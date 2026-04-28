@@ -219,3 +219,41 @@ public class FileListerFallbackExceptionTests : IDisposable
         Assert.Equal(2, files.Count);
     }
 }
+
+// ─── FileLister.Backend property ────────────────────────────────────────
+
+public class FileListerBackendPropertyTests
+{
+    [Fact]
+    public void Backend_SetAndGet_RoundTrips()
+    {
+        var original = FileLister.Backend;
+        try
+        {
+            FileLister.Backend = FileListerBackend.Managed;
+            Assert.Equal(FileListerBackend.Managed, FileLister.Backend);
+
+            FileLister.Backend = FileListerBackend.Auto;
+            Assert.Equal(FileListerBackend.Auto, FileLister.Backend);
+        }
+        finally { FileLister.Backend = original; }
+    }
+}
+
+// ─── FileLister.NormalizeExtension ──────────────────────────────────────
+
+public class NormalizeExtensionTests
+{
+    [Theory]
+    [InlineData("", "")]
+    [InlineData("  ", "")]
+    [InlineData("*.cs", "cs")]
+    [InlineData(".cs", "cs")]
+    [InlineData("*cs", "cs")]
+    [InlineData("cs", "cs")]
+    [InlineData(" *.txt ", "txt")]
+    public void NormalizeExtension_VariousFormats(string input, string expected)
+    {
+        Assert.Equal(expected, FileLister.NormalizeExtension(input));
+    }
+}

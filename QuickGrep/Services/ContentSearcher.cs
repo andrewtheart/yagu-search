@@ -282,7 +282,7 @@ public sealed class ContentSearcher
 
     [ThreadStatic] private static List<(int Start, int Length)>? t_hits;
 
-    private static List<(int Start, int Length)> FindMatches(string line, Regex? regex, string? literal, StringComparison cmp)
+    internal static List<(int Start, int Length)> FindMatches(string line, Regex? regex, string? literal, StringComparison cmp)
     {
         var hits = t_hits ??= new List<(int, int)>();
         hits.Clear();

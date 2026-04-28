@@ -58,6 +58,106 @@ const STATUS_INVALID_REGEX: c_int = 4;
 const STATUS_INVALID_PATH: c_int = 5;
 const STATUS_CANCELLED: c_int = 6;
 
+// ---------------------------------------------------------------------------
+// Helpers: open_and_mmap, scan_error_to_status
+// ---------------------------------------------------------------------------
+
+/// Test-only injection points for triggering OS-level errors.
+#[cfg(test)]
+mod test_inject {
+    use std::cell::Cell;
+    thread_local! {
+        static FAIL_METADATA: Cell<bool> = Cell::new(false);
+        static FAIL_MMAP: Cell<bool> = Cell::new(false);
+    }
+    pub fn should_fail_metadata() -> bool {
+        FAIL_METADATA.with(|c| c.get())
+    }
+    pub fn should_fail_mmap() -> bool {
+        FAIL_MMAP.with(|c| c.get())
+    }
+    pub fn set_fail_metadata(fail: bool) {
+        FAIL_METADATA.with(|c| c.set(fail));
+    }
+    pub fn set_fail_mmap(fail: bool) {
+        FAIL_MMAP.with(|c| c.set(fail));
+    }
+}
+
+#[cfg(test)]
+fn try_metadata(file: &File) -> std::io::Result<std::fs::Metadata> {
+    if test_inject::should_fail_metadata() {
+        return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+    }
+    file.metadata()
+}
+
+#[cfg(not(test))]
+fn try_metadata(file: &File) -> std::io::Result<std::fs::Metadata> {
+    file.metadata()
+}
+
+#[cfg(test)]
+fn try_mmap(file: &File) -> std::io::Result<Mmap> {
+    if test_inject::should_fail_mmap() {
+        return Err(std::io::Error::from(std::io::ErrorKind::Other));
+    }
+    unsafe { Mmap::map(file) }
+}
+
+#[cfg(not(test))]
+fn try_mmap(file: &File) -> std::io::Result<Mmap> {
+    unsafe { Mmap::map(file) }
+}
+
+/// Open a file, verify its size, and memory-map it.
+/// Returns `Ok(mmap)` on success, or `Err((status_code, true))` on empty file
+/// (caller should return OK), `Err((status_code, false))` on real error.
+fn open_and_mmap(path: &str, max_file_size: u64) -> Result<Mmap, c_int> {
+    let file = File::open(path).map_err(|_| STATUS_OPEN_FAILED)?;
+    let file_size = try_metadata(&file).map_err(|_| STATUS_OPEN_FAILED)?.len();
+    if max_file_size != 0 && file_size > max_file_size {
+        return Err(STATUS_TOO_LARGE);
+    }
+    if file_size == 0 {
+        // Signal "empty, nothing to scan" — caller treats this as STATUS_OK.
+        return Err(STATUS_OK);
+    }
+    try_mmap(&file).map_err(|_| STATUS_OPEN_FAILED)
+}
+
+/// Convert a `ScanError` to the corresponding FFI status code.
+fn scan_error_to_status(err: &ScanError) -> c_int {
+    match err {
+        ScanError::BinarySkipped => STATUS_BINARY_SKIPPED,
+        ScanError::InvalidRegex(_) => STATUS_INVALID_REGEX,
+        ScanError::Cancelled => STATUS_CANCELLED,
+        ScanError::Io(_) => STATUS_OPEN_FAILED,
+    }
+}
+
+/// If the error is `InvalidRegex`, write the message into the out-params.
+///
+/// # Safety
+/// `out_error_msg` and `out_error_msg_len` must be valid pointers (or null).
+unsafe fn write_scan_error_msg(
+    err: ScanError,
+    out_error_msg: *mut *mut u8,
+    out_error_msg_len: *mut usize,
+) {
+    if let ScanError::InvalidRegex(msg) = err {
+        if !out_error_msg.is_null() && !out_error_msg_len.is_null() {
+            let mut bytes = msg.into_bytes();
+            bytes.shrink_to_fit();
+            let len = bytes.len();
+            let ptr = bytes.as_mut_ptr();
+            std::mem::forget(bytes);
+            *out_error_msg = ptr;
+            *out_error_msg_len = len;
+        }
+    }
+}
+
 /// # Safety
 /// All pointer arguments must be valid for the indicated lengths and remain
 /// valid for the duration of the call. `cancel_flag` may be null; if non-null
@@ -124,36 +224,12 @@ pub unsafe extern "C" fn qg_search_file(
     };
 
     // Open + size check + mmap (or small read).
-    let file = match File::open(&path) {
-        Ok(f) => f,
-        Err(_) => {
-            result_slot.status = STATUS_OPEN_FAILED;
-            return STATUS_OPEN_FAILED;
-        }
-    };
-    let metadata = match file.metadata() {
+    let mmap = match open_and_mmap(&path, opts_in.max_file_size) {
         Ok(m) => m,
-        Err(_) => {
-            result_slot.status = STATUS_OPEN_FAILED;
-            return STATUS_OPEN_FAILED;
-        }
-    };
-    let file_size = metadata.len();
-    if opts_in.max_file_size != 0 && file_size > opts_in.max_file_size {
-        result_slot.status = STATUS_TOO_LARGE;
-        return STATUS_TOO_LARGE;
-    }
-    if file_size == 0 {
-        // Empty file -> zero matches, success.
-        return STATUS_OK;
-    }
-
-    // mmap. memmap2 is read-only by default via Mmap::map.
-    let mmap = match Mmap::map(&file) {
-        Ok(m) => m,
-        Err(_) => {
-            result_slot.status = STATUS_OPEN_FAILED;
-            return STATUS_OPEN_FAILED;
+        Err(STATUS_OK) => return STATUS_OK, // empty file
+        Err(status) => {
+            result_slot.status = status;
+            return status;
         }
     };
     let bytes: &[u8] = &mmap;
@@ -194,30 +270,11 @@ pub unsafe extern "C" fn qg_search_file(
         true
     });
 
-    match scan_result {
-        Ok(_) => {}
-        Err(ScanError::BinarySkipped) => {
-            result_slot.status = STATUS_BINARY_SKIPPED;
-            return STATUS_BINARY_SKIPPED;
-        }
-        Err(ScanError::InvalidRegex(msg)) => {
-            let mut bytes = msg.into_bytes();
-            bytes.shrink_to_fit();
-            let len = bytes.len();
-            debug_assert_eq!(len, bytes.capacity());
-            let ptr = bytes.as_mut_ptr();
-            std::mem::forget(bytes);
-            result_slot.error_msg = ptr;
-            result_slot.error_msg_len = len;
-            result_slot.status = STATUS_INVALID_REGEX;
-            return STATUS_INVALID_REGEX;
-        }
-        // Cancelled/Io are never produced by scan_bytes on mmap'd data,
-        // but handle defensively.
-        Err(_) => {
-            result_slot.status = STATUS_OPEN_FAILED;
-            return STATUS_OPEN_FAILED;
-        }
+    if let Err(e) = scan_result {
+        let status = scan_error_to_status(&e);
+        write_scan_error_msg(e, &mut result_slot.error_msg, &mut result_slot.error_msg_len);
+        result_slot.status = status;
+        return status;
     }
 
     // Re-check cancellation (most recent value) after scan completed.
@@ -394,25 +451,9 @@ pub unsafe extern "C" fn qg_search_file_stream(
         skip_binary: opts_in.skip_binary != 0,
     };
 
-    let file = match File::open(&path) {
-        Ok(f) => f,
-        Err(_) => return set_status(STATUS_OPEN_FAILED),
-    };
-    let metadata = match file.metadata() {
+    let mmap = match open_and_mmap(&path, opts_in.max_file_size) {
         Ok(m) => m,
-        Err(_) => return set_status(STATUS_OPEN_FAILED),
-    };
-    let file_size = metadata.len();
-    if opts_in.max_file_size != 0 && file_size > opts_in.max_file_size {
-        return set_status(STATUS_TOO_LARGE);
-    }
-    if file_size == 0 {
-        return set_status(STATUS_OK);
-    }
-
-    let mmap = match Mmap::map(&file) {
-        Ok(m) => m,
-        Err(_) => return set_status(STATUS_OPEN_FAILED),
+        Err(status) => return set_status(status),
     };
     let bytes: &[u8] = &mmap;
 
@@ -471,20 +512,11 @@ pub unsafe extern "C" fn qg_search_file_stream(
 
     match scan_result {
         Ok(_) => set_status(STATUS_OK),
-        Err(ScanError::BinarySkipped) => set_status(STATUS_BINARY_SKIPPED),
-        Err(ScanError::InvalidRegex(msg)) => {
-            if !out_error_msg.is_null() && !out_error_msg_len.is_null() {
-                let mut bytes = msg.into_bytes();
-                bytes.shrink_to_fit();
-                let len = bytes.len();
-                let ptr = bytes.as_mut_ptr();
-                std::mem::forget(bytes);
-                *out_error_msg = ptr;
-                *out_error_msg_len = len;
-            }
-            set_status(STATUS_INVALID_REGEX)
+        Err(e) => {
+            let status = scan_error_to_status(&e);
+            write_scan_error_msg(e, out_error_msg, out_error_msg_len);
+            set_status(status)
         }
-        Err(ScanError::Cancelled) | Err(ScanError::Io(_)) => set_status(STATUS_OPEN_FAILED),
     }
 }
 
@@ -565,20 +597,10 @@ pub unsafe extern "C" fn qg_create_session(
 
     let matcher = match crate::scan::build_matcher(pattern, &scan_opts) {
         Ok(m) => m,
-        Err(crate::scan::ScanError::InvalidRegex(msg)) => {
-            if !out_error_msg.is_null() && !out_error_msg_len.is_null() {
-                let mut bytes = msg.into_bytes();
-                bytes.shrink_to_fit();
-                let len = bytes.len();
-                let ptr = bytes.as_mut_ptr();
-                std::mem::forget(bytes);
-                *out_error_msg = ptr;
-                *out_error_msg_len = len;
-            }
+        Err(e) => {
+            write_scan_error_msg(e, out_error_msg, out_error_msg_len);
             return std::ptr::null_mut();
         }
-        // build_matcher only returns Ok or InvalidRegex; wildcard is defensive.
-        Err(_) => return std::ptr::null_mut(),
     };
 
     Box::into_raw(Box::new(QgSession {
@@ -648,25 +670,9 @@ pub unsafe extern "C" fn qg_session_search_file_stream(
     };
 
     // Open + size check + mmap.
-    let file = match File::open(&path) {
-        Ok(f) => f,
-        Err(_) => return set_status(STATUS_OPEN_FAILED),
-    };
-    let metadata = match file.metadata() {
+    let mmap = match open_and_mmap(&path, sess.max_file_size) {
         Ok(m) => m,
-        Err(_) => return set_status(STATUS_OPEN_FAILED),
-    };
-    let file_size = metadata.len();
-    if sess.max_file_size != 0 && file_size > sess.max_file_size {
-        return set_status(STATUS_TOO_LARGE);
-    }
-    if file_size == 0 {
-        return set_status(STATUS_OK);
-    }
-
-    let mmap = match Mmap::map(&file) {
-        Ok(m) => m,
-        Err(_) => return set_status(STATUS_OPEN_FAILED),
+        Err(status) => return set_status(status),
     };
     let bytes: &[u8] = &mmap;
 
@@ -730,10 +736,7 @@ pub unsafe extern "C" fn qg_session_search_file_stream(
 
     match scan_result {
         Ok(_) => set_status(STATUS_OK),
-        Err(ScanError::BinarySkipped) => set_status(STATUS_BINARY_SKIPPED),
-        // These are never produced by scan_bytes_with_matcher on mmap'd data
-        // with a pre-compiled matcher, but handle defensively.
-        Err(_) => set_status(STATUS_OPEN_FAILED),
+        Err(e) => set_status(scan_error_to_status(&e)),
     }
 }
 
@@ -2476,6 +2479,322 @@ mod tests {
             assert_eq!(ret, STATUS_OK);
             assert!(err_msg.is_null());
             assert_eq!(err_msg_len, 0);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // scan_error_to_status tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn scan_error_to_status_binary_skipped() {
+        assert_eq!(scan_error_to_status(&ScanError::BinarySkipped), STATUS_BINARY_SKIPPED);
+    }
+
+    #[test]
+    fn scan_error_to_status_invalid_regex() {
+        assert_eq!(
+            scan_error_to_status(&ScanError::InvalidRegex("bad".into())),
+            STATUS_INVALID_REGEX,
+        );
+    }
+
+    #[test]
+    fn scan_error_to_status_cancelled() {
+        assert_eq!(scan_error_to_status(&ScanError::Cancelled), STATUS_CANCELLED);
+    }
+
+    #[test]
+    fn scan_error_to_status_io() {
+        let io_err = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(scan_error_to_status(&ScanError::Io(io_err)), STATUS_OPEN_FAILED);
+    }
+
+    // -----------------------------------------------------------------------
+    // open_and_mmap tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn open_and_mmap_nonexistent_returns_open_failed() {
+        assert_eq!(open_and_mmap("__nonexistent_path__", 0).unwrap_err(), STATUS_OPEN_FAILED);
+    }
+
+    #[test]
+    fn open_and_mmap_empty_file_returns_ok() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        // File is 0 bytes.
+        let path = tmp.path().to_str().unwrap();
+        assert_eq!(open_and_mmap(path, 0).unwrap_err(), STATUS_OK);
+    }
+
+    #[test]
+    fn open_and_mmap_too_large_returns_too_large() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"hello world\n").unwrap();
+        tmp.flush().unwrap();
+        let path = tmp.path().to_str().unwrap();
+        // max_file_size=1 makes even this tiny file "too large".
+        assert_eq!(open_and_mmap(path, 1).unwrap_err(), STATUS_TOO_LARGE);
+    }
+
+    #[test]
+    fn open_and_mmap_success() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"hello\n").unwrap();
+        tmp.flush().unwrap();
+        let path = tmp.path().to_str().unwrap();
+        let result = open_and_mmap(path, 0);
+        assert!(result.is_ok());
+        assert_eq!(&result.unwrap()[..], b"hello\n");
+    }
+
+    #[test]
+    fn open_and_mmap_metadata_error() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"data\n").unwrap();
+        tmp.flush().unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        test_inject::set_fail_metadata(true);
+        let result = open_and_mmap(path, 0);
+        test_inject::set_fail_metadata(false);
+
+        assert_eq!(result.unwrap_err(), STATUS_OPEN_FAILED);
+    }
+
+    #[test]
+    fn open_and_mmap_mmap_error() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"data\n").unwrap();
+        tmp.flush().unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        test_inject::set_fail_mmap(true);
+        let result = open_and_mmap(path, 0);
+        test_inject::set_fail_mmap(false);
+
+        assert_eq!(result.unwrap_err(), STATUS_OPEN_FAILED);
+    }
+
+    // -----------------------------------------------------------------------
+    // FFI functions with injected metadata/mmap failures
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn search_file_metadata_failure() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"hello\n").unwrap();
+        tmp.flush().unwrap();
+        let path = to_utf16(tmp.path().to_str().unwrap());
+        let pattern = b"hello";
+        let opts = default_opts();
+        let mut result = QgResult {
+            buffer: std::ptr::null_mut(),
+            buffer_len: 0,
+            match_count: 0,
+            status: 0,
+            error_msg: std::ptr::null_mut(),
+            error_msg_len: 0,
+        };
+
+        test_inject::set_fail_metadata(true);
+        unsafe {
+            let ret = qg_search_file(
+                path.as_ptr(),
+                path.len(),
+                pattern.as_ptr(),
+                pattern.len(),
+                &opts,
+                std::ptr::null(),
+                &mut result,
+            );
+            assert_eq!(ret, STATUS_OPEN_FAILED);
+            assert_eq!(result.status, STATUS_OPEN_FAILED);
+        }
+        test_inject::set_fail_metadata(false);
+    }
+
+    #[test]
+    fn search_file_mmap_failure() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"hello\n").unwrap();
+        tmp.flush().unwrap();
+        let path = to_utf16(tmp.path().to_str().unwrap());
+        let pattern = b"hello";
+        let opts = default_opts();
+        let mut result = QgResult {
+            buffer: std::ptr::null_mut(),
+            buffer_len: 0,
+            match_count: 0,
+            status: 0,
+            error_msg: std::ptr::null_mut(),
+            error_msg_len: 0,
+        };
+
+        test_inject::set_fail_mmap(true);
+        unsafe {
+            let ret = qg_search_file(
+                path.as_ptr(),
+                path.len(),
+                pattern.as_ptr(),
+                pattern.len(),
+                &opts,
+                std::ptr::null(),
+                &mut result,
+            );
+            assert_eq!(ret, STATUS_OPEN_FAILED);
+            assert_eq!(result.status, STATUS_OPEN_FAILED);
+        }
+        test_inject::set_fail_mmap(false);
+    }
+
+    #[test]
+    fn stream_metadata_failure() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"hello\n").unwrap();
+        tmp.flush().unwrap();
+        let path = to_utf16(tmp.path().to_str().unwrap());
+        let pattern = b"hello";
+        let opts = default_opts();
+        let mut status: c_int = 0;
+        let mut err_msg: *mut u8 = std::ptr::null_mut();
+        let mut err_msg_len: usize = 0;
+
+        test_inject::set_fail_metadata(true);
+        unsafe {
+            let ret = qg_search_file_stream(
+                path.as_ptr(),
+                path.len(),
+                pattern.as_ptr(),
+                pattern.len(),
+                &opts,
+                std::ptr::null(),
+                count_callback,
+                std::ptr::null_mut(),
+                &mut status,
+                &mut err_msg,
+                &mut err_msg_len,
+            );
+            assert_eq!(ret, STATUS_OPEN_FAILED);
+            assert_eq!(status, STATUS_OPEN_FAILED);
+        }
+        test_inject::set_fail_metadata(false);
+    }
+
+    #[test]
+    fn stream_mmap_failure() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"hello\n").unwrap();
+        tmp.flush().unwrap();
+        let path = to_utf16(tmp.path().to_str().unwrap());
+        let pattern = b"hello";
+        let opts = default_opts();
+        let mut status: c_int = 0;
+        let mut err_msg: *mut u8 = std::ptr::null_mut();
+        let mut err_msg_len: usize = 0;
+
+        test_inject::set_fail_mmap(true);
+        unsafe {
+            let ret = qg_search_file_stream(
+                path.as_ptr(),
+                path.len(),
+                pattern.as_ptr(),
+                pattern.len(),
+                &opts,
+                std::ptr::null(),
+                count_callback,
+                std::ptr::null_mut(),
+                &mut status,
+                &mut err_msg,
+                &mut err_msg_len,
+            );
+            assert_eq!(ret, STATUS_OPEN_FAILED);
+            assert_eq!(status, STATUS_OPEN_FAILED);
+        }
+        test_inject::set_fail_mmap(false);
+    }
+
+    #[test]
+    fn session_stream_metadata_failure() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"hello\n").unwrap();
+        tmp.flush().unwrap();
+        let path = to_utf16(tmp.path().to_str().unwrap());
+        let pattern = b"hello";
+        let opts = default_opts();
+        let mut status: c_int = 0;
+        let mut err_msg: *mut u8 = std::ptr::null_mut();
+        let mut err_msg_len: usize = 0;
+
+        unsafe {
+            let session = qg_create_session(
+                pattern.as_ptr(),
+                pattern.len(),
+                &opts,
+                &mut err_msg,
+                &mut err_msg_len,
+            );
+            assert!(!session.is_null());
+
+            test_inject::set_fail_metadata(true);
+            let ret = qg_session_search_file_stream(
+                session,
+                path.as_ptr(),
+                path.len(),
+                std::ptr::null(),
+                count_callback,
+                std::ptr::null_mut(),
+                &mut status,
+                &mut err_msg,
+                &mut err_msg_len,
+            );
+            test_inject::set_fail_metadata(false);
+
+            assert_eq!(ret, STATUS_OPEN_FAILED);
+            assert_eq!(status, STATUS_OPEN_FAILED);
+            qg_free_session(session);
+        }
+    }
+
+    #[test]
+    fn session_stream_mmap_failure() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"hello\n").unwrap();
+        tmp.flush().unwrap();
+        let path = to_utf16(tmp.path().to_str().unwrap());
+        let pattern = b"hello";
+        let opts = default_opts();
+        let mut status: c_int = 0;
+        let mut err_msg: *mut u8 = std::ptr::null_mut();
+        let mut err_msg_len: usize = 0;
+
+        unsafe {
+            let session = qg_create_session(
+                pattern.as_ptr(),
+                pattern.len(),
+                &opts,
+                &mut err_msg,
+                &mut err_msg_len,
+            );
+            assert!(!session.is_null());
+
+            test_inject::set_fail_mmap(true);
+            let ret = qg_session_search_file_stream(
+                session,
+                path.as_ptr(),
+                path.len(),
+                std::ptr::null(),
+                count_callback,
+                std::ptr::null_mut(),
+                &mut status,
+                &mut err_msg,
+                &mut err_msg_len,
+            );
+            test_inject::set_fail_mmap(false);
+
+            assert_eq!(ret, STATUS_OPEN_FAILED);
+            assert_eq!(status, STATUS_OPEN_FAILED);
+            qg_free_session(session);
         }
     }
 }

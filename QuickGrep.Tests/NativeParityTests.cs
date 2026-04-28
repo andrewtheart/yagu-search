@@ -11,6 +11,7 @@ namespace QuickGrep.Tests;
 /// managed fallback. These tests run twice — once with the native path forced
 /// on, once forced off — and assert identical match counts and line numbers.
 /// </summary>
+[Collection("PreferNative")]
 public class NativeParityTests : IDisposable
 {
     private readonly string _root;

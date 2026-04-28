@@ -472,7 +472,7 @@ public sealed class FileLister : IFileLister
     private void SetKnownTotalFiles(int count) =>
         Volatile.Write(ref _knownTotalFiles, Math.Max(0, count));
 
-    private static string NormalizeExtension(string ext)
+    internal static string NormalizeExtension(string ext)
     {
         if (string.IsNullOrWhiteSpace(ext)) return string.Empty;
         var s = ext.Trim();
