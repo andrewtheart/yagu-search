@@ -18,7 +18,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly SemaphoreSlim _searchLifecycleGate = new(1, 1);
     private int _searchRunId;
     private AppSettings _settings;
-    private readonly List<FileGroup> _allResultGroups = [];
+    private readonly SearchResultCollection _resultCollection = new();
     private ResultStore? _resultStore;
 
     public MainViewModel() : this(new SearchService(), new SettingsService(), new EditorLauncher(),
@@ -54,6 +54,9 @@ public sealed partial class MainViewModel : ObservableObject
         LineTruncationLength = _settings.LineTruncationLength;
         MaxRecentItems = _settings.MaxRecentItems;
         GlobalHotkeyEnabled = _settings.GlobalHotkeyEnabled;
+        GlobalHotkeyKey = HotkeyService.TryNormalizeLetter(_settings.GlobalHotkeyKey, out var hotkeyKey)
+            ? hotkeyKey.ToString()
+            : HotkeyService.DefaultStartKey.ToString();
         MemoryLimitMB = _settings.MemoryLimitMB;
         MemoryPressurePercent = _settings.MemoryPressurePercent;
         SkipExtensions = _settings.SkipExtensions;
@@ -86,13 +89,26 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _previewWordWrap;
     [ObservableProperty] private int _logLevelIndex; // 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] private int _fileListerBackendIndex; // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
-    [ObservableProperty] private int _parallelismIndex; // 0 = Auto, 1 = 1 thread, 2 = half cores, 3 = 2x cores
+    [ObservableProperty] private int _parallelismIndex; // 0 = Auto, 1 = 1 thread, 2 = half cores, 3 = 2x cores, 4 = all cores
     [ObservableProperty] private int _lineTruncationLength = 500;
     [ObservableProperty] private int _maxRecentItems = 20;
     [ObservableProperty] private bool _globalHotkeyEnabled;
     [ObservableProperty] private int _memoryLimitMB = 4096;
     [ObservableProperty] private int _memoryPressurePercent = 80;
     [ObservableProperty] private string _skipExtensions = "exe;dll;pdb;obj;lib;so;dylib;zip;gz;tar;7z;rar;bz2;xz;iso;cab;msi;nupkg;whl;png;jpg;jpeg;gif;bmp;ico;tif;tiff;webp;svg;mp3;mp4;avi;mov;wmv;flv;mkv;wav;ogg;flac;woff;woff2;ttf;eot;otf;pdf;doc;docx;xls;xlsx;ppt;pptx";
+
+    private string _globalHotkeyKey = HotkeyService.DefaultStartKey.ToString();
+    public string GlobalHotkeyKey
+    {
+        get => _globalHotkeyKey;
+        set
+        {
+            var normalized = HotkeyService.TryNormalizeLetter(value, out var key)
+                ? key.ToString()
+                : HotkeyService.DefaultStartKey.ToString();
+            SetProperty(ref _globalHotkeyKey, normalized);
+        }
+    }
 
     [ObservableProperty] private bool _isSearching;
     [ObservableProperty] private string _statusText = string.Empty;
@@ -109,7 +125,7 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>Disk-backed store for evicted results. Null before first search.</summary>
     public ResultStore? ActiveResultStore => _resultStore;
 
-    public ObservableCollection<FileGroup> ResultGroups { get; } = [];
+    public ObservableCollection<FileGroup> ResultGroups => _resultCollection.VisibleGroups;
     public ObservableCollection<string> RecentDirectories { get; } = [];
     public ObservableCollection<string> SearchHistory { get; } = [];
 
@@ -200,7 +216,6 @@ public sealed partial class MainViewModel : ObservableObject
             var token = cts.Token;
             LogService.Instance.Info("Search", $"Starting search #{runId}: query='{Query}', dir='{Directory}', regex={UseRegex}, caseSensitive={CaseSensitive}, mode={SearchModeIndex}");
 
-            var groupIndex = new Dictionary<string, FileGroup>(StringComparer.OrdinalIgnoreCase);
             await foreach (var evt in _search.SearchAsync(options, token).ConfigureAwait(true))
             {
                 if (!IsCurrentSearch(runId, cts))
@@ -219,7 +234,7 @@ public sealed partial class MainViewModel : ObservableObject
                         StatusText = $"Searching {d.TotalFiles:N0} files…";
                         break;
                     case SearchEvent.Match m:
-                        AddMatch(groupIndex, m.Result);
+                        AddMatch(m.Result);
                         break;
                     case SearchEvent.MatchBatch mb:
                         // Drain the whole batch under a single dispatcher tick. AddMatch is
@@ -227,8 +242,7 @@ public sealed partial class MainViewModel : ObservableObject
                         // PropertyChanged churn from each ResultGroups.Add to the absolute
                         // minimum. The list itself was produced by the discovery thread —
                         // we own it now and don't need a copy.
-                        for (int i = 0; i < mb.Results.Count; i++)
-                            AddMatch(groupIndex, mb.Results[i]);
+                        AddMatches(mb.Results);
                         break;
                     case SearchEvent.Progress p:
                         FilesScanned = p.Snapshot.FilesScanned;
@@ -242,14 +256,19 @@ public sealed partial class MainViewModel : ObservableObject
                         ErrorText = e.Message;
                         break;
                     case SearchEvent.MemoryPressure mp:
-                        LogService.Instance.Info("ViewModel", $"Memory pressure event received — starting eviction ({_allResultGroups.Count:N0} groups, {MatchesFound:N0} matches)");
+                        StatusText = BuildMemoryPressureStatus(mp);
+                        LogService.Instance.Info("ViewModel", $"Memory pressure event received — starting eviction ({_resultCollection.AllGroups.Count:N0} groups, {MatchesFound:N0} matches)");
                         var evictSw = System.Diagnostics.Stopwatch.StartNew();
                         int evictedCount = EvictAllResults();
                         evictSw.Stop();
                         LogService.Instance.Info("ViewModel", $"Eviction + acknowledge complete in {evictSw.ElapsedMilliseconds}ms (freed {evictedCount:N0})");
                         mp.AcknowledgeEviction(evictedCount);   // Signal workers they can resume
                         Degraded = true;
-                        StatusText = $"Searching (memory-saving mode)… {MatchesFound:N0} matches so far";
+                        break;
+                    case SearchEvent.MemoryPressureRelieved relieved:
+                        Degraded = false;
+                        StatusText = BuildCurrentSearchStatus();
+                        LogService.Instance.Info("ViewModel", $"Memory pressure relieved — leaving memory-saving mode ({relieved.Diagnostics})");
                         break;
                     case SearchEvent.Completed c:
                         FilesScanned = c.Summary.FilesScanned;
@@ -316,8 +335,7 @@ public sealed partial class MainViewModel : ObservableObject
     private void ResetStateForNewSearch()
     {
         _cts = null;
-        ResultGroups.Clear();
-        _allResultGroups.Clear();
+        _resultCollection.Clear();
         FileMetadataCache.Clear();
 
         _resultStore?.Dispose();
@@ -351,6 +369,22 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         return $"{prefix}... {progress.FilesScanned:N0} files scanned, {progress.MatchesFound:N0} matches";
+    }
+
+    private string BuildCurrentSearchStatus()
+    {
+        var prefix = Degraded ? "Searching (memory-saving mode)" : "Searching";
+        if (TotalFiles > 0)
+        {
+            return $"{prefix} {FilesScanned:N0}/{TotalFiles:N0} files... {MatchesFound:N0} matches";
+        }
+
+        return $"{prefix}... {FilesScanned:N0} files scanned, {MatchesFound:N0} matches";
+    }
+
+    private static string BuildMemoryPressureStatus(SearchEvent.MemoryPressure memoryPressure)
+    {
+        return "Memory pressure high; paging QuickGrep results to disk and continuing in memory-saving mode...";
     }
 
     [RelayCommand]
@@ -407,65 +441,89 @@ public sealed partial class MainViewModel : ObservableObject
         catch (Exception ex) { LogService.Instance.Verbose("Clipboard", "Clipboard unavailable", ex); }
     }
 
-    private void AddMatch(Dictionary<string, FileGroup> index, SearchResult r)
+    private void AddMatch(SearchResult result)
+    {
+        bool resultAvailabilityChanged;
+        if (Degraded && _resultStore is not null)
+        {
+            resultAvailabilityChanged = false;
+            _resultStore.WriteBatch(writeOne => resultAvailabilityChanged = AddMatchCore(result, writeOne));
+        }
+        else
+        {
+            resultAvailabilityChanged = AddMatchCore(result, evictedResultWriter: null);
+        }
+
+        if (resultAvailabilityChanged)
+            NotifyResultAvailabilityChanged();
+    }
+
+    private void AddMatches(IReadOnlyList<SearchResult> results)
+    {
+        bool resultAvailabilityChanged = false;
+        if (Degraded && _resultStore is not null)
+        {
+            _resultStore.WriteBatch(writeOne =>
+            {
+                for (int resultIndex = 0; resultIndex < results.Count; resultIndex++)
+                    resultAvailabilityChanged |= AddMatchCore(results[resultIndex], writeOne);
+            });
+        }
+        else
+        {
+            for (int resultIndex = 0; resultIndex < results.Count; resultIndex++)
+                resultAvailabilityChanged |= AddMatchCore(results[resultIndex], evictedResultWriter: null);
+        }
+
+        if (resultAvailabilityChanged)
+            NotifyResultAvailabilityChanged();
+    }
+
+    private bool AddMatchCore(
+        SearchResult result,
+        Func<string, IReadOnlyList<string>, IReadOnlyList<string>, long>? evictedResultWriter)
     {
         // FilePath comes from FileLister and is already a full path on Windows.
         // Avoiding Path.GetFullPath here removes a per-match string allocation +
         // PInvoke that was running on the UI dispatcher.
-        var path = r.FilePath;
+        var path = result.FilePath;
         bool watched = QuickGrep.Services.FileWatchDiagnostics.IsWatched(path);
         if (watched)
-            QuickGrep.Services.FileWatchDiagnostics.Checkpoint(path, "UI-ADDMATCH-ENTER", -1, $"line={r.LineNumber} groups={_allResultGroups.Count}");
-        if (!index.TryGetValue(path, out var group))
-        {
-            bool wasEmpty = _allResultGroups.Count == 0;
-            group = new FileGroup(path);
-            // Load metadata on a worker thread — the FileInfo syscall on the UI
-            // dispatcher was a measurable stall on searches with thousands of
-            // distinct files.
-            group.BeginLoadMetadata(action => _dispatcher.TryEnqueue(() => action()));
-            index[path] = group;
-            _allResultGroups.Add(group);
-            if (MatchesFilter(group))
-            {
-                ResultGroups.Add(group);
-            }
-            if (wasEmpty)
-            {
-                OnPropertyChanged(nameof(HasResults));
-                OnPropertyChanged(nameof(ShowEmptyState));
-            }
-        }
-        group.Add(r);
+            QuickGrep.Services.FileWatchDiagnostics.Checkpoint(path, "UI-ADDMATCH-ENTER", -1, $"line={result.LineNumber} groups={_resultCollection.AllGroups.Count}");
+
+        bool resultAvailabilityChanged = _resultCollection.Add(
+            result,
+            InitializeResultGroup,
+            evictNewResult: Degraded && evictedResultWriter is not null,
+            evictedResultWriter);
+
         if (watched)
-            QuickGrep.Services.FileWatchDiagnostics.Checkpoint(path, "UI-ADDMATCH-EXIT", -1, $"groupCount={group.Count} visibleGroups={ResultGroups.Count}");
+            QuickGrep.Services.FileWatchDiagnostics.Checkpoint(path, "UI-ADDMATCH-EXIT", -1, $"groupCount={_resultCollection.AllGroups.Count} visibleGroups={ResultGroups.Count}");
         // MatchesFound is updated via throttled Progress / Completed events to avoid
         // pumping a PropertyChanged for every single result on huge searches.
+        return resultAvailabilityChanged;
+    }
+
+    private void InitializeResultGroup(FileGroup group)
+    {
+        // Load metadata on a worker thread — the FileInfo syscall on the UI
+        // dispatcher was a measurable stall on searches with thousands of
+        // distinct files.
+        group.BeginLoadMetadata(action => _dispatcher.TryEnqueue(() => action()));
+    }
+
+    private void NotifyResultAvailabilityChanged()
+    {
+        OnPropertyChanged(nameof(HasResults));
+        OnPropertyChanged(nameof(ShowEmptyState));
     }
 
     /// <summary>Evict all in-memory results to the disk-backed store to free memory.</summary>
     /// <returns>The number of results actually evicted.</returns>
     private int EvictAllResults()
     {
-        if (_resultStore is null) return 0;
-        int evicted = 0;
-        // Single locked batch + one Flush at the end — was 50k+ Flush() syscalls
-        // on the UI thread when each result called ResultStore.Write individually.
-        _resultStore.WriteBatch(writeOne =>
-        {
-            foreach (var group in _allResultGroups)
-            {
-                foreach (var result in group)
-                {
-                    if (!result.IsEvicted)
-                    {
-                        result.EvictWith(writeOne);
-                        evicted++;
-                    }
-                }
-            }
-        });
-        LogService.Instance.Info("ViewModel", $"Evicted {evicted:N0} results to disk ({_resultStore.EvictedCount:N0} total on disk)");
+        int evicted = _resultCollection.EvictAll(_resultStore);
+        LogService.Instance.Info("ViewModel", $"Evicted {evicted:N0} results to disk ({_resultStore?.EvictedCount ?? 0:N0} total on disk)");
         // GC is now triggered by the worker threads after the eviction signal,
         // keeping the UI thread responsive.
         return evicted;
@@ -495,77 +553,15 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void ApplySortAndFilter()
     {
-        var filtered = _allResultGroups.Where(g => MatchesFilter(g));
-        bool asc = SortDirectionIndex == 1;
-
-        IOrderedEnumerable<FileGroup> sorted;
-
-        if (GroupByDirectory)
-        {
-            var byDir = filtered.OrderBy(g => g.DirectoryName, StringComparer.OrdinalIgnoreCase);
-            sorted = SortModeIndex switch
-            {
-                1 => asc ? byDir.ThenBy(g => g.LastModified) : byDir.ThenByDescending(g => g.LastModified),
-                2 => asc ? byDir.ThenBy(g => g.FileSize) : byDir.ThenByDescending(g => g.FileSize),
-                _ => asc ? byDir.ThenBy(g => g.MatchCount) : byDir.ThenByDescending(g => g.MatchCount),
-            };
-        }
-        else
-        {
-            sorted = SortModeIndex switch
-            {
-                1 => asc ? filtered.OrderBy(g => g.LastModified) : filtered.OrderByDescending(g => g.LastModified),
-                2 => asc ? filtered.OrderBy(g => g.FileSize) : filtered.OrderByDescending(g => g.FileSize),
-                _ => asc ? filtered.OrderBy(g => g.MatchCount) : filtered.OrderByDescending(g => g.MatchCount),
-            };
-        }
-
-        var sortedList = sorted.ToList();
-
-        // Set directory group headers
-        foreach (var g in _allResultGroups)
-            g.GroupHeaderText = null;
-
-        if (GroupByDirectory)
-        {
-            string? lastDir = null;
-            foreach (var g in sortedList)
-            {
-                if (!string.Equals(g.DirectoryName, lastDir, StringComparison.OrdinalIgnoreCase))
-                {
-                    g.GroupHeaderText = g.DirectoryName;
-                    lastDir = g.DirectoryName;
-                }
-            }
-        }
-
-        ResultGroups.Clear();
-        foreach (var g in sortedList)
-            ResultGroups.Add(g);
+        _resultCollection.ResultFilter = ResultFilter;
+        _resultCollection.FileNameFilter = FileNameFilter;
+        _resultCollection.SortModeIndex = SortModeIndex;
+        _resultCollection.SortDirectionIndex = SortDirectionIndex;
+        _resultCollection.GroupByDirectory = GroupByDirectory;
+        _resultCollection.ApplySortAndFilter();
 
         OnPropertyChanged(nameof(HasResults));
         OnPropertyChanged(nameof(ShowEmptyState));
-    }
-
-    private bool MatchesFilter(FileGroup group)
-    {
-        // File name filter (left panel)
-        if (!string.IsNullOrWhiteSpace(FileNameFilter))
-        {
-            if (!group.FileName.Contains(FileNameFilter, StringComparison.OrdinalIgnoreCase)
-                && !group.FilePath.Contains(FileNameFilter, StringComparison.OrdinalIgnoreCase))
-                return false;
-        }
-
-        // Content/result filter
-        if (string.IsNullOrWhiteSpace(ResultFilter)) return true;
-        var filter = ResultFilter;
-        if (group.FilePath.Contains(filter, StringComparison.OrdinalIgnoreCase)) return true;
-        foreach (var r in group)
-        {
-            if (r.MatchLine.Contains(filter, StringComparison.OrdinalIgnoreCase)) return true;
-        }
-        return false;
     }
 
     private void SyncRecent()
@@ -597,6 +593,9 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.LineTruncationLength = LineTruncationLength;
         _settings.MaxRecentItems = MaxRecentItems;
         _settings.GlobalHotkeyEnabled = GlobalHotkeyEnabled;
+        _settings.GlobalHotkeyKey = HotkeyService.TryNormalizeLetter(GlobalHotkeyKey, out var hotkeyKey)
+            ? hotkeyKey.ToString()
+            : HotkeyService.DefaultStartKey.ToString();
         _settings.MemoryLimitMB = MemoryLimitMB;
         _settings.MemoryPressurePercent = MemoryPressurePercent;
         _settings.SkipExtensions = SkipExtensions;
@@ -610,15 +609,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     public List<SearchResult> GetAllSelectedResults()
     {
-        var results = new List<SearchResult>();
-        foreach (var g in ResultGroups)
-        {
-            foreach (var r in g)
-            {
-                if (r.IsSelected) results.Add(r);
-            }
-        }
-        return results;
+        return _resultCollection.GetAllSelectedResults();
     }
 
     public void SetDirectoryFromArgs(string? dir)
@@ -647,13 +638,6 @@ public sealed partial class MainViewModel : ObservableObject
 
     private static int ResolveParallelism(int index)
     {
-        int cores = Math.Max(1, Environment.ProcessorCount);
-        return index switch
-        {
-            1 => 1,                       // sequential (single-threaded)
-            2 => Math.Max(1, cores / 2),  // half cores (HDD-friendly)
-            3 => cores * 2,               // 2x cores (I/O heavy)
-            _ => 0,                       // 0 = Auto (SearchService chooses the safe cap)
-        };
+        return SearchOptions.ResolveContentSearchParallelism(index, Environment.ProcessorCount);
     }
 }

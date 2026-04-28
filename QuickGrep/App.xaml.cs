@@ -29,6 +29,7 @@ public partial class App : Application
         LogService.Instance.RotateIfNeeded();
         LogService.Init((LogLevel)settings.LogLevelIndex);
         FileLister.Backend = (FileListerBackend)settings.FileListerBackendIndex;
+        _ = ResultStore.CleanupOrphanedTempFilesAsync();
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)

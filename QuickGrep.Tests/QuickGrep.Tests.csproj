@@ -23,6 +23,7 @@
   <!-- Pull in only the engine source so tests don't depend on WindowsAppSDK. -->
   <ItemGroup>
     <Compile Include="..\QuickGrep\Models\SearchResult.cs" Link="Source\Models\SearchResult.cs" />
+    <Compile Include="..\QuickGrep\Models\SearchResultCollection.cs" Link="Source\Models\SearchResultCollection.cs" />
     <Compile Include="..\QuickGrep\Models\SearchOptions.cs" Link="Source\Models\SearchOptions.cs" />
     <Compile Include="..\QuickGrep\Models\SearchProgress.cs" Link="Source\Models\SearchProgress.cs" />
     <Compile Include="..\QuickGrep\Models\FileGroup.cs" Link="Source\Models\FileGroup.cs" />
@@ -36,6 +37,7 @@
     <Compile Include="..\QuickGrep\Services\FileMetadataCache.cs" Link="Source\Services\FileMetadataCache.cs" />
     <Compile Include="..\QuickGrep\Services\SearchService.cs" Link="Source\Services\SearchService.cs" />
     <Compile Include="..\QuickGrep\Services\SettingsService.cs" Link="Source\Services\SettingsService.cs" />
+    <Compile Include="..\QuickGrep\Services\HotkeyService.cs" Link="Source\Services\HotkeyService.cs" />
     <Compile Include="..\QuickGrep\Services\EditorLauncher.cs" Link="Source\Services\EditorLauncher.cs" />
     <Compile Include="..\QuickGrep\Services\LogService.cs" Link="Source\Services\LogService.cs" />
     <Compile Include="..\QuickGrep\Services\ResultStore.cs" Link="Source\Services\ResultStore.cs" />

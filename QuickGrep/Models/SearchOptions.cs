@@ -42,9 +42,22 @@ public sealed class SearchOptions
     public const int MaxResultsCeiling = 50_000;
 
     /// <summary>
-    /// Number of concurrent file scans. 0 = auto (Environment.ProcessorCount).
+    /// Number of concurrent file scans. 0 = auto safe cap chosen by <see cref="Services.SearchService"/>.
     /// </summary>
     public int MaxDegreeOfParallelism { get; init; } = 0;
+
+    public static int ResolveContentSearchParallelism(int index, int processorCount)
+    {
+        int cores = Math.Max(1, processorCount);
+        return index switch
+        {
+            1 => 1,
+            2 => Math.Max(1, cores / 2),
+            3 => cores * 2,
+            4 => cores,
+            _ => 0,
+        };
+    }
 
     /// <summary>Hard process working-set cap in bytes. 0 = no hard cap.</summary>
     public long MaxProcessMemoryBytes { get; init; } = 4L * 1024 * 1024 * 1024;
