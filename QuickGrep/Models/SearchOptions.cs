@@ -1,0 +1,57 @@
+namespace QuickGrep.Models;
+
+/// <summary>What to match the query against.</summary>
+public enum SearchMode
+{
+    /// <summary>Search file contents and file names.</summary>
+    Both = 0,
+    /// <summary>Search file contents only.</summary>
+    Content = 1,
+    /// <summary>Search file names only.</summary>
+    FileNames = 2,
+}
+
+/// <summary>
+/// Configuration for a single search invocation.
+/// </summary>
+public sealed class SearchOptions
+{
+    public required string Directory { get; init; }
+    public required string Query { get; init; }
+    public bool CaseSensitive { get; init; }
+    public bool UseRegex { get; init; }
+    public int ContextLines { get; init; } = 3;
+    public SearchMode SearchMode { get; init; } = SearchMode.Both;
+
+    /// <summary>Comma-separated extensions or globs (e.g. "ts,js" or "*.ts,*.js").</summary>
+    public IReadOnlyList<string> IncludeGlobs { get; init; } = [];
+    public IReadOnlyList<string> ExcludeGlobs { get; init; } = [];
+
+    /// <summary>Files larger than this are skipped. 0 disables the limit.</summary>
+    public long MaxFileSizeBytes { get; init; } = 50L * 1024 * 1024;
+
+    /// <summary>Stop streaming after this many matches. 0 disables.</summary>
+    public int MaxResults { get; init; } = 50_000;
+
+    /// <summary>Maximum matches per individual file before moving to the next. 0 disables.</summary>
+    public int MaxMatchesPerFile { get; init; } = 1_000;
+
+    public bool SkipBinary { get; init; } = true;
+
+    /// <summary>Absolute ceiling for <see cref="MaxResults"/> regardless of user settings.</summary>
+    public const int MaxResultsCeiling = 50_000;
+
+    /// <summary>
+    /// Number of concurrent file scans. 0 = auto (Environment.ProcessorCount).
+    /// </summary>
+    public int MaxDegreeOfParallelism { get; init; } = 0;
+
+    /// <summary>Hard process working-set cap in bytes. 0 = no hard cap.</summary>
+    public long MaxProcessMemoryBytes { get; init; } = 4L * 1024 * 1024 * 1024;
+
+    /// <summary>System-wide memory pressure threshold (0-100). 0 = disabled.</summary>
+    public int MemoryPressurePercent { get; init; } = 80;
+
+    /// <summary>Set of file extensions (without dots, case-insensitive) to skip entirely — no binary check, no content read.</summary>
+    public IReadOnlySet<string> SkipExtensions { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+}

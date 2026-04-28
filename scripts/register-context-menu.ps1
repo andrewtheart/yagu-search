@@ -1,0 +1,55 @@
+<#
+.SYNOPSIS
+  Registers (or unregisters) the "Search with QuickGrep" Explorer context menu entry.
+
+.PARAMETER ExePath
+  Full path to QuickGrep.exe.
+
+.PARAMETER Uninstall
+  Removes the registry entries instead of installing them.
+
+.EXAMPLE
+  .\register-context-menu.ps1 -ExePath 'C:\Tools\QuickGrep\QuickGrep.exe'
+  .\register-context-menu.ps1 -Uninstall
+#>
+[CmdletBinding()]
+param(
+  [Parameter(Mandatory = $false)]
+  [string]$ExePath,
+  [switch]$Uninstall
+)
+
+$ErrorActionPreference = 'Stop'
+
+$regPaths = @(
+  'HKCU:\Software\Classes\Directory\shell\QuickGrep',
+  'HKCU:\Software\Classes\Directory\Background\shell\QuickGrep'
+)
+
+if ($Uninstall) {
+  foreach ($p in $regPaths) {
+    if (Test-Path $p) {
+      Remove-Item -Path $p -Recurse -Force
+      Write-Host "Removed $p"
+    }
+  }
+  return
+}
+
+if (-not $ExePath) {
+  throw "Provide -ExePath '<path to QuickGrep.exe>' or use -Uninstall."
+}
+if (-not (Test-Path $ExePath)) {
+  throw "ExePath does not exist: $ExePath"
+}
+
+foreach ($regPath in $regPaths) {
+  New-Item -Path $regPath -Force | Out-Null
+  New-Item -Path "$regPath\command" -Force | Out-Null
+  Set-ItemProperty -Path $regPath -Name '(Default)' -Value 'Search with QuickGrep'
+  Set-ItemProperty -Path $regPath -Name 'Icon' -Value $ExePath
+  Set-ItemProperty -Path "$regPath\command" -Name '(Default)' -Value ('"{0}" --dir "%V"' -f $ExePath)
+  Write-Host "Registered $regPath"
+}
+
+Write-Host "Done. Right-click any folder to see 'Search with QuickGrep'."

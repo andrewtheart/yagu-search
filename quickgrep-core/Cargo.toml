@@ -1,0 +1,22 @@
+[package]
+name = "quickgrep-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "quickgrep_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+memchr = "2"
+memmap2 = "0.9"
+regex = "1"
+bstr = { version = "1", default-features = false, features = ["std"] }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+panic = "abort"
+strip = "symbols"

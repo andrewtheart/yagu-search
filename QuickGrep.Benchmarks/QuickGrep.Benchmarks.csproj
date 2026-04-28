@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>QuickGrep.Benchmarks</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.14.*" />
+    <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\QuickGrep\Models\SearchResult.cs" Link="Source\Models\SearchResult.cs" />
+    <Compile Include="..\QuickGrep\Models\SearchOptions.cs" Link="Source\Models\SearchOptions.cs" />
+    <Compile Include="..\QuickGrep\Models\SearchProgress.cs" Link="Source\Models\SearchProgress.cs" />
+    <Compile Include="..\QuickGrep\Models\FileGroup.cs" Link="Source\Models\FileGroup.cs" />
+    <Compile Include="..\QuickGrep\Helpers\BinaryDetector.cs" Link="Source\Helpers\BinaryDetector.cs" />
+    <Compile Include="..\QuickGrep\Helpers\GlobMatcher.cs" Link="Source\Helpers\GlobMatcher.cs" />
+    <Compile Include="..\QuickGrep\Helpers\EncodingDetector.cs" Link="Source\Helpers\EncodingDetector.cs" />
+    <Compile Include="..\QuickGrep\Helpers\LineTruncator.cs" Link="Source\Helpers\LineTruncator.cs" />
+    <Compile Include="..\QuickGrep\Helpers\SyntaxHighlighter.cs" Link="Source\Helpers\SyntaxHighlighter.cs" />
+    <Compile Include="..\QuickGrep\Services\FileLister.cs" Link="Source\Services\FileLister.cs" />
+    <Compile Include="..\QuickGrep\Services\ContentSearcher.cs" Link="Source\Services\ContentSearcher.cs" />
+    <Compile Include="..\QuickGrep\Services\FileMetadataCache.cs" Link="Source\Services\FileMetadataCache.cs" />
+    <Compile Include="..\QuickGrep\Services\SearchService.cs" Link="Source\Services\SearchService.cs" />
+    <Compile Include="..\QuickGrep\Services\SettingsService.cs" Link="Source\Services\SettingsService.cs" />
+    <Compile Include="..\QuickGrep\Services\EditorLauncher.cs" Link="Source\Services\EditorLauncher.cs" />
+    <Compile Include="..\QuickGrep\Services\ResultStore.cs" Link="Source\Services\ResultStore.cs" />
+    <Compile Include="..\QuickGrep\Services\FileWatchDiagnostics.cs" Link="Source\Services\FileWatchDiagnostics.cs" />
+    <Compile Include="..\QuickGrep\Services\LogService.cs" Link="Source\Services\LogService.cs" />
+    <Compile Include="..\QuickGrep\Native\NativeSearcher.cs" Link="Source\Native\NativeSearcher.cs" />
+    <Compile Include="..\QuickGrep\Native\EverythingSdk.cs" Link="Source\Native\EverythingSdk.cs" />
+  </ItemGroup>
+
+</Project>
