@@ -36,6 +36,7 @@ internal static class EverythingSdk
     internal const uint EVERYTHING_REQUEST_FILE_NAME = 0x00000001;
     internal const uint EVERYTHING_REQUEST_PATH = 0x00000002;
     internal const uint EVERYTHING_REQUEST_FULL_PATH_AND_FILE_NAME = 0x00000004;
+    internal const uint EVERYTHING_REQUEST_SIZE = 0x00000010;
 
     // ── Sort types ───────────────────────────────────────────────
     internal const uint EVERYTHING_SORT_PATH_ASCENDING = 3;
@@ -81,6 +82,9 @@ internal static class EverythingSdk
 
     [DllImport(DllName, EntryPoint = "Everything_GetResultFullPathNameW", CharSet = CharSet.Unicode)]
     internal static extern uint GetResultFullPathName(uint nIndex, StringBuilder lpString, uint nMaxCount);
+
+    [DllImport(DllName, EntryPoint = "Everything_GetResultSize")]
+    internal static extern bool GetResultSize(uint nIndex, out long lpSize);
 
     // ── Cleanup ──────────────────────────────────────────────────
     [DllImport(DllName, EntryPoint = "Everything_Reset")]

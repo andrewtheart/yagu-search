@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
@@ -369,17 +370,17 @@ public sealed partial class MainWindow : Window
         // ── Search Defaults ──
         sp.Children.Add(new TextBlock { Text = "Search Defaults", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16, Margin = new Thickness(0, 4, 0, 0) });
 
-        var searchAsYouType = new CheckBox { Content = "Search as you type", IsChecked = ViewModel.SearchAsYouType };
+        var searchAsYouType = new CheckBox { Content = "Search as you type (runs search on every keystroke)", IsChecked = ViewModel.SearchAsYouType };
         searchAsYouType.Checked += (_, _) => ViewModel.SearchAsYouType = true;
         searchAsYouType.Unchecked += (_, _) => ViewModel.SearchAsYouType = false;
         sp.Children.Add(searchAsYouType);
 
-        sp.Children.Add(new TextBlock { Text = "Context lines (before & after matches):" });
+        sp.Children.Add(new TextBlock { Text = "Context lines (lines shown before & after each match in results):" });
         var ctx = new NumberBox { Value = ViewModel.ContextLines, Minimum = 0, Maximum = 50 };
         ctx.ValueChanged += (_, args) => ViewModel.ContextLines = (int)args.NewValue;
         sp.Children.Add(ctx);
 
-        sp.Children.Add(new TextBlock { Text = "Preview context lines:" });
+        sp.Children.Add(new TextBlock { Text = "Preview context lines (lines shown around each match in the preview panel):" });
         var prevCtx = new NumberBox { Value = ViewModel.PreviewContextLines, Minimum = 0, Maximum = 200 };
         prevCtx.ValueChanged += (_, args) => ViewModel.PreviewContextLines = (int)args.NewValue;
         sp.Children.Add(prevCtx);
@@ -397,15 +398,23 @@ public sealed partial class MainWindow : Window
         // ── Search Limits ──
         sp.Children.Add(new TextBlock { Text = "Search Limits", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16, Margin = new Thickness(0, 12, 0, 0) });
 
-        sp.Children.Add(new TextBlock { Text = "Max results (0 = unlimited):" });
+        sp.Children.Add(new TextBlock { Text = "Max results (0 = unlimited, non-zero values capped at 50,000):" });
         var max = new NumberBox { Value = ViewModel.MaxResults, Minimum = 0 };
         max.ValueChanged += (_, args) => ViewModel.MaxResults = (int)args.NewValue;
         sp.Children.Add(max);
+        sp.Children.Add(new TextBlock { Text = "Stops the search after this many matches. Set to 0 for no limit (memory pressure will still protect against runaway usage).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-        sp.Children.Add(new TextBlock { Text = "Max file size (MB, 0 = unlimited):" });
+        sp.Children.Add(new TextBlock { Text = "Max file size to search (MB, 0 = no limit):" });
         var size = new NumberBox { Value = ViewModel.MaxFileSizeBytes / (1024d * 1024d), Minimum = 0 };
         size.ValueChanged += (_, args) => ViewModel.MaxFileSizeBytes = (long)(args.NewValue * 1024 * 1024);
         sp.Children.Add(size);
+        sp.Children.Add(new TextBlock { Text = "Files larger than this are skipped during search. Also used by the Everything SDK to pre-filter results.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+        var skipBinary = new CheckBox { Content = "Skip binary files", IsChecked = ViewModel.SkipBinary };
+        skipBinary.Checked += (_, _) => ViewModel.SkipBinary = true;
+        skipBinary.Unchecked += (_, _) => ViewModel.SkipBinary = false;
+        sp.Children.Add(skipBinary);
+        sp.Children.Add(new TextBlock { Text = "When enabled, files detected as binary (null bytes, magic bytes) are skipped during content search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
         sp.Children.Add(new TextBlock { Text = "Skip extensions (semicolon-separated, no dots):", Margin = new Thickness(0, 4, 0, 0) });
         var skipExt = new TextBox { Text = ViewModel.SkipExtensions, PlaceholderText = "e.g. exe;dll;zip;png;pdf", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false };
@@ -416,7 +425,7 @@ public sealed partial class MainWindow : Window
         // ── Performance ──
         sp.Children.Add(new TextBlock { Text = "Performance", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16, Margin = new Thickness(0, 12, 0, 0) });
 
-        sp.Children.Add(new TextBlock { Text = "Content-search parallelism:" });
+        sp.Children.Add(new TextBlock { Text = "Content-search parallelism (concurrent file scan threads):" });
         var parallelism = new ComboBox();
         parallelism.Items.Add($"Auto (safe cap · up to {Math.Min(8, Environment.ProcessorCount)})");
         parallelism.Items.Add("1 thread (sequential, HDD safe)");
@@ -427,20 +436,28 @@ public sealed partial class MainWindow : Window
         parallelism.SelectionChanged += (_, _) => ViewModel.ParallelismIndex = parallelism.SelectedIndex;
         sp.Children.Add(parallelism);
 
-        sp.Children.Add(new TextBlock { Text = "File-listing backend:" });
+        sp.Children.Add(new TextBlock { Text = "File-listing backend (how files are discovered before searching):" });
         var backend = new ComboBox();
         backend.Items.Add("Auto (SDK → es.exe → .NET)");
-        backend.Items.Add("Everything SDK only");
-        backend.Items.Add("es.exe only");
-        backend.Items.Add(".NET enumeration only (no Everything)");
+        backend.Items.Add("Everything SDK only (in-process, fastest)");
+        backend.Items.Add("es.exe only (process spawn)");
+        backend.Items.Add(".NET enumeration only (no Everything dependency)");
         backend.SelectedIndex = ViewModel.FileListerBackendIndex;
         backend.SelectionChanged += (_, _) => ViewModel.FileListerBackendIndex = backend.SelectedIndex;
         sp.Children.Add(backend);
+        sp.Children.Add(new TextBlock { Text = "Auto tries the Everything SDK first, then es.exe, then .NET recursive enumeration. Requires voidtools Everything to be running for SDK/es.exe.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-        sp.Children.Add(new TextBlock { Text = "Process memory hard cap (MB, 0 = auto):" });
+        sp.Children.Add(new TextBlock { Text = "Process memory hard cap (MB):" });
         var memLimit = new NumberBox { Value = ViewModel.MemoryLimitMB, Minimum = 0, Maximum = 65536 };
         memLimit.ValueChanged += (_, args) => ViewModel.MemoryLimitMB = (int)args.NewValue;
         sp.Children.Add(memLimit);
+        sp.Children.Add(new TextBlock { Text = "Maximum working set size for the QuickGrep process. Set to 0 for auto (25% of physical RAM, minimum 2 GB). Search enters memory-saving mode when this is exceeded.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+        sp.Children.Add(new TextBlock { Text = "SDK channel buffer size:" });
+        var sdkBuf = new NumberBox { Value = ViewModel.SdkChannelBufferSize, Minimum = 16, Maximum = 1000000 };
+        sdkBuf.ValueChanged += (_, args) => ViewModel.SdkChannelBufferSize = (int)args.NewValue;
+        sp.Children.Add(sdkBuf);
+        sp.Children.Add(new TextBlock { Text = "Number of file paths buffered between the Everything SDK producer thread and the consumer. Higher values may improve throughput on large directories but use more memory. Only applies when using the Everything SDK backend.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
         sp.Children.Add(new TextBlock { Text = "System memory pressure limit (%, 0 = disabled):", TextWrapping = TextWrapping.Wrap });
         var memPressure = new NumberBox { Value = ViewModel.MemoryPressurePercent, Minimum = 0, Maximum = 100 };
@@ -451,10 +468,11 @@ public sealed partial class MainWindow : Window
         // ── Display ──
         sp.Children.Add(new TextBlock { Text = "Display", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16, Margin = new Thickness(0, 12, 0, 0) });
 
-        sp.Children.Add(new TextBlock { Text = "Line truncation length (chars):" });
+        sp.Children.Add(new TextBlock { Text = "Line truncation length (characters):" });
         var trunc = new NumberBox { Value = ViewModel.LineTruncationLength, Minimum = 50, Maximum = 10000 };
         trunc.ValueChanged += (_, args) => ViewModel.LineTruncationLength = (int)args.NewValue;
         sp.Children.Add(trunc);
+        sp.Children.Add(new TextBlock { Text = "Lines longer than this are truncated in the results list to prevent UI slowdowns from extremely long lines.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
         sp.Children.Add(new TextBlock { Text = "Multi-select preview mode:" });
         var previewMode = new ComboBox();
@@ -472,7 +490,7 @@ public sealed partial class MainWindow : Window
         // ── Editor ──
         sp.Children.Add(new TextBlock { Text = "Editor", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16, Margin = new Thickness(0, 12, 0, 0) });
 
-        sp.Children.Add(new TextBlock { Text = "Editor command (use {file} and {line} placeholders):" });
+        sp.Children.Add(new TextBlock { Text = "Editor command ({file} = full file path, {line} = line number):" });
         var editor = new TextBox { Text = ViewModel.EditorCommand };
         editor.TextChanged += (_, _) => ViewModel.EditorCommand = editor.Text;
         sp.Children.Add(editor);
@@ -526,17 +544,17 @@ public sealed partial class MainWindow : Window
         };
         sp.Children.Add(hotkeyCombo);
 
-        sp.Children.Add(new TextBlock { Text = "Max recent directories / queries:" });
+        sp.Children.Add(new TextBlock { Text = "Max recent directories / queries to remember:" });
         var recent = new NumberBox { Value = ViewModel.MaxRecentItems, Minimum = 1, Maximum = 100 };
         recent.ValueChanged += (_, args) => ViewModel.MaxRecentItems = (int)args.NewValue;
         sp.Children.Add(recent);
 
-        sp.Children.Add(new TextBlock { Text = "Log level:" });
+        sp.Children.Add(new TextBlock { Text = "Log verbosity level:" });
         var logLevel = new ComboBox();
-        logLevel.Items.Add("Critical");
-        logLevel.Items.Add("Warning");
-        logLevel.Items.Add("Info");
-        logLevel.Items.Add("Verbose");
+        logLevel.Items.Add("Critical (errors only)");
+        logLevel.Items.Add("Warning (errors + warnings)");
+        logLevel.Items.Add("Info (general activity)");
+        logLevel.Items.Add("Verbose (all details, may slow performance)");
         logLevel.SelectedIndex = ViewModel.LogLevelIndex;
         logLevel.SelectionChanged += (_, _) => ViewModel.LogLevelIndex = logLevel.SelectedIndex;
         sp.Children.Add(logLevel);
@@ -1642,5 +1660,41 @@ public sealed partial class MainWindow : Window
             if (File.Exists(path)) return path;
         }
         return null;
+    }
+
+    // ── Skip-extensions dropdown ──────────────────────────────────
+    private void OnSkipExtToggled(object sender, RoutedEventArgs e) => ViewModel.OnSkipExtensionToggled();
+
+    private void OnSkipExtSelectAll(object sender, RoutedEventArgs e)
+    {
+        foreach (var item in ViewModel.SkipExtensionItems) item.IsEnabled = true;
+        ViewModel.OnSkipExtensionToggled();
+    }
+
+    private void OnSkipExtSelectNone(object sender, RoutedEventArgs e)
+    {
+        foreach (var item in ViewModel.SkipExtensionItems) item.IsEnabled = false;
+        ViewModel.OnSkipExtensionToggled();
+    }
+
+    // ── Skip-count breakdown overlay ─────────────────────────────
+    private void OnSkipCountTapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+    {
+        SkipBreakdownOverlay.Visibility =
+            SkipBreakdownOverlay.Visibility == Visibility.Visible
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+    }
+
+    private void OnSkipCountPointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (sender is TextBlock tb)
+            tb.TextDecorations = Windows.UI.Text.TextDecorations.Underline;
+    }
+
+    private void OnSkipCountPointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (sender is TextBlock tb)
+            tb.TextDecorations = Windows.UI.Text.TextDecorations.None;
     }
 }

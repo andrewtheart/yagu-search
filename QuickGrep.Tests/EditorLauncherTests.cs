@@ -4,8 +4,12 @@ using QuickGrep.Services;
 namespace QuickGrep.Tests;
 
 [Collection("EditorLauncher")]
-public class EditorLauncherTests
+public class EditorLauncherTests : IDisposable
 {
+    public void Dispose()
+    {
+        EditorLauncher.TestProcessLauncher = null;
+    }
     [Fact]
     public void DefaultCommand_IsVsCode()
     {
@@ -25,20 +29,18 @@ public class EditorLauncherTests
     [Fact]
     public void Split_SimpleExe()
     {
-        var launcher = new EditorLauncher { Command = "notepad test.txt" };
-        // notepad exists on Windows, but we only care that it doesn't crash
-        // This exercises the non-quoted Split path
+        // Use a non-existent exe to exercise the non-quoted Split path without spawning a real process.
+        var launcher = new EditorLauncher { Command = "fakeeditor_qg test.txt" };
         bool result = launcher.Open("test.txt", 1);
-        // notepad should at least start
-        Assert.True(result);
+        Assert.False(result); // exe doesn't exist
     }
 
     [Fact]
     public void Split_NoArguments()
     {
-        var launcher = new EditorLauncher { Command = "notepad.exe" };
+        var launcher = new EditorLauncher { Command = "fakeeditor_qg.exe" };
         bool result = launcher.Open("test.txt", 1);
-        Assert.True(result);
+        Assert.False(result); // exe doesn't exist
     }
 
     [Fact]
@@ -69,6 +71,7 @@ public class EditorLauncherTests
     [Fact]
     public void OpenContainingFolder_WithValidFile_ReturnsTrue()
     {
+        EditorLauncher.TestProcessLauncher = _ => { };
         var tempFile = Path.GetTempFileName();
         try
         {
@@ -99,6 +102,7 @@ public class EditorLauncherTests
     [Fact]
     public void OpenTerminalAt_WithValidFile_ReturnsTrue()
     {
+        EditorLauncher.TestProcessLauncher = _ => { };
         var tempFile = Path.GetTempFileName();
         try
         {
