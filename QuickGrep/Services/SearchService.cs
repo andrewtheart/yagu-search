@@ -63,6 +63,7 @@ public sealed class SearchService
                 MaxProcessMemoryBytes = options.MaxProcessMemoryBytes,
                 MemoryPressurePercent = options.MemoryPressurePercent,
                 SkipExtensions = options.SkipExtensions,
+                SdkChannelBufferSize = options.SdkChannelBufferSize,
             };
         }
 
@@ -99,6 +100,16 @@ public sealed class SearchService
         // draining the full file list before scanning starts.
         var includeExts = ExtractExtensions(options.IncludeGlobs);
         var globMatcher = new GlobMatcher(options.IncludeGlobs, options.ExcludeGlobs);
+
+        // Push skip settings to the lister so the Everything SDK path can
+        // pre-filter by size/extension without per-file FileInfo calls.
+        if (_fileLister is FileLister concreteLister)
+        {
+            concreteLister.EarlyMaxFileSizeBytes = options.MaxFileSizeBytes;
+            concreteLister.EarlySkipExtensions = options.SkipExtensions;
+            concreteLister.EarlyExcludeGlobs = options.ExcludeGlobs;
+            concreteLister.SdkChannelBufferSize = options.SdkChannelBufferSize;
+        }
 
         bool searchContent = options.SearchMode != SearchMode.FileNames;
         bool searchFileNames = options.SearchMode != SearchMode.Content;
@@ -143,27 +154,52 @@ public sealed class SearchService
         // Skip-reason tallies
         int skipBinary = 0, skipAccessDenied = 0, skipIOError = 0, skipTooLarge = 0;
         int skipNotFound = 0, skipEncoding = 0, skipOther = 0, skipByExtension = 0, skipDirectories = 0;
+        int skipGlobExcluded = 0;
 
         int CurrentDirectorySkips() => Math.Max(Volatile.Read(ref skipDirectories), _fileLister.SkippedDirectories);
         int CurrentAccessDeniedSkips() => Volatile.Read(ref skipAccessDenied) + _fileLister.AccessDeniedDirectories;
-        int CurrentFilesSkipped() => Volatile.Read(ref filesSkipped) + CurrentDirectorySkips();
+        int CurrentEarlySkips() => _fileLister.EarlySkippedFiles;
+        int CurrentFilesSkipped() => Volatile.Read(ref filesSkipped) + CurrentDirectorySkips() + CurrentEarlySkips();
         int CurrentTotalFiles()
         {
             int knownTotal = _fileLister.KnownTotalFiles;
+            int earlySkips = CurrentEarlySkips();
+            // Subtract early-skipped files so progress reflects only files that
+            // actually enter the content pipeline.
+            int effectiveKnown = Math.Max(0, knownTotal - earlySkips);
             int discoveredTotal = Volatile.Read(ref totalDiscovered);
             int completedTotal = Volatile.Read(ref filesScanned);
-            return Math.Max(knownTotal, Math.Max(discoveredTotal, completedTotal));
+            return Math.Max(effectiveKnown, Math.Max(discoveredTotal, completedTotal));
         }
 
-        SearchProgress CreateProgressSnapshot() => new(
-            Volatile.Read(ref filesScanned),
-            CurrentTotalFiles(),
-            Volatile.Read(ref totalMatches),
-            Volatile.Read(ref filesWithMatches),
-            CurrentFilesSkipped(),
-            Volatile.Read(ref bytesScanned),
-            sw.Elapsed,
-            CurrentAccessDeniedSkips());
+        SearchProgress CreateProgressSnapshot()
+        {
+            int accessDenied = CurrentAccessDeniedSkips();
+            int dirSkips = CurrentDirectorySkips();
+            int nonAccessDeniedDirSkips = Math.Max(0, dirSkips - _fileLister.AccessDeniedDirectories);
+            var breakdown = new SkipBreakdown(
+                Volatile.Read(ref skipBinary),
+                accessDenied,
+                Volatile.Read(ref skipIOError),
+                Volatile.Read(ref skipTooLarge),
+                Volatile.Read(ref skipNotFound),
+                Volatile.Read(ref skipEncoding),
+                Volatile.Read(ref skipOther),
+                Volatile.Read(ref skipByExtension),
+                nonAccessDeniedDirSkips,
+                CurrentEarlySkips(),
+                Volatile.Read(ref skipGlobExcluded));
+            return new(
+                Volatile.Read(ref filesScanned),
+                CurrentTotalFiles(),
+                Volatile.Read(ref totalMatches),
+                Volatile.Read(ref filesWithMatches),
+                CurrentFilesSkipped(),
+                Volatile.Read(ref bytesScanned),
+                sw.Elapsed,
+                accessDenied,
+                breakdown);
+        }
 
         // ── Discovery ──
         var discovery = Task.Run(async () =>
@@ -192,7 +228,7 @@ public sealed class SearchService
                     {
                         Interlocked.Increment(ref filesScanned);
                         Interlocked.Increment(ref filesSkipped);
-                        Interlocked.Increment(ref skipOther);
+                        Interlocked.Increment(ref skipGlobExcluded);
                         continue;
                     }
 
@@ -508,11 +544,14 @@ public sealed class SearchService
         bool wasDegraded = Volatile.Read(ref everDegraded) != 0;
         int totalFiles = CurrentTotalFiles();
         int directorySkips = CurrentDirectorySkips();
+        int earlySkips = CurrentEarlySkips();
         int accessDeniedSkips = CurrentAccessDeniedSkips();
-        int totalSkipped = Volatile.Read(ref filesSkipped) + directorySkips;
+        int totalSkipped = Volatile.Read(ref filesSkipped) + directorySkips + earlySkips;
         int nonAccessDeniedDirectorySkips = Math.Max(0, directorySkips - _fileLister.AccessDeniedDirectories);
-        var skipReasons = new SkipBreakdown(skipBinary, accessDeniedSkips, skipIOError, skipTooLarge, skipNotFound, skipEncoding, skipOther, skipByExtension, nonAccessDeniedDirectorySkips);
-        LogService.Instance.Info("SearchService", $"Search complete: {totalMatches} matches in {filesWithMatches} files, {filesScanned} scanned, {totalSkipped} skipped ({skipReasons}), degraded={wasDegraded}, truncated={wasTruncated}, {sw.Elapsed.TotalSeconds:F2}s");
+        // Attribute early skips to ByExtension/TooLarge tallies — they were pre-filtered
+        // by those criteria but we can't distinguish after the fact, so count them separately.
+        var skipReasons = new SkipBreakdown(skipBinary, accessDeniedSkips, skipIOError, skipTooLarge, skipNotFound, skipEncoding, skipOther, skipByExtension, nonAccessDeniedDirectorySkips, earlySkips, skipGlobExcluded);
+        LogService.Instance.Info("SearchService", $"Search complete: {totalMatches} matches in {filesWithMatches} files, {filesScanned} scanned, {totalSkipped} skipped ({skipReasons}), earlyFiltered={earlySkips}, degraded={wasDegraded}, truncated={wasTruncated}, {sw.Elapsed.TotalSeconds:F2}s");
         yield return new SearchEvent.Completed(new SearchSummary(
             TotalFiles: totalFiles,
             FilesScanned: filesScanned,

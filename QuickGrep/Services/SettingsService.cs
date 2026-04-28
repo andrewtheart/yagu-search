@@ -32,6 +32,10 @@ public sealed class AppSettings
     public int MemoryLimitMB { get; set; } = 4096;
     /// <summary>System-wide memory pressure threshold (0-100). Search evicts cached results and switches to memory-saving mode when total machine memory usage exceeds this %. 0 = disabled.</summary>
     public int MemoryPressurePercent { get; set; } = 80;
+    /// <summary>Bounded channel buffer size for the Everything SDK streaming path. Higher values use more memory but can improve throughput.</summary>
+    public int SdkChannelBufferSize { get; set; } = 4096;
+    /// <summary>Whether to skip binary files during content search. Default true.</summary>
+    public bool SkipBinary { get; set; } = true;
     /// <summary>Semicolon-separated file extensions to skip entirely (no binary check, no content read). e.g. "exe;dll;zip;png;jpg".</summary>
     public string SkipExtensions { get; set; } = "exe;dll;pdb;obj;lib;so;dylib;zip;gz;tar;7z;rar;bz2;xz;iso;cab;msi;nupkg;whl;png;jpg;jpeg;gif;bmp;ico;tif;tiff;webp;svg;mp3;mp4;avi;mov;wmv;flv;mkv;wav;ogg;flac;woff;woff2;ttf;eot;otf;pdf;doc;docx;xls;xlsx;ppt;pptx";
 

@@ -30,6 +30,9 @@ public interface IFileLister
 
     /// <summary>Known total file count from the listing backend, or 0 when it cannot be known up front.</summary>
     int KnownTotalFiles { get; }
+
+    /// <summary>Files skipped early during listing (e.g. by size or extension via the Everything SDK).</summary>
+    int EarlySkippedFiles { get; }
 }
 
 /// <summary>Selects which file-listing backend to use.</summary>
@@ -55,10 +58,24 @@ public sealed class FileLister : IFileLister
     private int _skippedDirectories;
     private int _accessDeniedDirectories;
     private int _knownTotalFiles;
+    private int _earlySkippedFiles;
     public string? FallbackReason { get; private set; }
     public int SkippedDirectories => Volatile.Read(ref _skippedDirectories);
     public int AccessDeniedDirectories => Volatile.Read(ref _accessDeniedDirectories);
     public int KnownTotalFiles => Volatile.Read(ref _knownTotalFiles);
+    public int EarlySkippedFiles => Volatile.Read(ref _earlySkippedFiles);
+
+    /// <summary>Files larger than this are skipped during listing (SDK path only). 0 disables.</summary>
+    public long EarlyMaxFileSizeBytes { get; set; }
+
+    /// <summary>Extensions (without dots, case-insensitive) to skip during listing (SDK path only).</summary>
+    public IReadOnlySet<string> EarlySkipExtensions { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Exclude glob patterns to push into the Everything SDK query (SDK path only).</summary>
+    public IReadOnlyList<string> EarlyExcludeGlobs { get; set; } = [];
+
+    /// <summary>Bounded channel buffer capacity for the Everything SDK streaming path. Default 4096.</summary>
+    public int SdkChannelBufferSize { get; set; } = 4096;
 
     /// <summary>
     /// Forced backend selection. <c>Auto</c> tries SDK → es.exe → .NET in order.
@@ -80,6 +97,7 @@ public sealed class FileLister : IFileLister
         Volatile.Write(ref _skippedDirectories, 0);
         Volatile.Write(ref _accessDeniedDirectories, 0);
         Volatile.Write(ref _knownTotalFiles, 0);
+        Volatile.Write(ref _earlySkippedFiles, 0);
         if (string.IsNullOrWhiteSpace(directory)) yield break;
 
         var fullDir = Path.GetFullPath(directory);
@@ -202,13 +220,55 @@ public sealed class FileLister : IFileLister
                 query += $" ext:{exts}";
         }
 
+        // Exclude extensions at query level so Everything never returns them.
+        var skipExts = EarlySkipExtensions;
+        if (skipExts.Count > 0)
+        {
+            var excludeExts = string.Join(';', skipExts);
+            query += $" !ext:{excludeExts}";
+        }
+
+        // Exclude files larger than the configured limit at query level.
+        long maxSizeBytes = EarlyMaxFileSizeBytes;
+        if (maxSizeBytes > 0)
+        {
+            query += $" size:<={maxSizeBytes}";
+        }
+
+        // Translate exclude globs into Everything search syntax.
+        // Extension globs ("*.log") → !ext:log   (already handled above for SkipExtensions)
+        // Segment names ("node_modules", ".git") → !"\segment\"
+        // Complex globs with wildcards/paths are left to the GlobMatcher post-filter.
+        foreach (var raw in EarlyExcludeGlobs)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            foreach (var part in raw.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var p = part;
+                // "*.ext" → exclude extension
+                if (p.StartsWith("*.") && p[2..].All(c => char.IsLetterOrDigit(c) || c == '_'))
+                {
+                    query += $" !ext:{p[2..]}";
+                }
+                // Bare token with no wildcards/path separators → path segment exclusion
+                else if (!p.Contains('*') && !p.Contains('?') && !p.Contains('/') && !p.Contains('\\'))
+                {
+                    // Everything path search: !"\segment\" matches the segment as a folder
+                    // in any position in the path.
+                    query += $" !\"\\{p}\\\"";
+                }
+                // Complex globs are left to the GlobMatcher post-filter.
+            }
+        }
+
         LogService.Instance.Warning("FileLister", $"Everything SDK query: {query}");
 
         // Stream results through a bounded channel instead of collecting all
         // into a List<string>. This avoids allocating a multi-million-entry
         // List (with LOH-sized backing arrays) that caused 1.4 GB LOH spikes
         // and triggered 97%-time-in-GC storms.
-        var channel = Channel.CreateBounded<string>(new BoundedChannelOptions(4096)
+        int channelCapacity = Math.Max(16, SdkChannelBufferSize);
+        var channel = Channel.CreateBounded<string>(new BoundedChannelOptions(channelCapacity)
         {
             SingleWriter = true,
             SingleReader = true,
@@ -234,7 +294,13 @@ public sealed class FileLister : IFileLister
                         EverythingSdk.Reset();
                         EverythingSdk.SetSearch(query);
                         EverythingSdk.SetMatchCase(false);
-                        EverythingSdk.SetRequestFlags(EverythingSdk.EVERYTHING_REQUEST_FULL_PATH_AND_FILE_NAME);
+                        // Request size alongside paths so we can pre-filter by file size
+                        // and extension without per-file FileInfo calls.
+                        bool wantSize = EarlyMaxFileSizeBytes > 0;
+                        uint requestFlags = EverythingSdk.EVERYTHING_REQUEST_FULL_PATH_AND_FILE_NAME;
+                        if (wantSize)
+                            requestFlags |= EverythingSdk.EVERYTHING_REQUEST_SIZE;
+                        EverythingSdk.SetRequestFlags(requestFlags);
                         EverythingSdk.SetSort(EverythingSdk.EVERYTHING_SORT_PATH_ASCENDING);
                         if (maxFiles > 0)
                             EverythingSdk.SetMax((uint)maxFiles);
@@ -255,10 +321,26 @@ public sealed class FileLister : IFileLister
                         SetKnownTotalFiles(count);
                         LogService.Instance.Warning("FileLister", $"Everything SDK: {count} returned, {total} total matches, last error={EverythingSdk.GetLastError()}");
                         var buf = new System.Text.StringBuilder(1024);
+                        long earlyMaxSize = EarlyMaxFileSizeBytes;
+                        var earlySkipExts = EarlySkipExtensions;
+                        bool hasSkipExts = earlySkipExts.Count > 0;
+                        int skipped = 0;
 
                         for (uint i = 0; i < count; i++)
                         {
                             if (cancellationToken.IsCancellationRequested) break;
+
+                            // ── Early skip by file size ──
+                            if (wantSize && earlyMaxSize > 0)
+                            {
+                                if (EverythingSdk.GetResultSize(i, out long fileSize) && fileSize > earlyMaxSize)
+                                {
+                                    skipped++;
+                                    Volatile.Write(ref _earlySkippedFiles, skipped);
+                                    continue;
+                                }
+                            }
+
                             buf.Clear();
                             uint len = EverythingSdk.GetResultFullPathName(i, buf, (uint)buf.Capacity);
                             if (len == 0) continue;
@@ -268,13 +350,39 @@ public sealed class FileLister : IFileLister
                                 buf.Clear();
                                 EverythingSdk.GetResultFullPathName(i, buf, (uint)buf.Capacity);
                             }
-                            // Write into the channel. TryWrite succeeds until the 4096
-                            // buffer is full; if full, use the async path with a sync wait.
-                            if (!channel.Writer.TryWrite(buf.ToString()))
+
+                            // ── Early skip by extension blocklist ──
+                            if (hasSkipExts)
                             {
-                                channel.Writer.WriteAsync(buf.ToString(), cancellationToken)
-                                    .AsTask().GetAwaiter().GetResult();
+                                var path = buf.ToString();
+                                var ext = System.IO.Path.GetExtension(path.AsSpan());
+                                if (ext.Length > 1 && earlySkipExts.Contains(ext.Slice(1).ToString()))
+                                {
+                                    skipped++;
+                                    Volatile.Write(ref _earlySkippedFiles, skipped);
+                                    continue;
+                                }
+                                if (!channel.Writer.TryWrite(path))
+                                {
+                                    channel.Writer.WriteAsync(path, cancellationToken)
+                                        .AsTask().GetAwaiter().GetResult();
+                                }
                             }
+                            else
+                            {
+                                // Write into the channel. TryWrite succeeds until the 4096
+                                // buffer is full; if full, use the async path with a sync wait.
+                                if (!channel.Writer.TryWrite(buf.ToString()))
+                                {
+                                    channel.Writer.WriteAsync(buf.ToString(), cancellationToken)
+                                        .AsTask().GetAwaiter().GetResult();
+                                }
+                            }
+                        }
+
+                        if (skipped > 0)
+                        {
+                            LogService.Instance.Warning("FileLister", $"Everything SDK: {skipped:N0} files pre-filtered (size/extension)");
                         }
 
                         EverythingSdk.Reset();

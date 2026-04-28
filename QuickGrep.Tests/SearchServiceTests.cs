@@ -235,7 +235,7 @@ public class SearchServiceTests : IDisposable
         Assert.Equal(2, summary!.TotalFiles);
         Assert.Equal(2, summary.FilesScanned);
         Assert.Equal(1, summary.FilesSkipped);
-        Assert.Equal(1, summary.SkipReasons?.Other);
+        Assert.Equal(1, summary.SkipReasons?.GlobExcluded);
         Assert.Equal(1, summary.TotalMatches);
     }
 
@@ -358,6 +358,7 @@ public class SearchServiceTests : IDisposable
         public int SkippedDirectories => 0;
         public int AccessDeniedDirectories => 0;
         public int KnownTotalFiles { get; } = knownTotalFiles;
+        public int EarlySkippedFiles => 0;
 
         public async IAsyncEnumerable<string> ListFilesAsync(
             string directory,
@@ -383,6 +384,7 @@ public class SearchServiceTests : IDisposable
         public int SkippedDirectories { get; private set; }
         public int AccessDeniedDirectories { get; private set; }
         public int KnownTotalFiles => 0;
+        public int EarlySkippedFiles => 0;
 
         public async IAsyncEnumerable<string> ListFilesAsync(
             string directory,
@@ -962,7 +964,7 @@ public class SearchProgressCoverageTests
     public void Deconstruction()
     {
         var sp = new SearchProgress(1, 2, 3, 4, 5, 6, TimeSpan.FromSeconds(7), 8);
-        var (fs, tf, mf, fwm, fsk, bs, el, ad) = sp;
+        var (fs, tf, mf, fwm, fsk, bs, el, ad, sr) = sp;
         Assert.Equal(1, fs);
         Assert.Equal(2, tf);
         Assert.Equal(3, mf);
@@ -971,6 +973,7 @@ public class SearchProgressCoverageTests
         Assert.Equal(6L, bs);
         Assert.Equal(TimeSpan.FromSeconds(7), el);
         Assert.Equal(8, ad);
+        Assert.Null(sr);
     }
 }
 
@@ -981,7 +984,7 @@ public class SearchSummaryCoverageTests
     [Fact]
     public void AllProperties_Accessible()
     {
-        var skip = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9);
+        var skip = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
         var ss = new SearchSummary(
             TotalFiles: 100,
             FilesScanned: 80,
@@ -1017,6 +1020,8 @@ public class SearchSummaryCoverageTests
         Assert.Equal(7, ss.SkipReasons.Other);
         Assert.Equal(8, ss.SkipReasons.ByExtension);
         Assert.Equal(9, ss.SkipReasons.Directories);
+        Assert.Equal(10, ss.SkipReasons.EarlyFiltered);
+        Assert.Equal(11, ss.SkipReasons.GlobExcluded);
     }
 
     [Fact]
@@ -1033,12 +1038,14 @@ public class SearchSummaryCoverageTests
         var sb = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7);
         Assert.Equal(0, sb.ByExtension);
         Assert.Equal(0, sb.Directories);
+        Assert.Equal(0, sb.EarlyFiltered);
+        Assert.Equal(0, sb.GlobExcluded);
     }
 
     [Fact]
     public void SkipBreakdown_ToString_ContainsAllFields()
     {
-        var sb = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9);
+        var sb = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
         var str = sb.ToString();
         Assert.Contains("binary=1", str);
         Assert.Contains("accessDenied=2", str);
@@ -1049,13 +1056,15 @@ public class SearchSummaryCoverageTests
         Assert.Contains("other=7", str);
         Assert.Contains("byExtension=8", str);
         Assert.Contains("directories=9", str);
+        Assert.Contains("earlyFiltered=10", str);
+        Assert.Contains("globExcluded=11", str);
     }
 
     [Fact]
     public void SkipBreakdown_RecordEquality()
     {
-        var a = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9);
-        var b = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9);
+        var a = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+        var b = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
         Assert.Equal(a, b);
     }
 
@@ -1233,5 +1242,208 @@ public class SearchEventTests
     {
         var evt = new SearchEvent.MemoryPressureRelieved();
         Assert.Null(evt.Diagnostics);
+    }
+}
+
+// ─── SearchProgress: SkipReasons field ──────────────────────────────────
+
+public class SearchProgressSkipReasonsTests
+{
+    [Fact]
+    public void SkipReasons_DefaultsToNull()
+    {
+        var sp = new SearchProgress(1, 2, 3, 4, 5, 6, TimeSpan.Zero, 7);
+        Assert.Null(sp.SkipReasons);
+    }
+
+    [Fact]
+    public void SkipReasons_RoundTrips()
+    {
+        var breakdown = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+        var sp = new SearchProgress(10, 20, 30, 40, 50, 60, TimeSpan.FromSeconds(1), 70, breakdown);
+        Assert.NotNull(sp.SkipReasons);
+        Assert.Equal(10, sp.SkipReasons!.EarlyFiltered);
+        Assert.Equal(11, sp.SkipReasons.GlobExcluded);
+    }
+
+    [Fact]
+    public void Deconstruction_WithSkipReasons()
+    {
+        var breakdown = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+        var sp = new SearchProgress(10, 20, 30, 40, 50, 60, TimeSpan.FromSeconds(1), 70, breakdown);
+        var (fs, tf, mf, fwm, fsk, bs, el, ad, sr) = sp;
+        Assert.Equal(10, fs);
+        Assert.Equal(70, ad);
+        Assert.NotNull(sr);
+        Assert.Equal(10, sr!.EarlyFiltered);
+    }
+
+    [Fact]
+    public void Equality_WithSkipReasons()
+    {
+        var b = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+        var a1 = new SearchProgress(1, 2, 3, 4, 5, 6, TimeSpan.Zero, 7, b);
+        var a2 = new SearchProgress(1, 2, 3, 4, 5, 6, TimeSpan.Zero, 7, b);
+        Assert.Equal(a1, a2);
+    }
+}
+
+// ─── SearchService: early-skip accounting ───────────────────────────────
+
+[Collection("FileListerBackend")]
+public class SearchServiceEarlySkipTests : IDisposable
+{
+    private readonly string _root;
+    private readonly FileListerBackend _originalBackend;
+    public SearchServiceEarlySkipTests()
+    {
+        _originalBackend = FileLister.Backend;
+        FileLister.Backend = FileListerBackend.Managed;
+        _root = Path.Combine(Path.GetTempPath(), "qg-early-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_root);
+    }
+    public void Dispose() { FileLister.Backend = _originalBackend; try { Directory.Delete(_root, recursive: true); } catch { } }
+
+    private void Write(string rel, string content)
+    {
+        var p = Path.Combine(_root, rel);
+        Directory.CreateDirectory(Path.GetDirectoryName(p)!);
+        File.WriteAllText(p, content, new System.Text.UTF8Encoding(false));
+    }
+
+    [Fact]
+    public async Task EarlySkips_IncludedInSummaryFilesSkipped()
+    {
+        Write("a.txt", "needle");
+
+        var lister = new EarlySkippedFileLister(
+            [Path.Combine(_root, "a.txt")],
+            earlySkippedFiles: 5,
+            knownTotalFiles: 6);
+        var svc = new SearchService(lister, new ContentSearcher());
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        SearchSummary? summary = null;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Completed c) summary = c.Summary;
+        }
+
+        Assert.NotNull(summary);
+        // FilesSkipped should include the early-skipped files
+        Assert.True(summary!.FilesSkipped >= 5, $"FilesSkipped={summary.FilesSkipped} should be >= 5 (earlySkips)");
+        Assert.Equal(5, summary.SkipReasons?.EarlyFiltered);
+    }
+
+    [Fact]
+    public async Task EarlySkips_SubtractedFromKnownTotalForProgress()
+    {
+        Write("a.txt", "needle");
+
+        var lister = new EarlySkippedFileLister(
+            [Path.Combine(_root, "a.txt")],
+            earlySkippedFiles: 10,
+            knownTotalFiles: 100);
+        var svc = new SearchService(lister, new ContentSearcher());
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        SearchProgress? lastProgress = null;
+        SearchSummary? summary = null;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Progress p) lastProgress = p.Snapshot;
+            if (evt is SearchEvent.Completed c) summary = c.Summary;
+        }
+
+        Assert.NotNull(summary);
+        // TotalFiles = max(effectiveKnown=90, discovered=1, scanned=1) = 90
+        Assert.Equal(90, summary!.TotalFiles);
+    }
+
+    [Fact]
+    public async Task ProgressSnapshot_ContainsFullSkipBreakdown()
+    {
+        Write("a.txt", "needle");
+        Write("skip.cs", "needle");
+
+        var files = new[]
+        {
+            Path.Combine(_root, "a.txt"),
+            Path.Combine(_root, "skip.cs"),
+        };
+        var lister = new EarlySkippedFileLister(files, earlySkippedFiles: 3, knownTotalFiles: 5);
+        var svc = new SearchService(lister, new ContentSearcher());
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            IncludeGlobs = ["*.txt"],
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        SearchSummary? summary = null;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Completed c) summary = c.Summary;
+        }
+
+        Assert.NotNull(summary);
+        Assert.NotNull(summary!.SkipReasons);
+        Assert.Equal(3, summary.SkipReasons!.EarlyFiltered);
+        Assert.Equal(1, summary.SkipReasons.GlobExcluded); // skip.cs excluded by glob
+    }
+
+    private sealed class EarlySkippedFileLister(
+        IReadOnlyList<string> files,
+        int earlySkippedFiles,
+        int knownTotalFiles = 0) : IFileLister
+    {
+        public string? FallbackReason => null;
+        public int SkippedDirectories => 0;
+        public int AccessDeniedDirectories => 0;
+        public int KnownTotalFiles { get; } = knownTotalFiles;
+        public int EarlySkippedFiles { get; } = earlySkippedFiles;
+
+        public async IAsyncEnumerable<string> ListFilesAsync(
+            string directory,
+            IReadOnlyList<string> includeExtensions,
+            int maxFiles,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.Yield();
+            foreach (var f in files) yield return f;
+        }
+    }
+}
+
+// ─── SearchOptions: SdkChannelBufferSize ────────────────────────────────
+
+public class SearchOptionsSdkChannelBufferTests
+{
+    [Fact]
+    public void SdkChannelBufferSize_DefaultIs4096()
+    {
+        var opts = new SearchOptions { Directory = ".", Query = "x" };
+        Assert.Equal(4096, opts.SdkChannelBufferSize);
+    }
+
+    [Fact]
+    public void SdkChannelBufferSize_CanBeSet()
+    {
+        var opts = new SearchOptions { Directory = ".", Query = "x", SdkChannelBufferSize = 512 };
+        Assert.Equal(512, opts.SdkChannelBufferSize);
     }
 }

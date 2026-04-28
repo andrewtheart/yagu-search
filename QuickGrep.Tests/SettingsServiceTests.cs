@@ -204,3 +204,52 @@ public class SettingsServiceDeserializeNullTests
         finally { try { File.Delete(tmp); } catch { } }
     }
 }
+
+// ─── SettingsService: new settings round-trip ───────────────────────────
+
+public class SettingsServiceNewFieldTests
+{
+    [Fact]
+    public void RoundTrip_SdkChannelBufferSize()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-sdk-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var svc = new SettingsService(tmp);
+            var s = new AppSettings { SdkChannelBufferSize = 8192 };
+            svc.Save(s);
+            var loaded = svc.Load();
+            Assert.Equal(8192, loaded.SdkChannelBufferSize);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
+    public void RoundTrip_SkipBinary()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-skipbin-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var svc = new SettingsService(tmp);
+            var s = new AppSettings { SkipBinary = false };
+            svc.Save(s);
+            var loaded = svc.Load();
+            Assert.False(loaded.SkipBinary);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
+    public void Defaults_SdkChannelBufferSize_Is4096()
+    {
+        var s = new AppSettings();
+        Assert.Equal(4096, s.SdkChannelBufferSize);
+    }
+
+    [Fact]
+    public void Defaults_SkipBinary_IsTrue()
+    {
+        var s = new AppSettings();
+        Assert.True(s.SkipBinary);
+    }
+}

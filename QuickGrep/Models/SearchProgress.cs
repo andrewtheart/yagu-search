@@ -12,10 +12,12 @@ public sealed record SkipBreakdown(
     int Encoding,
     int Other,
     int ByExtension = 0,
-    int Directories = 0)
+    int Directories = 0,
+    int EarlyFiltered = 0,
+    int GlobExcluded = 0)
 {
     public override string ToString() =>
-        $"binary={Binary}, accessDenied={AccessDenied}, ioError={IOError}, tooLarge={TooLarge}, notFound={NotFound}, encoding={Encoding}, other={Other}, byExtension={ByExtension}, directories={Directories}";
+        $"binary={Binary}, accessDenied={AccessDenied}, ioError={IOError}, tooLarge={TooLarge}, notFound={NotFound}, encoding={Encoding}, other={Other}, byExtension={ByExtension}, directories={Directories}, earlyFiltered={EarlyFiltered}, globExcluded={GlobExcluded}";
 }
 
 /// <summary>
@@ -29,7 +31,8 @@ public sealed record SearchProgress(
     int FilesSkipped,
     long BytesScanned,
     TimeSpan Elapsed,
-    int AccessDenied = 0);
+    int AccessDenied = 0,
+    SkipBreakdown? SkipReasons = null);
 
 /// <summary>
 /// Final summary published when a search ends.

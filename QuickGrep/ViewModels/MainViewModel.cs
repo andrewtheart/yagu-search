@@ -7,6 +7,22 @@ using QuickGrep.Services;
 
 namespace QuickGrep.ViewModels;
 
+/// <summary>A single extension entry in the skip-extensions dropdown.</summary>
+public sealed partial class SkipExtensionItem : ObservableObject
+{
+    public string Extension { get; }
+    public string Category { get; }
+
+    [ObservableProperty] private bool _isEnabled;
+
+    public SkipExtensionItem(string extension, string category, bool isEnabled)
+    {
+        Extension = extension;
+        Category = category;
+        _isEnabled = isEnabled;
+    }
+}
+
 public sealed partial class MainViewModel : ObservableObject
 {
     private readonly SearchService _search;
@@ -59,12 +75,16 @@ public sealed partial class MainViewModel : ObservableObject
             : HotkeyService.DefaultStartKey.ToString();
         MemoryLimitMB = _settings.MemoryLimitMB;
         MemoryPressurePercent = _settings.MemoryPressurePercent;
+        SdkChannelBufferSize = _settings.SdkChannelBufferSize;
+        SkipBinary = _settings.SkipBinary;
         SkipExtensions = _settings.SkipExtensions;
 
         Helpers.LineTruncator.TruncatedLength = LineTruncationLength;
 
         foreach (var d in _settings.RecentDirectories) RecentDirectories.Add(d);
         foreach (var q in _settings.SearchHistory) SearchHistory.Add(q);
+
+        SyncSkipExtensionItems();
     }
 
     [ObservableProperty] private string _directory = string.Empty;
@@ -95,7 +115,96 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _globalHotkeyEnabled;
     [ObservableProperty] private int _memoryLimitMB = 4096;
     [ObservableProperty] private int _memoryPressurePercent = 80;
+    [ObservableProperty] private int _sdkChannelBufferSize = 4096;
+    [ObservableProperty] private bool _skipBinary = true;
     [ObservableProperty] private string _skipExtensions = "exe;dll;pdb;obj;lib;so;dylib;zip;gz;tar;7z;rar;bz2;xz;iso;cab;msi;nupkg;whl;png;jpg;jpeg;gif;bmp;ico;tif;tiff;webp;svg;mp3;mp4;avi;mov;wmv;flv;mkv;wav;ogg;flac;woff;woff2;ttf;eot;otf;pdf;doc;docx;xls;xlsx;ppt;pptx";
+
+    /// <summary>Observable collection of skip-extension items for the multi-select dropdown.</summary>
+    public ObservableCollection<SkipExtensionItem> SkipExtensionItems { get; } = [];
+
+    /// <summary>Summary label for the skip-extensions dropdown button.</summary>
+    public string SkipExtensionsSummary
+    {
+        get
+        {
+            int enabled = SkipExtensionItems.Count(i => i.IsEnabled);
+            int total = SkipExtensionItems.Count;
+            return total == 0 ? "Skip: none" : $"Skip: {enabled}/{total} ext";
+        }
+    }
+
+    private static readonly Dictionary<string, string> ExtensionCategories = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Binaries / Build
+        ["exe"] = "Binaries", ["dll"] = "Binaries", ["pdb"] = "Binaries", ["obj"] = "Binaries",
+        ["lib"] = "Binaries", ["so"] = "Binaries", ["dylib"] = "Binaries",
+        // Archives
+        ["zip"] = "Archives", ["gz"] = "Archives", ["tar"] = "Archives", ["7z"] = "Archives",
+        ["rar"] = "Archives", ["bz2"] = "Archives", ["xz"] = "Archives", ["iso"] = "Archives",
+        ["cab"] = "Archives", ["msi"] = "Archives", ["nupkg"] = "Archives", ["whl"] = "Archives",
+        // Images
+        ["png"] = "Images", ["jpg"] = "Images", ["jpeg"] = "Images", ["gif"] = "Images",
+        ["bmp"] = "Images", ["ico"] = "Images", ["tif"] = "Images", ["tiff"] = "Images",
+        ["webp"] = "Images", ["svg"] = "Images",
+        // Audio / Video
+        ["mp3"] = "Media", ["mp4"] = "Media", ["avi"] = "Media", ["mov"] = "Media",
+        ["wmv"] = "Media", ["flv"] = "Media", ["mkv"] = "Media", ["wav"] = "Media",
+        ["ogg"] = "Media", ["flac"] = "Media",
+        // Fonts
+        ["woff"] = "Fonts", ["woff2"] = "Fonts", ["ttf"] = "Fonts", ["eot"] = "Fonts", ["otf"] = "Fonts",
+        // Documents
+        ["pdf"] = "Documents", ["doc"] = "Documents", ["docx"] = "Documents",
+        ["xls"] = "Documents", ["xlsx"] = "Documents", ["ppt"] = "Documents", ["pptx"] = "Documents",
+    };
+
+    private static string CategorizeExtension(string ext) =>
+        ExtensionCategories.TryGetValue(ext, out var cat) ? cat : "Other";
+
+    private bool _suppressSkipExtensionSync;
+
+    /// <summary>Rebuild the <see cref="SkipExtensionItems"/> collection from the current <see cref="SkipExtensions"/> string.</summary>
+    public void SyncSkipExtensionItems()
+    {
+        _suppressSkipExtensionSync = true;
+        try
+        {
+            var enabled = ParseExtensionSet(SkipExtensions);
+            // Gather all known extensions: union of currently enabled + all category keys
+            var allExts = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var e in enabled) allExts.Add(e);
+            foreach (var e in ExtensionCategories.Keys) allExts.Add(e);
+
+            SkipExtensionItems.Clear();
+
+            // Group by category, sorted
+            var groups = allExts
+                .GroupBy(CategorizeExtension)
+                .OrderBy(g => g.Key);
+
+            foreach (var group in groups)
+            {
+                foreach (var ext in group.OrderBy(e => e, StringComparer.OrdinalIgnoreCase))
+                {
+                    SkipExtensionItems.Add(new SkipExtensionItem(ext, group.Key, enabled.Contains(ext)));
+                }
+            }
+            OnPropertyChanged(nameof(SkipExtensionsSummary));
+        }
+        finally
+        {
+            _suppressSkipExtensionSync = false;
+        }
+    }
+
+    /// <summary>Called when a skip-extension item is toggled. Rebuilds the string and persists.</summary>
+    public void OnSkipExtensionToggled()
+    {
+        if (_suppressSkipExtensionSync) return;
+        var enabled = SkipExtensionItems.Where(i => i.IsEnabled).Select(i => i.Extension);
+        SkipExtensions = string.Join(';', enabled);
+        OnPropertyChanged(nameof(SkipExtensionsSummary));
+        PersistSettings();
+    }
 
     private string _globalHotkeyKey = HotkeyService.DefaultStartKey.ToString();
     public string GlobalHotkeyKey
@@ -135,10 +244,46 @@ public sealed partial class MainViewModel : ObservableObject
     public bool HasErrorText => !string.IsNullOrEmpty(ErrorText);
     public int OtherSkippedCount => Math.Max(0, FilesSkipped - AccessDeniedCount);
 
+    private SkipBreakdown? _lastSkipBreakdown;
+
+    /// <summary>Formatted tooltip showing a per-category breakdown of skipped files.</summary>
+    public string SkipTooltip
+    {
+        get
+        {
+            var b = _lastSkipBreakdown;
+            if (b is null || FilesSkipped == 0)
+                return "No files skipped";
+
+            var lines = new System.Text.StringBuilder();
+            lines.AppendLine("Skipped files breakdown:");
+            lines.AppendLine();
+            if (b.EarlyFiltered > 0)  lines.AppendLine($"  ⚡  Pre-filtered (SDK)    {b.EarlyFiltered,8:N0}");
+            if (b.GlobExcluded > 0)   lines.AppendLine($"  🚫  Glob exclusions       {b.GlobExcluded,8:N0}");
+            if (b.Binary > 0)         lines.AppendLine($"  🔒  Binary files          {b.Binary,8:N0}");
+            if (b.ByExtension > 0)    lines.AppendLine($"  📄  Skipped extensions     {b.ByExtension,8:N0}");
+            if (b.TooLarge > 0)       lines.AppendLine($"  📏  Too large             {b.TooLarge,8:N0}");
+            if (b.AccessDenied > 0)   lines.AppendLine($"  🔐  Access denied         {b.AccessDenied,8:N0}");
+            if (b.Directories > 0)    lines.AppendLine($"  📁  Inaccessible dirs     {b.Directories,8:N0}");
+            if (b.IOError > 0)        lines.AppendLine($"  ⚠️  I/O errors            {b.IOError,8:N0}");
+            if (b.NotFound > 0)       lines.AppendLine($"  ❓  Not found             {b.NotFound,8:N0}");
+            if (b.Encoding > 0)       lines.AppendLine($"  🔤  Encoding errors       {b.Encoding,8:N0}");
+            if (b.Other > 0)          lines.AppendLine($"  ❔  Other                 {b.Other,8:N0}");
+
+            return lines.ToString().TrimEnd();
+        }
+    }
+
+    private void UpdateSkipBreakdown(SkipBreakdown? breakdown)
+    {
+        _lastSkipBreakdown = breakdown;
+        OnPropertyChanged(nameof(SkipTooltip));
+    }
+
     partial void OnFallbackReasonChanged(string? value) => OnPropertyChanged(nameof(HasFallbackReason));
     partial void OnErrorTextChanged(string? value) => OnPropertyChanged(nameof(HasErrorText));
-    partial void OnFilesSkippedChanged(int value) => OnPropertyChanged(nameof(OtherSkippedCount));
-    partial void OnAccessDeniedCountChanged(int value) => OnPropertyChanged(nameof(OtherSkippedCount));
+    partial void OnFilesSkippedChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); }
+    partial void OnAccessDeniedCountChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); }
     partial void OnSortModeIndexChanged(int value) => ApplySortAndFilter();
     partial void OnSortDirectionIndexChanged(int value) => ApplySortAndFilter();
     partial void OnGroupByDirectoryChanged(bool value) => ApplySortAndFilter();
@@ -204,11 +349,12 @@ public sealed partial class MainViewModel : ObservableObject
                 ExcludeGlobs = SplitCsv(ExcludeGlobs),
                 MaxFileSizeBytes = MaxFileSizeBytes,
                 MaxResults = MaxResults,
-                SkipBinary = true,
+                SkipBinary = SkipBinary,
                 SkipExtensions = ParseExtensionSet(SkipExtensions),
                 MaxDegreeOfParallelism = ResolveParallelism(ParallelismIndex),
                 MaxProcessMemoryBytes = MemoryLimitMB > 0 ? (long)MemoryLimitMB * 1024 * 1024 : 0,
                 MemoryPressurePercent = MemoryPressurePercent,
+                SdkChannelBufferSize = SdkChannelBufferSize,
             };
 
             cts = new CancellationTokenSource();
@@ -250,6 +396,7 @@ public sealed partial class MainViewModel : ObservableObject
                         MatchesFound = p.Snapshot.MatchesFound;
                         FilesSkipped = p.Snapshot.FilesSkipped;
                         AccessDeniedCount = p.Snapshot.AccessDenied;
+                        UpdateSkipBreakdown(p.Snapshot.SkipReasons);
                         StatusText = BuildProgressStatus(p.Snapshot);
                         break;
                     case SearchEvent.Error e:
@@ -276,6 +423,7 @@ public sealed partial class MainViewModel : ObservableObject
                         MatchesFound = c.Summary.TotalMatches;
                         FilesSkipped = c.Summary.FilesSkipped;
                         AccessDeniedCount = c.Summary.SkipReasons?.AccessDenied ?? 0;
+                        UpdateSkipBreakdown(c.Summary.SkipReasons);
                         Truncated = c.Summary.Truncated;
                         Degraded = c.Summary.Degraded;
                         StatusText = BuildCompletionStatus(c.Summary);
@@ -348,6 +496,7 @@ public sealed partial class MainViewModel : ObservableObject
         MatchesFound = 0;
         FilesSkipped = 0;
         AccessDeniedCount = 0;
+        UpdateSkipBreakdown(null);
         Truncated = false;
         Degraded = false;
         IsSearching = true;
@@ -598,6 +747,8 @@ public sealed partial class MainViewModel : ObservableObject
             : HotkeyService.DefaultStartKey.ToString();
         _settings.MemoryLimitMB = MemoryLimitMB;
         _settings.MemoryPressurePercent = MemoryPressurePercent;
+        _settings.SdkChannelBufferSize = SdkChannelBufferSize;
+        _settings.SkipBinary = SkipBinary;
         _settings.SkipExtensions = SkipExtensions;
 
         Helpers.LineTruncator.TruncatedLength = LineTruncationLength;

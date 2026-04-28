@@ -129,6 +129,49 @@
                         <x:String>Content only</x:String>
                         <x:String>File names only</x:String>
                     </ComboBox>
+                    <DropDownButton Content="{x:Bind ViewModel.SkipExtensionsSummary, Mode=OneWay}"
+                                    VerticalAlignment="Center" FontSize="12"
+                                    ToolTipService.ToolTip="Extensions to skip during search">
+                        <DropDownButton.Flyout>
+                            <Flyout Placement="BottomEdgeAlignedLeft">
+                                <StackPanel Width="320" Spacing="2">
+                                    <Grid Margin="0,0,0,6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Skip Extensions" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                        <HyperlinkButton Grid.Column="1" Content="All" Click="OnSkipExtSelectAll" Padding="4,2" />
+                                        <HyperlinkButton Grid.Column="2" Content="None" Click="OnSkipExtSelectNone" Padding="4,2" />
+                                    </Grid>
+                                    <ScrollViewer MaxHeight="380" VerticalScrollBarVisibility="Auto">
+                                        <ItemsRepeater x:Name="SkipExtRepeater"
+                                                       ItemsSource="{x:Bind ViewModel.SkipExtensionItems, Mode=OneWay}">
+                                            <ItemsRepeater.Layout>
+                                                <StackLayout Spacing="0" />
+                                            </ItemsRepeater.Layout>
+                                            <ItemsRepeater.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:SkipExtensionItem">
+                                                    <CheckBox IsChecked="{x:Bind IsEnabled, Mode=TwoWay}"
+                                                              MinWidth="0" MinHeight="0" Padding="6,2"
+                                                              Checked="OnSkipExtToggled" Unchecked="OnSkipExtToggled">
+                                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                                            <TextBlock Text="{x:Bind Extension}" FontFamily="Consolas" Width="50" />
+                                                            <TextBlock Text="{x:Bind Category}" Opacity="0.5" FontSize="11" />
+                                                        </StackPanel>
+                                                    </CheckBox>
+                                                </DataTemplate>
+                                            </ItemsRepeater.ItemTemplate>
+                                        </ItemsRepeater>
+                                    </ScrollViewer>
+                                </StackPanel>
+                            </Flyout>
+                        </DropDownButton.Flyout>
+                    </DropDownButton>
+                    <CheckBox Content="Skip binary" IsChecked="{x:Bind ViewModel.SkipBinary, Mode=TwoWay}"
+                              VerticalAlignment="Center" MinWidth="0" Padding="4,0"
+                              ToolTipService.ToolTip="Skip files detected as binary during content search" />
                 </StackPanel>
 
                 <!-- Filter row -->
@@ -387,19 +430,37 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Opacity="0.8" FontSize="12" />
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="16">
-                <TextBlock FontSize="12" Opacity="0.6">
-                    <Run Text="Access denied: " />
-                    <Run Text="{x:Bind ViewModel.AccessDeniedCount, Mode=OneWay}" />
-                </TextBlock>
-                <TextBlock FontSize="12" Opacity="0.6">
-                    <Run Text="Skipped: " />
-                    <Run Text="{x:Bind ViewModel.OtherSkippedCount, Mode=OneWay}" />
-                </TextBlock>
-            </StackPanel>
+            <TextBlock Grid.Column="1" FontSize="12" Opacity="0.6" x:Name="SkipCountBlock"
+                       Tapped="OnSkipCountTapped" PointerEntered="OnSkipCountPointerEntered"
+                       PointerExited="OnSkipCountPointerExited">
+                <Run Text="Skipped: " />
+                <Run Text="{x:Bind ViewModel.FilesSkipped, Mode=OneWay}" />
+            </TextBlock>
             <TextBlock Grid.Column="2" Foreground="DarkOrange" FontSize="12"
                        Visibility="{x:Bind ViewModel.Truncated, Mode=OneWay}"
                        Text="Results truncated — refine your query" />
         </Grid>
+
+        <!-- Skip breakdown overlay — floats above status bar, toggled by skip-count click -->
+        <Border x:Name="SkipBreakdownOverlay"
+                Grid.Row="4"
+                Visibility="Collapsed"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="0,0,20,8"
+                Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="16,12"
+                Canvas.ZIndex="100"
+                Translation="0,0,32">
+            <Border.Shadow>
+                <ThemeShadow />
+            </Border.Shadow>
+            <TextBlock Text="{x:Bind ViewModel.SkipTooltip, Mode=OneWay}"
+                       FontFamily="Consolas" FontSize="12"
+                       IsTextSelectionEnabled="True" />
+        </Border>
     </Grid>
 </Window>

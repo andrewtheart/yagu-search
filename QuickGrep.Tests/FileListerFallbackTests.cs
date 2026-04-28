@@ -855,3 +855,95 @@ public class FileListerManagedTests : IDisposable
         Assert.EndsWith("deep.txt", files[0]);
     }
 }
+
+// ─── FileLister: new property coverage ──────────────────────────────────
+
+[Collection("FileListerBackend")]
+public class FileListerNewPropertyTests : IDisposable
+{
+    private readonly string _root;
+    private readonly FileListerBackend _originalBackend;
+    public FileListerNewPropertyTests()
+    {
+        _originalBackend = FileLister.Backend;
+        FileLister.Backend = FileListerBackend.Managed;
+        _root = Path.Combine(Path.GetTempPath(), "qg-fl-prop-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_root);
+    }
+    public void Dispose() { FileLister.Backend = _originalBackend; try { Directory.Delete(_root, recursive: true); } catch { } }
+
+    [Fact]
+    public void EarlySkippedFiles_DefaultsToZero()
+    {
+        var lister = new FileLister();
+        Assert.Equal(0, lister.EarlySkippedFiles);
+    }
+
+    [Fact]
+    public void EarlyMaxFileSizeBytes_CanBeSetAndRead()
+    {
+        var lister = new FileLister();
+        lister.EarlyMaxFileSizeBytes = 1024 * 1024;
+        Assert.Equal(1024 * 1024, lister.EarlyMaxFileSizeBytes);
+    }
+
+    [Fact]
+    public void EarlySkipExtensions_CanBeSetAndRead()
+    {
+        var lister = new FileLister();
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "exe", "dll" };
+        lister.EarlySkipExtensions = set;
+        Assert.Contains("exe", lister.EarlySkipExtensions);
+        Assert.Contains("dll", lister.EarlySkipExtensions);
+    }
+
+    [Fact]
+    public void EarlyExcludeGlobs_CanBeSetAndRead()
+    {
+        var lister = new FileLister();
+        lister.EarlyExcludeGlobs = new[] { "*.log", "node_modules" };
+        Assert.Equal(2, lister.EarlyExcludeGlobs.Count);
+    }
+
+    [Fact]
+    public void SdkChannelBufferSize_DefaultIs4096()
+    {
+        var lister = new FileLister();
+        Assert.Equal(4096, lister.SdkChannelBufferSize);
+    }
+
+    [Fact]
+    public void SdkChannelBufferSize_CanBeSet()
+    {
+        var lister = new FileLister();
+        lister.SdkChannelBufferSize = 256;
+        Assert.Equal(256, lister.SdkChannelBufferSize);
+    }
+
+    [Fact]
+    public async Task EarlySkippedFiles_ResetsOnNewListing()
+    {
+        File.WriteAllText(Path.Combine(_root, "a.txt"), "");
+        var lister = new FileLister();
+        // Run a listing to exercise the reset path
+        await foreach (var _ in lister.ListFilesAsync(_root, Array.Empty<string>(), 0, default)) { }
+        // EarlySkippedFiles should be 0 after listing (managed fallback doesn't early-skip)
+        Assert.Equal(0, lister.EarlySkippedFiles);
+    }
+
+    [Fact]
+    public async Task ListFilesAsync_ResetsAllCounters()
+    {
+        File.WriteAllText(Path.Combine(_root, "a.txt"), "");
+        var lister = new FileLister();
+
+        // First listing
+        await foreach (var _ in lister.ListFilesAsync(_root, Array.Empty<string>(), 0, default)) { }
+
+        // Second listing should reset all counters
+        await foreach (var _ in lister.ListFilesAsync(_root, Array.Empty<string>(), 0, default)) { }
+
+        Assert.Equal(0, lister.EarlySkippedFiles);
+        Assert.Null(lister.FallbackReason);
+    }
+}
