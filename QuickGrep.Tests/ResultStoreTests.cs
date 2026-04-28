@@ -141,6 +141,26 @@ public class ResultStoreExtraTests
     {
         await ResultStore.CleanupOrphanedTempFilesAsync();
     }
+
+    [Fact]
+    public async Task CleanupOrphanedTempFilesAsync_DeletesOldOrphanedFiles()
+    {
+        // Create a file that matches the orphan pattern with an old write time
+        var orphan = Path.Combine(Path.GetTempPath(), $"quickgrep-results-{Guid.NewGuid():N}.tmp");
+        try
+        {
+            File.WriteAllText(orphan, "stale data");
+            File.SetLastWriteTimeUtc(orphan, DateTime.UtcNow.AddHours(-1));
+
+            await ResultStore.CleanupOrphanedTempFilesAsync();
+
+            Assert.False(File.Exists(orphan));
+        }
+        finally
+        {
+            try { File.Delete(orphan); } catch { }
+        }
+    }
 }
 
 // ─── ResultStore: DeleteOrphanedTempFiles ───────────────────────────────
@@ -190,6 +210,20 @@ public class ResultStoreDeleteOrphanedTests : IDisposable
         File.WriteAllText(Path.Combine(_dir, "other-file.txt"), "not a match");
         int deleted = ResultStore.DeleteOrphanedTempFiles(_dir, DateTime.UtcNow);
         Assert.Equal(0, deleted);
+    }
+
+    [Fact]
+    public void DeleteOrphanedTempFiles_LockedFile_DoesNotThrow()
+    {
+        var locked = Path.Combine(_dir, "quickgrep-results-locked.tmp");
+        File.WriteAllText(locked, "locked");
+        File.SetLastWriteTimeUtc(locked, DateTime.UtcNow.AddHours(-1));
+
+        // Hold the file open so Delete() throws IOException inside the catch block
+        using var stream = new FileStream(locked, FileMode.Open, FileAccess.Read, FileShare.None);
+        int deleted = ResultStore.DeleteOrphanedTempFiles(_dir, DateTime.UtcNow);
+        Assert.Equal(0, deleted);
+        Assert.True(File.Exists(locked));
     }
 }
 

@@ -68,10 +68,8 @@ public sealed class FileLister : IFileLister
 
     public FileLister() { }
 
-    [ExcludeFromCodeCoverage]
     internal FileLister(Func<string, ProcessStartInfo, IProcess>? processFactory) => _processFactory = processFactory;
 
-    [ExcludeFromCodeCoverage]
     public async IAsyncEnumerable<string> ListFilesAsync(
         string directory,
         IReadOnlyList<string> includeExtensions,
@@ -327,7 +325,6 @@ public sealed class FileLister : IFileLister
         }
     }
 
-    [ExcludeFromCodeCoverage]
     public static string? FindEsExe()
     {
         var candidates = new List<string>();
@@ -349,14 +346,18 @@ public sealed class FileLister : IFileLister
         // 4. C:\tools
         candidates.Add(@"C:\tools\es.exe");
 
+        return FindEsExe(candidates, File.Exists);
+    }
+
+    internal static string? FindEsExe(IReadOnlyList<string> candidates, Func<string, bool> fileExists)
+    {
         foreach (var c in candidates)
         {
-            try { if (File.Exists(c)) return c; } catch (Exception ex) { LogService.Instance.Verbose("FileLister", $"Cannot check es.exe path: {c}", ex); }
+            try { if (fileExists(c)) return c; } catch (Exception ex) { LogService.Instance.Verbose("FileLister", $"Cannot check es.exe path: {c}", ex); }
         }
         return null;
     }
 
-    [ExcludeFromCodeCoverage]
     private async IAsyncEnumerable<string> RunEverythingAsync(
         string esPath,
         string directory,
@@ -428,7 +429,6 @@ public sealed class FileLister : IFileLister
         }
     }
 
-    [ExcludeFromCodeCoverage]
     private async Task<int> TryGetEverythingResultCountAsync(
         string esPath,
         IReadOnlyList<string> queryArgs,
@@ -464,11 +464,9 @@ public sealed class FileLister : IFileLister
         }
     }
 
-    [ExcludeFromCodeCoverage]
     private void SetKnownTotalFiles(uint count) =>
         SetKnownTotalFiles(count > int.MaxValue ? int.MaxValue : (int)count);
 
-    [ExcludeFromCodeCoverage]
     private void SetKnownTotalFiles(int count) =>
         Volatile.Write(ref _knownTotalFiles, Math.Max(0, count));
 
@@ -482,7 +480,6 @@ public sealed class FileLister : IFileLister
         return s;
     }
 
-    [ExcludeFromCodeCoverage]
     private async IAsyncEnumerable<string> EnumerateFallbackAsync(
         string directory,
         IReadOnlyList<string> includeExtensions,

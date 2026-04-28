@@ -65,7 +65,6 @@ public sealed class LogService : IDisposable
     public void Verbose(string source, string message, Exception? ex)
         => Write(LogLevel.Verbose, source, message, ex);
 
-    [ExcludeFromCodeCoverage]
     private void Write(LogLevel level, string source, string message, Exception? ex)
     {
         if (level > _level) return;
@@ -82,7 +81,6 @@ public sealed class LogService : IDisposable
         _queue.Enqueue(line);
     }
 
-    [ExcludeFromCodeCoverage]
     public void Flush()
     {
         if (_queue.IsEmpty) return;
@@ -98,7 +96,6 @@ public sealed class LogService : IDisposable
         catch { /* last-resort: don't crash on logging failure */ }
     }
 
-    [ExcludeFromCodeCoverage]
     public void RotateIfNeeded(long maxBytes = 5 * 1024 * 1024)
     {
         try

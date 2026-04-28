@@ -474,3 +474,115 @@ public class FileWatchDiagnosticsCoverageTests
         FileWatchDiagnostics.Checkpoint(@"C:\test\file.txt", "test-phase"); // no optional params
     }
 }
+
+// ─── LogService: RotateIfNeeded ─────────────────────────────────────
+
+public class LogServiceRotateTests : IDisposable
+{
+    private readonly string _path = Path.Combine(Path.GetTempPath(), $"qg-rotate-{Guid.NewGuid()}.log");
+
+    public void Dispose()
+    {
+        try { File.Delete(_path); } catch { }
+        try { File.Delete(_path + ".old"); } catch { }
+    }
+
+    [Fact]
+    public void RotateIfNeeded_NoFile_DoesNotThrow()
+    {
+        var log = new LogService(_path);
+        log.RotateIfNeeded();
+        log.Dispose();
+    }
+
+    [Fact]
+    public void RotateIfNeeded_SmallFile_DoesNotRotate()
+    {
+        File.WriteAllText(_path, "small");
+        var log = new LogService(_path);
+        log.RotateIfNeeded(1024);
+        log.Dispose();
+        Assert.True(File.Exists(_path));
+        Assert.False(File.Exists(_path + ".old"));
+    }
+
+    [Fact]
+    public void RotateIfNeeded_LargeFile_Rotates()
+    {
+        File.WriteAllBytes(_path, new byte[2000]);
+        var log = new LogService(_path);
+        log.RotateIfNeeded(1000);
+        log.Dispose();
+        Assert.True(File.Exists(_path + ".old"));
+    }
+
+    [Fact]
+    public void RotateIfNeeded_OldBackupExists_ReplacesIt()
+    {
+        File.WriteAllText(_path + ".old", "old backup");
+        File.WriteAllBytes(_path, new byte[2000]);
+        var log = new LogService(_path);
+        log.RotateIfNeeded(1000);
+        log.Dispose();
+        Assert.True(File.Exists(_path + ".old"));
+        Assert.Equal(2000, new FileInfo(_path + ".old").Length);
+    }
+
+    [Fact]
+    public void Write_FiltersByLevel()
+    {
+        var log = new LogService(_path);
+        log.Level = LogLevel.Warning;
+        log.Info("test", "should be filtered");
+        log.Warning("test", "should pass");
+        log.Flush();
+        log.Dispose();
+
+        if (File.Exists(_path))
+        {
+            var content = File.ReadAllText(_path);
+            Assert.DoesNotContain("should be filtered", content);
+            Assert.Contains("should pass", content);
+        }
+    }
+}
+
+// ─── LogService: catch block / edge case coverage ───────────────────────
+
+public class LogServiceCatchBlockTests
+{
+    [Fact]
+    public void Flush_InvalidPath_CatchesSilently()
+    {
+        // Path with invalid characters triggers IOException in StreamWriter ctor
+        var badPath = Path.Combine("Z:\\", new string('x', 300), "quickgrep.log");
+        var log = new LogService(badPath);
+        log.Level = LogLevel.Verbose;
+        log.Info("test", "will fail to flush");
+        // Flush should not throw — the catch block absorbs the error
+        log.Flush();
+        log.Dispose();
+    }
+
+    [Fact]
+    public void RotateIfNeeded_LockedFile_CatchesSilently()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"qg-locked-{Guid.NewGuid()}.log");
+        try
+        {
+            // Create a large file and lock it
+            File.WriteAllBytes(path, new byte[2000]);
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+            var log = new LogService(path);
+            // RotateIfNeeded should not throw when File.Move fails due to lock
+            log.RotateIfNeeded(1000);
+            log.Dispose();
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { }
+            try { File.Delete(path + ".old"); } catch { }
+        }
+    }
+}

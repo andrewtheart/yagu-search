@@ -5,15 +5,19 @@ using QuickGrep.Services;
 
 namespace QuickGrep.Tests;
 
+[Collection("FileListerBackend")]
 public class SearchServiceTests : IDisposable
 {
     private readonly string _root;
+    private readonly FileListerBackend _originalBackend;
     public SearchServiceTests()
     {
+        _originalBackend = FileLister.Backend;
+        FileLister.Backend = FileListerBackend.Managed;
         _root = Path.Combine(Path.GetTempPath(), "qg-svc-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_root);
     }
-    public void Dispose() { try { Directory.Delete(_root, recursive: true); } catch { } }
+    public void Dispose() { FileLister.Backend = _originalBackend; try { Directory.Delete(_root, recursive: true); } catch { } }
 
     private void Write(string rel, string content)
     {
@@ -396,16 +400,20 @@ public class SearchServiceTests : IDisposable
 
 // ─── SearchService: MaxResults clamping ─────────────────────────────────
 
+[Collection("FileListerBackend")]
 public class SearchServiceClampTests : IDisposable
 {
     private readonly string _root;
+    private readonly FileListerBackend _originalBackend;
     public SearchServiceClampTests()
     {
+        _originalBackend = FileLister.Backend;
+        FileLister.Backend = FileListerBackend.Managed;
         _root = Path.Combine(Path.GetTempPath(), "qg-clamp-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_root);
         File.WriteAllText(Path.Combine(_root, "a.txt"), "match");
     }
-    public void Dispose() { try { Directory.Delete(_root, recursive: true); } catch { } }
+    public void Dispose() { FileLister.Backend = _originalBackend; try { Directory.Delete(_root, recursive: true); } catch { } }
 
     [Fact]
     public async Task MaxResultsAboveCeiling_GetsClampedAndSearchCompletes()
@@ -431,15 +439,19 @@ public class SearchServiceClampTests : IDisposable
 
 // ─── SearchService: FlushFilenameBatchAsync ─────────────────────────────
 
+[Collection("FileListerBackend")]
 public class SearchServiceFlushBatchTests : IDisposable
 {
     private readonly string _root;
+    private readonly FileListerBackend _originalBackend;
     public SearchServiceFlushBatchTests()
     {
+        _originalBackend = FileLister.Backend;
+        FileLister.Backend = FileListerBackend.Managed;
         _root = Path.Combine(Path.GetTempPath(), "qg-flush-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_root);
     }
-    public void Dispose() { try { Directory.Delete(_root, recursive: true); } catch { } }
+    public void Dispose() { FileLister.Backend = _originalBackend; try { Directory.Delete(_root, recursive: true); } catch { } }
 
     [Fact]
     public async Task FileNameSearch_WithMultipleFiles_FlushesAsMatchBatch()
@@ -470,15 +482,19 @@ public class SearchServiceFlushBatchTests : IDisposable
 
 // ─── SearchService: more SearchAsync paths ──────────────────────────────
 
+[Collection("FileListerBackend")]
 public class SearchServiceExtraTests : IDisposable
 {
     private readonly string _root;
+    private readonly FileListerBackend _originalBackend;
     public SearchServiceExtraTests()
     {
+        _originalBackend = FileLister.Backend;
+        FileLister.Backend = FileListerBackend.Managed;
         _root = Path.Combine(Path.GetTempPath(), "qg-svc-extra-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_root);
     }
-    public void Dispose() { try { Directory.Delete(_root, recursive: true); } catch { } }
+    public void Dispose() { FileLister.Backend = _originalBackend; try { Directory.Delete(_root, recursive: true); } catch { } }
 
     private void Write(string rel, string content)
     {
@@ -1049,5 +1065,173 @@ public class SearchSummaryCoverageTests
         var a = new SearchSummary(1, 2, 3, 4, 5, 6, TimeSpan.Zero, false, false, false, "reason");
         var b = new SearchSummary(1, 2, 3, 4, 5, 6, TimeSpan.Zero, false, false, false, "reason");
         Assert.Equal(a, b);
+    }
+}
+
+// ─── ComputeAutoProcessMemoryCap ────────────────────────────────────
+
+public class ComputeAutoProcessMemoryCapTests
+{
+    [Fact]
+    public void SixteenGB_ReturnsQuarter()
+    {
+        long result = SearchService.ComputeAutoProcessMemoryCap(16UL * 1024 * 1024 * 1024);
+        Assert.Equal(4L * 1024 * 1024 * 1024, result);
+    }
+
+    [Fact]
+    public void FourGB_ReturnsFloor()
+    {
+        long result = SearchService.ComputeAutoProcessMemoryCap(4UL * 1024 * 1024 * 1024);
+        Assert.Equal(2L * 1024 * 1024 * 1024, result);
+    }
+
+    [Fact]
+    public void OneGB_ReturnsFloor()
+    {
+        long result = SearchService.ComputeAutoProcessMemoryCap(1UL * 1024 * 1024 * 1024);
+        Assert.Equal(2L * 1024 * 1024 * 1024, result);
+    }
+
+    [Fact]
+    public void Zero_ReturnsFloor()
+    {
+        long result = SearchService.ComputeAutoProcessMemoryCap(0);
+        Assert.Equal(2L * 1024 * 1024 * 1024, result);
+    }
+}
+
+// ─── IsMemoryPressureHighForSnapshot ────────────────────────────────
+
+public class IsMemoryPressureHighForSnapshotTests
+{
+    [Fact]
+    public void WorkingSetExceedsCap_ReturnsTrue()
+    {
+        Assert.True(SearchService.IsMemoryPressureHighForSnapshot(
+            workingSet: 5_000_000_000, effectiveCap: 4_000_000_000,
+            hasSystemLoad: false, systemLoadPercent: 0,
+            pressurePercent: 80, gcMemoryLoadBytes: 0, gcTotalAvailableBytes: 0));
+    }
+
+    [Fact]
+    public void SystemLoadExceedsThreshold_ReturnsTrue()
+    {
+        Assert.True(SearchService.IsMemoryPressureHighForSnapshot(
+            workingSet: 1_000, effectiveCap: 4_000_000_000,
+            hasSystemLoad: true, systemLoadPercent: 85,
+            pressurePercent: 80, gcMemoryLoadBytes: 0, gcTotalAvailableBytes: 0));
+    }
+
+    [Fact]
+    public void SystemLoadBelowThreshold_ReturnsFalse()
+    {
+        Assert.False(SearchService.IsMemoryPressureHighForSnapshot(
+            workingSet: 1_000, effectiveCap: 4_000_000_000,
+            hasSystemLoad: true, systemLoadPercent: 50,
+            pressurePercent: 80, gcMemoryLoadBytes: 0, gcTotalAvailableBytes: 0));
+    }
+
+    [Fact]
+    public void GcFallback_HighLoad_ReturnsTrue()
+    {
+        Assert.True(SearchService.IsMemoryPressureHighForSnapshot(
+            workingSet: 1_000, effectiveCap: 4_000_000_000,
+            hasSystemLoad: false, systemLoadPercent: 0,
+            pressurePercent: 80,
+            gcMemoryLoadBytes: 9_000_000_000, gcTotalAvailableBytes: 10_000_000_000));
+    }
+
+    [Fact]
+    public void GcFallback_LowLoad_ReturnsFalse()
+    {
+        Assert.False(SearchService.IsMemoryPressureHighForSnapshot(
+            workingSet: 1_000, effectiveCap: 4_000_000_000,
+            hasSystemLoad: false, systemLoadPercent: 0,
+            pressurePercent: 80,
+            gcMemoryLoadBytes: 1_000_000_000, gcTotalAvailableBytes: 10_000_000_000));
+    }
+
+    [Fact]
+    public void PressureDisabled_Zero_ReturnsFalse()
+    {
+        Assert.False(SearchService.IsMemoryPressureHighForSnapshot(
+            workingSet: 1_000, effectiveCap: 4_000_000_000,
+            hasSystemLoad: true, systemLoadPercent: 99,
+            pressurePercent: 0, gcMemoryLoadBytes: 0, gcTotalAvailableBytes: 0));
+    }
+
+    [Fact]
+    public void PressureAbove100_ReturnsFalse()
+    {
+        Assert.False(SearchService.IsMemoryPressureHighForSnapshot(
+            workingSet: 1_000, effectiveCap: 4_000_000_000,
+            hasSystemLoad: true, systemLoadPercent: 99,
+            pressurePercent: 101, gcMemoryLoadBytes: 0, gcTotalAvailableBytes: 0));
+    }
+}
+
+// ─── IsMemoryPressureRelievedGcFallback ─────────────────────────────
+
+public class IsMemoryPressureRelievedGcFallbackTests
+{
+    [Fact]
+    public void Relieved_ReturnsTrue()
+    {
+        // Process ws well below cap, GC load well below threshold
+        Assert.True(SearchService.IsMemoryPressureRelievedGcFallback(
+            workingSetBytes: 500_000_000, effectiveProcessCapBytes: 4_000_000_000,
+            pressurePercent: 80, recoveryMarginPercent: 10,
+            gcMemoryLoadBytes: 5_000_000_000, gcTotalAvailableBytes: 10_000_000_000));
+    }
+
+    [Fact]
+    public void ProcessNotRelieved_ReturnsFalse()
+    {
+        // Working set above cap * recovery ratio
+        Assert.False(SearchService.IsMemoryPressureRelievedGcFallback(
+            workingSetBytes: 4_000_000_000, effectiveProcessCapBytes: 4_000_000_000,
+            pressurePercent: 80, recoveryMarginPercent: 10,
+            gcMemoryLoadBytes: 1_000_000_000, gcTotalAvailableBytes: 10_000_000_000));
+    }
+
+    [Fact]
+    public void GcAboveRelief_ReturnsFalse()
+    {
+        // Process relieved but GC memory load too high
+        Assert.False(SearchService.IsMemoryPressureRelievedGcFallback(
+            workingSetBytes: 500_000_000, effectiveProcessCapBytes: 4_000_000_000,
+            pressurePercent: 80, recoveryMarginPercent: 10,
+            gcMemoryLoadBytes: 9_000_000_000, gcTotalAvailableBytes: 10_000_000_000));
+    }
+}
+
+// ─── SearchEvent record construction ────────────────────────────────────
+
+public class SearchEventTests
+{
+    [Fact]
+    public void MemoryPressure_RoundTrips()
+    {
+        int acked = 0;
+        var evt = new SearchEvent.MemoryPressure(n => acked = n, ThresholdPercent: 85, Diagnostics: "diag");
+        Assert.Equal(85, evt.ThresholdPercent);
+        Assert.Equal("diag", evt.Diagnostics);
+        evt.AcknowledgeEviction(42);
+        Assert.Equal(42, acked);
+    }
+
+    [Fact]
+    public void MemoryPressureRelieved_RoundTrips()
+    {
+        var evt = new SearchEvent.MemoryPressureRelieved(Diagnostics: "relieved");
+        Assert.Equal("relieved", evt.Diagnostics);
+    }
+
+    [Fact]
+    public void MemoryPressureRelieved_NullDiagnostics()
+    {
+        var evt = new SearchEvent.MemoryPressureRelieved();
+        Assert.Null(evt.Diagnostics);
     }
 }

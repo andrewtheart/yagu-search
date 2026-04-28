@@ -587,30 +587,35 @@ public sealed class SearchService
     {
         try
         {
-            // Hard cap: shed QuickGrep memory if this process alone is consuming too much.
-            // When the user sets 0 ("auto"), derive a cap from total physical RAM.
             long effectiveCap = EffectiveProcessMemoryCap(maxProcessBytes);
-            {
-                long ws = Environment.WorkingSet;
-                if (ws > effectiveCap) return true;
-            }
-
-            // System-wide memory pressure via OS API (accurate, unlike GC.GetGCMemoryInfo
-            // which only reflects the managed heap and misses native/channel/UI allocations).
-            if (pressurePercent > 0 && pressurePercent <= 100)
-            {
-                if (TryGetSystemMemoryLoadPercent(out var systemLoadPercent))
-                    return systemLoadPercent >= pressurePercent;
-
-                // Fallback to GC info if P/Invoke fails.
-                var info = GC.GetGCMemoryInfo();
-                double threshold = info.TotalAvailableMemoryBytes * (pressurePercent / 100.0);
-                return info.MemoryLoadBytes > (long)threshold;
-            }
-
-            return false;
+            long ws = Environment.WorkingSet;
+            bool hasSystemLoad = TryGetSystemMemoryLoadPercent(out var systemLoadPercent);
+            var gcInfo = GC.GetGCMemoryInfo();
+            return IsMemoryPressureHighForSnapshot(ws, effectiveCap,
+                hasSystemLoad, systemLoadPercent, pressurePercent,
+                gcInfo.MemoryLoadBytes, gcInfo.TotalAvailableMemoryBytes);
         }
         catch { return false; }
+    }
+
+    internal static bool IsMemoryPressureHighForSnapshot(
+        long workingSet, long effectiveCap,
+        bool hasSystemLoad, uint systemLoadPercent,
+        int pressurePercent,
+        long gcMemoryLoadBytes, long gcTotalAvailableBytes)
+    {
+        if (workingSet > effectiveCap) return true;
+
+        if (pressurePercent > 0 && pressurePercent <= 100)
+        {
+            if (hasSystemLoad)
+                return systemLoadPercent >= (uint)pressurePercent;
+
+            double threshold = gcTotalAvailableBytes * (pressurePercent / 100.0);
+            return gcMemoryLoadBytes > (long)threshold;
+        }
+
+        return false;
     }
 
     [ExcludeFromCodeCoverage]
@@ -625,28 +630,34 @@ public sealed class SearchService
                 if (TryGetSystemMemoryLoadPercent(out var systemLoadPercent))
                 {
                     return IsMemoryPressureRelievedForSnapshot(
-                        workingSet,
-                        effectiveCap,
-                        systemLoadPercent,
-                        pressurePercent,
-                        MemoryPressureRecoveryMarginPercent);
+                        workingSet, effectiveCap, systemLoadPercent,
+                        pressurePercent, MemoryPressureRecoveryMarginPercent);
                 }
 
                 var info = GC.GetGCMemoryInfo();
-                bool processRelieved = IsProcessMemoryRelieved(workingSet, effectiveCap);
-                int reliefPercent = Math.Max(0, pressurePercent - MemoryPressureRecoveryMarginPercent);
-                double reliefThreshold = info.TotalAvailableMemoryBytes * (reliefPercent / 100.0);
-                return processRelieved && info.MemoryLoadBytes <= reliefThreshold;
+                return IsMemoryPressureRelievedGcFallback(
+                    workingSet, effectiveCap, pressurePercent,
+                    MemoryPressureRecoveryMarginPercent,
+                    info.MemoryLoadBytes, info.TotalAvailableMemoryBytes);
             }
 
             return IsMemoryPressureRelievedForSnapshot(
-                workingSet,
-                effectiveCap,
-                systemMemoryLoadPercent: 0,
-                pressurePercent: 0,
+                workingSet, effectiveCap,
+                systemMemoryLoadPercent: 0, pressurePercent: 0,
                 MemoryPressureRecoveryMarginPercent);
         }
         catch { return false; }
+    }
+
+    internal static bool IsMemoryPressureRelievedGcFallback(
+        long workingSetBytes, long effectiveProcessCapBytes,
+        int pressurePercent, int recoveryMarginPercent,
+        long gcMemoryLoadBytes, long gcTotalAvailableBytes)
+    {
+        bool processRelieved = IsProcessMemoryRelieved(workingSetBytes, effectiveProcessCapBytes);
+        int reliefPercent = Math.Max(0, pressurePercent - recoveryMarginPercent);
+        double reliefThreshold = gcTotalAvailableBytes * (reliefPercent / 100.0);
+        return processRelieved && gcMemoryLoadBytes <= reliefThreshold;
     }
 
     internal static bool IsMemoryPressureRelievedForSnapshot(
@@ -710,18 +721,21 @@ public sealed class SearchService
     [ExcludeFromCodeCoverage]
     private static long AutoProcessMemoryCap()
     {
-        const long minCap = 2L * 1024 * 1024 * 1024; // 2 GB floor
         try
         {
             var status = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
             if (GlobalMemoryStatusEx(ref status))
-            {
-                long quarter = (long)(status.ullTotalPhys / 4);
-                return Math.Max(quarter, minCap);
-            }
+                return ComputeAutoProcessMemoryCap(status.ullTotalPhys);
         }
         catch { }
         return 4L * 1024 * 1024 * 1024; // fallback: 4 GB
+    }
+
+    internal static long ComputeAutoProcessMemoryCap(ulong totalPhysicalBytes)
+    {
+        const long minCap = 2L * 1024 * 1024 * 1024; // 2 GB floor
+        long quarter = (long)(totalPhysicalBytes / 4);
+        return Math.Max(quarter, minCap);
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -744,7 +758,6 @@ public sealed class SearchService
 }
 
 /// <summary>Discriminated event returned by <see cref="SearchService.SearchAsync"/>.</summary>
-[ExcludeFromCodeCoverage]
 public abstract record SearchEvent
 {
     public sealed record Fallback(string Reason) : SearchEvent;

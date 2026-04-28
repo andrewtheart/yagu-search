@@ -73,7 +73,6 @@ public sealed class ContentSearcher
         Native.NativeSession? session)
         => (await SearchFileWithStatsAsync(filePath, regex, literal, literalComparison, options, writer, cancellationToken, session).ConfigureAwait(false)).MatchCount;
 
-    [ExcludeFromCodeCoverage]
     internal async Task<FileSearchOutcome> SearchFileWithStatsAsync(
         string filePath,
         Regex? regex,
@@ -426,8 +425,7 @@ public sealed class ContentSearcher
         }
     }
 
-    [ExcludeFromCodeCoverage]
-    private static int Cancel(CancellationToken ct, int emitted)
+    internal static int Cancel(CancellationToken ct, int emitted)
     {
         ct.ThrowIfCancellationRequested();
         return emitted;
