@@ -472,7 +472,6 @@ internal sealed class NativeSearchOutcome
     public static NativeSearchOutcome Error(string reason) => new(OutcomeKind.Error, null, reason);
     public static NativeSearchOutcome Cancelled() => new(OutcomeKind.Cancelled, null, null);
 
-    [ExcludeFromCodeCoverage]
     public static unsafe NativeSearchOutcome FromBuffer(
         string filePath,
         NativeSearcher.QgResult result,
@@ -556,8 +555,7 @@ internal sealed class NativeSearchOutcome
         }
     }
 
-    [ExcludeFromCodeCoverage]
-    private ref struct BufferReader
+    internal ref struct BufferReader
     {
         private ReadOnlySpan<byte> _data;
         private int _pos;

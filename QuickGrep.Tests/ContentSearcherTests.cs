@@ -775,3 +775,211 @@ public class SearchResultMatchLengthTest
         Assert.Equal(6, r.MatchStartColumn);
     }
 }
+
+// ─── ContentSearcher.Cancel ─────────────────────────────────────────
+
+public class ContentSearcherCancelTests
+{
+    [Fact]
+    public void Cancel_NonCancelledToken_ReturnsEmitted()
+    {
+        int result = ContentSearcher.Cancel(CancellationToken.None, 42);
+        Assert.Equal(42, result);
+    }
+
+    [Fact]
+    public void Cancel_CancelledToken_Throws()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        Assert.Throws<OperationCanceledException>(() => ContentSearcher.Cancel(cts.Token, 10));
+    }
+}
+
+// ─── ContentSearcher.SearchFileWithStatsAsync ───────────────────────
+
+[Collection("PreferNative")]
+public class SearchFileWithStatsTests : IDisposable
+{
+    private readonly string _root;
+    private readonly ContentSearcher _searcher = new();
+
+    public SearchFileWithStatsTests()
+    {
+        _root = Path.Combine(Path.GetTempPath(), "qg-sfws-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_root);
+        ContentSearcher.PreferNative = false;
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_root, recursive: true); } catch { }
+    }
+
+    private string Write(string name, string content)
+    {
+        var p = Path.Combine(_root, name);
+        File.WriteAllText(p, content, new UTF8Encoding(false));
+        return p;
+    }
+
+    private static SearchOptions Opt(string query) => new()
+    {
+        Directory = ".",
+        Query = query,
+        UseRegex = false,
+        CaseSensitive = false,
+        ContextLines = 0,
+        MaxMatchesPerFile = 0,
+        MaxFileSizeBytes = 0,
+        SkipBinary = false,
+    };
+
+    private static SearchOptions OptWithMaxSize(string query, long maxSize) => new()
+    {
+        Directory = ".",
+        Query = query,
+        UseRegex = false,
+        CaseSensitive = false,
+        ContextLines = 0,
+        MaxMatchesPerFile = 0,
+        MaxFileSizeBytes = maxSize,
+        SkipBinary = false,
+    };
+
+    private static SearchOptions OptWithSkipExtensions(string query, IReadOnlySet<string> exts) => new()
+    {
+        Directory = ".",
+        Query = query,
+        UseRegex = false,
+        CaseSensitive = false,
+        ContextLines = 0,
+        MaxMatchesPerFile = 0,
+        MaxFileSizeBytes = 0,
+        SkipBinary = false,
+        SkipExtensions = exts,
+    };
+
+    private static SearchOptions OptWithSkipBinary(string query) => new()
+    {
+        Directory = ".",
+        Query = query,
+        UseRegex = false,
+        CaseSensitive = false,
+        ContextLines = 0,
+        MaxMatchesPerFile = 0,
+        MaxFileSizeBytes = 0,
+        SkipBinary = true,
+    };
+
+    private async Task<(FileSearchOutcome outcome, List<SearchResult> results)> Search(string path, SearchOptions opts)
+    {
+        var channel = Channel.CreateUnbounded<SearchResult>();
+        var outcome = await _searcher.SearchFileWithStatsAsync(
+            path, null, opts.Query, StringComparison.OrdinalIgnoreCase,
+            opts, channel.Writer, CancellationToken.None, null);
+        channel.Writer.Complete();
+        var results = new List<SearchResult>();
+        await foreach (var r in channel.Reader.ReadAllAsync())
+            results.Add(r);
+        return (outcome, results);
+    }
+
+    [Fact]
+    public async Task FileNotFound_ReturnsSkipNotFound()
+    {
+        var (outcome, _) = await Search(Path.Combine(_root, "missing.txt"), Opt("hello"));
+        Assert.Equal(ContentSearcher.SkipNotFound, outcome.MatchCount);
+    }
+
+    [Fact]
+    public async Task InvalidPath_ReturnsSkipOther()
+    {
+        // null bytes in path cause FileInfo to throw
+        var (outcome, _) = await Search("", Opt("hello"));
+        Assert.True(outcome.MatchCount == ContentSearcher.SkipNotFound || outcome.MatchCount == ContentSearcher.SkipOther);
+    }
+
+    [Fact]
+    public async Task FileTooLarge_ReturnsSkipTooLarge()
+    {
+        var path = Write("big.txt", "hello world");
+        var opts = OptWithMaxSize("hello", 1); // 1 byte limit
+        var (outcome, _) = await Search(path, opts);
+        Assert.Equal(ContentSearcher.SkipTooLarge, outcome.MatchCount);
+    }
+
+    [Fact]
+    public async Task ExtensionSkip_ReturnsSkipByExtension()
+    {
+        var path = Write("test.log", "hello world");
+        var opts = OptWithSkipExtensions("hello", new HashSet<string> { "log" });
+        var (outcome, _) = await Search(path, opts);
+        Assert.Equal(ContentSearcher.SkipByExtension, outcome.MatchCount);
+    }
+
+    [Fact]
+    public async Task ExtensionSkip_NoExtension_FallsThrough()
+    {
+        // A file with no extension should NOT be skipped even when SkipExtensions is set
+        var path = Write("Makefile", "hello world\n");
+        var opts = OptWithSkipExtensions("hello", new HashSet<string> { "log" });
+        var (outcome, results) = await Search(path, opts);
+        Assert.True(outcome.MatchCount > 0);
+        Assert.Single(results);
+    }
+
+    [Fact]
+    public async Task BinaryFile_WithSkipBinary_ReturnsSkipBinary()
+    {
+        var path = Path.Combine(_root, "binary.dat");
+        // Write bytes with nulls to trigger binary detection
+        File.WriteAllBytes(path, new byte[] { 0x00, 0x01, 0x02, 0x00, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00 });
+        var opts = OptWithSkipBinary("hello");
+        var (outcome, _) = await Search(path, opts);
+        Assert.Equal(ContentSearcher.SkipBinary, outcome.MatchCount);
+    }
+
+    [Fact]
+    public async Task ManagedPath_FindsMatch()
+    {
+        var path = Write("found.txt", "hello world\ngoodbye\n");
+        var (outcome, results) = await Search(path, Opt("hello"));
+        Assert.True(outcome.MatchCount > 0);
+        Assert.Single(results);
+        Assert.Equal(1, results[0].LineNumber);
+    }
+
+    [Fact]
+    public async Task ManagedPath_NoMatch_ReturnsZero()
+    {
+        var path = Write("empty.txt", "nothing here\n");
+        var (outcome, results) = await Search(path, Opt("hello"));
+        Assert.Equal(0, outcome.MatchCount);
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public async Task ManagedPath_WithRegex()
+    {
+        var path = Write("regex.txt", "foo123bar\nbaz456\n");
+        var channel = Channel.CreateUnbounded<SearchResult>();
+        var regex = new Regex(@"\d+", RegexOptions.Compiled);
+        var opts = new SearchOptions
+        {
+            Directory = ".",
+            Query = @"\d+",
+            UseRegex = true,
+            CaseSensitive = false,
+            ContextLines = 0,
+            MaxMatchesPerFile = 0,
+            MaxFileSizeBytes = 0,
+            SkipBinary = false,
+        };
+        var outcome = await _searcher.SearchFileWithStatsAsync(
+            path, regex, null, StringComparison.Ordinal,
+            opts, channel.Writer, CancellationToken.None, null);
+        channel.Writer.Complete();
+        Assert.True(outcome.MatchCount >= 2);
+    }
+}

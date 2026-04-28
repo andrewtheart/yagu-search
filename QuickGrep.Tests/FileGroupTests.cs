@@ -427,3 +427,99 @@ public class FileGroupRootPathTests
         Assert.Equal(string.Empty, group.DirectoryName);
     }
 }
+
+// ─── FileGroup: LoadMetadata + BeginLoadMetadata ────────────────────
+
+public class FileGroupMetadataTests : IDisposable
+{
+    private readonly string _root;
+
+    public FileGroupMetadataTests()
+    {
+        _root = Path.Combine(Path.GetTempPath(), "qg-fgmeta-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_root);
+        FileMetadataCache.Clear();
+    }
+
+    public void Dispose()
+    {
+        FileMetadataCache.Clear();
+        try { Directory.Delete(_root, recursive: true); } catch { }
+    }
+
+    [Fact]
+    public void LoadMetadata_RealFile_SetsFileSizeAndLastModified()
+    {
+        var path = Path.Combine(_root, "test.txt");
+        File.WriteAllText(path, "hello world");
+        var group = new FileGroup(path);
+        group.LoadMetadata();
+        Assert.True(group.FileSize > 0);
+        Assert.NotEqual(default, group.LastModified);
+    }
+
+    [Fact]
+    public void LoadMetadata_CacheHit_ReturnsCachedValues()
+    {
+        var path = Path.Combine(_root, "cached.txt");
+        var expected = new FileMetadata(42, new DateTime(2024, 1, 1));
+        FileMetadataCache.Set(path, expected);
+
+        var group = new FileGroup(path);
+        group.LoadMetadata();
+        Assert.Equal(42, group.FileSize);
+        Assert.Equal(new DateTime(2024, 1, 1), group.LastModified);
+    }
+
+    [Fact]
+    public void LoadMetadata_NonExistentFile_DoesNotThrow()
+    {
+        var group = new FileGroup(Path.Combine(_root, "nope.txt"));
+        group.LoadMetadata(); // should not throw
+        Assert.Equal(0, group.FileSize);
+    }
+
+    [Fact]
+    public void BeginLoadMetadata_CacheHit_AppliesSynchronously()
+    {
+        var path = Path.Combine(_root, "cached2.txt");
+        FileMetadataCache.Set(path, new FileMetadata(99, new DateTime(2025, 6, 15)));
+
+        var group = new FileGroup(path);
+        group.BeginLoadMetadata(action => action());
+        Assert.Equal(99, group.FileSize);
+        Assert.Equal(new DateTime(2025, 6, 15), group.LastModified);
+    }
+
+    [Fact]
+    public async Task BeginLoadMetadata_RealFile_DispatchesThenApplies()
+    {
+        var path = Path.Combine(_root, "real.txt");
+        File.WriteAllText(path, new string('x', 100));
+
+        var group = new FileGroup(path);
+        var tcs = new TaskCompletionSource();
+        group.BeginLoadMetadata(action =>
+        {
+            action();
+            tcs.SetResult();
+        });
+
+        // Wait for the background Task.Run + dispatch callback
+        await Task.WhenAny(tcs.Task, Task.Delay(5000));
+        Assert.True(tcs.Task.IsCompleted);
+        Assert.True(group.FileSize > 0);
+    }
+
+    [Fact]
+    public void BeginLoadMetadata_NonExistentFile_DoesNotThrow()
+    {
+        var group = new FileGroup(Path.Combine(_root, "ghost.txt"));
+        // dispatch should not be called for non-existent file
+        bool dispatched = false;
+        group.BeginLoadMetadata(action => { dispatched = true; action(); });
+        // Allow background task to finish
+        Thread.Sleep(200);
+        // No exception should have been thrown
+    }
+}

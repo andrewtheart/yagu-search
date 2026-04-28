@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using QuickGrep.Services;
 
 namespace QuickGrep.Tests;
 
+[Collection("EditorLauncher")]
 public class EditorLauncherTests
 {
     [Fact]
@@ -126,6 +128,7 @@ public class EditorLauncherTests
 
 // ─── EditorLauncher.SplitCommandLine ────────────────────────────────────
 
+[Collection("EditorLauncher")]
 public class EditorLauncherSplitTests
 {
     [Fact]
@@ -175,5 +178,124 @@ public class EditorLauncherSplitTests
         // No closing quote → falls through to space-split; no space → entire string is exe
         Assert.Equal("\"C:\\unclosed\\path", exe);
         Assert.Equal("", args);
+    }
+}
+
+// ─── EditorLauncher: Open / OpenContainingFolder / OpenTerminalAt ───
+
+[Collection("EditorLauncher")]
+public class EditorLauncherSeamTests : IDisposable
+{
+    private readonly string _root;
+
+    public EditorLauncherSeamTests()
+    {
+        _root = Path.Combine(Path.GetTempPath(), "qg-editor-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_root);
+    }
+
+    public void Dispose()
+    {
+        EditorLauncher.TestProcessLauncher = null;
+        try { Directory.Delete(_root, recursive: true); } catch { }
+    }
+
+    [Fact]
+    public void Open_Success_ReturnsTrue_CapturesPsi()
+    {
+        ProcessStartInfo? captured = null;
+        EditorLauncher.TestProcessLauncher = psi => captured = psi;
+        var launcher = new EditorLauncher { Command = "code.exe -g \"{file}\":{line}" };
+        bool result = launcher.Open(Path.Combine(_root, "test.txt"), 42);
+        Assert.True(result);
+        Assert.NotNull(captured);
+        Assert.Equal("code.exe", captured!.FileName);
+        Assert.Contains("42", captured.Arguments);
+    }
+
+    [Fact]
+    public void Open_ProcessLauncherThrows_ReturnsFalse()
+    {
+        EditorLauncher.TestProcessLauncher = _ => throw new InvalidOperationException("test");
+        var launcher = new EditorLauncher { Command = "code.exe \"{file}\"" };
+        bool result = launcher.Open("test.txt", 1);
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void OpenContainingFolder_Success_ReturnsTrue()
+    {
+        ProcessStartInfo? captured = null;
+        EditorLauncher.TestProcessLauncher = psi => captured = psi;
+        var filePath = Path.Combine(_root, "test.txt");
+        File.WriteAllText(filePath, "hi");
+        bool result = EditorLauncher.OpenContainingFolder(filePath);
+        Assert.True(result);
+        Assert.NotNull(captured);
+        Assert.Equal("explorer.exe", captured!.FileName);
+    }
+
+    [Fact]
+    public void OpenContainingFolder_EmptyDir_ReturnsFalse()
+    {
+        bool result = EditorLauncher.OpenContainingFolder("");
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void OpenContainingFolder_Throws_ReturnsFalse()
+    {
+        EditorLauncher.TestProcessLauncher = _ => throw new Exception("test");
+        bool result = EditorLauncher.OpenContainingFolder(Path.Combine(_root, "test.txt"));
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void OpenTerminalAt_Success_ReturnsTrue()
+    {
+        ProcessStartInfo? captured = null;
+        EditorLauncher.TestProcessLauncher = psi => captured = psi;
+        var filePath = Path.Combine(_root, "test.txt");
+        File.WriteAllText(filePath, "hi");
+        bool result = EditorLauncher.OpenTerminalAt(filePath);
+        Assert.True(result);
+        Assert.NotNull(captured);
+        Assert.Equal("wt.exe", captured!.FileName);
+    }
+
+    [Fact]
+    public void OpenTerminalAt_EmptyPath_ReturnsFalse()
+    {
+        bool result = EditorLauncher.OpenTerminalAt("");
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void OpenTerminalAt_WtFails_FallsToPowershell()
+    {
+        int callCount = 0;
+        ProcessStartInfo? captured = null;
+        EditorLauncher.TestProcessLauncher = psi =>
+        {
+            callCount++;
+            if (psi.FileName == "wt.exe") throw new Exception("wt not found");
+            captured = psi;
+        };
+        var filePath = Path.Combine(_root, "test.txt");
+        File.WriteAllText(filePath, "hi");
+        bool result = EditorLauncher.OpenTerminalAt(filePath);
+        Assert.True(result);
+        Assert.Equal(2, callCount);
+        Assert.Equal("powershell.exe", captured!.FileName);
+    }
+
+    [Fact]
+    public void OpenTerminalAt_BothFail_ReturnsFalse()
+    {
+        EditorLauncher.TestProcessLauncher = _ => throw new Exception("fail");
+        var filePath = Path.Combine(_root, "test.txt");
+        File.WriteAllText(filePath, "hi");
+        bool result = EditorLauncher.OpenTerminalAt(filePath);
+        Assert.False(result);
     }
 }

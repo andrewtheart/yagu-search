@@ -31,7 +31,6 @@ public sealed class ResultStore : IDisposable
         _writer = new BinaryWriter(_stream, Encoding.UTF8, leaveOpen: true);
     }
 
-    [ExcludeFromCodeCoverage]
     public static Task CleanupOrphanedTempFilesAsync()
     {
         var scheduledAtUtc = DateTime.UtcNow;
@@ -43,7 +42,6 @@ public sealed class ResultStore : IDisposable
         });
     }
 
-    [ExcludeFromCodeCoverage]
     internal static int DeleteOrphanedTempFiles(string tempDirectory, DateTime deleteFilesLastWrittenAtOrBeforeUtc)
     {
         int deleted = 0;

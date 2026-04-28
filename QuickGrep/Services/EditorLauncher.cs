@@ -13,7 +13,9 @@ public sealed class EditorLauncher
 
     public string Command { get; set; } = DefaultCommand;
 
-    [ExcludeFromCodeCoverage]
+    /// <summary>Test seam: when set, replaces Process.Start calls.</summary>
+    internal static Action<ProcessStartInfo>? TestProcessLauncher;
+
     public bool Open(string filePath, int line)
     {
         var rendered = Command.Replace("{file}", filePath).Replace("{line}", line.ToString());
@@ -26,7 +28,8 @@ public sealed class EditorLauncher
                 Arguments = args,
                 UseShellExecute = false,
             };
-            Process.Start(psi);
+            if (TestProcessLauncher != null) TestProcessLauncher(psi);
+            else Process.Start(psi);
             return true;
         }
         catch (Exception ex)
@@ -36,37 +39,39 @@ public sealed class EditorLauncher
         }
     }
 
-    [ExcludeFromCodeCoverage]
     public static bool OpenContainingFolder(string filePath)
     {
         try
         {
             var dir = Path.GetDirectoryName(filePath);
             if (string.IsNullOrEmpty(dir)) return false;
-            Process.Start(new ProcessStartInfo
+            var psi = new ProcessStartInfo
             {
                 FileName = "explorer.exe",
                 Arguments = $"/select,\"{filePath}\"",
                 UseShellExecute = true,
-            });
+            };
+            if (TestProcessLauncher != null) TestProcessLauncher(psi);
+            else Process.Start(psi);
             return true;
         }
         catch (Exception ex) { LogService.Instance.Warning("EditorLauncher", $"Failed to open folder for {filePath}", ex); return false; }
     }
 
-    [ExcludeFromCodeCoverage]
     public static bool OpenTerminalAt(string filePath)
     {
         try
         {
             var dir = Path.GetDirectoryName(filePath);
             if (string.IsNullOrEmpty(dir)) return false;
-            Process.Start(new ProcessStartInfo
+            var psi = new ProcessStartInfo
             {
                 FileName = "wt.exe",
                 Arguments = $"-d \"{dir}\"",
                 UseShellExecute = true,
-            });
+            };
+            if (TestProcessLauncher != null) TestProcessLauncher(psi);
+            else Process.Start(psi);
             return true;
         }
         catch (Exception ex)
@@ -74,12 +79,14 @@ public sealed class EditorLauncher
             LogService.Instance.Verbose("EditorLauncher", "wt.exe not available, trying powershell", ex);
             try
             {
-                Process.Start(new ProcessStartInfo
+                var psi = new ProcessStartInfo
                 {
                     FileName = "powershell.exe",
                     WorkingDirectory = Path.GetDirectoryName(filePath) ?? ".",
                     UseShellExecute = true,
-                });
+                };
+                if (TestProcessLauncher != null) TestProcessLauncher(psi);
+                else Process.Start(psi);
                 return true;
             }
             catch (Exception ex2) { LogService.Instance.Warning("EditorLauncher", "Failed to open terminal", ex2); return false; }
