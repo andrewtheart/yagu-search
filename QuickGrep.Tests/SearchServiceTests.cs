@@ -318,6 +318,36 @@ public class SearchServiceTests : IDisposable
         Assert.Equal(1, summary.SkipReasons?.Directories);
     }
 
+    [Theory]
+    [InlineData(51, 62, true)]
+    [InlineData(57, 62, true)]
+    [InlineData(58, 62, false)]
+    [InlineData(61, 62, false)]
+    public void MemoryPressureRelief_UsesFivePercentHysteresis(uint systemLoadPercent, int pressurePercent, bool expectedRelieved)
+    {
+        bool relieved = SearchService.IsMemoryPressureRelievedForSnapshot(
+            workingSetBytes: 512,
+            effectiveProcessCapBytes: 1_024,
+            systemLoadPercent,
+            pressurePercent,
+            recoveryMarginPercent: 5);
+
+        Assert.Equal(expectedRelieved, relieved);
+    }
+
+    [Fact]
+    public void MemoryPressureRelief_WaitsForProcessWorkingSetToDropBelowCapMargin()
+    {
+        bool relieved = SearchService.IsMemoryPressureRelievedForSnapshot(
+            workingSetBytes: 950,
+            effectiveProcessCapBytes: 1_000,
+            systemMemoryLoadPercent: 51,
+            pressurePercent: 62,
+            recoveryMarginPercent: 5);
+
+        Assert.False(relieved);
+    }
+
     private sealed class DelayedFileLister(IReadOnlyList<string> files, TimeSpan delayAfterFirst, int knownTotalFiles = 0) : IFileLister
     {
         public string? FallbackReason => null;

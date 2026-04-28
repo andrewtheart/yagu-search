@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Diagnostics;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -36,6 +37,31 @@ public sealed partial class MainWindow : Window
     private Encoding? _previewEditorEncoding;
     private bool _previewEditorDirty;
     private bool _suppressPreviewEditorTextChanged;
+    private readonly HotkeyService _hotkeyService = new();
+    private SubclassProc? _hotkeySubclassProc;
+    private IntPtr _hwnd;
+    private bool _hotkeyHookInstalled;
+    private bool _suppressHotkeySettingChange;
+
+    private static readonly UIntPtr HotkeySubclassId = new(0x5147484Bu);
+    private const int SW_RESTORE = 9;
+
+    private delegate IntPtr SubclassProc(IntPtr hWnd, uint message, UIntPtr wParam, IntPtr lParam, UIntPtr subclassId, UIntPtr refData);
+
+    [DllImport("comctl32.dll", SetLastError = true)]
+    private static extern bool SetWindowSubclass(IntPtr hWnd, SubclassProc subclassProc, UIntPtr subclassId, UIntPtr refData);
+
+    [DllImport("comctl32.dll", SetLastError = true)]
+    private static extern bool RemoveWindowSubclass(IntPtr hWnd, SubclassProc subclassProc, UIntPtr subclassId);
+
+    [DllImport("comctl32.dll", SetLastError = true)]
+    private static extern IntPtr DefSubclassProc(IntPtr hWnd, uint message, UIntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
 
     public MainWindow(string? startupDirectory)
     {
@@ -63,11 +89,19 @@ public sealed partial class MainWindow : Window
         if (File.Exists(icoPath))
             AppWindow.SetIcon(icoPath);
 
+        InitializeGlobalHotkey();
+
         ViewModel.PropertyChanged += async (_, e) =>
         {
             if (e.PropertyName == nameof(ViewModel.Query) && ViewModel.SearchAsYouType)
             {
                 await DebouncedSearchAsync();
+            }
+
+            if (!_suppressHotkeySettingChange &&
+                (e.PropertyName == nameof(ViewModel.GlobalHotkeyEnabled) || e.PropertyName == nameof(ViewModel.GlobalHotkeyKey)))
+            {
+                ApplyGlobalHotkeyRegistration();
             }
         };
 
@@ -99,6 +133,8 @@ public sealed partial class MainWindow : Window
         // Flush logs when the window closes so no diagnostic entries are lost.
         this.Closed += (_, _) =>
         {
+            _hotkeyService.Dispose();
+            RemoveGlobalHotkeyHook();
             LogService.Instance.Info("MainWindow", "Window closing — flushing logs");
             LogService.Instance.Flush();
         };
@@ -122,6 +158,93 @@ public sealed partial class MainWindow : Window
             AppTitleBar.Padding = new Thickness(16, 0, rightDip, 0);
         }
         catch { /* AppWindow not always available; ignore */ }
+    }
+
+    private void InitializeGlobalHotkey()
+    {
+        _hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        if (_hwnd == IntPtr.Zero)
+        {
+            LogService.Instance.Warning("Hotkey", "Could not initialize global hotkey: window handle was not available");
+            return;
+        }
+
+        _hotkeySubclassProc = HotkeyWindowProc;
+        _hotkeyHookInstalled = SetWindowSubclass(_hwnd, _hotkeySubclassProc, HotkeySubclassId, UIntPtr.Zero);
+        if (!_hotkeyHookInstalled)
+        {
+            LogService.Instance.Warning("Hotkey", "Could not install global hotkey window hook");
+            return;
+        }
+
+        _hotkeyService.Pressed += OnGlobalHotkeyPressed;
+        ApplyGlobalHotkeyRegistration();
+    }
+
+    private void ApplyGlobalHotkeyRegistration()
+    {
+        if (!_hotkeyHookInstalled || _hwnd == IntPtr.Zero)
+            return;
+
+        if (!ViewModel.GlobalHotkeyEnabled)
+        {
+            _hotkeyService.Unregister();
+            return;
+        }
+
+        if (_hotkeyService.TryRegisterFirstAvailableCtrlShift(_hwnd, ViewModel.GlobalHotkeyKey, out var selectedKey))
+        {
+            var selectedKeyText = selectedKey.ToString();
+            if (!string.Equals(ViewModel.GlobalHotkeyKey, selectedKeyText, StringComparison.OrdinalIgnoreCase))
+            {
+                _suppressHotkeySettingChange = true;
+                try { ViewModel.GlobalHotkeyKey = selectedKeyText; }
+                finally { _suppressHotkeySettingChange = false; }
+            }
+
+            LogService.Instance.Info("Hotkey", $"Registered global hotkey {HotkeyService.FormatCtrlShift(selectedKey)}");
+            return;
+        }
+
+        _hotkeyService.Unregister();
+        ViewModel.StatusText = "No available Ctrl+Shift+letter global hotkeys were found.";
+        LogService.Instance.Warning("Hotkey", "Could not register any Ctrl+Shift+letter global hotkey");
+    }
+
+    private IntPtr HotkeyWindowProc(IntPtr hWnd, uint message, UIntPtr wParam, IntPtr lParam, UIntPtr subclassId, UIntPtr refData)
+    {
+        if (message == HotkeyService.WM_HOTKEY)
+        {
+            _hotkeyService.OnWmHotkey((int)wParam);
+            return IntPtr.Zero;
+        }
+
+        return DefSubclassProc(hWnd, message, wParam, lParam);
+    }
+
+    private void OnGlobalHotkeyPressed()
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_hwnd != IntPtr.Zero)
+            {
+                ShowWindow(_hwnd, SW_RESTORE);
+                SetForegroundWindow(_hwnd);
+            }
+
+            Activate();
+            FocusSearchBox();
+        });
+    }
+
+    private void RemoveGlobalHotkeyHook()
+    {
+        if (_hotkeyHookInstalled && _hwnd != IntPtr.Zero && _hotkeySubclassProc is not null)
+            RemoveWindowSubclass(_hwnd, _hotkeySubclassProc, HotkeySubclassId);
+
+        _hotkeyHookInstalled = false;
+        _hotkeySubclassProc = null;
+        _hwnd = IntPtr.Zero;
     }
 
     private void OnAutoScrollTick(object? sender, object e)
@@ -299,6 +422,7 @@ public sealed partial class MainWindow : Window
         parallelism.Items.Add("1 thread (sequential, HDD safe)");
         parallelism.Items.Add($"Half cores ({Math.Max(1, Environment.ProcessorCount / 2)})");
         parallelism.Items.Add($"2× cores ({Environment.ProcessorCount * 2}, I/O heavy)");
+        parallelism.Items.Add($"All cores ({Math.Max(1, Environment.ProcessorCount)})");
         parallelism.SelectedIndex = ViewModel.ParallelismIndex;
         parallelism.SelectionChanged += (_, _) => ViewModel.ParallelismIndex = parallelism.SelectedIndex;
         sp.Children.Add(parallelism);
@@ -322,7 +446,7 @@ public sealed partial class MainWindow : Window
         var memPressure = new NumberBox { Value = ViewModel.MemoryPressurePercent, Minimum = 0, Maximum = 100 };
         memPressure.ValueChanged += (_, args) => ViewModel.MemoryPressurePercent = (int)args.NewValue;
         sp.Children.Add(memPressure);
-        sp.Children.Add(new TextBlock { Text = "Search stops when total machine RAM usage exceeds this %.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+        sp.Children.Add(new TextBlock { Text = "QuickGrep enters memory saving / eviction mode when total machine RAM usage exceeds this %.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
         // ── Display ──
         sp.Children.Add(new TextBlock { Text = "Display", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16, Margin = new Thickness(0, 12, 0, 0) });
@@ -356,10 +480,51 @@ public sealed partial class MainWindow : Window
         // ── General ──
         sp.Children.Add(new TextBlock { Text = "General", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16, Margin = new Thickness(0, 12, 0, 0) });
 
-        var hotkey = new CheckBox { Content = "Enable global hotkey (Ctrl+Shift+G)", IsChecked = ViewModel.GlobalHotkeyEnabled };
+        var availableHotkeyKeys = _hotkeyService.GetAvailableCtrlShiftLetterKeys(_hwnd);
+        var selectedHotkeyKey = HotkeyService.ChooseAvailableKey(availableHotkeyKeys, ViewModel.GlobalHotkeyKey);
+        if (selectedHotkeyKey is char selectedKey && !string.Equals(ViewModel.GlobalHotkeyKey, selectedKey.ToString(), StringComparison.OrdinalIgnoreCase))
+            ViewModel.GlobalHotkeyKey = selectedKey.ToString();
+
+        var hotkey = new CheckBox { Content = "Enable global hotkey", IsChecked = ViewModel.GlobalHotkeyEnabled, IsEnabled = availableHotkeyKeys.Count > 0 };
         hotkey.Checked += (_, _) => ViewModel.GlobalHotkeyEnabled = true;
         hotkey.Unchecked += (_, _) => ViewModel.GlobalHotkeyEnabled = false;
         sp.Children.Add(hotkey);
+
+        sp.Children.Add(new TextBlock { Text = "Global hotkey:" });
+        var hotkeyCombo = new ComboBox { IsEnabled = availableHotkeyKeys.Count > 0 };
+        foreach (var key in availableHotkeyKeys)
+        {
+            hotkeyCombo.Items.Add(new ComboBoxItem
+            {
+                Content = HotkeyService.FormatCtrlShift(key),
+                Tag = key.ToString(),
+            });
+        }
+
+        if (selectedHotkeyKey is char hotkeyKey)
+        {
+            for (int itemIndex = 0; itemIndex < hotkeyCombo.Items.Count; itemIndex++)
+            {
+                if (hotkeyCombo.Items[itemIndex] is ComboBoxItem item &&
+                    string.Equals(item.Tag as string, hotkeyKey.ToString(), StringComparison.OrdinalIgnoreCase))
+                {
+                    hotkeyCombo.SelectedIndex = itemIndex;
+                    break;
+                }
+            }
+        }
+        else
+        {
+            hotkeyCombo.Items.Add("No Ctrl+Shift+letter combinations available");
+            hotkeyCombo.SelectedIndex = 0;
+        }
+
+        hotkeyCombo.SelectionChanged += (_, _) =>
+        {
+            if (hotkeyCombo.SelectedItem is ComboBoxItem item && item.Tag is string key)
+                ViewModel.GlobalHotkeyKey = key;
+        };
+        sp.Children.Add(hotkeyCombo);
 
         sp.Children.Add(new TextBlock { Text = "Max recent directories / queries:" });
         var recent = new NumberBox { Value = ViewModel.MaxRecentItems, Minimum = 1, Maximum = 100 };

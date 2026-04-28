@@ -9,6 +9,12 @@ namespace QuickGrep.Services;
 
 public sealed class SearchService
 {
+    private const int MemoryPressureRecoveryMarginPercent = 5;
+    private const double ProcessMemoryRecoveryRatio = 0.90;
+
+    private static int s_memoryPressureGcInFlight;
+    private static long s_lastMemoryPressureGcTicks;
+
     private readonly IFileLister _fileLister;
     private readonly ContentSearcher _searcher;
 
@@ -95,7 +101,7 @@ public sealed class SearchService
         bool searchContent = options.SearchMode != SearchMode.FileNames;
         bool searchFileNames = options.SearchMode != SearchMode.Content;
 
-        var events = Channel.CreateBounded<SearchEvent>(new BoundedChannelOptions(8192)
+        var events = Channel.CreateBounded<SearchEvent>(new BoundedChannelOptions(2048)
         {
             SingleReader = true,
             SingleWriter = false,
@@ -112,7 +118,7 @@ public sealed class SearchService
         // consumer, preventing unbounded memory growth. The native FFI uses TryWrite
         // (stops scanning when full); the managed path uses WriteAsync (backpressure).
         // Channel buffer size — independent of total result limit.
-        int contentCap = options.MaxResults > 0 ? Math.Clamp(options.MaxResults, 1_000, 50_000) : 50_000;
+        int contentCap = options.MaxResults > 0 ? Math.Clamp(options.MaxResults, 512, 4_096) : 4_096;
         var contentResults = Channel.CreateBounded<SearchResult>(new BoundedChannelOptions(contentCap)
         {
             SingleReader = true,
@@ -127,12 +133,10 @@ public sealed class SearchService
         int totalDiscovered = 0;
         long bytesScanned = 0;
         int truncated = 0;
-        int degraded = 0;            // 0 = normal, ≥1 = degraded (0 context, evicting to disk)
+        int degraded = 0;            // 0 = normal, ≥1 = actively degraded (0 context, evicting to disk)
+        int everDegraded = 0;        // 1 once memory-saving mode was used during this search
         int evictionInFlight = 0;    // 1 while an eviction event is being processed by the UI
-        int lowYieldEvictions = 0;   // consecutive evictions that freed < 100 results
         int pressureCycles = 0;      // total number of memory pressure events emitted
-        long lastLargeEvictionTicks = 0; // Stopwatch.GetTimestamp() of last eviction that freed >= 100
-        var evictionDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         string? fallbackReason = null;
         // Skip-reason tallies
         int skipBinary = 0, skipAccessDenied = 0, skipIOError = 0, skipTooLarge = 0;
@@ -361,91 +365,63 @@ public sealed class SearchService
                         {
                             // Mark degraded (may already be) and signal UI to evict.
                             Volatile.Write(ref degraded, 1);
+                            Volatile.Write(ref everDegraded, 1);
 
-                            // Only emit one MemoryPressure event at a time; skip if one is already in flight.
                             if (Interlocked.CompareExchange(ref evictionInFlight, 1, 0) == 0)
                             {
                                 int cycle = Interlocked.Increment(ref pressureCycles);
+                                string diagnostics = GetMemoryDiagnostics();
                                 LogService.Instance.Warning("SearchService",
-                                    $"Memory pressure cycle #{cycle}: {GetMemoryDiagnostics()} — signalling eviction (scanned={filesScanned:N0}, matches={totalMatches:N0})");
-                                // Fresh signal for this eviction cycle.
-                                evictionDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                                var currentSignal = evictionDone;
+                                    $"Memory pressure cycle #{cycle}: {diagnostics} - shedding QuickGrep memory (scanned={filesScanned:N0}, matches={totalMatches:N0})");
                                 try
                                 {
-                                    await events.Writer.WriteAsync(
-                                        new SearchEvent.MemoryPressure((evictedCount) =>
+                                    var memoryPressureEvent = new SearchEvent.MemoryPressure(
+                                        (evictedCount) =>
                                         {
-                                            // Eviction ran on the UI thread. Do NOT block it with GC.
-                                            // Instead, let workers handle GC on their own threads.
-                                            if (evictedCount < 100)
-                                            {
-                                                // Grace period: after a large eviction the GC needs time
-                                                // to reclaim freed .NET memory. Rapid-fire zero-yield
-                                                // cycles during this window are expected, not a sign of
-                                                // external pressure — don't count them toward truncation.
-                                                long lastLarge = Volatile.Read(ref lastLargeEvictionTicks);
-                                                double secondsSinceLargeEviction = lastLarge == 0
-                                                    ? double.MaxValue
-                                                    : (double)(Stopwatch.GetTimestamp() - lastLarge) / Stopwatch.Frequency;
-
-                                                if (secondsSinceLargeEviction < 5.0)
-                                                {
-                                                    LogService.Instance.Info("SearchService",
-                                                        $"Low-yield eviction: freed {evictedCount}, but within {secondsSinceLargeEviction:F1}s of large eviction — resetting counter");
-                                                    Volatile.Write(ref lowYieldEvictions, 0);
-                                                }
-                                                else
-                                                {
-                                                    int consecutive = Interlocked.Increment(ref lowYieldEvictions);
-                                                    LogService.Instance.Info("SearchService",
-                                                        $"Low-yield eviction: freed {evictedCount}, consecutive={consecutive}");
-                                                    if (consecutive >= 5)
-                                                    {
-                                                        LogService.Instance.Warning("SearchService",
-                                                            $"Truncating: {consecutive} consecutive low-yield evictions (last freed {evictedCount}); memory pressure is external");
-                                                        Volatile.Write(ref truncated, 1);
-                                                    }
-                                                }
-                                            }
-                                            else
-                                            {
-                                                Volatile.Write(ref lowYieldEvictions, 0);
-                                                Volatile.Write(ref lastLargeEvictionTicks, Stopwatch.GetTimestamp());
-                                            }
+                                            // Eviction ran on the UI thread. Run collection on a worker
+                                            // after payload references have been dropped, then keep scanning.
                                             LogService.Instance.Info("SearchService",
-                                                $"Eviction acknowledged: freed {evictedCount} — signalling workers to resume");
+                                                $"Eviction acknowledged: freed {evictedCount}; continuing in memory-saving mode");
+                                            _ = Task.Run(() => CollectForMemoryPressureIfDue(TimeSpan.FromSeconds(3)));
                                             Volatile.Write(ref evictionInFlight, 0);
-                                            currentSignal.TrySetResult();
-                                        }),
-                                        ct).ConfigureAwait(false);
+                                        },
+                                        options.MemoryPressurePercent,
+                                        diagnostics);
+
+                                    if (!events.Writer.TryWrite(memoryPressureEvent))
+                                    {
+                                        _ = Task.Run(async () =>
+                                        {
+                                            try { await events.Writer.WriteAsync(memoryPressureEvent, ct).ConfigureAwait(false); }
+                                            catch { Volatile.Write(ref evictionInFlight, 0); }
+                                        }, CancellationToken.None);
+                                    }
                                 }
                                 catch
                                 {
                                     Volatile.Write(ref evictionInFlight, 0);
-                                    currentSignal.TrySetResult();
                                 }
                             }
 
-                            // Back-pressure: wait for eviction acknowledgment (up to 5s),
-                            // then resume. Use Task.WaitAsync rather than Task.Delay so we
-                            // don't allocate a fresh timer per worker per pressure cycle
-                            // (was driving Active Timer count to ~980).
-                            var pressureStart = sw.Elapsed;
-                            try { await evictionDone.Task.WaitAsync(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false); }
-                            catch (TimeoutException) { /* expected: eviction took longer than 5s */ }
-                            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { /* race: WaitAsync cancelled by completed task replacement */ }
-                            catch (OperationCanceledException) { throw; }
-
-                            // Don't force a per-worker GC. With many workers entering
-                            // pressure simultaneously, back-to-back Gen2 collections were
-                            // pushing time-in-GC to 92%. The eviction drops .NET references;
-                            // let the runtime decide when to collect.
-
-                            bool relieved = !IsMemoryPressureHigh(options.MaxProcessMemoryBytes, options.MemoryPressurePercent);
-                            var pauseDuration = sw.Elapsed - pressureStart;
+                            CollectForMemoryPressureIfDue(TimeSpan.FromSeconds(10));
+                        }
+                        else if (Volatile.Read(ref degraded) != 0 &&
+                                 Volatile.Read(ref evictionInFlight) == 0 &&
+                                 IsMemoryPressureRelieved(options.MaxProcessMemoryBytes, options.MemoryPressurePercent))
+                        {
+                            Volatile.Write(ref degraded, 0);
+                            string diagnostics = GetMemoryDiagnostics();
                             LogService.Instance.Info("SearchService",
-                                $"Worker resumed after {pauseDuration.TotalSeconds:F1}s back-pressure, relieved={relieved}, {GetMemoryDiagnostics()}");
+                                $"Memory pressure relieved: {diagnostics} - leaving memory-saving mode");
+                            var relievedEvent = new SearchEvent.MemoryPressureRelieved(diagnostics);
+                            if (!events.Writer.TryWrite(relievedEvent))
+                            {
+                                _ = Task.Run(async () =>
+                                {
+                                    try { await events.Writer.WriteAsync(relievedEvent, ct).ConfigureAwait(false); }
+                                    catch { }
+                                }, CancellationToken.None);
+                            }
                         }
                     }).ConfigureAwait(false);
                     }
@@ -527,7 +503,7 @@ public sealed class SearchService
         }
 
         bool wasTruncated = Volatile.Read(ref truncated) != 0;
-        bool wasDegraded = Volatile.Read(ref degraded) != 0;
+        bool wasDegraded = Volatile.Read(ref everDegraded) != 0;
         int totalFiles = CurrentTotalFiles();
         int directorySkips = CurrentDirectorySkips();
         int accessDeniedSkips = CurrentAccessDeniedSkips();
@@ -569,6 +545,34 @@ public sealed class SearchService
         return exts;
     }
 
+    private static void CollectForMemoryPressureIfDue(TimeSpan cooldown)
+    {
+        long now = Stopwatch.GetTimestamp();
+        long last = Volatile.Read(ref s_lastMemoryPressureGcTicks);
+        if (last != 0)
+        {
+            double secondsSinceLast = (double)(now - last) / Stopwatch.Frequency;
+            if (secondsSinceLast < cooldown.TotalSeconds)
+                return;
+        }
+
+        if (Interlocked.CompareExchange(ref s_memoryPressureGcInFlight, 1, 0) != 0)
+            return;
+
+        try
+        {
+            LogService.Instance.Info("SearchService", "Running coordinated GC for memory pressure relief");
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: false);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(2, GCCollectionMode.Optimized, blocking: true, compacting: false);
+            Volatile.Write(ref s_lastMemoryPressureGcTicks, Stopwatch.GetTimestamp());
+        }
+        finally
+        {
+            Volatile.Write(ref s_memoryPressureGcInFlight, 0);
+        }
+    }
+
     /// <summary>
     /// Returns true when memory limits are exceeded.
     /// <paramref name="maxProcessBytes"/>: hard process working-set cap. When 0, auto-calculates
@@ -579,13 +583,9 @@ public sealed class SearchService
     {
         try
         {
-            // Hard cap: stop if this process alone is consuming too much.
+            // Hard cap: shed QuickGrep memory if this process alone is consuming too much.
             // When the user sets 0 ("auto"), derive a cap from total physical RAM.
-            long effectiveCap = maxProcessBytes;
-            if (effectiveCap <= 0)
-            {
-                effectiveCap = AutoProcessMemoryCap();
-            }
+            long effectiveCap = EffectiveProcessMemoryCap(maxProcessBytes);
             {
                 long ws = Environment.WorkingSet;
                 if (ws > effectiveCap) return true;
@@ -595,11 +595,9 @@ public sealed class SearchService
             // which only reflects the managed heap and misses native/channel/UI allocations).
             if (pressurePercent > 0 && pressurePercent <= 100)
             {
-                var status = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
-                if (GlobalMemoryStatusEx(ref status))
-                {
-                    return status.dwMemoryLoad >= (uint)pressurePercent;
-                }
+                if (TryGetSystemMemoryLoadPercent(out var systemLoadPercent))
+                    return systemLoadPercent >= pressurePercent;
+
                 // Fallback to GC info if P/Invoke fails.
                 var info = GC.GetGCMemoryInfo();
                 double threshold = info.TotalAvailableMemoryBytes * (pressurePercent / 100.0);
@@ -610,6 +608,77 @@ public sealed class SearchService
         }
         catch { return false; }
     }
+
+    private static bool IsMemoryPressureRelieved(long maxProcessBytes, int pressurePercent)
+    {
+        try
+        {
+            long effectiveCap = EffectiveProcessMemoryCap(maxProcessBytes);
+            long workingSet = Environment.WorkingSet;
+            if (pressurePercent > 0 && pressurePercent <= 100)
+            {
+                if (TryGetSystemMemoryLoadPercent(out var systemLoadPercent))
+                {
+                    return IsMemoryPressureRelievedForSnapshot(
+                        workingSet,
+                        effectiveCap,
+                        systemLoadPercent,
+                        pressurePercent,
+                        MemoryPressureRecoveryMarginPercent);
+                }
+
+                var info = GC.GetGCMemoryInfo();
+                bool processRelieved = IsProcessMemoryRelieved(workingSet, effectiveCap);
+                int reliefPercent = Math.Max(0, pressurePercent - MemoryPressureRecoveryMarginPercent);
+                double reliefThreshold = info.TotalAvailableMemoryBytes * (reliefPercent / 100.0);
+                return processRelieved && info.MemoryLoadBytes <= reliefThreshold;
+            }
+
+            return IsMemoryPressureRelievedForSnapshot(
+                workingSet,
+                effectiveCap,
+                systemMemoryLoadPercent: 0,
+                pressurePercent: 0,
+                MemoryPressureRecoveryMarginPercent);
+        }
+        catch { return false; }
+    }
+
+    internal static bool IsMemoryPressureRelievedForSnapshot(
+        long workingSetBytes,
+        long effectiveProcessCapBytes,
+        uint systemMemoryLoadPercent,
+        int pressurePercent,
+        int recoveryMarginPercent)
+    {
+        if (!IsProcessMemoryRelieved(workingSetBytes, effectiveProcessCapBytes))
+            return false;
+
+        if (pressurePercent <= 0 || pressurePercent > 100)
+            return true;
+
+        int reliefPercent = Math.Max(0, pressurePercent - Math.Clamp(recoveryMarginPercent, 0, 100));
+        return systemMemoryLoadPercent <= reliefPercent;
+    }
+
+    private static bool IsProcessMemoryRelieved(long workingSetBytes, long effectiveProcessCapBytes) =>
+        effectiveProcessCapBytes <= 0 || workingSetBytes <= effectiveProcessCapBytes * ProcessMemoryRecoveryRatio;
+
+    private static bool TryGetSystemMemoryLoadPercent(out uint systemLoadPercent)
+    {
+        var status = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
+        if (GlobalMemoryStatusEx(ref status))
+        {
+            systemLoadPercent = status.dwMemoryLoad;
+            return true;
+        }
+
+        systemLoadPercent = 0;
+        return false;
+    }
+
+    private static long EffectiveProcessMemoryCap(long maxProcessBytes) =>
+        maxProcessBytes > 0 ? maxProcessBytes : AutoProcessMemoryCap();
 
     /// <summary>Returns a human-readable snapshot of current memory usage for diagnostics.</summary>
     private static string GetMemoryDiagnostics()
@@ -680,7 +749,11 @@ public abstract record SearchEvent
     public sealed record Error(string Message) : SearchEvent;
     public sealed record Completed(SearchSummary Summary) : SearchEvent;
     /// <summary>Emitted when memory pressure triggers degradation. The consumer should evict heavy data to disk
-    /// and then call <see cref="AcknowledgeEviction"/> with the count of results actually evicted so the
-    /// search engine can detect when eviction is no longer effective.</summary>
-    public sealed record MemoryPressure(Action<int> AcknowledgeEviction) : SearchEvent;
+    /// and then call <see cref="AcknowledgeEviction"/> with the count of results actually evicted. Workers keep
+    /// scanning in memory-saving mode instead of waiting for system memory to fall below the threshold.</summary>
+    public sealed record MemoryPressure(
+        Action<int> AcknowledgeEviction,
+        int ThresholdPercent = 0,
+        string? Diagnostics = null) : SearchEvent;
+    public sealed record MemoryPressureRelieved(string? Diagnostics = null) : SearchEvent;
 }

@@ -11,6 +11,8 @@ namespace QuickGrep.Services;
 /// </summary>
 public sealed class ResultStore : IDisposable
 {
+    private const string TempFileSearchPattern = "quickgrep-results-*.tmp";
+
     private readonly string _path;
     private readonly FileStream _stream;
     private readonly BinaryWriter _writer;
@@ -19,12 +21,56 @@ public sealed class ResultStore : IDisposable
     private int _evictedCount;
 
     public int EvictedCount => Volatile.Read(ref _evictedCount);
+    public string TempFilePath => _path;
 
     public ResultStore()
     {
         _path = Path.Combine(Path.GetTempPath(), $"quickgrep-results-{Guid.NewGuid():N}.tmp");
         _stream = new FileStream(_path, FileMode.Create, FileAccess.ReadWrite, FileShare.Read, 64 * 1024);
         _writer = new BinaryWriter(_stream, Encoding.UTF8, leaveOpen: true);
+    }
+
+    public static Task CleanupOrphanedTempFilesAsync()
+    {
+        var scheduledAtUtc = DateTime.UtcNow;
+        return Task.Run(() =>
+        {
+            int deleted = DeleteOrphanedTempFiles(Path.GetTempPath(), scheduledAtUtc);
+            if (deleted > 0)
+                LogService.Instance.Info("ResultStore", $"Deleted {deleted:N0} orphaned QuickGrep temp result file(s)");
+        });
+    }
+
+    internal static int DeleteOrphanedTempFiles(string tempDirectory, DateTime deleteFilesLastWrittenAtOrBeforeUtc)
+    {
+        int deleted = 0;
+        try
+        {
+            if (!Directory.Exists(tempDirectory)) return 0;
+
+            foreach (var path in Directory.EnumerateFiles(tempDirectory, TempFileSearchPattern, SearchOption.TopDirectoryOnly))
+            {
+                try
+                {
+                    var file = new FileInfo(path);
+                    if (!file.Exists || file.LastWriteTimeUtc > deleteFilesLastWrittenAtOrBeforeUtc)
+                        continue;
+
+                    file.Delete();
+                    deleted++;
+                }
+                catch (Exception ex)
+                {
+                    LogService.Instance.Verbose("ResultStore", $"Could not delete orphaned temp result file '{path}'", ex);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Verbose("ResultStore", $"Could not enumerate orphaned QuickGrep temp files in '{tempDirectory}'", ex);
+        }
+
+        return deleted;
     }
 
     /// <summary>
