@@ -541,13 +541,8 @@ mod tests {
             case_sensitive: true,
             ..opts()
         };
-        let mut count = 0;
-        scan_bytes(bytes, "foobar", &o, |_| {
-            count += 1;
-            true
-        })
-        .unwrap();
-        assert_eq!(count, 0);
+        let n = scan_bytes(bytes, "foobar", &o, |_| true).unwrap();
+        assert_eq!(n, 0);
     }
 
     #[test]
@@ -638,5 +633,693 @@ mod tests {
         })
         .unwrap();
         assert_eq!(hits, vec![7, 19, 24]);
+    }
+
+    // ---- Coverage: ScanError::Io From impl ----
+    #[test]
+    fn scan_error_io_from_impl() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
+        let scan_err = ScanError::from(io_err);
+        assert!(matches!(scan_err, ScanError::Io(_)));
+    }
+
+    // ---- Coverage: emit returning false (early stop, no context) ----
+    #[test]
+    fn emit_returning_false_stops_scan() {
+        let bytes = b"aaa\naaa\naaa\n";
+        let mut count = 0;
+        let n = scan_bytes(bytes, "aaa", &opts(), |_| {
+            count += 1;
+            false // stop after first
+        })
+        .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(n, 0); // emitted is only incremented AFTER emit returns true
+    }
+
+    // ---- Coverage: zero-width regex match ----
+    #[test]
+    fn zero_width_regex_does_not_infinite_loop() {
+        let bytes = b"abc\n";
+        let o = ScanOptions {
+            use_regex: true,
+            ..opts()
+        };
+        // \b is zero-width, but the scanner should skip it via the len==0 guard
+        // Actually we need a regex that produces zero-width matches.
+        // "(?=a)" is a lookahead — zero-width match at position of 'a'.
+        let result = scan_bytes(bytes, "(?=a)", &o, |_| true);
+        // Should not hang; the zero-width guard breaks the loop
+        assert!(result.unwrap_or(0) <= 3); // at most one per character
+    }
+
+    // ---- Coverage: max_results with pending after-context ----
+    #[test]
+    fn max_results_with_after_context_flush() {
+        // 3 matches each wanting 1 line of after-context, max_results=2
+        let bytes = b"hit\nctx\nhit\nctx\nhit\nctx\n";
+        let o = ScanOptions {
+            context_after: 1,
+            max_results: 2,
+            ..opts()
+        };
+        let mut hits = Vec::new();
+        let n = scan_bytes(bytes, "hit", &o, |r| {
+            hits.push(r.line_number);
+            true
+        })
+        .unwrap();
+        assert_eq!(n, 2);
+    }
+
+    // ---- Coverage: emit returns false during pending flush ----
+    #[test]
+    fn emit_false_during_pending_flush() {
+        let bytes = b"hit\nctx\nhit\nctx\n";
+        let o = ScanOptions {
+            context_after: 1,
+            ..opts()
+        };
+        let mut count = 0;
+        scan_bytes(bytes, "hit", &o, |_| {
+            count += 1;
+            false // stop on first emitted
+        })
+        .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    // ---- Coverage: EOF flush of pending records with emit returning false ----
+    #[test]
+    fn eof_flush_emit_false() {
+        // Match at end of file, pending after-context never completes
+        let bytes = b"hit\n";
+        let o = ScanOptions {
+            context_after: 5,
+            ..opts()
+        };
+        let mut count = 0;
+        scan_bytes(bytes, "hit", &o, |_| {
+            count += 1;
+            false
+        })
+        .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    // ---- Coverage: EOF flush with max_results ----
+    #[test]
+    fn eof_flush_max_results() {
+        let bytes = b"hit\nhit\nhit\n";
+        let o = ScanOptions {
+            context_after: 99, // large context that will never fill
+            max_results: 2,
+            ..opts()
+        };
+        let mut count = 0;
+        scan_bytes(bytes, "hit", &o, |_| {
+            count += 1;
+            true
+        })
+        .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    // ---- Coverage: copy_context_line_for_record truncation with multi-byte UTF-8 ----
+    #[test]
+    fn context_line_truncation_multibyte() {
+        // Create a long context line > MAX_EMITTED_LINE_BYTES with multi-byte chars at boundary
+        let mut long_line = vec![b'x'; MAX_EMITTED_LINE_BYTES - 1];
+        // Add a 3-byte UTF-8 char (e.g. U+2603 snowman = E2 98 83) at the boundary
+        long_line.extend_from_slice(&[0xE2, 0x98, 0x83]);
+        long_line.extend_from_slice(&[b'y'; 100]);
+        let result = copy_context_line_for_record(&long_line);
+        // Should be truncated and end with the truncation marker
+        assert!(result.len() <= MAX_EMITTED_LINE_BYTES + TRUNCATION_MARKER.len() + 3);
+        assert!(result.ends_with(TRUNCATION_MARKER));
+    }
+
+    #[test]
+    fn context_line_short_is_unchanged() {
+        let line = b"short line";
+        let result = copy_context_line_for_record(line);
+        assert_eq!(result, line.to_vec());
+    }
+
+    // ---- Coverage: copy_match_line_for_record branches ----
+    #[test]
+    fn match_line_short_unchanged() {
+        let line = b"hello world";
+        let (result, start) = copy_match_line_for_record(line, 6, 5);
+        assert_eq!(result, line.to_vec());
+        assert_eq!(start, 6);
+    }
+
+    #[test]
+    fn match_line_long_with_prefix_and_suffix() {
+        // Line much longer than MAX_EMITTED_LINE_BYTES, match in the middle
+        let mut line = vec![b'A'; MAX_EMITTED_LINE_BYTES * 2];
+        let match_pos = MAX_EMITTED_LINE_BYTES; // middle-ish
+        line[match_pos] = b'X';
+        let (result, _) = copy_match_line_for_record(&line, match_pos, 1);
+        // Should have prefix AND suffix truncation markers
+        assert!(result.starts_with(TRUNCATION_MARKER));
+        assert!(result.ends_with(TRUNCATION_MARKER));
+    }
+
+    #[test]
+    fn match_line_long_match_at_start() {
+        // Match at very beginning of a long line - no prefix marker
+        let line = vec![b'Z'; MAX_EMITTED_LINE_BYTES + 500];
+        let (result, start) = copy_match_line_for_record(&line, 0, 3);
+        assert!(!result.starts_with(TRUNCATION_MARKER));
+        assert!(result.ends_with(TRUNCATION_MARKER));
+        assert_eq!(start, 0);
+    }
+
+    #[test]
+    fn match_line_long_match_at_end() {
+        // Match at very end of a long line - no suffix marker
+        let line = vec![b'W'; MAX_EMITTED_LINE_BYTES + 500];
+        let match_pos = line.len() - 3;
+        let (result, _) = copy_match_line_for_record(&line, match_pos, 3);
+        assert!(result.starts_with(TRUNCATION_MARKER));
+        assert!(!result.ends_with(TRUNCATION_MARKER));
+    }
+
+    #[test]
+    fn match_line_long_with_multibyte_boundary() {
+        // A long line with multi-byte UTF-8 near the window boundary
+        let mut line = vec![b'a'; MAX_EMITTED_LINE_BYTES + 200];
+        // Place a 3-byte char at the potential snap boundary
+        let snap_pos = 100;
+        line[snap_pos] = 0xE2;
+        line[snap_pos + 1] = 0x98;
+        line[snap_pos + 2] = 0x83;
+        let (result, _) = copy_match_line_for_record(&line, MAX_EMITTED_LINE_BYTES, 5);
+        assert!(result.len() <= MAX_EMITTED_LINE_BYTES + 2 * TRUNCATION_MARKER.len() + 10);
+    }
+
+    // ---- Coverage: snap_to_char_boundary helpers ----
+    #[test]
+    fn snap_start_on_continuation_byte() {
+        // 3-byte UTF-8: E2 98 83 (snowman)
+        let data = b"abc\xE2\x98\x83def";
+        // Try snapping from a continuation byte (index 4 = 0x98)
+        assert_eq!(snap_to_char_boundary_start(data, 4), 3);
+        // From index 5 = 0x83 (continuation)
+        assert_eq!(snap_to_char_boundary_start(data, 5), 3);
+        // From index 3 = 0xE2 (lead byte) — stays
+        assert_eq!(snap_to_char_boundary_start(data, 3), 3);
+        // From index 0 — stays
+        assert_eq!(snap_to_char_boundary_start(data, 0), 0);
+    }
+
+    #[test]
+    fn snap_end_on_continuation_byte() {
+        let data = b"abc\xE2\x98\x83def";
+        // Snap end from continuation byte
+        assert_eq!(snap_to_char_boundary_end(data, 4), 3);
+        assert_eq!(snap_to_char_boundary_end(data, 5), 3);
+        // From lead byte — stays
+        assert_eq!(snap_to_char_boundary_end(data, 3), 3);
+    }
+
+    #[test]
+    fn snap_start_at_end_of_slice() {
+        let data = b"abc";
+        // index == len: beyond bounds, but loop guard checks index < line.len()
+        assert_eq!(snap_to_char_boundary_start(data, 3), 3);
+    }
+
+    #[test]
+    fn snap_end_at_end_of_slice() {
+        let data = b"abc";
+        assert_eq!(snap_to_char_boundary_end(data, 3), 3);
+    }
+
+    // ---- Coverage: looks_binary branches ----
+    #[test]
+    fn looks_binary_empty() {
+        assert!(!looks_binary(b""));
+    }
+
+    #[test]
+    fn looks_binary_null_byte() {
+        assert!(looks_binary(b"hello\0world"));
+    }
+
+    #[test]
+    fn looks_binary_magic_gzip() {
+        let mut data = vec![0x1F, 0x8B, 0x08, 0x00];
+        data.extend_from_slice(&[b'x'; 100]);
+        assert!(looks_binary(&data));
+    }
+
+    #[test]
+    fn looks_binary_magic_zip() {
+        let mut data = vec![0x50, 0x4B, 0x03, 0x04];
+        data.extend_from_slice(&[b'x'; 100]);
+        assert!(looks_binary(&data));
+    }
+
+    #[test]
+    fn looks_binary_magic_png() {
+        let mut data = vec![0x89, 0x50, 0x4E, 0x47];
+        data.extend_from_slice(&[b'x'; 100]);
+        assert!(looks_binary(&data));
+    }
+
+    #[test]
+    fn looks_binary_magic_jpeg() {
+        let mut data = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        data.extend_from_slice(&[b'x'; 100]);
+        assert!(looks_binary(&data));
+    }
+
+    #[test]
+    fn looks_binary_magic_pdf() {
+        let mut data = vec![0x25, 0x50, 0x44, 0x46];
+        data.extend_from_slice(&[b'x'; 100]);
+        assert!(looks_binary(&data));
+    }
+
+    #[test]
+    fn looks_binary_magic_elf() {
+        let mut data = vec![0x7F, 0x45, 0x4C, 0x46];
+        data.extend_from_slice(&[b'x'; 100]);
+        assert!(looks_binary(&data));
+    }
+
+    #[test]
+    fn looks_binary_magic_pe_dos() {
+        let mut data = vec![0x4D, 0x5A, 0x90, 0x00];
+        data.extend_from_slice(&[b'x'; 100]);
+        assert!(looks_binary(&data));
+    }
+
+    #[test]
+    fn looks_binary_magic_7z() {
+        let mut data = vec![0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C];
+        data.extend_from_slice(&[b'x'; 100]);
+        assert!(looks_binary(&data));
+    }
+
+    #[test]
+    fn looks_binary_magic_zstd() {
+        let mut data = vec![0x28, 0xB5, 0x2F, 0xFD];
+        data.extend_from_slice(&[b'x'; 100]);
+        assert!(looks_binary(&data));
+    }
+
+    #[test]
+    fn looks_binary_magic_macho32() {
+        let mut data = vec![0xCE, 0xFA, 0xED, 0xFE];
+        data.extend_from_slice(&[b'x'; 100]);
+        assert!(looks_binary(&data));
+    }
+
+    #[test]
+    fn looks_binary_magic_macho64() {
+        let mut data = vec![0xCF, 0xFA, 0xED, 0xFE];
+        data.extend_from_slice(&[b'x'; 100]);
+        assert!(looks_binary(&data));
+    }
+
+    #[test]
+    fn looks_binary_magic_macho_fat() {
+        let mut data = vec![0xCA, 0xFE, 0xBA, 0xBE];
+        data.extend_from_slice(&[b'x'; 100]);
+        assert!(looks_binary(&data));
+    }
+
+    #[test]
+    fn looks_binary_magic_sqlite() {
+        let mut data = vec![0x53, 0x51, 0x4C, 0x69, 0x74, 0x65];
+        data.extend_from_slice(&[b'x'; 100]);
+        assert!(looks_binary(&data));
+    }
+
+    #[test]
+    fn looks_binary_magic_bzip2() {
+        let mut data = vec![0x42, 0x5A, 0x68, 0x39];
+        data.extend_from_slice(&[b'x'; 100]);
+        assert!(looks_binary(&data));
+    }
+
+    #[test]
+    fn looks_binary_magic_xz() {
+        let mut data = vec![0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00];
+        data.extend_from_slice(&[b'x'; 100]);
+        assert!(looks_binary(&data));
+    }
+
+    #[test]
+    fn looks_binary_magic_rar() {
+        let mut data = vec![0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00];
+        data.extend_from_slice(&[b'x'; 100]);
+        assert!(looks_binary(&data));
+    }
+
+    #[test]
+    fn looks_binary_suspicious_control_chars() {
+        // >= 512 bytes with > 5% suspicious control chars
+        let mut data = Vec::with_capacity(600);
+        for _ in 0..564 {
+            data.push(b'a');
+        }
+        // Add ~36 suspicious control characters (6%+ of 600)
+        for _ in 0..36 {
+            data.push(0x01); // control char, not tab/lf/cr
+        }
+        assert!(looks_binary(&data));
+    }
+
+    #[test]
+    fn looks_binary_below_threshold_not_binary() {
+        // >= 512 bytes with < 5% suspicious — should NOT be binary
+        let mut data = Vec::with_capacity(600);
+        for _ in 0..590 {
+            data.push(b'a');
+        }
+        for _ in 0..10 {
+            data.push(0x01); // only ~1.6%
+        }
+        assert!(!looks_binary(&data));
+    }
+
+    #[test]
+    fn has_binary_magic_short_input() {
+        assert!(!has_binary_magic(b"ab")); // < 4 bytes
+        assert!(!has_binary_magic(b"abc")); // < 4 bytes
+    }
+
+    #[test]
+    fn has_binary_magic_no_match() {
+        assert!(!has_binary_magic(b"hello world this is text"));
+    }
+
+    #[test]
+    fn has_binary_magic_zip_variant_05() {
+        let data = vec![0x50, 0x4B, 0x05, 0x06];
+        assert!(has_binary_magic(&data));
+    }
+
+    #[test]
+    fn has_binary_magic_zip_variant_07() {
+        let data = vec![0x50, 0x4B, 0x07, 0x08];
+        assert!(has_binary_magic(&data));
+    }
+
+    // ---- Coverage: find_ascii_case_insensitive edge cases ----
+    #[test]
+    fn find_case_insensitive_empty_needle() {
+        assert_eq!(find_ascii_case_insensitive(b"hello", b""), Some(0));
+    }
+
+    #[test]
+    fn find_case_insensitive_needle_longer_than_hay() {
+        assert_eq!(
+            find_ascii_case_insensitive(b"hi", b"hello"),
+            None
+        );
+    }
+
+    #[test]
+    fn find_case_insensitive_non_alpha_first_byte() {
+        // needle starts with a digit — uses memchr instead of memchr2
+        assert_eq!(
+            find_ascii_case_insensitive(b"abc123def", b"123"),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn find_case_insensitive_no_match() {
+        assert_eq!(
+            find_ascii_case_insensitive(b"abcdef", b"xyz"),
+            None
+        );
+    }
+
+    #[test]
+    fn find_case_insensitive_partial_match_then_real() {
+        // "teST" starts with 'te' but doesn't match "text"; "test" later does
+        assert_eq!(
+            find_ascii_case_insensitive(b"texttestmore", b"test"),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn find_case_insensitive_candidate_overflows() {
+        // candidate found but needle extends past hay end
+        assert_eq!(
+            find_ascii_case_insensitive(b"abcX", b"xyzw"),
+            None
+        );
+    }
+
+    #[test]
+    fn find_case_insensitive_loop_exhausts_all_candidates() {
+        // First byte matches via memchr2 but full needle never matches,
+        // and offset advances past the last viable position, exiting the
+        // while loop normally and returning the trailing None.
+        assert_eq!(
+            find_ascii_case_insensitive(b"aX", b"ay"),
+            None
+        );
+    }
+
+    // ---- Coverage: ascii_byte_eq_lower ----
+    #[test]
+    fn ascii_byte_eq_lower_alpha() {
+        assert!(ascii_byte_eq_lower(b'A', b'a'));
+        assert!(ascii_byte_eq_lower(b'a', b'a'));
+        assert!(!ascii_byte_eq_lower(b'b', b'a'));
+    }
+
+    #[test]
+    fn ascii_byte_eq_lower_non_alpha() {
+        assert!(ascii_byte_eq_lower(b'5', b'5'));
+        assert!(!ascii_byte_eq_lower(b'6', b'5'));
+        assert!(ascii_byte_eq_lower(b'.', b'.'));
+    }
+
+    // ---- Coverage: build_matcher branches ----
+    #[test]
+    fn build_matcher_invalid_regex() {
+        let o = ScanOptions {
+            use_regex: true,
+            ..opts()
+        };
+        let result = build_matcher("[invalid", &o);
+        assert!(matches!(result, Err(ScanError::InvalidRegex(_))));
+    }
+
+    #[test]
+    fn build_matcher_case_sensitive_literal() {
+        let o = ScanOptions {
+            case_sensitive: true,
+            use_regex: false,
+            ..opts()
+        };
+        let m = build_matcher("hello", &o).unwrap();
+        assert_eq!(m.find(b"Hello"), None);
+        assert_eq!(m.find(b"hello"), Some((0, 5)));
+    }
+
+    #[test]
+    fn build_matcher_regex_case_insensitive() {
+        let o = ScanOptions {
+            case_sensitive: false,
+            use_regex: true,
+            ..opts()
+        };
+        let m = build_matcher("hello", &o).unwrap();
+        assert!(m.find(b"HELLO").is_some());
+    }
+
+    // ---- Coverage: scan_bytes_with_matcher directly ----
+    #[test]
+    fn scan_bytes_with_matcher_basic() {
+        let o = opts();
+        let m = build_matcher("foo", &o).unwrap();
+        let mut hits = Vec::new();
+        let n = scan_bytes_with_matcher(b"foo bar\nfoo baz\n", &*m, &o, |r| {
+            hits.push(r.line_number);
+            true
+        })
+        .unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(hits, vec![1, 2]);
+    }
+
+    // ---- Coverage: skip_binary=false allows binary content ----
+    #[test]
+    fn skip_binary_false_allows_binary() {
+        let o = ScanOptions {
+            skip_binary: false,
+            ..opts()
+        };
+        let bytes = b"abc\0def\n";
+        let mut count = 0;
+        scan_bytes(bytes, "abc", &o, |_| {
+            count += 1;
+            true
+        })
+        .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    // ---- Coverage: ScanError Debug ----
+    #[test]
+    fn scan_error_debug() {
+        let e = ScanError::InvalidRegex("bad".into());
+        let dbg = format!("{:?}", e);
+        assert!(dbg.contains("InvalidRegex"));
+
+        let e2 = ScanError::Cancelled;
+        let dbg2 = format!("{:?}", e2);
+        assert!(dbg2.contains("Cancelled"));
+
+        let e3 = ScanError::BinarySkipped;
+        assert!(format!("{:?}", e3).contains("BinarySkipped"));
+
+        let io = ScanError::Io(std::io::Error::new(std::io::ErrorKind::Other, "x"));
+        assert!(format!("{:?}", io).contains("Io"));
+    }
+
+    // ---- Coverage: MatchRecord Debug ----
+    #[test]
+    fn match_record_debug() {
+        let r = MatchRecord {
+            line_number: 1,
+            match_start: 0,
+            match_len: 3,
+            line: b"foo".to_vec(),
+            context_before: vec![],
+            context_after: vec![],
+        };
+        let dbg = format!("{:?}", r);
+        assert!(dbg.contains("MatchRecord"));
+    }
+
+    // ---- Coverage: ScanOptions Clone + Debug ----
+    #[test]
+    fn scan_options_clone_debug() {
+        let o = opts();
+        let o2 = o.clone();
+        assert_eq!(o2.case_sensitive, o.case_sensitive);
+        let dbg = format!("{:?}", o);
+        assert!(dbg.contains("ScanOptions"));
+    }
+
+    // ---- Coverage: max_results during pending after-context flush ----
+    #[test]
+    fn max_results_hit_during_after_context_flush() {
+        // Two matches on consecutive lines, each wanting 1 line of after-context.
+        // max_results=1 means only the first pending record should flush.
+        let bytes = b"hit\nhit\nfiller\n";
+        let o = ScanOptions {
+            context_after: 1,
+            max_results: 1,
+            ..opts()
+        };
+        let mut count = 0;
+        let n = scan_bytes(bytes, "hit", &o, |_| {
+            count += 1;
+            true
+        })
+        .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    // ---- Coverage: long context line in before-context ----
+    #[test]
+    fn long_before_context_line_truncated() {
+        let mut long_line = vec![b'z'; MAX_EMITTED_LINE_BYTES + 200];
+        long_line.push(b'\n');
+        let mut bytes = long_line;
+        bytes.extend_from_slice(b"MATCH\n");
+        let o = ScanOptions {
+            context_before: 1,
+            ..opts()
+        };
+        let mut hits = Vec::new();
+        scan_bytes(&bytes, "MATCH", &o, |r| {
+            hits.push(r);
+            true
+        })
+        .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].context_before.len(), 1);
+        assert!(hits[0].context_before[0].len() <= MAX_EMITTED_LINE_BYTES + TRUNCATION_MARKER.len());
+        assert!(hits[0].context_before[0].ends_with(TRUNCATION_MARKER));
+    }
+
+    // ---- Coverage: long after-context line truncated ----
+    #[test]
+    fn long_after_context_line_truncated() {
+        let mut bytes = b"MATCH\n".to_vec();
+        let mut long_line = vec![b'q'; MAX_EMITTED_LINE_BYTES + 200];
+        long_line.push(b'\n');
+        bytes.extend_from_slice(&long_line);
+        let o = ScanOptions {
+            context_after: 1,
+            ..opts()
+        };
+        let mut hits = Vec::new();
+        scan_bytes(&bytes, "MATCH", &o, |r| {
+            hits.push(r);
+            true
+        })
+        .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].context_after.len(), 1);
+        assert!(hits[0].context_after[0].len() <= MAX_EMITTED_LINE_BYTES + TRUNCATION_MARKER.len());
+        assert!(hits[0].context_after[0].ends_with(TRUNCATION_MARKER));
+    }
+
+    // ---- Coverage: RegexMatcher find method ----
+    #[test]
+    fn regex_matcher_find() {
+        let re = RegexBuilder::new(r"\d+")
+            .build()
+            .unwrap();
+        let m = RegexMatcher { re };
+        assert_eq!(m.find(b"abc 42 xyz"), Some((4, 2)));
+        assert_eq!(m.find(b"no digits"), None);
+    }
+
+    // ---- Coverage: LiteralMatcher find method ----
+    #[test]
+    fn literal_matcher_find_case_sensitive() {
+        let m = LiteralMatcher::new(b"Test", true);
+        assert_eq!(m.find(b"a Test here"), Some((2, 4)));
+        assert_eq!(m.find(b"a test here"), None); // wrong case
+    }
+
+    #[test]
+    fn literal_matcher_find_case_insensitive() {
+        let m = LiteralMatcher::new(b"Test", false);
+        assert_eq!(m.find(b"a TEST here"), Some((2, 4)));
+        assert_eq!(m.find(b"nope"), None);
+    }
+
+    // ---- Coverage: copy_match_line_for_record fallback (end <= start) ----
+    #[test]
+    fn copy_match_line_fallback_branch() {
+        // This exercises the (end <= start) fallback in copy_match_line_for_record.
+        // We need: line > MAX_EMITTED_LINE_BYTES, and after snap, end <= start.
+        // All continuation bytes (0x80). Match at position 0 so that `end`
+        // computes to MAX_EMITTED_LINE_BYTES (< line.len()), and snap_to_char_boundary_end
+        // walks all the 0x80 bytes back to 0, giving end=0 <= start=0.
+        let line = vec![0x80u8; MAX_EMITTED_LINE_BYTES + 200];
+        let (result, offset) = copy_match_line_for_record(&line, 0, 5);
+        // Should fall back to copy_context_line_for_record behavior
+        assert!(!result.is_empty());
+        // Fallback returns match_start.min(MAX_EMITTED_LINE_BYTES) as u32 = 0
+        assert_eq!(offset, 0);
     }
 }

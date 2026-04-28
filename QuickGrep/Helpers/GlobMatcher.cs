@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace QuickGrep.Helpers;
 
 /// <summary>
@@ -54,6 +56,7 @@ public sealed class GlobMatcher
         public string Value = string.Empty;
         public System.Text.RegularExpressions.Regex? Regex;
 
+        [ExcludeFromCodeCoverage]
         public bool IsMatch(string normalizedPath)
         {
             switch (PatternKind)

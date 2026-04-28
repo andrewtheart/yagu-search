@@ -393,3 +393,401 @@ public class SearchServiceTests : IDisposable
         }
     }
 }
+
+// ─── SearchService: MaxResults clamping ─────────────────────────────────
+
+public class SearchServiceClampTests : IDisposable
+{
+    private readonly string _root;
+    public SearchServiceClampTests()
+    {
+        _root = Path.Combine(Path.GetTempPath(), "qg-clamp-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_root);
+        File.WriteAllText(Path.Combine(_root, "a.txt"), "match");
+    }
+    public void Dispose() { try { Directory.Delete(_root, recursive: true); } catch { } }
+
+    [Fact]
+    public async Task MaxResultsAboveCeiling_GetsClampedAndSearchCompletes()
+    {
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "match",
+            MaxResults = 999_999,
+            MaxFileSizeBytes = 0,
+        };
+
+        SearchSummary? summary = null;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Completed c) summary = c.Summary;
+        }
+        Assert.NotNull(summary);
+        Assert.True(summary!.TotalMatches >= 1);
+    }
+}
+
+// ─── SearchService: FlushFilenameBatchAsync ─────────────────────────────
+
+public class SearchServiceFlushBatchTests : IDisposable
+{
+    private readonly string _root;
+    public SearchServiceFlushBatchTests()
+    {
+        _root = Path.Combine(Path.GetTempPath(), "qg-flush-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_root);
+    }
+    public void Dispose() { try { Directory.Delete(_root, recursive: true); } catch { } }
+
+    [Fact]
+    public async Task FileNameSearch_WithMultipleFiles_FlushesAsMatchBatch()
+    {
+        for (int i = 0; i < 50; i++)
+            File.WriteAllText(Path.Combine(_root, $"target{i}.txt"), "content");
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "target",
+            SearchMode = SearchMode.FileNames,
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        int matchBatchCount = 0;
+        int matchCount = 0;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.MatchBatch mb) { matchBatchCount++; matchCount += mb.Results.Count; }
+            if (evt is SearchEvent.Match) matchCount++;
+        }
+        Assert.True(matchCount >= 50);
+    }
+}
+
+// ─── SearchService: more SearchAsync paths ──────────────────────────────
+
+public class SearchServiceExtraTests : IDisposable
+{
+    private readonly string _root;
+    public SearchServiceExtraTests()
+    {
+        _root = Path.Combine(Path.GetTempPath(), "qg-svc-extra-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_root);
+    }
+    public void Dispose() { try { Directory.Delete(_root, recursive: true); } catch { } }
+
+    private void Write(string rel, string content)
+    {
+        var p = Path.Combine(_root, rel);
+        Directory.CreateDirectory(Path.GetDirectoryName(p)!);
+        File.WriteAllText(p, content, new UTF8Encoding(false));
+    }
+
+    [Fact]
+    public async Task EmptyQuery_EmitsCompletedImmediately()
+    {
+        Write("a.txt", "content");
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "",
+            MaxFileSizeBytes = 0,
+        };
+
+        SearchSummary? summary = null;
+        int matchCount = 0;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Completed c) summary = c.Summary;
+            if (evt is SearchEvent.Match) matchCount++;
+            if (evt is SearchEvent.MatchBatch mb) matchCount += mb.Results.Count;
+        }
+        Assert.True(matchCount == 0 || summary is not null);
+    }
+
+    [Fact]
+    public async Task Cancellation_StopsSearch()
+    {
+        for (int i = 0; i < 100; i++)
+            Write($"f{i}.txt", string.Join('\n', Enumerable.Repeat("match", 50)));
+
+        var svc = new SearchService();
+        var cts = new CancellationTokenSource();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "match",
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        int events = 0;
+        try
+        {
+            await foreach (var evt in svc.SearchAsync(opts, cts.Token))
+            {
+                events++;
+                if (events >= 3) cts.Cancel();
+            }
+        }
+        catch (OperationCanceledException) { /* expected */ }
+
+        Assert.True(events >= 1);
+    }
+
+    [Fact]
+    public async Task FileNameOnlySearch_MatchesByFileName()
+    {
+        Write("alpha.txt", "content not searched");
+        Write("beta.txt", "content not searched");
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "alpha",
+            SearchMode = SearchMode.FileNames,
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        int matches = 0;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Match) matches++;
+            if (evt is SearchEvent.MatchBatch mb) matches += mb.Results.Count;
+        }
+        Assert.Equal(1, matches);
+    }
+
+    [Fact]
+    public async Task SearchWithContextLines_ReturnsContext()
+    {
+        Write("ctx.txt", "line1\nline2\nMATCH\nline4\nline5");
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "MATCH",
+            ContextLines = 1,
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        SearchResult? found = null;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Match m) found = m.Result;
+            if (evt is SearchEvent.MatchBatch mb && mb.Results.Count > 0) found = mb.Results[0];
+        }
+        Assert.NotNull(found);
+        Assert.NotEmpty(found!.ContextBefore);
+        Assert.NotEmpty(found.ContextAfter);
+    }
+
+    [Fact]
+    public void ExtractExtensions_StarDotExtWithUnderscoreAndDigit()
+    {
+        var result = SearchService.ExtractExtensions(new[] { "*.c99", "*.h_file" });
+        Assert.Equal(2, result.Count);
+        Assert.Contains("c99", result);
+        Assert.Contains("h_file", result);
+    }
+
+    [Fact]
+    public void IsMemoryPressureRelievedForSnapshot_NoPressureConfig_ReturnsTrue()
+    {
+        bool relieved = SearchService.IsMemoryPressureRelievedForSnapshot(
+            workingSetBytes: 100,
+            effectiveProcessCapBytes: 200,
+            systemMemoryLoadPercent: 90,
+            pressurePercent: 0,
+            recoveryMarginPercent: 5);
+        Assert.True(relieved);
+    }
+
+    [Fact]
+    public void IsMemoryPressureRelievedForSnapshot_HighWorkingSet_ReturnsFalse()
+    {
+        bool relieved = SearchService.IsMemoryPressureRelievedForSnapshot(
+            workingSetBytes: 999,
+            effectiveProcessCapBytes: 1000,
+            systemMemoryLoadPercent: 50,
+            pressurePercent: 90,
+            recoveryMarginPercent: 5);
+        Assert.False(relieved);
+    }
+
+    [Fact]
+    public void IsMemoryPressureRelievedForSnapshot_ZeroCap_ReturnsTrue()
+    {
+        bool relieved = SearchService.IsMemoryPressureRelievedForSnapshot(
+            workingSetBytes: 999,
+            effectiveProcessCapBytes: 0,
+            systemMemoryLoadPercent: 50,
+            pressurePercent: 90,
+            recoveryMarginPercent: 5);
+        Assert.True(relieved);
+    }
+}
+
+// ─── SearchService.ExtractExtensions ────────────────────────────────────
+
+public class ExtractExtensionsCoverageTests
+{
+    [Fact]
+    public void SimpleGlob_ExtractsExtension()
+    {
+        var result = SearchService.ExtractExtensions(new[] { "*.cs" });
+        Assert.Single(result);
+        Assert.Equal("cs", result[0]);
+    }
+
+    [Fact]
+    public void BareExtension_NoStar()
+    {
+        var result = SearchService.ExtractExtensions(new[] { "ts" });
+        Assert.Single(result);
+        Assert.Equal("ts", result[0]);
+    }
+
+    [Fact]
+    public void DotPrefixed_Extension()
+    {
+        var result = SearchService.ExtractExtensions(new[] { ".json" });
+        Assert.Single(result);
+        Assert.Equal("json", result[0]);
+    }
+
+    [Fact]
+    public void ComplexGlob_ExtractsExtension()
+    {
+        var result = SearchService.ExtractExtensions(new[] { "src/**/*.py" });
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void SemicolonSeparated()
+    {
+        var result = SearchService.ExtractExtensions(new[] { "*.cs;*.xml;*.json" });
+        Assert.Equal(3, result.Count);
+        Assert.Contains("cs", result);
+        Assert.Contains("xml", result);
+        Assert.Contains("json", result);
+    }
+
+    [Fact]
+    public void CommaSeparated()
+    {
+        var result = SearchService.ExtractExtensions(new[] { "*.cs,*.ts" });
+        Assert.Equal(2, result.Count);
+        Assert.Contains("cs", result);
+        Assert.Contains("ts", result);
+    }
+
+    [Fact]
+    public void NullInput_ReturnsEmpty()
+    {
+        var result = SearchService.ExtractExtensions(null!);
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void EmptyList_ReturnsEmpty()
+    {
+        var result = SearchService.ExtractExtensions(Array.Empty<string>());
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void BlankEntries_Skipped()
+    {
+        var result = SearchService.ExtractExtensions(new[] { "", "  ", "*.cs" });
+        Assert.Single(result);
+        Assert.Equal("cs", result[0]);
+    }
+
+    [Fact]
+    public void MultipleInputEntries()
+    {
+        var result = SearchService.ExtractExtensions(new[] { "*.cs", "*.xml" });
+        Assert.Equal(2, result.Count);
+        Assert.Contains("cs", result);
+        Assert.Contains("xml", result);
+    }
+
+    [Fact]
+    public void Underscore_InExtension_IsAllowed()
+    {
+        var result = SearchService.ExtractExtensions(new[] { "*.c_pp" });
+        Assert.Single(result);
+        Assert.Equal("c_pp", result[0]);
+    }
+}
+
+// ─── ExtractExtensions: non-alphanumeric ────────────────────────────────
+
+public class ExtractExtensionsNonAlphaTests
+{
+    [Fact]
+    public void SpecialCharsInExtension_NotExtracted()
+    {
+        var result = SearchService.ExtractExtensions(["*.c++"]);
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void MixedPatterns_OnlyValidExtracted()
+    {
+        var result = SearchService.ExtractExtensions(["*.cs", "*.c++", "*.txt"]);
+        Assert.Equal(new[] { "cs", "txt" }, result);
+    }
+
+    [Fact]
+    public void ExtensionWithUnderscore_IsExtracted()
+    {
+        var result = SearchService.ExtractExtensions(["*.my_ext"]);
+        Assert.Equal(new[] { "my_ext" }, result);
+    }
+
+    [Fact]
+    public void EmptyAfterStrip_NotExtracted()
+    {
+        var result = SearchService.ExtractExtensions(["*."]);
+        Assert.Empty(result);
+    }
+}
+
+// ─── SearchService.EffectiveProcessMemoryCap ────────────────────────────
+
+public class EffectiveProcessMemoryCapTests
+{
+    [Fact]
+    public void EffectiveProcessMemoryCap_ZeroCap_ReturnsAutoCap()
+    {
+        var method = typeof(SearchService).GetMethod(
+            "EffectiveProcessMemoryCap",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var result = (long)method!.Invoke(null, [0L])!;
+        Assert.True(result > 0);
+    }
+
+    [Fact]
+    public void EffectiveProcessMemoryCap_PositiveCap_ReturnsSameValue()
+    {
+        var method = typeof(SearchService).GetMethod(
+            "EffectiveProcessMemoryCap",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var result = (long)method!.Invoke(null, [42L])!;
+        Assert.Equal(42L, result);
+    }
+}

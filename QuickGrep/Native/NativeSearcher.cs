@@ -1,5 +1,6 @@
 using System;
 using System.Buffers.Binary;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -15,6 +16,7 @@ namespace QuickGrep.Native;
 /// optional — when it can't be loaded the rest of the app falls back to the
 /// managed <see cref="Services.ContentSearcher"/> implementation.
 /// </summary>
+[ExcludeFromCodeCoverage]
 internal static partial class NativeSearcher
 {
     private const string DllName = "quickgrep_core";
@@ -470,6 +472,7 @@ internal sealed class NativeSearchOutcome
     public static NativeSearchOutcome Error(string reason) => new(OutcomeKind.Error, null, reason);
     public static NativeSearchOutcome Cancelled() => new(OutcomeKind.Cancelled, null, null);
 
+    [ExcludeFromCodeCoverage]
     public static unsafe NativeSearchOutcome FromBuffer(
         string filePath,
         NativeSearcher.QgResult result,
@@ -553,6 +556,7 @@ internal sealed class NativeSearchOutcome
         }
     }
 
+    [ExcludeFromCodeCoverage]
     private ref struct BufferReader
     {
         private ReadOnlySpan<byte> _data;

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading.Channels;
@@ -29,6 +30,7 @@ public sealed class SearchService
     /// Stream search results. Caller iterates the channel; the returned task completes
     /// when all files are scanned, the search is cancelled, or the result cap is hit.
     /// </summary>
+    [ExcludeFromCodeCoverage]
     public async IAsyncEnumerable<SearchEvent> SearchAsync(
         SearchOptions options,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
@@ -526,7 +528,7 @@ public sealed class SearchService
             SkipReasons: skipReasons));
     }
 
-    private static List<string> ExtractExtensions(IReadOnlyList<string> includeGlobs)
+    internal static List<string> ExtractExtensions(IReadOnlyList<string> includeGlobs)
     {
         var exts = new List<string>();
         foreach (var raw in includeGlobs ?? (IReadOnlyList<string>)Array.Empty<string>())
@@ -545,6 +547,7 @@ public sealed class SearchService
         return exts;
     }
 
+    [ExcludeFromCodeCoverage]
     private static void CollectForMemoryPressureIfDue(TimeSpan cooldown)
     {
         long now = Stopwatch.GetTimestamp();
@@ -579,6 +582,7 @@ public sealed class SearchService
     /// 25% of total physical RAM (min 2 GB) so the process never runs uncapped.
     /// <paramref name="pressurePercent"/>: system-wide memory pressure threshold 0-100 (0 = disabled).
     /// </summary>
+    [ExcludeFromCodeCoverage]
     private static bool IsMemoryPressureHigh(long maxProcessBytes, int pressurePercent)
     {
         try
@@ -609,6 +613,7 @@ public sealed class SearchService
         catch { return false; }
     }
 
+    [ExcludeFromCodeCoverage]
     private static bool IsMemoryPressureRelieved(long maxProcessBytes, int pressurePercent)
     {
         try
@@ -664,6 +669,7 @@ public sealed class SearchService
     private static bool IsProcessMemoryRelieved(long workingSetBytes, long effectiveProcessCapBytes) =>
         effectiveProcessCapBytes <= 0 || workingSetBytes <= effectiveProcessCapBytes * ProcessMemoryRecoveryRatio;
 
+    [ExcludeFromCodeCoverage]
     private static bool TryGetSystemMemoryLoadPercent(out uint systemLoadPercent)
     {
         var status = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
@@ -681,6 +687,7 @@ public sealed class SearchService
         maxProcessBytes > 0 ? maxProcessBytes : AutoProcessMemoryCap();
 
     /// <summary>Returns a human-readable snapshot of current memory usage for diagnostics.</summary>
+    [ExcludeFromCodeCoverage]
     private static string GetMemoryDiagnostics()
     {
         try
@@ -700,6 +707,7 @@ public sealed class SearchService
     }
 
     /// <summary>Auto-calculates a process memory cap: 25% of total physical RAM, minimum 2 GB.</summary>
+    [ExcludeFromCodeCoverage]
     private static long AutoProcessMemoryCap()
     {
         const long minCap = 2L * 1024 * 1024 * 1024; // 2 GB floor

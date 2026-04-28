@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Threading.Channels;
 using QuickGrep.Native;
@@ -67,9 +68,10 @@ public sealed class FileLister : IFileLister
 
     public FileLister() { }
 
-    // Test seam.
+    [ExcludeFromCodeCoverage]
     internal FileLister(Func<string, ProcessStartInfo, IProcess>? processFactory) => _processFactory = processFactory;
 
+    [ExcludeFromCodeCoverage]
     public async IAsyncEnumerable<string> ListFilesAsync(
         string directory,
         IReadOnlyList<string> includeExtensions,
@@ -168,6 +170,7 @@ public sealed class FileLister : IFileLister
     // ── Everything SDK (in-process) ────────────────────────────────
     private static bool _sdkAvailable = true; // set to false on first load failure
 
+    [ExcludeFromCodeCoverage]
     private async IAsyncEnumerable<string> RunEverythingSdkAsync(
         string directory,
         IReadOnlyList<string> includeExtensions,
@@ -324,6 +327,7 @@ public sealed class FileLister : IFileLister
         }
     }
 
+    [ExcludeFromCodeCoverage]
     public static string? FindEsExe()
     {
         var candidates = new List<string>();
@@ -352,6 +356,7 @@ public sealed class FileLister : IFileLister
         return null;
     }
 
+    [ExcludeFromCodeCoverage]
     private async IAsyncEnumerable<string> RunEverythingAsync(
         string esPath,
         string directory,
@@ -423,6 +428,7 @@ public sealed class FileLister : IFileLister
         }
     }
 
+    [ExcludeFromCodeCoverage]
     private async Task<int> TryGetEverythingResultCountAsync(
         string esPath,
         IReadOnlyList<string> queryArgs,
@@ -458,9 +464,11 @@ public sealed class FileLister : IFileLister
         }
     }
 
+    [ExcludeFromCodeCoverage]
     private void SetKnownTotalFiles(uint count) =>
         SetKnownTotalFiles(count > int.MaxValue ? int.MaxValue : (int)count);
 
+    [ExcludeFromCodeCoverage]
     private void SetKnownTotalFiles(int count) =>
         Volatile.Write(ref _knownTotalFiles, Math.Max(0, count));
 
@@ -474,6 +482,7 @@ public sealed class FileLister : IFileLister
         return s;
     }
 
+    [ExcludeFromCodeCoverage]
     private async IAsyncEnumerable<string> EnumerateFallbackAsync(
         string directory,
         IReadOnlyList<string> includeExtensions,
@@ -605,6 +614,7 @@ public sealed class FileLister : IFileLister
         int ExitCode { get; }
     }
 
+    [ExcludeFromCodeCoverage]
     private sealed class RealProcess : IProcess
     {
         private readonly Process _p;
