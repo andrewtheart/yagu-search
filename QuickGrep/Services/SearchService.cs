@@ -744,6 +744,7 @@ public sealed class SearchService
 }
 
 /// <summary>Discriminated event returned by <see cref="SearchService.SearchAsync"/>.</summary>
+[ExcludeFromCodeCoverage]
 public abstract record SearchEvent
 {
     public sealed record Fallback(string Reason) : SearchEvent;

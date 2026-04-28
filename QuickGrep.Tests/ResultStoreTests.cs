@@ -234,3 +234,32 @@ public class ResultStoreNullBranchTests : IDisposable
         Assert.Equal(string.Empty, match);
     }
 }
+
+// ─── ResultStore: Dispose & Cleanup ─────────────────────────────────────
+
+public class ResultStoreDisposeTests
+{
+    [Fact]
+    public void Dispose_DeletesTempFile()
+    {
+        var store = new ResultStore();
+        // Write something so the file definitely exists
+        store.Write("test", Array.Empty<string>(), Array.Empty<string>());
+
+        // Get the file path via reflection
+        var pathField = typeof(ResultStore).GetField("_path",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        var path = (string)pathField!.GetValue(store)!;
+        Assert.True(File.Exists(path));
+
+        store.Dispose();
+        Assert.False(File.Exists(path));
+    }
+
+    [Fact]
+    public async Task CleanupOrphanedTempFilesAsync_DoesNotThrow()
+    {
+        // Exercise the code path; it scans temp directory for old files
+        await ResultStore.CleanupOrphanedTempFilesAsync();
+    }
+}

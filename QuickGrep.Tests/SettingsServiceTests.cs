@@ -157,6 +157,33 @@ public class SettingsServiceExtraTests
         var ex = Record.Exception(() => svc.Save(settings));
         // The implementation may create directories or silently fail; either way, no crash
     }
+
+    [Fact]
+    public void Save_ToInvalidDrive_DoesNotThrow()
+    {
+        // Use an invalid path that will definitely fail
+        var svc = new SettingsService(@"Z:\nonexistent\path\settings.json");
+        var settings = new AppSettings();
+        var ex = Record.Exception(() => svc.Save(settings));
+        Assert.Null(ex); // caught internally
+    }
+
+    [Fact]
+    public void PushRecent_EmptyValue_IsNoOp()
+    {
+        var list = new List<string> { "existing" };
+        SettingsService.PushRecent(list, "");
+        Assert.Single(list);
+        Assert.Equal("existing", list[0]);
+    }
+
+    [Fact]
+    public void PushRecent_WhitespaceValue_IsNoOp()
+    {
+        var list = new List<string> { "existing" };
+        SettingsService.PushRecent(list, "   ");
+        Assert.Single(list);
+    }
 }
 
 // ─── SettingsService: null JSON deserialization ─────────────────────────
