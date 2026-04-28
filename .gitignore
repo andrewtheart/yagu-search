@@ -1,0 +1,38 @@
+# Build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+.vs/
+
+# Publish
+publish/
+*.pubxml.user
+
+# Tests / benchmarks
+TestResults/
+BenchmarkDotNet.Artifacts/
+
+# Rust build output
+target/
+
+# Settings written at runtime
+%APPDATA%/QuickGrep/
+*.log
+PERFORMANCE_IMPROVEMENTS.md
+PLAN.md
+.analysis/quickgrep-cpu-3min-20260427-152612.nettrace
+.analysis/quickgrep-cpu-3min-20260427-152612.nettrace.etlx
+.analysis/quickgrep-cpu-3min-20260427-152612.speedscope.json
+.analysis/quickgrep-cpu-5min-20260427-152532.nettrace
+.analysis/quickgrep-cpu-5min-20260427-152532.speedscope.json
+.analysis/quickgrep-cpu-20260427-152203.nettrace
+.analysis/quickgrep-cpu-20260427-152203.nettrace.etlx
+.analysis/quickgrep-cpu-20260427-152203.speedscope.json
+.analysis/Report20260427-1443/hardfault.txt
+.analysis/Report20260427-1443/process.txt
+.analysis/Report20260427-1443/tracestats.txt
+.analysis/Report20260427-1443/uidelay.txt
+.analysis/Report20260427-1443/virtualalloc.txt
