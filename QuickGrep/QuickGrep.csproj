@@ -16,6 +16,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InternalsVisibleTo>QuickGrep.Tests</InternalsVisibleTo>
     <ApplicationIcon>Assets\quickgrep.ico</ApplicationIcon>
     <!-- Point WindowsAppSDK PRI/Appx generation tasks at the VS-shipped DLLs when the
          .NET SDK installation does not include them (no Visual Studio workload). -->

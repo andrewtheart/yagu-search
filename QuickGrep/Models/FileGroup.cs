@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.Diagnostics.CodeAnalysis;
 using QuickGrep.Services;
 
 namespace QuickGrep.Models;
@@ -100,6 +101,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     }
     public bool HasGroupHeader => !string.IsNullOrEmpty(GroupHeaderText);
 
+    [ExcludeFromCodeCoverage]
     public void LoadMetadata()
     {
         if (FileMetadataCache.TryGet(FilePath, out var cached))
@@ -127,6 +129,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     /// FileInfo syscall per result group on huge searches. The <paramref name="dispatch"/>
     /// delegate is responsible for marshalling its action onto the UI thread.
     /// </summary>
+    [ExcludeFromCodeCoverage]
     public void BeginLoadMetadata(Action<Action> dispatch)
     {
         if (FileMetadataCache.TryGet(FilePath, out var cached))

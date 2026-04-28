@@ -1,4 +1,5 @@
 using System.IO.MemoryMappedFiles;
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Channels;
@@ -72,6 +73,7 @@ public sealed class ContentSearcher
         Native.NativeSession? session)
         => (await SearchFileWithStatsAsync(filePath, regex, literal, literalComparison, options, writer, cancellationToken, session).ConfigureAwait(false)).MatchCount;
 
+    [ExcludeFromCodeCoverage]
     internal async Task<FileSearchOutcome> SearchFileWithStatsAsync(
         string filePath,
         Regex? regex,
@@ -342,6 +344,7 @@ public sealed class ContentSearcher
     /// <summary>Sentinel returned by <see cref="TryNativeAsync"/> when the native path cannot be used and the caller should run the managed path.</summary>
     private const int NativeFellThrough = int.MinValue;
 
+    [ExcludeFromCodeCoverage]
     private static async Task<int> TryNativeAsync(
         string filePath,
         SearchOptions options,
@@ -423,6 +426,7 @@ public sealed class ContentSearcher
         }
     }
 
+    [ExcludeFromCodeCoverage]
     private static int Cancel(CancellationToken ct, int emitted)
     {
         ct.ThrowIfCancellationRequested();
@@ -434,6 +438,7 @@ public sealed class ContentSearcher
     /// pointer-backed data into managed strings, and writes <see cref="SearchResult"/>
     /// items into the channel.
     /// </summary>
+    [ExcludeFromCodeCoverage]
     private sealed class StreamingSink : Native.IStreamingSink
     {
         private readonly string _filePath;

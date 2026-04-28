@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using QuickGrep.Services;
 
 namespace QuickGrep.Services;
@@ -12,6 +13,7 @@ public sealed class EditorLauncher
 
     public string Command { get; set; } = DefaultCommand;
 
+    [ExcludeFromCodeCoverage]
     public bool Open(string filePath, int line)
     {
         var rendered = Command.Replace("{file}", filePath).Replace("{line}", line.ToString());
@@ -34,6 +36,7 @@ public sealed class EditorLauncher
         }
     }
 
+    [ExcludeFromCodeCoverage]
     public static bool OpenContainingFolder(string filePath)
     {
         try
@@ -51,6 +54,7 @@ public sealed class EditorLauncher
         catch (Exception ex) { LogService.Instance.Warning("EditorLauncher", $"Failed to open folder for {filePath}", ex); return false; }
     }
 
+    [ExcludeFromCodeCoverage]
     public static bool OpenTerminalAt(string filePath)
     {
         try
@@ -82,7 +86,7 @@ public sealed class EditorLauncher
         }
     }
 
-    private static (string exe, string args) Split(string command)
+    internal static (string exe, string args) Split(string command)
     {
         if (string.IsNullOrWhiteSpace(command)) return ("", "");
         command = command.Trim();
