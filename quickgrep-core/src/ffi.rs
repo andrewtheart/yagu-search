@@ -8,7 +8,7 @@
 //!   3. The buffer pointer + length are returned via out-params; ownership
 //!      transfers to the caller, which must release it via `qg_free_result`.
 
-use crate::scan::{scan_bytes_ex, scan_bytes_with_matcher_ex, MatchRecord, ScanError, ScanOptions};
+use crate::scan::{looks_binary, scan_bytes_ex, scan_bytes_with_matcher_ex, MatchRecord, ScanError, ScanOptions};
 use memmap2::Mmap;
 use std::fs::File;
 use std::io::Read;
@@ -234,7 +234,7 @@ fn open_file_for_scan(
         let n = file
             .read(&mut probe[..probe_len])
             .map_err(|_| STATUS_OPEN_FAILED)?;
-        if memchr::memchr(0, &probe[..n]).is_some() {
+        if looks_binary(&probe[..n]) {
             return Err(STATUS_BINARY_SKIPPED);
         }
     }
@@ -308,7 +308,7 @@ fn open_file_for_scan_into<'a>(
         let n = file
             .read(&mut probe[..probe_len])
             .map_err(|_| STATUS_OPEN_FAILED)?;
-        if memchr::memchr(0, &probe[..n]).is_some() {
+        if looks_binary(&probe[..n]) {
             return Err(STATUS_BINARY_SKIPPED);
         }
     }
@@ -3370,6 +3370,35 @@ mod tests {
             open_file_for_scan(path, 0, true).unwrap_err(),
             STATUS_BINARY_SKIPPED,
         );
+    }
+
+    #[test]
+    fn open_file_for_scan_binary_probe_skips_large_magic_file() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut content = vec![b'a'; (MMAP_THRESHOLD_BYTES as usize) + 16];
+        content[..4].copy_from_slice(b"PK\x03\x04");
+        tmp.write_all(&content).unwrap();
+        tmp.flush().unwrap();
+        let path = tmp.path().to_str().unwrap();
+        assert_eq!(
+            open_file_for_scan(path, 0, true).unwrap_err(),
+            STATUS_BINARY_SKIPPED,
+        );
+    }
+
+    #[test]
+    fn open_file_for_scan_into_binary_probe_skips_large_magic_file() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut content = vec![b'a'; (MMAP_THRESHOLD_BYTES as usize) + 16];
+        content[..2].copy_from_slice(&[0x1F, 0x8B]);
+        tmp.write_all(&content).unwrap();
+        tmp.flush().unwrap();
+        let path = tmp.path().to_str().unwrap();
+        let mut scratch = Vec::with_capacity(MMAP_THRESHOLD_BYTES as usize);
+        assert!(matches!(
+            open_file_for_scan_into(path, 0, true, &mut scratch),
+            Err(STATUS_BINARY_SKIPPED)
+        ));
     }
 
     #[test]

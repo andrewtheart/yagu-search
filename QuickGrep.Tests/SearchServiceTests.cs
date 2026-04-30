@@ -19,6 +19,18 @@ public class SearchServiceTests : IDisposable
     }
     public void Dispose() { FileLister.Backend = _originalBackend; try { Directory.Delete(_root, recursive: true); } catch { } }
 
+    [Theory]
+    [InlineData(0, 1024)]
+    [InlineData(1, 1024)]
+    [InlineData(8, 1024)]
+    [InlineData(16, 2048)]
+    [InlineData(24, 3072)]
+    [InlineData(64, 4096)]
+    public void ResolveNativeBatchSize_ScalesWithParallelism(int parallelism, int expected)
+    {
+        Assert.Equal(expected, SearchService.ResolveNativeBatchSize(parallelism));
+    }
+
     private void Write(string rel, string content)
     {
         var p = Path.Combine(_root, rel);

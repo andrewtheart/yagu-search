@@ -323,7 +323,7 @@ fn snap_to_char_boundary_end(line: &[u8], mut index: usize) -> usize {
     index
 }
 
-fn looks_binary(bytes: &[u8]) -> bool {
+pub(crate) fn looks_binary(bytes: &[u8]) -> bool {
     let probe = &bytes[..bytes.len().min(8 * 1024)];
     if probe.is_empty() {
         return false;

@@ -252,4 +252,28 @@ public class SettingsServiceNewFieldTests
         var s = new AppSettings();
         Assert.True(s.SkipBinary);
     }
+
+    [Fact]
+    public void Defaults_SkipExtensions_UsesExpandedBinaryPrefilter()
+    {
+        var s = new AppSettings();
+        Assert.Contains("wasm", s.SkipExtensions);
+        Assert.Contains("sqlite", s.SkipExtensions);
+        Assert.Contains("etl", s.SkipExtensions);
+    }
+
+    [Fact]
+    public void Load_LegacySkipExtensions_MigratesToExpandedDefault()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-skip-ext-migration-" + Guid.NewGuid() + ".json");
+        try
+        {
+            File.WriteAllText(tmp, $$"""{"SkipExtensions":"{{AppSettings.LegacyDefaultSkipExtensions}}"}""");
+            var svc = new SettingsService(tmp);
+            var loaded = svc.Load();
+
+            Assert.Equal(AppSettings.DefaultSkipExtensions, loaded.SkipExtensions);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
 }

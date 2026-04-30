@@ -427,7 +427,7 @@ public sealed partial class MainWindow : Window
 
         sp.Children.Add(new TextBlock { Text = "Content-search parallelism (concurrent file scan threads):" });
         var parallelism = new ComboBox();
-        parallelism.Items.Add($"Auto (safe cap · up to {Math.Min(8, Environment.ProcessorCount)})");
+        parallelism.Items.Add($"Auto (safe cap · up to {Math.Min(16, Environment.ProcessorCount)})");
         parallelism.Items.Add("1 thread (sequential, HDD safe)");
         parallelism.Items.Add($"Half cores ({Math.Max(1, Environment.ProcessorCount / 2)})");
         parallelism.Items.Add($"2× cores ({Environment.ProcessorCount * 2}, I/O heavy)");
@@ -754,14 +754,98 @@ public sealed partial class MainWindow : Window
 
     private void OnCopySelectedFilePaths(object sender, RoutedEventArgs e)
     {
+        var paths = GetSelectedFilePaths();
+        if (paths.Count == 0) return;
+        SetClipboardText(SelectedFileExportService.BuildPathListText(paths), "selected file paths");
+    }
+
+    private async void OnCopySelectedFilesWithContent(object sender, RoutedEventArgs e)
+    {
+        var paths = GetSelectedFilePaths();
+        if (paths.Count == 0) return;
+
+        try
+        {
+            var text = await SelectedFileExportService.BuildFilesWithContentTextAsync(paths).ConfigureAwait(true);
+            SetClipboardText(text, "selected files with content");
+            ViewModel.StatusText = $"Copied {paths.Count:N0} selected file(s) with content.";
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("MainWindow", "Could not copy selected files with content", ex);
+            ViewModel.StatusText = $"Could not copy selected files with content: {ex.Message}";
+        }
+    }
+
+    private async void OnSaveSelectedFilePaths(object sender, RoutedEventArgs e)
+    {
+        var paths = GetSelectedFilePaths();
+        if (paths.Count == 0) return;
+
+        var file = await PickTextExportFileAsync("QuickGrep_Selected_File_Paths").ConfigureAwait(true);
+        if (file is null) return;
+
+        try
+        {
+            await using var stream = await file.OpenStreamForWriteAsync().ConfigureAwait(true);
+            stream.SetLength(0);
+            using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), bufferSize: 128 * 1024, leaveOpen: false);
+            await SelectedFileExportService.WritePathListAsync(paths, writer).ConfigureAwait(true);
+            ViewModel.StatusText = $"Saved {paths.Count:N0} selected file path(s) to {file.Path}.";
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("MainWindow", $"Could not save selected file paths: {file.Path}", ex);
+            ViewModel.StatusText = $"Could not save selected file paths: {ex.Message}";
+        }
+    }
+
+    private async void OnSaveSelectedFilesWithContent(object sender, RoutedEventArgs e)
+    {
+        var paths = GetSelectedFilePaths();
+        if (paths.Count == 0) return;
+
+        var file = await PickTextExportFileAsync("QuickGrep_Selected_Files_With_Content").ConfigureAwait(true);
+        if (file is null) return;
+
+        try
+        {
+            await using var stream = await file.OpenStreamForWriteAsync().ConfigureAwait(true);
+            stream.SetLength(0);
+            using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), bufferSize: 128 * 1024, leaveOpen: false);
+            await SelectedFileExportService.WriteFilesWithContentAsync(paths, writer).ConfigureAwait(true);
+            ViewModel.StatusText = $"Saved {paths.Count:N0} selected file(s) with content to {file.Path}.";
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("MainWindow", $"Could not save selected files with content: {file.Path}", ex);
+            ViewModel.StatusText = $"Could not save selected files with content: {ex.Message}";
+        }
+    }
+
+    private List<string> GetSelectedFilePaths()
+    {
         var paths = new List<string>();
         foreach (var item in ResultsList.SelectedItems)
         {
             if (item is FileGroup g && !string.IsNullOrWhiteSpace(g.FilePath))
                 paths.Add(g.FilePath);
         }
-        if (paths.Count == 0) return;
-        SetClipboardText(string.Join(Environment.NewLine, paths), "selected file paths");
+
+        return paths;
+    }
+
+    private async Task<Windows.Storage.StorageFile?> PickTextExportFileAsync(string suggestedFileName)
+    {
+        var picker = new Windows.Storage.Pickers.FileSavePicker();
+        picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
+        picker.FileTypeChoices.Add("Text File", new List<string> { ".txt" });
+        picker.SuggestedFileName = suggestedFileName;
+
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+
+        return await picker.PickSaveFileAsync();
     }
 
     private void OnCopyPreviewFilePath(object sender, RoutedEventArgs e)
