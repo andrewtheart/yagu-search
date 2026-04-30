@@ -218,6 +218,21 @@ public sealed class SearchService
                 filenameBatch = null;
                 await events.Writer.WriteAsync(new SearchEvent.MatchBatch(batch), cancellationToken).ConfigureAwait(false);
             }
+
+            async ValueTask WritePendingFileAsync(string path)
+            {
+                while (Volatile.Read(ref truncated) == 0)
+                {
+                    if (pending.Writer.TryWrite(path))
+                        return;
+
+                    var waitToWrite = pending.Writer.WaitToWriteAsync(cancellationToken).AsTask();
+                    var completed = await Task.WhenAny(waitToWrite, Task.Delay(25, cancellationToken)).ConfigureAwait(false);
+                    if (completed == waitToWrite && !await waitToWrite.ConfigureAwait(false))
+                        return;
+                }
+            }
+
             try
             {
                 await foreach (var path in _fileLister.ListFilesAsync(options.Directory, includeExts, maxFiles: 0, cancellationToken).WithCancellation(cancellationToken))
@@ -274,7 +289,7 @@ public sealed class SearchService
 
                     if (searchContent)
                     {
-                        await pending.Writer.WriteAsync(path, cancellationToken).ConfigureAwait(false);
+                        await WritePendingFileAsync(path).ConfigureAwait(false);
                     }
                     else
                     {
@@ -307,12 +322,15 @@ public sealed class SearchService
             {
                 try
                 {
+                    bool nativeAvailable = Native.NativeSearcher.IsAvailable;
                     int parallelism = options.MaxDegreeOfParallelism > 0
                         ? options.MaxDegreeOfParallelism
-                        // Default cap raised to match the widened native gate.
-                        // NVMe drives saturate at 16–64 outstanding reads;
-                        // the old 8-wide cap left I/O bandwidth on the table.
-                        : Math.Max(1, Math.Min(16, Environment.ProcessorCount));
+                        // Native scanning overlaps file open/read work in Rust.
+                        // The profiler shows low mean CPU while I/O dominates, so
+                        // the native default can safely run wider than managed.
+                        : nativeAvailable
+                            ? Math.Max(1, Math.Min(32, Environment.ProcessorCount * 2))
+                            : Math.Max(1, Math.Min(16, Environment.ProcessorCount));
                     LogService.Instance.Info("SearchService", $"Content scan parallelism = {parallelism}");
 
                     // Pre-compute the degraded options once so we don't allocate a new
@@ -404,7 +422,7 @@ public sealed class SearchService
                         }
                     }
 
-                    if (Native.NativeSearcher.IsAvailable)
+                    if (nativeAvailable)
                     {
                         // ── Batch native path ──
                         // Feed batches of paths to the Rust parallel scanner instead
@@ -597,10 +615,25 @@ public sealed class SearchService
         {
             try
             {
+                const int ContentBatchSize = 256;
+                List<SearchResult>? contentBatch = null;
+
+                async ValueTask FlushContentBatchAsync()
+                {
+                    if (contentBatch is null || contentBatch.Count == 0) return;
+                    var batch = contentBatch;
+                    contentBatch = null;
+                    await events.Writer.WriteAsync(new SearchEvent.MatchBatch(batch), cancellationToken).ConfigureAwait(false);
+                }
+
                 await foreach (var r in contentResults.Reader.ReadAllAsync(cancellationToken))
                 {
-                    await events.Writer.WriteAsync(new SearchEvent.Match(r), cancellationToken).ConfigureAwait(false);
+                    (contentBatch ??= new List<SearchResult>(ContentBatchSize)).Add(r);
+                    if (contentBatch.Count >= ContentBatchSize)
+                        await FlushContentBatchAsync().ConfigureAwait(false);
                 }
+
+                await FlushContentBatchAsync().ConfigureAwait(false);
             }
             catch (OperationCanceledException) { }
             catch (Exception ex) { LogService.Instance.Warning("SearchService", "Forwarder failed", ex); }
@@ -642,7 +675,6 @@ public sealed class SearchService
         await foreach (var evt in events.Reader.ReadAllAsync(cancellationToken))
         {
             yield return evt;
-            if (Volatile.Read(ref truncated) != 0) break;
         }
 
         bool wasTruncated = Volatile.Read(ref truncated) != 0;
@@ -1020,18 +1052,6 @@ public sealed class SearchService
             int idx = (int)fileIndex;
             string filePath = _paths[idx];
 
-            // Cache file metadata on first match for this file.
-            if (_emitted[idx] == 0)
-            {
-                try
-                {
-                    var fi = new FileInfo(filePath);
-                    _fileLength[idx] = fi.Length;
-                    FileMetadataCache.Set(filePath, new FileMetadata(fi.Length, fi.LastWriteTime));
-                }
-                catch { }
-            }
-
             var view = *m;
             int lineBytes = view.LineLen > (nuint)int.MaxValue ? int.MaxValue : (int)view.LineLen;
             int matchStartBytes = view.MatchStart > int.MaxValue ? lineBytes : (int)view.MatchStart;
@@ -1072,9 +1092,11 @@ public sealed class SearchService
             return 0;
         }
 
-        public void OnFileDone(uint fileIndex, int status)
+        public void OnFileDone(uint fileIndex, int status, ulong fileLength)
         {
-            _statuses[(int)fileIndex] = status;
+            int idx = (int)fileIndex;
+            _statuses[idx] = status;
+            _fileLength[idx] = fileLength > long.MaxValue ? long.MaxValue : (long)fileLength;
         }
     }
 }

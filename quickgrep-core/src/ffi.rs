@@ -8,7 +8,9 @@
 //!   3. The buffer pointer + length are returned via out-params; ownership
 //!      transfers to the caller, which must release it via `qg_free_result`.
 
-use crate::scan::{looks_binary, scan_bytes_ex, scan_bytes_with_matcher_ex, MatchRecord, ScanError, ScanOptions};
+use crate::scan::{
+    looks_binary, scan_bytes_ex, scan_bytes_with_matcher_ex, MatchRecord, ScanError, ScanOptions,
+};
 use memmap2::Mmap;
 use std::fs::File;
 use std::io::Read;
@@ -93,6 +95,11 @@ const STATUS_BINARY_SKIPPED: c_int = 3;
 const STATUS_INVALID_REGEX: c_int = 4;
 const STATUS_INVALID_PATH: c_int = 5;
 const STATUS_CANCELLED: c_int = 6;
+
+#[inline]
+fn use_ascii_literal_fast_path(pattern: &str, use_regex: bool, case_sensitive: bool) -> bool {
+    !use_regex && !case_sensitive && pattern.is_ascii()
+}
 
 // ---------------------------------------------------------------------------
 // Helpers: open_and_mmap, scan_error_to_status
@@ -272,7 +279,7 @@ fn open_file_for_scan_into<'a>(
     max_file_size: u64,
     skip_binary: bool,
     scratch: &'a mut Vec<u8>,
-) -> Result<FileBytesRef<'a>, c_int> {
+) -> Result<(FileBytesRef<'a>, u64), c_int> {
     let mut file = open_for_scan(path).map_err(|_| STATUS_OPEN_FAILED)?;
     let file_size = try_metadata(&file).map_err(|_| STATUS_OPEN_FAILED)?.len();
     if max_file_size != 0 && file_size > max_file_size {
@@ -280,7 +287,7 @@ fn open_file_for_scan_into<'a>(
     }
     if file_size == 0 {
         scratch.clear();
-        return Ok(FileBytesRef::Borrowed(&[]));
+        return Ok((FileBytesRef::Borrowed(&[]), 0));
     }
 
     if file_size <= MMAP_THRESHOLD_BYTES {
@@ -299,7 +306,7 @@ fn open_file_for_scan_into<'a>(
                 return Err(STATUS_OPEN_FAILED);
             }
         }
-        return Ok(FileBytesRef::Borrowed(&scratch[..]));
+        return Ok((FileBytesRef::Borrowed(&scratch[..]), file_size));
     }
 
     if skip_binary {
@@ -314,7 +321,7 @@ fn open_file_for_scan_into<'a>(
     }
 
     let mmap = try_mmap(&file).map_err(|_| STATUS_OPEN_FAILED)?;
-    Ok(FileBytesRef::Mapped(mmap))
+    Ok((FileBytesRef::Mapped(mmap), file_size))
 }
 
 /// Open a file, verify its size, and memory-map it.
@@ -429,7 +436,11 @@ pub unsafe extern "C" fn qg_search_file(
         context_after: opts_in.context_after as usize,
         max_results: opts_in.max_results as usize,
         skip_binary: opts_in.skip_binary != 0,
-        ascii_case_only: false,
+        ascii_case_only: use_ascii_literal_fast_path(
+            pattern,
+            opts_in.use_regex != 0,
+            opts_in.case_sensitive != 0,
+        ),
     };
 
     // Open + size check + (probe/read/mmap).
@@ -563,7 +574,7 @@ pub unsafe extern "C" fn qg_free_result(result: *mut QgResult) {
 /// ABI/version probe used by the C# loader to confirm the DLL is the one we built.
 #[no_mangle]
 pub extern "C" fn qg_abi_version() -> c_uint {
-    2
+    3
 }
 
 // ---------------------------------------------------------------------------
@@ -667,7 +678,11 @@ pub unsafe extern "C" fn qg_search_file_stream(
         context_after: opts_in.context_after as usize,
         max_results: opts_in.max_results as usize,
         skip_binary: opts_in.skip_binary != 0,
-        ascii_case_only: false,
+        ascii_case_only: use_ascii_literal_fast_path(
+            pattern,
+            opts_in.use_regex != 0,
+            opts_in.case_sensitive != 0,
+        ),
     };
 
     let file_bytes = match open_file_for_scan(&path, opts_in.max_file_size, scan_opts.skip_binary) {
@@ -820,7 +835,11 @@ pub unsafe extern "C" fn qg_create_session(
         context_after: opts_in.context_after as usize,
         max_results: opts_in.max_results as usize,
         skip_binary: opts_in.skip_binary != 0,
-        ascii_case_only: false,
+        ascii_case_only: use_ascii_literal_fast_path(
+            pattern,
+            opts_in.use_regex != 0,
+            opts_in.case_sensitive != 0,
+        ),
     };
 
     let matcher = match crate::scan::build_matcher(pattern, &scan_opts) {
@@ -998,6 +1017,36 @@ pub type QgFileMatchCallback = unsafe extern "C" fn(
 pub type QgFileDoneCallback =
     unsafe extern "C" fn(ctx: *mut c_void, file_index: c_uint, status: c_int);
 
+/// Extended per-file completion callback that also reports the file length
+/// already obtained by Rust during open/metadata validation. This avoids a
+/// second managed FileInfo stat on every matched file.
+pub type QgFileDoneExCallback = unsafe extern "C" fn(
+    ctx: *mut c_void,
+    file_index: c_uint,
+    status: c_int,
+    file_len: c_ulonglong,
+);
+
+#[derive(Clone, Copy)]
+enum QgFileDoneDispatch {
+    Legacy(QgFileDoneCallback),
+    WithLength(QgFileDoneExCallback),
+}
+
+#[inline]
+unsafe fn dispatch_file_done(
+    callback: QgFileDoneDispatch,
+    ctx: *mut c_void,
+    file_index: c_uint,
+    status: c_int,
+    file_len: u64,
+) {
+    match callback {
+        QgFileDoneDispatch::Legacy(cb) => cb(ctx, file_index, status),
+        QgFileDoneDispatch::WithLength(cb) => cb(ctx, file_index, status, file_len),
+    }
+}
+
 /// Scan `path_count` files in parallel using a session.
 ///
 /// The match and per-file-done callbacks are serialized through an internal
@@ -1031,6 +1080,55 @@ pub unsafe extern "C" fn qg_session_scan_paths_parallel(
     cancel_flag: *const i32,
     on_match: QgFileMatchCallback,
     on_file_done: QgFileDoneCallback,
+    on_match_ctx: *mut c_void,
+) -> c_int {
+    qg_session_scan_paths_parallel_impl(
+        session,
+        paths_utf16_concat,
+        path_lengths,
+        path_count,
+        thread_count,
+        cancel_flag,
+        on_match,
+        QgFileDoneDispatch::Legacy(on_file_done),
+        on_match_ctx,
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn qg_session_scan_paths_parallel_ex(
+    session: *const QgSession,
+    paths_utf16_concat: *const c_ushort,
+    path_lengths: *const c_uint,
+    path_count: usize,
+    thread_count: c_uint,
+    cancel_flag: *const i32,
+    on_match: QgFileMatchCallback,
+    on_file_done: QgFileDoneExCallback,
+    on_match_ctx: *mut c_void,
+) -> c_int {
+    qg_session_scan_paths_parallel_impl(
+        session,
+        paths_utf16_concat,
+        path_lengths,
+        path_count,
+        thread_count,
+        cancel_flag,
+        on_match,
+        QgFileDoneDispatch::WithLength(on_file_done),
+        on_match_ctx,
+    )
+}
+
+unsafe fn qg_session_scan_paths_parallel_impl(
+    session: *const QgSession,
+    paths_utf16_concat: *const c_ushort,
+    path_lengths: *const c_uint,
+    path_count: usize,
+    thread_count: c_uint,
+    cancel_flag: *const i32,
+    on_match: QgFileMatchCallback,
+    on_file_done: QgFileDoneDispatch,
     on_match_ctx: *mut c_void,
 ) -> c_int {
     if session.is_null() || (path_count > 0 && (paths_utf16_concat.is_null() || path_lengths.is_null())) {
@@ -1131,12 +1229,18 @@ pub unsafe extern "C" fn qg_session_scan_paths_parallel(
                         Err(_) => {
                             // Report the failure and keep going.
                             let _g = cb_mutex.lock().unwrap();
-                            on_file_done(ctx_wrapper.0, i as c_uint, STATUS_INVALID_PATH);
+                            dispatch_file_done(
+                                on_file_done,
+                                ctx_wrapper.0,
+                                i as c_uint,
+                                STATUS_INVALID_PATH,
+                                0,
+                            );
                             continue;
                         }
                     };
 
-                    let file_bytes = match open_file_for_scan_into(
+                    let (file_bytes, file_len) = match open_file_for_scan_into(
                         &path,
                         sess.max_file_size,
                         sess.scan_opts.skip_binary,
@@ -1145,7 +1249,13 @@ pub unsafe extern "C" fn qg_session_scan_paths_parallel(
                         Ok(b) => b,
                         Err(status) => {
                             let _g = cb_mutex.lock().unwrap();
-                            on_file_done(ctx_wrapper.0, i as c_uint, status);
+                            dispatch_file_done(
+                                on_file_done,
+                                ctx_wrapper.0,
+                                i as c_uint,
+                                status,
+                                0,
+                            );
                             continue;
                         }
                     };
@@ -1218,7 +1328,13 @@ pub unsafe extern "C" fn qg_session_scan_paths_parallel(
                         Err(e) => scan_error_to_status(&e),
                     };
                     let _g = cb_mutex.lock().unwrap();
-                    on_file_done(ctx_wrapper.0, i as c_uint, final_status);
+                    dispatch_file_done(
+                        on_file_done,
+                        ctx_wrapper.0,
+                        i as c_uint,
+                        final_status,
+                        file_len,
+                    );
                 }
             });
         }
@@ -1268,8 +1384,8 @@ mod tests {
 
     // ---- qg_abi_version ----
     #[test]
-    fn abi_version_returns_2() {
-        assert_eq!(qg_abi_version(), 2);
+    fn abi_version_returns_3() {
+        assert_eq!(qg_abi_version(), 3);
     }
 
     // ---- pack_lines ----

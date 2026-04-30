@@ -36,6 +36,7 @@ public sealed partial class MainViewModel : ObservableObject
     private AppSettings _settings;
     private readonly SearchResultCollection _resultCollection = new();
     private ResultStore? _resultStore;
+    private System.Diagnostics.Stopwatch? _searchTimer;
 
     public MainViewModel() : this(new SearchService(), new SettingsService(), new EditorLauncher(),
                                    DispatcherQueue.GetForCurrentThread())
@@ -439,6 +440,7 @@ public sealed partial class MainViewModel : ObservableObject
                         LogService.Instance.Info("ViewModel", $"Memory pressure relieved — leaving memory-saving mode ({relieved.Diagnostics})");
                         break;
                     case SearchEvent.Completed c:
+                        var completedElapsed = StopSearchTimer();
                         FilesScanned = c.Summary.FilesScanned;
                         TotalFiles = c.Summary.TotalFiles;
                         MatchesFound = c.Summary.TotalMatches;
@@ -447,7 +449,7 @@ public sealed partial class MainViewModel : ObservableObject
                         UpdateSkipBreakdown(c.Summary.SkipReasons);
                         Truncated = c.Summary.Truncated;
                         Degraded = c.Summary.Degraded;
-                        StatusText = BuildCompletionStatus(c.Summary);
+                        StatusText = BuildCompletionStatus(c.Summary, completedElapsed);
                         ApplySortAndFilter();
                         break;
                 }
@@ -457,7 +459,8 @@ public sealed partial class MainViewModel : ObservableObject
         {
             if (cts is not null && IsCurrentSearch(runId, cts))
             {
-                StatusText = "Cancelled";
+                var cancelledElapsed = StopSearchTimer();
+                StatusText = BuildCancelledStatus(cancelledElapsed);
                 LogService.Instance.Info("Search", $"Search #{runId} cancelled by user");
             }
         }
@@ -465,6 +468,7 @@ public sealed partial class MainViewModel : ObservableObject
         {
             if (cts is not null && IsCurrentSearch(runId, cts))
             {
+                StopSearchTimer();
                 ErrorText = $"Search failed: {ex.Message}";
                 LogService.Instance.Critical("Search", $"Search #{runId} failed", ex);
             }
@@ -521,6 +525,7 @@ public sealed partial class MainViewModel : ObservableObject
         Truncated = false;
         Degraded = false;
         IsSearching = true;
+        _searchTimer = System.Diagnostics.Stopwatch.StartNew();
         StatusText = "Searching…";
 
         OnPropertyChanged(nameof(HasResults));
@@ -555,6 +560,24 @@ public sealed partial class MainViewModel : ObservableObject
     private static string BuildMemoryPressureStatus(SearchEvent.MemoryPressure memoryPressure)
     {
         return "Memory pressure high; paging QuickGrep results to disk and continuing in memory-saving mode...";
+    }
+
+    private TimeSpan StopSearchTimer()
+    {
+        var timer = _searchTimer;
+        if (timer is null)
+            return TimeSpan.Zero;
+
+        timer.Stop();
+        _searchTimer = null;
+        return timer.Elapsed;
+    }
+
+    private string BuildCancelledStatus(TimeSpan elapsed)
+    {
+        var time = $"{elapsed.TotalSeconds:F2}s";
+        var rate = FormatFilesPerSecond(FilesScanned, elapsed);
+        return $"Cancelled — {MatchesFound:N0} matches, {FilesScanned:N0} files processed ({time}, {rate})";
     }
 
     [RelayCommand]
@@ -706,16 +729,23 @@ public sealed partial class MainViewModel : ObservableObject
             result.Hydrate(_resultStore);
     }
 
-    private static string BuildCompletionStatus(SearchSummary s)
+    private static string BuildCompletionStatus(SearchSummary s, TimeSpan elapsed)
     {
-        var time = $"{s.Elapsed.TotalSeconds:F2}s";
+        var time = $"{elapsed.TotalSeconds:F2}s";
+        var rate = FormatFilesPerSecond(s.FilesScanned, elapsed);
         if (s.Cancelled)
-            return $"Cancelled — {s.TotalMatches:N0} matches in {s.FilesWithMatches:N0} files ({time})";
+            return $"Cancelled — {s.TotalMatches:N0} matches in {s.FilesWithMatches:N0} files ({time}, {rate})";
         if (s.Truncated)
-            return $"Truncated at {s.TotalMatches:N0} matches ({time})";
+            return $"Truncated at {s.TotalMatches:N0} matches ({time}, {rate})";
         if (s.Degraded)
-            return $"{s.TotalMatches:N0} matches in {s.FilesWithMatches:N0} files — some results paged to disk ({time})";
-        return $"{s.TotalMatches:N0} matches in {s.FilesWithMatches:N0} files ({time})";
+            return $"{s.TotalMatches:N0} matches in {s.FilesWithMatches:N0} files — some results paged to disk ({time}, {rate})";
+        return $"{s.TotalMatches:N0} matches in {s.FilesWithMatches:N0} files ({time}, {rate})";
+    }
+
+    private static string FormatFilesPerSecond(int filesProcessed, TimeSpan elapsed)
+    {
+        double seconds = Math.Max(elapsed.TotalSeconds, 0.001);
+        return $"{filesProcessed / seconds:N1} files/sec";
     }
 
     partial void OnResultFilterChanged(string value) => ApplySortAndFilter();

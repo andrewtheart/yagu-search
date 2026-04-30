@@ -130,8 +130,8 @@ internal static partial class NativeSearcher
         byte** outErrorMsg,
         nuint* outErrorMsgLen);
 
-    [LibraryImport(DllName, EntryPoint = "qg_session_scan_paths_parallel")]
-    private static unsafe partial int QgSessionScanPathsParallel(
+    [LibraryImport(DllName, EntryPoint = "qg_session_scan_paths_parallel_ex")]
+    private static unsafe partial int QgSessionScanPathsParallelEx(
         IntPtr session,
         char* pathsUtf16Concat,
         uint* pathLengths,
@@ -139,7 +139,7 @@ internal static partial class NativeSearcher
         uint threadCount,
         int* cancelFlag,
         delegate* unmanaged[Cdecl]<void*, uint, QgMatchView*, int> onMatch,
-        delegate* unmanaged[Cdecl]<void*, uint, int, void> onFileDone,
+        delegate* unmanaged[Cdecl]<void*, uint, int, ulong, void> onFileDone,
         void* onMatchCtx);
 
     private static readonly Lazy<bool> _available = new(TryLoad, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -162,7 +162,7 @@ internal static partial class NativeSearcher
 
         try
         {
-            return QgAbiVersion() == 2;
+            return QgAbiVersion() == 3;
         }
         catch (DllNotFoundException) { LogService.Instance.Info("NativeSearcher", "quickgrep_core.dll not found"); return false; }
         catch (BadImageFormatException ex) { LogService.Instance.Warning("NativeSearcher", "quickgrep_core.dll bad image format", ex); return false; }
@@ -423,7 +423,7 @@ internal static partial class NativeSearcher
     internal interface IParallelSink : IStreamingSink
     {
         unsafe int OnMatchForFile(uint fileIndex, QgMatchView* m);
-        void OnFileDone(uint fileIndex, int status);
+        void OnFileDone(uint fileIndex, int status, ulong fileLength);
     }
 
     /// <summary>
@@ -462,7 +462,7 @@ internal static partial class NativeSearcher
             fixed (char* pConcat = concat)
             fixed (uint* pLengths = lengths)
             {
-                int ret = QgSessionScanPathsParallel(
+                int ret = QgSessionScanPathsParallelEx(
                     session.Handle,
                     pConcat,
                     pLengths,
@@ -507,12 +507,12 @@ internal static partial class NativeSearcher
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
-    private static unsafe void OnParallelFileDoneTrampoline(void* ctx, uint fileIndex, int status)
+    private static unsafe void OnParallelFileDoneTrampoline(void* ctx, uint fileIndex, int status, ulong fileLength)
     {
         try
         {
             var handle = GCHandle.FromIntPtr((IntPtr)ctx);
-            if (handle.Target is IParallelSink sink) sink.OnFileDone(fileIndex, status);
+            if (handle.Target is IParallelSink sink) sink.OnFileDone(fileIndex, status, fileLength);
         }
         catch (Exception ex)
         {

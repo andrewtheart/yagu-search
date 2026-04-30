@@ -784,9 +784,11 @@ public sealed class PerformanceBenchmarkTests : IDisposable
         Assert.True(metrics.FilesScanned > 0,
             $"[{scenario}] No files were scanned — check search directory '{metrics.Directory}'.");
 
-        // For scenarios with very few large files (< 20 files), files/sec is not meaningful —
-        // a single 500 MB file scanned in 0.3 s gives only 3 fps. Use MB/sec instead.
-        if (metrics.FilesScanned < 20)
+        double averageBytesPerFile = metrics.BytesScanned / (double)Math.Max(metrics.FilesScanned, 1);
+
+        // For scenarios with few or very large files, files/sec is not meaningful —
+        // a 500 MB file scanned quickly still produces a low fps value. Use MB/sec instead.
+        if (metrics.FilesScanned < 20 || averageBytesPerFile >= 20 * Megabyte)
         {
             double minMBPerSecond = GetEnvInt($"QUICKGREP_PERF_{scenario.ToUpperInvariant()}_MIN_MBPS", 10);
             Assert.True(metrics.MBPerSecond >= minMBPerSecond,
