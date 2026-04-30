@@ -6,3 +6,6 @@
 
 pub mod ffi;
 pub mod scan;
+
+#[cfg(feature = "grep_crates")]
+pub mod scan_grep;

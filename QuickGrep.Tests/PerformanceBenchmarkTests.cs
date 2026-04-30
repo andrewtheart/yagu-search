@@ -423,17 +423,23 @@ public sealed class PerformanceBenchmarkTests : IDisposable
     [Fact]
     public async Task MaxResultsCap_Throughput()
     {
-        // Hits the result limit early. Tests early-termination throughput and cleanup.
+        // Hits the result limit before fully scanning the tree. Tests early-termination
+        // throughput and cleanup. The cap is sized so it fires partway through the tree
+        // (after ~1,200 of 50,000 files at ~80 matches/file), giving the MB/sec metric
+        // a meaningful denominator (~17 MB scanned over multiple hundred ms) instead of
+        // being dominated by fixed per-search setup overhead.
         var metrics = await RunTimedSearchAsync(
             scenarioName: "MaxResultsCap",
             query: "Test",
             useRegex: false,
             caseSensitive: false,
-            maxResults: 1_000);
+            maxResults: 100_000);
 
         AssertMinimumThroughput(metrics, "MaxResultsCap");
-        Assert.True(metrics.TotalMatches <= 1_100,
-            $"[MaxResultsCap] Expected ≤ ~1,000 matches but got {metrics.TotalMatches:N0} (cap should have kicked in).");
+        Assert.True(metrics.TotalMatches <= 110_000,
+            $"[MaxResultsCap] Expected ≤ ~100,000 matches but got {metrics.TotalMatches:N0} (cap should have kicked in).");
+        Assert.True(metrics.FilesScanned < 50_000,
+            $"[MaxResultsCap] Expected cap to terminate early but scanned all {metrics.FilesScanned:N0} files.");
     }
 
     [Fact]

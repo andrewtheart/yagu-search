@@ -130,6 +130,18 @@ internal static partial class NativeSearcher
         byte** outErrorMsg,
         nuint* outErrorMsgLen);
 
+    [LibraryImport(DllName, EntryPoint = "qg_session_scan_paths_parallel")]
+    private static unsafe partial int QgSessionScanPathsParallel(
+        IntPtr session,
+        char* pathsUtf16Concat,
+        uint* pathLengths,
+        nuint pathCount,
+        uint threadCount,
+        int* cancelFlag,
+        delegate* unmanaged[Cdecl]<void*, uint, QgMatchView*, int> onMatch,
+        delegate* unmanaged[Cdecl]<void*, uint, int, void> onFileDone,
+        void* onMatchCtx);
+
     private static readonly Lazy<bool> _available = new(TryLoad, LazyThreadSafetyMode.ExecutionAndPublication);
     public static bool IsAvailable => _available.Value;
 
@@ -402,6 +414,114 @@ internal static partial class NativeSearcher
         {
             if (errMsg != null) QgFreeBuffer(errMsg, errMsgLen);
             gcHandle.Free();
+        }
+    }
+
+    /// <summary>
+    /// Per-file completion callback for <see cref="ScanPathsParallel"/>.
+    /// </summary>
+    internal interface IParallelSink : IStreamingSink
+    {
+        unsafe int OnMatchForFile(uint fileIndex, QgMatchView* m);
+        void OnFileDone(uint fileIndex, int status);
+    }
+
+    /// <summary>
+    /// Parallel batch search using a pre-compiled session and a worker pool
+    /// inside the native library. Files are scanned concurrently so reads
+    /// overlap; the match and per-file-done callbacks on <paramref name="sink"/>
+    /// are serialised by the native layer so the sink can be non-thread-safe.
+    /// </summary>
+    public static unsafe int ScanPathsParallel(
+        NativeSession session,
+        IReadOnlyList<string> paths,
+        int threadCount,
+        int* cancelFlag,
+        IParallelSink sink)
+    {
+        if (!IsAvailable) return StatusOpenFailed;
+        if (paths.Count == 0) return StatusOk;
+
+        // Concatenate UTF-16 paths and build a parallel length array.
+        int totalChars = 0;
+        for (int i = 0; i < paths.Count; i++) totalChars += paths[i].Length;
+        var concat = new char[totalChars];
+        var lengths = new uint[paths.Count];
+        int cursor = 0;
+        for (int i = 0; i < paths.Count; i++)
+        {
+            var s = paths[i];
+            s.AsSpan().CopyTo(concat.AsSpan(cursor));
+            lengths[i] = (uint)s.Length;
+            cursor += s.Length;
+        }
+
+        var gcHandle = GCHandle.Alloc(sink, GCHandleType.Normal);
+        try
+        {
+            fixed (char* pConcat = concat)
+            fixed (uint* pLengths = lengths)
+            {
+                int ret = QgSessionScanPathsParallel(
+                    session.Handle,
+                    pConcat,
+                    pLengths,
+                    (nuint)paths.Count,
+                    (uint)Math.Max(0, threadCount),
+                    cancelFlag,
+                    &OnParallelMatchTrampoline,
+                    &OnParallelFileDoneTrampoline,
+                    (void*)GCHandle.ToIntPtr(gcHandle));
+
+                if (sink.CapturedException is { } ex)
+                    throw new InvalidOperationException("Parallel sink threw inside native callback", ex);
+
+                return ret;
+            }
+        }
+        finally
+        {
+            gcHandle.Free();
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
+    private static unsafe int OnParallelMatchTrampoline(void* ctx, uint fileIndex, QgMatchView* m)
+    {
+        try
+        {
+            var handle = GCHandle.FromIntPtr((IntPtr)ctx);
+            if (handle.Target is IParallelSink sink) return sink.OnMatchForFile(fileIndex, m);
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                var handle = GCHandle.FromIntPtr((IntPtr)ctx);
+                if (handle.Target is IStreamingSink s) s.CapturedException = ex;
+            }
+            catch { /* swallow */ }
+            return 1;
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
+    private static unsafe void OnParallelFileDoneTrampoline(void* ctx, uint fileIndex, int status)
+    {
+        try
+        {
+            var handle = GCHandle.FromIntPtr((IntPtr)ctx);
+            if (handle.Target is IParallelSink sink) sink.OnFileDone(fileIndex, status);
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                var handle = GCHandle.FromIntPtr((IntPtr)ctx);
+                if (handle.Target is IStreamingSink s) s.CapturedException = ex;
+            }
+            catch { /* swallow */ }
         }
     }
 }

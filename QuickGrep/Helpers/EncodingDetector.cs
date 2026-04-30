@@ -16,15 +16,25 @@ public static class EncodingDetector
         int read = stream.Read(bom);
         stream.Position = origin;
 
-        if (read >= 3 && bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF)
+        return DetectEncoding(bom[..read]);
+    }
+
+    /// <summary>
+    /// Detect encoding from the first few bytes of a file header (BOM sniffing).
+    /// Allows callers to share a single peek buffer for binary + encoding detection
+    /// without re-reading the file.
+    /// </summary>
+    public static Encoding DetectEncoding(ReadOnlySpan<byte> header)
+    {
+        if (header.Length >= 3 && header[0] == 0xEF && header[1] == 0xBB && header[2] == 0xBF)
             return Encoding.UTF8;
-        if (read >= 4 && bom[0] == 0xFF && bom[1] == 0xFE && bom[2] == 0 && bom[3] == 0)
+        if (header.Length >= 4 && header[0] == 0xFF && header[1] == 0xFE && header[2] == 0 && header[3] == 0)
             return Encoding.UTF32;
-        if (read >= 4 && bom[0] == 0 && bom[1] == 0 && bom[2] == 0xFE && bom[3] == 0xFF)
+        if (header.Length >= 4 && header[0] == 0 && header[1] == 0 && header[2] == 0xFE && header[3] == 0xFF)
             return new UTF32Encoding(bigEndian: true, byteOrderMark: true);
-        if (read >= 2 && bom[0] == 0xFF && bom[1] == 0xFE)
+        if (header.Length >= 2 && header[0] == 0xFF && header[1] == 0xFE)
             return Encoding.Unicode;
-        if (read >= 2 && bom[0] == 0xFE && bom[1] == 0xFF)
+        if (header.Length >= 2 && header[0] == 0xFE && header[1] == 0xFF)
             return Encoding.BigEndianUnicode;
 
         return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);

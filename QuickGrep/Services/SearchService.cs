@@ -289,30 +289,14 @@ public sealed class SearchService
                 {
                     int parallelism = options.MaxDegreeOfParallelism > 0
                         ? options.MaxDegreeOfParallelism
-                        // Default cap of 8: content scanning is mostly I/O-bound
-                        // (mmap fault-ins) and 24-way fan-out on high-core boxes
-                        // drove unmanaged working set above 22 GB without
-                        // proportional throughput gains. ripgrep ships with a
-                        // similar cap.
-                        : Math.Max(1, Math.Min(8, Environment.ProcessorCount));
+                        // Default cap raised to match the widened native gate.
+                        // NVMe drives saturate at 16–64 outstanding reads;
+                        // the old 8-wide cap left I/O bandwidth on the table.
+                        : Math.Max(1, Math.Min(16, Environment.ProcessorCount));
                     LogService.Instance.Info("SearchService", $"Content scan parallelism = {parallelism}");
 
-                    // Create per-THREAD native sessions. Each thread compiles the
-                    // regex once (instead of once per file). We use thread-local
-                    // sessions rather than a single shared session because the regex
-                    // crate's Regex type uses an internal thread-cache pool — sharing
-                    // one Regex across many threads causes mutex contention on every
-                    // find() call inside the hot line-scanning loop.
-                    ThreadLocal<Native.NativeSession?>? sessionPool = null;
-                    if (Native.NativeSearcher.IsAvailable)
-                    {
-                        sessionPool = new ThreadLocal<Native.NativeSession?>(
-                            () => Native.NativeSearcher.CreateSession(options.Query, options),
-                            trackAllValues: true);
-                        LogService.Instance.Info("SearchService", "Thread-local native sessions enabled — pattern compiled once per thread");
-                    }
                     // Pre-compute the degraded options once so we don't allocate a new
-                    // SearchOptions per file inside the hot Parallel.ForEachAsync loop.
+                    // SearchOptions per file inside the hot loop.
                     var degradedOptions = options.ContextLines > 0
                         ? new SearchOptions
                         {
@@ -335,73 +319,12 @@ public sealed class SearchService
                         }
                         : options;
 
-                    try
+                    // Local function that captures the enclosing method's locals directly
+                    // (avoids the C# restriction on capturing ref params in lambdas).
+                    void CheckMemoryPressure()
                     {
-                    await Parallel.ForEachAsync(pending.Reader.ReadAllAsync(cancellationToken), new ParallelOptions
-                    {
-                        MaxDegreeOfParallelism = parallelism,
-                        CancellationToken = cancellationToken,
-                    }, async (file, ct) =>
-                    {
-                        if (Volatile.Read(ref truncated) != 0) return;
-                        bool watched = FileWatchDiagnostics.IsWatched(file);
-                        var workerSw = watched ? Stopwatch.StartNew() : null;
-                        if (watched) FileWatchDiagnostics.Checkpoint(file, "WORKER-DEQUEUE", extra: $"channelReady={contentResults.Reader.Count}");
-                        // In degraded mode, search with 0 context lines to reduce memory for new results.
-                        var effectiveOptions = Volatile.Read(ref degraded) != 0 ? degradedOptions : options;
-                        FileSearchOutcome outcome;
-                        int produced;
-                        try
-                        {
-                            outcome = await _searcher.SearchFileWithStatsAsync(file, regex, literal, cmp, effectiveOptions, contentResults.Writer, ct, sessionPool?.Value).ConfigureAwait(false);
-                            produced = outcome.MatchCount;
-                            if (watched) FileWatchDiagnostics.Checkpoint(file, "WORKER-RETURN", workerSw!.ElapsedMilliseconds, $"produced={produced}");
-                        }
-                        catch (OperationCanceledException) { throw; }
-                        catch (Exception ex)
-                        {
-                            // One bad file (e.g. native FFI corrupt buffer, IO error) must not kill the whole pool.
-                            LogService.Instance.Warning("SearchService", $"Scan failed for {file}", ex);
-                            Interlocked.Increment(ref filesScanned);
-                            Interlocked.Increment(ref filesSkipped);
-                            Interlocked.Increment(ref skipOther);
-                            return;
-                        }
-                        Interlocked.Increment(ref filesScanned);
-                        if (produced < 0)
-                        {
-                            Interlocked.Increment(ref filesSkipped);
-                            // Tally by skip reason
-                            switch (produced)
-                            {
-                                case ContentSearcher.SkipBinary: Interlocked.Increment(ref skipBinary); break;
-                                case ContentSearcher.SkipAccessDenied: Interlocked.Increment(ref skipAccessDenied); break;
-                                case ContentSearcher.SkipIOError: Interlocked.Increment(ref skipIOError); break;
-                                case ContentSearcher.SkipTooLarge: Interlocked.Increment(ref skipTooLarge); break;
-                                case ContentSearcher.SkipNotFound: Interlocked.Increment(ref skipNotFound); break;
-                                case ContentSearcher.SkipEncoding: Interlocked.Increment(ref skipEncoding); break;
-                                case ContentSearcher.SkipByExtension: Interlocked.Increment(ref skipByExtension); break;
-                                default: Interlocked.Increment(ref skipOther); break;
-                            }
-                        }
-                        else
-                        {
-                            Interlocked.Add(ref bytesScanned, outcome.BytesScanned);
-                            if (produced > 0)
-                            {
-                                Interlocked.Increment(ref filesWithMatches);
-                                int newTotal = Interlocked.Add(ref totalMatches, produced);
-                                if (options.MaxResults > 0 && newTotal >= options.MaxResults)
-                                {
-                                    Volatile.Write(ref truncated, 1);
-                                }
-                            }
-                        }
-
-                        // Memory pressure check — every file, whether it matched or not.
                         if (IsMemoryPressureHigh(options.MaxProcessMemoryBytes, options.MemoryPressurePercent))
                         {
-                            // Mark degraded (may already be) and signal UI to evict.
                             Volatile.Write(ref degraded, 1);
                             Volatile.Write(ref everDegraded, 1);
 
@@ -416,8 +339,6 @@ public sealed class SearchService
                                     var memoryPressureEvent = new SearchEvent.MemoryPressure(
                                         (evictedCount) =>
                                         {
-                                            // Eviction ran on the UI thread. Run collection on a worker
-                                            // after payload references have been dropped, then keep scanning.
                                             LogService.Instance.Info("SearchService",
                                                 $"Eviction acknowledged: freed {evictedCount}; continuing in memory-saving mode");
                                             _ = Task.Run(() => CollectForMemoryPressureIfDue(TimeSpan.FromSeconds(3)));
@@ -430,7 +351,7 @@ public sealed class SearchService
                                     {
                                         _ = Task.Run(async () =>
                                         {
-                                            try { await events.Writer.WriteAsync(memoryPressureEvent, ct).ConfigureAwait(false); }
+                                            try { await events.Writer.WriteAsync(memoryPressureEvent, cancellationToken).ConfigureAwait(false); }
                                             catch { Volatile.Write(ref evictionInFlight, 0); }
                                         }, CancellationToken.None);
                                     }
@@ -456,22 +377,168 @@ public sealed class SearchService
                             {
                                 _ = Task.Run(async () =>
                                 {
-                                    try { await events.Writer.WriteAsync(relievedEvent, ct).ConfigureAwait(false); }
+                                    try { await events.Writer.WriteAsync(relievedEvent, cancellationToken).ConfigureAwait(false); }
                                     catch { }
                                 }, CancellationToken.None);
                             }
                         }
-                    }).ConfigureAwait(false);
                     }
-                    finally
+
+                    if (Native.NativeSearcher.IsAvailable)
                     {
-                        if (sessionPool != null)
+                        // ── Batch native path ──
+                        // Feed batches of paths to the Rust parallel scanner instead
+                        // of one FFI call per file. Eliminates per-file Task.Run,
+                        // GCHandle, semaphore, and cancel-int overhead.
+                        Native.NativeSession? batchSession = null;
+                        Native.NativeSession? degradedSession = null;
+                        try
                         {
-                            foreach (var s in sessionPool.Values)
-                                s?.Dispose();
-                            sessionPool.Dispose();
+                            batchSession = Native.NativeSearcher.CreateSession(options.Query, options);
+                            if (options.ContextLines > 0)
+                                degradedSession = Native.NativeSearcher.CreateSession(options.Query, degradedOptions);
+
+                            if (batchSession == null)
+                            {
+                                LogService.Instance.Warning("SearchService", "Native session creation failed — falling back to managed per-file path");
+                                goto managedFallback;
+                            }
+
+                            LogService.Instance.Info("SearchService", "Batch native scanning enabled");
+
+                            // Single cancel-int shared across all batches.
+                            IntPtr cancelPtr = Marshal.AllocHGlobal(sizeof(int));
+                            try
+                            {
+                                unsafe { *(int*)cancelPtr = 0; }
+                                using var ctr = cancellationToken.Register(static state =>
+                                {
+                                    unsafe { System.Threading.Interlocked.Exchange(ref *(int*)(IntPtr)state!, 1); }
+                                }, cancelPtr);
+
+                                const int BatchSize = 512;
+                                var batch = new List<string>(BatchSize);
+
+                                await foreach (var file in pending.Reader.ReadAllAsync(cancellationToken))
+                                {
+                                    if (Volatile.Read(ref truncated) != 0) break;
+                                    batch.Add(file);
+                                    if (batch.Count >= BatchSize)
+                                    {
+                                        ProcessNativeBatch(batch, batchSession, degradedSession, parallelism, cancelPtr,
+                                            options, contentResults.Writer,
+                                            ref filesScanned, ref filesSkipped, ref filesWithMatches, ref totalMatches,
+                                            ref bytesScanned, ref truncated, ref degraded,
+                                            ref skipBinary, ref skipAccessDenied, ref skipIOError,
+                                            ref skipTooLarge, ref skipNotFound, ref skipOther);
+                                        CheckMemoryPressure();
+                                        batch.Clear();
+                                    }
+                                }
+                                // Process remaining files.
+                                if (batch.Count > 0 && Volatile.Read(ref truncated) == 0)
+                                {
+                                    ProcessNativeBatch(batch, batchSession, degradedSession, parallelism, cancelPtr,
+                                        options, contentResults.Writer,
+                                        ref filesScanned, ref filesSkipped, ref filesWithMatches, ref totalMatches,
+                                        ref bytesScanned, ref truncated, ref degraded,
+                                        ref skipBinary, ref skipAccessDenied, ref skipIOError,
+                                        ref skipTooLarge, ref skipNotFound, ref skipOther);
+                                }
+                            }
+                            finally
+                            {
+                                Marshal.FreeHGlobal(cancelPtr);
+                            }
+                        }
+                        finally
+                        {
+                            batchSession?.Dispose();
+                            degradedSession?.Dispose();
+                        }
+                        goto workersDone;
+                    }
+
+                    managedFallback:
+                    {
+                        // ── Per-file managed fallback ──
+                        // Used when the native engine is unavailable.
+                        ThreadLocal<Native.NativeSession?>? sessionPool = null;
+                        if (Native.NativeSearcher.IsAvailable)
+                        {
+                            sessionPool = new ThreadLocal<Native.NativeSession?>(
+                                () => Native.NativeSearcher.CreateSession(options.Query, options),
+                                trackAllValues: true);
+                        }
+                        try
+                        {
+                        await Parallel.ForEachAsync(pending.Reader.ReadAllAsync(cancellationToken), new ParallelOptions
+                        {
+                            MaxDegreeOfParallelism = parallelism,
+                            CancellationToken = cancellationToken,
+                        }, async (file, ct) =>
+                        {
+                            if (Volatile.Read(ref truncated) != 0) return;
+                            var effectiveOptions = Volatile.Read(ref degraded) != 0 ? degradedOptions : options;
+                            FileSearchOutcome outcome;
+                            int produced;
+                            try
+                            {
+                                outcome = await _searcher.SearchFileWithStatsAsync(file, regex, literal, cmp, effectiveOptions, contentResults.Writer, ct, sessionPool?.Value).ConfigureAwait(false);
+                                produced = outcome.MatchCount;
+                            }
+                            catch (OperationCanceledException) { throw; }
+                            catch (Exception ex)
+                            {
+                                LogService.Instance.Warning("SearchService", $"Scan failed for {file}", ex);
+                                Interlocked.Increment(ref filesScanned);
+                                Interlocked.Increment(ref filesSkipped);
+                                Interlocked.Increment(ref skipOther);
+                                return;
+                            }
+                            Interlocked.Increment(ref filesScanned);
+                            if (produced < 0)
+                            {
+                                Interlocked.Increment(ref filesSkipped);
+                                switch (produced)
+                                {
+                                    case ContentSearcher.SkipBinary: Interlocked.Increment(ref skipBinary); break;
+                                    case ContentSearcher.SkipAccessDenied: Interlocked.Increment(ref skipAccessDenied); break;
+                                    case ContentSearcher.SkipIOError: Interlocked.Increment(ref skipIOError); break;
+                                    case ContentSearcher.SkipTooLarge: Interlocked.Increment(ref skipTooLarge); break;
+                                    case ContentSearcher.SkipNotFound: Interlocked.Increment(ref skipNotFound); break;
+                                    case ContentSearcher.SkipEncoding: Interlocked.Increment(ref skipEncoding); break;
+                                    case ContentSearcher.SkipByExtension: Interlocked.Increment(ref skipByExtension); break;
+                                    default: Interlocked.Increment(ref skipOther); break;
+                                }
+                            }
+                            else
+                            {
+                                Interlocked.Add(ref bytesScanned, outcome.BytesScanned);
+                                if (produced > 0)
+                                {
+                                    Interlocked.Increment(ref filesWithMatches);
+                                    int newTotal = Interlocked.Add(ref totalMatches, produced);
+                                    if (options.MaxResults > 0 && newTotal >= options.MaxResults)
+                                        Volatile.Write(ref truncated, 1);
+                                }
+                            }
+
+                            CheckMemoryPressure();
+                        }).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            if (sessionPool != null)
+                            {
+                                foreach (var s in sessionPool.Values)
+                                    s?.Dispose();
+                                sessionPool.Dispose();
+                            }
                         }
                     }
+
+                    workersDone:;
                 }
                 catch (OperationCanceledException) { LogService.Instance.Info("SearchService", "Content workers cancelled"); }
                 catch (Exception ex) { LogService.Instance.Warning("SearchService", "Content workers failed", ex); }
@@ -793,6 +860,178 @@ public sealed class SearchService
         public ulong ullTotalVirtual;
         public ulong ullAvailVirtual;
         public ulong ullAvailExtendedVirtual;
+    }
+
+    // ── Batch native scanning ──────────────────────────────────────
+
+    /// <summary>
+    /// Process a batch of files through the Rust parallel scanner, then update all
+    /// stats counters. One cancel-int, one GCHandle, no Task.Run per file.
+    /// </summary>
+    [ExcludeFromCodeCoverage]
+    private static unsafe void ProcessNativeBatch(
+        IReadOnlyList<string> batch,
+        Native.NativeSession batchSession,
+        Native.NativeSession? degradedSession,
+        int parallelism,
+        IntPtr cancelPtr,
+        SearchOptions options,
+        ChannelWriter<SearchResult> contentWriter,
+        ref int filesScanned, ref int filesSkipped, ref int filesWithMatches,
+        ref int totalMatches, ref long bytesScanned, ref int truncated,
+        ref int degraded,
+        ref int skipBinary, ref int skipAccessDenied, ref int skipIOError,
+        ref int skipTooLarge, ref int skipNotFound, ref int skipOther)
+    {
+        var session = (Volatile.Read(ref degraded) != 0 && degradedSession != null)
+            ? degradedSession
+            : batchSession;
+
+        var sink = new BatchScanSink(batch, contentWriter, options.MaxResults, Volatile.Read(ref totalMatches));
+
+        Native.NativeSearcher.ScanPathsParallel(
+            session, batch, parallelism, (int*)cancelPtr, sink);
+
+        // Apply sink results back to the outer counters.
+        if (sink.TotalEmitted > 0)
+            Interlocked.Add(ref totalMatches, sink.TotalEmitted);
+        if (sink.Truncated)
+            Volatile.Write(ref truncated, 1);
+
+        // Post-batch: reconcile per-file stats.
+        for (int i = 0; i < batch.Count; i++)
+        {
+            int status = sink.GetStatus(i);
+            int emitted = sink.GetEmitted(i);
+
+            Interlocked.Increment(ref filesScanned);
+
+            if (status != Native.NativeSearcher.StatusOk)
+            {
+                Interlocked.Increment(ref filesSkipped);
+                switch (status)
+                {
+                    case Native.NativeSearcher.StatusBinarySkipped: Interlocked.Increment(ref skipBinary); break;
+                    case Native.NativeSearcher.StatusOpenFailed: Interlocked.Increment(ref skipAccessDenied); break;
+                    case Native.NativeSearcher.StatusTooLarge: Interlocked.Increment(ref skipTooLarge); break;
+                    case Native.NativeSearcher.StatusInvalidPath: Interlocked.Increment(ref skipNotFound); break;
+                    default: Interlocked.Increment(ref skipOther); break;
+                }
+            }
+            else if (emitted > 0)
+            {
+                Interlocked.Increment(ref filesWithMatches);
+                Interlocked.Add(ref bytesScanned, sink.GetFileLength(i));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Sink for the batch native parallel scanner. The Rust side serialises callbacks
+    /// under a mutex, so this does not need to be thread-safe.
+    /// </summary>
+    [ExcludeFromCodeCoverage]
+    private sealed class BatchScanSink : Native.NativeSearcher.IParallelSink
+    {
+        private readonly IReadOnlyList<string> _paths;
+        private readonly ChannelWriter<SearchResult> _writer;
+        private readonly int _maxResults;
+        private readonly int[] _emitted;
+        private readonly int[] _statuses;
+        private readonly long[] _fileLength;
+        private int _runningTotal; // starts from outer totalMatches at batch start
+        private bool _stopped;
+
+        public bool Truncated { get; private set; }
+        public int TotalEmitted { get; private set; }
+        public Exception? CapturedException { get; set; }
+        public string? ErrorMessage { get; set; }
+
+        public BatchScanSink(
+            IReadOnlyList<string> paths,
+            ChannelWriter<SearchResult> writer,
+            int maxResults,
+            int currentTotalMatches)
+        {
+            _paths = paths;
+            _writer = writer;
+            _maxResults = maxResults;
+            _runningTotal = currentTotalMatches;
+            _emitted = new int[paths.Count];
+            _statuses = new int[paths.Count];
+            _fileLength = new long[paths.Count];
+        }
+
+        public int GetEmitted(int i) => _emitted[i];
+        public int GetStatus(int i) => _statuses[i];
+        public long GetFileLength(int i) => _fileLength[i];
+
+        // IStreamingSink.OnMatch — not used in parallel path.
+        public unsafe int OnMatch(Native.NativeSearcher.QgMatchView* m) => 1;
+
+        public unsafe int OnMatchForFile(uint fileIndex, Native.NativeSearcher.QgMatchView* m)
+        {
+            if (_stopped) return 1;
+
+            int idx = (int)fileIndex;
+            string filePath = _paths[idx];
+
+            // Cache file metadata on first match for this file.
+            if (_emitted[idx] == 0)
+            {
+                try
+                {
+                    var fi = new FileInfo(filePath);
+                    _fileLength[idx] = fi.Length;
+                    FileMetadataCache.Set(filePath, new FileMetadata(fi.Length, fi.LastWriteTime));
+                }
+                catch { }
+            }
+
+            var view = *m;
+            int lineBytes = view.LineLen > (nuint)int.MaxValue ? int.MaxValue : (int)view.LineLen;
+            int matchStartBytes = view.MatchStart > int.MaxValue ? lineBytes : (int)view.MatchStart;
+            int matchLenBytes = view.MatchLen > int.MaxValue ? 0 : (int)view.MatchLen;
+            var matchLine = ContentSearcher.NativeMatchDecoder.DecodeMatchLine(
+                view.LinePtr, lineBytes, matchStartBytes, matchLenBytes);
+            var before = ContentSearcher.NativeMatchDecoder.UnpackLinesTruncated(
+                view.CtxBeforePtr, view.CtxBeforeBytes, view.CtxBeforeCount);
+            var after = ContentSearcher.NativeMatchDecoder.UnpackLinesTruncated(
+                view.CtxAfterPtr, view.CtxAfterBytes, view.CtxAfterCount);
+
+            int lineNum = view.LineNumber > int.MaxValue ? int.MaxValue : (int)view.LineNumber;
+
+            var result = new SearchResult(
+                FilePath: filePath,
+                LineNumber: lineNum,
+                MatchLine: matchLine.Line,
+                MatchStartColumn: matchLine.MatchStart,
+                MatchLength: matchLine.MatchLength,
+                ContextBefore: before,
+                ContextAfter: after);
+
+            if (!_writer.TryWrite(result))
+            {
+                _stopped = true;
+                return 1;
+            }
+
+            _emitted[idx]++;
+            TotalEmitted++;
+            _runningTotal++;
+            if (_maxResults > 0 && _runningTotal >= _maxResults)
+            {
+                Truncated = true;
+                _stopped = true;
+                return 1;
+            }
+            return 0;
+        }
+
+        public void OnFileDone(uint fileIndex, int status)
+        {
+            _statuses[(int)fileIndex] = status;
+        }
     }
 }
 
