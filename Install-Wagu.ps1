@@ -10,7 +10,10 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $false)]
-  [string]$InstallDir
+  [string]$InstallDir,
+
+  # Skip all interactive prompts, accepting the default answer for each.
+  [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,10 +34,40 @@ if ([string]::IsNullOrWhiteSpace($assemblyName)) {
   $assemblyName = [System.IO.Path]::GetFileNameWithoutExtension($projectPath)
 }
 
+function Get-RegisteredInstallDirectory {  try {
+    if (-not (Test-Path -LiteralPath $installRegistryPath)) {
+      return $null
+    }
+
+    $value = (Get-ItemProperty -LiteralPath $installRegistryPath -Name $installRegistryValueName -ErrorAction Stop).$installRegistryValueName
+    if ([string]::IsNullOrWhiteSpace($value)) {
+      return $null
+    }
+
+    return [System.IO.Path]::GetFullPath($value)
+  }
+  catch {
+    return $null
+  }
+}
+
 function Resolve-InstallDirectory {
   param([string]$Value)
 
-  $defaultDir = (Get-Location).Path
+  $registeredDir = Get-RegisteredInstallDirectory
+  if (-not [string]::IsNullOrWhiteSpace($registeredDir)) {
+    if (Test-Path -LiteralPath $registeredDir) {
+      # Previous installation found — suggest it as the default for in-place upgrades.
+      $defaultDir = $registeredDir
+    } else {
+      Write-Warning "Previously registered install directory no longer exists on disk: $registeredDir"
+      Write-Warning "Falling back to current directory as the default install location."
+      $defaultDir = (Get-Location).Path
+    }
+  } else {
+    $defaultDir = (Get-Location).Path
+  }
+
   if ([string]::IsNullOrWhiteSpace($Value)) {
     $answer = Read-Host "Install directory [$defaultDir]"
     if ([string]::IsNullOrWhiteSpace($answer)) {
@@ -52,6 +85,8 @@ function Read-YesNo {
     [string]$Prompt,
     [bool]$DefaultYes = $false
   )
+
+  if ($Force) { return $DefaultYes }
 
   $suffix = if ($DefaultYes) { '[Y/n]' } else { '[y/N]' }
   $answer = Read-Host "$Prompt $suffix"
@@ -102,11 +137,58 @@ function Copy-InstallFile {
 function Set-InstallRegistryEntry {
   param([string]$Path)
 
+  $isUpgrade = (Get-RegisteredInstallDirectory) -ne $null
   New-Item -Path $installRegistryPath -Force | Out-Null
   Set-ItemProperty -Path $installRegistryPath -Name $installRegistryValueName -Value $Path
   Set-ItemProperty -Path $installRegistryPath -Name 'DisplayName' -Value 'Yagu'
   Set-ItemProperty -Path $installRegistryPath -Name 'ExecutablePath' -Value (Join-Path $Path $exeName)
-  Set-ItemProperty -Path $installRegistryPath -Name 'InstalledAtUtc' -Value ([DateTime]::UtcNow.ToString('o'))
+  if ($isUpgrade) {
+    Set-ItemProperty -Path $installRegistryPath -Name 'UpdatedAtUtc' -Value ([DateTime]::UtcNow.ToString('o'))
+  } else {
+    Set-ItemProperty -Path $installRegistryPath -Name 'InstalledAtUtc' -Value ([DateTime]::UtcNow.ToString('o'))
+  }
+}
+
+function Stop-RunningYagu {
+  param([string]$InstallPath)
+
+  $exeFullPath = Join-Path $InstallPath $exeName
+  # Only kill the process if it was launched from the target install directory.
+  $procs = @(Get-Process -Name ([System.IO.Path]::GetFileNameWithoutExtension($exeName)) -ErrorAction SilentlyContinue |
+    Where-Object {
+      try { [System.IO.Path]::GetFullPath($_.MainModule.FileName) -eq [System.IO.Path]::GetFullPath($exeFullPath) }
+      catch { $false }
+    })
+
+  if ($procs.Count -eq 0) { return }
+
+  Write-Warning "$exeName is currently running from the install directory."
+  $stop = if ($Force) { $true } else { Read-YesNo -Prompt "Stop it now to continue the install?" -DefaultYes $true }
+  if (-not $stop) {
+    throw "Install cancelled: $exeName must not be running when installing."
+  }
+
+  foreach ($p in $procs) {
+    try {
+      $p.CloseMainWindow() | Out-Null
+      if (-not $p.WaitForExit(3000)) { $p.Kill() }
+      Write-Host "Stopped $exeName (PID $($p.Id))."
+    } catch {
+      Write-Warning "Could not stop $exeName (PID $($p.Id)): $_"
+    }
+  }
+}
+
+function Test-ContextMenuRegistered {
+  param([string]$InstallPath)
+
+  $expectedExe = Join-Path $InstallPath $exeName
+  $regPath = "HKCU:\Software\Classes\Directory\shell\Yagu\command"
+  if (-not (Test-Path -LiteralPath $regPath)) { return $false }
+  try {
+    $cmd = (Get-ItemProperty -LiteralPath $regPath -ErrorAction Stop).'(default)'
+    return $cmd -match [regex]::Escape($expectedExe)
+  } catch { return $false }
 }
 
 if (-not (Test-Path -LiteralPath $projectPath)) {
@@ -119,6 +201,8 @@ $tempPublishDir = Join-Path ([System.IO.Path]::GetTempPath()) ("wagu-publish-" +
 try {
   New-Item -ItemType Directory -Path $tempPublishDir -Force | Out-Null
   New-Item -ItemType Directory -Path $installPath -Force | Out-Null
+
+  Stop-RunningYagu -InstallPath $installPath
 
   Write-Host "Building Yagu in Release mode..."
   & dotnet publish $projectPath --configuration Release --output $tempPublishDir --nologo
@@ -147,6 +231,10 @@ try {
     Get-ChildItem -LiteralPath $buildOutputDir -Filter "$assemblyName.pri" -File -Recurse
   )
 
+  if ($winuiResourceFiles.Count -eq 0) {
+    Write-Warning "No WinUI resource files (.xbf / .pri) found in $buildOutputDir — the app may fail to start."
+  }
+
   foreach ($file in $winuiResourceFiles) {
     Copy-InstallFile -SourcePath $file.FullName -BasePath $buildOutputDir -InstallPath $installPath -ManifestEntries $manifestEntries -ManifestEntrySet $manifestEntrySet
   }
@@ -164,14 +252,27 @@ try {
   Write-Host "Installed $exeName to $installPath"
   Write-Host "Saved install location to $installRegistryPath\$installRegistryValueName"
 
-  if (Read-YesNo -Prompt "Add a 'Search with Yagu' Explorer context menu?" -DefaultYes $true) {
-    if (-not (Test-Path -LiteralPath $contextMenuScript)) {
-      throw "Could not find context menu script: $contextMenuScript"
-    }
+  # Context menu — skip prompt if already registered with the correct path.
+  $contextMenuAlreadyCurrent = Test-ContextMenuRegistered -InstallPath $installPath
+  $registerContextMenu = if ($contextMenuAlreadyCurrent) {
+    Write-Host "Explorer context menu already registered and up to date."
+    $false
+  } else {
+    Read-YesNo -Prompt "Add a 'Search with Yagu' Explorer context menu?" -DefaultYes $true
+  }
 
-    & $contextMenuScript -InstallDir $installPath
-    if ($LASTEXITCODE -ne 0) {
-      throw "Context menu registration failed with exit code $LASTEXITCODE"
+  if ($registerContextMenu) {
+    if (-not (Test-Path -LiteralPath $contextMenuScript)) {
+      Write-Warning "Could not find context menu script: $contextMenuScript — skipping."
+    } else {
+      try {
+        & $contextMenuScript -InstallDir $installPath
+        if ($LASTEXITCODE -ne 0) {
+          Write-Warning "Context menu registration exited with code $LASTEXITCODE — installation is otherwise complete."
+        }
+      } catch {
+        Write-Warning "Context menu registration failed: $_ — installation is otherwise complete."
+      }
     }
   }
 
