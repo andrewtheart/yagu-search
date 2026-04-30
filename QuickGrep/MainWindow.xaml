@@ -254,13 +254,20 @@
                     <ListView
                         x:Name="ResultsList"
                         Grid.Row="2"
-                        SelectionMode="Single"
+                        SelectionMode="Extended"
                         ShowsScrollingPlaceholders="True"
                         IsItemClickEnabled="True"
                         ItemClick="OnResultItemClick"
                         DoubleTapped="OnResultDoubleTapped"
                         ItemsSource="{x:Bind ViewModel.ResultGroups, Mode=OneWay}"
                         Padding="4,0">
+                        <ListView.ContextFlyout>
+                            <MenuFlyout>
+                                <MenuFlyoutItem Text="Copy Selected File Paths" Click="OnCopySelectedFilePaths">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                            </MenuFlyout>
+                        </ListView.ContextFlyout>
                         <ListView.ItemTemplate>
                             <DataTemplate x:DataType="models:FileGroup">
                                 <StackPanel>
@@ -278,6 +285,9 @@
                                             <StackPanel.ContextFlyout>
                                                 <MenuFlyout>
                                                     <MenuFlyoutItem Text="Copy Full Path" Click="OnCopyFileGroupPath" Tag="{x:Bind FilePath}">
+                                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
+                                                    </MenuFlyoutItem>
+                                                    <MenuFlyoutItem Text="Copy Selected File Paths" Click="OnCopySelectedFilePaths">
                                                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
                                                     </MenuFlyoutItem>
                                                 </MenuFlyout>

@@ -235,12 +235,31 @@ public sealed class SearchService
                     if (searchFileNames)
                     {
                         var fileName = Path.GetFileName(path);
-                        bool isMatch = regex is not null ? regex.IsMatch(fileName) : fileName.Contains(literal!, cmp);
-                        if (isMatch)
+                        int fnMatchStart = -1;
+                        int fnMatchLen = 0;
+                        if (regex is not null)
+                        {
+                            var m = regex.Match(fileName);
+                            if (m.Success)
+                            {
+                                fnMatchStart = m.Index;
+                                fnMatchLen = m.Length;
+                            }
+                        }
+                        else
+                        {
+                            int idx = fileName.IndexOf(literal!, cmp);
+                            if (idx >= 0)
+                            {
+                                fnMatchStart = idx;
+                                fnMatchLen = literal!.Length;
+                            }
+                        }
+                        if (fnMatchStart >= 0)
                         {
                             (filenameBatch ??= new List<SearchResult>(FilenameBatchSize)).Add(new SearchResult(
                                 FilePath: path, LineNumber: 0, MatchLine: fileName,
-                                MatchStartColumn: 0, MatchLength: 0,
+                                MatchStartColumn: fnMatchStart, MatchLength: fnMatchLen,
                                 ContextBefore: [], ContextAfter: []));
                             if (filenameBatch.Count >= FilenameBatchSize)
                                 await FlushFilenameBatchAsync().ConfigureAwait(false);

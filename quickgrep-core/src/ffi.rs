@@ -16,6 +16,29 @@ use std::os::raw::{c_int, c_uchar, c_uint, c_ulonglong, c_ushort, c_void};
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+/// Open a file with the platform's best read hint for sequential, one-shot
+/// scanning. On Windows we set `FILE_FLAG_SEQUENTIAL_SCAN` so the cache
+/// manager prefetches more aggressively and discards pages soon after they
+/// are read — a large win for files-per-second on cold reads and a meaningful
+/// reduction in working-set pressure when sweeping large trees.
+#[inline]
+fn open_for_scan(path: &str) -> std::io::Result<File> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_FLAG_SEQUENTIAL_SCAN = 0x08000000
+        const FILE_FLAG_SEQUENTIAL_SCAN: u32 = 0x0800_0000;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_SEQUENTIAL_SCAN)
+            .open(path)
+    }
+    #[cfg(not(windows))]
+    {
+        File::open(path)
+    }
+}
+
 /// Files at or below this size are read fully into a `Vec<u8>` instead of being
 /// memory-mapped. mmap setup (TLB, page-fault dance) costs more than a single
 /// `read_to_end` for small files; on the C:\ benchmark 75% of files are <64 KB.
@@ -168,7 +191,7 @@ fn open_file_for_scan(
     max_file_size: u64,
     skip_binary: bool,
 ) -> Result<FileBytes, c_int> {
-    let mut file = File::open(path).map_err(|_| STATUS_OPEN_FAILED)?;
+    let mut file = open_for_scan(path).map_err(|_| STATUS_OPEN_FAILED)?;
     let file_size = try_metadata(&file).map_err(|_| STATUS_OPEN_FAILED)?.len();
     if max_file_size != 0 && file_size > max_file_size {
         return Err(STATUS_TOO_LARGE);
@@ -177,12 +200,29 @@ fn open_file_for_scan(
         return Ok(FileBytes::Owned(Vec::new()));
     }
 
-    // Small file path: a single read is faster than mmap setup. The scan
-    // layer's own `looks_binary` will handle the binary check if `skip_binary`
-    // is set, so we don't need a separate probe here.
+    // Small file path: a single sized read is faster than mmap setup. The
+    // scan layer's own `looks_binary` will handle the binary check if
+    // `skip_binary` is set, so we don't need a separate probe here.
+    // `read_exact` over a presized buffer avoids the growth-and-zero-init
+    // overhead of `read_to_end`'s internal buffer doubling.
     if file_size <= MMAP_THRESHOLD_BYTES {
-        let mut buf = Vec::with_capacity(file_size as usize);
-        file.read_to_end(&mut buf).map_err(|_| STATUS_OPEN_FAILED)?;
+        let size = file_size as usize;
+        let mut buf: Vec<u8> = Vec::with_capacity(size);
+        // SAFETY: we set the length to `size`, which equals capacity, and
+        // immediately overwrite the entire range with `read_exact`. Any I/O
+        // error returns before the buffer is observed.
+        unsafe { buf.set_len(size) };
+        if let Err(e) = file.read_exact(&mut buf[..]) {
+            // Tolerate truncation between metadata() and read (rare on Windows
+            // but possible if another process truncates concurrently). Fall
+            // back to a normal read to recover whatever bytes are present.
+            if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                buf.clear();
+                file.read_to_end(&mut buf).map_err(|_| STATUS_OPEN_FAILED)?;
+            } else {
+                return Err(STATUS_OPEN_FAILED);
+            }
+        }
         return Ok(FileBytes::Owned(buf));
     }
 
@@ -203,6 +243,78 @@ fn open_file_for_scan(
     // advanced during the probe.
     let mmap = try_mmap(&file).map_err(|_| STATUS_OPEN_FAILED)?;
     Ok(FileBytes::Mapped(mmap))
+}
+
+/// Borrowed view of file bytes returned by [`open_file_for_scan_into`]. The
+/// `Borrowed` variant references a caller-owned scratch buffer (no per-file
+/// allocation in the small-file path); the `Mapped` variant carries an Mmap
+/// whose lifetime is bound to the caller's stack.
+pub(crate) enum FileBytesRef<'a> {
+    Borrowed(&'a [u8]),
+    Mapped(Mmap),
+}
+impl<'a> FileBytesRef<'a> {
+    #[inline]
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        match self {
+            FileBytesRef::Borrowed(s) => s,
+            FileBytesRef::Mapped(m) => &m[..],
+        }
+    }
+}
+
+/// Same contract as [`open_file_for_scan`], but the small-file path reads into
+/// a caller-supplied scratch buffer so per-thread `Vec<u8>` allocations are
+/// reused across files. On the C:\ benchmark 75% of files are <= 64 KB, so
+/// this turns the most common case into a zero-alloc syscall plus a memcpy.
+fn open_file_for_scan_into<'a>(
+    path: &str,
+    max_file_size: u64,
+    skip_binary: bool,
+    scratch: &'a mut Vec<u8>,
+) -> Result<FileBytesRef<'a>, c_int> {
+    let mut file = open_for_scan(path).map_err(|_| STATUS_OPEN_FAILED)?;
+    let file_size = try_metadata(&file).map_err(|_| STATUS_OPEN_FAILED)?.len();
+    if max_file_size != 0 && file_size > max_file_size {
+        return Err(STATUS_TOO_LARGE);
+    }
+    if file_size == 0 {
+        scratch.clear();
+        return Ok(FileBytesRef::Borrowed(&[]));
+    }
+
+    if file_size <= MMAP_THRESHOLD_BYTES {
+        let size = file_size as usize;
+        scratch.clear();
+        scratch.reserve(size);
+        // SAFETY: we set the length to `size <= capacity` and immediately
+        // overwrite the full range with `read_exact`. On error we truncate
+        // before the caller observes the buffer.
+        unsafe { scratch.set_len(size) };
+        if let Err(e) = file.read_exact(&mut scratch[..]) {
+            scratch.clear();
+            if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                file.read_to_end(scratch).map_err(|_| STATUS_OPEN_FAILED)?;
+            } else {
+                return Err(STATUS_OPEN_FAILED);
+            }
+        }
+        return Ok(FileBytesRef::Borrowed(&scratch[..]));
+    }
+
+    if skip_binary {
+        let mut probe = [0u8; BINARY_PROBE_BYTES];
+        let probe_len = std::cmp::min(file_size as usize, BINARY_PROBE_BYTES);
+        let n = file
+            .read(&mut probe[..probe_len])
+            .map_err(|_| STATUS_OPEN_FAILED)?;
+        if memchr::memchr(0, &probe[..n]).is_some() {
+            return Err(STATUS_BINARY_SKIPPED);
+        }
+    }
+
+    let mmap = try_mmap(&file).map_err(|_| STATUS_OPEN_FAILED)?;
+    Ok(FileBytesRef::Mapped(mmap))
 }
 
 /// Open a file, verify its size, and memory-map it.
@@ -991,6 +1103,11 @@ pub unsafe extern "C" fn qg_session_scan_paths_parallel(
                 // Per-thread scratch buffers — reused across files.
                 let mut before_buf: Vec<u8> = Vec::new();
                 let mut after_buf: Vec<u8> = Vec::new();
+                // Per-thread file-content scratch. Sized to MMAP_THRESHOLD so
+                // the common small-file case never reallocates after the
+                // first iteration. ~75% of real-world files fit here.
+                let mut file_scratch: Vec<u8> =
+                    Vec::with_capacity(MMAP_THRESHOLD_BYTES as usize);
                 let _ = &ctx_wrapper; // capture by reference
 
                 loop {
@@ -1019,10 +1136,11 @@ pub unsafe extern "C" fn qg_session_scan_paths_parallel(
                         }
                     };
 
-                    let file_bytes = match open_file_for_scan(
+                    let file_bytes = match open_file_for_scan_into(
                         &path,
                         sess.max_file_size,
                         sess.scan_opts.skip_binary,
+                        &mut file_scratch,
                     ) {
                         Ok(b) => b,
                         Err(status) => {
