@@ -752,6 +752,18 @@ public sealed partial class MainWindow : Window
             SetClipboardText(path, "file group path");
     }
 
+    private void OnCopySelectedFilePaths(object sender, RoutedEventArgs e)
+    {
+        var paths = new List<string>();
+        foreach (var item in ResultsList.SelectedItems)
+        {
+            if (item is FileGroup g && !string.IsNullOrWhiteSpace(g.FilePath))
+                paths.Add(g.FilePath);
+        }
+        if (paths.Count == 0) return;
+        SetClipboardText(string.Join(Environment.NewLine, paths), "selected file paths");
+    }
+
     private void OnCopyPreviewFilePath(object sender, RoutedEventArgs e)
     {
         if (_previewResult is null) return;
