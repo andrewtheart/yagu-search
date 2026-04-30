@@ -221,10 +221,10 @@ public class ContentSearcherExtraTests : IDisposable
     [Fact]
     public async Task LargeFile_MemoryMappedPath()
     {
-        // Create file > 1MB to trigger memory-mapped path
+        // Create file large enough to trigger the memory-mapped path.
         var p = Path.Combine(_root, "large.txt");
         var sb = new StringBuilder();
-        for (int i = 0; i < 50000; i++)
+        for (int i = 0; i < 220000; i++)
             sb.AppendLine($"line {i} with some content to pad the file");
         sb.AppendLine("FINDME target match here");
         File.WriteAllText(p, sb.ToString(), new UTF8Encoding(false));

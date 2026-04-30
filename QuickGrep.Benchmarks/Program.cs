@@ -1,5 +1,9 @@
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Configs;
+using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Running;
+using BenchmarkDotNet.Toolchains.CsProj;
+using BenchmarkDotNet.Toolchains.DotNetCli;
 using QuickGrep.Models;
 using QuickGrep.Services;
 
@@ -7,7 +11,21 @@ namespace QuickGrep.Benchmarks;
 
 public static class Program
 {
-    public static void Main(string[] args) => BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
+    public static void Main(string[] args)
+    {
+        var windowsToolchain = CsProjCoreToolchain.From(new NetCoreAppSettings(
+            "net10.0-windows",
+            runtimeFrameworkVersion: null,
+            name: ".NET 10 Windows",
+            customDotNetCliPath: null,
+            packagesPath: null,
+            customRuntimePack: null,
+            aotCompilerPath: null,
+            aotCompilerMode: default));
+        var config = DefaultConfig.Instance.AddJob(Job.Default.WithToolchain(windowsToolchain));
+
+        BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args, config);
+    }
 }
 
 [MemoryDiagnoser]
