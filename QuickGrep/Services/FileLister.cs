@@ -618,10 +618,10 @@ public sealed class FileLister : IFileLister
             }
             if (!visited.Add(canonical)) continue;
 
-            IEnumerator<string> entries;
+            IEnumerator<FileSystemInfo> entries;
             try
             {
-                entries = Directory.EnumerateFileSystemEntries(canonical).GetEnumerator();
+                entries = new DirectoryInfo(canonical).EnumerateFileSystemInfos().GetEnumerator();
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -650,10 +650,12 @@ public sealed class FileLister : IFileLister
                     cancellationToken.ThrowIfCancellationRequested();
 
                     string entry;
+                    FileSystemInfo fsi;
                     try
                     {
                         if (!entries.MoveNext()) break;
-                        entry = entries.Current;
+                        fsi = entries.Current;
+                        entry = fsi.FullName;
                     }
                     catch (UnauthorizedAccessException ex)
                     {
@@ -676,7 +678,7 @@ public sealed class FileLister : IFileLister
                     }
 
                     FileAttributes attrs;
-                    try { attrs = File.GetAttributes(entry); }
+                    try { attrs = fsi.Attributes; }
                     catch (Exception ex) { LogService.Instance.Verbose("FileLister", $"Cannot get attrs: {entry}", ex); continue; }
 
                     if ((attrs & FileAttributes.Directory) != 0)
@@ -699,6 +701,12 @@ public sealed class FileLister : IFileLister
                         {
                             var ext = Path.GetExtension(entry);
                             if (ext.Length == 0 || !extSet.Contains(ext)) continue;
+                        }
+                        // Cache file metadata from the enumeration data — avoids a
+                        // second stat call in ContentSearcher.
+                        if (fsi is FileInfo fileInfo)
+                        {
+                            FileMetadataCache.Set(entry, new FileMetadata(fileInfo.Length, fileInfo.LastWriteTime));
                         }
                         yield return entry;
                         yielded++;

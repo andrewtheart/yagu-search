@@ -14,24 +14,30 @@ namespace QuickGrep.Services;
 /// </summary>
 public sealed class ContentSearcher
 {
-    public const long MemoryMapThresholdBytes = 1 * 1024 * 1024;
+    public const long MemoryMapThresholdBytes = 8 * 1024 * 1024;
 
     /// <summary>
     /// Limits the number of concurrent memory-mapped file views to prevent
     /// runaway virtual address space / private bytes growth. With 24+ parallel
     /// workers, uncapped MMF views were contributing to 13+ GB unmanaged memory.
+    /// Raised from 4 to 16 since the threshold now only targets genuinely large
+    /// files (≥ 8 MB), and the Rust side's mmap doesn't gate at all.
     /// </summary>
-    private static readonly SemaphoreSlim s_mmfGate = new(4, 4);
+    private static readonly SemaphoreSlim s_mmfGate = new(16, 16);
 
     /// <summary>
     /// Limits concurrent native (Rust) scans. The native engine also memory-maps
     /// large files, so it must be gated like the managed MMF path. Without this,
     /// 24-way parallel scans of 50 MB-cap files drove process working set above
     /// 22 GB while the managed heap stayed under 3 GB (i.e. unmanaged blow-up).
-    /// Slightly higher than <see cref="s_mmfGate"/> because the native path
-    /// streams matches incrementally without holding all decoded text.
+    /// Higher than <see cref="s_mmfGate"/> because the native path streams
+    /// matches incrementally without holding all decoded text, and its mmaps
+    /// are promptly munmap'd. NVMe drives saturate at 16–64 outstanding reads,
+    /// so the old cap of 8 was an I/O ceiling on fast storage.
     /// </summary>
-    private static readonly SemaphoreSlim s_nativeGate = new(8, 8);
+    private static readonly SemaphoreSlim s_nativeGate = new(
+        Math.Min(32, Environment.ProcessorCount * 2),
+        Math.Min(32, Environment.ProcessorCount * 2));
 
     // Skip-reason codes (all negative so they are distinguishable from match counts).
     public const int SkipBinary     = -1;
@@ -88,19 +94,31 @@ public sealed class ContentSearcher
         if (watched) FileWatchDiagnostics.Checkpoint(filePath, "ENTER");
 
         FileInfo fi;
-        try { fi = new FileInfo(filePath); }
-        catch (Exception ex) { LogService.Instance.Verbose("ContentSearcher", $"Cannot stat file: {filePath}", ex); return new FileSearchOutcome(SkipOther, 0); }
-        if (!fi.Exists) return new FileSearchOutcome(SkipNotFound, 0);
+        long fileLength;
+        FileMetadata metadata;
+        if (FileMetadataCache.TryGet(filePath, out var cached))
+        {
+            fileLength = cached.Length;
+            metadata = cached;
+            fi = null!; // avoid stat; only used for Exists check below
+            if (fileLength == 0 && !File.Exists(filePath)) return new FileSearchOutcome(SkipNotFound, 0);
+        }
+        else
+        {
+            try { fi = new FileInfo(filePath); }
+            catch (Exception ex) { LogService.Instance.Verbose("ContentSearcher", $"Cannot stat file: {filePath}", ex); return new FileSearchOutcome(SkipOther, 0); }
+            if (!fi.Exists) return new FileSearchOutcome(SkipNotFound, 0);
 
-        long fileLength = fi.Length;
-        var metadata = new FileMetadata(fileLength, fi.LastWriteTime);
+            fileLength = fi.Length;
+            metadata = new FileMetadata(fileLength, fi.LastWriteTime);
+        }
 
         if (options.MaxFileSizeBytes > 0 && fileLength > options.MaxFileSizeBytes) return new FileSearchOutcome(SkipTooLarge, 0);
 
         // Extension-based skip — no binary sniff, no content read.
         if (options.SkipExtensions.Count > 0)
         {
-            var ext = fi.Extension;
+            var ext = Path.GetExtension(filePath);
             if (ext.Length > 1 && options.SkipExtensions.Contains(ext.AsSpan(1).ToString()))
                 return new FileSearchOutcome(SkipByExtension, 0);
         }
@@ -119,22 +137,21 @@ public sealed class ContentSearcher
             if (watched) FileWatchDiagnostics.Checkpoint(filePath, "NATIVE-FELLTHROUGH", totalSw!.ElapsedMilliseconds);
         }
 
-        if (options.SkipBinary)
-        {
-            try
-            {
-                using var sniff = fi.OpenRead();
-                if (BinaryDetector.IsBinary(sniff)) return new FileSearchOutcome(SkipBinary, 0);
-            }
-            catch (UnauthorizedAccessException ex) { LogService.Instance.Verbose("ContentSearcher", $"Access denied sniffing binary: {filePath}", ex); return new FileSearchOutcome(SkipAccessDenied, 0); }
-            catch (IOException ex) { LogService.Instance.Verbose("ContentSearcher", $"IO error sniffing binary: {filePath}", ex); return new FileSearchOutcome(SkipIOError, 0); }
-        }
-
         try
         {
-            int result = fileLength >= MemoryMapThresholdBytes
-                ? await SearchMappedAsync(filePath, fileLength, regex, literal, literalComparison, options, writer, cancellationToken, metadata).ConfigureAwait(false)
-                : await SearchStreamAsync(filePath, regex, literal, literalComparison, options, writer, cancellationToken, metadata).ConfigureAwait(false);
+            int result;
+            if (fileLength >= MemoryMapThresholdBytes)
+            {
+                // Large files: binary sniff still happens via the MMF view's first 8 KB.
+                result = await SearchMappedAsync(filePath, fileLength, regex, literal, literalComparison, options, writer, cancellationToken, metadata).ConfigureAwait(false);
+            }
+            else
+            {
+                // Single-peek open: one FileStream, one 8 KB read for binary + encoding
+                // detection, then reuse the same stream for scanning. This eliminates the
+                // 2–3 CreateFile round-trips per file the old code path incurred.
+                result = await SearchStreamSinglePeekAsync(filePath, regex, literal, literalComparison, options, writer, cancellationToken, metadata).ConfigureAwait(false);
+            }
             if (watched) FileWatchDiagnostics.Checkpoint(filePath, "EXIT-MANAGED", totalSw!.ElapsedMilliseconds, $"produced={result} size={fileLength}");
             return new FileSearchOutcome(result, result >= 0 ? fileLength : 0);
         }
@@ -159,6 +176,45 @@ public sealed class ContentSearcher
         return await SearchLinesAsync(filePath, reader, regex, literal, literalComparison, options, writer, cancellationToken, metadata).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Single-peek stream path: opens the file once, reads 8 KB into a buffer,
+    /// runs binary detection AND encoding detection on that buffer, then seeks
+    /// back and scans. Eliminates the 2–3 separate CreateFile + ReadFile calls
+    /// the old code path made per file (~0.2 ms each on HDD).
+    /// </summary>
+    private static async Task<int> SearchStreamSinglePeekAsync(
+        string filePath,
+        Regex? regex,
+        string? literal,
+        StringComparison literalComparison,
+        SearchOptions options,
+        ChannelWriter<SearchResult> writer,
+        CancellationToken cancellationToken,
+        FileMetadata metadata)
+    {
+        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan);
+
+        // Single 8 KB peek: shared by binary detection + encoding detection.
+        Span<byte> peek = stackalloc byte[BinaryDetector.SampleBytes];
+        int peekRead = 0;
+        while (peekRead < peek.Length)
+        {
+            int n = fs.Read(peek[peekRead..]);
+            if (n <= 0) break;
+            peekRead += n;
+        }
+
+        if (options.SkipBinary && peekRead > 0 && BinaryDetector.IsBinary(peek[..peekRead]))
+            return SkipBinary;
+
+        var encoding = EncodingDetector.DetectEncoding(peek[..Math.Min(peekRead, 4)]);
+
+        // Seek back to the start so StreamReader reads the full file.
+        fs.Position = 0;
+        using var reader = new StreamReader(fs, encoding, detectEncodingFromByteOrderMarks: true);
+        return await SearchLinesAsync(filePath, reader, regex, literal, literalComparison, options, writer, cancellationToken, metadata).ConfigureAwait(false);
+    }
+
     private static async Task<int> SearchMappedAsync(
         string filePath,
         long length,
@@ -175,7 +231,23 @@ public sealed class ContentSearcher
         {
             using var mmf = MemoryMappedFile.CreateFromFile(filePath, FileMode.Open, mapName: null, capacity: 0, MemoryMappedFileAccess.Read);
             using var stream = mmf.CreateViewStream(0, length, MemoryMappedFileAccess.Read);
-            var encoding = EncodingDetector.DetectEncoding(stream);
+
+            // Peek the first 8 KB of the view for binary + encoding detection
+            // so we don't need a separate file open for sniffing.
+            Span<byte> peek = stackalloc byte[BinaryDetector.SampleBytes];
+            int peekRead = 0;
+            while (peekRead < peek.Length)
+            {
+                int n = stream.Read(peek[peekRead..]);
+                if (n <= 0) break;
+                peekRead += n;
+            }
+
+            if (options.SkipBinary && peekRead > 0 && BinaryDetector.IsBinary(peek[..peekRead]))
+                return SkipBinary;
+
+            var encoding = EncodingDetector.DetectEncoding(peek[..Math.Min(peekRead, 4)]);
+            stream.Position = 0;
             using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true);
             return await SearchLinesAsync(filePath, reader, regex, literal, literalComparison, options, writer, cancellationToken, metadata).ConfigureAwait(false);
         }
@@ -343,6 +415,15 @@ public sealed class ContentSearcher
     /// <summary>Sentinel returned by <see cref="TryNativeAsync"/> when the native path cannot be used and the caller should run the managed path.</summary>
     private const int NativeFellThrough = int.MinValue;
 
+    /// <summary>
+    /// Per-thread cancel-flag pointer. Eliminates per-file AllocHGlobal/FreeHGlobal
+    /// + CancellationToken.Register allocations — the same pinned int* is reused for
+    /// every file scanned on a given thread.
+    /// </summary>
+    private static readonly ThreadLocal<IntPtr> t_cancelPtr = new(
+        () => System.Runtime.InteropServices.Marshal.AllocHGlobal(sizeof(int)),
+        trackAllValues: false);
+
     [ExcludeFromCodeCoverage]
     private static async Task<int> TryNativeAsync(
         string filePath,
@@ -361,21 +442,18 @@ public sealed class ContentSearcher
             FileWatchDiagnostics.Checkpoint(filePath, "NATIVE-GATE-ACQUIRED", gateSw!.ElapsedMilliseconds,
                 $"gateAvail={s_nativeGate.CurrentCount}");
         }
-        // Run on a worker thread; the native call is synchronous and may mmap a
-        // large file, blocking briefly. Cancellation is plumbed through a shared
-        // int* (allocated unmanaged so we can take its address inside an async
-        // method) that the Rust side polls every ~256 matches.
-        IntPtr cancelPtr = System.Runtime.InteropServices.Marshal.AllocHGlobal(sizeof(int));
         try
         {
-            unsafe { *(int*)cancelPtr = 0; }
-            using var ctr = cancellationToken.Register(() =>
-            {
-                unsafe { System.Threading.Interlocked.Exchange(ref *(int*)cancelPtr, 1); }
-            });
-
             return await Task.Run(() =>
             {
+                // Reuse the thread-local cancel-int — reset to 0 before each file.
+                IntPtr cancelPtr = t_cancelPtr.Value!;
+                unsafe { *(int*)cancelPtr = 0; }
+                using var ctr = cancellationToken.Register(static state =>
+                {
+                    unsafe { System.Threading.Interlocked.Exchange(ref *(int*)(IntPtr)state!, 1); }
+                }, cancelPtr);
+
                 var sink = new StreamingSink(filePath, writer, cancellationToken, options.ContextLines, metadata);
                 var scanSw = watched ? System.Diagnostics.Stopwatch.StartNew() : null;
                 if (watched) FileWatchDiagnostics.Checkpoint(filePath, "NATIVE-SCAN-START");
@@ -420,7 +498,6 @@ public sealed class ContentSearcher
         }
         finally
         {
-            System.Runtime.InteropServices.Marshal.FreeHGlobal(cancelPtr);
             s_nativeGate.Release();
         }
     }
@@ -497,6 +574,20 @@ public sealed class ContentSearcher
         }
 
         private static unsafe (string Line, int MatchStart, int MatchLength) DecodeMatchLine(byte* ptr, int len, int matchStartBytes, int matchLenBytes)
+            => NativeMatchDecoder.DecodeMatchLine(ptr, len, matchStartBytes, matchLenBytes);
+
+        private static unsafe IReadOnlyList<string> UnpackLinesTruncated(byte* ptr, nuint totalBytes, uint count)
+            => NativeMatchDecoder.UnpackLinesTruncated(ptr, totalBytes, count);
+    }
+
+    /// <summary>
+    /// Shared helpers for decoding native match data into managed SearchResult fields.
+    /// Used by both the per-file <see cref="StreamingSink"/> and the batch
+    /// <see cref="SearchService"/> parallel scan sink.
+    /// </summary>
+    internal static class NativeMatchDecoder
+    {
+        internal static unsafe (string Line, int MatchStart, int MatchLength) DecodeMatchLine(byte* ptr, int len, int matchStartBytes, int matchLenBytes)
         {
             if (ptr == null || len <= 0) return (string.Empty, 0, 0);
 
@@ -509,7 +600,7 @@ public sealed class ContentSearcher
             return (displayLine.Text, displayLine.MatchStart, matchLength);
         }
 
-        private static unsafe IReadOnlyList<string> UnpackLinesTruncated(byte* ptr, nuint totalBytes, uint count)
+        internal static unsafe IReadOnlyList<string> UnpackLinesTruncated(byte* ptr, nuint totalBytes, uint count)
         {
             if (count == 0 || ptr == null || totalBytes == 0) return Array.Empty<string>();
             var list = new List<string>((int)count);
@@ -528,30 +619,21 @@ public sealed class ContentSearcher
 
         /// <summary>
         /// Decode a UTF-8 byte buffer to a managed string, hard-capped to keep huge
-        /// lines off the LOH. Without this cap, a single matched line of e.g. 200 KB
-        /// (minified JS, log lines, etc.) allocated a >85 KB string straight onto the
-        /// LOH — the LOH peaked at 1.72 GB during a recent diagnostics session.
+        /// lines off the LOH.
         /// </summary>
-        private static unsafe string DecodeAndTruncate(byte* ptr, int len)
+        internal static unsafe string DecodeAndTruncate(byte* ptr, int len)
         {
             if (ptr == null || len <= 0) return string.Empty;
-            // UTF-8 uses up to 4 bytes per char. Decoding (TruncatedLength*2 + 4) chars
-            // worth of bytes guarantees we cover the visible window before Truncate trims.
-            // Default settings (TruncatedLength=500) cap decoded strings at ~4 KB — well
-            // below the 85 KB LOH threshold.
             int maxBytes = (LineTruncator.MaxDisplayLength + 1) * 4;
             bool bytesTruncated = len > maxBytes;
             int decodeBytes = bytesTruncated ? maxBytes : len;
             if (bytesTruncated)
             {
-                // Snap back to a UTF-8 char boundary so we don't decode a partial sequence.
                 while (decodeBytes > 0 && (ptr[decodeBytes] & 0xC0) == 0x80) decodeBytes--;
             }
             var s = System.Text.Encoding.UTF8.GetString(ptr, decodeBytes);
             if (bytesTruncated && s.Length <= LineTruncator.MaxDisplayLength)
             {
-                // We cut bytes but the decoded text still fits the display window — force
-                // the ellipsis so the user sees that the line was truncated.
                 int keep = Math.Min(s.Length, LineTruncator.TruncatedLength);
                 return string.Concat(s.AsSpan(0, keep), LineTruncator.Ellipsis);
             }

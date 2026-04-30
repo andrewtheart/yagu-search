@@ -25,6 +25,12 @@ pub struct ScanOptions {
     pub context_after: usize,
     pub max_results: usize,
     pub skip_binary: bool,
+    /// When `true` and `case_sensitive == false`, perform ASCII-only case
+    /// folding for the literal matcher (cheaper, but does not fold non-ASCII
+    /// characters like "Über" / "über"). When `false` (default), use
+    /// Unicode-aware case folding via the regex engine, matching the regex
+    /// matcher's case-insensitive behavior.
+    pub ascii_case_only: bool,
 }
 
 const MAX_EMITTED_LINE_BYTES: usize = 4096;
@@ -57,9 +63,15 @@ pub fn build_matcher(
             .map_err(|e| ScanError::InvalidRegex(e.to_string()))?;
         Ok(Box::new(RegexMatcher { re }))
     } else if options.case_sensitive {
-        Ok(Box::new(LiteralMatcher::new(pattern.as_bytes(), true)))
+        Ok(Box::new(LiteralMatcher::new_case_sensitive(pattern.as_bytes())))
+    } else if options.ascii_case_only {
+        Ok(Box::new(LiteralMatcher::new_ascii_case_insensitive(
+            pattern.as_bytes(),
+        )))
     } else {
-        Ok(Box::new(LiteralMatcher::new(pattern.as_bytes(), false)))
+        Ok(Box::new(LiteralMatcher::new_unicode_case_insensitive(
+            pattern,
+        )?))
     }
 }
 
@@ -75,11 +87,38 @@ pub fn scan_bytes(
     scan_bytes_with_matcher(bytes, &*matcher, options, emit)
 }
 
+/// Like `scan_bytes` but also polls `should_cancel` once per line.
+pub fn scan_bytes_ex(
+    bytes: &[u8],
+    pattern: &str,
+    options: &ScanOptions,
+    should_cancel: impl FnMut() -> bool,
+    emit: impl FnMut(MatchRecord) -> bool,
+) -> Result<usize, ScanError> {
+    let matcher = build_matcher(pattern, options)?;
+    scan_bytes_with_matcher_ex(bytes, &*matcher, options, should_cancel, emit)
+}
+
 /// Like `scan_bytes` but accepts a pre-compiled matcher for reuse across files.
 pub fn scan_bytes_with_matcher(
     bytes: &[u8],
     matcher: &dyn LineMatcher,
     options: &ScanOptions,
+    emit: impl FnMut(MatchRecord) -> bool,
+) -> Result<usize, ScanError> {
+    scan_bytes_with_matcher_ex(bytes, matcher, options, || false, emit)
+}
+
+/// Like `scan_bytes_with_matcher` but also polls `should_cancel` once per line
+/// (including non-matching lines). When `should_cancel()` returns `true` the
+/// scan stops early and returns `Ok(emitted_so_far)`, matching the soft
+/// early-stop semantics of `emit` returning `false`. This lets long no-match
+/// or sparse-match scans react to cancellation independent of match rate.
+pub fn scan_bytes_with_matcher_ex(
+    bytes: &[u8],
+    matcher: &dyn LineMatcher,
+    options: &ScanOptions,
+    mut should_cancel: impl FnMut() -> bool,
     mut emit: impl FnMut(MatchRecord) -> bool,
 ) -> Result<usize, ScanError> {
     if options.skip_binary && looks_binary(bytes) {
@@ -95,6 +134,12 @@ pub fn scan_bytes_with_matcher(
 
     for line in bytes.lines() {
         line_number += 1;
+
+        // Per-line cancellation poll: independent of match rate so no-match
+        // and sparse-match scans react promptly to the cancel flag.
+        if should_cancel() {
+            return Ok(emitted);
+        }
 
         // Fill in pending after-context with this line.
         if !pending.is_empty() {
@@ -187,7 +232,7 @@ pub fn scan_bytes_with_matcher(
     Ok(emitted)
 }
 
-fn copy_context_line_for_record(line: &[u8]) -> Vec<u8> {
+pub(crate) fn copy_context_line_for_record(line: &[u8]) -> Vec<u8> {
     if line.len() <= MAX_EMITTED_LINE_BYTES {
         return line.to_vec();
     }
@@ -203,7 +248,7 @@ fn copy_context_line_for_record(line: &[u8]) -> Vec<u8> {
     output
 }
 
-fn copy_match_line_for_record(line: &[u8], match_start: usize, match_len: usize) -> (Vec<u8>, u32) {
+pub(crate) fn copy_match_line_for_record(line: &[u8], match_start: usize, match_len: usize) -> (Vec<u8>, u32) {
     if line.len() <= MAX_EMITTED_LINE_BYTES {
         return (line.to_vec(), match_start as u32);
     }
@@ -267,9 +312,13 @@ fn snap_to_char_boundary_start(line: &[u8], mut index: usize) -> usize {
     index
 }
 
+/// Snap an *exclusive* upper bound to a UTF-8 codepoint boundary by advancing
+/// forward past any continuation bytes. This keeps the partial codepoint in
+/// the slice rather than dropping it (which `snap_to_char_boundary_start`-style
+/// retreat would do when used as an end bound).
 fn snap_to_char_boundary_end(line: &[u8], mut index: usize) -> usize {
-    while index > 0 && index < line.len() && (line[index] & 0xC0) == 0x80 {
-        index -= 1;
+    while index < line.len() && (line[index] & 0xC0) == 0x80 {
+        index += 1;
     }
     index
 }
@@ -401,42 +450,69 @@ pub trait LineMatcher: Send + Sync {
 }
 
 pub struct LiteralMatcher {
-    finder_owned: Option<memmem::Finder<'static>>,
-    needle_lower: Vec<u8>,
-    case_sensitive: bool,
-    needle_len: usize,
+    impl_: LiteralImpl,
+}
+
+enum LiteralImpl {
+    CaseSensitive {
+        finder: memmem::Finder<'static>,
+        len: usize,
+    },
+    AsciiCaseInsensitive {
+        needle_lower: Vec<u8>,
+        len: usize,
+    },
+    UnicodeCaseInsensitive {
+        regex: Regex,
+    },
 }
 
 impl LiteralMatcher {
-    fn new(needle: &[u8], case_sensitive: bool) -> Self {
-        if case_sensitive {
-            Self {
-                finder_owned: Some(memmem::Finder::new(needle).into_owned()),
-                needle_lower: Vec::new(),
-                case_sensitive: true,
-                needle_len: needle.len(),
-            }
-        } else {
-            Self {
-                finder_owned: None,
-                needle_lower: needle.to_ascii_lowercase(),
-                case_sensitive: false,
-                needle_len: needle.len(),
-            }
+    fn new_case_sensitive(needle: &[u8]) -> Self {
+        Self {
+            impl_: LiteralImpl::CaseSensitive {
+                finder: memmem::Finder::new(needle).into_owned(),
+                len: needle.len(),
+            },
         }
+    }
+
+    fn new_ascii_case_insensitive(needle: &[u8]) -> Self {
+        Self {
+            impl_: LiteralImpl::AsciiCaseInsensitive {
+                needle_lower: needle.to_ascii_lowercase(),
+                len: needle.len(),
+            },
+        }
+    }
+
+    /// Build a Unicode-case-folding literal matcher by escaping the pattern
+    /// and feeding it to the regex engine with `(?i)`. This matches the
+    /// case-insensitive behavior of the regex path.
+    fn new_unicode_case_insensitive(pattern: &str) -> Result<Self, ScanError> {
+        let escaped = regex::escape(pattern);
+        let regex = RegexBuilder::new(&escaped)
+            .case_insensitive(true)
+            .build()
+            .map_err(|e| ScanError::InvalidRegex(e.to_string()))?;
+        Ok(Self {
+            impl_: LiteralImpl::UnicodeCaseInsensitive { regex },
+        })
     }
 }
 
 impl LineMatcher for LiteralMatcher {
     fn find(&self, hay: &[u8]) -> Option<(usize, usize)> {
-        if self.case_sensitive {
-            self.finder_owned
-                .as_ref()
-                .unwrap()
-                .find(hay)
-                .map(|i| (i, self.needle_len))
-        } else {
-            find_ascii_case_insensitive(hay, &self.needle_lower).map(|i| (i, self.needle_len))
+        match &self.impl_ {
+            LiteralImpl::CaseSensitive { finder, len } => {
+                finder.find(hay).map(|i| (i, *len))
+            }
+            LiteralImpl::AsciiCaseInsensitive { needle_lower, len } => {
+                find_ascii_case_insensitive(hay, needle_lower).map(|i| (i, *len))
+            }
+            LiteralImpl::UnicodeCaseInsensitive { regex } => {
+                regex.find(hay).map(|m| (m.start(), m.end() - m.start()))
+            }
         }
     }
 }
@@ -504,6 +580,7 @@ mod tests {
             context_after: 0,
             max_results: 0,
             skip_binary: true,
+            ascii_case_only: false,
         }
     }
 
@@ -838,9 +915,11 @@ mod tests {
     #[test]
     fn snap_end_on_continuation_byte() {
         let data = b"abc\xE2\x98\x83def";
-        // Snap end from continuation byte
-        assert_eq!(snap_to_char_boundary_end(data, 4), 3);
-        assert_eq!(snap_to_char_boundary_end(data, 5), 3);
+        // snap_end advances forward past continuation bytes so the partial
+        // codepoint is preserved (e.g. truncating in the middle of "☃" keeps
+        // the whole character rather than dropping it).
+        assert_eq!(snap_to_char_boundary_end(data, 4), 6);
+        assert_eq!(snap_to_char_boundary_end(data, 5), 6);
         // From lead byte — stays
         assert_eq!(snap_to_char_boundary_end(data, 3), 3);
     }
@@ -1295,14 +1374,14 @@ mod tests {
     // ---- Coverage: LiteralMatcher find method ----
     #[test]
     fn literal_matcher_find_case_sensitive() {
-        let m = LiteralMatcher::new(b"Test", true);
+        let m = LiteralMatcher::new_case_sensitive(b"Test");
         assert_eq!(m.find(b"a Test here"), Some((2, 4)));
         assert_eq!(m.find(b"a test here"), None); // wrong case
     }
 
     #[test]
     fn literal_matcher_find_case_insensitive() {
-        let m = LiteralMatcher::new(b"Test", false);
+        let m = LiteralMatcher::new_ascii_case_insensitive(b"Test");
         assert_eq!(m.find(b"a TEST here"), Some((2, 4)));
         assert_eq!(m.find(b"nope"), None);
     }
@@ -1321,5 +1400,103 @@ mod tests {
         assert!(!result.is_empty());
         // Fallback returns match_start.min(MAX_EMITTED_LINE_BYTES) as u32 = 0
         assert_eq!(offset, 0);
+    }
+
+    // ---- Pre-work: Unicode case folding for LiteralMatcher ----
+    #[test]
+    fn literal_unicode_case_fold_german_umlaut() {
+        // "Über" / "über" should match under Unicode fold (default).
+        let m = LiteralMatcher::new_unicode_case_insensitive("über").unwrap();
+        let hay = "Über alles".as_bytes();
+        let r = m.find(hay).expect("Unicode fold should match Über");
+        assert_eq!(r.0, 0);
+        // "Über" is 5 bytes ("\xC3\x9Cber"), "über" is also 5 bytes.
+        assert_eq!(r.1, 5);
+    }
+
+    #[test]
+    fn literal_unicode_case_fold_pattern_with_uppercase() {
+        let m = LiteralMatcher::new_unicode_case_insensitive("ÜBER").unwrap();
+        assert!(m.find("über alles".as_bytes()).is_some());
+    }
+
+    #[test]
+    fn literal_ascii_only_skips_non_ascii_fold() {
+        // Documents that ascii_case_only path does NOT fold non-ASCII.
+        let m = LiteralMatcher::new_ascii_case_insensitive("über".as_bytes());
+        let hay = "Über alles".as_bytes();
+        // "Ü" (0xC3 0x9C) vs "ü" (0xC3 0xBC) — different non-ASCII bytes,
+        // ASCII fold leaves them alone, so this does not match.
+        assert!(m.find(hay).is_none());
+    }
+
+    #[test]
+    fn literal_unicode_fold_via_build_matcher_default() {
+        let o = ScanOptions {
+            case_sensitive: false,
+            use_regex: false,
+            ascii_case_only: false,
+            ..opts()
+        };
+        let m = build_matcher("über", &o).unwrap();
+        assert!(m.find("Über".as_bytes()).is_some());
+    }
+
+    #[test]
+    fn literal_unicode_fold_eszett_documents_simple_fold() {
+        // Document the chosen behavior for ß: regex's case_insensitive uses
+        // Unicode *simple* case fold, which folds "ß" to itself (not "ss").
+        // So "ß" pattern matches "ß" but NOT "SS" (and vice versa).
+        let m = LiteralMatcher::new_unicode_case_insensitive("ß").unwrap();
+        assert!(m.find("straße".as_bytes()).is_some());
+        // "ß" and "SS" do not match each other under simple fold.
+        assert!(m.find(b"STRASSE").is_none());
+    }
+
+    #[test]
+    fn literal_unicode_fold_turkish_dotless_i_documents_default() {
+        // Document Turkish I behavior: regex simple fold treats "i"/"I" as
+        // a fold pair, but does NOT fold "I" to dotless "ı" or "i" to "İ"
+        // (that requires Turkish-locale full case folding which is out of scope).
+        let m = LiteralMatcher::new_unicode_case_insensitive("i").unwrap();
+        assert!(m.find(b"I").is_some());
+        assert!(m.find(b"i").is_some());
+        // Dotless I (U+0131) is NOT considered a fold of "i" by default.
+        assert!(m.find("ı".as_bytes()).is_none());
+    }
+
+    // ---- Pre-work: per-line cancellation polling ----
+    #[test]
+    fn per_line_cancellation_stops_no_match_scan() {
+        // Build a no-match buffer with many lines so that per-match cancel
+        // polling would never fire. The per-line cancel should stop us early.
+        let mut bytes = Vec::new();
+        for _ in 0..2000 {
+            bytes.extend_from_slice(b"nothing here to find\n");
+        }
+        let cancel_calls = std::cell::Cell::new(0u32);
+        let result = scan_bytes_ex(
+            &bytes,
+            "needle",
+            &opts(),
+            || {
+                let n = cancel_calls.get() + 1;
+                cancel_calls.set(n);
+                // Cancel after the first poll.
+                n >= 1
+            },
+            |_| true,
+        )
+        .unwrap();
+        assert_eq!(result, 0);
+        // Cancel was polled at least once even though there were zero matches.
+        assert!(cancel_calls.get() >= 1);
+    }
+
+    #[test]
+    fn per_line_cancel_returning_false_completes_scan() {
+        let bytes = b"foo\nbar\nfoo\n";
+        let n = scan_bytes_ex(bytes, "foo", &opts(), || false, |_| true).unwrap();
+        assert_eq!(n, 2);
     }
 }

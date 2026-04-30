@@ -15,23 +15,32 @@ public static class FileWatchDiagnostics
     /// recent diagnostics session where the UI froze for 30–60s after this file
     /// appeared in results. Add via <see cref="Add"/>; clear via <see cref="Clear"/>.
     /// </summary>
+    private static readonly object s_lock = new();
     private static readonly HashSet<string> s_patterns = new(StringComparer.OrdinalIgnoreCase)
     {
         "lvl_jotun_gpm_rockskipcontest.sbp",
     };
 
-    public static void Add(string substring) { lock (s_patterns) s_patterns.Add(substring); }
-    public static void Clear() { lock (s_patterns) s_patterns.Clear(); }
+    // Lock-free read snapshot — updated on Add/Clear. Readers never contend.
+    private static volatile string[] s_snapshot = ["lvl_jotun_gpm_rockskipcontest.sbp"];
+
+    public static void Add(string substring)
+    {
+        lock (s_lock) { s_patterns.Add(substring); s_snapshot = [.. s_patterns]; }
+    }
+
+    public static void Clear()
+    {
+        lock (s_lock) { s_patterns.Clear(); s_snapshot = []; }
+    }
 
     public static bool IsWatched(string filePath)
     {
-        lock (s_patterns)
-        {
-            if (s_patterns.Count == 0) return false;
-            foreach (var p in s_patterns)
-                if (filePath.Contains(p, StringComparison.OrdinalIgnoreCase)) return true;
-            return false;
-        }
+        var patterns = s_snapshot;
+        if (patterns.Length == 0) return false;
+        foreach (var p in patterns)
+            if (filePath.Contains(p, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
 
     /// <summary>Emit a checkpoint log line capturing memory/GC/threadpool state.</summary>

@@ -5,7 +5,7 @@ shells out to [voidtools Everything](https://www.voidtools.com/) (`es.exe`) for
 near-instant file discovery and uses parallel compiled regex / `MemoryMappedFile`
 for content search.
 
-Implementation tracks [PLAN.md](PLAN.md).
+Implementation tracks [PLAN.md](PLANS/PLAN.md).
 
 ## Build
 

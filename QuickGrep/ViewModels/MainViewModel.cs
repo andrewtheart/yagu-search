@@ -777,7 +777,7 @@ public sealed partial class MainViewModel : ObservableObject
     private static List<string> SplitCsv(string s) =>
         string.IsNullOrWhiteSpace(s)
             ? []
-            : s.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+            : [.. s.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
 
     private static HashSet<string> ParseExtensionSet(string s) =>
         string.IsNullOrWhiteSpace(s)
