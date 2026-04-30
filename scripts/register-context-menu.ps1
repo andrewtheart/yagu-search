@@ -1,15 +1,15 @@
 <#
 .SYNOPSIS
-  Registers (or unregisters) the "Search with QuickGrep" Explorer context menu entry.
+  Registers (or unregisters) the "Search with Yagu" Explorer context menu entry.
 
 .PARAMETER ExePath
-  Full path to QuickGrep.exe.
+  Full path to Yagu.exe.
 
 .PARAMETER Uninstall
   Removes the registry entries instead of installing them.
 
 .EXAMPLE
-  .\register-context-menu.ps1 -ExePath 'C:\Tools\QuickGrep\QuickGrep.exe'
+  .\register-context-menu.ps1 -ExePath 'C:\Tools\Yagu\Yagu.exe'
   .\register-context-menu.ps1 -Uninstall
 #>
 [CmdletBinding()]
@@ -22,8 +22,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $regPaths = @(
-  'HKCU:\Software\Classes\Directory\shell\QuickGrep',
-  'HKCU:\Software\Classes\Directory\Background\shell\QuickGrep'
+  'HKCU:\Software\Classes\Directory\shell\Yagu',
+  'HKCU:\Software\Classes\Directory\Background\shell\Yagu'
 )
 
 if ($Uninstall) {
@@ -37,7 +37,7 @@ if ($Uninstall) {
 }
 
 if (-not $ExePath) {
-  throw "Provide -ExePath '<path to QuickGrep.exe>' or use -Uninstall."
+  throw "Provide -ExePath '<path to Yagu.exe>' or use -Uninstall."
 }
 if (-not (Test-Path $ExePath)) {
   throw "ExePath does not exist: $ExePath"
@@ -46,10 +46,10 @@ if (-not (Test-Path $ExePath)) {
 foreach ($regPath in $regPaths) {
   New-Item -Path $regPath -Force | Out-Null
   New-Item -Path "$regPath\command" -Force | Out-Null
-  Set-ItemProperty -Path $regPath -Name '(Default)' -Value 'Search with QuickGrep'
+  Set-ItemProperty -Path $regPath -Name '(Default)' -Value 'Search with Yagu'
   Set-ItemProperty -Path $regPath -Name 'Icon' -Value $ExePath
   Set-ItemProperty -Path "$regPath\command" -Name '(Default)' -Value ('"{0}" --dir "%V"' -f $ExePath)
   Write-Host "Registered $regPath"
 }
 
-Write-Host "Done. Right-click any folder to see 'Search with QuickGrep'."
+Write-Host "Done. Right-click any folder to see 'Search with Yagu'."
