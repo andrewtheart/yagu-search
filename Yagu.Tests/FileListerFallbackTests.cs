@@ -317,6 +317,54 @@ public class FindEsExeTests
     }
 }
 
+// ─── FileLister: Everything SDK readiness polling ─────────────────────
+
+public class EverythingReadinessTests
+{
+    [Fact]
+    public async Task WaitForEverythingSdkReadyAsync_ReturnsWhenProbeBecomesReady()
+    {
+        int attempts = 0;
+
+        var result = await FileLister.WaitForEverythingSdkReadyAsync(
+            () =>
+            {
+                attempts++;
+                return attempts < 3
+                    ? EverythingReadinessResult.NotReady("loading")
+                    : EverythingReadinessResult.Ready(1, 10, new[] { @"C:\ready.txt" });
+            },
+            timeout: TimeSpan.FromSeconds(5),
+            pollInterval: TimeSpan.FromMilliseconds(1),
+            cancellationToken: CancellationToken.None);
+
+        Assert.True(result.IsReady);
+        Assert.Equal(3, attempts);
+        Assert.Equal((uint)10, result.TotalCount);
+    }
+
+    [Fact]
+    public async Task WaitForEverythingSdkReadyAsync_TimesOutWithLastStatus()
+    {
+        int attempts = 0;
+
+        var result = await FileLister.WaitForEverythingSdkReadyAsync(
+            () =>
+            {
+                attempts++;
+                return EverythingReadinessResult.NotReady("still loading");
+            },
+            timeout: TimeSpan.FromMilliseconds(1),
+            pollInterval: TimeSpan.FromMilliseconds(1),
+            cancellationToken: CancellationToken.None);
+
+        Assert.False(result.IsReady);
+        Assert.True(attempts > 0);
+        Assert.Contains("Timed out", result.Error);
+        Assert.Contains("still loading", result.Error);
+    }
+}
+
 // ─── FileLister: ListFilesAsync + EnumerateFallbackAsync deeper ─────
 
 [Collection("FileListerBackend")]
