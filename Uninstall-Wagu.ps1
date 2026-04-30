@@ -5,7 +5,10 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $false)]
-  [string]$InstallDir
+  [string]$InstallDir,
+
+  # Skip all interactive prompts, accepting the default answer for each.
+  [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,6 +42,10 @@ function Resolve-InstallDirectory {
   param([string]$Value)
 
   $registeredDir = Get-RegisteredInstallDirectory
+  if (-not [string]::IsNullOrWhiteSpace($registeredDir) -and -not (Test-Path -LiteralPath $registeredDir)) {
+    Write-Warning "The registered install directory no longer exists on disk: $registeredDir"
+    Write-Warning "The registry entry will still be cleaned up."
+  }
   $defaultDir = if ([string]::IsNullOrWhiteSpace($registeredDir)) { (Get-Location).Path } else { $registeredDir }
   if ([string]::IsNullOrWhiteSpace($Value)) {
     $answer = Read-Host "Install directory to remove [$defaultDir]"
@@ -65,7 +72,11 @@ function Unregister-ContextMenu {
   $registryKeyNames = @('Yagu', 'Wagu')
   if (Test-Path -LiteralPath $contextMenuScript) {
     foreach ($registryKeyName in $registryKeyNames) {
-      & $contextMenuScript -RegistryKeyName $registryKeyName -Uninstall
+      try {
+        & $contextMenuScript -RegistryKeyName $registryKeyName -Uninstall
+      } catch {
+        Write-Warning "Context menu unregistration for '$registryKeyName' failed: $_ — continuing."
+      }
     }
   } else {
     Write-Warning "Could not find context menu script: $contextMenuScript"
@@ -92,6 +103,8 @@ function Read-YesNo {
     [bool]$DefaultYes = $false
   )
 
+  if ($Force) { return $DefaultYes }
+
   $suffix = if ($DefaultYes) { '[Y/n]' } else { '[y/N]' }
   $answer = Read-Host "$Prompt $suffix"
   if ([string]::IsNullOrWhiteSpace($answer)) {
@@ -99,6 +112,35 @@ function Read-YesNo {
   }
 
   return $answer -match '^(y|yes)$'
+}
+
+function Stop-RunningYagu {
+  param([string]$InstallPath)
+
+  $exeFullPath = Join-Path $InstallPath $exeName
+  $procs = @(Get-Process -Name ([System.IO.Path]::GetFileNameWithoutExtension($exeName)) -ErrorAction SilentlyContinue |
+    Where-Object {
+      try { [System.IO.Path]::GetFullPath($_.MainModule.FileName) -eq [System.IO.Path]::GetFullPath($exeFullPath) }
+      catch { $false }
+    })
+
+  if ($procs.Count -eq 0) { return }
+
+  Write-Warning "$exeName is currently running from the install directory."
+  $stop = if ($Force) { $true } else { Read-YesNo -Prompt "Stop it now to continue uninstall?" -DefaultYes $true }
+  if (-not $stop) {
+    throw "Uninstall cancelled: $exeName must not be running when uninstalling."
+  }
+
+  foreach ($p in $procs) {
+    try {
+      $p.CloseMainWindow() | Out-Null
+      if (-not $p.WaitForExit(3000)) { $p.Kill() }
+      Write-Host "Stopped $exeName (PID $($p.Id))."
+    } catch {
+      Write-Warning "Could not stop $exeName (PID $($p.Id)): $_"
+    }
+  }
 }
 
 function Test-IsPathUnderDirectory {
@@ -128,8 +170,12 @@ function Remove-InstalledFiles {
       }
 
       if (Test-Path -LiteralPath $target -PathType Leaf) {
-        Remove-Item -LiteralPath $target -Force
-        Write-Host "Removed $target"
+        try {
+          Remove-Item -LiteralPath $target -Force -ErrorAction Stop
+          Write-Host "Removed $target"
+        } catch {
+          Write-Warning "Could not remove $target : $_"
+        }
       }
 
       $dir = Split-Path -Parent $target
@@ -222,6 +268,11 @@ function Invoke-EverythingUninstall {
 }
 
 $installPath = Resolve-InstallDirectory -Value $InstallDir
+
+if (Test-Path -LiteralPath $installPath) {
+  Stop-RunningYagu -InstallPath $installPath
+}
+
 Unregister-ContextMenu
 
 if (Test-Path -LiteralPath $installPath) {

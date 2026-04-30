@@ -34,7 +34,7 @@ public sealed class SearchOptions
     public int MaxResults { get; init; } = 50_000;
 
     /// <summary>Maximum matches per individual file before moving to the next. 0 disables.</summary>
-    public int MaxMatchesPerFile { get; init; } = 1_000;
+    public int MaxMatchesPerFile { get; init; } = 0;
 
     public bool SkipBinary { get; init; } = true;
 
