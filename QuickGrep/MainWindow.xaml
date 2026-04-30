@@ -266,6 +266,16 @@
                                 <MenuFlyoutItem Text="Copy Selected File Paths" Click="OnCopySelectedFilePaths">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
+                                <MenuFlyoutItem Text="Copy Selected Files With Content" Click="OnCopySelectedFilesWithContent">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutSeparator />
+                                <MenuFlyoutItem Text="Save Selected File Paths…" Click="OnSaveSelectedFilePaths">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem Text="Save Selected Files With Content…" Click="OnSaveSelectedFilesWithContent">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
                             </MenuFlyout>
                         </ListView.ContextFlyout>
                         <ListView.ItemTemplate>
@@ -287,8 +297,19 @@
                                                     <MenuFlyoutItem Text="Copy Full Path" Click="OnCopyFileGroupPath" Tag="{x:Bind FilePath}">
                                                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
                                                     </MenuFlyoutItem>
+                                                    <MenuFlyoutSeparator />
                                                     <MenuFlyoutItem Text="Copy Selected File Paths" Click="OnCopySelectedFilePaths">
                                                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
+                                                    </MenuFlyoutItem>
+                                                    <MenuFlyoutItem Text="Copy Selected Files With Content" Click="OnCopySelectedFilesWithContent">
+                                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
+                                                    </MenuFlyoutItem>
+                                                    <MenuFlyoutSeparator />
+                                                    <MenuFlyoutItem Text="Save Selected File Paths…" Click="OnSaveSelectedFilePaths">
+                                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
+                                                    </MenuFlyoutItem>
+                                                    <MenuFlyoutItem Text="Save Selected Files With Content…" Click="OnSaveSelectedFilesWithContent">
+                                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
                                                     </MenuFlyoutItem>
                                                 </MenuFlyout>
                                             </StackPanel.ContextFlyout>
@@ -302,6 +323,12 @@
                                         </StackPanel>
                                     </Expander.Header>
                                     <StackPanel>
+                                        <StackPanel Orientation="Horizontal" Spacing="8" Padding="4,4,0,2">
+                                            <CheckBox Content="Select All" IsChecked="{x:Bind AllSelected, Mode=TwoWay}"
+                                                      FontSize="12" MinHeight="0" Padding="4,0,0,0"
+                                                      Checked="OnSelectAllChecked" Unchecked="OnSelectAllUnchecked" />
+                                            <TextBlock Text="{x:Bind SelectedCountText, Mode=OneWay}" Opacity="0.5" FontSize="11" VerticalAlignment="Center" />
+                                        </StackPanel>
                                         <ItemsControl ItemsSource="{x:Bind VisibleResults}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate x:DataType="models:SearchResult">
@@ -335,12 +362,6 @@
                                                          Visibility="{x:Bind HasMore, Mode=OneWay}"
                                                          Click="OnShowMoreClicked"
                                                          Padding="4,4,0,2" FontSize="12" />
-                                        <StackPanel Orientation="Horizontal" Spacing="8" Padding="4,4,0,2">
-                                            <CheckBox Content="Select All" IsChecked="{x:Bind AllSelected, Mode=TwoWay}"
-                                                      FontSize="12" MinHeight="0" Padding="4,0,0,0"
-                                                      Checked="OnSelectAllChecked" Unchecked="OnSelectAllUnchecked" />
-                                            <TextBlock Text="{x:Bind SelectedCountText, Mode=OneWay}" Opacity="0.5" FontSize="11" VerticalAlignment="Center" />
-                                        </StackPanel>
                                     </StackPanel>
                                 </Expander>
                                 </StackPanel>

@@ -12,6 +12,7 @@ public sealed class SearchService
 {
     private const int MemoryPressureRecoveryMarginPercent = 5;
     private const double ProcessMemoryRecoveryRatio = 0.90;
+    private static readonly TimeSpan NativePartialBatchFlushDelay = TimeSpan.FromMilliseconds(100);
 
     private static int s_memoryPressureGcInFlight;
     private static long s_lastMemoryPressureGcTicks;
@@ -423,7 +424,8 @@ public sealed class SearchService
                                 goto managedFallback;
                             }
 
-                            LogService.Instance.Info("SearchService", "Batch native scanning enabled");
+                            int nativeBatchSize = ResolveNativeBatchSize(parallelism);
+                            LogService.Instance.Info("SearchService", $"Batch native scanning enabled (batchSize={nativeBatchSize})");
 
                             // Single cancel-int shared across all batches.
                             IntPtr cancelPtr = Marshal.AllocHGlobal(sizeof(int));
@@ -435,34 +437,51 @@ public sealed class SearchService
                                     unsafe { System.Threading.Interlocked.Exchange(ref *(int*)(IntPtr)state!, 1); }
                                 }, cancelPtr);
 
-                                const int BatchSize = 512;
-                                var batch = new List<string>(BatchSize);
-
-                                await foreach (var file in pending.Reader.ReadAllAsync(cancellationToken))
+                                var batch = new List<string>(nativeBatchSize);
+                                void FlushNativeBatch()
                                 {
-                                    if (Volatile.Read(ref truncated) != 0) break;
-                                    batch.Add(file);
-                                    if (batch.Count >= BatchSize)
-                                    {
-                                        ProcessNativeBatch(batch, batchSession, degradedSession, parallelism, cancelPtr,
-                                            options, contentResults.Writer,
-                                            ref filesScanned, ref filesSkipped, ref filesWithMatches, ref totalMatches,
-                                            ref bytesScanned, ref truncated, ref degraded,
-                                            ref skipBinary, ref skipAccessDenied, ref skipIOError,
-                                            ref skipTooLarge, ref skipNotFound, ref skipOther);
-                                        CheckMemoryPressure();
-                                        batch.Clear();
-                                    }
-                                }
-                                // Process remaining files.
-                                if (batch.Count > 0 && Volatile.Read(ref truncated) == 0)
-                                {
+                                    if (batch.Count == 0) return;
                                     ProcessNativeBatch(batch, batchSession, degradedSession, parallelism, cancelPtr,
                                         options, contentResults.Writer,
                                         ref filesScanned, ref filesSkipped, ref filesWithMatches, ref totalMatches,
                                         ref bytesScanned, ref truncated, ref degraded,
                                         ref skipBinary, ref skipAccessDenied, ref skipIOError,
                                         ref skipTooLarge, ref skipNotFound, ref skipOther);
+                                    CheckMemoryPressure();
+                                    batch.Clear();
+                                }
+
+                                while (Volatile.Read(ref truncated) == 0)
+                                {
+                                    while (batch.Count < nativeBatchSize && pending.Reader.TryRead(out var bufferedFile))
+                                    {
+                                        batch.Add(bufferedFile);
+                                    }
+
+                                    if (batch.Count >= nativeBatchSize)
+                                    {
+                                        FlushNativeBatch();
+                                        continue;
+                                    }
+
+                                    var waitToRead = pending.Reader.WaitToReadAsync(cancellationToken).AsTask();
+                                    if (batch.Count > 0)
+                                    {
+                                        var completed = await Task.WhenAny(waitToRead, Task.Delay(NativePartialBatchFlushDelay)).ConfigureAwait(false);
+                                        if (completed != waitToRead)
+                                        {
+                                            FlushNativeBatch();
+                                            continue;
+                                        }
+                                    }
+
+                                    if (!await waitToRead.ConfigureAwait(false))
+                                        break;
+                                }
+                                // Process remaining files.
+                                if (batch.Count > 0 && Volatile.Read(ref truncated) == 0)
+                                {
+                                    FlushNativeBatch();
                                 }
                             }
                             finally
@@ -804,6 +823,12 @@ public sealed class SearchService
 
     private static bool IsProcessMemoryRelieved(long workingSetBytes, long effectiveProcessCapBytes) =>
         effectiveProcessCapBytes <= 0 || workingSetBytes <= effectiveProcessCapBytes * ProcessMemoryRecoveryRatio;
+
+    internal static int ResolveNativeBatchSize(int parallelism)
+    {
+        int workers = Math.Max(1, parallelism);
+        return Math.Clamp(workers * 128, 1024, 4096);
+    }
 
     [ExcludeFromCodeCoverage]
     private static bool TryGetSystemMemoryLoadPercent(out uint systemLoadPercent)

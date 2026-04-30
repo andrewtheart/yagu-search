@@ -117,7 +117,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private int _memoryPressurePercent = 80;
     [ObservableProperty] private int _sdkChannelBufferSize = 4096;
     [ObservableProperty] private bool _skipBinary = true;
-    [ObservableProperty] private string _skipExtensions = "exe;dll;pdb;obj;lib;so;dylib;zip;gz;tar;7z;rar;bz2;xz;iso;cab;msi;nupkg;whl;png;jpg;jpeg;gif;bmp;ico;tif;tiff;webp;svg;mp3;mp4;avi;mov;wmv;flv;mkv;wav;ogg;flac;woff;woff2;ttf;eot;otf;pdf;doc;docx;xls;xlsx;ppt;pptx";
+    [ObservableProperty] private string _skipExtensions = AppSettings.DefaultSkipExtensions;
 
     /// <summary>Observable collection of skip-extension items for the multi-select dropdown.</summary>
     public ObservableCollection<SkipExtensionItem> SkipExtensionItems { get; } = [];
@@ -138,18 +138,39 @@ public sealed partial class MainViewModel : ObservableObject
         // Binaries / Build
         ["exe"] = "Binaries", ["dll"] = "Binaries", ["pdb"] = "Binaries", ["obj"] = "Binaries",
         ["lib"] = "Binaries", ["so"] = "Binaries", ["dylib"] = "Binaries",
+        ["com"] = "Binaries", ["scr"] = "Binaries", ["sys"] = "Binaries", ["drv"] = "Binaries",
+        ["ocx"] = "Binaries", ["cpl"] = "Binaries", ["mui"] = "Binaries", ["winmd"] = "Binaries",
+        ["pri"] = "Binaries", ["cat"] = "Binaries", ["res"] = "Binaries", ["resources"] = "Binaries",
+        ["o"] = "Binaries", ["a"] = "Binaries", ["lo"] = "Binaries", ["la"] = "Binaries",
+        ["ilk"] = "Binaries", ["iobj"] = "Binaries", ["ipdb"] = "Binaries", ["exp"] = "Binaries",
+        ["pyc"] = "Binaries", ["pyo"] = "Binaries", ["class"] = "Binaries", ["dex"] = "Binaries",
+        ["wasm"] = "Binaries",
         // Archives
         ["zip"] = "Archives", ["gz"] = "Archives", ["tar"] = "Archives", ["7z"] = "Archives",
         ["rar"] = "Archives", ["bz2"] = "Archives", ["xz"] = "Archives", ["iso"] = "Archives",
         ["cab"] = "Archives", ["msi"] = "Archives", ["nupkg"] = "Archives", ["whl"] = "Archives",
+        ["jar"] = "Archives", ["war"] = "Archives", ["ear"] = "Archives", ["apk"] = "Archives",
+        ["aab"] = "Archives", ["aar"] = "Archives", ["appx"] = "Archives", ["msix"] = "Archives",
+        ["appxbundle"] = "Archives", ["msixbundle"] = "Archives", ["vsix"] = "Archives",
+        ["tgz"] = "Archives", ["tbz2"] = "Archives", ["txz"] = "Archives", ["zst"] = "Archives",
+        ["zstd"] = "Archives", ["br"] = "Archives", ["lz4"] = "Archives", ["lzma"] = "Archives",
+        // Data / Dumps
+        ["bin"] = "Data", ["dat"] = "Data", ["db"] = "Data", ["db3"] = "Data",
+        ["sqlite"] = "Data", ["sqlite3"] = "Data", ["edb"] = "Data", ["mdb"] = "Data",
+        ["accdb"] = "Data", ["ldb"] = "Data", ["sdf"] = "Data", ["cache"] = "Data",
+        ["tmp"] = "Data", ["bak"] = "Data", ["etl"] = "Data", ["evtx"] = "Data",
+        ["dmp"] = "Data", ["mdmp"] = "Data", ["hdmp"] = "Data", ["hprof"] = "Data",
+        ["vhd"] = "Data", ["vhdx"] = "Data", ["vmdk"] = "Data", ["pak"] = "Data",
+        ["usm"] = "Data", ["bundle"] = "Data", ["assets"] = "Data",
         // Images
         ["png"] = "Images", ["jpg"] = "Images", ["jpeg"] = "Images", ["gif"] = "Images",
         ["bmp"] = "Images", ["ico"] = "Images", ["tif"] = "Images", ["tiff"] = "Images",
-        ["webp"] = "Images", ["svg"] = "Images",
+        ["webp"] = "Images", ["svg"] = "Images", ["heic"] = "Images", ["heif"] = "Images",
+        ["avif"] = "Images",
         // Audio / Video
         ["mp3"] = "Media", ["mp4"] = "Media", ["avi"] = "Media", ["mov"] = "Media",
         ["wmv"] = "Media", ["flv"] = "Media", ["mkv"] = "Media", ["wav"] = "Media",
-        ["ogg"] = "Media", ["flac"] = "Media",
+        ["ogg"] = "Media", ["flac"] = "Media", ["m4a"] = "Media", ["webm"] = "Media",
         // Fonts
         ["woff"] = "Fonts", ["woff2"] = "Fonts", ["ttf"] = "Fonts", ["eot"] = "Fonts", ["otf"] = "Fonts",
         // Documents
