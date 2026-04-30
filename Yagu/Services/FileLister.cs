@@ -54,6 +54,20 @@ public enum FileListerBackend
     Managed = 3,
 }
 
+internal sealed record EverythingReadinessResult(
+    bool IsReady,
+    uint ReturnedCount,
+    uint TotalCount,
+    IReadOnlyList<string> SamplePaths,
+    string? Error)
+{
+    internal static EverythingReadinessResult Ready(uint returnedCount, uint totalCount, IReadOnlyList<string> samplePaths) =>
+        new(true, returnedCount, totalCount, samplePaths, null);
+
+    internal static EverythingReadinessResult NotReady(string error) =>
+        new(false, 0, 0, Array.Empty<string>(), error);
+}
+
 /// <summary>
 /// Lists files under a directory using <c>es.exe</c> (voidtools Everything) when available,
 /// and falls back to .NET recursive enumeration with cycle protection otherwise.
@@ -474,6 +488,132 @@ public sealed class FileLister : IFileLister
             try { if (fileExists(c)) return c; } catch (Exception ex) { LogService.Instance.Verbose("FileLister", $"Cannot check es.exe path: {c}", ex); }
         }
         return null;
+    }
+
+    internal static Task<EverythingReadinessResult> WaitForEverythingSdkReadyAsync(
+        TimeSpan timeout,
+        TimeSpan pollInterval,
+        CancellationToken cancellationToken) =>
+        WaitForEverythingSdkReadyAsync(ProbeEverythingSdkReadiness, timeout, pollInterval, cancellationToken);
+
+    internal static async Task<EverythingReadinessResult> WaitForEverythingSdkReadyAsync(
+        Func<EverythingReadinessResult> readinessProbe,
+        TimeSpan timeout,
+        TimeSpan pollInterval,
+        CancellationToken cancellationToken)
+    {
+        if (timeout < TimeSpan.Zero) timeout = TimeSpan.Zero;
+        if (pollInterval <= TimeSpan.Zero) pollInterval = TimeSpan.FromSeconds(1);
+
+        var stopwatch = Stopwatch.StartNew();
+        EverythingReadinessResult lastResult;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lastResult = readinessProbe();
+            if (lastResult.IsReady)
+            {
+                return lastResult;
+            }
+
+            var remaining = timeout - stopwatch.Elapsed;
+            if (remaining <= TimeSpan.Zero)
+            {
+                break;
+            }
+
+            var delay = remaining < pollInterval ? remaining : pollInterval;
+            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+        }
+
+        var status = string.IsNullOrWhiteSpace(lastResult.Error)
+            ? "Timed out waiting for Everything Search to return indexed files or folders."
+            : $"Timed out waiting for Everything Search to return indexed files or folders. Last status: {lastResult.Error}";
+        return lastResult with { Error = status };
+    }
+
+    internal static EverythingReadinessResult ProbeEverythingSdkReadiness()
+    {
+        if (!_sdkAvailable)
+        {
+            return EverythingReadinessResult.NotReady("Everything SDK not available");
+        }
+
+        lock (EverythingSdk.Lock)
+        {
+            try
+            {
+                if (!EverythingSdk.IsDBLoaded())
+                {
+                    return EverythingReadinessResult.NotReady("Everything database is still loading");
+                }
+
+                EverythingSdk.Reset();
+                EverythingSdk.SetSearch(string.Empty);
+                EverythingSdk.SetMatchPath(false);
+                EverythingSdk.SetMatchCase(false);
+                EverythingSdk.SetOffset(0);
+                EverythingSdk.SetMax(25);
+                EverythingSdk.SetRequestFlags(EverythingSdk.EVERYTHING_REQUEST_FULL_PATH_AND_FILE_NAME);
+                EverythingSdk.SetSort(EverythingSdk.EVERYTHING_SORT_PATH_ASCENDING);
+
+                if (!EverythingSdk.Query(bWait: true))
+                {
+                    var err = EverythingSdk.GetLastError();
+                    return EverythingReadinessResult.NotReady(err == EverythingSdk.EVERYTHING_ERROR_IPC
+                        ? "Everything is not running"
+                        : $"Everything SDK query failed: {EverythingSdk.ErrorMessage(err)}");
+                }
+
+                uint returnedCount = EverythingSdk.GetNumResults();
+                uint totalCount = EverythingSdk.GetTotResults();
+                if (returnedCount == 0)
+                {
+                    return EverythingReadinessResult.NotReady("Everything returned no files or folders yet");
+                }
+
+                var samples = new List<string>((int)Math.Min(returnedCount, 25));
+                var buffer = new System.Text.StringBuilder(1024);
+                for (uint i = 0; i < returnedCount && samples.Count < 25; i++)
+                {
+                    buffer.Clear();
+                    uint length = EverythingSdk.GetResultFullPathName(i, buffer, (uint)buffer.Capacity);
+                    if (length == 0) continue;
+                    if (length >= buffer.Capacity)
+                    {
+                        buffer.Capacity = (int)length + 1;
+                        buffer.Clear();
+                        EverythingSdk.GetResultFullPathName(i, buffer, (uint)buffer.Capacity);
+                    }
+
+                    var path = buffer.ToString();
+                    if (!string.IsNullOrWhiteSpace(path))
+                    {
+                        samples.Add(path);
+                    }
+                }
+
+                if (samples.Count == 0)
+                {
+                    return EverythingReadinessResult.NotReady("Everything returned results but no file or folder paths yet");
+                }
+
+                return EverythingReadinessResult.Ready(returnedCount, totalCount, samples.ToArray());
+            }
+            catch (DllNotFoundException)
+            {
+                _sdkAvailable = false;
+                return EverythingReadinessResult.NotReady("Everything64.dll not found");
+            }
+            catch (Exception ex)
+            {
+                return EverythingReadinessResult.NotReady($"Everything SDK readiness check failed: {ex.Message}");
+            }
+            finally
+            {
+                try { EverythingSdk.Reset(); } catch { }
+            }
+        }
     }
 
     private async IAsyncEnumerable<string> RunEverythingAsync(

@@ -1967,11 +1967,7 @@ public sealed partial class MainWindow : Window
                             FileName = everythingExe,
                             UseShellExecute = true,
                         });
-                        // Give it a moment to start
-                        await Task.Delay(2000);
-                        ViewModel.StatusText = Process.GetProcessesByName("Everything").Length > 0
-                            ? "Everything Search started \u2014 fast file discovery enabled."
-                            : "Everything Search is starting\u2026";
+                        await WaitForEverythingReadyAndNotifyAsync();
                     }
                     catch (Exception ex)
                     {
@@ -2026,9 +2022,34 @@ public sealed partial class MainWindow : Window
                 await proc.WaitForExitAsync();
             }
 
-            ViewModel.StatusText = FileLister.FindEsExe() != null
-                ? "Everything Search installed \u2014 fast file discovery enabled."
-                : "Installer completed. Restart Yagu if Everything was installed to a custom location.";
+            var installedEsPath = FileLister.FindEsExe();
+            if (installedEsPath is null)
+            {
+                ViewModel.StatusText = "Installer completed. Restart Yagu if Everything was installed to a custom location.";
+                return;
+            }
+
+            if (Process.GetProcessesByName("Everything").Length == 0)
+            {
+                var everythingExe = FindEverythingExe(installedEsPath);
+                if (everythingExe != null)
+                {
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = everythingExe,
+                            UseShellExecute = true,
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        LogService.Instance.Warning("MainWindow", "Failed to start Everything after install", ex);
+                    }
+                }
+            }
+
+            await WaitForEverythingReadyAndNotifyAsync();
         }
         catch (System.ComponentModel.Win32Exception)
         {
@@ -2040,6 +2061,36 @@ public sealed partial class MainWindow : Window
             ViewModel.StatusText = $"Failed to install Everything: {ex.Message}. Using built-in file enumeration.";
             LogService.Instance.Warning("MainWindow", "Everything install failed", ex);
         }
+    }
+
+    private async Task<bool> WaitForEverythingReadyAndNotifyAsync()
+    {
+        ViewModel.StatusText = "Waiting for Everything Search to return indexed files and folders...";
+        var readiness = await FileLister.WaitForEverythingSdkReadyAsync(
+            timeout: TimeSpan.FromSeconds(90),
+            pollInterval: TimeSpan.FromSeconds(1),
+            cancellationToken: CancellationToken.None);
+
+        if (!readiness.IsReady)
+        {
+            ViewModel.StatusText = $"Everything Search is not ready yet: {readiness.Error}. Using built-in file enumeration.";
+            return false;
+        }
+
+        uint indexedCount = readiness.TotalCount > 0 ? readiness.TotalCount : readiness.ReturnedCount;
+        ViewModel.StatusText = $"Everything Search is ready - {indexedCount:N0} files and folders indexed.";
+
+        var readyDialog = new ContentDialog
+        {
+            XamlRoot = ((FrameworkElement)Content).XamlRoot,
+            Title = "Everything Search Ready",
+            Content = $"Everything Search returned indexed files and folders through the SDK. Fast file discovery is ready to use.\n\nIndexed items reported: {indexedCount:N0}",
+            CloseButtonText = "OK",
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        await readyDialog.ShowAsync();
+        return true;
     }
 
     private static string? FindEverythingExe(string esPath)
