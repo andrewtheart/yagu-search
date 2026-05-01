@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Yagu.Helpers;
 using Yagu.Services;
 
 namespace Yagu.Models;
@@ -11,12 +12,15 @@ public sealed class SearchResultCollection
 {
     private readonly List<FileGroup> _allGroups = [];
     private readonly Dictionary<string, FileGroup> _index = new(StringComparer.OrdinalIgnoreCase);
+    private GlobMatcher? _globMatcher;
 
     public IReadOnlyList<FileGroup> AllGroups => _allGroups;
     public ObservableCollection<FileGroup> VisibleGroups { get; } = [];
 
     public string ResultFilter { get; set; } = string.Empty;
     public string FileNameFilter { get; set; } = string.Empty;
+    public string IncludeGlobs { get; set; } = string.Empty;
+    public string ExcludeGlobs { get; set; } = string.Empty;
     public int SortModeIndex { get; set; }
     public int SortDirectionIndex { get; set; }
     public bool GroupByDirectory { get; set; }
@@ -106,6 +110,10 @@ public sealed class SearchResultCollection
 
     public void ApplySortAndFilter()
     {
+        _globMatcher = (!string.IsNullOrWhiteSpace(IncludeGlobs) || !string.IsNullOrWhiteSpace(ExcludeGlobs))
+            ? new GlobMatcher(SplitGlobs(IncludeGlobs), SplitGlobs(ExcludeGlobs))
+            : null;
+
         var filtered = _allGroups.Where(MatchesFilter).ToList();
         bool ascending = SortDirectionIndex == 1;
 
@@ -184,6 +192,9 @@ public sealed class SearchResultCollection
 
     private bool MatchesFilter(FileGroup group)
     {
+        if (_globMatcher is not null && !_globMatcher.Matches(group.FilePath))
+            return false;
+
         if (!string.IsNullOrWhiteSpace(FileNameFilter))
         {
             if (!group.FileName.Contains(FileNameFilter, StringComparison.OrdinalIgnoreCase)
@@ -212,4 +223,9 @@ public sealed class SearchResultCollection
 
         result.EvictWith(evictedResultWriter);
     }
+
+    private static string[] SplitGlobs(string s) =>
+        string.IsNullOrWhiteSpace(s)
+            ? []
+            : s.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 }

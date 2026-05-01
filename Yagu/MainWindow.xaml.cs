@@ -681,7 +681,7 @@ public sealed partial class MainWindow : Window
         {
             var selected = ViewModel.GetAllSelectedResults();
             if (selected.Count >= 2)
-                UpdateMultiSelectPreview();
+                UpdateMultiSelectPreview(scrollTarget: r);
             else
                 UpdatePreview(r);
         }
@@ -704,6 +704,13 @@ public sealed partial class MainWindow : Window
     {
         ApplyWordWrap(ViewModel.PreviewWordWrap);
         ViewModel.PersistSettings();
+    }
+
+    private void OnPreviewModeChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var selected = ViewModel.GetAllSelectedResults();
+        if (selected.Count >= 2)
+            UpdateMultiSelectPreview();
     }
 
     private void ApplyWordWrap(bool wrap)
@@ -781,6 +788,7 @@ public sealed partial class MainWindow : Window
         ShowPreviewBlockSurface();
         PreviewBlock.Blocks.Clear();
         FullFileButton.IsEnabled = true;
+        PreviewToolbarContent.Visibility = Visibility.Collapsed;
         return true;
     }
 
@@ -1132,31 +1140,44 @@ public sealed partial class MainWindow : Window
         ViewModel.HydrateResult(r);
         _previewResult = r;
         SetPreviewFileLabel(r.FilePath);
+        PreviewToolbarContent.Visibility = Visibility.Visible;
         ShowSingleFilePreview(r, fullFile: false);
     }
 
-    private void UpdateMultiSelectPreview()
+    private void UpdateMultiSelectPreview(SearchResult? scrollTarget = null)
     {
         if (!TryLeavePreviewEditorForPreviewChange()) return;
 
         var selected = ViewModel.GetAllSelectedResults();
-        if (selected.Count == 0) return;
+        if (selected.Count == 0)
+        {
+            ShowPreviewBlockSurface();
+            PreviewBlock.Blocks.Clear();
+            SetPreviewFileLabel(string.Empty);
+            PreviewToolbarContent.Visibility = Visibility.Collapsed;
+            _previewResult = null;
+            return;
+        }
 
         // Hydrate any evicted results before rendering the preview.
         foreach (var r in selected)
             ViewModel.HydrateResult(r);
 
+        PreviewToolbarContent.Visibility = Visibility.Visible;
         if (ViewModel.PreviewModeIndex == 1)
-            ShowMultiHighlightPreview(selected);
+            ShowMultiHighlightPreview(selected, scrollTarget);
         else
-            ShowConcatenatedPreview(selected);
+            ShowConcatenatedPreview(selected, scrollTarget);
     }
 
-    private void ShowConcatenatedPreview(List<SearchResult> selected)
+    private void ShowConcatenatedPreview(List<SearchResult> selected, SearchResult? scrollTarget)
     {
         ShowPreviewSectionsSurface();
         int previewLines = ViewModel.PreviewContextLines;
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
+
+        RichTextBlock? scrollBlock = null;
+        Paragraph? scrollPara = null;
 
         // Group by file to show file headers
         var byFile = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
@@ -1199,6 +1220,14 @@ public sealed partial class MainWindow : Window
                     bool isMatchLine = lineNum == r.LineNumber;
                     var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
                     section.Blocks.Add(para);
+
+                    if (scrollTarget is not null && isMatchLine
+                        && r.LineNumber == scrollTarget.LineNumber
+                        && string.Equals(r.FilePath, scrollTarget.FilePath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        scrollBlock = section;
+                        scrollPara = para;
+                    }
                 }
             }
         }
@@ -1209,12 +1238,18 @@ public sealed partial class MainWindow : Window
                 : $"{selected.Count} selected matches across {byFile.Count} file(s)",
             selected.Count == 1 ? selected[0].FilePath : string.Join(Environment.NewLine, byFile.Keys));
         _previewResult = selected[0];
+
+        if (scrollBlock is not null && scrollPara is not null)
+            ScrollPreviewToLine(scrollBlock, scrollPara);
     }
 
-    private void ShowMultiHighlightPreview(List<SearchResult> selected)
+    private void ShowMultiHighlightPreview(List<SearchResult> selected, SearchResult? scrollTarget)
     {
         ShowPreviewSectionsSurface();
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
+
+        RichTextBlock? scrollBlock = null;
+        Paragraph? scrollPara = null;
 
         // Group by file
         var byFile = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
@@ -1282,6 +1317,13 @@ public sealed partial class MainWindow : Window
                         var matchResult = results.FirstOrDefault(r => r.LineNumber == lineNum) ?? results[0];
                         var para = MakePreviewParagraph(allLines[i], lineNum, isMatchLine, matchResult, rx);
                         section.Blocks.Add(para);
+
+                        if (scrollTarget is not null && isMatchLine && lineNum == scrollTarget.LineNumber
+                            && string.Equals(filePath, scrollTarget.FilePath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            scrollBlock = section;
+                            scrollPara = para;
+                        }
                     }
                 }
             }
@@ -1296,6 +1338,14 @@ public sealed partial class MainWindow : Window
                         bool isMatchLine = lineNum == r.LineNumber;
                         var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
                         section.Blocks.Add(para);
+
+                        if (scrollTarget is not null && isMatchLine
+                            && r.LineNumber == scrollTarget.LineNumber
+                            && string.Equals(r.FilePath, scrollTarget.FilePath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            scrollBlock = section;
+                            scrollPara = para;
+                        }
                     }
                 }
             }
@@ -1307,6 +1357,9 @@ public sealed partial class MainWindow : Window
                 : $"{selected.Count} selected matches across {byFile.Count} file(s)",
             selected.Count == 1 ? selected[0].FilePath : string.Join(Environment.NewLine, byFile.Keys));
         _previewResult = selected[0];
+
+        if (scrollBlock is not null && scrollPara is not null)
+            ScrollPreviewToLine(scrollBlock, scrollPara);
     }
 
     private static List<(string line, int lineNum)> GetPreviewLines(SearchResult r, string[]? allLines, int previewLines, bool fullFile)
@@ -1448,14 +1501,24 @@ public sealed partial class MainWindow : Window
 
     private FrameworkElement BuildPreviewSectionHeader(string filePath, string? detail)
     {
-        var panel = new StackPanel
+        var grid = new Grid
+        {
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            ColumnDefinitions =
+            {
+                new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) },
+                new ColumnDefinition { Width = GridLength.Auto },
+            },
+        };
+
+        var infoPanel = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 8,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Center,
         };
 
-        panel.Children.Add(new FontIcon
+        infoPanel.Children.Add(new FontIcon
         {
             Glyph = "\uE8B7",
             FontSize = 13,
@@ -1463,7 +1526,7 @@ public sealed partial class MainWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
         });
 
-        panel.Children.Add(new TextBlock
+        infoPanel.Children.Add(new TextBlock
         {
             Text = Path.GetFileName(filePath),
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
@@ -1474,7 +1537,7 @@ public sealed partial class MainWindow : Window
 
         if (!string.IsNullOrWhiteSpace(detail))
         {
-            panel.Children.Add(new TextBlock
+            infoPanel.Children.Add(new TextBlock
             {
                 Text = detail,
                 Opacity = 0.65,
@@ -1483,7 +1546,17 @@ public sealed partial class MainWindow : Window
             });
         }
 
-        // Per-file action buttons
+        grid.Children.Add(infoPanel);
+
+        // Per-file action buttons — right-aligned
+        var buttonPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 4,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(buttonPanel, 1);
+
         var path = filePath; // capture for lambdas
 
         var copyBtn = new Button
@@ -1493,7 +1566,7 @@ public sealed partial class MainWindow : Window
         };
         ToolTipService.SetToolTip(copyBtn, "Copy full file path");
         copyBtn.Click += (_, _) => SetClipboardText(path, "section file path");
-        panel.Children.Add(copyBtn);
+        buttonPanel.Children.Add(copyBtn);
 
         var openBtn = new Button
         {
@@ -1506,7 +1579,7 @@ public sealed partial class MainWindow : Window
             try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
             catch (Exception ex) { LogService.Instance.Warning("MainWindow", $"Failed to open in default app: {path}", ex); }
         };
-        panel.Children.Add(openBtn);
+        buttonPanel.Children.Add(openBtn);
 
         var editorBtn = new Button
         {
@@ -1516,17 +1589,18 @@ public sealed partial class MainWindow : Window
         ToolTipService.SetToolTip(editorBtn, "Open in configured editor");
         editorBtn.Click += async (_, _) =>
         {
-            // Find the first result for this file to pass to the editor
             var result = ViewModel.ResultGroups
                 .FirstOrDefault(g => string.Equals(g.FilePath, path, StringComparison.OrdinalIgnoreCase))
                 ?.FirstOrDefault();
             if (result is not null)
                 await ShowFullFileEditorAsync(result);
         };
-        panel.Children.Add(editorBtn);
+        buttonPanel.Children.Add(editorBtn);
 
-        ToolTipService.SetToolTip(panel, filePath);
-        return panel;
+        grid.Children.Add(buttonPanel);
+
+        ToolTipService.SetToolTip(grid, filePath);
+        return grid;
     }
 
     private async Task ShowFullFilePreviewAsync(IReadOnlyList<FullFilePreviewTarget> targets)
@@ -1904,6 +1978,7 @@ public sealed partial class MainWindow : Window
         SetPreviewEditorVisible(false);
         ShowPreviewBlockSurface();
         PreviewBlock.Blocks.Clear();
+        PreviewToolbarContent.Visibility = Visibility.Collapsed;
         var para = new Paragraph();
         para.Inlines.Add(new Run { Text = message });
         PreviewBlock.Blocks.Add(para);
@@ -1965,8 +2040,8 @@ public sealed partial class MainWindow : Window
         gutterSep.Foreground = s_gutterSepBrush;
         para.Inlines.Add(gutterSep);
 
-        // Highlight matches in this line
-        if (rx != null)
+        // Highlight matches only on the actual match line, not context lines.
+        if (rx != null && isMatchLine)
         {
             int lastIdx = 0;
             foreach (System.Text.RegularExpressions.Match m in rx.Matches(line))
@@ -2010,6 +2085,39 @@ public sealed partial class MainWindow : Window
         }
 
         return LineTruncator.Truncate(line);
+    }
+
+    /// <summary>
+    /// Scrolls the outer preview ScrollViewer so that <paramref name="targetPara"/>
+    /// inside <paramref name="block"/> is vertically centred in the viewport.
+    /// Must be called after the content has been added to the visual tree;
+    /// actual scrolling is deferred to a low-priority dispatcher tick so layout
+    /// has time to complete.
+    /// </summary>
+    private void ScrollPreviewToLine(RichTextBlock block, Paragraph targetPara)
+    {
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            try
+            {
+                var pointer = targetPara.ContentStart;
+                if (pointer is null) return;
+
+                var rect = pointer.GetCharacterRect(LogicalDirection.Forward);
+                var transform = block.TransformToVisual(PreviewScrollViewer);
+                var point = transform.TransformPoint(new Windows.Foundation.Point(0, rect.Y));
+
+                double viewportHeight = PreviewScrollViewer.ViewportHeight;
+                double targetOffset = PreviewScrollViewer.VerticalOffset + point.Y - viewportHeight / 2;
+                targetOffset = Math.Max(0, targetOffset);
+
+                PreviewScrollViewer.ChangeView(null, targetOffset, null, disableAnimation: false);
+            }
+            catch
+            {
+                // Layout may not be ready — silently ignore.
+            }
+        });
     }
 
     private void OnSplitterPressed(object sender, PointerRoutedEventArgs e)
