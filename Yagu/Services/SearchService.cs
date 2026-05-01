@@ -64,6 +64,7 @@ public sealed class SearchService
                 MaxProcessMemoryBytes = options.MaxProcessMemoryBytes,
                 MemoryPressurePercent = options.MemoryPressurePercent,
                 SkipExtensions = options.SkipExtensions,
+                SearchInsideArchives = options.SearchInsideArchives,
                 SdkChannelBufferSize = options.SdkChannelBufferSize,
             };
         }
@@ -107,7 +108,21 @@ public sealed class SearchService
         if (_fileLister is FileLister concreteLister)
         {
             concreteLister.EarlyMaxFileSizeBytes = options.MaxFileSizeBytes;
-            concreteLister.EarlySkipExtensions = options.SkipExtensions;
+
+            // When archive search is enabled, don't let the file lister skip
+            // zip-like extensions — they need to reach ContentSearcher so it
+            // can open them as archives.
+            var skipExts = options.SkipExtensions;
+            if (options.SearchInsideArchives && skipExts.Count > 0)
+            {
+                var filtered = new HashSet<string>(skipExts, StringComparer.OrdinalIgnoreCase);
+                // ZipLikeExtensions uses ".zip" format; SkipExtensions uses "zip" (no dot).
+                foreach (var ext in ContentSearcher.ZipLikeExtensions)
+                    filtered.Remove(ext.TrimStart('.'));
+                skipExts = filtered;
+            }
+            concreteLister.EarlySkipExtensions = skipExts;
+
             concreteLister.EarlyExcludeGlobs = options.ExcludeGlobs;
             concreteLister.SdkChannelBufferSize = options.SdkChannelBufferSize;
         }
@@ -355,6 +370,7 @@ public sealed class SearchService
                             MaxProcessMemoryBytes = options.MaxProcessMemoryBytes,
                             MemoryPressurePercent = options.MemoryPressurePercent,
                             SkipExtensions = options.SkipExtensions,
+                            SearchInsideArchives = options.SearchInsideArchives,
                         }
                         : options;
 
@@ -457,6 +473,47 @@ public sealed class SearchService
                                 }, cancelPtr);
 
                                 var batch = new List<string>(nativeBatchSize);
+
+                                // When archive search is enabled, zip files must go through the managed
+                                // ContentSearcher (which knows how to open ZIPs) rather than the native
+                                // Rust scanner (which would treat them as binary and skip them).
+                                async Task ScanZipViaManagedAsync(string zipFile)
+                                {
+                                    var effectiveOptions = Volatile.Read(ref degraded) != 0 ? degradedOptions : options;
+                                    try
+                                    {
+                                        var outcome = await _searcher.SearchFileWithStatsAsync(
+                                            zipFile, regex, literal, cmp, effectiveOptions,
+                                            contentResults.Writer, cancellationToken, session: null).ConfigureAwait(false);
+                                        int produced = outcome.MatchCount;
+                                        Interlocked.Increment(ref filesScanned);
+                                        if (produced < 0)
+                                        {
+                                            Interlocked.Increment(ref filesSkipped);
+                                        }
+                                        else if (produced > 0)
+                                        {
+                                            Interlocked.Increment(ref filesWithMatches);
+                                            Interlocked.Add(ref bytesScanned, outcome.BytesScanned);
+                                            int newTotal = Interlocked.Add(ref totalMatches, produced);
+                                            if (options.MaxResults > 0 && newTotal >= options.MaxResults)
+                                                Volatile.Write(ref truncated, 1);
+                                        }
+                                        else
+                                        {
+                                            Interlocked.Increment(ref filesScanned);
+                                        }
+                                    }
+                                    catch (OperationCanceledException) { }
+                                    catch (Exception ex)
+                                    {
+                                        LogService.Instance.Warning("SearchService", $"Managed ZIP scan failed for {zipFile}", ex);
+                                        Interlocked.Increment(ref filesScanned);
+                                        Interlocked.Increment(ref filesSkipped);
+                                        Interlocked.Increment(ref skipOther);
+                                    }
+                                }
+
                                 void FlushNativeBatch()
                                 {
                                     if (batch.Count == 0) return;
@@ -474,7 +531,15 @@ public sealed class SearchService
                                 {
                                     while (batch.Count < nativeBatchSize && pending.Reader.TryRead(out var bufferedFile))
                                     {
-                                        batch.Add(bufferedFile);
+                                        // Route zip-like files to the managed searcher
+                                        if (options.SearchInsideArchives && ContentSearcher.IsZipLikeExtension(Path.GetExtension(bufferedFile)))
+                                        {
+                                            await ScanZipViaManagedAsync(bufferedFile).ConfigureAwait(false);
+                                        }
+                                        else
+                                        {
+                                            batch.Add(bufferedFile);
+                                        }
                                     }
 
                                     if (batch.Count >= nativeBatchSize)

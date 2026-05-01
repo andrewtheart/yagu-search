@@ -15,8 +15,35 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     private const int HiddenNotificationInterval = PageSize;
 
     public string FilePath { get; }
-    public string FileName => System.IO.Path.GetFileName(FilePath);
-    public string DirectoryName => System.IO.Path.GetDirectoryName(FilePath) ?? string.Empty;
+
+    /// <summary>True when this group represents a file inside a ZIP archive.</summary>
+    public bool IsArchiveEntry => ZipArchiveSearcher.IsArchivePath(FilePath);
+
+    /// <summary>
+    /// Display-friendly file name. For archive entries shows e.g. "archive.zip?/entry.txt".
+    /// </summary>
+    public string FileName
+    {
+        get
+        {
+            if (!IsArchiveEntry) return System.IO.Path.GetFileName(FilePath);
+            var (archivePath, entryPath) = ZipArchiveSearcher.SplitArchivePath(FilePath);
+            return $"{System.IO.Path.GetFileName(archivePath)}{ZipArchiveSearcher.ArchiveSeparator}/{entryPath}";
+        }
+    }
+
+    /// <summary>
+    /// Directory containing the outermost archive (or the file itself for non-archive paths).
+    /// </summary>
+    public string DirectoryName
+    {
+        get
+        {
+            if (!IsArchiveEntry) return System.IO.Path.GetDirectoryName(FilePath) ?? string.Empty;
+            var (archivePath, _) = ZipArchiveSearcher.SplitArchivePath(FilePath);
+            return System.IO.Path.GetDirectoryName(archivePath) ?? string.Empty;
+        }
+    }
 
     /// <summary>Capped subset of items currently rendered in the UI.</summary>
     public ObservableCollection<SearchResult> VisibleResults { get; } = new();
@@ -103,7 +130,10 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
 
     public void LoadMetadata()
     {
-        if (FileMetadataCache.TryGet(FilePath, out var cached))
+        // For archive entries, resolve to the outermost file on disk
+        string physicalPath = IsArchiveEntry ? ZipArchiveSearcher.SplitArchivePath(FilePath).ArchivePath : FilePath;
+
+        if (FileMetadataCache.TryGet(physicalPath, out var cached))
         {
             ApplyMetadata(cached.Length, cached.LastModified);
             return;
@@ -111,11 +141,11 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
 
         try
         {
-            var fi = new System.IO.FileInfo(FilePath);
+            var fi = new System.IO.FileInfo(physicalPath);
             if (fi.Exists)
             {
                 var metadata = new FileMetadata(fi.Length, fi.LastWriteTime);
-                FileMetadataCache.Set(FilePath, metadata);
+                FileMetadataCache.Set(physicalPath, metadata);
                 ApplyMetadata(metadata.Length, metadata.LastModified);
             }
         }
@@ -130,7 +160,10 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     /// </summary>
     public void BeginLoadMetadata(Action<Action> dispatch)
     {
-        if (FileMetadataCache.TryGet(FilePath, out var cached))
+        // For archive entries, resolve to the outermost file on disk
+        string physicalPath = IsArchiveEntry ? ZipArchiveSearcher.SplitArchivePath(FilePath).ArchivePath : FilePath;
+
+        if (FileMetadataCache.TryGet(physicalPath, out var cached))
         {
             ApplyMetadata(cached.Length, cached.LastModified);
             return;
@@ -142,12 +175,12 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             DateTime modified = default;
             try
             {
-                var fi = new System.IO.FileInfo(FilePath);
+                var fi = new System.IO.FileInfo(physicalPath);
                 if (fi.Exists)
                 {
                     size = fi.Length;
                     modified = fi.LastWriteTime;
-                    FileMetadataCache.Set(FilePath, new FileMetadata(size, modified));
+                    FileMetadataCache.Set(physicalPath, new FileMetadata(size, modified));
                 }
             }
             catch (Exception ex) { LogService.Instance.Verbose("FileGroup", $"Cannot load metadata for {FilePath}", ex); return; }

@@ -263,7 +263,6 @@ public sealed class FileLister : IFileLister
             var excludeExts = string.Join(';', skipExts);
             query += $" !ext:{excludeExts}";
         }
-
         // Size filtering is handled after the SDK returns metadata so Yagu can
         // report the files as Too large in the skipped-files breakdown.
 

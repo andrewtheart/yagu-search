@@ -1756,13 +1756,18 @@ public sealed partial class MainWindow : Window
             _suppressPreviewEditorTextChanged = false;
             _previewEditorDirty = false;
 
+            // Archive entries are read-only (cannot save back into zip)
+            bool isArchive = ZipArchiveSearcher.IsArchivePath(result.FilePath);
+            PreviewEditor.IsReadOnly = isArchive;
+
             SetPreviewEditorVisible(true);
             PreviewEditor.Focus(FocusState.Programmatic);
 
             // Scroll to the match line and highlight the matched text.
             ScrollEditorToMatch(document.Text, result);
 
-            ViewModel.StatusText = $"Loaded {Path.GetFileName(result.FilePath)} ({FormatBytes(document.ByteLength)}) for editing.";
+            string label = isArchive ? "viewing (read-only)" : "editing";
+            ViewModel.StatusText = $"Loaded {Path.GetFileName(result.FilePath)} ({FormatBytes(document.ByteLength)}) for {label}.";
         }
         catch (OperationCanceledException)
         {
@@ -1832,6 +1837,12 @@ public sealed partial class MainWindow : Window
 
     private static async Task<PreviewTextDocument> LoadPreviewDocumentAsync(string filePath, CancellationToken cancellationToken)
     {
+        // Handle archive entry paths: extract the entry to a memory stream
+        if (ZipArchiveSearcher.IsArchivePath(filePath))
+        {
+            return await LoadArchiveEntryPreviewAsync(filePath, cancellationToken).ConfigureAwait(false);
+        }
+
         FileInfo info;
         try { info = new FileInfo(filePath); }
         catch (Exception ex) { throw new PreviewLoadException($"Could not inspect full file: {ex.Message}"); }
@@ -1873,6 +1884,41 @@ public sealed partial class MainWindow : Window
         catch (UnauthorizedAccessException ex) { throw new PreviewLoadException($"Could not load full file: access denied. {ex.Message}"); }
         catch (DecoderFallbackException ex) { throw new PreviewLoadException($"Could not load full file: unsupported text encoding. {ex.Message}"); }
         catch (IOException ex) { throw new PreviewLoadException($"Could not load full file: {ex.Message}"); }
+    }
+
+    private static async Task<PreviewTextDocument> LoadArchiveEntryPreviewAsync(string archivePath, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var ms = await ZipArchiveSearcher.ExtractToMemoryAsync(archivePath, cancellationToken).ConfigureAwait(false);
+            long byteLength = ms.Length;
+
+            if (byteLength > FullFilePreviewLimitBytes)
+                throw new PreviewLoadException($"Full-file preview is limited to {FormatBytes(FullFilePreviewLimitBytes)}. This entry is {FormatBytes(byteLength)}.");
+
+            int probeSize = (int)Math.Min(BinaryDetector.SampleBytes, Math.Max(0, byteLength));
+            if (probeSize > 0)
+            {
+                var probe = new byte[probeSize];
+                int read = await ms.ReadAsync(probe.AsMemory(0, probeSize), cancellationToken).ConfigureAwait(false);
+                if (BinaryDetector.IsBinary(probe.AsSpan(0, read)))
+                    throw new PreviewLoadException("Full-file editing is only available for non-binary text files.");
+                ms.Position = 0;
+            }
+
+            var encoding = EncodingDetector.DetectEncoding(ms);
+            if (encoding is UTF8Encoding)
+                encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
+            ms.Position = 0;
+            using var reader = new StreamReader(ms, encoding, detectEncodingFromByteOrderMarks: true, bufferSize: 128 * 1024, leaveOpen: true);
+            var text = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+            return new PreviewTextDocument(text, reader.CurrentEncoding, byteLength);
+        }
+        catch (PreviewLoadException) { throw; }
+        catch (FileNotFoundException ex) { throw new PreviewLoadException($"Could not find archive entry: {ex.Message}"); }
+        catch (InvalidDataException ex) { throw new PreviewLoadException($"Could not read archive: {ex.Message}"); }
+        catch (UnauthorizedAccessException ex) { throw new PreviewLoadException($"Access denied to archive: {ex.Message}"); }
+        catch (IOException ex) { throw new PreviewLoadException($"Could not load archive entry: {ex.Message}"); }
     }
 
     private async Task<bool> SavePreviewEditAsync()

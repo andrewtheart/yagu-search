@@ -78,6 +78,7 @@ public sealed partial class MainViewModel : ObservableObject
         MemoryPressurePercent = _settings.MemoryPressurePercent;
         SdkChannelBufferSize = _settings.SdkChannelBufferSize;
         SkipBinary = _settings.SkipBinary;
+        SearchInsideArchives = _settings.SearchInsideArchives;
         SkipExtensions = _settings.SkipExtensions;
         SuppressAdminWarning = _settings.SuppressAdminWarning;
 
@@ -119,6 +120,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private int _sdkChannelBufferSize = 4096;
     [ObservableProperty] private bool _skipBinary = true;
     [ObservableProperty] private string _skipExtensions = AppSettings.DefaultSkipExtensions;
+    [ObservableProperty] private bool _searchInsideArchives = true;
 
     private bool _suppressAdminWarning;
     public bool SuppressAdminWarning
@@ -399,6 +401,7 @@ public sealed partial class MainViewModel : ObservableObject
                 MaxResults = MaxResults,
                 SkipBinary = SkipBinary,
                 SkipExtensions = ParseExtensionSet(SkipExtensions),
+                SearchInsideArchives = SearchInsideArchives,
                 MaxDegreeOfParallelism = ResolveParallelism(ParallelismIndex),
                 MaxProcessMemoryBytes = MemoryLimitMB > 0 ? (long)MemoryLimitMB * 1024 * 1024 : 0,
                 MemoryPressurePercent = MemoryPressurePercent,
@@ -850,6 +853,7 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.MemoryPressurePercent = MemoryPressurePercent;
         _settings.SdkChannelBufferSize = SdkChannelBufferSize;
         _settings.SkipBinary = SkipBinary;
+        _settings.SearchInsideArchives = SearchInsideArchives;
         _settings.SkipExtensions = SkipExtensions;
         _settings.SuppressAdminWarning = SuppressAdminWarning;
 

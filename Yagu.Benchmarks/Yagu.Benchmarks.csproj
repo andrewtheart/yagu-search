@@ -32,6 +32,7 @@
     <Compile Include="..\Yagu\Services\SettingsService.cs" Link="Source\Services\SettingsService.cs" />
     <Compile Include="..\Yagu\Services\HotkeyService.cs" Link="Source\Services\HotkeyService.cs" />
     <Compile Include="..\Yagu\Services\EditorLauncher.cs" Link="Source\Services\EditorLauncher.cs" />
+    <Compile Include="..\Yagu\Services\ZipArchiveSearcher.cs" Link="Source\Services\ZipArchiveSearcher.cs" />
     <Compile Include="..\Yagu\Services\ResultStore.cs" Link="Source\Services\ResultStore.cs" />
     <Compile Include="..\Yagu\Services\FileWatchDiagnostics.cs" Link="Source\Services\FileWatchDiagnostics.cs" />
     <Compile Include="..\Yagu\Services\LogService.cs" Link="Source\Services\LogService.cs" />

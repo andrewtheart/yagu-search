@@ -116,11 +116,45 @@ public sealed class ContentSearcher
         if (options.MaxFileSizeBytes > 0 && fileLength > options.MaxFileSizeBytes) return new FileSearchOutcome(SkipTooLarge, 0);
 
         // Extension-based skip — no binary sniff, no content read.
+        // When SearchInsideArchives is enabled, don't skip ZIP archives by extension.
         if (options.SkipExtensions.Count > 0)
         {
             var ext = Path.GetExtension(filePath);
             if (ext.Length > 1 && options.SkipExtensions.Contains(ext.AsSpan(1).ToString()))
-                return new FileSearchOutcome(SkipByExtension, 0);
+            {
+                // Allow zip-like extensions through when archive search is enabled
+                if (!options.SearchInsideArchives || !IsZipLikeExtension(ext))
+                    return new FileSearchOutcome(SkipByExtension, 0);
+            }
+        }
+
+        // ZIP archive search: before the normal scan paths, peek the file header
+        // and redirect to the archive searcher if it's a ZIP file.
+        if (options.SearchInsideArchives)
+        {
+            try
+            {
+                using var peekFs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                Span<byte> headerBuf = stackalloc byte[4];
+                int headerRead = 0;
+                while (headerRead < 4)
+                {
+                    int n = peekFs.Read(headerBuf[headerRead..]);
+                    if (n <= 0) break;
+                    headerRead += n;
+                }
+                if (headerRead >= 4 && BinaryDetector.IsZipMagic(headerBuf[..headerRead]))
+                {
+                    int archiveMatches = await ZipArchiveSearcher.SearchArchiveAsync(
+                        filePath, regex, literal, literalComparison, options, writer, cancellationToken).ConfigureAwait(false);
+                    if (watched) FileWatchDiagnostics.Checkpoint(filePath, "EXIT-ZIP", totalSw!.ElapsedMilliseconds, $"produced={archiveMatches}");
+                    return new FileSearchOutcome(archiveMatches, archiveMatches >= 0 ? fileLength : 0);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                LogService.Instance.Verbose("ContentSearcher", $"ZIP header check failed for {filePath}, falling through to normal scan", ex);
+            }
         }
 
         // Native (Rust) fast path. Falls back to the managed path on any failure
@@ -411,6 +445,16 @@ public sealed class ContentSearcher
 
     /// <summary>When true, attempt the native (Rust) scan path before falling back to managed.</summary>
     public static bool PreferNative { get; set; } = true;
+
+    /// <summary>Extensions that may be ZIP archives. Used to bypass extension-based skip when archive search is enabled.</summary>
+    internal static readonly HashSet<string> ZipLikeExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".zip", ".jar", ".war", ".ear", ".nupkg", ".vsix", ".apk",
+        ".aab", ".aar", ".appx", ".msix", ".appxbundle", ".msixbundle",
+        ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".epub",
+    };
+
+    internal static bool IsZipLikeExtension(string ext) => ZipLikeExtensions.Contains(ext);
 
     /// <summary>Sentinel returned by <see cref="TryNativeAsync"/> when the native path cannot be used and the caller should run the managed path.</summary>
     private const int NativeFellThrough = int.MinValue;

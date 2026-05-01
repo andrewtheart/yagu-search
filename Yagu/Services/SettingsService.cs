@@ -38,6 +38,8 @@ public sealed class AppSettings
     public int SdkChannelBufferSize { get; set; } = 4096;
     /// <summary>Whether to skip binary files during content search. Default true.</summary>
     public bool SkipBinary { get; set; } = true;
+    /// <summary>When true, detect ZIP archives by file header and search text files inside them. Default true.</summary>
+    public bool SearchInsideArchives { get; set; } = true;
     /// <summary>Semicolon-separated file extensions to skip entirely (no binary check, no content read). e.g. "exe;dll;zip;png;jpg".</summary>
     public string SkipExtensions { get; set; } = DefaultSkipExtensions;
     /// <summary>When true, do not show the non-admin access warning banner on startup.</summary>
