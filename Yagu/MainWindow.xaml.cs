@@ -29,7 +29,7 @@ public sealed partial class MainWindow : Window
 {
     public MainViewModel ViewModel { get; }
     private bool _suppressPreviewUpdate;
-    private bool _autoScrollEnabled = true;
+    private bool _autoScrollEnabled = false;
     private bool _querySuggestionsDetached;
     private DispatcherTimer? _autoScrollTimer;
     private const long FullFilePreviewLimitBytes = 1L * 1024 * 1024 * 1024;
@@ -299,6 +299,11 @@ public sealed partial class MainWindow : Window
             e.Handled = true;
             HideQuerySuggestions(sender as AutoSuggestBox);
             await ViewModel.StartSearchAsync();
+        }
+        else if (e.Key == VirtualKey.Escape && ViewModel.IsSearching)
+        {
+            e.Handled = true;
+            await ViewModel.CancelAsync();
         }
     }
 
@@ -707,8 +712,18 @@ public sealed partial class MainWindow : Window
         PreviewEditor.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
         foreach (var block in EnumeratePreviewSectionBlocks())
             block.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
-        PreviewScrollViewer.HorizontalScrollBarVisibility =
-            wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+        // For single-file block view, toggle outer scroll; for sections view it stays disabled.
+        if (PreviewSectionsPanel.Visibility != Visibility.Visible)
+        {
+            PreviewScrollViewer.HorizontalScrollBarVisibility =
+                wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+        }
+        // Toggle each per-section horizontal scroller.
+        foreach (var expander in PreviewSectionsPanel.Children.OfType<Expander>())
+        {
+            if (expander.Content is ScrollViewer sv)
+                sv.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+        }
         ScrollViewer.SetHorizontalScrollBarVisibility(
             PreviewEditor,
             wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto);
@@ -723,7 +738,11 @@ public sealed partial class MainWindow : Window
     {
         if (_previewEditorDirty && !await ConfirmDiscardPreviewEditAsync()) return;
         ClosePreviewEditor();
-        if (_previewResult is not null)
+
+        var selected = ViewModel.GetAllSelectedResults();
+        if (selected.Count >= 2)
+            UpdateMultiSelectPreview();
+        else if (_previewResult is not null)
             ShowSingleFilePreview(_previewResult, fullFile: false);
     }
 
@@ -775,10 +794,10 @@ public sealed partial class MainWindow : Window
         catch (Exception ex) { LogService.Instance.Warning("MainWindow", $"Failed to open in default app: {_previewResult.FilePath}", ex); }
     }
 
-    private void OnOpenInEditor(object sender, RoutedEventArgs e)
+    private async void OnOpenInEditor(object sender, RoutedEventArgs e)
     {
         if (_previewResult is null) return;
-        ViewModel.OpenInEditor(_previewResult);
+        await ShowFullFileEditorAsync(_previewResult);
     }
 
     private void OnMatchLineLoaded(object sender, RoutedEventArgs e)
@@ -867,11 +886,11 @@ public sealed partial class MainWindow : Window
         var paths = GetSelectedFilePaths();
         if (paths.Count == 0) return;
 
-        var file = await PickTextExportFileAsync("Yagu_Selected_File_Paths").ConfigureAwait(true);
-        if (file is null) return;
-
         try
         {
+            var file = await PickTextExportFileAsync("Yagu_Selected_File_Paths").ConfigureAwait(true);
+            if (file is null) return;
+
             await using var stream = await file.OpenStreamForWriteAsync().ConfigureAwait(true);
             stream.SetLength(0);
             using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), bufferSize: 128 * 1024, leaveOpen: false);
@@ -880,7 +899,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("MainWindow", $"Could not save selected file paths: {file.Path}", ex);
+            LogService.Instance.Warning("MainWindow", "Could not save selected file paths", ex);
             ViewModel.StatusText = $"Could not save selected file paths: {ex.Message}";
         }
     }
@@ -890,11 +909,11 @@ public sealed partial class MainWindow : Window
         var paths = GetSelectedFilePaths();
         if (paths.Count == 0) return;
 
-        var file = await PickTextExportFileAsync("Yagu_Selected_Files_With_Content").ConfigureAwait(true);
-        if (file is null) return;
-
         try
         {
+            var file = await PickTextExportFileAsync("Yagu_Selected_Files_With_Content").ConfigureAwait(true);
+            if (file is null) return;
+
             await using var stream = await file.OpenStreamForWriteAsync().ConfigureAwait(true);
             stream.SetLength(0);
             using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), bufferSize: 128 * 1024, leaveOpen: false);
@@ -903,7 +922,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("MainWindow", $"Could not save selected files with content: {file.Path}", ex);
+            LogService.Instance.Warning("MainWindow", "Could not save selected files with content", ex);
             ViewModel.StatusText = $"Could not save selected files with content: {ex.Message}";
         }
     }
@@ -1163,10 +1182,12 @@ public sealed partial class MainWindow : Window
             {
                 // Separator between matches in same file
                 var sep = new Paragraph();
-                var label = $" Line {r.LineNumber} ";
+                var label = $"\u00A0Line\u00A0{r.LineNumber}\u00A0";
                 var lineChar = '\u2500'; // ─ box-drawing horizontal
-                var (left, right) = ComputeDividerWidths(label.Length);
-                var sepRun = new Run { Text = $"{new string(lineChar, left)}{label}{new string(lineChar, right)}" };
+                // Use short fixed dividers so the separator never wraps.
+                const int shortLeft = 6;
+                const int shortRight = 6;
+                var sepRun = new Run { Text = $"{new string(lineChar, shortLeft)}{label}{new string(lineChar, shortRight)}" };
                 sepRun.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 60, 140, 60));
                 sep.Inlines.Add(sepRun);
                 sep.Margin = new Thickness(0, 8, 0, 4);
@@ -1353,6 +1374,10 @@ public sealed partial class MainWindow : Window
         PreviewSectionsPanel.Children.Clear();
         PreviewSectionsPanel.Visibility = Visibility.Collapsed;
         PreviewBlock.Visibility = Visibility.Visible;
+        SetPerFileToolbarVisibility(Visibility.Visible);
+        // Restore outer horizontal scroll for single-file block view.
+        PreviewScrollViewer.HorizontalScrollBarVisibility =
+            ViewModel.PreviewWordWrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
     }
 
     private void ShowPreviewSectionsSurface()
@@ -1361,14 +1386,28 @@ public sealed partial class MainWindow : Window
         PreviewBlock.Visibility = Visibility.Collapsed;
         PreviewSectionsPanel.Children.Clear();
         PreviewSectionsPanel.Visibility = Visibility.Visible;
+        SetPerFileToolbarVisibility(Visibility.Collapsed);
+        // Sections have their own per-section horizontal scroll; outer viewer stays vertical-only.
+        PreviewScrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+    }
+
+    private void SetPerFileToolbarVisibility(Visibility visibility)
+    {
+        CopyPreviewFilePathButton.Visibility = visibility;
+        PreviewToolbarSeparator.Visibility = visibility;
+        FullFileButton.Visibility = visibility;
+        OpenInDefaultAppButton.Visibility = visibility;
+        OpenInEditorButton.Visibility = visibility;
     }
 
     private IEnumerable<RichTextBlock> EnumeratePreviewSectionBlocks()
     {
         foreach (var expander in PreviewSectionsPanel.Children.OfType<Expander>())
         {
-            if (expander.Content is Border { Child: RichTextBlock block })
+            if (expander.Content is ScrollViewer sv && sv.Content is Border { Child: RichTextBlock block })
                 yield return block;
+            else if (expander.Content is Border { Child: RichTextBlock legacyBlock })
+                yield return legacyBlock;
         }
     }
 
@@ -1386,10 +1425,19 @@ public sealed partial class MainWindow : Window
             Child = block,
         };
 
+        var sectionScroller = new ScrollViewer
+        {
+            Content = content,
+            HorizontalScrollBarVisibility = ViewModel.PreviewWordWrap
+                ? ScrollBarVisibility.Disabled
+                : ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
+
         var expander = new Expander
         {
             Header = BuildPreviewSectionHeader(filePath, detail),
-            Content = content,
+            Content = sectionScroller,
             IsExpanded = true,
             HorizontalAlignment = HorizontalAlignment.Stretch,
         };
@@ -1398,7 +1446,7 @@ public sealed partial class MainWindow : Window
         return block;
     }
 
-    private static FrameworkElement BuildPreviewSectionHeader(string filePath, string? detail)
+    private FrameworkElement BuildPreviewSectionHeader(string filePath, string? detail)
     {
         var panel = new StackPanel
         {
@@ -1434,6 +1482,48 @@ public sealed partial class MainWindow : Window
                 VerticalAlignment = VerticalAlignment.Center,
             });
         }
+
+        // Per-file action buttons
+        var path = filePath; // capture for lambdas
+
+        var copyBtn = new Button
+        {
+            Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
+            Content = new FontIcon { Glyph = "\uE8C8", FontSize = 12 },
+        };
+        ToolTipService.SetToolTip(copyBtn, "Copy full file path");
+        copyBtn.Click += (_, _) => SetClipboardText(path, "section file path");
+        panel.Children.Add(copyBtn);
+
+        var openBtn = new Button
+        {
+            Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
+            Content = new FontIcon { Glyph = "\uE8A7", FontSize = 12 },
+        };
+        ToolTipService.SetToolTip(openBtn, "Open with default application");
+        openBtn.Click += (_, _) =>
+        {
+            try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
+            catch (Exception ex) { LogService.Instance.Warning("MainWindow", $"Failed to open in default app: {path}", ex); }
+        };
+        panel.Children.Add(openBtn);
+
+        var editorBtn = new Button
+        {
+            Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
+            Content = new FontIcon { Glyph = "\uE70F", FontSize = 12 },
+        };
+        ToolTipService.SetToolTip(editorBtn, "Open in configured editor");
+        editorBtn.Click += async (_, _) =>
+        {
+            // Find the first result for this file to pass to the editor
+            var result = ViewModel.ResultGroups
+                .FirstOrDefault(g => string.Equals(g.FilePath, path, StringComparison.OrdinalIgnoreCase))
+                ?.FirstOrDefault();
+            if (result is not null)
+                await ShowFullFileEditorAsync(result);
+        };
+        panel.Children.Add(editorBtn);
 
         ToolTipService.SetToolTip(panel, filePath);
         return panel;
@@ -1594,6 +1684,10 @@ public sealed partial class MainWindow : Window
 
             SetPreviewEditorVisible(true);
             PreviewEditor.Focus(FocusState.Programmatic);
+
+            // Scroll to the match line and highlight the matched text.
+            ScrollEditorToMatch(document.Text, result);
+
             ViewModel.StatusText = $"Loaded {Path.GetFileName(result.FilePath)} ({FormatBytes(document.ByteLength)}) for editing.";
         }
         catch (OperationCanceledException)
@@ -1629,6 +1723,39 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void ScrollEditorToMatch(string text, SearchResult result)
+    {
+        // Find the character offset of the target line (1-based LineNumber).
+        int charOffset = 0;
+        int currentLine = 1;
+        for (int i = 0; i < text.Length && currentLine < result.LineNumber; i++)
+        {
+            if (text[i] == '\r' && i + 1 < text.Length && text[i + 1] == '\n')
+            {
+                currentLine++;
+                charOffset = i + 2;
+                i++; // skip \n
+            }
+            else if (text[i] == '\n')
+            {
+                currentLine++;
+                charOffset = i + 1;
+            }
+        }
+
+        // TextBox uses \r\n → each line adds 2 chars. But TextBox.Text already has \r\n,
+        // so charOffset calculated above is correct. Select the matched portion.
+        int selectStart = charOffset + result.MatchStartColumn;
+        int selectLength = result.MatchLength;
+
+        // Clamp to valid range.
+        if (selectStart > text.Length) selectStart = charOffset;
+        if (selectStart + selectLength > text.Length) selectLength = 0;
+
+        // Select the match — this auto-scrolls the TextBox to the selection.
+        PreviewEditor.Select(selectStart, Math.Max(selectLength, 0));
+    }
+
     private static async Task<PreviewTextDocument> LoadPreviewDocumentAsync(string filePath, CancellationToken cancellationToken)
     {
         FileInfo info;
@@ -1661,6 +1788,9 @@ public sealed partial class MainWindow : Window
 
             stream.Position = 0;
             var encoding = EncodingDetector.DetectEncoding(stream);
+            // Use a replacement fallback so non-UTF-8 files render with '�' instead of throwing.
+            if (encoding is UTF8Encoding)
+                encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
             using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true, bufferSize: 128 * 1024, leaveOpen: false);
             var text = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             return new PreviewTextDocument(text, reader.CurrentEncoding, info.Length);
@@ -1815,40 +1945,6 @@ public sealed partial class MainWindow : Window
     private static readonly SolidColorBrush s_gutterSepBrush = new(Windows.UI.Color.FromArgb(255, 60, 60, 60));
     private static readonly SolidColorBrush s_contextTextBrush = new(Windows.UI.Color.FromArgb(255, 110, 110, 110));
     private static readonly SolidColorBrush s_matchAccentBrush = new(Windows.UI.Color.FromArgb(255, 70, 140, 70));
-
-    /// <summary>
-    /// Computes left/right divider widths. When word wrap is on, sizes to the viewport
-    /// so the divider doesn't overflow. Otherwise uses generous fixed widths.
-    /// </summary>
-    private (int left, int right) ComputeDividerWidths(int labelLength)
-    {
-        const int fixedLeft = 20;
-        const int fixedRight = 120;
-
-        if (!ViewModel.PreviewWordWrap)
-            return (fixedLeft, fixedRight);
-
-        // Estimate how many monospace characters fit in the viewport.
-        // Consolas at default size (~13.333px) with padding subtracted.
-        double viewportWidth = PreviewScrollViewer.ActualWidth;
-        if (viewportWidth <= 0) return (fixedLeft, fixedRight);
-
-        // Subtract horizontal padding (16 each side from ScrollViewer Padding)
-        viewportWidth -= 32;
-
-        // Approximate character width for Consolas at the default font size.
-        double scale = Content?.XamlRoot?.RasterizationScale ?? 1.0;
-        double fontSize = PreviewBlock.FontSize > 0 ? PreviewBlock.FontSize : 13.333;
-        double charWidth = fontSize * 0.6; // Consolas is roughly 0.6× em-width
-        int totalChars = Math.Max(20, (int)(viewportWidth / charWidth));
-
-        int available = totalChars - labelLength;
-        if (available <= 4) return (2, 2);
-
-        int left = available / 4;
-        int right = available - left;
-        return (left, right);
-    }
 
     private static Paragraph MakePreviewParagraph(string line, int lineNum, bool isMatchLine, SearchResult r, Regex? rx, bool truncate = true)
     {

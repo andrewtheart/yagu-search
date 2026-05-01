@@ -122,6 +122,10 @@ public sealed class ResultStore : IDisposable
     {
         lock (_lock)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (offset < 0 || offset >= _stream.Length)
+                throw new InvalidOperationException($"ResultStore offset {offset} is out of range (stream length {_stream.Length}).");
+
             _stream.Position = offset;
             using var reader = new BinaryReader(_stream, Encoding.UTF8, leaveOpen: true);
             var matchLine = reader.ReadString();

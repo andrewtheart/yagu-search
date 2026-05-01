@@ -107,6 +107,16 @@ public sealed class FileLister : IFileLister
     /// </summary>
     public static FileListerBackend Backend { get; set; } = FileListerBackend.Auto;
 
+    // EnumerationOptions used by the managed fallback path. IgnoreInaccessible suppresses
+    // UnauthorizedAccessException / IOException from the kernel enumerator, eliminating tens of
+    // thousands of exception objects (and the GC pressure they cause) on system-wide scans.
+    private static readonly EnumerationOptions s_enumOpts = new()
+    {
+        IgnoreInaccessible = true,
+        RecurseSubdirectories = false,
+        ReturnSpecialDirectories = false,
+    };
+
     public FileLister() { }
 
     internal FileLister(Func<string, ProcessStartInfo, IProcess>? processFactory) => _processFactory = processFactory;
@@ -744,7 +754,8 @@ public sealed class FileLister : IFileLister
         int maxFiles,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Pre-size visited to avoid repeated backing-array resize on large trees.
+        var visited = new HashSet<string>(capacity: 4096, StringComparer.OrdinalIgnoreCase);
         var stack = new Stack<string>();
         stack.Push(directory);
 
@@ -753,6 +764,7 @@ public sealed class FileLister : IFileLister
             : null;
 
         int yielded = 0;
+        int dirCount = 0;
         while (stack.Count > 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -771,7 +783,9 @@ public sealed class FileLister : IFileLister
             IEnumerator<FileSystemInfo> entries;
             try
             {
-                entries = new DirectoryInfo(canonical).EnumerateFileSystemInfos().GetEnumerator();
+                // s_enumOpts has IgnoreInaccessible=true: access-denied entries are silently
+                // skipped by the OS enumerator rather than thrown as exceptions.
+                entries = new DirectoryInfo(canonical).EnumerateFileSystemInfos("*", s_enumOpts).GetEnumerator();
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -809,6 +823,7 @@ public sealed class FileLister : IFileLister
                     }
                     catch (UnauthorizedAccessException ex)
                     {
+                        // Rare with IgnoreInaccessible=true; kept as a last-resort guard.
                         Interlocked.Increment(ref _skippedDirectories);
                         Interlocked.Increment(ref _accessDeniedDirectories);
                         LogService.Instance.Verbose("FileLister", $"Access denied while enumerating: {canonical}", ex);
@@ -864,7 +879,10 @@ public sealed class FileLister : IFileLister
                     }
                 }
             }
-            await Task.Yield();
+            // Yield to interleave with content workers, but only every 64 directories to avoid
+            // flooding the threadpool with short-lived continuations on large scans.
+            if (++dirCount % 64 == 0)
+                await Task.Yield();
         }
     }
 
