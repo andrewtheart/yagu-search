@@ -106,7 +106,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private int _sortModeIndex;
     [ObservableProperty] private int _sortDirectionIndex;
     [ObservableProperty] private bool _groupByDirectory;
-    [ObservableProperty] private int _previewModeIndex; // 0 = Concatenated, 1 = Multi-highlight
+    [ObservableProperty] private int _previewModeIndex = 1; // 0 = Concatenated, 1 = Multi-highlight
     [ObservableProperty] private bool _previewWordWrap;
     [ObservableProperty] private int _logLevelIndex; // 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] private int _fileListerBackendIndex; // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
@@ -274,6 +274,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private int _accessDeniedCount;
     [ObservableProperty] private bool _truncated;
     [ObservableProperty] private bool _degraded;
+    [ObservableProperty] private string _filesPerSecondText = string.Empty;
 
     /// <summary>Disk-backed store for evicted results. Null before first search.</summary>
     public ResultStore? ActiveResultStore => _resultStore;
@@ -332,6 +333,8 @@ public sealed partial class MainViewModel : ObservableObject
     partial void OnSortModeIndexChanged(int value) => ApplySortAndFilter();
     partial void OnSortDirectionIndexChanged(int value) => ApplySortAndFilter();
     partial void OnGroupByDirectoryChanged(bool value) => ApplySortAndFilter();
+    partial void OnIncludeGlobsChanged(string value) => ApplySortAndFilter();
+    partial void OnExcludeGlobsChanged(string value) => ApplySortAndFilter();
     partial void OnLogLevelIndexChanged(int value)
     {
         LogService.Instance.Level = (LogLevel)value;
@@ -443,6 +446,7 @@ public sealed partial class MainViewModel : ObservableObject
                         AccessDeniedCount = p.Snapshot.AccessDenied;
                         UpdateSkipBreakdown(p.Snapshot.SkipReasons);
                         StatusText = BuildProgressStatus(p.Snapshot);
+                        UpdateFilesPerSecond();
                         break;
                     case SearchEvent.Error e:
                         ErrorText = e.Message;
@@ -501,6 +505,7 @@ public sealed partial class MainViewModel : ObservableObject
             if (cts is not null && IsCurrentSearch(runId, cts))
             {
                 IsSearching = false;
+                FilesPerSecondText = string.Empty;
                 OnPropertyChanged(nameof(HasResults));
                 OnPropertyChanged(nameof(ShowEmptyState));
                 _cts = null;
@@ -544,6 +549,7 @@ public sealed partial class MainViewModel : ObservableObject
         MatchesFound = 0;
         FilesSkipped = 0;
         AccessDeniedCount = 0;
+        FilesPerSecondText = string.Empty;
         UpdateSkipBreakdown(null);
         Truncated = false;
         Degraded = false;
@@ -754,7 +760,7 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 result.Hydrate(_resultStore);
             }
-            catch (Exception ex) when (ex is EndOfStreamException or InvalidOperationException or ObjectDisposedException)
+            catch (Exception ex) when (ex is EndOfStreamException or FormatException or InvalidOperationException or ObjectDisposedException)
             {
                 LogService.Instance.Warning("ViewModel", $"Could not hydrate result at offset {result.DiskOffset}: {ex.Message}");
             }
@@ -780,6 +786,17 @@ public sealed partial class MainViewModel : ObservableObject
         return $"{filesProcessed / seconds:N1} files/sec";
     }
 
+    private void UpdateFilesPerSecond()
+    {
+        if (_searchTimer is null || FilesScanned == 0)
+        {
+            FilesPerSecondText = string.Empty;
+            return;
+        }
+        double seconds = Math.Max(_searchTimer.Elapsed.TotalSeconds, 0.001);
+        FilesPerSecondText = $"{FilesScanned / seconds:N0} files/sec";
+    }
+
     partial void OnResultFilterChanged(string value) => ApplySortAndFilter();
     partial void OnFileNameFilterChanged(string value) => ApplySortAndFilter();
 
@@ -787,6 +804,8 @@ public sealed partial class MainViewModel : ObservableObject
     {
         _resultCollection.ResultFilter = ResultFilter;
         _resultCollection.FileNameFilter = FileNameFilter;
+        _resultCollection.IncludeGlobs = IncludeGlobs;
+        _resultCollection.ExcludeGlobs = ExcludeGlobs;
         _resultCollection.SortModeIndex = SortModeIndex;
         _resultCollection.SortDirectionIndex = SortDirectionIndex;
         _resultCollection.GroupByDirectory = GroupByDirectory;
