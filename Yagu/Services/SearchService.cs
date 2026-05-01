@@ -1015,6 +1015,10 @@ public sealed class SearchService
         private readonly int[] _emitted;
         private readonly int[] _statuses;
         private readonly long[] _fileLength;
+        // Per-file result buffers: accumulate matches for each file and flush them
+        // atomically in OnFileDone so the channel never contains interleaved results
+        // from different files (which would corrupt ripgrep-style grouped output).
+        private readonly List<SearchResult>?[] _buffers;
         private int _runningTotal; // starts from outer totalMatches at batch start
         private bool _stopped;
 
@@ -1036,6 +1040,7 @@ public sealed class SearchService
             _emitted = new int[paths.Count];
             _statuses = new int[paths.Count];
             _fileLength = new long[paths.Count];
+            _buffers = new List<SearchResult>?[paths.Count];
         }
 
         public int GetEmitted(int i) => _emitted[i];
@@ -1074,11 +1079,10 @@ public sealed class SearchService
                 ContextBefore: before,
                 ContextAfter: after);
 
-            if (!_writer.TryWrite(result))
-            {
-                _stopped = true;
-                return 1;
-            }
+            // Buffer the result; we write to the channel atomically in OnFileDone
+            // so that all results for a file arrive contiguously and never interleave
+            // with results from other files processed in parallel by the Rust scanner.
+            (_buffers[idx] ??= new List<SearchResult>()).Add(result);
 
             _emitted[idx]++;
             TotalEmitted++;
@@ -1097,6 +1101,20 @@ public sealed class SearchService
             int idx = (int)fileIndex;
             _statuses[idx] = status;
             _fileLength[idx] = fileLength > long.MaxValue ? long.MaxValue : (long)fileLength;
+
+            // Flush this file's buffered results to the channel as a contiguous run.
+            var buf = _buffers[idx];
+            if (buf != null && !_stopped)
+            {
+                foreach (var r in buf)
+                {
+                    if (!_writer.TryWrite(r))
+                    {
+                        _stopped = true;
+                        break;
+                    }
+                }
+            }
         }
     }
 }
