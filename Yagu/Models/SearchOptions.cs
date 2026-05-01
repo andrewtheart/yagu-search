@@ -68,6 +68,9 @@ public sealed class SearchOptions
     /// <summary>Set of file extensions (without dots, case-insensitive) to skip entirely — no binary check, no content read.</summary>
     public IReadOnlySet<string> SkipExtensions { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>When true, detect ZIP archives by file header and search their contents recursively (including nested zips).</summary>
+    public bool SearchInsideArchives { get; init; } = true;
+
     /// <summary>Bounded channel buffer capacity for the Everything SDK streaming path.</summary>
     public int SdkChannelBufferSize { get; init; } = 4096;
 }

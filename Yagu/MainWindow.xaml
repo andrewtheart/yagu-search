@@ -145,6 +145,9 @@
                 <StackPanel Orientation="Horizontal" Spacing="16">
                     <CheckBox Content="Case sensitive" IsChecked="{x:Bind ViewModel.CaseSensitive, Mode=TwoWay}" MinWidth="0" />
                     <CheckBox Content="Regex" IsChecked="{x:Bind ViewModel.UseRegex, Mode=TwoWay}" MinWidth="0" />
+                    <CheckBox Content="Search archives" IsChecked="{x:Bind ViewModel.SearchInsideArchives, Mode=TwoWay}"
+                              VerticalAlignment="Center" MinWidth="0"
+                              ToolTipService.ToolTip="Detect ZIP archives by file header and search text files inside them (supports nested zips)" />
                     <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                         <TextBlock Text="Context:" VerticalAlignment="Center" Opacity="0.8" />
                         <NumberBox Value="{x:Bind ViewModel.ContextLines, Mode=TwoWay}" Minimum="0" Maximum="20"

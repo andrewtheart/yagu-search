@@ -18,7 +18,23 @@ public sealed class EditorLauncher
 
     public bool Open(string filePath, int line)
     {
-        var rendered = Command.Replace("{file}", filePath).Replace("{line}", line.ToString());
+        // For archive entries, extract to a temp file first
+        string actualPath = filePath;
+        if (ZipArchiveSearcher.IsArchivePath(filePath))
+        {
+            try
+            {
+                actualPath = ZipArchiveSearcher.ExtractToTempFileAsync(filePath, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Warning("EditorLauncher", $"Failed to extract archive entry for editing: {filePath}", ex);
+                return false;
+            }
+        }
+
+        var rendered = Command.Replace("{file}", actualPath).Replace("{line}", line.ToString());
         var (exe, args) = Split(rendered);
         try
         {
@@ -43,12 +59,16 @@ public sealed class EditorLauncher
     {
         try
         {
-            var dir = Path.GetDirectoryName(filePath);
+            // For archive entries, open the folder containing the archive itself
+            string physicalPath = ZipArchiveSearcher.IsArchivePath(filePath)
+                ? ZipArchiveSearcher.SplitArchivePath(filePath).ArchivePath
+                : filePath;
+            var dir = Path.GetDirectoryName(physicalPath);
             if (string.IsNullOrEmpty(dir)) return false;
             var psi = new ProcessStartInfo
             {
                 FileName = "explorer.exe",
-                Arguments = $"/select,\"{filePath}\"",
+                Arguments = $"/select,\"{physicalPath}\"",
                 UseShellExecute = true,
             };
             if (TestProcessLauncher != null) TestProcessLauncher(psi);

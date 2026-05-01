@@ -276,6 +276,33 @@ The Rust crate exposes a C ABI and supports:
 
 By default, the Rust crate uses the in-tree scanner in [yagu-core/src/scan.rs](yagu-core/src/scan.rs). Experimental ripgrep-library spike code exists behind the `grep_crates` Cargo feature and is off by default.
 
+## Performance
+
+### UI Update Throttling
+
+Search statistics (files scanned, files skipped, matches found, files/second) are **not** updated per-file. A dedicated `PeriodicTimer` in `SearchService` emits a `SearchEvent.Progress` snapshot every **100 ms**. The view model handles each snapshot by setting approximately six properties that cascade into roughly ten `PropertyChanged` notifications per tick. At 10 Hz this is lightweight and does not compete with the search pipeline for dispatcher time.
+
+The `ProgressBar` binds to `TotalFiles` and `FilesScanned` with compiled `x:Bind` (no reflection). The auto-scroll timer that keeps the result list pinned to the bottom fires at **500 ms**, well below the threshold for perceptible UI stutter.
+
+### Result Batching
+
+Content and filename matches are batched before delivery to the UI thread:
+
+| Match type | Batch size | Delivery mechanism |
+| --- | --- | --- |
+| Content matches | 256 | `SearchEvent.MatchBatch` via bounded channel |
+| Filename matches | 256 | `SearchEvent.MatchBatch` via bounded channel |
+
+Each result added to a `FileGroup` can trigger up to three `CollectionChanged` events (group collection, `VisibleResults` sub-collection, and top-level `VisibleGroups`). In a worst-case batch where every result belongs to a different new file, one batch may produce up to ~768 `CollectionChanged` notifications in a single dispatcher tick. WinUI handles incremental `Add` without a full layout pass, but very high-cardinality searches can still cause brief dispatcher stalls at batch boundaries.
+
+### FileGroup Metadata
+
+File size and last-modified metadata are loaded off the UI thread via `Task.Run`. Only the four property-change notifications (`FileSize`, `LastModified`, `FormattedSize`, `FormattedDate`) dispatch back to the UI. Because these bind to collapsed expander headers, the layout cost is minimal until the user expands a group.
+
+### Memory Pressure
+
+When the process working set exceeds the configured memory limit, `SearchService` switches to memory-pressure mode. Result payloads are evicted to disk-backed `ResultStore` temp files under `%TEMP%`, and only lightweight metadata stays in memory. The preview panel rehydrates payloads on demand when the user selects a result.
+
 ## Settings, Logs, And Temp Files
 
 | Data | Location |

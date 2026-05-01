@@ -65,6 +65,16 @@ public static class BinaryDetector
         return false;
     }
 
+    /// <summary>
+    /// Detects if the given sample bytes start with a ZIP magic number (PK\x03\x04, PK\x05\x06, PK\x07\x08).
+    /// Used to identify ZIP archives for search-inside-archive support.
+    /// </summary>
+    public static bool IsZipMagic(ReadOnlySpan<byte> s)
+    {
+        if (s.Length < 4) return false;
+        return s[0] == 0x50 && s[1] == 0x4B && (s[2] == 0x03 || s[2] == 0x05 || s[2] == 0x07);
+    }
+
     private static bool HasBinaryMagic(ReadOnlySpan<byte> s)
     {
         if (s.Length < 4) return false;
