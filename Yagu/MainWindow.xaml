@@ -201,7 +201,7 @@
                         </DropDownButton.Flyout>
                     </DropDownButton>
                     <CheckBox Content="Skip binary" IsChecked="{x:Bind ViewModel.SkipBinary, Mode=TwoWay}"
-                              VerticalAlignment="Center" MinWidth="0" Padding="4,0"
+                              VerticalAlignment="Center" MinWidth="0"
                               ToolTipService.ToolTip="Skip files detected as binary during content search" />
                 </StackPanel>
 
@@ -272,13 +272,14 @@
                             <x:String>Desc</x:String>
                             <x:String>Asc</x:String>
                         </ComboBox>
-                        <CheckBox Content="Group by folder" IsChecked="{x:Bind ViewModel.GroupByDirectory, Mode=TwoWay}" VerticalAlignment="Center" FontSize="12" MinWidth="0" />
+                        <CheckBox Content="Group by folder" IsChecked="{x:Bind ViewModel.GroupByDirectory, Mode=TwoWay}" VerticalAlignment="Center" FontSize="12" MinWidth="0" Padding="4,0,0,0" />
                         <CheckBox x:Name="AutoScrollResultsCheckBox"
                                   Content="Auto-scroll"
-                                  IsChecked="True"
+                                  IsChecked="False"
                                   VerticalAlignment="Center"
                                   FontSize="12"
                                   MinWidth="0"
+                                  Padding="4,0,0,0"
                                   Checked="OnAutoScrollResultsChanged"
                                   Unchecked="OnAutoScrollResultsChanged"
                                   ToolTipService.ToolTip="Follow new results as they arrive" />
@@ -430,11 +431,11 @@
                         <FontIcon Glyph="&#xE7B3;" FontSize="12" VerticalAlignment="Center" Opacity="0.6" />
                         <TextBlock x:Name="PreviewFileLabel" VerticalAlignment="Center" FontSize="12" Opacity="0.7"
                                    TextTrimming="CharacterEllipsis" MaxWidth="300" />
-                        <Button Click="OnCopyPreviewFilePath" Width="28" Height="28" MinWidth="0" MinHeight="0"
+                        <Button x:Name="CopyPreviewFilePathButton" Click="OnCopyPreviewFilePath" Width="28" Height="28" MinWidth="0" MinHeight="0"
                                 Padding="0" ToolTipService.ToolTip="Copy full file path">
                             <FontIcon Glyph="&#xE8C8;" FontSize="12" />
                         </Button>
-                        <AppBarSeparator />
+                        <AppBarSeparator x:Name="PreviewToolbarSeparator" />
                         <Button x:Name="FullFileButton" Click="OnShowFullFile" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Show full file">
                             <StackPanel Orientation="Horizontal" Spacing="4">
                                 <FontIcon Glyph="&#xE8A5;" FontSize="12" />
@@ -452,13 +453,13 @@
                                 MinWidth="0" MinHeight="0" Padding="0" ToolTipService.ToolTip="Close editor" Visibility="Collapsed">
                             <FontIcon Glyph="&#xE711;" FontSize="12" />
                         </Button>
-                        <Button Click="OnOpenInDefaultApp" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Open with the default Windows application">
+                        <Button x:Name="OpenInDefaultAppButton" Click="OnOpenInDefaultApp" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Open with the default Windows application">
                             <StackPanel Orientation="Horizontal" Spacing="4">
                                 <FontIcon Glyph="&#xE8A7;" FontSize="12" />
                                 <TextBlock Text="Open" />
                             </StackPanel>
                         </Button>
-                        <Button Click="OnOpenInEditor" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Open in configured editor">
+                        <Button x:Name="OpenInEditorButton" Click="OnOpenInEditor" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Open in configured editor">
                             <StackPanel Orientation="Horizontal" Spacing="4">
                                 <FontIcon Glyph="&#xE70F;" FontSize="12" />
                                 <TextBlock Text="Editor" />

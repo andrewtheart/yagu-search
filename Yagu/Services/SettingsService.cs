@@ -17,7 +17,7 @@ public sealed class AppSettings
     public int PreviewContextLines { get; set; } = 20;
     public string IncludeGlobs { get; set; } = string.Empty;
     public string ExcludeGlobs { get; set; } = "node_modules;bin;obj;.git";
-    public long MaxFileSizeBytes { get; set; } = 50L * 1024 * 1024;
+    public long MaxFileSizeBytes { get; set; } = 100L * 1024 * 1024;
     public int MaxResults { get; set; } = 0;
     public string EditorCommand { get; set; } = EditorLauncher.DefaultCommand;
     public double SplitPanePosition { get; set; } = 0.5;

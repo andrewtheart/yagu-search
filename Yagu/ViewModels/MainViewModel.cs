@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
@@ -96,7 +97,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private int _previewContextLines = 20;
     [ObservableProperty] private string _includeGlobs = string.Empty;
     [ObservableProperty] private string _excludeGlobs = "node_modules;bin;obj;.git";
-    [ObservableProperty] private long _maxFileSizeBytes = 50L * 1024 * 1024;
+    [ObservableProperty] private long _maxFileSizeBytes = 100L * 1024 * 1024;
     [ObservableProperty] private int _maxResults;
     [ObservableProperty] private string _editorCommand = EditorLauncher.DefaultCommand;
     [ObservableProperty] private string _resultFilter = string.Empty;
@@ -748,7 +749,16 @@ public sealed partial class MainViewModel : ObservableObject
     public void HydrateResult(SearchResult result)
     {
         if (result.IsEvicted && _resultStore is not null)
-            result.Hydrate(_resultStore);
+        {
+            try
+            {
+                result.Hydrate(_resultStore);
+            }
+            catch (Exception ex) when (ex is EndOfStreamException or InvalidOperationException or ObjectDisposedException)
+            {
+                LogService.Instance.Warning("ViewModel", $"Could not hydrate result at offset {result.DiskOffset}: {ex.Message}");
+            }
+        }
     }
 
     private static string BuildCompletionStatus(SearchSummary s, TimeSpan elapsed)

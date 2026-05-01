@@ -28,3 +28,4 @@ target/
 PERFORMANCE_IMPROVEMENTS.md
 PLAN.md
 .analysis/
+scripts/publish-to-azure.ps1
