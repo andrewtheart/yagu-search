@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
@@ -92,6 +94,9 @@ internal static class CliRunner
 
         WarnIfNotAdmin(args);
 
+        if (vtEnabled)
+            OfferEverythingSetupAsync().GetAwaiter().GetResult();
+
         var settings = LoadEffectiveSettings(args);
 
         // Configure the file-lister backend from settings (same as App() constructor).
@@ -185,6 +190,164 @@ internal static class CliRunner
         catch { /* best-effort */ }
 
         return vtEnabled;
+    }
+
+    // -----------------------------------------------------------------------
+    // Everything Search: offer to start or install (once per machine, tracked by marker file)
+    // -----------------------------------------------------------------------
+
+    private static readonly string EverythingMarkerPath =
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                     "Yagu", ".everything-prompted");
+
+    private static async Task OfferEverythingSetupAsync()
+    {
+        // Only ask once — marker file records that we've already prompted.
+        if (File.Exists(EverythingMarkerPath)) return;
+
+        bool running  = Process.GetProcessesByName("Everything").Length > 0;
+
+        // Everything is running — nothing to do (don't write the marker;
+        // if Everything is later uninstalled we still want to ask again).
+        if (running) return;
+
+        // Check if Everything.exe can be located (meaning the full app is installed).
+        var esPath        = FileLister.FindEsExe();
+        var everythingExe = esPath != null ? FindEverythingExe(esPath) : null;
+
+        // Also check standard install paths directly in case es.exe is a standalone tool.
+        if (everythingExe == null)
+        {
+            foreach (var p in new[]
+            {
+                @"C:\Program Files\Everything\Everything.exe",
+                @"C:\Program Files (x86)\Everything\Everything.exe",
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Everything", "Everything.exe"),
+            })
+            {
+                if (File.Exists(p)) { everythingExe = p; break; }
+            }
+        }
+
+        try
+        {
+            if (everythingExe != null)
+            {
+                // Full Everything app is installed but not running — offer to start.
+                Console.Error.WriteLine();
+                Console.Error.Write("Everything Search is installed but not running. Start it now for fast file discovery? [Y/n] ");
+                var answer = Console.ReadLine();
+                Console.Error.WriteLine();
+
+                if (IsYes(answer))
+                {
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo { FileName = everythingExe, UseShellExecute = true });
+                        await Task.Delay(1500); // brief wait so it begins indexing before the search
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"Could not start Everything: {ex.Message}");
+                    }
+                }
+                return;
+            }
+
+            // Not installed — offer to download and install.
+            Console.Error.WriteLine();
+            Console.Error.Write("Everything Search by voidtools is not installed. Install it for significantly faster file discovery? [Y/n] ");
+            var installAnswer = Console.ReadLine();
+            Console.Error.WriteLine();
+
+            if (!IsYes(installAnswer)) return;
+
+            bool is64 = Environment.Is64BitOperatingSystem;
+            string url      = is64
+                ? "https://www.voidtools.com/Everything-1.4.1.1032.x64-Setup.exe"
+                : "https://www.voidtools.com/Everything-1.4.1.1032.x86-Setup.exe";
+            string tempPath = Path.Combine(Path.GetTempPath(),
+                is64 ? "Everything-1.4.1.1032.x64-Setup.exe" : "Everything-1.4.1.1032.x86-Setup.exe");
+
+            Console.Error.WriteLine("Downloading Everything Search installer...");
+
+            try
+            {
+                using var http = new HttpClient();
+                var data = await http.GetByteArrayAsync(new Uri(url));
+                await File.WriteAllBytesAsync(tempPath, data);
+
+                Console.Error.WriteLine("Running installer \u2014 please complete the setup wizard...");
+
+                var proc = Process.Start(new ProcessStartInfo
+                {
+                    FileName       = tempPath,
+                    Verb           = "runas",
+                    UseShellExecute = true,
+                });
+                if (proc != null) await proc.WaitForExitAsync();
+
+                var installedEsPath = FileLister.FindEsExe();
+                if (installedEsPath != null && Process.GetProcessesByName("Everything").Length == 0)
+                {
+                    var postInstallExe = FindEverythingExe(installedEsPath);
+                    if (postInstallExe != null)
+                    {
+                        try { Process.Start(new ProcessStartInfo { FileName = postInstallExe, UseShellExecute = true }); }
+                        catch { /* ignore */ }
+                        await Task.Delay(2000);
+                    }
+                }
+
+                Console.Error.WriteLine("Everything installed. Proceeding with search...");
+                Console.Error.WriteLine();
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                Console.Error.WriteLine("Installation was cancelled.");
+                Console.Error.WriteLine();
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Installation failed: {ex.Message}");
+                Console.Error.WriteLine();
+            }
+        }
+        finally
+        {
+            // Write marker after the first prompt so we never pester again.
+            // (The "already running" early-return above skips the try block entirely,
+            //  so this finally only runs when we actually showed a prompt.)
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(EverythingMarkerPath)!);
+                File.WriteAllText(EverythingMarkerPath, DateTime.UtcNow.ToString("o"));
+            }
+            catch { /* best-effort */ }
+        }
+    }
+
+    private static bool IsYes(string? answer)
+        => string.IsNullOrWhiteSpace(answer) || answer.Trim().StartsWith("y", StringComparison.OrdinalIgnoreCase);
+
+    private static string? FindEverythingExe(string esPath)
+    {
+        var dir = Path.GetDirectoryName(esPath);
+        if (dir != null)
+        {
+            var candidate = Path.Combine(dir, "Everything.exe");
+            if (File.Exists(candidate)) return candidate;
+        }
+        foreach (var path in new[]
+        {
+            @"C:\Program Files\Everything\Everything.exe",
+            @"C:\Program Files (x86)\Everything\Everything.exe",
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Everything", "Everything.exe"),
+        })
+        {
+            if (File.Exists(path)) return path;
+        }
+        return null;
     }
 
     // -----------------------------------------------------------------------
@@ -297,8 +460,9 @@ internal static class CliRunner
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-        var service = new SearchService();
-        var writer  = new RipgrepWriter(Console.Out, useColor);
+        var service  = new SearchService();
+        var writer   = new RipgrepWriter(Console.Out, useColor);
+        var progress = vtEnabled ? new ProgressLine(useColor) : null;
 
         try
         {
@@ -307,28 +471,43 @@ internal static class CliRunner
                 switch (ev)
                 {
                     case SearchEvent.Match m:
+                        progress?.Hide();
                         writer.Add(m.Result);
+                        progress?.Show();
                         break;
 
                     case SearchEvent.MatchBatch mb:
+                        progress?.Hide();
                         foreach (var r in mb.Results)
                             writer.Add(r);
+                        progress?.Show();
+                        break;
+
+                    case SearchEvent.Progress p:
+                        progress?.Update(p.Snapshot);
                         break;
 
                     case SearchEvent.Error e:
-                        WriteError($"error: {e.Message}");
+                        progress?.Hide();
+                        WriteError($"error: {e.Message}", useColor);
+                        progress?.Show();
                         break;
 
                     case SearchEvent.MemoryPressure mp:
                         mp.AcknowledgeEviction(0);
-                        WriteError("warning: memory pressure detected; search continues in degraded mode.");
+                        progress?.Hide();
+                        WriteError("warning: memory pressure detected; search continues in degraded mode.", useColor);
+                        progress?.Show();
                         break;
 
                     case SearchEvent.Fallback f:
-                        WriteError($"info: file-lister fallback - {f.Reason}");
+                        progress?.Hide();
+                        WriteError($"info: file-lister fallback - {f.Reason}", useColor);
+                        progress?.Show();
                         break;
 
                     case SearchEvent.Completed c:
+                        progress?.Dismiss();
                         writer.Flush();
                         WriteCompletionSummary(c.Summary, useColor);
                         if (c.Summary.Cancelled) return 130;
@@ -338,6 +517,7 @@ internal static class CliRunner
         }
         catch (OperationCanceledException)
         {
+            progress?.Dismiss();
             writer.Flush();
             WriteError("search cancelled.");
             return 130;
@@ -346,9 +526,11 @@ internal static class CliRunner
         {
             // Broken pipe — consumer closed the pipe before we finished.
             // This is normal when users pipe to head/Select-Object -First N.
+            progress?.Dismiss();
             return writer.TotalMatches > 0 ? 0 : 1;
         }
 
+        progress?.Dismiss();
         writer.Flush();
         return writer.TotalMatches > 0 ? 0 : 1;
     }
@@ -461,6 +643,70 @@ internal static class CliRunner
 ///   <item>Blank line between files.</item>
 /// </list>
 /// </summary>
+// ---------------------------------------------------------------------------
+// Persistent progress indicator (stderr, interactive only)
+// ---------------------------------------------------------------------------
+
+internal sealed class ProgressLine
+{
+    private static readonly char[] Spinner = ['|', '/', '-', '\\'];
+    private int    _frame;
+    private string _current = "";
+    private bool   _visible;
+    private readonly bool _color;
+
+    private const string Dim   = "\x1B[2m";
+    private const string Reset = "\x1B[0m";
+    private const string Clear = "\r\x1B[K";
+
+    public ProgressLine(bool color) => _color = color;
+
+    /// <summary>Called on each SearchEvent.Progress — advances spinner and redraws.</summary>
+    public void Update(SearchProgress p)
+    {
+        _frame   = (_frame + 1) % Spinner.Length;
+        _current = Build(p);
+        Draw();
+    }
+
+    /// <summary>Clear the line so stdout match output doesn't overlap.</summary>
+    public void Hide()
+    {
+        if (_visible)
+        {
+            Console.Error.Write(Clear);
+            _visible = false;
+        }
+    }
+
+    /// <summary>Redraw the last progress line after match output.</summary>
+    public void Show()
+    {
+        if (_current.Length > 0) Draw();
+    }
+
+    /// <summary>Clear permanently (search ended).</summary>
+    public void Dismiss() => Hide();
+
+    private void Draw()
+    {
+        Console.Error.Write(Clear + (_color ? Dim + _current + Reset : _current));
+        _visible = true;
+    }
+
+    private string Build(SearchProgress p)
+    {
+        char spin = Spinner[_frame];
+        // Only show X/Y when TotalFiles is a genuine pre-known total (e.g. from Everything SDK).
+        // When no pre-known total exists, TotalFiles == discoveredTotal == FilesScanned,
+        // so the X/Y format would show 50K/50K which looks wrong — fall back to "Searching..."
+        bool knownTotal = p.TotalFiles > p.FilesScanned;
+        return knownTotal
+            ? $"{spin} Searching {p.FilesScanned:N0} / {p.TotalFiles:N0} files  ·  {p.MatchesFound:N0} match(es)"
+            : $"{spin} Searching... {p.FilesScanned:N0} files  ·  {p.MatchesFound:N0} match(es)";
+    }
+}
+
 internal sealed class RipgrepWriter
 {
     // ANSI escape sequences — matches ripgrep defaults
