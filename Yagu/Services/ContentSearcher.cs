@@ -34,10 +34,13 @@ public sealed class ContentSearcher
     /// matches incrementally without holding all decoded text, and its mmaps
     /// are promptly munmap'd. NVMe drives saturate at 16–64 outstanding reads,
     /// so the old cap of 8 was an I/O ceiling on fast storage.
+    /// Raised to 64 to match Rust MAX_WORKERS — ETL profiling showed only
+    /// 1,744 opens/sec on NVMe capable of 100K+ IOPS, confirming the cap
+    /// was the bottleneck, not the storage.
     /// </summary>
     private static readonly SemaphoreSlim s_nativeGate = new(
-        Math.Min(32, Environment.ProcessorCount * 2),
-        Math.Min(32, Environment.ProcessorCount * 2));
+        Math.Min(64, Environment.ProcessorCount * 2),
+        Math.Min(64, Environment.ProcessorCount * 2));
 
     // Skip-reason codes (all negative so they are distinguishable from match counts).
     public const int SkipBinary     = -1;

@@ -348,10 +348,12 @@ public sealed class SearchService
                     int parallelism = options.MaxDegreeOfParallelism > 0
                         ? options.MaxDegreeOfParallelism
                         // Native scanning overlaps file open/read work in Rust.
-                        // The profiler shows low mean CPU while I/O dominates, so
-                        // the native default can safely run wider than managed.
+                        // ETL profiling shows 1,744 opens/sec with median disk
+                        // latency 0.072ms — NVMe is far from saturated. Raising
+                        // the cap to 64 (matching Rust MAX_WORKERS) lets more
+                        // workers overlap I/O with scanning.
                         : nativeAvailable
-                            ? Math.Max(1, Math.Min(32, Environment.ProcessorCount * 2))
+                            ? Math.Max(1, Math.Min(64, Environment.ProcessorCount * 2))
                             : Math.Max(1, Math.Min(16, Environment.ProcessorCount));
                     LogService.Instance.Info("SearchService", $"Content scan parallelism = {parallelism}");
 
