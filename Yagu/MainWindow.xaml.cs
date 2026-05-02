@@ -16,6 +16,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using System.Net.Http;
 using System.Security.Principal;
+using Microsoft.Win32;
 using Yagu.Helpers;
 using Yagu.Models;
 using Yagu.Services;
@@ -485,6 +486,12 @@ public sealed partial class MainWindow : Window
         skipExt.TextChanged += (_, _) => ViewModel.SkipExtensions = skipExt.Text;
         sp.Children.Add(skipExt);
         sp.Children.Add(new TextBlock { Text = "Files with these extensions are skipped entirely — no binary check, no content read.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+        sp.Children.Add(new TextBlock { Text = "Archive extensions (semicolon-separated, no dots):", Margin = new Thickness(0, 4, 0, 0) });
+        var archiveExt = new TextBox { Text = ViewModel.ArchiveExtensions, PlaceholderText = "e.g. zip;jar;docx;xlsx;pptx;epub", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false };
+        archiveExt.TextChanged += (_, _) => ViewModel.ArchiveExtensions = archiveExt.Text;
+        sp.Children.Add(archiveExt);
+        sp.Children.Add(new TextBlock { Text = "Extensions that are ZIP-like containers. When 'Search archives' is on, these are removed from the skip list so they reach the content searcher. Detection still uses file-header magic bytes.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
         // ── Performance ──
         sp.Children.Add(new TextBlock { Text = "Performance", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16, Margin = new Thickness(0, 12, 0, 0) });
@@ -2176,6 +2183,7 @@ public sealed partial class MainWindow : Window
         ((FrameworkElement)sender).Loaded -= OnContentLoaded;
         ApplyWordWrap(ViewModel.PreviewWordWrap);
         await CheckEverythingAsync();
+        await CheckFirstRunContextMenuAsync();
         FocusSearchBox();
     }
 
@@ -2365,6 +2373,89 @@ public sealed partial class MainWindow : Window
         return null;
     }
 
+    // ── First-run context menu prompt ──────────────────────────────────
+    private const string ContextMenuRegKeyDir = @"Software\Classes\Directory\shell\Yagu";
+    private const string ContextMenuRegKeyBg  = @"Software\Classes\Directory\Background\shell\Yagu";
+    private const string ContextMenuText = "Search with Yagu";
+
+    private async Task CheckFirstRunContextMenuAsync()
+    {
+        if (ViewModel.HasCompletedFirstRun)
+            return;
+
+        // Mark first run complete regardless of what the user chooses
+        ViewModel.HasCompletedFirstRun = true;
+        ViewModel.PersistSettings();
+
+        // If context menu is already registered, nothing to do
+        if (IsContextMenuRegistered())
+            return;
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = ((FrameworkElement)Content).XamlRoot,
+            Title = "Add Explorer Context Menu?",
+            Content = "Would you like to add a \"Search with Yagu\" option to the Windows Explorer right-click menu?\n\nThis lets you quickly search any folder by right-clicking it.",
+            PrimaryButtonText = "Yes, add it",
+            CloseButtonText = "No thanks",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            return;
+
+        try
+        {
+            RegisterContextMenu();
+
+            var successDialog = new ContentDialog
+            {
+                XamlRoot = ((FrameworkElement)Content).XamlRoot,
+                Title = "Context Menu Installed",
+                Content = "The \"Search with Yagu\" context menu has been added.\n\nTo use it: right-click any folder in Windows Explorer and select \"Search with Yagu\". Yagu will open with that folder ready to search.",
+                CloseButtonText = "OK",
+                DefaultButton = ContentDialogButton.Close,
+            };
+            await successDialog.ShowAsync();
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("ContextMenu", "Failed to register context menu", ex);
+
+            var errorDialog = new ContentDialog
+            {
+                XamlRoot = ((FrameworkElement)Content).XamlRoot,
+                Title = "Context Menu Registration Failed",
+                Content = $"Could not register the context menu entry:\n{ex.Message}",
+                CloseButtonText = "OK",
+                DefaultButton = ContentDialogButton.Close,
+            };
+            await errorDialog.ShowAsync();
+        }
+    }
+
+    private static bool IsContextMenuRegistered()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(ContextMenuRegKeyDir);
+        return key != null;
+    }
+
+    private static void RegisterContextMenu()
+    {
+        var exePath = Environment.ProcessPath
+            ?? Path.Combine(AppContext.BaseDirectory, "Yagu.exe");
+
+        foreach (var regPath in new[] { ContextMenuRegKeyDir, ContextMenuRegKeyBg })
+        {
+            using var shellKey = Registry.CurrentUser.CreateSubKey(regPath);
+            shellKey.SetValue(null, ContextMenuText);
+            shellKey.SetValue("Icon", exePath);
+
+            using var cmdKey = Registry.CurrentUser.CreateSubKey(regPath + @"\command");
+            cmdKey.SetValue(null, $"\"{exePath}\" --dir \"%V\"");
+        }
+    }
+
     // ── Skip-extensions dropdown ──────────────────────────────────
     private void OnSkipExtToggled(object sender, RoutedEventArgs e) => ViewModel.OnSkipExtensionToggled();
 
@@ -2378,6 +2469,21 @@ public sealed partial class MainWindow : Window
     {
         foreach (var item in ViewModel.SkipExtensionItems) item.IsEnabled = false;
         ViewModel.OnSkipExtensionToggled();
+    }
+
+    // ── Archive-extensions dropdown ───────────────────────────────
+    private void OnArchiveExtToggled(object sender, RoutedEventArgs e) => ViewModel.OnArchiveExtensionToggled();
+
+    private void OnArchiveExtSelectAll(object sender, RoutedEventArgs e)
+    {
+        foreach (var item in ViewModel.ArchiveExtensionItems) item.IsEnabled = true;
+        ViewModel.OnArchiveExtensionToggled();
+    }
+
+    private void OnArchiveExtSelectNone(object sender, RoutedEventArgs e)
+    {
+        foreach (var item in ViewModel.ArchiveExtensionItems) item.IsEnabled = false;
+        ViewModel.OnArchiveExtensionToggled();
     }
 
     // ── Skip-count breakdown overlay ─────────────────────────────

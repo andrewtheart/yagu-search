@@ -7,6 +7,7 @@ public sealed class AppSettings
 {
     public const string LegacyDefaultSkipExtensions = "exe;dll;pdb;obj;lib;so;dylib;zip;gz;tar;7z;rar;bz2;xz;iso;cab;msi;nupkg;whl;png;jpg;jpeg;gif;bmp;ico;tif;tiff;webp;svg;mp3;mp4;avi;mov;wmv;flv;mkv;wav;ogg;flac;woff;woff2;ttf;eot;otf;pdf;doc;docx;xls;xlsx;ppt;pptx";
     public const string DefaultSkipExtensions = LegacyDefaultSkipExtensions + ";com;scr;sys;drv;ocx;cpl;mui;winmd;pri;cat;res;resources;o;a;lo;la;ilk;iobj;ipdb;exp;pyc;pyo;class;dex;wasm;jar;war;ear;apk;aab;aar;appx;msix;appxbundle;msixbundle;vsix;tgz;tbz2;txz;zst;zstd;br;lz4;lzma;bin;dat;db;db3;sqlite;sqlite3;edb;mdb;accdb;ldb;sdf;cache;tmp;bak;etl;evtx;dmp;mdmp;hdmp;hprof;vhd;vhdx;vmdk;pak;usm;bundle;assets;m4a;webm;heic;heif;avif";
+    public const string DefaultArchiveExtensions = "zip;jar;war;ear;nupkg;vsix;apk;aab;aar;appx;msix;appxbundle;msixbundle;docx;xlsx;pptx;odt;ods;odp;epub";
 
     public string? LastDirectory { get; set; }
     public List<string> RecentDirectories { get; set; } = [];
@@ -40,10 +41,14 @@ public sealed class AppSettings
     public bool SkipBinary { get; set; } = true;
     /// <summary>When true, detect ZIP archives by file header and search text files inside them. Default true.</summary>
     public bool SearchInsideArchives { get; set; } = true;
+    /// <summary>Semicolon-separated file extensions that are known ZIP-like containers (bypassed from skip-extensions when archive search is on). e.g. "zip;jar;docx;xlsx".</summary>
+    public string ArchiveExtensions { get; set; } = DefaultArchiveExtensions;
     /// <summary>Semicolon-separated file extensions to skip entirely (no binary check, no content read). e.g. "exe;dll;zip;png;jpg".</summary>
     public string SkipExtensions { get; set; } = DefaultSkipExtensions;
     /// <summary>When true, do not show the non-admin access warning banner on startup.</summary>
     public bool SuppressAdminWarning { get; set; }
+    /// <summary>Whether the first-run experience has been completed (context menu prompt, etc.).</summary>
+    public bool HasCompletedFirstRun { get; set; }
 
     public const int MaxRecent = 20; // kept for backward compat; prefer MaxRecentItems
 }

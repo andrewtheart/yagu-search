@@ -116,14 +116,15 @@ public sealed class ContentSearcher
         if (options.MaxFileSizeBytes > 0 && fileLength > options.MaxFileSizeBytes) return new FileSearchOutcome(SkipTooLarge, 0);
 
         // Extension-based skip — no binary sniff, no content read.
-        // When SearchInsideArchives is enabled, don't skip ZIP archives by extension.
+        // When SearchInsideArchives is enabled, don't skip files that are
+        // actually ZIP archives (detected by header), regardless of extension.
         if (options.SkipExtensions.Count > 0)
         {
             var ext = Path.GetExtension(filePath);
             if (ext.Length > 1 && options.SkipExtensions.Contains(ext.AsSpan(1).ToString()))
             {
-                // Allow zip-like extensions through when archive search is enabled
-                if (!options.SearchInsideArchives || !IsZipLikeExtension(ext))
+                // Allow through if archive search is on and the file has a ZIP header
+                if (!options.SearchInsideArchives || !ZipArchiveSearcher.IsZipByHeader(filePath))
                     return new FileSearchOutcome(SkipByExtension, 0);
             }
         }
@@ -446,15 +447,13 @@ public sealed class ContentSearcher
     /// <summary>When true, attempt the native (Rust) scan path before falling back to managed.</summary>
     public static bool PreferNative { get; set; } = true;
 
-    /// <summary>Extensions that may be ZIP archives. Used to bypass extension-based skip when archive search is enabled.</summary>
-    internal static readonly HashSet<string> ZipLikeExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".zip", ".jar", ".war", ".ear", ".nupkg", ".vsix", ".apk",
-        ".aab", ".aar", ".appx", ".msix", ".appxbundle", ".msixbundle",
-        ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".epub",
-    };
+    /// <summary>
+    /// Extensions that are known ZIP-like containers. Populated from <see cref="SearchOptions.ArchiveExtensions"/>
+    /// before each search. Used to bypass extension-based skip at the file-lister layer.
+    /// </summary>
+    internal IReadOnlySet<string> ZipLikeExtensions { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-    internal static bool IsZipLikeExtension(string ext) => ZipLikeExtensions.Contains(ext);
+    internal static bool IsZipLikeExtension(IReadOnlySet<string> archiveExts, string ext) => archiveExts.Contains(ext);
 
     /// <summary>Sentinel returned by <see cref="TryNativeAsync"/> when the native path cannot be used and the caller should run the managed path.</summary>
     private const int NativeFellThrough = int.MinValue;

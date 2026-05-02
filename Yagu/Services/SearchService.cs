@@ -65,6 +65,7 @@ public sealed class SearchService
                 MemoryPressurePercent = options.MemoryPressurePercent,
                 SkipExtensions = options.SkipExtensions,
                 SearchInsideArchives = options.SearchInsideArchives,
+                ArchiveExtensions = options.ArchiveExtensions,
                 SdkChannelBufferSize = options.SdkChannelBufferSize,
             };
         }
@@ -113,11 +114,11 @@ public sealed class SearchService
             // zip-like extensions — they need to reach ContentSearcher so it
             // can open them as archives.
             var skipExts = options.SkipExtensions;
-            if (options.SearchInsideArchives && skipExts.Count > 0)
+            if (options.SearchInsideArchives && skipExts.Count > 0 && options.ArchiveExtensions.Count > 0)
             {
                 var filtered = new HashSet<string>(skipExts, StringComparer.OrdinalIgnoreCase);
-                // ZipLikeExtensions uses ".zip" format; SkipExtensions uses "zip" (no dot).
-                foreach (var ext in ContentSearcher.ZipLikeExtensions)
+                // ArchiveExtensions uses ".zip" format; SkipExtensions uses "zip" (no dot).
+                foreach (var ext in options.ArchiveExtensions)
                     filtered.Remove(ext.TrimStart('.'));
                 skipExts = filtered;
             }
@@ -129,6 +130,10 @@ public sealed class SearchService
 
         bool searchContent = options.SearchMode != SearchMode.FileNames;
         bool searchFileNames = options.SearchMode != SearchMode.Content;
+
+        // Push the configurable archive-extension set to the searcher so it
+        // can bypass extension-based skip for ZIP-like containers.
+        _searcher.ZipLikeExtensions = options.ArchiveExtensions;
 
         var events = Channel.CreateBounded<SearchEvent>(new BoundedChannelOptions(2048)
         {
@@ -531,8 +536,10 @@ public sealed class SearchService
                                 {
                                     while (batch.Count < nativeBatchSize && pending.Reader.TryRead(out var bufferedFile))
                                     {
-                                        // Route zip-like files to the managed searcher
-                                        if (options.SearchInsideArchives && ContentSearcher.IsZipLikeExtension(Path.GetExtension(bufferedFile)))
+                                        // Route ZIP archives to the managed searcher by
+                                        // peeking the file header (4 bytes). This detects
+                                        // zips regardless of extension (.docx, .jar, etc.).
+                                        if (options.SearchInsideArchives && ZipArchiveSearcher.IsZipByHeader(bufferedFile))
                                         {
                                             await ScanZipViaManagedAsync(bufferedFile).ConfigureAwait(false);
                                         }

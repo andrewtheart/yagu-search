@@ -516,8 +516,7 @@ public class FileGroupMetadataTests : IDisposable
     {
         var group = new FileGroup(Path.Combine(_root, "ghost.txt"));
         // dispatch should not be called for non-existent file
-        bool dispatched = false;
-        group.BeginLoadMetadata(action => { dispatched = true; action(); });
+        group.BeginLoadMetadata(action => { action(); });
         // Allow background task to finish
         Thread.Sleep(200);
         // No exception should have been thrown

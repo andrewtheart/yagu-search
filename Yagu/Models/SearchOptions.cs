@@ -71,6 +71,9 @@ public sealed class SearchOptions
     /// <summary>When true, detect ZIP archives by file header and search their contents recursively (including nested zips).</summary>
     public bool SearchInsideArchives { get; init; } = true;
 
+    /// <summary>Set of file extensions (with leading dots, case-insensitive) that are known ZIP-like containers. Used to bypass skip-extensions at the file-lister layer when archive search is enabled.</summary>
+    public IReadOnlySet<string> ArchiveExtensions { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Bounded channel buffer capacity for the Everything SDK streaming path.</summary>
     public int SdkChannelBufferSize { get; init; } = 4096;
 }

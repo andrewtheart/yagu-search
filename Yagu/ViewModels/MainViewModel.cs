@@ -14,13 +14,13 @@ public sealed partial class SkipExtensionItem : ObservableObject
     public string Extension { get; }
     public string Category { get; }
 
-    [ObservableProperty] private bool _isEnabled;
+    [ObservableProperty] public partial bool IsEnabled { get; set; }
 
     public SkipExtensionItem(string extension, string category, bool isEnabled)
     {
         Extension = extension;
         Category = category;
-        _isEnabled = isEnabled;
+        IsEnabled = isEnabled;
     }
 }
 
@@ -79,8 +79,10 @@ public sealed partial class MainViewModel : ObservableObject
         SdkChannelBufferSize = _settings.SdkChannelBufferSize;
         SkipBinary = _settings.SkipBinary;
         SearchInsideArchives = _settings.SearchInsideArchives;
+        ArchiveExtensions = _settings.ArchiveExtensions;
         SkipExtensions = _settings.SkipExtensions;
         SuppressAdminWarning = _settings.SuppressAdminWarning;
+        HasCompletedFirstRun = _settings.HasCompletedFirstRun;
 
         Helpers.LineTruncator.TruncatedLength = LineTruncationLength;
 
@@ -88,39 +90,41 @@ public sealed partial class MainViewModel : ObservableObject
         foreach (var q in _settings.SearchHistory) SearchHistory.Add(q);
 
         SyncSkipExtensionItems();
+        SyncArchiveExtensionItems();
     }
 
-    [ObservableProperty] private string _directory = string.Empty;
-    [ObservableProperty] private string _query = string.Empty;
-    [ObservableProperty] private bool _caseSensitive;
-    [ObservableProperty] private bool _useRegex;
-    [ObservableProperty] private int _contextLines = 3;
-    [ObservableProperty] private int _previewContextLines = 20;
-    [ObservableProperty] private string _includeGlobs = string.Empty;
-    [ObservableProperty] private string _excludeGlobs = "node_modules;bin;obj;.git";
-    [ObservableProperty] private long _maxFileSizeBytes = 100L * 1024 * 1024;
-    [ObservableProperty] private int _maxResults;
-    [ObservableProperty] private string _editorCommand = EditorLauncher.DefaultCommand;
-    [ObservableProperty] private string _resultFilter = string.Empty;
-    [ObservableProperty] private string _fileNameFilter = string.Empty;
-    [ObservableProperty] private int _searchModeIndex;
-    [ObservableProperty] private int _sortModeIndex;
-    [ObservableProperty] private int _sortDirectionIndex;
-    [ObservableProperty] private bool _groupByDirectory;
-    [ObservableProperty] private int _previewModeIndex = 1; // 0 = Concatenated, 1 = Multi-highlight
-    [ObservableProperty] private bool _previewWordWrap;
-    [ObservableProperty] private int _logLevelIndex; // 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
-    [ObservableProperty] private int _fileListerBackendIndex; // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
-    [ObservableProperty] private int _parallelismIndex; // 0 = Auto, 1 = 1 thread, 2 = half cores, 3 = 2x cores, 4 = all cores
-    [ObservableProperty] private int _lineTruncationLength = 500;
-    [ObservableProperty] private int _maxRecentItems = 20;
-    [ObservableProperty] private bool _globalHotkeyEnabled;
-    [ObservableProperty] private int _memoryLimitMB = 4096;
-    [ObservableProperty] private int _memoryPressurePercent = 80;
-    [ObservableProperty] private int _sdkChannelBufferSize = 4096;
-    [ObservableProperty] private bool _skipBinary = true;
-    [ObservableProperty] private string _skipExtensions = AppSettings.DefaultSkipExtensions;
-    [ObservableProperty] private bool _searchInsideArchives = true;
+    [ObservableProperty] public partial string Directory { get; set; } = string.Empty;
+    [ObservableProperty] public partial string Query { get; set; } = string.Empty;
+    [ObservableProperty] public partial bool CaseSensitive { get; set; }
+    [ObservableProperty] public partial bool UseRegex { get; set; }
+    [ObservableProperty] public partial int ContextLines { get; set; } = 3;
+    [ObservableProperty] public partial int PreviewContextLines { get; set; } = 20;
+    [ObservableProperty] public partial string IncludeGlobs { get; set; } = string.Empty;
+    [ObservableProperty] public partial string ExcludeGlobs { get; set; } = "node_modules;bin;obj;.git";
+    [ObservableProperty] public partial long MaxFileSizeBytes { get; set; } = 100L * 1024 * 1024;
+    [ObservableProperty] public partial int MaxResults { get; set; }
+    [ObservableProperty] public partial string EditorCommand { get; set; } = EditorLauncher.DefaultCommand;
+    [ObservableProperty] public partial string ResultFilter { get; set; } = string.Empty;
+    [ObservableProperty] public partial string FileNameFilter { get; set; } = string.Empty;
+    [ObservableProperty] public partial int SearchModeIndex { get; set; }
+    [ObservableProperty] public partial int SortModeIndex { get; set; }
+    [ObservableProperty] public partial int SortDirectionIndex { get; set; }
+    [ObservableProperty] public partial bool GroupByDirectory { get; set; }
+    [ObservableProperty] public partial int PreviewModeIndex { get; set; } = 1; // 0 = Concatenated, 1 = Multi-highlight
+    [ObservableProperty] public partial bool PreviewWordWrap { get; set; }
+    [ObservableProperty] public partial int LogLevelIndex { get; set; } // 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
+    [ObservableProperty] public partial int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
+    [ObservableProperty] public partial int ParallelismIndex { get; set; } // 0 = Auto, 1 = 1 thread, 2 = half cores, 3 = 2x cores, 4 = all cores
+    [ObservableProperty] public partial int LineTruncationLength { get; set; } = 500;
+    [ObservableProperty] public partial int MaxRecentItems { get; set; } = 20;
+    [ObservableProperty] public partial bool GlobalHotkeyEnabled { get; set; }
+    [ObservableProperty] public partial int MemoryLimitMB { get; set; } = 4096;
+    [ObservableProperty] public partial int MemoryPressurePercent { get; set; } = 80;
+    [ObservableProperty] public partial int SdkChannelBufferSize { get; set; } = 4096;
+    [ObservableProperty] public partial bool SkipBinary { get; set; } = true;
+    [ObservableProperty] public partial string SkipExtensions { get; set; } = AppSettings.DefaultSkipExtensions;
+    [ObservableProperty] public partial bool SearchInsideArchives { get; set; } = true;
+    [ObservableProperty] public partial string ArchiveExtensions { get; set; } = AppSettings.DefaultArchiveExtensions;
 
     private bool _suppressAdminWarning;
     public bool SuppressAdminWarning
@@ -128,6 +132,8 @@ public sealed partial class MainViewModel : ObservableObject
         get => _suppressAdminWarning;
         set => SetProperty(ref _suppressAdminWarning, value);
     }
+
+    [ObservableProperty] public partial bool HasCompletedFirstRun { get; set; }
 
     /// <summary>Observable collection of skip-extension items for the multi-select dropdown.</summary>
     public ObservableCollection<SkipExtensionItem> SkipExtensionItems { get; } = [];
@@ -252,6 +258,102 @@ public sealed partial class MainViewModel : ObservableObject
         PersistSettings();
     }
 
+    // ── Archive (ZIP-like) extensions dropdown ────────────────────
+
+    /// <summary>Observable collection of archive-extension items for the multi-select dropdown.</summary>
+    public ObservableCollection<SkipExtensionItem> ArchiveExtensionItems { get; } = [];
+
+    /// <summary>Summary label for the archive-extensions dropdown button.</summary>
+    public string ArchiveExtensionsSummary
+    {
+        get
+        {
+            int count = ArchiveExtensionItems.Count;
+            return count == 0 ? "Archive ext: none" : $"Archive ext: {count}";
+        }
+    }
+
+    private static readonly Dictionary<string, string> ArchiveExtensionCategories = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["zip"] = "Archives", ["jar"] = "Java", ["war"] = "Java", ["ear"] = "Java",
+        ["nupkg"] = ".NET", ["vsix"] = ".NET",
+        ["apk"] = "Android", ["aab"] = "Android", ["aar"] = "Android",
+        ["appx"] = "Windows", ["msix"] = "Windows", ["appxbundle"] = "Windows", ["msixbundle"] = "Windows",
+        ["docx"] = "Office", ["xlsx"] = "Office", ["pptx"] = "Office",
+        ["odt"] = "OpenDoc", ["ods"] = "OpenDoc", ["odp"] = "OpenDoc",
+        ["epub"] = "eBooks",
+    };
+
+    private static string CategorizeArchiveExtension(string ext) =>
+        ArchiveExtensionCategories.TryGetValue(ext, out var cat) ? cat : "Other";
+
+    private bool _suppressArchiveExtensionSync;
+    private bool _updatingArchiveExtensionsFromItems;
+
+    partial void OnArchiveExtensionsChanged(string value)
+    {
+        if (_suppressArchiveExtensionSync || _updatingArchiveExtensionsFromItems) return;
+        SyncArchiveExtensionItems();
+    }
+
+    /// <summary>Rebuild the <see cref="ArchiveExtensionItems"/> collection from the current <see cref="ArchiveExtensions"/> string.</summary>
+    public void SyncArchiveExtensionItems()
+    {
+        _suppressArchiveExtensionSync = true;
+        try
+        {
+            var enabled = ParseExtensionSet(ArchiveExtensions);
+
+            ArchiveExtensionItems.Clear();
+
+            // Only show extensions that are currently configured — removing one
+            // from the settings text box removes it from the dropdown entirely.
+            var groups = enabled
+                .GroupBy(CategorizeArchiveExtension)
+                .OrderBy(g => g.Key);
+
+            foreach (var group in groups)
+            {
+                foreach (var ext in group.OrderBy(e => e, StringComparer.OrdinalIgnoreCase))
+                {
+                    ArchiveExtensionItems.Add(new SkipExtensionItem(ext, group.Key, isEnabled: true));
+                }
+            }
+            OnPropertyChanged(nameof(ArchiveExtensionsSummary));
+        }
+        finally
+        {
+            _suppressArchiveExtensionSync = false;
+        }
+    }
+
+    /// <summary>Called when an archive-extension item is toggled. Removes unchecked items and persists.</summary>
+    public void OnArchiveExtensionToggled()
+    {
+        if (_suppressArchiveExtensionSync) return;
+
+        // Remove unchecked items directly instead of rebuilding the whole
+        // collection — a full Clear()+rebuild while the ItemsRepeater is
+        // materializing templates crashes WinUI.
+        for (int i = ArchiveExtensionItems.Count - 1; i >= 0; i--)
+        {
+            if (!ArchiveExtensionItems[i].IsEnabled)
+                ArchiveExtensionItems.RemoveAt(i);
+        }
+
+        _updatingArchiveExtensionsFromItems = true;
+        try
+        {
+            ArchiveExtensions = string.Join(';', ArchiveExtensionItems.Select(i => i.Extension));
+        }
+        finally
+        {
+            _updatingArchiveExtensionsFromItems = false;
+        }
+        OnPropertyChanged(nameof(ArchiveExtensionsSummary));
+        PersistSettings();
+    }
+
     private string _globalHotkeyKey = HotkeyService.DefaultStartKey.ToString();
     public string GlobalHotkeyKey
     {
@@ -265,18 +367,18 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
-    [ObservableProperty] private bool _isSearching;
-    [ObservableProperty] private string _statusText = string.Empty;
-    [ObservableProperty] private string? _errorText;
-    [ObservableProperty] private string? _fallbackReason;
-    [ObservableProperty] private int _filesScanned;
-    [ObservableProperty] private int _totalFiles;
-    [ObservableProperty] private int _matchesFound;
-    [ObservableProperty] private int _filesSkipped;
-    [ObservableProperty] private int _accessDeniedCount;
-    [ObservableProperty] private bool _truncated;
-    [ObservableProperty] private bool _degraded;
-    [ObservableProperty] private string _filesPerSecondText = string.Empty;
+    [ObservableProperty] public partial bool IsSearching { get; set; }
+    [ObservableProperty] public partial string StatusText { get; set; } = string.Empty;
+    [ObservableProperty] public partial string? ErrorText { get; set; }
+    [ObservableProperty] public partial string? FallbackReason { get; set; }
+    [ObservableProperty] public partial int FilesScanned { get; set; }
+    [ObservableProperty] public partial int TotalFiles { get; set; }
+    [ObservableProperty] public partial int MatchesFound { get; set; }
+    [ObservableProperty] public partial int FilesSkipped { get; set; }
+    [ObservableProperty] public partial int AccessDeniedCount { get; set; }
+    [ObservableProperty] public partial bool Truncated { get; set; }
+    [ObservableProperty] public partial bool Degraded { get; set; }
+    [ObservableProperty] public partial string FilesPerSecondText { get; set; } = string.Empty;
 
     /// <summary>Disk-backed store for evicted results. Null before first search.</summary>
     public ResultStore? ActiveResultStore => _resultStore;
@@ -402,6 +504,7 @@ public sealed partial class MainViewModel : ObservableObject
                 SkipBinary = SkipBinary,
                 SkipExtensions = ParseExtensionSet(SkipExtensions),
                 SearchInsideArchives = SearchInsideArchives,
+                ArchiveExtensions = ParseDottedExtensionSet(ArchiveExtensions),
                 MaxDegreeOfParallelism = ResolveParallelism(ParallelismIndex),
                 MaxProcessMemoryBytes = MemoryLimitMB > 0 ? (long)MemoryLimitMB * 1024 * 1024 : 0,
                 MemoryPressurePercent = MemoryPressurePercent,
@@ -854,8 +957,10 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.SdkChannelBufferSize = SdkChannelBufferSize;
         _settings.SkipBinary = SkipBinary;
         _settings.SearchInsideArchives = SearchInsideArchives;
+        _settings.ArchiveExtensions = ArchiveExtensions;
         _settings.SkipExtensions = SkipExtensions;
         _settings.SuppressAdminWarning = SuppressAdminWarning;
+        _settings.HasCompletedFirstRun = HasCompletedFirstRun;
 
         Helpers.LineTruncator.TruncatedLength = LineTruncationLength;
 
@@ -892,6 +997,18 @@ public sealed partial class MainViewModel : ObservableObject
                 s.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                  .Select(e => e.TrimStart('.', '*')),
                 StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Parse a semicolon-separated extension string into a set WITH leading dots (e.g. ".zip", ".docx").</summary>
+    private static HashSet<string> ParseDottedExtensionSet(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s))
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return new HashSet<string>(
+            s.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+             .Select(e => e.TrimStart('.', '*'))
+             .Select(e => "." + e),
+            StringComparer.OrdinalIgnoreCase);
+    }
 
     private static int ResolveParallelism(int index)
     {

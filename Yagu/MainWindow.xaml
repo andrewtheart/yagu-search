@@ -148,6 +148,46 @@
                     <CheckBox Content="Search archives" IsChecked="{x:Bind ViewModel.SearchInsideArchives, Mode=TwoWay}"
                               VerticalAlignment="Center" MinWidth="0"
                               ToolTipService.ToolTip="Detect ZIP archives by file header and search text files inside them (supports nested zips)" />
+                    <DropDownButton Content="{x:Bind ViewModel.ArchiveExtensionsSummary, Mode=OneWay}"
+                                    VerticalAlignment="Center" FontSize="12"
+                                    ToolTipService.ToolTip="ZIP-like extensions to bypass from skip list when archive search is on">
+                        <DropDownButton.Flyout>
+                            <Flyout Placement="BottomEdgeAlignedLeft">
+                                <StackPanel Width="320" Spacing="2">
+                                    <Grid Margin="0,0,0,6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Archive Extensions" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                        <HyperlinkButton Grid.Column="1" Content="All" Click="OnArchiveExtSelectAll" Padding="4,2" />
+                                        <HyperlinkButton Grid.Column="2" Content="None" Click="OnArchiveExtSelectNone" Padding="4,2" />
+                                    </Grid>
+                                    <ScrollViewer MaxHeight="380" VerticalScrollBarVisibility="Auto">
+                                        <ItemsRepeater x:Name="ArchiveExtRepeater"
+                                                       ItemsSource="{x:Bind ViewModel.ArchiveExtensionItems, Mode=OneWay}">
+                                            <ItemsRepeater.Layout>
+                                                <StackLayout Spacing="0" />
+                                            </ItemsRepeater.Layout>
+                                            <ItemsRepeater.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:SkipExtensionItem">
+                                                    <CheckBox IsChecked="{x:Bind IsEnabled, Mode=TwoWay}"
+                                                              MinWidth="0" MinHeight="0" Padding="6,2"
+                                                              Checked="OnArchiveExtToggled" Unchecked="OnArchiveExtToggled">
+                                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                                            <TextBlock Text="{x:Bind Extension}" FontFamily="Consolas" Width="80" />
+                                                            <TextBlock Text="{x:Bind Category}" Opacity="0.5" FontSize="11" />
+                                                        </StackPanel>
+                                                    </CheckBox>
+                                                </DataTemplate>
+                                            </ItemsRepeater.ItemTemplate>
+                                        </ItemsRepeater>
+                                    </ScrollViewer>
+                                </StackPanel>
+                            </Flyout>
+                        </DropDownButton.Flyout>
+                    </DropDownButton>
                     <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                         <TextBlock Text="Context:" VerticalAlignment="Center" Opacity="0.8" />
                         <NumberBox Value="{x:Bind ViewModel.ContextLines, Mode=TwoWay}" Minimum="0" Maximum="20"

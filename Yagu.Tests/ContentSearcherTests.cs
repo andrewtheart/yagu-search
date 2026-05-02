@@ -525,7 +525,7 @@ public class ContentSearcherManagedRegexTests : IDisposable
         // A lookahead-only pattern produces zero-width matches that should be skipped
         var regex = new Regex(@"(?=foo)", RegexOptions.IgnoreCase);
         var hits = ContentSearcher.FindMatches(" foobar foo ", regex, null, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(0, hits.Count);
+        Assert.Empty(hits);
     }
 
     [Fact]
