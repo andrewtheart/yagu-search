@@ -341,6 +341,8 @@ fn open_and_mmap(path: &str, max_file_size: u64) -> Result<Mmap, c_int> {
 }
 
 /// Convert a `ScanError` to the corresponding FFI status code.
+#[cold]
+#[inline(never)]
 fn scan_error_to_status(err: &ScanError) -> c_int {
     match err {
         ScanError::BinarySkipped => STATUS_BINARY_SKIPPED,
@@ -354,6 +356,8 @@ fn scan_error_to_status(err: &ScanError) -> c_int {
 ///
 /// # Safety
 /// `out_error_msg` and `out_error_msg_len` must be valid pointers (or null).
+#[cold]
+#[inline(never)]
 unsafe fn write_scan_error_msg(
     err: ScanError,
     out_error_msg: *mut *mut u8,
@@ -600,6 +604,7 @@ pub struct QgMatchView {
 /// Callback returns 0 to continue, non-zero to stop scanning early.
 pub type QgMatchCallback = unsafe extern "C" fn(ctx: *mut c_void, m: *const QgMatchView) -> c_int;
 
+#[inline]
 fn pack_lines(lines: &[Vec<u8>], buf: &mut Vec<u8>) {
     buf.clear();
     for l in lines {

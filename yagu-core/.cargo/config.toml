@@ -1,0 +1,21 @@
+# Per-crate Cargo config. Yagu is shipped only as an x86_64 Windows binary,
+# so we raise the codegen baseline above the default `x86-64` (which targets
+# circa-2003 CPUs and disables SSE3/SSSE3/SSE4.1/SSE4.2/POPCNT).
+#
+# `x86-64-v2` corresponds to Nehalem (2008) and is the documented baseline for
+# Windows 11. It is universally available on any machine that can run a current
+# version of Windows 10 / 11, and unlocks SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT
+# for the regex/memchr/memmem inner loops and our own scan helpers.
+#
+# We deliberately do not pick `x86-64-v3` (Haswell, AVX2) because some still-in-
+# use OEM laptops (pre-2013) lack AVX2; `memchr`/`regex` already runtime-detect
+# AVX2 and dispatch dynamically, so we do not lose AVX2 in those hot loops.
+#
+# To override locally for benchmarking against `target-cpu=native`, set
+# CARGO_BUILD_RUSTFLAGS or pass `--config 'build.rustflags=["-C","target-cpu=native"]'`.
+
+[build]
+rustflags = ["-C", "target-cpu=x86-64-v2"]
+
+[target.'cfg(all(target_arch = "x86_64", target_os = "windows"))']
+rustflags = ["-C", "target-cpu=x86-64-v2"]

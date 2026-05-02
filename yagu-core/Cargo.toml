@@ -22,11 +22,21 @@ grep-searcher = { version = "=0.1.16", optional = true }
 grep-regex = { version = "=0.1.14", optional = true }
 grep-matcher = { version = "=0.1.8", optional = true }
 
+# Optional alternative allocator (perf-book "Alternative Allocators"). On
+# Windows the system allocator (`HeapAlloc`) has high per-allocation overhead
+# for the small `Vec<u8>` line/context buffers we churn through during scans.
+# `mimalloc` typically reduces alloc-heavy workloads by 5-15% on Windows.
+# Opt-in via `--features mimalloc` so the default cdylib stays dependency-light.
+mimalloc = { version = "0.1", default-features = false, optional = true }
+
 [features]
 default = []
 # Enables the experimental scan_grep module that uses grep-searcher / grep-regex
 # instead of the in-tree scanner. Off by default — Phase 6 spike.
 grep_crates = ["dep:grep-searcher", "dep:grep-regex", "dep:grep-matcher"]
+# Enables mimalloc as the global allocator for this cdylib's Rust-side
+# allocations (see Cargo.toml comment above).
+mimalloc = ["dep:mimalloc"]
 
 [dev-dependencies]
 tempfile = "3"

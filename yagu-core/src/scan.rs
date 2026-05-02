@@ -229,6 +229,7 @@ pub fn scan_bytes_with_matcher_ex(
     Ok(emitted)
 }
 
+#[inline]
 pub(crate) fn copy_context_line_for_record(line: &[u8]) -> Vec<u8> {
     if line.len() <= MAX_EMITTED_LINE_BYTES {
         return line.to_vec();
@@ -499,6 +500,7 @@ impl LiteralMatcher {
 }
 
 impl LineMatcher for LiteralMatcher {
+    #[inline]
     fn find(&self, hay: &[u8]) -> Option<(usize, usize)> {
         match &self.impl_ {
             LiteralImpl::CaseSensitive { finder, len } => {
@@ -514,6 +516,7 @@ impl LineMatcher for LiteralMatcher {
     }
 }
 
+#[inline]
 fn find_ascii_case_insensitive(hay: &[u8], needle_lower: &[u8]) -> Option<usize> {
     if needle_lower.is_empty() {
         return Some(0);
@@ -547,6 +550,7 @@ fn find_ascii_case_insensitive(hay: &[u8], needle_lower: &[u8]) -> Option<usize>
     None
 }
 
+#[inline]
 fn ascii_byte_eq_lower(actual: u8, expected_lower: u8) -> bool {
     if expected_lower.is_ascii_alphabetic() {
         actual.to_ascii_lowercase() == expected_lower
@@ -560,6 +564,7 @@ pub struct RegexMatcher {
 }
 
 impl LineMatcher for RegexMatcher {
+    #[inline]
     fn find(&self, hay: &[u8]) -> Option<(usize, usize)> {
         self.re.find(hay).map(|m| (m.start(), m.end() - m.start()))
     }
