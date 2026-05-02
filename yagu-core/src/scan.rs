@@ -126,15 +126,12 @@ pub fn scan_bytes_with_matcher_ex(
     }
 
     let mut emitted = 0usize;
-    let mut line_number: u64 = 0;
     let mut before: VecDeque<Vec<u8>> = VecDeque::with_capacity(options.context_before);
     // Pending after-context: each entry is (record, lines_remaining).
     // VecDeque for O(1) front removal when flushing completed records.
     let mut pending: VecDeque<(MatchRecord, usize)> = VecDeque::new();
 
-    for line in bytes.lines() {
-        line_number += 1;
-
+    for (line_number, line) in (1_u64..).zip(bytes.lines()) {
         // Per-line cancellation poll: independent of match rate so no-match
         // and sparse-match scans react promptly to the cancel flag.
         if should_cancel() {
@@ -455,7 +452,7 @@ pub struct LiteralMatcher {
 
 enum LiteralImpl {
     CaseSensitive {
-        finder: memmem::Finder<'static>,
+        finder: Box<memmem::Finder<'static>>,
         len: usize,
     },
     AsciiCaseInsensitive {
@@ -471,7 +468,7 @@ impl LiteralMatcher {
     fn new_case_sensitive(needle: &[u8]) -> Self {
         Self {
             impl_: LiteralImpl::CaseSensitive {
-                finder: memmem::Finder::new(needle).into_owned(),
+                finder: Box::new(memmem::Finder::new(needle).into_owned()),
                 len: needle.len(),
             },
         }
@@ -1063,27 +1060,17 @@ mod tests {
     #[test]
     fn looks_binary_suspicious_control_chars() {
         // >= 512 bytes with > 5% suspicious control chars
-        let mut data = Vec::with_capacity(600);
-        for _ in 0..564 {
-            data.push(b'a');
-        }
+        let mut data = vec![b'a'; 564];
         // Add ~36 suspicious control characters (6%+ of 600)
-        for _ in 0..36 {
-            data.push(0x01); // control char, not tab/lf/cr
-        }
+        data.extend(std::iter::repeat_n(0x01, 36)); // control char, not tab/lf/cr
         assert!(looks_binary(&data));
     }
 
     #[test]
     fn looks_binary_below_threshold_not_binary() {
         // >= 512 bytes with < 5% suspicious — should NOT be binary
-        let mut data = Vec::with_capacity(600);
-        for _ in 0..590 {
-            data.push(b'a');
-        }
-        for _ in 0..10 {
-            data.push(0x01); // only ~1.6%
-        }
+        let mut data = vec![b'a'; 590];
+        data.extend(std::iter::repeat_n(0x01, 10)); // only ~1.6%
         assert!(!looks_binary(&data));
     }
 
@@ -1265,7 +1252,7 @@ mod tests {
         let e3 = ScanError::BinarySkipped;
         assert!(format!("{:?}", e3).contains("BinarySkipped"));
 
-        let io = ScanError::Io(std::io::Error::new(std::io::ErrorKind::Other, "x"));
+        let io = ScanError::Io(std::io::Error::other("x"));
         assert!(format!("{:?}", io).contains("Io"));
     }
 

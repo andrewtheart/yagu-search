@@ -1081,8 +1081,8 @@ public sealed class SearchService
     /// Sink for the batch native parallel scanner. The Rust side serialises callbacks
     /// under a mutex, so this does not need to be thread-safe.
     /// Arrays are rented from ArrayPool to avoid per-batch allocations (ETL showed
-    /// 112 MB of SearchResult[] + int[] churn). File paths are deduped so that all
-    /// matches in the same file share the same string instance (ETL: 6 GB of String).
+    /// 112 MB of SearchResult[] + int[] churn). Results reuse the indexed path
+    /// string from the input batch instead of hashing per match.
     /// </summary>
     [ExcludeFromCodeCoverage]
     private sealed class BatchScanSink : Native.NativeSearcher.IParallelSink, IDisposable
@@ -1097,15 +1097,10 @@ public sealed class SearchService
         // Per-file result buffers: accumulate matches for each file and flush them
         // atomically in OnFileDone so the channel never contains interleaved results
         // from different files (which would corrupt ripgrep-style grouped output).
-        // Lists are pooled: cleared and reused rather than reallocated per file.
+        // The buffer array is pooled because this object is created for every batch.
         private readonly List<SearchResult>?[] _buffers;
         private int _runningTotal; // starts from outer totalMatches at batch start
         private bool _stopped;
-
-        // File-path dedup: all matches for the same file share a single string instance,
-        // avoiding thousands of duplicate string references surviving to Gen 2.
-        // The dictionary is reused across batches via Reset().
-        private readonly Dictionary<string, string> _pathCache = new(StringComparer.Ordinal);
 
         public bool Truncated { get; private set; }
         public int TotalEmitted { get; private set; }
@@ -1126,30 +1121,27 @@ public sealed class SearchService
             _emitted = ArrayPool<int>.Shared.Rent(paths.Count);
             _statuses = ArrayPool<int>.Shared.Rent(paths.Count);
             _fileLength = ArrayPool<long>.Shared.Rent(paths.Count);
-            _buffers = new List<SearchResult>?[paths.Count];
+            _buffers = ArrayPool<List<SearchResult>?>.Shared.Rent(paths.Count);
             Array.Clear(_emitted, 0, paths.Count);
             Array.Clear(_statuses, 0, paths.Count);
             Array.Clear(_fileLength, 0, paths.Count);
+            Array.Clear(_buffers, 0, paths.Count);
         }
 
         public void Dispose()
         {
+            for (int i = 0; i < _count; i++)
+                _buffers[i]?.Clear();
+            Array.Clear(_buffers, 0, _count);
             ArrayPool<int>.Shared.Return(_emitted);
             ArrayPool<int>.Shared.Return(_statuses);
             ArrayPool<long>.Shared.Return(_fileLength);
+            ArrayPool<List<SearchResult>?>.Shared.Return(_buffers);
         }
 
         public int GetEmitted(int i) => _emitted[i];
         public int GetStatus(int i) => _statuses[i];
         public long GetFileLength(int i) => _fileLength[i];
-
-        private string DeduplicatePath(string path)
-        {
-            if (_pathCache.TryGetValue(path, out var cached))
-                return cached;
-            _pathCache[path] = path;
-            return path;
-        }
 
         // IStreamingSink.OnMatch — not used in parallel path.
         public unsafe int OnMatch(Native.NativeSearcher.QgMatchView* m) => 1;
@@ -1159,7 +1151,7 @@ public sealed class SearchService
             if (_stopped) return 1;
 
             int idx = (int)fileIndex;
-            string filePath = DeduplicatePath(_paths[idx]);
+            string filePath = _paths[idx];
 
             var view = *m;
             int lineBytes = view.LineLen > (nuint)int.MaxValue ? int.MaxValue : (int)view.LineLen;

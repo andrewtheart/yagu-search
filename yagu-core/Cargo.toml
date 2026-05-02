@@ -38,3 +38,8 @@ codegen-units = 1
 opt-level = 3
 panic = "abort"
 strip = "symbols"
+
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = "none"

@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
@@ -442,46 +443,60 @@ internal static partial class NativeSearcher
         if (!IsAvailable) return StatusOpenFailed;
         if (paths.Count == 0) return StatusOk;
 
-        // Concatenate UTF-16 paths and build a parallel length array.
+        // Concatenate UTF-16 paths and build a parallel length array. These
+        // buffers are hot per-batch allocations, so rent them and reuse the
+        // backing storage across searches.
         int totalChars = 0;
-        for (int i = 0; i < paths.Count; i++) totalChars += paths[i].Length;
-        var concat = new char[totalChars];
-        var lengths = new uint[paths.Count];
-        int cursor = 0;
         for (int i = 0; i < paths.Count; i++)
-        {
-            var s = paths[i];
-            s.AsSpan().CopyTo(concat.AsSpan(cursor));
-            lengths[i] = (uint)s.Length;
-            cursor += s.Length;
-        }
+            totalChars = checked(totalChars + paths[i].Length);
 
-        var gcHandle = GCHandle.Alloc(sink, GCHandleType.Normal);
+        var concat = ArrayPool<char>.Shared.Rent(totalChars);
+        var lengths = ArrayPool<uint>.Shared.Rent(paths.Count);
         try
         {
-            fixed (char* pConcat = concat)
-            fixed (uint* pLengths = lengths)
+            var concatSpan = concat.AsSpan(0, totalChars);
+            var lengthsSpan = lengths.AsSpan(0, paths.Count);
+            int cursor = 0;
+            for (int i = 0; i < paths.Count; i++)
             {
-                int ret = QgSessionScanPathsParallelEx(
-                    session.Handle,
-                    pConcat,
-                    pLengths,
-                    (nuint)paths.Count,
-                    (uint)Math.Max(0, threadCount),
-                    cancelFlag,
-                    &OnParallelMatchTrampoline,
-                    &OnParallelFileDoneTrampoline,
-                    (void*)GCHandle.ToIntPtr(gcHandle));
+                var s = paths[i];
+                s.AsSpan().CopyTo(concatSpan[cursor..]);
+                lengthsSpan[i] = (uint)s.Length;
+                cursor += s.Length;
+            }
 
-                if (sink.CapturedException is { } ex)
-                    throw new InvalidOperationException("Parallel sink threw inside native callback", ex);
+            var gcHandle = GCHandle.Alloc(sink, GCHandleType.Normal);
+            try
+            {
+                fixed (char* pConcat = concatSpan)
+                fixed (uint* pLengths = lengthsSpan)
+                {
+                    int ret = QgSessionScanPathsParallelEx(
+                        session.Handle,
+                        pConcat,
+                        pLengths,
+                        (nuint)paths.Count,
+                        (uint)Math.Max(0, threadCount),
+                        cancelFlag,
+                        &OnParallelMatchTrampoline,
+                        &OnParallelFileDoneTrampoline,
+                        (void*)GCHandle.ToIntPtr(gcHandle));
 
-                return ret;
+                    if (sink.CapturedException is { } ex)
+                        throw new InvalidOperationException("Parallel sink threw inside native callback", ex);
+
+                    return ret;
+                }
+            }
+            finally
+            {
+                gcHandle.Free();
             }
         }
         finally
         {
-            gcHandle.Free();
+            ArrayPool<uint>.Shared.Return(lengths);
+            ArrayPool<char>.Shared.Return(concat);
         }
     }
 

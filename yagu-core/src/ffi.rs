@@ -112,8 +112,8 @@ fn use_ascii_literal_fast_path(pattern: &str, use_regex: bool, case_sensitive: b
 mod test_inject {
     use std::cell::Cell;
     thread_local! {
-        static FAIL_METADATA: Cell<bool> = Cell::new(false);
-        static FAIL_MMAP: Cell<bool> = Cell::new(false);
+        static FAIL_METADATA: Cell<bool> = const { Cell::new(false) };
+        static FAIL_MMAP: Cell<bool> = const { Cell::new(false) };
     }
     pub fn should_fail_metadata() -> bool {
         FAIL_METADATA.with(|c| c.get())
@@ -212,15 +212,11 @@ fn open_file_for_scan(
     // Small file path: a single sized read is faster than mmap setup. The
     // scan layer's own `looks_binary` will handle the binary check if
     // `skip_binary` is set, so we don't need a separate probe here.
-    // `read_exact` over a presized buffer avoids the growth-and-zero-init
-    // overhead of `read_to_end`'s internal buffer doubling.
+    // `read_exact` over a presized buffer avoids `read_to_end`'s internal
+    // growth loop while keeping the buffer initialized for safe Rust.
     if file_size <= MMAP_THRESHOLD_BYTES {
         let size = file_size as usize;
-        let mut buf: Vec<u8> = Vec::with_capacity(size);
-        // SAFETY: we set the length to `size`, which equals capacity, and
-        // immediately overwrite the entire range with `read_exact`. Any I/O
-        // error returns before the buffer is observed.
-        unsafe { buf.set_len(size) };
+        let mut buf: Vec<u8> = vec![0; size];
         if let Err(e) = file.read_exact(&mut buf[..]) {
             // Tolerate truncation between metadata() and read (rare on Windows
             // but possible if another process truncates concurrently). Fall
@@ -300,11 +296,7 @@ fn open_file_for_scan_into<'a>(
     if file_size <= MMAP_THRESHOLD_BYTES {
         let size = file_size as usize;
         scratch.clear();
-        scratch.reserve(size);
-        // SAFETY: we set the length to `size <= capacity` and immediately
-        // overwrite the full range with `read_exact`. On error we truncate
-        // before the caller observes the buffer.
-        unsafe { scratch.set_len(size) };
+        scratch.resize(size, 0);
         if let Err(e) = file.read_exact(&mut scratch[..]) {
             scratch.clear();
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
@@ -465,7 +457,7 @@ pub unsafe extern "C" fn qg_search_file(
         None
     } else {
         debug_assert!(
-            cancel_flag as usize % std::mem::align_of::<AtomicI32>() == 0,
+            (cancel_flag as usize).is_multiple_of(std::mem::align_of::<AtomicI32>()),
             "cancel_flag must be 4-byte aligned"
         );
         Some(&*(cancel_flag as *const AtomicI32))
@@ -702,7 +694,7 @@ pub unsafe extern "C" fn qg_search_file_stream(
         None
     } else {
         debug_assert!(
-            cancel_flag as usize % std::mem::align_of::<AtomicI32>() == 0,
+            (cancel_flag as usize).is_multiple_of(std::mem::align_of::<AtomicI32>()),
             "cancel_flag must be 4-byte aligned"
         );
         Some(&*(cancel_flag as *const AtomicI32))
@@ -934,7 +926,7 @@ pub unsafe extern "C" fn qg_session_search_file_stream(
         None
     } else {
         debug_assert!(
-            cancel_flag as usize % std::mem::align_of::<AtomicI32>() == 0,
+            (cancel_flag as usize).is_multiple_of(std::mem::align_of::<AtomicI32>()),
             "cancel_flag must be 4-byte aligned"
         );
         Some(&*(cancel_flag as *const AtomicI32))
@@ -1105,6 +1097,14 @@ pub unsafe extern "C" fn qg_session_scan_paths_parallel(
 }
 
 #[no_mangle]
+/// Extended parallel batch search using a pre-compiled session.
+///
+/// # Safety
+/// All pointers must remain valid for the duration of the call. `session` must
+/// be a live session. `paths_utf16_concat` must reference a buffer of at least
+/// `sum(path_lengths[0..path_count])` u16 elements. `path_lengths` must
+/// reference at least `path_count` u32 elements. Callbacks must be valid
+/// `extern "C"` function pointers.
 pub unsafe extern "C" fn qg_session_scan_paths_parallel_ex(
     session: *const QgSession,
     paths_utf16_concat: *const c_ushort,
@@ -1129,6 +1129,7 @@ pub unsafe extern "C" fn qg_session_scan_paths_parallel_ex(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn qg_session_scan_paths_parallel_impl(
     session: *const QgSession,
     paths_utf16_concat: *const c_ushort,
@@ -1172,7 +1173,7 @@ unsafe fn qg_session_scan_paths_parallel_impl(
         None
     } else {
         debug_assert!(
-            cancel_flag as usize % std::mem::align_of::<AtomicI32>() == 0,
+            (cancel_flag as usize).is_multiple_of(std::mem::align_of::<AtomicI32>()),
             "cancel_flag must be 4-byte aligned"
         );
         Some(&*(cancel_flag as *const AtomicI32))
@@ -1452,7 +1453,7 @@ mod tests {
     fn free_buffer_zero_len() {
         unsafe {
             // A non-null ptr with len=0 should be treated as no-op
-            qg_free_buffer(1 as *mut u8, 0);
+            qg_free_buffer(std::ptr::dangling_mut::<u8>(), 0);
         }
     }
 
@@ -3828,7 +3829,7 @@ mod tests {
             let binary = dir.path().join("bin.bin");
             std::fs::write(&binary, b"hello\0world\n").unwrap();
             let missing = dir.path().join("missing.txt").to_string_lossy().into_owned();
-            let paths = vec![
+            let paths = [
                 good.to_string_lossy().into_owned(),
                 binary.to_string_lossy().into_owned(),
                 missing,
@@ -3917,7 +3918,7 @@ mod tests {
             // We must not have processed every file — at least one file
             // should still report status -1 (untouched) because the workers
             // bailed out.
-            assert!(h.statuses.iter().any(|&s| s == -1));
+            assert!(h.statuses.contains(&-1));
             qg_free_session(session);
         }
     }
