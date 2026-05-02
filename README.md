@@ -2,9 +2,15 @@
 
 Yagu is a fast Windows directory search tool for finding text or regex matches across large folder trees. It is a native WinUI 3 desktop app built on .NET 10, with an optional Rust search engine DLL for the hot content-scanning path and optional voidtools Everything integration for very fast file discovery.
 
-The name means "Yet Another Grep Utility". The goal is the speed of command-line search with a GUI built for repeated code and log investigation: streaming results, context preview, filtering, sorting, exporting, and quick opening in your editor. A headless `--cli` mode is also available for terminal use with ripgrep-compatible output.
+The name means "Yet Another Grep Utility". The goal is the speed of command-line search with a GUI built for repeated code and log investigation: streaming results, context preview, filtering, sorting, exporting, and quick opening in your editor.
 
 For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
+
+## Current Project Status
+
+Use [Yagu.sln](Yagu.sln) for current development. [QuickGrep.sln](QuickGrep.sln) and the [QuickGrep](QuickGrep/) folder are legacy remnants from the previous project name and are not the active build target.
+
+The [PLANS](PLANS/) directory contains design notes, performance investigations, and future optimization plans. Treat those files as engineering history and roadmap material, not as the canonical build instructions. This README is the entry point for new contributors.
 
 ## Important Features
 
@@ -26,8 +32,6 @@ For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
 - Copy or export selected match lines, selected file paths, or selected files with content.
 - Explorer context menu registration for "Search with Yagu".
 - Startup directory argument via `--dir` or `--dir=...`.
-- Headless `--cli` mode for command-line usage with ripgrep-compatible output format.
-- ZIP archive content search with support for nested archives.
 - Recent directory and search-query history.
 - Drag-and-drop folders onto the window to set the search directory.
 - Optional global `Ctrl+Shift+letter` hotkey to bring Yagu forward and focus the search box.
@@ -153,55 +157,25 @@ Uninstall the context menu entry:
 
 The registered command launches `Yagu.exe --dir "%V"` for folder and folder-background right-clicks.
 
-### Install And Uninstall
-
-Build and install Yagu to a directory:
-
-```powershell
-.\Install-Wagu.ps1 -InstallDir 'C:\Tools\Yagu'
-```
-
-Remove the installation:
-
-```powershell
-.\Uninstall-Wagu.ps1 -InstallDir 'C:\Tools\Yagu'
-```
-
-### CLI Mode
-
-Run Yagu headlessly from a terminal with ripgrep-compatible output:
-
-```powershell
-Yagu.exe --cli --dir "D:\projects\myapp" "search query"
-```
-
 ## Repository Layout
 
 | Path | Purpose |
 | --- | --- |
-| [Yagu.sln](Yagu.sln) | Solution for the app, tests, and benchmarks. |
-| [global.json](global.json) | Pins the .NET SDK version with `rollForward: latestFeature`. |
-| [HELP.md](HELP.md) | User-focused walkthrough of the app. |
-| [Yagu](Yagu/) | Main WinUI 3 application: XAML UI, view model, services, models, helpers, and native wrappers. |
+| [Yagu.sln](Yagu.sln) | Current solution for the app, tests, and benchmarks. |
+| [Yagu](Yagu/) | Main WinUI 3 application: XAML UI, view model, services, models, and native wrappers. |
 | [Yagu/Yagu.csproj](Yagu/Yagu.csproj) | App project, package references, WinUI settings, and Rust build integration. |
-| [Yagu/Program.cs](Yagu/Program.cs) | App entry point. Routes `--cli` to headless CLI mode, otherwise starts the WinUI GUI. |
-| [Yagu/CliRunner.cs](Yagu/CliRunner.cs) | Headless `--cli` mode: parses arguments, loads settings, streams results to stdout in ripgrep-compatible format. |
 | [Yagu/MainWindow.xaml](Yagu/MainWindow.xaml) | Main search UI layout. |
 | [Yagu/MainWindow.xaml.cs](Yagu/MainWindow.xaml.cs) | UI event handlers, preview rendering/editing, Everything install/start prompts, hotkey hook. |
 | [Yagu/ViewModels/MainViewModel.cs](Yagu/ViewModels/MainViewModel.cs) | MVVM search state, settings binding, result grouping, commands, memory-pressure handling. |
 | [Yagu/Models](Yagu/Models/) | Search options, results, grouped result collection, progress summaries, and file groups. |
-| [Yagu/Services](Yagu/Services/) | File discovery, content scanning, ZIP archive search, settings, logging, editor launch, hotkeys, result export, metadata cache, file-watch diagnostics, disk-backed result store. |
-| [Yagu/Helpers](Yagu/Helpers/) | Binary detection, encoding detection, glob matching, line truncation, and syntax highlighting. |
+| [Yagu/Services](Yagu/Services/) | File discovery, content scanning, settings, logging, editor launch, hotkeys, result export, disk-backed result store. |
 | [Yagu/Native](Yagu/Native/) | P/Invoke wrappers for `yagu_core.dll` and the Everything SDK. |
 | [yagu-core](yagu-core/) | Rust native search engine built as `yagu_core.dll`. |
 | [Yagu.Tests](Yagu.Tests/) | xUnit tests for the engine-facing C# code and helpers. |
 | [Yagu.Benchmarks](Yagu.Benchmarks/) | BenchmarkDotNet benchmark harness. |
 | [scripts/register-context-menu.ps1](scripts/register-context-menu.ps1) | Explorer context menu registration script. |
-| [scripts/increment-yagu-version.ps1](scripts/increment-yagu-version.ps1) | Auto-increments the build version number during compilation. |
-| [Install-Wagu.ps1](Install-Wagu.ps1) | Builds and installs the Yagu executable and companion files to a chosen directory. |
-| [Uninstall-Wagu.ps1](Uninstall-Wagu.ps1) | Removes files installed by `Install-Wagu.ps1` and unregisters the Explorer context menu. |
-| [SdkTest](SdkTest/) | Standalone Everything SDK test harness for verifying SDK connectivity. |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | Windows CI: Rust build/test, .NET restore/build/test, benchmark smoke test. |
+| [PLANS](PLANS/) | Design notes, performance reports, and future work. |
 
 ## Architecture
 
@@ -242,22 +216,10 @@ Everything SDK / es.exe /      Rust yagu_core.dll
 | `FileLister` | Discovers candidate files with Everything SDK, `es.exe`, or recursive managed enumeration. Pushes some filters into Everything when possible. |
 | `ContentSearcher` | Searches one file, choosing Rust native search when available and managed stream/MMF search otherwise. Applies binary, extension, size, encoding, and cancellation policies. |
 | `NativeSearcher` | C# P/Invoke wrapper over `yagu_core.dll`, including ABI checks, native sessions, streaming callbacks, and native status mapping. |
-| `ZipArchiveSearcher` | Searches inside ZIP archives for text content, supporting nested zips up to a configurable depth. |
 | `ResultStore` | Disk-backed temp store for match payloads evicted during memory pressure. |
-| `FileMetadataCache` | Thread-safe cache for file size and last-modified metadata used during search and result display. |
-| `FileWatchDiagnostics` | Lightweight per-file diagnostic logging for suspect files flagged by path substring matches. |
 | `SearchResultCollection` | WinUI-free grouped result model used by the UI and large-result performance tests. |
 | `SettingsService` | Loads and saves `%APPDATA%\Yagu\settings.json`. |
 | `LogService` | Writes `%APPDATA%\Yagu\yagu.log` and rotates large logs. |
-| `EditorLauncher` | Parses the editor command template and launches the configured external editor with `{file}` and `{line}` token substitution. |
-| `HotkeyService` | Registers and manages the optional global `Ctrl+Shift+letter` hotkey to bring Yagu forward. |
-| `SelectedFileExportService` | Formats and exports selected match lines, file paths, or files with content for clipboard and file output. |
-| `BinaryDetector` | Detects binary files via magic numbers, NUL bytes, and suspicious control-byte ratios. |
-| `EncodingDetector` | BOM sniffing with UTF-8 fallback for file encoding detection. |
-| `GlobMatcher` | Glob-style include/exclude matcher for absolute Windows paths, supporting extensions, path segments, and `**` wildcards. |
-| `LineTruncator` | Truncates long result lines for responsive UI display. |
-| `SyntaxHighlighter` | Lightweight regex-based syntax token classifier for the preview pane. |
-| `CliRunner` | Headless `--cli` mode: parses arguments, loads layered settings, and streams results to stdout in ripgrep-compatible format. |
 
 ## Search Pipeline
 
@@ -363,27 +325,20 @@ Areas covered by [Yagu.Tests](Yagu.Tests/) include:
 
 - `ContentSearcher` literal, regex, binary, size, encoding, and skip behavior.
 - `SearchService` progress, batching, limits, fallback events, and memory pressure behavior.
-- `SearchOptions` validation and option construction.
 - `FileLister` fallback enumeration and cycle-protection behavior.
 - `NativeSearcher` outcome mapping and native/managed parity.
 - Settings persistence and migration.
-- Log service writing and rotation.
-- Result store disk-backed eviction and rehydration.
 - Result grouping, sorting, filtering, selection, and large-result UI model behavior.
-- File group metadata loading and formatting.
 - Editor launcher command parsing.
 - Hotkey registration helpers.
 - Export formatting for selected files and selected content.
-- Syntax highlighting, glob matching, line truncation, binary detection, encoding detection, and other helpers.
-- Performance benchmark regression tests.
+- Syntax highlighting, glob matching, line truncation, and other helpers.
 
 Run Rust tests when changing [yagu-core](yagu-core/). Run .NET tests when changing [Yagu/Services](Yagu/Services/), [Yagu/Models](Yagu/Models/), [Yagu/Helpers](Yagu/Helpers/), [Yagu/Native](Yagu/Native/), or settings behavior. Run both when changing the native ABI or native search semantics.
 
 ## CI
 
-The GitHub Actions workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) runs on Windows and has two jobs:
-
-**build-test** (runs on every push/PR to `main`):
+The GitHub Actions workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) runs on Windows and performs:
 
 1. Checkout.
 2. Setup .NET 10 SDK.
@@ -395,15 +350,11 @@ The GitHub Actions workflow in [.github/workflows/ci.yml](.github/workflows/ci.y
 8. Build [Yagu.sln](Yagu.sln) in release mode.
 9. Run [Yagu.Tests](Yagu.Tests/).
 10. Upload test result artifacts.
-
-**benchmark-smoke** (runs after build-test succeeds):
-
-1. Checkout.
-2. Setup .NET 10 SDK and Rust stable.
-3. Run a short BenchmarkDotNet smoke benchmark.
+11. Run a short BenchmarkDotNet smoke benchmark.
 
 ## Development Notes
 
+- Prefer [Yagu.sln](Yagu.sln); [QuickGrep.sln](QuickGrep.sln) is stale.
 - The app build attempts `cargo build --release --quiet` for [yagu-core](yagu-core/) before C# compilation unless `BuildRustCore=false` is set.
 - After changing Rust FFI exports or ABI-sensitive code, rebuild [yagu-core](yagu-core/) before running .NET native parity tests.
 - The native DLL must match the process architecture.

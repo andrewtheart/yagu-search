@@ -788,20 +788,11 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void AddMatches(IReadOnlyList<SearchResult> results)
     {
-        bool resultAvailabilityChanged = false;
-        if (Degraded && _resultStore is not null)
-        {
-            _resultStore.WriteBatch(writeOne =>
-            {
-                for (int resultIndex = 0; resultIndex < results.Count; resultIndex++)
-                    resultAvailabilityChanged |= AddMatchCore(results[resultIndex], writeOne);
-            });
-        }
-        else
-        {
-            for (int resultIndex = 0; resultIndex < results.Count; resultIndex++)
-                resultAvailabilityChanged |= AddMatchCore(results[resultIndex], evictedResultWriter: null);
-        }
+        bool resultAvailabilityChanged = _resultCollection.AddRange(
+            results,
+            InitializeResultGroup,
+            evictNewResults: Degraded,
+            Degraded ? _resultStore : null);
 
         if (resultAvailabilityChanged)
             NotifyResultAvailabilityChanged();

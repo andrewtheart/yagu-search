@@ -15,7 +15,7 @@ public sealed class SearchResultCollection
     private GlobMatcher? _globMatcher;
 
     public IReadOnlyList<FileGroup> AllGroups => _allGroups;
-    public ObservableCollection<FileGroup> VisibleGroups { get; } = [];
+    public BatchObservableCollection<FileGroup> VisibleGroups { get; } = new();
 
     public string ResultFilter { get; set; } = string.Empty;
     public string FileNameFilter { get; set; } = string.Empty;
@@ -63,26 +63,49 @@ public sealed class SearchResultCollection
         bool evictNewResults = false,
         ResultStore? resultStore = null)
     {
-        bool resultAvailabilityChanged = false;
+        if (results.Count == 0) return false;
+
+        bool wasEmpty = _allGroups.Count == 0;
+        // Collect newly-created groups so we can batch-add them to VisibleGroups
+        // with a single Reset notification instead of one per group.
+        List<FileGroup>? newVisibleGroups = null;
+
+        void AddCore(SearchResult result, Func<string, IReadOnlyList<string>, IReadOnlyList<string>, long>? evictWriter)
+        {
+            var path = result.FilePath;
+            if (!_index.TryGetValue(path, out var group))
+            {
+                group = new FileGroup(path);
+                initializeNewGroup?.Invoke(group);
+                _index[path] = group;
+                _allGroups.Add(group);
+                if (MatchesFilter(group))
+                    (newVisibleGroups ??= []).Add(group);
+            }
+            group.Add(result);
+            if (evictWriter is not null)
+                EvictNewResultIfNeeded(result, evictNewResults, evictWriter);
+        }
+
         if (evictNewResults && resultStore is not null)
         {
             resultStore.WriteBatch(writeOne =>
             {
-                for (int resultIndex = 0; resultIndex < results.Count; resultIndex++)
-                {
-                    resultAvailabilityChanged |= Add(results[resultIndex], initializeNewGroup, evictNewResult: true, writeOne);
-                }
+                for (int i = 0; i < results.Count; i++)
+                    AddCore(results[i], writeOne);
             });
         }
         else
         {
-            for (int resultIndex = 0; resultIndex < results.Count; resultIndex++)
-            {
-                resultAvailabilityChanged |= Add(results[resultIndex], initializeNewGroup, evictNewResult: false);
-            }
+            for (int i = 0; i < results.Count; i++)
+                AddCore(results[i], null);
         }
 
-        return resultAvailabilityChanged;
+        // Flush new groups to VisibleGroups in one batch notification.
+        if (newVisibleGroups is not null)
+            VisibleGroups.AddRange(newVisibleGroups);
+
+        return wasEmpty && _allGroups.Count > 0;
     }
 
     public int EvictAll(ResultStore? resultStore)
@@ -172,8 +195,7 @@ public sealed class SearchResultCollection
         }
 
         VisibleGroups.Clear();
-        foreach (var group in sortedList)
-            VisibleGroups.Add(group);
+        VisibleGroups.AddRange(sortedList);
     }
 
     public List<SearchResult> GetAllSelectedResults()

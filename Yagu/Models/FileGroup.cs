@@ -46,7 +46,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     }
 
     /// <summary>Capped subset of items currently rendered in the UI.</summary>
-    public ObservableCollection<SearchResult> VisibleResults { get; } = new();
+    public BatchObservableCollection<SearchResult> VisibleResults { get; } = new();
 
     public FileGroup(string filePath)
     {
@@ -85,16 +85,20 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     {
         int start = VisibleResults.Count;
         int end = Math.Min(Count, start + PageSize);
+        var batch = new List<SearchResult>(end - start);
         for (int i = start; i < end; i++)
-            VisibleResults.Add(this[i]);
+            batch.Add(this[i]);
+        VisibleResults.AddRange(batch);
         NotifyMoreStateChanged();
     }
 
     public void ShowAll()
     {
         int start = VisibleResults.Count;
+        var batch = new List<SearchResult>(Count - start);
         for (int i = start; i < Count; i++)
-            VisibleResults.Add(this[i]);
+            batch.Add(this[i]);
+        VisibleResults.AddRange(batch);
         NotifyMoreStateChanged();
     }
 
