@@ -138,12 +138,12 @@ public sealed class ContentSearcher
         {
             try
             {
-                using var peekFs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                Span<byte> headerBuf = stackalloc byte[4];
+                using var peekFs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.Asynchronous);
+                var headerBuf = new byte[4];
                 int headerRead = 0;
                 while (headerRead < 4)
                 {
-                    int n = peekFs.Read(headerBuf[headerRead..]);
+                    int n = await peekFs.ReadAsync(headerBuf.AsMemory(headerRead), cancellationToken).ConfigureAwait(false);
                     if (n <= 0) break;
                     headerRead += n;
                 }
@@ -208,7 +208,7 @@ public sealed class ContentSearcher
         CancellationToken cancellationToken,
         FileMetadata metadata)
     {
-        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan);
+        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan | FileOptions.Asynchronous);
         var encoding = EncodingDetector.DetectEncoding(fs);
         using var reader = new StreamReader(fs, encoding, detectEncodingFromByteOrderMarks: true);
         return await SearchLinesAsync(filePath, reader, regex, literal, literalComparison, options, writer, cancellationToken, metadata).ConfigureAwait(false);
@@ -230,22 +230,22 @@ public sealed class ContentSearcher
         CancellationToken cancellationToken,
         FileMetadata metadata)
     {
-        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan);
+        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan | FileOptions.Asynchronous);
 
         // Single 8 KB peek: shared by binary detection + encoding detection.
-        Span<byte> peek = stackalloc byte[BinaryDetector.SampleBytes];
+        var peek = new byte[BinaryDetector.SampleBytes];
         int peekRead = 0;
         while (peekRead < peek.Length)
         {
-            int n = fs.Read(peek[peekRead..]);
+            int n = await fs.ReadAsync(peek.AsMemory(peekRead), cancellationToken).ConfigureAwait(false);
             if (n <= 0) break;
             peekRead += n;
         }
 
-        if (options.SkipBinary && peekRead > 0 && BinaryDetector.IsBinary(peek[..peekRead]))
+        if (options.SkipBinary && peekRead > 0 && BinaryDetector.IsBinary(peek.AsSpan(0, peekRead)))
             return SkipBinary;
 
-        var encoding = EncodingDetector.DetectEncoding(peek[..Math.Min(peekRead, 4)]);
+        var encoding = EncodingDetector.DetectEncoding(peek.AsSpan(0, Math.Min(peekRead, 4)));
 
         // Seek back to the start so StreamReader reads the full file.
         fs.Position = 0;

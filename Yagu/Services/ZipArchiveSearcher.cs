@@ -124,7 +124,7 @@ public static class ZipArchiveSearcher
 
         try
         {
-            using var fs = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan);
+            using var fs = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan | FileOptions.Asynchronous);
             totalMatches = await SearchArchiveStreamAsync(
                 fs, archivePath, regex, literal, literalComparison, options, writer, cancellationToken, nestingDepth).ConfigureAwait(false);
         }
@@ -350,7 +350,7 @@ public static class ZipArchiveSearcher
         var segments = SplitAllSegments(archivePath);
         if (segments.Count < 2) throw new ArgumentException("Not an archive path", nameof(archivePath));
 
-        Stream currentStream = new FileStream(segments[0], FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        Stream currentStream = new FileStream(segments[0], FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.Asynchronous);
         try
         {
             // Walk through each nested archive level
@@ -411,7 +411,7 @@ public static class ZipArchiveSearcher
         var segments = SplitAllSegments(archivePath);
         if (segments.Count < 2) throw new ArgumentException("Not an archive path", nameof(archivePath));
 
-        Stream currentStream = new FileStream(segments[0], FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        Stream currentStream = new FileStream(segments[0], FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.Asynchronous);
         try
         {
             for (int i = 1; i < segments.Count; i++)

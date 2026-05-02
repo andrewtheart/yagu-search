@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using Microsoft.UI.Dispatching;
 using WinRT;
 using Yagu;
+using Yagu.Services;
 
 namespace Yagu;
 
@@ -30,8 +31,24 @@ internal static class Program
         var con = GetConsoleWindow();
         if (con != 0) ShowWindow(con, SW_HIDE);
 
-        // Pass any --dir argument so App.OnLaunched can pick it up.
+        // Detect if another instance is already running.
+        bool anotherInstanceRunning = !Mutex.TryOpenExisting("Global\\YaguSingleInstance", out _);
+        if (anotherInstanceRunning)
+        {
+            // We are the first — create and hold the mutex for our lifetime.
+            App.InstanceMutex = new Mutex(true, "Global\\YaguSingleInstance", out _);
+        }
+        else
+        {
+            // Another instance already owns the mutex.
+            var settings = new SettingsService().Load();
+            if (!settings.SuppressMultiInstanceWarning)
+                App.AnotherInstanceDetected = true;
+        }
+
+        // Pass any --dir / --query arguments so App.OnLaunched can pick them up.
         App.StartupDirectory = App.ParseDirArg(args);
+        App.StartupQuery = App.ParseStringArg(args, "--query");
 
         // Normal GUI mode — mirrors the WinUI-generated entry point.
         ComWrappersSupport.InitializeComWrappers();

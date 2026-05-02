@@ -12,6 +12,9 @@ namespace Yagu;
 public partial class App : Application
 {
     public static string? StartupDirectory { get; set; }
+    public static string? StartupQuery { get; set; }
+    public static bool AnotherInstanceDetected { get; set; }
+    public static Mutex? InstanceMutex { get; set; }
     public static string CrashLogPath { get; } = Path.Combine(
         Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory, "yagu-crash.log");
     private MainWindow? _window;
@@ -38,14 +41,65 @@ public partial class App : Application
         {
             if (StartupDirectory is null)
                 StartupDirectory = ParseDirArg(System.Environment.GetCommandLineArgs());
-            _window = new MainWindow(StartupDirectory);
+            _window = new MainWindow(StartupDirectory, StartupQuery);
             _window.Activate();
+
+            if (AnotherInstanceDetected)
+                _ = ShowMultiInstanceDialogAsync();
         }
         catch (Exception ex)
         {
             LogCrash("OnLaunched", ex);
             ShowUnhandledExceptionMessageBox("OnLaunched", ex);
             throw;
+        }
+    }
+
+    private async Task ShowMultiInstanceDialogAsync()
+    {
+        try
+        {
+            if (_window?.Content is not FrameworkElement root || root.XamlRoot is null)
+                return;
+
+            var dontRemindCheckBox = new CheckBox { Content = "Don't remind me again" };
+
+            var content = new StackPanel { Spacing = 12 };
+            content.Children.Add(new TextBlock
+            {
+                Text = "Another instance of Yagu is already running. Do you want to run a second instance?",
+                TextWrapping = TextWrapping.Wrap,
+            });
+            content.Children.Add(dontRemindCheckBox);
+
+            var dialog = new ContentDialog
+            {
+                XamlRoot = root.XamlRoot,
+                Title = "Yagu is already running",
+                Content = content,
+                PrimaryButtonText = "Run anyway",
+                CloseButtonText = "Exit",
+                DefaultButton = ContentDialogButton.Primary,
+            };
+
+            var result = await dialog.ShowAsync();
+
+            if (dontRemindCheckBox.IsChecked == true)
+            {
+                var settingsService = new SettingsService();
+                var settings = settingsService.Load();
+                settings.SuppressMultiInstanceWarning = true;
+                settingsService.Save(settings);
+            }
+
+            if (result != ContentDialogResult.Primary)
+            {
+                _window?.Close();
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("App", "Failed to show multi-instance dialog", ex);
         }
     }
 
@@ -198,16 +252,19 @@ public partial class App : Application
         catch { /* last resort — nothing we can do */ }
     }
 
-    internal static string? ParseDirArg(string[] args)
+    internal static string? ParseDirArg(string[] args) => ParseStringArg(args, "--dir");
+
+    internal static string? ParseStringArg(string[] args, string name)
     {
         if (args is null) return null;
+        var prefix = name + "=";
         for (int i = 0; i < args.Length; i++)
         {
             var a = args[i];
-            if (string.Equals(a, "--dir", System.StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            if (string.Equals(a, name, System.StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
                 return args[i + 1].Trim().Trim('"');
-            if (a.StartsWith("--dir=", System.StringComparison.OrdinalIgnoreCase))
-                return a["--dir=".Length..].Trim().Trim('"');
+            if (a.StartsWith(prefix, System.StringComparison.OrdinalIgnoreCase))
+                return a[prefix.Length..].Trim().Trim('"');
         }
         return null;
     }

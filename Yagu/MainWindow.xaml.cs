@@ -65,10 +65,17 @@ public sealed partial class MainWindow : Window
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
 
-    public MainWindow(string? startupDirectory)
+    private bool _autoSearchOnLoad;
+
+    public MainWindow(string? startupDirectory, string? startupQuery = null)
     {
         ViewModel = new MainViewModel();
         ViewModel.SetDirectoryFromArgs(startupDirectory);
+        if (!string.IsNullOrWhiteSpace(startupQuery))
+        {
+            ViewModel.Query = startupQuery;
+            _autoSearchOnLoad = !string.IsNullOrWhiteSpace(startupDirectory);
+        }
         InitializeComponent();
         Title = AppInfo.WindowTitle;
 
@@ -156,6 +163,9 @@ public sealed partial class MainWindow : Window
             // RightInset is in physical pixels; convert to DIPs.
             var scale = (Content?.XamlRoot?.RasterizationScale) ?? 1.0;
             var rightDip = tb.RightInset / scale;
+            // Ensure a minimum so the ? and gear icons are never clipped
+            // when RightInset returns 0 before the window is fully rendered.
+            if (rightDip < 48) rightDip = 148;
             AppTitleBar.Padding = new Thickness(16, 0, rightDip, 0);
         }
         catch { /* AppWindow not always available; ignore */ }
@@ -381,10 +391,10 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void OnDontShowAdminWarningAgain(object sender, RoutedEventArgs e)
+    private async void OnDontShowAdminWarningAgain(object sender, RoutedEventArgs e)
     {
         ViewModel.SuppressAdminWarning = true;
-        ViewModel.PersistSettings();
+        await ViewModel.PersistSettingsAsync();
         AdminBanner.IsOpen = false;
     }
 
@@ -404,7 +414,7 @@ public sealed partial class MainWindow : Window
             PrimaryButtonText = "Save",
             Content = BuildSettingsPanel(),
         };
-        dialog.PrimaryButtonClick += (_, _) => ViewModel.PersistSettings();
+        dialog.PrimaryButtonClick += async (_, _) => await ViewModel.PersistSettingsAsync();
         _ = dialog.ShowAsync();
     }
 
@@ -666,10 +676,10 @@ public sealed partial class MainWindow : Window
 
     private SearchResult? _previewResult;
 
-    private void OnResultItemClick(object sender, ItemClickEventArgs e)
+    private async void OnResultItemClick(object sender, ItemClickEventArgs e)
     {
         if (e.ClickedItem is FileGroup g && g.Count > 0)
-            UpdatePreview(g[0]);
+            await UpdatePreviewAsync(g[0]);
     }
 
     private void OnResultDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
@@ -678,7 +688,7 @@ public sealed partial class MainWindow : Window
             ViewModel.OpenInEditor(g[0]);
     }
 
-    private void OnMatchLineTapped(object sender, TappedRoutedEventArgs e)
+    private async void OnMatchLineTapped(object sender, TappedRoutedEventArgs e)
     {
         // Don't trigger preview when user clicks the checkbox itself
         if (e.OriginalSource is Microsoft.UI.Xaml.Controls.Primitives.ToggleButton or CheckBox)
@@ -688,9 +698,9 @@ public sealed partial class MainWindow : Window
         {
             var selected = ViewModel.GetAllSelectedResults();
             if (selected.Count >= 2)
-                UpdateMultiSelectPreview(scrollTarget: r);
+                await UpdateMultiSelectPreviewAsync(scrollTarget: r);
             else
-                UpdatePreview(r);
+                await UpdatePreviewAsync(r);
         }
     }
 
@@ -707,17 +717,17 @@ public sealed partial class MainWindow : Window
         await ShowFullFilePreviewAsync(targets);
     }
 
-    private void OnWordWrapToggled(object sender, RoutedEventArgs e)
+    private async void OnWordWrapToggled(object sender, RoutedEventArgs e)
     {
         ApplyWordWrap(ViewModel.PreviewWordWrap);
-        ViewModel.PersistSettings();
+        await ViewModel.PersistSettingsAsync();
     }
 
-    private void OnPreviewModeChanged(object sender, SelectionChangedEventArgs e)
+    private async void OnPreviewModeChanged(object sender, SelectionChangedEventArgs e)
     {
         var selected = ViewModel.GetAllSelectedResults();
         if (selected.Count >= 2)
-            UpdateMultiSelectPreview();
+            await UpdateMultiSelectPreviewAsync();
     }
 
     private void ApplyWordWrap(bool wrap)
@@ -755,9 +765,9 @@ public sealed partial class MainWindow : Window
 
         var selected = ViewModel.GetAllSelectedResults();
         if (selected.Count >= 2)
-            UpdateMultiSelectPreview();
+            await UpdateMultiSelectPreviewAsync();
         else if (_previewResult is not null)
-            ShowSingleFilePreview(_previewResult, fullFile: false);
+            await ShowSingleFilePreviewAsync(_previewResult, fullFile: false);
     }
 
     private void OnPreviewEditorTextChanged(object sender, TextChangedEventArgs e)
@@ -768,20 +778,20 @@ public sealed partial class MainWindow : Window
         UpdatePreviewEditorButtons();
     }
 
-    private void RefreshCurrentPreview()
+    private async void RefreshCurrentPreview()
     {
         if (PreviewEditor.Visibility == Visibility.Visible) return;
 
         var selected = ViewModel.GetAllSelectedResults();
         if (selected.Count >= 2)
         {
-            UpdateMultiSelectPreview();
+            await UpdateMultiSelectPreviewAsync();
             return;
         }
 
         if (_previewResult is null) return;
         ViewModel.HydrateResult(_previewResult);
-        ShowSingleFilePreview(_previewResult, fullFile: false);
+        await ShowSingleFilePreviewAsync(_previewResult, fullFile: false);
     }
 
     private async Task<bool> ClearPreviewPanelForNewSearchAsync()
@@ -837,25 +847,25 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void OnSelectAllChecked(object sender, RoutedEventArgs e)
+    private async void OnSelectAllChecked(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement fe && fe.DataContext is FileGroup g)
         {
             _suppressPreviewUpdate = true;
             g.SelectAll();
             _suppressPreviewUpdate = false;
-            UpdateMultiSelectPreview();
+            await UpdateMultiSelectPreviewAsync();
         }
     }
 
-    private void OnSelectAllUnchecked(object sender, RoutedEventArgs e)
+    private async void OnSelectAllUnchecked(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement fe && fe.DataContext is FileGroup g)
         {
             _suppressPreviewUpdate = true;
             g.DeselectAll();
             _suppressPreviewUpdate = false;
-            UpdateMultiSelectPreview();
+            await UpdateMultiSelectPreviewAsync();
         }
     }
 
@@ -1139,7 +1149,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void UpdatePreview(SearchResult r)
+    private async Task UpdatePreviewAsync(SearchResult r)
     {
         if (!TryLeavePreviewEditorForPreviewChange()) return;
 
@@ -1148,10 +1158,10 @@ public sealed partial class MainWindow : Window
         _previewResult = r;
         SetPreviewFileLabel(r.FilePath);
         PreviewToolbarContent.Visibility = Visibility.Visible;
-        ShowSingleFilePreview(r, fullFile: false);
+        await ShowSingleFilePreviewAsync(r, fullFile: false);
     }
 
-    private void UpdateMultiSelectPreview(SearchResult? scrollTarget = null)
+    private async Task UpdateMultiSelectPreviewAsync(SearchResult? scrollTarget = null)
     {
         if (!TryLeavePreviewEditorForPreviewChange()) return;
 
@@ -1172,12 +1182,12 @@ public sealed partial class MainWindow : Window
 
         PreviewToolbarContent.Visibility = Visibility.Visible;
         if (ViewModel.PreviewModeIndex == 1)
-            ShowMultiHighlightPreview(selected, scrollTarget);
+            await ShowMultiHighlightPreviewAsync(selected, scrollTarget);
         else
-            ShowConcatenatedPreview(selected, scrollTarget);
+            await ShowConcatenatedPreviewAsync(selected, scrollTarget);
     }
 
-    private void ShowConcatenatedPreview(List<SearchResult> selected, SearchResult? scrollTarget)
+    private async Task ShowConcatenatedPreviewAsync(List<SearchResult> selected, SearchResult? scrollTarget)
     {
         ShowPreviewSectionsSurface();
         int previewLines = ViewModel.PreviewContextLines;
@@ -1204,7 +1214,7 @@ public sealed partial class MainWindow : Window
             var section = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)");
 
             string[]? allLines = null;
-            try { allLines = File.ReadAllLines(filePath); } catch (Exception ex) { LogService.Instance.Verbose("Preview", $"Cannot read file for concatenated preview: {filePath}", ex); }
+            try { allLines = await File.ReadAllLinesAsync(filePath); } catch (Exception ex) { LogService.Instance.Verbose("Preview", $"Cannot read file for concatenated preview: {filePath}", ex); }
 
             foreach (var r in results)
             {
@@ -1250,7 +1260,7 @@ public sealed partial class MainWindow : Window
             ScrollPreviewToLine(scrollBlock, scrollPara);
     }
 
-    private void ShowMultiHighlightPreview(List<SearchResult> selected, SearchResult? scrollTarget)
+    private async Task ShowMultiHighlightPreviewAsync(List<SearchResult> selected, SearchResult? scrollTarget)
     {
         ShowPreviewSectionsSurface();
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
@@ -1279,7 +1289,7 @@ public sealed partial class MainWindow : Window
             var matchLines = new HashSet<int>(results.Select(r => r.LineNumber));
 
             string[]? allLines = null;
-            try { allLines = File.ReadAllLines(filePath); } catch (Exception ex) { LogService.Instance.Verbose("Preview", $"Cannot read file for multi-highlight preview: {filePath}", ex); }
+            try { allLines = await File.ReadAllLinesAsync(filePath); } catch (Exception ex) { LogService.Instance.Verbose("Preview", $"Cannot read file for multi-highlight preview: {filePath}", ex); }
 
             if (allLines != null)
             {
@@ -1408,7 +1418,7 @@ public sealed partial class MainWindow : Window
         return lines;
     }
 
-    private void ShowSingleFilePreview(SearchResult r, bool fullFile)
+    private async Task ShowSingleFilePreviewAsync(SearchResult r, bool fullFile)
     {
         ShowPreviewBlockSurface();
         PreviewBlock.Blocks.Clear();
@@ -1417,7 +1427,7 @@ public sealed partial class MainWindow : Window
         string[]? allLines = null;
         if (fullFile)
         {
-            try { allLines = File.ReadAllLines(r.FilePath); } catch (Exception ex) { LogService.Instance.Verbose("Preview", $"Cannot read file for single-file preview: {r.FilePath}", ex); }
+            try { allLines = await File.ReadAllLinesAsync(r.FilePath); } catch (Exception ex) { LogService.Instance.Verbose("Preview", $"Cannot read file for single-file preview: {r.FilePath}", ex); }
         }
 
         var lines = GetPreviewLines(r, allLines, ViewModel.PreviewContextLines, fullFile);
@@ -2184,7 +2194,16 @@ public sealed partial class MainWindow : Window
         ApplyWordWrap(ViewModel.PreviewWordWrap);
         await CheckEverythingAsync();
         await CheckFirstRunContextMenuAsync();
-        FocusSearchBox();
+
+        if (_autoSearchOnLoad)
+        {
+            _autoSearchOnLoad = false;
+            await ViewModel.StartSearchAsync();
+        }
+        else
+        {
+            FocusSearchBox();
+        }
     }
 
     private void FocusSearchBox()
@@ -2385,7 +2404,7 @@ public sealed partial class MainWindow : Window
 
         // Mark first run complete regardless of what the user chooses
         ViewModel.HasCompletedFirstRun = true;
-        ViewModel.PersistSettings();
+        await ViewModel.PersistSettingsAsync();
 
         // If context menu is already registered, nothing to do
         if (IsContextMenuRegistered())

@@ -321,7 +321,7 @@ internal static class CliRunner
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(EverythingMarkerPath)!);
-                File.WriteAllText(EverythingMarkerPath, DateTime.UtcNow.ToString("o"));
+                await File.WriteAllTextAsync(EverythingMarkerPath, DateTime.UtcNow.ToString("o"));
             }
             catch { /* best-effort */ }
         }

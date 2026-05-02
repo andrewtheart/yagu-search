@@ -255,7 +255,7 @@ public sealed partial class MainViewModel : ObservableObject
             _updatingSkipExtensionsFromItems = false;
         }
         OnPropertyChanged(nameof(SkipExtensionsSummary));
-        PersistSettings();
+        _ = PersistSettingsAsync();
     }
 
     // ── Archive (ZIP-like) extensions dropdown ────────────────────
@@ -351,7 +351,7 @@ public sealed partial class MainViewModel : ObservableObject
             _updatingArchiveExtensionsFromItems = false;
         }
         OnPropertyChanged(nameof(ArchiveExtensionsSummary));
-        PersistSettings();
+        _ = PersistSettingsAsync();
     }
 
     private string _globalHotkeyKey = HotkeyService.DefaultStartKey.ToString();
@@ -487,7 +487,7 @@ public sealed partial class MainViewModel : ObservableObject
             SettingsService.PushRecent(_settings.RecentDirectories, Directory, MaxRecentItems);
             SettingsService.PushRecent(_settings.SearchHistory, Query, MaxRecentItems);
             SyncRecent();
-            PersistSettings();
+            await PersistSettingsAsync();
 
             var options = new SearchOptions
             {
@@ -920,7 +920,7 @@ public sealed partial class MainViewModel : ObservableObject
         foreach (var q in _settings.SearchHistory) SearchHistory.Add(q);
     }
 
-    public void PersistSettings()
+    public async Task PersistSettingsAsync()
     {
         _settings.LastDirectory = Directory;
         _settings.CaseSensitive = CaseSensitive;
@@ -955,7 +955,7 @@ public sealed partial class MainViewModel : ObservableObject
 
         Helpers.LineTruncator.TruncatedLength = LineTruncationLength;
 
-        _settingsService.Save(_settings);
+        await _settingsService.SaveAsync(_settings).ConfigureAwait(false);
         LogService.Instance.Info("Settings", "Settings persisted");
         LogService.Instance.Flush();
     }

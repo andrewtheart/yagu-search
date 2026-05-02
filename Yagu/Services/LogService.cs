@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Yagu.Services;
 
@@ -36,7 +37,7 @@ public sealed class LogService : IDisposable
     public LogService(string logPath)
     {
         _logPath = logPath;
-        _flushTimer = new Timer(_ => Flush(), null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+        _flushTimer = new Timer(async _ => await FlushAsync(), null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
     }
 
     public static string DefaultLogPath() =>
@@ -89,9 +90,26 @@ public sealed class LogService : IDisposable
             var dir = Path.GetDirectoryName(_logPath);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-            using var sw = new StreamWriter(_logPath, append: true);
+            using var sw = new StreamWriter(
+                new FileStream(_logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, 4096));
             while (_queue.TryDequeue(out var line))
                 sw.WriteLine(line);
+        }
+        catch { /* last-resort: don't crash on logging failure */ }
+    }
+
+    public async Task FlushAsync()
+    {
+        if (_queue.IsEmpty) return;
+        try
+        {
+            var dir = Path.GetDirectoryName(_logPath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+            await using var sw = new StreamWriter(
+                new FileStream(_logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, 4096, FileOptions.Asynchronous));
+            while (_queue.TryDequeue(out var line))
+                await sw.WriteLineAsync(line);
         }
         catch { /* last-resort: don't crash on logging failure */ }
     }

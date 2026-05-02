@@ -13,9 +13,11 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using Microsoft.Diagnostics.Tracing;
+using Microsoft.Diagnostics.Tracing.Etlx;
 using Microsoft.Diagnostics.Tracing.Parsers;
 using Microsoft.Diagnostics.Tracing.Parsers.Clr;
 using Microsoft.Diagnostics.Tracing.Parsers.Kernel;
+using Microsoft.Diagnostics.Tracing.Stacks;
 
 // ─── Argument parsing ───────────────────────────────────────────────────────
 string? etlPath = null;
@@ -58,6 +60,9 @@ var sw = Stopwatch.StartNew();
 
 // CPU Sampling
 long totalCpuSamples = 0;
+var cpuByModule = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+var cpuByMethod = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+long cpuSamplesForProcess = 0;
 
 // GC
 var gcEvents = new List<GcRecord>();
@@ -113,6 +118,8 @@ using (var source = new ETWTraceEventSource(etlPath))
     kernelParser.PerfInfoSample += e =>
     {
         totalCpuSamples++;
+        if (MatchProcess(e))
+            Interlocked.Increment(ref cpuSamplesForProcess);
     };
 
     // ── GC Events ────────────────────────────────────────────────────────
@@ -295,6 +302,79 @@ using (var source = new ETWTraceEventSource(etlPath))
     Console.WriteLine($"\r  {eventCount / 1_000_000.0:F1}M events processed in {sw.Elapsed.TotalSeconds:F1}s");
 }
 
+// ─── Phase 1b: CPU stack sampling via TraceLog (enables native frame resolution) ──
+Console.WriteLine();
+Console.Write("Converting ETL → ETLX for stack resolution... ");
+var etlxPath = Path.ChangeExtension(etlPath, ".etlx");
+try
+{
+    TraceLog.CreateFromEventTraceLogFile(etlPath, etlxPath);
+    Console.WriteLine("done.");
+
+    using var traceLog = TraceLog.OpenOrConvert(etlxPath);
+
+    // Find the target process
+    TraceProcess? targetProcess = null;
+    if (processFilter != null)
+    {
+        targetProcess = traceLog.Processes
+            .FirstOrDefault(p => p.Name?.Contains(processFilter, StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    if (targetProcess != null || processFilter == null)
+    {
+        Console.Write("Walking CPU stacks... ");
+        var cpuStackSw = Stopwatch.StartNew();
+
+        var events = traceLog.Events
+            .Where(e => e.EventName == "PerfInfoSample" || e.EventName == "PerfInfo/Sample")
+            .Where(e => targetProcess == null || e.ProcessID == targetProcess.ProcessID);
+
+        long stackSamples = 0;
+        foreach (var evt in events)
+        {
+            var callStack = evt.CallStack();
+            if (callStack == null) continue;
+            stackSamples++;
+
+            var seenModules = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seenMethods = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var frame = callStack;
+            while (frame != null)
+            {
+                var modFile = frame.CodeAddress?.ModuleFile;
+                var moduleName = modFile?.Name;
+                var methodName = frame.CodeAddress?.FullMethodName;
+
+                if (!string.IsNullOrEmpty(moduleName) && seenModules.Add(moduleName))
+                {
+                    cpuByModule.TryGetValue(moduleName, out long c);
+                    cpuByModule[moduleName] = c + 1;
+                }
+
+                if (!string.IsNullOrEmpty(methodName) && methodName != "?" && seenMethods.Add(methodName))
+                {
+                    cpuByMethod.TryGetValue(methodName, out long c);
+                    cpuByMethod[methodName] = c + 1;
+                }
+
+                frame = frame.Caller;
+            }
+        }
+        Console.WriteLine($"done ({stackSamples:N0} stacks resolved in {cpuStackSw.Elapsed.TotalSeconds:F1}s)");
+    }
+    else
+    {
+        Console.WriteLine($"Process '{processFilter}' not found in TraceLog — skipping stack resolution.");
+    }
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"ETLX conversion failed: {ex.Message}");
+    Console.WriteLine("CPU module/method breakdown will be unavailable.");
+}
+
 // ─── Phase 2: Produce reports ────────────────────────────────────────────────
 
 Console.WriteLine();
@@ -317,6 +397,48 @@ sb.AppendLine($"│ Total CPU samples: {totalCpuSamples:N0}");
 sb.AppendLine($"│ Processes seen:    {processInfo.Count}");
 if (processFilter != null)
     sb.AppendLine($"│ Filter:            {processFilter}");
+sb.AppendLine("└──────────────────────────────────────────────────────────────────");
+sb.AppendLine();
+
+// ── CPU Sampling by Module ───────────────────────────────────────────────
+sb.AppendLine("┌─ CPU SAMPLING BY MODULE (inclusive, process-filtered) ────────────");
+sb.AppendLine($"│ Samples in process: {cpuSamplesForProcess:N0} of {totalCpuSamples:N0} total");
+if (cpuByModule.Count > 0)
+{
+    sb.AppendLine("│");
+    sb.AppendLine("│   Samples | % of proc | Module");
+    sb.AppendLine("│ ----------|-----------|-------");
+    var topModules = cpuByModule.OrderByDescending(kv => kv.Value).Take(30);
+    foreach (var (mod, count) in topModules)
+    {
+        double pct = cpuSamplesForProcess > 0 ? count * 100.0 / cpuSamplesForProcess : 0;
+        sb.AppendLine($"│ {count,9:N0} | {pct,8:F1}% | {mod}");
+    }
+}
+else
+{
+    sb.AppendLine("│ No resolved stack frames (symbols may not be available).");
+}
+sb.AppendLine("└──────────────────────────────────────────────────────────────────");
+sb.AppendLine();
+
+// ── CPU Sampling by Method ───────────────────────────────────────────────
+sb.AppendLine("┌─ CPU SAMPLING BY METHOD (inclusive, top 50) ──────────────────────");
+if (cpuByMethod.Count > 0)
+{
+    sb.AppendLine("│   Samples | % of proc | Method");
+    sb.AppendLine("│ ----------|-----------|-------");
+    var topMethods = cpuByMethod.OrderByDescending(kv => kv.Value).Take(50);
+    foreach (var (method, count) in topMethods)
+    {
+        double pct = cpuSamplesForProcess > 0 ? count * 100.0 / cpuSamplesForProcess : 0;
+        sb.AppendLine($"│ {count,9:N0} | {pct,8:F1}% | {method}");
+    }
+}
+else
+{
+    sb.AppendLine("│ No resolved method names (symbols may not be available).");
+}
 sb.AppendLine("└──────────────────────────────────────────────────────────────────");
 sb.AppendLine();
 

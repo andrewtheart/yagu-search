@@ -49,6 +49,8 @@ public sealed class AppSettings
     public bool SuppressAdminWarning { get; set; }
     /// <summary>Whether the first-run experience has been completed (context menu prompt, etc.).</summary>
     public bool HasCompletedFirstRun { get; set; }
+    /// <summary>When true, do not show the "another instance is already running" dialog on startup.</summary>
+    public bool SuppressMultiInstanceWarning { get; set; }
 
     public const int MaxRecent = 20; // kept for backward compat; prefer MaxRecentItems
 }
@@ -82,6 +84,22 @@ public sealed class SettingsService
         catch (Exception ex) { LogService.Instance.Warning("Settings", $"Failed to load settings from {_path}", ex); return new AppSettings(); }
     }
 
+    public async Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            if (!File.Exists(_path)) return new AppSettings();
+            await using var fs = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 4096, FileOptions.Asynchronous);
+            var settings = await JsonSerializer.DeserializeAsync<AppSettings>(fs, cancellationToken: cancellationToken).ConfigureAwait(false) ?? new AppSettings();
+            if (settings.MaxResults > SearchOptions.MaxResultsCeiling)
+                settings.MaxResults = SearchOptions.MaxResultsCeiling;
+            if (IsLegacyDefaultSkipExtensions(settings.SkipExtensions))
+                settings.SkipExtensions = AppSettings.DefaultSkipExtensions;
+            return settings;
+        }
+        catch (Exception ex) { LogService.Instance.Warning("Settings", $"Failed to load settings from {_path}", ex); return new AppSettings(); }
+    }
+
     private static bool IsLegacyDefaultSkipExtensions(string skipExtensions) =>
         string.Equals(skipExtensions, AppSettings.LegacyDefaultSkipExtensions, StringComparison.OrdinalIgnoreCase);
 
@@ -93,6 +111,18 @@ public sealed class SettingsService
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             using var fs = File.Create(_path);
             JsonSerializer.Serialize(fs, settings, JsonOpts);
+        }
+        catch (Exception ex) { LogService.Instance.Warning("Settings", $"Failed to save settings to {_path}", ex); }
+    }
+
+    public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(_path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            await using var fs = new FileStream(_path, FileMode.Create, FileAccess.Write, FileShare.Read, 4096, FileOptions.Asynchronous);
+            await JsonSerializer.SerializeAsync(fs, settings, JsonOpts, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) { LogService.Instance.Warning("Settings", $"Failed to save settings to {_path}", ex); }
     }
