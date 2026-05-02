@@ -17,6 +17,8 @@ use std::io::Read;
 use std::os::raw::{c_int, c_uchar, c_uint, c_ulonglong, c_ushort, c_void};
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::Mutex;
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
 
 /// Open a file with the platform's best read hint for sequential, one-shot
 /// scanning. On Windows we set `FILE_FLAG_SEQUENTIAL_SCAN` so the cache
@@ -279,15 +281,20 @@ fn open_file_for_scan_into<'a>(
     max_file_size: u64,
     skip_binary: bool,
     scratch: &'a mut Vec<u8>,
-) -> Result<(FileBytesRef<'a>, u64), c_int> {
+) -> Result<(FileBytesRef<'a>, u64, u64), c_int> {
     let mut file = open_for_scan(path).map_err(|_| STATUS_OPEN_FAILED)?;
-    let file_size = try_metadata(&file).map_err(|_| STATUS_OPEN_FAILED)?.len();
+    let meta = try_metadata(&file).map_err(|_| STATUS_OPEN_FAILED)?;
+    let file_size = meta.len();
+    #[cfg(windows)]
+    let last_modified = meta.last_write_time();
+    #[cfg(not(windows))]
+    let last_modified = 0u64;
     if max_file_size != 0 && file_size > max_file_size {
         return Err(STATUS_TOO_LARGE);
     }
     if file_size == 0 {
         scratch.clear();
-        return Ok((FileBytesRef::Borrowed(&[]), 0));
+        return Ok((FileBytesRef::Borrowed(&[]), 0, last_modified));
     }
 
     if file_size <= MMAP_THRESHOLD_BYTES {
@@ -306,7 +313,7 @@ fn open_file_for_scan_into<'a>(
                 return Err(STATUS_OPEN_FAILED);
             }
         }
-        return Ok((FileBytesRef::Borrowed(&scratch[..]), file_size));
+        return Ok((FileBytesRef::Borrowed(&scratch[..]), file_size, last_modified));
     }
 
     if skip_binary {
@@ -321,7 +328,7 @@ fn open_file_for_scan_into<'a>(
     }
 
     let mmap = try_mmap(&file).map_err(|_| STATUS_OPEN_FAILED)?;
-    Ok((FileBytesRef::Mapped(mmap), file_size))
+    Ok((FileBytesRef::Mapped(mmap), file_size, last_modified))
 }
 
 /// Open a file, verify its size, and memory-map it.
@@ -574,7 +581,7 @@ pub unsafe extern "C" fn qg_free_result(result: *mut QgResult) {
 /// ABI/version probe used by the C# loader to confirm the DLL is the one we built.
 #[no_mangle]
 pub extern "C" fn qg_abi_version() -> c_uint {
-    3
+    4
 }
 
 // ---------------------------------------------------------------------------
@@ -1025,6 +1032,7 @@ pub type QgFileDoneExCallback = unsafe extern "C" fn(
     file_index: c_uint,
     status: c_int,
     file_len: c_ulonglong,
+    last_modified: c_ulonglong,
 );
 
 #[derive(Clone, Copy)]
@@ -1040,10 +1048,11 @@ unsafe fn dispatch_file_done(
     file_index: c_uint,
     status: c_int,
     file_len: u64,
+    last_modified: u64,
 ) {
     match callback {
         QgFileDoneDispatch::Legacy(cb) => cb(ctx, file_index, status),
-        QgFileDoneDispatch::WithLength(cb) => cb(ctx, file_index, status, file_len),
+        QgFileDoneDispatch::WithLength(cb) => cb(ctx, file_index, status, file_len, last_modified),
     }
 }
 
@@ -1235,12 +1244,13 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                                 i as c_uint,
                                 STATUS_INVALID_PATH,
                                 0,
+                                0,
                             );
                             continue;
                         }
                     };
 
-                    let (file_bytes, file_len) = match open_file_for_scan_into(
+                    let (file_bytes, file_len, last_modified) = match open_file_for_scan_into(
                         &path,
                         sess.max_file_size,
                         sess.scan_opts.skip_binary,
@@ -1254,6 +1264,7 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                                 ctx_wrapper.0,
                                 i as c_uint,
                                 status,
+                                0,
                                 0,
                             );
                             continue;
@@ -1334,6 +1345,7 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                         i as c_uint,
                         final_status,
                         file_len,
+                        last_modified,
                     );
                 }
             });
@@ -1384,8 +1396,8 @@ mod tests {
 
     // ---- qg_abi_version ----
     #[test]
-    fn abi_version_returns_3() {
-        assert_eq!(qg_abi_version(), 3);
+    fn abi_version_returns_4() {
+        assert_eq!(qg_abi_version(), 4);
     }
 
     // ---- pack_lines ----

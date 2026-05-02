@@ -38,6 +38,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly SearchResultCollection _resultCollection = new();
     private ResultStore? _resultStore;
     private System.Diagnostics.Stopwatch? _searchTimer;
+    private long _bytesScanned;
 
     public MainViewModel() : this(new SearchService(), new SettingsService(), new EditorLauncher(),
                                    DispatcherQueue.GetForCurrentThread())
@@ -550,6 +551,7 @@ public sealed partial class MainViewModel : ObservableObject
                         MatchesFound = p.Snapshot.MatchesFound;
                         FilesSkipped = p.Snapshot.FilesSkipped;
                         AccessDeniedCount = p.Snapshot.AccessDenied;
+                        _bytesScanned = p.Snapshot.BytesScanned;
                         UpdateSkipBreakdown(p.Snapshot.SkipReasons);
                         StatusText = BuildProgressStatus(p.Snapshot);
                         UpdateFilesPerSecond();
@@ -660,6 +662,7 @@ public sealed partial class MainViewModel : ObservableObject
         Truncated = false;
         Degraded = false;
         IsSearching = true;
+        _bytesScanned = 0;
         _searchTimer = System.Diagnostics.Stopwatch.StartNew();
         StatusText = "Searching…";
 
@@ -711,7 +714,7 @@ public sealed partial class MainViewModel : ObservableObject
     private string BuildCancelledStatus(TimeSpan elapsed)
     {
         var time = $"{elapsed.TotalSeconds:F2}s";
-        var rate = FormatFilesPerSecond(FilesScanned, elapsed);
+        var rate = FormatThroughput(FilesScanned, _bytesScanned, elapsed);
         return $"Cancelled — {MatchesFound:N0} matches, {FilesScanned:N0} files processed ({time}, {rate})";
     }
 
@@ -867,7 +870,7 @@ public sealed partial class MainViewModel : ObservableObject
     private static string BuildCompletionStatus(SearchSummary s, TimeSpan elapsed)
     {
         var time = $"{elapsed.TotalSeconds:F2}s";
-        var rate = FormatFilesPerSecond(s.FilesScanned, elapsed);
+        var rate = FormatThroughput(s.FilesScanned, s.BytesScanned, elapsed);
         if (s.Cancelled)
             return $"Cancelled — {s.TotalMatches:N0} matches in {s.FilesWithMatches:N0} files ({time}, {rate})";
         if (s.Truncated)
@@ -877,10 +880,11 @@ public sealed partial class MainViewModel : ObservableObject
         return $"{s.TotalMatches:N0} matches in {s.FilesWithMatches:N0} files ({time}, {rate})";
     }
 
-    private static string FormatFilesPerSecond(int filesProcessed, TimeSpan elapsed)
+    private static string FormatThroughput(int filesProcessed, long bytesScanned, TimeSpan elapsed)
     {
         double seconds = Math.Max(elapsed.TotalSeconds, 0.001);
-        return $"{filesProcessed / seconds:N1} files/sec";
+        double mbPerSec = bytesScanned / (1024.0 * 1024.0) / seconds;
+        return $"{filesProcessed / seconds:N1} files/sec, {mbPerSec:N0} MB/s";
     }
 
     private void UpdateFilesPerSecond()
@@ -891,7 +895,8 @@ public sealed partial class MainViewModel : ObservableObject
             return;
         }
         double seconds = Math.Max(_searchTimer.Elapsed.TotalSeconds, 0.001);
-        FilesPerSecondText = $"{FilesScanned / seconds:N0} files/sec";
+        double mbPerSec = _bytesScanned / (1024.0 * 1024.0) / seconds;
+        FilesPerSecondText = $"{FilesScanned / seconds:N0} files/sec  {mbPerSec:N0} MB/s";
     }
 
     partial void OnResultFilterChanged(string value) => ApplySortAndFilter();

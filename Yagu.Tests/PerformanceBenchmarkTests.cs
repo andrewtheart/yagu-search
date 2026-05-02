@@ -34,6 +34,9 @@ public sealed class PerformanceBenchmarkTests : IDisposable
     {
         _output = output;
 
+        // Clean up leftover temp trees from previous runs that were terminated early.
+        CleanupStaleTempTrees();
+
         // Configurable search target: default to a synthetic temp tree for CI,
         // but allow pointing at C:\ or any real path for local deep benchmarks.
         var envDir = Environment.GetEnvironmentVariable("YAGU_PERF_DIRECTORY");
@@ -871,6 +874,28 @@ public sealed class PerformanceBenchmarkTests : IDisposable
         _output.WriteLine($"OS:                 {metrics.OsVersion}");
         _output.WriteLine($"CPU util (min/med/mean/max): {metrics.CpuMinPercent:F1}% / {metrics.CpuMedianPercent:F1}% / {metrics.CpuMeanPercent:F1}% / {metrics.CpuMaxPercent:F1}%  ({metrics.CpuSampleCount} samples)");
         _output.WriteLine("────────────────────────────────────────");
+    }
+
+    /// <summary>
+    /// Delete any <c>qg-perf-*</c> directories left in temp from previous runs
+    /// that were terminated before Dispose could run.
+    /// </summary>
+    private void CleanupStaleTempTrees()
+    {
+        try
+        {
+            var tempDir = Path.GetTempPath();
+            foreach (var dir in Directory.EnumerateDirectories(tempDir, "qg-perf-*"))
+            {
+                try
+                {
+                    Directory.Delete(dir, recursive: true);
+                    _output.WriteLine($"Cleaned up stale temp tree: {dir}");
+                }
+                catch { /* best effort */ }
+            }
+        }
+        catch { /* best effort — don't fail the test if cleanup itself fails */ }
     }
 
     // ───────────────────────── Synthetic Tree Setup ─────────────────────────

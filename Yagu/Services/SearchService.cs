@@ -1200,11 +1200,19 @@ public sealed class SearchService
             return 0;
         }
 
-        public void OnFileDone(uint fileIndex, int status, ulong fileLength)
+        public void OnFileDone(uint fileIndex, int status, ulong fileLength, ulong lastModifiedFileTime)
         {
             int idx = (int)fileIndex;
             _statuses[idx] = status;
             _fileLength[idx] = fileLength > long.MaxValue ? long.MaxValue : (long)fileLength;
+
+            // Pre-populate the metadata cache so FileGroup.BeginLoadMetadata
+            // gets a synchronous hit and skips the secondary FileInfo syscall.
+            if (status == Native.NativeSearcher.StatusOk && fileLength > 0 && lastModifiedFileTime > 0)
+            {
+                var lastMod = DateTime.FromFileTime((long)lastModifiedFileTime);
+                FileMetadataCache.Set(_paths[idx], new FileMetadata((long)fileLength, lastMod));
+            }
 
             // Flush this file's buffered results to the channel as a contiguous run.
             var buf = _buffers[idx];

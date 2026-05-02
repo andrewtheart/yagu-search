@@ -139,7 +139,7 @@ internal static partial class NativeSearcher
         uint threadCount,
         int* cancelFlag,
         delegate* unmanaged[Cdecl]<void*, uint, QgMatchView*, int> onMatch,
-        delegate* unmanaged[Cdecl]<void*, uint, int, ulong, void> onFileDone,
+        delegate* unmanaged[Cdecl]<void*, uint, int, ulong, ulong, void> onFileDone,
         void* onMatchCtx);
 
     private static readonly Lazy<bool> _available = new(TryLoad, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -162,7 +162,7 @@ internal static partial class NativeSearcher
 
         try
         {
-            return QgAbiVersion() == 3;
+            return QgAbiVersion() == 4;
         }
         catch (DllNotFoundException) { LogService.Instance.Info("NativeSearcher", "yagu_core.dll not found"); return false; }
         catch (BadImageFormatException ex) { LogService.Instance.Warning("NativeSearcher", "yagu_core.dll bad image format", ex); return false; }
@@ -423,7 +423,7 @@ internal static partial class NativeSearcher
     internal interface IParallelSink : IStreamingSink
     {
         unsafe int OnMatchForFile(uint fileIndex, QgMatchView* m);
-        void OnFileDone(uint fileIndex, int status, ulong fileLength);
+        void OnFileDone(uint fileIndex, int status, ulong fileLength, ulong lastModifiedFileTime);
     }
 
     /// <summary>
@@ -507,12 +507,12 @@ internal static partial class NativeSearcher
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
-    private static unsafe void OnParallelFileDoneTrampoline(void* ctx, uint fileIndex, int status, ulong fileLength)
+    private static unsafe void OnParallelFileDoneTrampoline(void* ctx, uint fileIndex, int status, ulong fileLength, ulong lastModifiedFileTime)
     {
         try
         {
             var handle = GCHandle.FromIntPtr((IntPtr)ctx);
-            if (handle.Target is IParallelSink sink) sink.OnFileDone(fileIndex, status, fileLength);
+            if (handle.Target is IParallelSink sink) sink.OnFileDone(fileIndex, status, fileLength, lastModifiedFileTime);
         }
         catch (Exception ex)
         {
