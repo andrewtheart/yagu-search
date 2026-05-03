@@ -31,7 +31,9 @@ public sealed class SearchResultCollection
             group.Cleanup();
         VisibleGroups.Clear();
         _allGroups.Clear();
+        _allGroups.TrimExcess();
         _index.Clear();
+        _index.TrimExcess();
     }
 
     public bool Add(

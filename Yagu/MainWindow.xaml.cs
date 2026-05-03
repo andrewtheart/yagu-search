@@ -475,243 +475,307 @@ public sealed partial class MainWindow : Window
         return panel;
     }
 
+    /// <summary>Creates a settings group box: a bordered panel with a header and a content StackPanel.</summary>
+    private static StackPanel MakeSettingsGroup(string header)
+    {
+        var content = new StackPanel { Spacing = 6, Padding = new Thickness(12, 8, 12, 12) };
+        var border = new Border
+        {
+            BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Background = (Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new Border
+                    {
+                        Background = (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"],
+                        CornerRadius = new CornerRadius(6, 6, 0, 0),
+                        Padding = new Thickness(12, 8, 12, 8),
+                        BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                        BorderThickness = new Thickness(0, 0, 0, 1),
+                        Child = new TextBlock
+                        {
+                            Text = header,
+                            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                            FontSize = 14,
+                        },
+                    },
+                    content,
+                },
+            },
+        };
+        // Stash the Border as the Tag so callers can retrieve it via .Parent.
+        // We return the content panel for easy Children.Add() calls; the caller
+        // adds (StackPanel).Parent (the outer StackPanel inside the Border) — but
+        // that's the inner panel, not the Border.  Use a simple helper property instead.
+        content.Tag = border;
+        return content;
+    }
+
     private FrameworkElement BuildSettingsPanel()
     {
-        var sp = new StackPanel { Spacing = 8, Width = 480 };
+        var sp = new StackPanel { Spacing = 12, Width = 480 };
 
         // Legend for the next-search icon
-        var legend = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Opacity = 0.6, Margin = new Thickness(0, 0, 0, 4) };
+        var legend = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Opacity = 0.6, Margin = new Thickness(0, 0, 0, 0) };
         legend.Children.Add(new FontIcon { Glyph = "\uE72C", FontSize = 11 });
         legend.Children.Add(new TextBlock { Text = "= takes effect on the next search", FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
         sp.Children.Add(legend);
 
         // ── Search Defaults ──
-        sp.Children.Add(new TextBlock { Text = "Search Defaults", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16, Margin = new Thickness(0, 4, 0, 0) });
+        {
+            var g = MakeSettingsGroup("Search Defaults");
 
-        sp.Children.Add(NextSearchLabel("Context lines (lines shown before & after each match in results):"));
-        var ctx = new NumberBox { Value = ViewModel.ContextLines, Minimum = 0, Maximum = 50 };
-        ctx.ValueChanged += (_, args) => ViewModel.ContextLines = (int)args.NewValue;
-        sp.Children.Add(ctx);
+            g.Children.Add(NextSearchLabel("Context lines (lines shown before & after each match in results):"));
+            var ctx = new NumberBox { Value = ViewModel.ContextLines, Minimum = 0, Maximum = 50 };
+            ctx.ValueChanged += (_, args) => ViewModel.ContextLines = (int)args.NewValue;
+            g.Children.Add(ctx);
 
-        sp.Children.Add(new TextBlock { Text = "Preview context lines (lines shown around each match in the preview panel):" });
-        var prevCtx = new NumberBox { Value = ViewModel.PreviewContextLines, Minimum = 0, Maximum = 200 };
-        prevCtx.ValueChanged += (_, args) => ViewModel.PreviewContextLines = (int)args.NewValue;
-        sp.Children.Add(prevCtx);
+            g.Children.Add(new TextBlock { Text = "Preview context lines (lines shown around each match in the preview panel):" });
+            var prevCtx = new NumberBox { Value = ViewModel.PreviewContextLines, Minimum = 0, Maximum = 200 };
+            prevCtx.ValueChanged += (_, args) => ViewModel.PreviewContextLines = (int)args.NewValue;
+            g.Children.Add(prevCtx);
 
-        sp.Children.Add(NextSearchLabel("Default include globs (comma/semicolon-separated):"));
-        var incGlobs = new TextBox { Text = ViewModel.IncludeGlobs, PlaceholderText = "e.g. *.cs;*.ts" };
-        incGlobs.TextChanged += (_, _) => ViewModel.IncludeGlobs = incGlobs.Text;
-        sp.Children.Add(incGlobs);
+            g.Children.Add(NextSearchLabel("Default include globs (comma/semicolon-separated):"));
+            var incGlobs = new TextBox { Text = ViewModel.IncludeGlobs, PlaceholderText = "e.g. *.cs;*.ts" };
+            incGlobs.TextChanged += (_, _) => ViewModel.IncludeGlobs = incGlobs.Text;
+            g.Children.Add(incGlobs);
 
-        sp.Children.Add(NextSearchLabel("Default exclude globs (comma/semicolon-separated):"));
-        var excGlobs = new TextBox { Text = ViewModel.ExcludeGlobs, PlaceholderText = "e.g. node_modules;bin;obj;.git" };
-        excGlobs.TextChanged += (_, _) => ViewModel.ExcludeGlobs = excGlobs.Text;
-        sp.Children.Add(excGlobs);
+            g.Children.Add(NextSearchLabel("Default exclude globs (comma/semicolon-separated):"));
+            var excGlobs = new TextBox { Text = ViewModel.ExcludeGlobs, PlaceholderText = "e.g. node_modules;bin;obj;.git" };
+            excGlobs.TextChanged += (_, _) => ViewModel.ExcludeGlobs = excGlobs.Text;
+            g.Children.Add(excGlobs);
+
+            sp.Children.Add((Border)g.Tag!);
+        }
 
         // ── Search Limits ──
-        sp.Children.Add(new TextBlock { Text = "Search Limits", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16, Margin = new Thickness(0, 12, 0, 0) });
+        {
+            var g = MakeSettingsGroup("Search Limits");
 
-        sp.Children.Add(NextSearchLabel("Max results (0 = unlimited, non-zero values capped at 50,000):"));
-        var max = new NumberBox { Value = ViewModel.MaxResults, Minimum = 0 };
-        max.ValueChanged += (_, args) => ViewModel.MaxResults = (int)args.NewValue;
-        sp.Children.Add(max);
-        sp.Children.Add(new TextBlock { Text = "Stops the search after this many matches. Set to 0 for no limit (memory pressure will still protect against runaway usage).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            g.Children.Add(NextSearchLabel("Max results (0 = unlimited, non-zero values capped at 50,000):"));
+            var max = new NumberBox { Value = ViewModel.MaxResults, Minimum = 0 };
+            max.ValueChanged += (_, args) => ViewModel.MaxResults = (int)args.NewValue;
+            g.Children.Add(max);
+            g.Children.Add(new TextBlock { Text = "Stops the search after this many matches. Set to 0 for no limit (memory pressure will still protect against runaway usage).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-        sp.Children.Add(NextSearchLabel("Max file size to search (MB, 0 = no limit):"));
-        var size = new NumberBox { Value = ViewModel.MaxFileSizeBytes / (1024d * 1024d), Minimum = 0 };
-        size.ValueChanged += (_, args) => ViewModel.MaxFileSizeBytes = (long)(args.NewValue * 1024 * 1024);
-        sp.Children.Add(size);
-        sp.Children.Add(new TextBlock { Text = "Files larger than this are skipped during search. Also used by the Everything SDK to pre-filter results.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            g.Children.Add(NextSearchLabel("Max file size to search (MB, 0 = no limit):"));
+            var size = new NumberBox { Value = ViewModel.MaxFileSizeBytes / (1024d * 1024d), Minimum = 0 };
+            size.ValueChanged += (_, args) => ViewModel.MaxFileSizeBytes = (long)(args.NewValue * 1024 * 1024);
+            g.Children.Add(size);
+            g.Children.Add(new TextBlock { Text = "Files larger than this are skipped during search. Also used by the Everything SDK to pre-filter results.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-        var skipBinary = new CheckBox { Content = NextSearchLabel("Skip binary files"), IsChecked = ViewModel.SkipBinary };
-        skipBinary.Checked += (_, _) => ViewModel.SkipBinary = true;
-        skipBinary.Unchecked += (_, _) => ViewModel.SkipBinary = false;
-        sp.Children.Add(skipBinary);
-        sp.Children.Add(new TextBlock { Text = "When enabled, files detected as binary (null bytes, magic bytes) are skipped during content search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            var skipBinary = new CheckBox { Content = NextSearchLabel("Skip binary files"), IsChecked = ViewModel.SkipBinary };
+            skipBinary.Checked += (_, _) => ViewModel.SkipBinary = true;
+            skipBinary.Unchecked += (_, _) => ViewModel.SkipBinary = false;
+            g.Children.Add(skipBinary);
+            g.Children.Add(new TextBlock { Text = "When enabled, files detected as binary (null bytes, magic bytes) are skipped during content search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-        var skipExtLabel = NextSearchLabel("Skip extensions (semicolon-separated, no dots):");
-        skipExtLabel.Margin = new Thickness(0, 4, 0, 0);
-        sp.Children.Add(skipExtLabel);
-        var skipExt = new TextBox { Text = ViewModel.SkipExtensions, PlaceholderText = "e.g. exe;dll;zip;png;pdf", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false };
-        skipExt.TextChanged += (_, _) => ViewModel.SkipExtensions = skipExt.Text;
-        sp.Children.Add(skipExt);
-        sp.Children.Add(new TextBlock { Text = "Files with these extensions are skipped entirely — no binary check, no content read.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            var skipExtLabel = NextSearchLabel("Skip extensions (semicolon-separated, no dots):");
+            skipExtLabel.Margin = new Thickness(0, 4, 0, 0);
+            g.Children.Add(skipExtLabel);
+            var skipExt = new TextBox { Text = ViewModel.SkipExtensions, PlaceholderText = "e.g. exe;dll;zip;png;pdf", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false };
+            skipExt.TextChanged += (_, _) => ViewModel.SkipExtensions = skipExt.Text;
+            g.Children.Add(skipExt);
+            g.Children.Add(new TextBlock { Text = "Files with these extensions are skipped entirely — no binary check, no content read.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-        var archiveExtLabel = NextSearchLabel("Archive extensions (semicolon-separated, no dots):");
-        archiveExtLabel.Margin = new Thickness(0, 4, 0, 0);
-        sp.Children.Add(archiveExtLabel);
-        var archiveExt = new TextBox { Text = ViewModel.ArchiveExtensions, PlaceholderText = "e.g. zip;jar;docx;xlsx;pptx;epub", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false };
-        archiveExt.TextChanged += (_, _) => ViewModel.ArchiveExtensions = archiveExt.Text;
-        sp.Children.Add(archiveExt);
-        sp.Children.Add(new TextBlock { Text = "Extensions that are ZIP-like containers. When 'Search archives' is on, these are removed from the skip list so they reach the content searcher. Detection still uses file-header magic bytes.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            var archiveExtLabel = NextSearchLabel("Archive extensions (semicolon-separated, no dots):");
+            archiveExtLabel.Margin = new Thickness(0, 4, 0, 0);
+            g.Children.Add(archiveExtLabel);
+            var archiveExt = new TextBox { Text = ViewModel.ArchiveExtensions, PlaceholderText = "e.g. zip;jar;docx;xlsx;pptx;epub", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false };
+            archiveExt.TextChanged += (_, _) => ViewModel.ArchiveExtensions = archiveExt.Text;
+            g.Children.Add(archiveExt);
+            g.Children.Add(new TextBlock { Text = "Extensions that are ZIP-like containers. When 'Search archives' is on, these are removed from the skip list so they reach the content searcher. Detection still uses file-header magic bytes.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            sp.Children.Add((Border)g.Tag!);
+        }
 
         // ── Performance ──
-        sp.Children.Add(new TextBlock { Text = "Performance", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16, Margin = new Thickness(0, 12, 0, 0) });
+        {
+            var g = MakeSettingsGroup("Performance");
 
-        sp.Children.Add(NextSearchLabel("Content-search parallelism (concurrent file scan threads):"));
-        var parallelism = new ComboBox();
-        parallelism.Items.Add($"Auto (safe cap · up to {Math.Min(16, Environment.ProcessorCount)})");
-        parallelism.Items.Add("1 thread (sequential, HDD safe)");
-        parallelism.Items.Add($"Half cores ({Math.Max(1, Environment.ProcessorCount / 2)})");
-        parallelism.Items.Add($"2× cores ({Environment.ProcessorCount * 2}, I/O heavy)");
-        parallelism.Items.Add($"All cores ({Math.Max(1, Environment.ProcessorCount)})");
-        parallelism.SelectedIndex = ViewModel.ParallelismIndex;
-        parallelism.SelectionChanged += (_, _) => ViewModel.ParallelismIndex = parallelism.SelectedIndex;
-        sp.Children.Add(parallelism);
+            g.Children.Add(NextSearchLabel("Content-search parallelism (concurrent file scan threads):"));
+            var parallelism = new ComboBox();
+            parallelism.Items.Add($"Auto (safe cap · up to {Math.Min(16, Environment.ProcessorCount)})");
+            parallelism.Items.Add("1 thread (sequential, HDD safe)");
+            parallelism.Items.Add($"Half cores ({Math.Max(1, Environment.ProcessorCount / 2)})");
+            parallelism.Items.Add($"2× cores ({Environment.ProcessorCount * 2}, I/O heavy)");
+            parallelism.Items.Add($"All cores ({Math.Max(1, Environment.ProcessorCount)})");
+            parallelism.SelectedIndex = ViewModel.ParallelismIndex;
+            parallelism.SelectionChanged += (_, _) => ViewModel.ParallelismIndex = parallelism.SelectedIndex;
+            g.Children.Add(parallelism);
 
-        sp.Children.Add(new TextBlock { Text = "File-listing backend (how files are discovered before searching):" });
-        var backend = new ComboBox();
-        backend.Items.Add("Auto (SDK → es.exe → .NET)");
-        backend.Items.Add("Everything SDK only (in-process, fastest)");
-        backend.Items.Add("es.exe only (process spawn)");
-        backend.Items.Add(".NET enumeration only (no Everything dependency)");
-        backend.SelectedIndex = ViewModel.FileListerBackendIndex;
-        backend.SelectionChanged += (_, _) => ViewModel.FileListerBackendIndex = backend.SelectedIndex;
-        sp.Children.Add(backend);
-        sp.Children.Add(new TextBlock { Text = "Auto tries the Everything SDK first, then es.exe, then .NET recursive enumeration. Requires voidtools Everything to be running for SDK/es.exe.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            g.Children.Add(new TextBlock { Text = "File-listing backend (how files are discovered before searching):" });
+            var backend = new ComboBox();
+            backend.Items.Add("Auto (SDK → es.exe → .NET)");
+            backend.Items.Add("Everything SDK only (in-process, fastest)");
+            backend.Items.Add("es.exe only (process spawn)");
+            backend.Items.Add(".NET enumeration only (no Everything dependency)");
+            backend.SelectedIndex = ViewModel.FileListerBackendIndex;
+            backend.SelectionChanged += (_, _) => ViewModel.FileListerBackendIndex = backend.SelectedIndex;
+            g.Children.Add(backend);
+            g.Children.Add(new TextBlock { Text = "Auto tries the Everything SDK first, then es.exe, then .NET recursive enumeration. Requires voidtools Everything to be running for SDK/es.exe.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-        // ── Memory saving mode ──
-        sp.Children.Add(new TextBlock { Text = "Memory saving mode", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 8, 0, 0) });
-        sp.Children.Add(new TextBlock { Text = "These two settings control when Yagu enters memory-saving mode. Use one or the other — if the hard cap is set (> 0), it takes precedence over the pressure percentage. Changes apply to the next search.", FontSize = 11, Opacity = 0.7, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
+            // Memory saving mode sub-section
+            g.Children.Add(new TextBlock { Text = "Memory saving mode", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 8, 0, 0) });
+            g.Children.Add(new TextBlock { Text = "These two settings control when Yagu enters memory-saving mode. Use one or the other — if the hard cap is set (> 0), it takes precedence over the pressure percentage. Changes apply to the next search.", FontSize = 11, Opacity = 0.7, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
 
-        sp.Children.Add(NextSearchLabel("System memory pressure limit (%, 0 = disabled):"));
-        var memPressure = new NumberBox { Value = ViewModel.MemoryPressurePercent, Minimum = 0, Maximum = 100 };
-        memPressure.ValueChanged += (_, args) => ViewModel.MemoryPressurePercent = (int)args.NewValue;
-        sp.Children.Add(memPressure);
-        sp.Children.Add(new TextBlock { Text = "Yagu enters memory-saving mode when total machine RAM usage exceeds this %. Recommended for most users.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            g.Children.Add(NextSearchLabel("System memory pressure limit (%, 0 = disabled):"));
+            var memPressure = new NumberBox { Value = ViewModel.MemoryPressurePercent, Minimum = 0, Maximum = 100 };
+            memPressure.ValueChanged += (_, args) => ViewModel.MemoryPressurePercent = (int)args.NewValue;
+            g.Children.Add(memPressure);
+            g.Children.Add(new TextBlock { Text = "Yagu enters memory-saving mode when total machine RAM usage exceeds this %. Recommended for most users.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-        sp.Children.Add(NextSearchLabel("Process memory hard cap (MB, 0 = use pressure % above):"));
-        var memLimit = new NumberBox { Value = ViewModel.MemoryLimitMB, Minimum = 0, Maximum = 65536 };
-        memLimit.ValueChanged += (_, args) => ViewModel.MemoryLimitMB = (int)args.NewValue;
-        sp.Children.Add(memLimit);
-        sp.Children.Add(new TextBlock { Text = "When set above 0, memory-saving mode activates when the Yagu process exceeds this working-set size regardless of system memory pressure. Leave at 0 to use the pressure % instead.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            g.Children.Add(NextSearchLabel("Process memory hard cap (MB, 0 = use pressure % above):"));
+            var memLimit = new NumberBox { Value = ViewModel.MemoryLimitMB, Minimum = 0, Maximum = 65536 };
+            memLimit.ValueChanged += (_, args) => ViewModel.MemoryLimitMB = (int)args.NewValue;
+            g.Children.Add(memLimit);
+            g.Children.Add(new TextBlock { Text = "When set above 0, memory-saving mode activates when the Yagu process exceeds this working-set size regardless of system memory pressure. Leave at 0 to use the pressure % instead.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-        sp.Children.Add(NextSearchLabel("SDK channel buffer size:"));
-        var sdkBuf = new NumberBox { Value = ViewModel.SdkChannelBufferSize, Minimum = 16, Maximum = 1000000 };
-        sdkBuf.ValueChanged += (_, args) => ViewModel.SdkChannelBufferSize = (int)args.NewValue;
-        sp.Children.Add(sdkBuf);
-        sp.Children.Add(new TextBlock { Text = "Number of file paths buffered between the Everything SDK producer thread and the consumer. Higher values may improve throughput on large directories but use more memory. Only applies when using the Everything SDK backend.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            g.Children.Add(NextSearchLabel("SDK channel buffer size:"));
+            var sdkBuf = new NumberBox { Value = ViewModel.SdkChannelBufferSize, Minimum = 16, Maximum = 1000000 };
+            sdkBuf.ValueChanged += (_, args) => ViewModel.SdkChannelBufferSize = (int)args.NewValue;
+            g.Children.Add(sdkBuf);
+            g.Children.Add(new TextBlock { Text = "Number of file paths buffered between the Everything SDK producer thread and the consumer. Higher values may improve throughput on large directories but use more memory. Only applies when using the Everything SDK backend.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            sp.Children.Add((Border)g.Tag!);
+        }
 
         // ── Display ──
-        sp.Children.Add(new TextBlock { Text = "Display", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16, Margin = new Thickness(0, 12, 0, 0) });
+        {
+            var g = MakeSettingsGroup("Display");
 
-        sp.Children.Add(new TextBlock { Text = "Line truncation length (characters):" });
-        var trunc = new NumberBox { Value = ViewModel.LineTruncationLength, Minimum = 0, Maximum = 10000 };
-        trunc.ValueChanged += (_, args) => ViewModel.LineTruncationLength = (int)args.NewValue;
-        sp.Children.Add(trunc);
-        sp.Children.Add(new TextBlock { Text = "Lines longer than this are truncated in the results list to prevent UI slowdowns from extremely long lines. Set to 0 to disable truncation.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            g.Children.Add(new TextBlock { Text = "Line truncation length (characters):" });
+            var trunc = new NumberBox { Value = ViewModel.LineTruncationLength, Minimum = 0, Maximum = 10000 };
+            trunc.ValueChanged += (_, args) => ViewModel.LineTruncationLength = (int)args.NewValue;
+            g.Children.Add(trunc);
+            g.Children.Add(new TextBlock { Text = "Lines longer than this are truncated in the results list to prevent UI slowdowns from extremely long lines. Set to 0 to disable truncation.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-        sp.Children.Add(new TextBlock { Text = "Multi-select preview mode:" });
-        var previewMode = new ComboBox();
-        previewMode.Items.Add("Concatenated (separate match snippets)");
-        previewMode.Items.Add("Multi-highlight (unified file view)");
-        previewMode.SelectedIndex = ViewModel.PreviewModeIndex;
-        previewMode.SelectionChanged += (_, _) => ViewModel.PreviewModeIndex = previewMode.SelectedIndex;
-        sp.Children.Add(previewMode);
+            g.Children.Add(new TextBlock { Text = "Multi-select preview mode:" });
+            var previewMode = new ComboBox();
+            previewMode.Items.Add("Concatenated (separate match snippets)");
+            previewMode.Items.Add("Multi-highlight (unified file view)");
+            previewMode.SelectedIndex = ViewModel.PreviewModeIndex;
+            previewMode.SelectionChanged += (_, _) => ViewModel.PreviewModeIndex = previewMode.SelectedIndex;
+            g.Children.Add(previewMode);
 
-        var wordWrap = new CheckBox { Content = "Word wrap in preview panel", IsChecked = ViewModel.PreviewWordWrap };
-        wordWrap.Checked += (_, _) => { ViewModel.PreviewWordWrap = true; ApplyWordWrap(true); };
-        wordWrap.Unchecked += (_, _) => { ViewModel.PreviewWordWrap = false; ApplyWordWrap(false); };
-        sp.Children.Add(wordWrap);
+            var wordWrap = new CheckBox { Content = "Word wrap in preview panel", IsChecked = ViewModel.PreviewWordWrap };
+            wordWrap.Checked += (_, _) => { ViewModel.PreviewWordWrap = true; ApplyWordWrap(true); };
+            wordWrap.Unchecked += (_, _) => { ViewModel.PreviewWordWrap = false; ApplyWordWrap(false); };
+            g.Children.Add(wordWrap);
+
+            sp.Children.Add((Border)g.Tag!);
+        }
 
         // ── Editor ──
-        sp.Children.Add(new TextBlock { Text = "Editor", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16, Margin = new Thickness(0, 12, 0, 0) });
+        {
+            var g = MakeSettingsGroup("Editor");
 
-        sp.Children.Add(new TextBlock { Text = "Editor command ({file} = full file path, {line} = line number):" });
-        var editor = new TextBox { Text = ViewModel.EditorCommand };
-        editor.TextChanged += (_, _) => ViewModel.EditorCommand = editor.Text;
-        sp.Children.Add(editor);
+            g.Children.Add(new TextBlock { Text = "Editor command ({file} = full file path, {line} = line number):" });
+            var editor = new TextBox { Text = ViewModel.EditorCommand };
+            editor.TextChanged += (_, _) => ViewModel.EditorCommand = editor.Text;
+            g.Children.Add(editor);
+
+            sp.Children.Add((Border)g.Tag!);
+        }
 
         // ── General ──
-        sp.Children.Add(new TextBlock { Text = "General", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16, Margin = new Thickness(0, 12, 0, 0) });
-
-        var availableHotkeyKeys = _hotkeyService.GetAvailableCtrlShiftLetterKeys(_hwnd);
-        var selectedHotkeyKey = HotkeyService.ChooseAvailableKey(availableHotkeyKeys, ViewModel.GlobalHotkeyKey);
-        if (selectedHotkeyKey is char selectedKey && !string.Equals(ViewModel.GlobalHotkeyKey, selectedKey.ToString(), StringComparison.OrdinalIgnoreCase))
-            ViewModel.GlobalHotkeyKey = selectedKey.ToString();
-
-        var hotkey = new CheckBox { Content = "Enable global hotkey", IsChecked = ViewModel.GlobalHotkeyEnabled, IsEnabled = availableHotkeyKeys.Count > 0 };
-        hotkey.Checked += (_, _) => ViewModel.GlobalHotkeyEnabled = true;
-        hotkey.Unchecked += (_, _) => ViewModel.GlobalHotkeyEnabled = false;
-        sp.Children.Add(hotkey);
-
-        sp.Children.Add(new TextBlock { Text = "Global hotkey:" });
-        var hotkeyCombo = new ComboBox { IsEnabled = availableHotkeyKeys.Count > 0 };
-        foreach (var key in availableHotkeyKeys)
         {
-            hotkeyCombo.Items.Add(new ComboBoxItem
-            {
-                Content = HotkeyService.FormatCtrlShift(key),
-                Tag = key.ToString(),
-            });
-        }
+            var g = MakeSettingsGroup("General");
 
-        if (selectedHotkeyKey is char hotkeyKey)
-        {
-            for (int itemIndex = 0; itemIndex < hotkeyCombo.Items.Count; itemIndex++)
+            var availableHotkeyKeys = _hotkeyService.GetAvailableCtrlShiftLetterKeys(_hwnd);
+            var selectedHotkeyKey = HotkeyService.ChooseAvailableKey(availableHotkeyKeys, ViewModel.GlobalHotkeyKey);
+            if (selectedHotkeyKey is char selectedKey && !string.Equals(ViewModel.GlobalHotkeyKey, selectedKey.ToString(), StringComparison.OrdinalIgnoreCase))
+                ViewModel.GlobalHotkeyKey = selectedKey.ToString();
+
+            var hotkey = new CheckBox { Content = "Enable global hotkey", IsChecked = ViewModel.GlobalHotkeyEnabled, IsEnabled = availableHotkeyKeys.Count > 0 };
+            hotkey.Checked += (_, _) => ViewModel.GlobalHotkeyEnabled = true;
+            hotkey.Unchecked += (_, _) => ViewModel.GlobalHotkeyEnabled = false;
+            g.Children.Add(hotkey);
+
+            g.Children.Add(new TextBlock { Text = "Global hotkey:" });
+            var hotkeyCombo = new ComboBox { IsEnabled = availableHotkeyKeys.Count > 0 };
+            foreach (var key in availableHotkeyKeys)
             {
-                if (hotkeyCombo.Items[itemIndex] is ComboBoxItem item &&
-                    string.Equals(item.Tag as string, hotkeyKey.ToString(), StringComparison.OrdinalIgnoreCase))
+                hotkeyCombo.Items.Add(new ComboBoxItem
                 {
-                    hotkeyCombo.SelectedIndex = itemIndex;
-                    break;
+                    Content = HotkeyService.FormatCtrlShift(key),
+                    Tag = key.ToString(),
+                });
+            }
+
+            if (selectedHotkeyKey is char hotkeyKey)
+            {
+                for (int itemIndex = 0; itemIndex < hotkeyCombo.Items.Count; itemIndex++)
+                {
+                    if (hotkeyCombo.Items[itemIndex] is ComboBoxItem item &&
+                        string.Equals(item.Tag as string, hotkeyKey.ToString(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        hotkeyCombo.SelectedIndex = itemIndex;
+                        break;
+                    }
                 }
             }
-        }
-        else
-        {
-            hotkeyCombo.Items.Add("No Ctrl+Shift+letter combinations available");
-            hotkeyCombo.SelectedIndex = 0;
-        }
-
-        hotkeyCombo.SelectionChanged += (_, _) =>
-        {
-            if (hotkeyCombo.SelectedItem is ComboBoxItem item && item.Tag is string key)
-                ViewModel.GlobalHotkeyKey = key;
-        };
-        sp.Children.Add(hotkeyCombo);
-
-        sp.Children.Add(new TextBlock { Text = "Max recent directories / queries to remember:" });
-        var recent = new NumberBox { Value = ViewModel.MaxRecentItems, Minimum = 1, Maximum = 100 };
-        recent.ValueChanged += (_, args) => ViewModel.MaxRecentItems = (int)args.NewValue;
-        sp.Children.Add(recent);
-
-        sp.Children.Add(new TextBlock { Text = "File log level:" });
-        var fileLogLevel = new ComboBox();
-        fileLogLevel.Items.Add("None (logging disabled)");
-        fileLogLevel.Items.Add("Critical (errors only)");
-        fileLogLevel.Items.Add("Warning (errors + warnings)");
-        fileLogLevel.Items.Add("Info (general activity)");
-        fileLogLevel.Items.Add("Verbose (all details, may slow performance)");
-        fileLogLevel.SelectedIndex = ViewModel.FileLogLevelIndex + 1;
-        fileLogLevel.SelectionChanged += (_, _) => ViewModel.FileLogLevelIndex = fileLogLevel.SelectedIndex - 1;
-        sp.Children.Add(fileLogLevel);
-
-        sp.Children.Add(new TextBlock { Text = "Console log level:" });
-        var consoleLogLevel = new ComboBox();
-        consoleLogLevel.Items.Add("None (logging disabled)");
-        consoleLogLevel.Items.Add("Critical (errors only)");
-        consoleLogLevel.Items.Add("Warning (errors + warnings)");
-        consoleLogLevel.Items.Add("Info (general activity)");
-        consoleLogLevel.Items.Add("Verbose (all details, may slow performance)");
-        consoleLogLevel.SelectedIndex = ViewModel.ConsoleLogLevelIndex + 1;
-        consoleLogLevel.SelectionChanged += (_, _) => ViewModel.ConsoleLogLevelIndex = consoleLogLevel.SelectedIndex - 1;
-        sp.Children.Add(consoleLogLevel);
-
-        sp.Children.Add(new TextBlock { Text = $"Log file: {LogService.DefaultLogPath()}", FontSize = 11, Opacity = 0.6 });
-
-        // Reset admin warning
-        if (ViewModel.SuppressAdminWarning)
-        {
-            var resetAdmin = new Button { Content = "Re-enable admin privilege warning", FontSize = 12, Padding = new Thickness(8, 4, 8, 4), Margin = new Thickness(0, 4, 0, 0) };
-            resetAdmin.Click += (_, _) =>
+            else
             {
-                ViewModel.SuppressAdminWarning = false;
-                resetAdmin.Content = "Admin warning re-enabled ✓";
-                resetAdmin.IsEnabled = false;
+                hotkeyCombo.Items.Add("No Ctrl+Shift+letter combinations available");
+                hotkeyCombo.SelectedIndex = 0;
+            }
+
+            hotkeyCombo.SelectionChanged += (_, _) =>
+            {
+                if (hotkeyCombo.SelectedItem is ComboBoxItem item && item.Tag is string key)
+                    ViewModel.GlobalHotkeyKey = key;
             };
-            sp.Children.Add(resetAdmin);
-            sp.Children.Add(new TextBlock { Text = "The non-administrator warning was previously dismissed. Click to show it again on next launch.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            g.Children.Add(hotkeyCombo);
+
+            g.Children.Add(new TextBlock { Text = "Max recent directories / queries to remember:" });
+            var recent = new NumberBox { Value = ViewModel.MaxRecentItems, Minimum = 1, Maximum = 100 };
+            recent.ValueChanged += (_, args) => ViewModel.MaxRecentItems = (int)args.NewValue;
+            g.Children.Add(recent);
+
+            g.Children.Add(new TextBlock { Text = "File log level:" });
+            var fileLogLevel = new ComboBox();
+            fileLogLevel.Items.Add("None (logging disabled)");
+            fileLogLevel.Items.Add("Critical (errors only)");
+            fileLogLevel.Items.Add("Warning (errors + warnings)");
+            fileLogLevel.Items.Add("Info (general activity)");
+            fileLogLevel.Items.Add("Verbose (all details, may slow performance)");
+            fileLogLevel.SelectedIndex = ViewModel.FileLogLevelIndex + 1;
+            fileLogLevel.SelectionChanged += (_, _) => ViewModel.FileLogLevelIndex = fileLogLevel.SelectedIndex - 1;
+            g.Children.Add(fileLogLevel);
+
+            g.Children.Add(new TextBlock { Text = "Console log level:" });
+            var consoleLogLevel = new ComboBox();
+            consoleLogLevel.Items.Add("None (logging disabled)");
+            consoleLogLevel.Items.Add("Critical (errors only)");
+            consoleLogLevel.Items.Add("Warning (errors + warnings)");
+            consoleLogLevel.Items.Add("Info (general activity)");
+            consoleLogLevel.Items.Add("Verbose (all details, may slow performance)");
+            consoleLogLevel.SelectedIndex = ViewModel.ConsoleLogLevelIndex + 1;
+            consoleLogLevel.SelectionChanged += (_, _) => ViewModel.ConsoleLogLevelIndex = consoleLogLevel.SelectedIndex - 1;
+            g.Children.Add(consoleLogLevel);
+
+            g.Children.Add(new TextBlock { Text = $"Log file: {LogService.DefaultLogPath()}", FontSize = 11, Opacity = 0.6 });
+
+            // Reset admin warning
+            if (ViewModel.SuppressAdminWarning)
+            {
+                var resetAdmin = new Button { Content = "Re-enable admin privilege warning", FontSize = 12, Padding = new Thickness(8, 4, 8, 4), Margin = new Thickness(0, 4, 0, 0) };
+                resetAdmin.Click += (_, _) =>
+                {
+                    ViewModel.SuppressAdminWarning = false;
+                    resetAdmin.Content = "Admin warning re-enabled ✓";
+                    resetAdmin.IsEnabled = false;
+                };
+                g.Children.Add(resetAdmin);
+                g.Children.Add(new TextBlock { Text = "The non-administrator warning was previously dismissed. Click to show it again on next launch.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            }
+
+            sp.Children.Add((Border)g.Tag!);
         }
 
         // Wrap in ScrollViewer so the dialog is scrollable when content overflows.
@@ -747,6 +811,35 @@ public sealed partial class MainWindow : Window
     }
 
     private SearchResult? _previewResult;
+    private bool _previewPanelRevealed;
+
+    // Match navigation state for multi-highlight mode
+    private readonly List<(RichTextBlock block, Paragraph para)> _matchParagraphs = new();
+    private int _currentMatchIndex = -1;
+
+    // Per-section match navigation state
+    private sealed class SectionMatchNav
+    {
+        public List<Paragraph> Matches { get; } = new();
+        public int CurrentIndex { get; set; } = -1;
+        public TextBlock Label { get; set; } = null!;
+        public StackPanel Panel { get; set; } = null!;
+        public ScrollViewer Scroller { get; set; } = null!;
+        public RichTextBlock Block { get; set; } = null!;
+    }
+    private readonly Dictionary<RichTextBlock, SectionMatchNav> _sectionMatchNavs = new();
+
+    private void EnsurePreviewPanelVisible()
+    {
+        if (_previewPanelRevealed) return;
+        _previewPanelRevealed = true;
+        ResultsColumn.Width = new GridLength(2, GridUnitType.Star);
+        SplitterColumn.Width = GridLength.Auto;
+        PreviewColumn.Width = new GridLength(3, GridUnitType.Star);
+        PreviewColumn.MinWidth = 200;
+        SplitterBorder.Visibility = Visibility.Visible;
+        PreviewPanelBorder.Visibility = Visibility.Visible;
+    }
 
     private async void OnResultItemClick(object sender, ItemClickEventArgs e)
     {
@@ -1239,6 +1332,8 @@ public sealed partial class MainWindow : Window
     {
         if (!TryLeavePreviewEditorForPreviewChange()) return;
 
+        EnsurePreviewPanelVisible();
+
         // Hydrate from disk if this result was evicted during memory pressure.
         ViewModel.HydrateResult(r);
         _previewResult = r;
@@ -1250,6 +1345,8 @@ public sealed partial class MainWindow : Window
     private async Task UpdateMultiSelectPreviewAsync(SearchResult? scrollTarget = null)
     {
         if (!TryLeavePreviewEditorForPreviewChange()) return;
+
+        EnsurePreviewPanelVisible();
 
         var selected = ViewModel.GetAllSelectedResults();
         if (selected.Count == 0)
@@ -1297,7 +1394,7 @@ public sealed partial class MainWindow : Window
 
         foreach (var (filePath, results) in byFile)
         {
-            var section = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)");
+            var section = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
 
             string[]? allLines = null;
             try { allLines = await ReadAllLinesWithEncodingAsync(filePath); } catch (Exception ex) { LogService.Instance.Verbose("Preview", $"Cannot read file for concatenated preview: {filePath}", ex); }
@@ -1349,6 +1446,8 @@ public sealed partial class MainWindow : Window
     private async Task ShowMultiHighlightPreviewAsync(List<SearchResult> selected, SearchResult? scrollTarget)
     {
         ShowPreviewSectionsSurface();
+        _matchParagraphs.Clear();
+        _currentMatchIndex = -1;
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
 
         RichTextBlock? scrollBlock = null;
@@ -1369,7 +1468,7 @@ public sealed partial class MainWindow : Window
 
         foreach (var (filePath, results) in byFile)
         {
-            var section = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)");
+            var section = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
 
             // Collect all match line numbers in this file
             var matchLines = new HashSet<int>(results.Select(r => r.LineNumber));
@@ -1420,6 +1519,11 @@ public sealed partial class MainWindow : Window
                         var matchResult = results.FirstOrDefault(r => r.LineNumber == lineNum) ?? results[0];
                         var para = MakePreviewParagraph(allLines[i], lineNum, isMatchLine, matchResult, rx);
                         section.Blocks.Add(para);
+                        if (isMatchLine)
+                        {
+                            _matchParagraphs.Add((section, para));
+                            if (_sectionMatchNavs.TryGetValue(section, out var sn)) sn.Matches.Add(para);
+                        }
 
                         if (scrollTarget is not null && isMatchLine && lineNum == scrollTarget.LineNumber
                             && string.Equals(filePath, scrollTarget.FilePath, StringComparison.OrdinalIgnoreCase))
@@ -1441,6 +1545,11 @@ public sealed partial class MainWindow : Window
                         bool isMatchLine = lineNum == r.LineNumber;
                         var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
                         section.Blocks.Add(para);
+                        if (isMatchLine)
+                        {
+                            _matchParagraphs.Add((section, para));
+                            if (_sectionMatchNavs.TryGetValue(section, out var sn)) sn.Matches.Add(para);
+                        }
 
                         if (scrollTarget is not null && isMatchLine
                             && r.LineNumber == scrollTarget.LineNumber
@@ -1460,6 +1569,9 @@ public sealed partial class MainWindow : Window
                 : $"{selected.Count} selected matches across {byFile.Count} file(s)",
             selected.Count == 1 ? selected[0].FilePath : string.Join(Environment.NewLine, byFile.Keys));
         _previewResult = selected[0];
+
+        UpdateMatchNavPanel();
+        UpdateSectionMatchNavPanels();
 
         if (scrollBlock is not null && scrollPara is not null)
             ScrollPreviewToLine(scrollBlock, scrollPara);
@@ -1486,6 +1598,41 @@ public sealed partial class MainWindow : Window
         while ((line = await reader.ReadLineAsync()) != null)
             lines.Add(line);
         return lines.ToArray();
+    }
+
+    private async Task ExpandSectionToFullFileAsync(RichTextBlock section, string filePath, List<SearchResult> results)
+    {
+        string[]? allLines = null;
+        try { allLines = await ReadAllLinesWithEncodingAsync(filePath); }
+        catch (Exception ex)
+        {
+            LogService.Instance.Verbose("Preview", $"Cannot read file for full-file section preview: {filePath}", ex);
+            return;
+        }
+
+        var matchLines = new HashSet<int>(results.Select(r => r.LineNumber));
+        Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
+
+        section.Blocks.Clear();
+        for (int i = 0; i < allLines.Length; i++)
+        {
+            int lineNum = i + 1;
+            bool isMatch = matchLines.Contains(lineNum);
+            var matchResult = isMatch
+                ? results.FirstOrDefault(r => r.LineNumber == lineNum) ?? results[0]
+                : results[0];
+            var para = MakePreviewParagraph(allLines[i], lineNum, isMatch, matchResult, rx, truncate: false);
+            section.Blocks.Add(para);
+        }
+
+        if (allLines.Length == 0)
+        {
+            var para = new Paragraph();
+            var run = new Run { Text = "(empty file)" };
+            run.Foreground = s_contextTextBrush;
+            para.Inlines.Add(run);
+            section.Blocks.Add(para);
+        }
     }
 
     private static List<(string line, int lineNum)> GetPreviewLines(SearchResult r, string[]? allLines, int previewLines, bool fullFile)
@@ -1554,6 +1701,7 @@ public sealed partial class MainWindow : Window
         PreviewSectionsPanel.Visibility = Visibility.Collapsed;
         PreviewBlock.Visibility = Visibility.Visible;
         SetPerFileToolbarVisibility(Visibility.Visible);
+        HideMatchNavPanel();
         // Restore outer horizontal scroll for single-file block view.
         PreviewScrollViewer.HorizontalScrollBarVisibility =
             ViewModel.PreviewWordWrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
@@ -1566,6 +1714,7 @@ public sealed partial class MainWindow : Window
         PreviewSectionsPanel.Children.Clear();
         PreviewSectionsPanel.Visibility = Visibility.Visible;
         SetPerFileToolbarVisibility(Visibility.Collapsed);
+        HideMatchNavPanel();
         // Sections have their own per-section horizontal scroll; outer viewer stays vertical-only.
         PreviewScrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
     }
@@ -1590,7 +1739,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private RichTextBlock AddPreviewSection(string filePath, string? detail = null)
+    private RichTextBlock AddPreviewSection(string filePath, string? detail = null, List<SearchResult>? results = null)
     {
         var block = new RichTextBlock
         {
@@ -1613,19 +1762,80 @@ public sealed partial class MainWindow : Window
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
         };
 
+        // Per-section match nav overlay
+        var navLabel = new TextBlock { FontSize = 11, Opacity = 0.8, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 2, 0) };
+        var prevBtn = new Button
+        {
+            Style = (Style)Application.Current.Resources["AccentButtonStyle"],
+            Width = 24, Height = 24, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
+            CornerRadius = new CornerRadius(4),
+            Content = new FontIcon { Glyph = "\uE70E", FontSize = 11 },
+        };
+        ToolTipService.SetToolTip(prevBtn, "Previous match in file (↑)");
+        var nextBtn = new Button
+        {
+            Style = (Style)Application.Current.Resources["AccentButtonStyle"],
+            Width = 24, Height = 24, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
+            CornerRadius = new CornerRadius(4),
+            Content = new FontIcon { Glyph = "\uE70D", FontSize = 11 },
+        };
+        ToolTipService.SetToolTip(nextBtn, "Next match in file (↓)");
+
+        var navInner = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3 };
+        navInner.Children.Add(navLabel);
+        navInner.Children.Add(prevBtn);
+        navInner.Children.Add(nextBtn);
+
+        var navBorder = new Border
+        {
+            Background = (Brush)Application.Current.Resources["AcrylicBackgroundFillColorBaseBrush"],
+            BorderBrush = new SolidColorBrush((Windows.UI.Color)Application.Current.Resources["SystemAccentColor"]),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(5, 3, 5, 3),
+            Child = navInner,
+        };
+
+        var navPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 4, 8, 0),
+            Visibility = Visibility.Collapsed,
+        };
+        navPanel.Children.Add(navBorder);
+
+        var sectionNav = new SectionMatchNav
+        {
+            Label = navLabel,
+            Panel = navPanel,
+            Scroller = sectionScroller,
+            Block = block,
+        };
+        _sectionMatchNavs[block] = sectionNav;
+
+        prevBtn.Click += (_, _) => OnSectionPrevMatch(sectionNav);
+        nextBtn.Click += (_, _) => OnSectionNextMatch(sectionNav);
+
+        // Wrap scroller + nav overlay in a Grid
+        var wrapper = new Grid();
+        wrapper.Children.Add(sectionScroller);
+        wrapper.Children.Add(navPanel);
+
         var expander = new Expander
         {
-            Header = BuildPreviewSectionHeader(filePath, detail),
-            Content = sectionScroller,
+            Header = BuildPreviewSectionHeader(filePath, detail, block, results),
+            Content = wrapper,
             IsExpanded = true,
             HorizontalAlignment = HorizontalAlignment.Stretch,
         };
         ToolTipService.SetToolTip(expander, filePath);
-        PreviewSectionsPanel.Children.Add(expander);
+        PreviewSectionsPanel.Children.Insert(0, expander);
         return block;
     }
 
-    private FrameworkElement BuildPreviewSectionHeader(string filePath, string? detail)
+    private FrameworkElement BuildPreviewSectionHeader(string filePath, string? detail, RichTextBlock? sectionBlock = null, List<SearchResult>? sectionResults = null)
     {
         var grid = new Grid
         {
@@ -1685,6 +1895,24 @@ public sealed partial class MainWindow : Window
 
         var path = filePath; // capture for lambdas
 
+        if (sectionBlock is not null && sectionResults is not null)
+        {
+            var fullFileBtn = new Button
+            {
+                Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
+                Content = new FontIcon { Glyph = "\uE81E", FontSize = 12 },
+            };
+            ToolTipService.SetToolTip(fullFileBtn, "Show full file");
+            var capturedBlock = sectionBlock;
+            var capturedResults = sectionResults;
+            fullFileBtn.Click += async (_, _) =>
+            {
+                fullFileBtn.IsEnabled = false;
+                await ExpandSectionToFullFileAsync(capturedBlock, path, capturedResults);
+            };
+            buttonPanel.Children.Add(fullFileBtn);
+        }
+
         var copyBtn = new Button
         {
             Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
@@ -1712,7 +1940,7 @@ public sealed partial class MainWindow : Window
             Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
             Content = new FontIcon { Glyph = "\uE70F", FontSize = 12 },
         };
-        ToolTipService.SetToolTip(editorBtn, "Open in configured editor");
+        ToolTipService.SetToolTip(editorBtn, "Edit file");
         editorBtn.Click += async (_, _) =>
         {
             var result = ViewModel.ResultGroups
@@ -1723,10 +1951,56 @@ public sealed partial class MainWindow : Window
         };
         buttonPanel.Children.Add(editorBtn);
 
+        // Dismiss button — remove this file section from the preview
+        var dismissBtn = new Button
+        {
+            Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
+            Content = new FontIcon { Glyph = "\uE711", FontSize = 12 },
+        };
+        ToolTipService.SetToolTip(dismissBtn, "Remove from preview");
+        if (sectionBlock is not null)
+        {
+            var capturedBlock = sectionBlock;
+            dismissBtn.Click += (_, _) => RemovePreviewSection(capturedBlock);
+        }
+        buttonPanel.Children.Add(dismissBtn);
+
         grid.Children.Add(buttonPanel);
 
         ToolTipService.SetToolTip(grid, filePath);
         return grid;
+    }
+
+    private void RemovePreviewSection(RichTextBlock block)
+    {
+        // Find and remove the Expander containing this block
+        for (int i = PreviewSectionsPanel.Children.Count - 1; i >= 0; i--)
+        {
+            if (PreviewSectionsPanel.Children[i] is Expander expander
+                && expander.Content is Grid wrapper)
+            {
+                // The wrapper Grid contains a ScrollViewer whose content Border holds the block
+                foreach (var child in wrapper.Children)
+                {
+                    if (child is ScrollViewer sv
+                        && sv.Content is Border border
+                        && border.Child == block)
+                    {
+                        PreviewSectionsPanel.Children.RemoveAt(i);
+
+                        // Remove per-section match nav data
+                        _sectionMatchNavs.Remove(block);
+
+                        // Remove global matches for this block
+                        _matchParagraphs.RemoveAll(m => m.block == block);
+                        _currentMatchIndex = -1;
+                        UpdateMatchNavPanel();
+                        UpdateSectionMatchNavPanels();
+                        return;
+                    }
+                }
+            }
+        }
     }
 
     private async Task ShowFullFilePreviewAsync(IReadOnlyList<FullFilePreviewTarget> targets)
@@ -1941,25 +2215,25 @@ public sealed partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
-            ShowPreviewMessage("Full-file load cancelled.");
+            ShowPreviewMessage("Full-file load cancelled.", showBackButton: _previewResult is not null);
         }
         catch (PreviewLoadException ex)
         {
-            ShowPreviewMessage(ex.Message);
+            ShowPreviewMessage(ex.Message, showBackButton: _previewResult is not null);
             ViewModel.StatusText = ex.Message;
         }
         catch (OutOfMemoryException ex)
         {
             const string message = "Not enough memory to load this full file into the right-panel editor.";
             LogService.Instance.Warning("Preview", message, ex);
-            ShowPreviewMessage(message);
+            ShowPreviewMessage(message, showBackButton: _previewResult is not null);
             ViewModel.StatusText = message;
         }
         catch (Exception ex)
         {
             var message = $"Could not load full file: {ex.Message}";
             LogService.Instance.Warning("Preview", $"Could not load full file: {result.FilePath}", ex);
-            ShowPreviewMessage(message);
+            ShowPreviewMessage(message, showBackButton: _previewResult is not null);
             ViewModel.StatusText = message;
         }
         finally
@@ -2231,7 +2505,7 @@ public sealed partial class MainWindow : Window
             baseName);
     }
 
-    private void ShowPreviewMessage(string message)
+    private void ShowPreviewMessage(string message, bool showBackButton = false)
     {
         SetPreviewEditorVisible(false);
         ShowPreviewBlockSurface();
@@ -2240,6 +2514,14 @@ public sealed partial class MainWindow : Window
         var para = new Paragraph();
         para.Inlines.Add(new Run { Text = message });
         PreviewBlock.Blocks.Add(para);
+        PreviewBackButton.Visibility = showBackButton ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private async void OnPreviewBackClick(object sender, RoutedEventArgs e)
+    {
+        PreviewBackButton.Visibility = Visibility.Collapsed;
+        if (_previewResult is { } result)
+            await UpdatePreviewAsync(result);
     }
 
     private static string FormatBytes(long bytes)
@@ -2376,6 +2658,78 @@ public sealed partial class MainWindow : Window
                 // Layout may not be ready — silently ignore.
             }
         });
+    }
+
+    private void UpdateMatchNavPanel()
+    {
+        if (_matchParagraphs.Count > 0)
+        {
+            MatchNavPanel.Visibility = Visibility.Visible;
+            MatchNavLabel.Text = $"{_matchParagraphs.Count} matches";
+        }
+        else
+        {
+            HideMatchNavPanel();
+        }
+    }
+
+    private void HideMatchNavPanel()
+    {
+        MatchNavPanel.Visibility = Visibility.Collapsed;
+        _matchParagraphs.Clear();
+        _currentMatchIndex = -1;
+        _sectionMatchNavs.Clear();
+    }
+
+    private void UpdateSectionMatchNavPanels()
+    {
+        foreach (var sn in _sectionMatchNavs.Values)
+        {
+            if (sn.Matches.Count > 1)
+            {
+                sn.CurrentIndex = 0;
+                sn.Panel.Visibility = Visibility.Visible;
+                sn.Label.Text = $"Match 1 of {sn.Matches.Count}";
+            }
+            else
+            {
+                sn.Panel.Visibility = Visibility.Collapsed;
+            }
+        }
+    }
+
+    private void OnSectionNextMatch(SectionMatchNav sn)
+    {
+        if (sn.Matches.Count == 0) return;
+        sn.CurrentIndex = (sn.CurrentIndex + 1) % sn.Matches.Count;
+        sn.Label.Text = $"Match {sn.CurrentIndex + 1} of {sn.Matches.Count}";
+        ScrollPreviewToLine(sn.Block, sn.Matches[sn.CurrentIndex]);
+    }
+
+    private void OnSectionPrevMatch(SectionMatchNav sn)
+    {
+        if (sn.Matches.Count == 0) return;
+        sn.CurrentIndex = (sn.CurrentIndex - 1 + sn.Matches.Count) % sn.Matches.Count;
+        sn.Label.Text = $"Match {sn.CurrentIndex + 1} of {sn.Matches.Count}";
+        ScrollPreviewToLine(sn.Block, sn.Matches[sn.CurrentIndex]);
+    }
+
+    private void OnNextMatch(object sender, RoutedEventArgs e)
+    {
+        if (_matchParagraphs.Count == 0) return;
+        _currentMatchIndex = (_currentMatchIndex + 1) % _matchParagraphs.Count;
+        var (block, para) = _matchParagraphs[_currentMatchIndex];
+        MatchNavLabel.Text = $"{_currentMatchIndex + 1} / {_matchParagraphs.Count}";
+        ScrollPreviewToLine(block, para);
+    }
+
+    private void OnPrevMatch(object sender, RoutedEventArgs e)
+    {
+        if (_matchParagraphs.Count == 0) return;
+        _currentMatchIndex = (_currentMatchIndex - 1 + _matchParagraphs.Count) % _matchParagraphs.Count;
+        var (block, para) = _matchParagraphs[_currentMatchIndex];
+        MatchNavLabel.Text = $"{_currentMatchIndex + 1} / {_matchParagraphs.Count}";
+        ScrollPreviewToLine(block, para);
     }
 
     private bool _splitterDragging;

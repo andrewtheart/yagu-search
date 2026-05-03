@@ -297,9 +297,9 @@
         <!-- Split pane: results + preview -->
         <Grid x:Name="SplitPaneGrid" Grid.Row="4" Margin="16,4,16,4">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="2*" MinWidth="200" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="3*" MinWidth="200" />
+                <ColumnDefinition x:Name="ResultsColumn" Width="*" MinWidth="200" />
+                <ColumnDefinition x:Name="SplitterColumn" Width="0" />
+                <ColumnDefinition x:Name="PreviewColumn" Width="0" />
             </Grid.ColumnDefinitions>
 
             <!-- Results panel card -->
@@ -477,6 +477,7 @@
             </Border>
 
             <Border x:Name="SplitterBorder" Grid.Column="1" Width="8" Background="Transparent"
+                    Visibility="Collapsed"
                     PointerPressed="OnSplitterPressed"
                     PointerMoved="OnSplitterMoved"
                     PointerReleased="OnSplitterReleased"
@@ -493,7 +494,8 @@
             </Border>
 
             <!-- Preview panel card -->
-            <Border Grid.Column="2" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            <Border x:Name="PreviewPanelBorder" Grid.Column="2" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    Visibility="Collapsed"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1" CornerRadius="8">
                 <Grid>
@@ -535,7 +537,7 @@
                                     <TextBlock Text="Open" />
                                 </StackPanel>
                             </Button>
-                            <Button x:Name="OpenInEditorButton" Click="OnOpenInEditor" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Open in configured editor">
+                            <Button x:Name="OpenInEditorButton" Click="OnOpenInEditor" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Edit file">
                                 <StackPanel Orientation="Horizontal" Spacing="4">
                                     <FontIcon Glyph="&#xE70F;" FontSize="12" />
                                     <TextBlock Text="Editor" />
@@ -612,10 +614,48 @@
                         <ScrollViewer x:Name="PreviewScrollViewer" Grid.Row="1" Padding="16,12"
                                       HorizontalScrollBarVisibility="Auto">
                             <Grid>
-                                <RichTextBlock x:Name="PreviewBlock" FontFamily="Consolas" TextWrapping="NoWrap" />
+                                <StackPanel x:Name="PreviewMessagePanel">
+                                    <RichTextBlock x:Name="PreviewBlock" FontFamily="Consolas" TextWrapping="NoWrap" />
+                                    <Button x:Name="PreviewBackButton" Visibility="Collapsed"
+                                            Click="OnPreviewBackClick" Margin="0,12,0,0">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <FontIcon Glyph="&#xE72B;" FontSize="12" />
+                                            <TextBlock Text="Back to preview" />
+                                        </StackPanel>
+                                    </Button>
+                                </StackPanel>
                                 <StackPanel x:Name="PreviewSectionsPanel" Visibility="Collapsed" Spacing="8" />
                             </Grid>
                         </ScrollViewer>
+
+                        <!-- Match navigation overlay (multi-highlight mode) -->
+                        <StackPanel x:Name="MatchNavPanel" Grid.Row="1" Visibility="Collapsed"
+                                    Orientation="Horizontal" Spacing="2"
+                                    HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                    Margin="0,0,24,16">
+                            <Border Background="{ThemeResource AcrylicBackgroundFillColorBaseBrush}"
+                                    BorderBrush="{ThemeResource SystemAccentColor}"
+                                    BorderThickness="1" CornerRadius="6" Padding="6,4">
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock x:Name="MatchNavLabel" FontSize="11" Opacity="0.8"
+                                               VerticalAlignment="Center" Margin="2,0" />
+                                    <Button x:Name="PrevMatchButton" Click="OnPrevMatch"
+                                            Style="{StaticResource AccentButtonStyle}"
+                                            Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
+                                            CornerRadius="4"
+                                            ToolTipService.ToolTip="Previous match (↑)">
+                                        <FontIcon Glyph="&#xE70E;" FontSize="12" />
+                                    </Button>
+                                    <Button x:Name="NextMatchButton" Click="OnNextMatch"
+                                            Style="{StaticResource AccentButtonStyle}"
+                                            Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
+                                            CornerRadius="4"
+                                            ToolTipService.ToolTip="Next match (↓)">
+                                        <FontIcon Glyph="&#xE70D;" FontSize="12" />
+                                    </Button>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
                         <TextBox x:Name="PreviewEditor" Grid.Row="1" Visibility="Collapsed" FontFamily="Consolas"
                                  AcceptsReturn="True" TextWrapping="NoWrap"
                                  ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto"

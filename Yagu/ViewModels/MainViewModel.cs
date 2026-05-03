@@ -707,9 +707,14 @@ public sealed partial class MainViewModel : ObservableObject
         _resultStore?.Dispose();
         _resultStore = new ResultStore();
 
-        // Force a gen-2 collection so the previous search's result graph
-        // is reclaimed before the new search starts allocating.
-        GC.Collect(2, GCCollectionMode.Forced, blocking: false);
+        // Force a full blocking collection so the previous search's result graph
+        // (potentially gigabytes of SearchResult strings) is reclaimed before
+        // the new search starts allocating.  Follow with WaitForPendingFinalizers
+        // to release any weak-referenced finalizable objects, then a second pass
+        // to collect objects freed by finalizers.
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(0, GCCollectionMode.Forced, blocking: true);
 
         ErrorText = null;
         FallbackReason = null;

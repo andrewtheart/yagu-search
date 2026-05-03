@@ -13,7 +13,6 @@ public partial class App : Application
 {
     public static string? StartupDirectory { get; set; }
     public static string? StartupQuery { get; set; }
-    public static bool AnotherInstanceDetected { get; set; }
     public static Mutex? InstanceMutex { get; set; }
     public static string CrashLogPath { get; } = Path.Combine(
         Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory, "yagu-crash.log");
@@ -43,63 +42,12 @@ public partial class App : Application
                 StartupDirectory = ParseDirArg(System.Environment.GetCommandLineArgs());
             _window = new MainWindow(StartupDirectory, StartupQuery);
             _window.Activate();
-
-            if (AnotherInstanceDetected)
-                _ = ShowMultiInstanceDialogAsync();
         }
         catch (Exception ex)
         {
             LogCrash("OnLaunched", ex);
             ShowUnhandledExceptionMessageBox("OnLaunched", ex);
             throw;
-        }
-    }
-
-    private async Task ShowMultiInstanceDialogAsync()
-    {
-        try
-        {
-            if (_window?.Content is not FrameworkElement root || root.XamlRoot is null)
-                return;
-
-            var dontRemindCheckBox = new CheckBox { Content = "Don't remind me again" };
-
-            var content = new StackPanel { Spacing = 12 };
-            content.Children.Add(new TextBlock
-            {
-                Text = "Another instance of Yagu is already running. Do you want to run a second instance?",
-                TextWrapping = TextWrapping.Wrap,
-            });
-            content.Children.Add(dontRemindCheckBox);
-
-            var dialog = new ContentDialog
-            {
-                XamlRoot = root.XamlRoot,
-                Title = "Yagu is already running",
-                Content = content,
-                PrimaryButtonText = "Run anyway",
-                CloseButtonText = "Exit",
-                DefaultButton = ContentDialogButton.Primary,
-            };
-
-            var result = await dialog.ShowAsync();
-
-            if (dontRemindCheckBox.IsChecked == true)
-            {
-                var settingsService = new SettingsService();
-                var settings = settingsService.Load();
-                settings.SuppressMultiInstanceWarning = true;
-                settingsService.Save(settings);
-            }
-
-            if (result != ContentDialogResult.Primary)
-            {
-                _window?.Close();
-            }
-        }
-        catch (Exception ex)
-        {
-            LogService.Instance.Warning("App", "Failed to show multi-instance dialog", ex);
         }
     }
 
