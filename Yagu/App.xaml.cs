@@ -30,7 +30,7 @@ public partial class App : Application
         // Initialize logging from persisted settings
         var settings = new SettingsService().Load();
         LogService.Instance.RotateIfNeeded();
-        LogService.Init((LogLevel)settings.LogLevelIndex);
+        LogService.Init((LogLevel)settings.LogLevelIndex, (LogLevel)settings.ConsoleLogLevelIndex);
         FileLister.Backend = (FileListerBackend)settings.FileListerBackendIndex;
         _ = ResultStore.CleanupOrphanedTempFilesAsync();
     }

@@ -9,6 +9,7 @@ namespace Yagu.Services;
 
 public enum LogLevel
 {
+    None = -1,
     Critical = 0,
     Warning = 1,
     Info = 2,
@@ -23,13 +24,32 @@ public sealed class LogService : IDisposable
     private readonly ConcurrentQueue<string> _queue = new();
     private readonly Timer _flushTimer;
     private readonly string _logPath;
-    private LogLevel _level = LogLevel.Critical;
+    private LogLevel _fileLevel = LogLevel.Critical;
+    private LogLevel _consoleLevel = LogLevel.None;
     private bool _disposed;
 
+    /// <summary>Log level for file output.</summary>
+    public LogLevel FileLevel
+    {
+        get => _fileLevel;
+        set => _fileLevel = value;
+    }
+
+    /// <summary>Log level for console (stderr) output.</summary>
+    public LogLevel ConsoleLevel
+    {
+        get => _consoleLevel;
+        set => _consoleLevel = value;
+    }
+
+    /// <summary>
+    /// Backward-compatible property. Getter returns <see cref="FileLevel"/>;
+    /// setter sets both <see cref="FileLevel"/> and <see cref="ConsoleLevel"/>.
+    /// </summary>
     public LogLevel Level
     {
-        get => _level;
-        set => _level = value;
+        get => _fileLevel;
+        set { _fileLevel = value; _consoleLevel = value; }
     }
 
     public LogService() : this(DefaultLogPath()) { }
@@ -47,8 +67,15 @@ public sealed class LogService : IDisposable
 
     public static void Init(LogLevel level)
     {
-        Instance.Level = level;
+        Instance.FileLevel = level;
         Instance.Info("LogService", $"Logging initialized at level {level}");
+    }
+
+    public static void Init(LogLevel fileLevel, LogLevel consoleLevel)
+    {
+        Instance.FileLevel = fileLevel;
+        Instance.ConsoleLevel = consoleLevel;
+        Instance.Info("LogService", $"Logging initialized — file: {fileLevel}, console: {consoleLevel}");
     }
 
     public void Critical(string source, string message, Exception? ex = null)
@@ -68,7 +95,10 @@ public sealed class LogService : IDisposable
 
     private void Write(LogLevel level, string source, string message, Exception? ex)
     {
-        if (level > _level) return;
+        bool toFile = _fileLevel != LogLevel.None && level <= _fileLevel;
+        bool toConsole = _consoleLevel != LogLevel.None && level <= _consoleLevel;
+        if (!toFile && !toConsole) return;
+
         var prefix = level switch
         {
             LogLevel.Critical => "CRT",
@@ -79,7 +109,9 @@ public sealed class LogService : IDisposable
         };
         var line = $"[{DateTime.UtcNow:O}] [{prefix}] [{source}] {message}";
         if (ex != null) line += $"\n  Exception: {ex}";
-        _queue.Enqueue(line);
+
+        if (toFile) _queue.Enqueue(line);
+        if (toConsole) try { Console.Error.WriteLine(line); } catch { /* ignore if no console */ }
     }
 
     public void Flush()

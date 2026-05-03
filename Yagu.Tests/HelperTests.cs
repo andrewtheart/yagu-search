@@ -384,6 +384,23 @@ public class LineTruncatorExtraTests
     }
 
     [Fact]
+    public void SetTruncatedLength_ZeroDisablesTruncation()
+    {
+        int original = LineTruncator.TruncatedLength;
+        try
+        {
+            LineTruncator.TruncatedLength = 0;
+            Assert.Equal(0, LineTruncator.TruncatedLength);
+            var longLine = new string('x', 5000);
+            Assert.Equal(longLine, LineTruncator.Truncate(longLine));
+            var result = LineTruncator.TruncateAroundMatch(longLine, 2500, 10);
+            Assert.Equal(longLine, result.Text);
+            Assert.Equal(2500, result.MatchStart);
+        }
+        finally { LineTruncator.TruncatedLength = original; }
+    }
+
+    [Fact]
     public void SetTruncatedLength_AcceptsValidValue()
     {
         int original = LineTruncator.TruncatedLength;

@@ -48,10 +48,24 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     /// <summary>Capped subset of items currently rendered in the UI.</summary>
     public BatchObservableCollection<SearchResult> VisibleResults { get; } = new();
 
+    private volatile bool _cleaned;
+
     public FileGroup(string filePath)
     {
         FilePath = filePath;
         CollectionChanged += OnSelfChanged;
+    }
+
+    /// <summary>
+    /// Release all held data so the SearchResult strings can be GC'd even if this
+    /// FileGroup is temporarily kept alive by a pending metadata task or UI binding.
+    /// </summary>
+    public void Cleanup()
+    {
+        _cleaned = true;
+        CollectionChanged -= OnSelfChanged;
+        VisibleResults.Clear();
+        Clear();          // base ObservableCollection items
     }
 
     private void OnSelfChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -162,7 +176,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     /// FileInfo syscall per result group on huge searches. The <paramref name="dispatch"/>
     /// delegate is responsible for marshalling its action onto the UI thread.
     /// </summary>
-    public void BeginLoadMetadata(Action<Action> dispatch)
+    public void BeginLoadMetadata(Action<Action> dispatch, CancellationToken cancellationToken = default)
     {
         // For archive entries, resolve to the outermost file on disk
         string physicalPath = IsArchiveEntry ? ZipArchiveSearcher.SplitArchivePath(FilePath).ArchivePath : FilePath;
@@ -175,6 +189,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
 
         _ = System.Threading.Tasks.Task.Run(() =>
         {
+            if (_cleaned || cancellationToken.IsCancellationRequested) return;
             long size = 0;
             DateTime modified = default;
             try
@@ -189,9 +204,10 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             }
             catch (Exception ex) { LogService.Instance.Verbose("FileGroup", $"Cannot load metadata for {FilePath}", ex); return; }
 
+            if (_cleaned || cancellationToken.IsCancellationRequested) return;
             dispatch(() =>
             {
-                ApplyMetadata(size, modified);
+                if (!_cleaned) ApplyMetadata(size, modified);
             });
         });
     }

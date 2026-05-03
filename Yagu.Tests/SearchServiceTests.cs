@@ -591,12 +591,16 @@ public class SearchServiceExtraTests : IDisposable
         };
 
         int matches = 0;
+        SearchSummary? summary = null;
         await foreach (var evt in svc.SearchAsync(opts, default))
         {
             if (evt is SearchEvent.Match) matches++;
             if (evt is SearchEvent.MatchBatch mb) matches += mb.Results.Count;
+            if (evt is SearchEvent.Completed c) summary = c.Summary;
         }
         Assert.Equal(1, matches);
+        Assert.NotNull(summary);
+        Assert.Equal(1, summary!.FilesWithMatches);
     }
 
     [Fact]
@@ -1098,10 +1102,10 @@ public class SearchSummaryCoverageTests
 public class ComputeAutoProcessMemoryCapTests
 {
     [Fact]
-    public void SixteenGB_ReturnsQuarter()
+    public void SixteenGB_ReturnsHalf()
     {
         long result = SearchService.ComputeAutoProcessMemoryCap(16UL * 1024 * 1024 * 1024);
-        Assert.Equal(4L * 1024 * 1024 * 1024, result);
+        Assert.Equal(8L * 1024 * 1024 * 1024, result);
     }
 
     [Fact]

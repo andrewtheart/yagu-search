@@ -6,8 +6,8 @@ namespace Yagu.Services;
 public sealed class AppSettings
 {
     public const string LegacyDefaultSkipExtensions = "exe;dll;pdb;obj;lib;so;dylib;zip;gz;tar;7z;rar;bz2;xz;iso;cab;msi;nupkg;whl;png;jpg;jpeg;gif;bmp;ico;tif;tiff;webp;svg;mp3;mp4;avi;mov;wmv;flv;mkv;wav;ogg;flac;woff;woff2;ttf;eot;otf;pdf;doc;docx;xls;xlsx;ppt;pptx";
-    public const string DefaultSkipExtensions = LegacyDefaultSkipExtensions + ";com;scr;sys;drv;ocx;cpl;mui;winmd;pri;cat;res;resources;o;a;lo;la;ilk;iobj;ipdb;exp;pyc;pyo;class;dex;wasm;jar;war;ear;apk;aab;aar;appx;msix;appxbundle;msixbundle;vsix;tgz;tbz2;txz;zst;zstd;br;lz4;lzma;bin;dat;db;db3;sqlite;sqlite3;edb;mdb;accdb;ldb;sdf;cache;tmp;bak;etl;evtx;dmp;mdmp;hdmp;hprof;vhd;vhdx;vmdk;pak;usm;bundle;assets;m4a;webm;heic;heif;avif";
-    public const string DefaultArchiveExtensions = "zip;jar;war;ear;nupkg;vsix;apk;aab;aar;appx;msix;appxbundle;msixbundle;docx;xlsx;pptx;odt;ods;odp;epub";
+    public const string DefaultSkipExtensions = "exe;dll;pdb;obj;lib;so;dylib;png;jpg;jpeg;gif;bmp;ico;tif;tiff;webp;svg;mp3;mp4;avi;mov;wmv;flv;mkv;wav;ogg;flac;woff;woff2;ttf;eot;otf;pdf;doc;xls;ppt;com;scr;sys;drv;ocx;cpl;mui;winmd;pri;cat;res;resources;o;a;lo;la;ilk;iobj;ipdb;exp;pyc;pyo;class;dex;wasm;bin;dat;db;db3;sqlite;sqlite3;edb;mdb;accdb;ldb;sdf;cache;tmp;bak;etl;evtx;dmp;mdmp;hdmp;hprof;vhd;vhdx;vmdk;pak;usm;bundle;assets;m4a;webm;heic;heif;avif";
+    public const string DefaultArchiveExtensions = "zip;jar;war;ear;nupkg;vsix;apk;aab;aar;appx;msix;appxbundle;msixbundle;docx;xlsx;pptx;odt;ods;odp;epub;whl;gz;tar;7z;rar;bz2;xz;iso;cab;msi;tgz;tbz2;txz;zst;zstd;br;lz4;lzma";
 
     public string? LastDirectory { get; set; }
     public List<string> RecentDirectories { get; set; } = [];
@@ -26,13 +26,14 @@ public sealed class AppSettings
     public string GlobalHotkeyKey { get; set; } = HotkeyService.DefaultStartKey.ToString();
     public int PreviewModeIndex { get; set; } = 1; // 0 = Concatenated, 1 = Multi-highlight
     public bool PreviewWordWrap { get; set; }
-    public int LogLevelIndex { get; set; } // 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
+    public int LogLevelIndex { get; set; } // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose (file logging)
+    public int ConsoleLogLevelIndex { get; set; } = -1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     public int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
     public int ParallelismIndex { get; set; } // 0 = Auto, 1 = 1, 2 = half cores, 3 = 2x cores, 4 = all cores
     public int LineTruncationLength { get; set; } = 500;
     public int MaxRecentItems { get; set; } = 20;
     /// <summary>Hard process memory cap in MB. 0 = auto cap based on physical RAM.</summary>
-    public int MemoryLimitMB { get; set; } = 4096;
+    public int MemoryLimitMB { get; set; }
     /// <summary>System-wide memory pressure threshold (0-100). Search evicts cached results and switches to memory-saving mode when total machine memory usage exceeds this %. 0 = disabled.</summary>
     public int MemoryPressurePercent { get; set; } = 80;
     /// <summary>Bounded channel buffer size for the Everything SDK streaming path. Higher values use more memory but can improve throughput.</summary>

@@ -303,6 +303,7 @@ public sealed class SearchService
                                 await FlushFilenameBatchAsync().ConfigureAwait(false);
                             if (!searchContent)
                             {
+                                Interlocked.Increment(ref filesWithMatches);
                                 int n = Interlocked.Increment(ref totalMatches);
                                 if (options.MaxResults > 0 && n >= options.MaxResults) Volatile.Write(ref truncated, 1);
                             }
@@ -951,8 +952,12 @@ public sealed class SearchService
         return false;
     }
 
+    // When the user has not set an explicit process cap (0), rely solely on the
+    // pressure-percent threshold.  The old auto-cap (25%/50% of RAM) fired
+    // independently of pressure-percent and triggered memory-saving mode long
+    // before the user's configured system-pressure threshold was reached.
     private static long EffectiveProcessMemoryCap(long maxProcessBytes) =>
-        maxProcessBytes > 0 ? maxProcessBytes : AutoProcessMemoryCap();
+        maxProcessBytes > 0 ? maxProcessBytes : long.MaxValue;
 
     /// <summary>Returns a human-readable snapshot of current memory usage for diagnostics.</summary>
     [ExcludeFromCodeCoverage]
@@ -991,8 +996,8 @@ public sealed class SearchService
     internal static long ComputeAutoProcessMemoryCap(ulong totalPhysicalBytes)
     {
         const long minCap = 2L * 1024 * 1024 * 1024; // 2 GB floor
-        long quarter = (long)(totalPhysicalBytes / 4);
-        return Math.Max(quarter, minCap);
+        long half = (long)(totalPhysicalBytes / 2);
+        return Math.Max(half, minCap);
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]

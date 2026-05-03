@@ -213,6 +213,70 @@ public class LogServiceTests : IDisposable
         svc.Level = LogLevel.Critical;
         Assert.Equal(LogLevel.Critical, svc.Level);
     }
+
+    [Fact]
+    public void NoneLevel_NothingWrittenToFile()
+    {
+        using var svc = new LogService(_logPath);
+        svc.FileLevel = LogLevel.None;
+        svc.ConsoleLevel = LogLevel.None;
+        svc.Critical("test", "should not appear");
+        svc.Warning("test", "should not appear");
+        svc.Info("test", "should not appear");
+        svc.Verbose("test", "should not appear");
+        svc.Flush();
+        Assert.False(File.Exists(_logPath));
+    }
+
+    [Fact]
+    public void FileLevel_IndependentOfConsoleLevel()
+    {
+        using var svc = new LogService(_logPath);
+        svc.FileLevel = LogLevel.Warning;
+        svc.ConsoleLevel = LogLevel.None;
+        svc.Warning("test", "file-warn");
+        svc.Info("test", "file-info-should-not-appear");
+        svc.Flush();
+        var content = File.ReadAllText(_logPath);
+        Assert.Contains("file-warn", content);
+        Assert.DoesNotContain("file-info-should-not-appear", content);
+    }
+
+    [Fact]
+    public void Level_SetsBothFileLevelAndConsoleLevel()
+    {
+        using var svc = new LogService(_logPath);
+        svc.Level = LogLevel.Verbose;
+        Assert.Equal(LogLevel.Verbose, svc.FileLevel);
+        Assert.Equal(LogLevel.Verbose, svc.ConsoleLevel);
+    }
+
+    [Fact]
+    public void Level_Getter_ReturnsFileLevel()
+    {
+        using var svc = new LogService(_logPath);
+        svc.FileLevel = LogLevel.Info;
+        svc.ConsoleLevel = LogLevel.Verbose;
+        Assert.Equal(LogLevel.Info, svc.Level);
+    }
+
+    [Fact]
+    public void Init_TwoArgs_SetsBothLevels()
+    {
+        var origFile = LogService.Instance.FileLevel;
+        var origConsole = LogService.Instance.ConsoleLevel;
+        try
+        {
+            LogService.Init(LogLevel.Warning, LogLevel.Verbose);
+            Assert.Equal(LogLevel.Warning, LogService.Instance.FileLevel);
+            Assert.Equal(LogLevel.Verbose, LogService.Instance.ConsoleLevel);
+        }
+        finally
+        {
+            LogService.Instance.FileLevel = origFile;
+            LogService.Instance.ConsoleLevel = origConsole;
+        }
+    }
 }
 
 // ─── LogService: exercise catch paths ───────────────────────────────────

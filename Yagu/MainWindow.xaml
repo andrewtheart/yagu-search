@@ -12,6 +12,10 @@
     </Window.SystemBackdrop>
 
     <Grid x:Name="RootGrid" AllowDrop="True" DragOver="OnDragOver" Drop="OnDrop">
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Modifiers="Control" Key="F" Invoked="OnCtrlFInvoked" />
+            <KeyboardAccelerator Modifiers="Control" Key="H" Invoked="OnCtrlHInvoked" />
+        </Grid.KeyboardAccelerators>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />  <!-- Custom title bar -->
             <RowDefinition Height="Auto" />  <!-- Admin banner -->
@@ -114,7 +118,6 @@
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <FontIcon Glyph="&#xE721;" FontSize="16" VerticalAlignment="Center" Opacity="0.7" />
                     <AutoSuggestBox
@@ -126,17 +129,10 @@
                         TextChanged="OnQueryTextChanged"
                         LostFocus="OnQueryLostFocus"
                         KeyDown="OnQueryKeyDown" />
-                    <Button Grid.Column="2" Click="OnSearchClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,6">
+                    <Button x:Name="SearchCancelButton" Grid.Column="2" Click="OnSearchCancelClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,6">
                         <StackPanel Orientation="Horizontal" Spacing="6">
-                            <FontIcon Glyph="&#xE721;" FontSize="14" />
-                            <TextBlock Text="Search" />
-                        </StackPanel>
-                    </Button>
-                    <Button Grid.Column="3" Click="OnCancelClick"
-                            IsEnabled="{x:Bind ViewModel.IsSearching, Mode=OneWay}" Padding="12,6">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <FontIcon Glyph="&#xE711;" FontSize="14" />
-                            <TextBlock Text="Cancel" />
+                            <FontIcon x:Name="SearchCancelIcon" Glyph="&#xE721;" FontSize="14" />
+                            <TextBlock x:Name="SearchCancelLabel" Text="Search" />
                         </StackPanel>
                     </Button>
                 </Grid>
@@ -188,11 +184,6 @@
                             </Flyout>
                         </DropDownButton.Flyout>
                     </DropDownButton>
-                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                        <TextBlock Text="Context:" VerticalAlignment="Center" Opacity="0.8" />
-                        <NumberBox Value="{x:Bind ViewModel.ContextLines, Mode=TwoWay}" Minimum="0" Maximum="20"
-                                   SpinButtonPlacementMode="Compact" MinWidth="90" />
-                    </StackPanel>
                     <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                         <TextBlock Text="Preview:" VerticalAlignment="Center" Opacity="0.8" />
                         <NumberBox Value="{x:Bind ViewModel.PreviewContextLines, Mode=TwoWay}" Minimum="0" Maximum="50"
@@ -258,10 +249,12 @@
                     <Grid>
                         <TextBox PlaceholderText="e.g. ts,js,py or *.cs"
                                  Text="{x:Bind ViewModel.IncludeGlobs, Mode=TwoWay}"
-                                 Padding="72,4,8,4" />
+                                 Padding="72,4,8,4" FontStyle="Italic"
+                                 TextChanged="OnFilterBoxTextChanged" />
                         <Border Background="#0078D4" CornerRadius="8" Padding="8,2"
                                 VerticalAlignment="Center" HorizontalAlignment="Left"
-                                Margin="6,0,0,0" IsHitTestVisible="False">
+                                Margin="6,0,0,0" IsHitTestVisible="True"
+                                ToolTipService.ToolTip="Extensions or file path / folder path substrings to include. Absence of a value in the field implies everything will be included.">
                             <TextBlock Text="Include" FontSize="11" Foreground="White"
                                        FontWeight="SemiBold" />
                         </Border>
@@ -269,10 +262,12 @@
                     <Grid Grid.Column="1">
                         <TextBox PlaceholderText="e.g. node_modules;bin;obj"
                                  Text="{x:Bind ViewModel.ExcludeGlobs, Mode=TwoWay}"
-                                 Padding="72,4,8,4" />
+                                 Padding="72,4,8,4" FontStyle="Italic"
+                                 TextChanged="OnFilterBoxTextChanged" />
                         <Border Background="#0078D4" CornerRadius="8" Padding="8,2"
                                 VerticalAlignment="Center" HorizontalAlignment="Left"
-                                Margin="6,0,0,0" IsHitTestVisible="False">
+                                Margin="6,0,0,0" IsHitTestVisible="True"
+                                ToolTipService.ToolTip="Extensions or file path / folder path substrings to exclude. Absence of a value in the field implies nothing will be excluded.">
                             <TextBlock Text="Exclude" FontSize="11" Foreground="White"
                                        FontWeight="SemiBold" />
                         </Border>
@@ -300,7 +295,7 @@
         </StackPanel>
 
         <!-- Split pane: results + preview -->
-        <Grid Grid.Row="4" Margin="16,4,16,4">
+        <Grid x:Name="SplitPaneGrid" Grid.Row="4" Margin="16,4,16,4">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="2*" MinWidth="200" />
                 <ColumnDefinition Width="Auto" />
@@ -345,6 +340,11 @@
                                   Checked="OnAutoScrollResultsChanged"
                                   Unchecked="OnAutoScrollResultsChanged"
                                   ToolTipService.ToolTip="Follow new results as they arrive" />
+                        <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                            <TextBlock Text="Context:" VerticalAlignment="Center" FontSize="12" Opacity="0.7" />
+                            <NumberBox Value="{x:Bind ViewModel.ContextLines, Mode=TwoWay}" Minimum="0" Maximum="20"
+                                       SpinButtonPlacementMode="Compact" MinWidth="80" FontSize="12" />
+                        </StackPanel>
                     </StackPanel>
 
                     <Grid Grid.Row="1" Margin="8,6">
@@ -367,18 +367,18 @@
                         ItemsSource="{x:Bind ViewModel.ResultGroups, Mode=OneWay}"
                         Padding="4,0">
                         <ListView.ContextFlyout>
-                            <MenuFlyout>
-                                <MenuFlyoutItem Text="Copy Selected File Paths" Click="OnCopySelectedFilePaths">
+                            <MenuFlyout Opening="OnResultsContextMenuOpening">
+                                <MenuFlyoutItem x:Name="CtxCopyPaths" Text="Copy File Path" Click="OnCopySelectedFilePaths">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
-                                <MenuFlyoutItem Text="Copy Selected Files With Content" Click="OnCopySelectedFilesWithContent">
+                                <MenuFlyoutItem x:Name="CtxCopyWithContent" Text="Copy File With Content" Click="OnCopySelectedFilesWithContent">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
                                 <MenuFlyoutSeparator />
-                                <MenuFlyoutItem Text="Save Selected File Paths…" Click="OnSaveSelectedFilePaths">
+                                <MenuFlyoutItem x:Name="CtxSavePaths" Text="Save File Path…" Click="OnSaveSelectedFilePaths">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
-                                <MenuFlyoutItem Text="Save Selected Files With Content…" Click="OnSaveSelectedFilesWithContent">
+                                <MenuFlyoutItem x:Name="CtxSaveWithContent" Text="Save File With Content…" Click="OnSaveSelectedFilesWithContent">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
                             </MenuFlyout>
@@ -394,7 +394,7 @@
                                             <SolidColorBrush Color="{ThemeResource SystemAccentColor}" />
                                         </TextBlock.Foreground>
                                     </TextBlock>
-                                    <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="False">
+                                    <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="False" Expanding="OnFileGroupExpanding">
                                     <Expander.Header>
                                         <StackPanel Orientation="Horizontal" Spacing="8">
                                             <StackPanel.ContextFlyout>
@@ -476,8 +476,21 @@
                 </Grid>
             </Border>
 
-            <Border Grid.Column="1" Width="8" Background="Transparent"
-                    PointerPressed="OnSplitterPressed" />
+            <Border x:Name="SplitterBorder" Grid.Column="1" Width="8" Background="Transparent"
+                    PointerPressed="OnSplitterPressed"
+                    PointerMoved="OnSplitterMoved"
+                    PointerReleased="OnSplitterReleased"
+                    PointerEntered="OnSplitterPointerEntered"
+                    PointerExited="OnSplitterPointerExited">
+                <!-- Grip dots indicating the splitter can be dragged -->
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="3" Opacity="0.4">
+                    <Ellipse Width="3" Height="3" Fill="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <Ellipse Width="3" Height="3" Fill="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <Ellipse Width="3" Height="3" Fill="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <Ellipse Width="3" Height="3" Fill="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <Ellipse Width="3" Height="3" Fill="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+            </Border>
 
             <!-- Preview panel card -->
             <Border Grid.Column="2" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
@@ -545,14 +558,65 @@
                         </StackPanel>
                     </StackPanel>
                     <Grid Grid.Row="1">
-                        <ScrollViewer x:Name="PreviewScrollViewer" Padding="16,12"
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <!-- Find / Replace bar -->
+                        <Border x:Name="FindBar" Visibility="Collapsed" Grid.Row="0"
+                                Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                BorderThickness="0,0,0,1" Padding="8,6">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="4">
+                                    <TextBox x:Name="FindTextBox" PlaceholderText="Find…" Width="220" FontSize="12"
+                                             KeyDown="OnFindTextBoxKeyDown" TextChanged="OnFindTextBoxTextChanged"
+                                             IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" />
+                                    <Button Click="OnFindPrevious" ToolTipService.ToolTip="Previous (Shift+Enter)" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0">
+                                        <FontIcon Glyph="&#xE70E;" FontSize="12" />
+                                    </Button>
+                                    <Button Click="OnFindNext" ToolTipService.ToolTip="Next (Enter)" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0">
+                                        <FontIcon Glyph="&#xE70D;" FontSize="12" />
+                                    </Button>
+                                    <CheckBox x:Name="FindMatchCaseCheckBox" Content="Aa" FontSize="11" MinWidth="0" Padding="4,0"
+                                              ToolTipService.ToolTip="Match case" Unchecked="OnFindOptionChanged" Checked="OnFindOptionChanged" />
+                                    <ToggleButton x:Name="FindReplaceToggle" Click="OnFindReplaceToggle" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
+                                                  ToolTipService.ToolTip="Toggle Replace (Ctrl+H)">
+                                        <FontIcon Glyph="&#xE8AC;" FontSize="12" />
+                                    </ToggleButton>
+                                    <TextBlock x:Name="FindStatusText" VerticalAlignment="Center" FontSize="11" Opacity="0.6" Margin="4,0,0,0" />
+                                    <Button Click="OnCloseFindBar" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
+                                            ToolTipService.ToolTip="Close (Escape)">
+                                        <FontIcon Glyph="&#xE711;" FontSize="12" />
+                                    </Button>
+                                </StackPanel>
+                                <StackPanel x:Name="ReplaceRow" Grid.Row="1" Orientation="Horizontal" Spacing="4" Margin="0,4,0,0" Visibility="Collapsed">
+                                    <TextBox x:Name="ReplaceTextBox" PlaceholderText="Replace…" Width="220" FontSize="12"
+                                             KeyDown="OnReplaceTextBoxKeyDown"
+                                             IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" />
+                                    <Button Click="OnReplaceOne" ToolTipService.ToolTip="Replace (Enter)" FontSize="12" Padding="8,4">
+                                        <TextBlock Text="Replace" />
+                                    </Button>
+                                    <Button Click="OnReplaceAll" ToolTipService.ToolTip="Replace All" FontSize="12" Padding="8,4">
+                                        <TextBlock Text="All" />
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <ScrollViewer x:Name="PreviewScrollViewer" Grid.Row="1" Padding="16,12"
                                       HorizontalScrollBarVisibility="Auto">
                             <Grid>
                                 <RichTextBlock x:Name="PreviewBlock" FontFamily="Consolas" TextWrapping="NoWrap" />
                                 <StackPanel x:Name="PreviewSectionsPanel" Visibility="Collapsed" Spacing="8" />
                             </Grid>
                         </ScrollViewer>
-                        <TextBox x:Name="PreviewEditor" Visibility="Collapsed" FontFamily="Consolas"
+                        <TextBox x:Name="PreviewEditor" Grid.Row="1" Visibility="Collapsed" FontFamily="Consolas"
                                  AcceptsReturn="True" TextWrapping="NoWrap"
                                  ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto"
                                  Padding="16,12" IsSpellCheckEnabled="False" IsTextPredictionEnabled="False"

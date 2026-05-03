@@ -38,6 +38,7 @@ public sealed partial class MainWindow : Window
     private string? _previewEditorPath;
     private Encoding? _previewEditorEncoding;
     private bool _previewEditorDirty;
+    private string? _previewEditorOriginalText;
     private bool _suppressPreviewEditorTextChanged;
     private readonly HotkeyService _hotkeyService = new();
     private SubclassProc? _hotkeySubclassProc;
@@ -127,6 +128,9 @@ public sealed partial class MainWindow : Window
             if (e.PropertyName != nameof(ViewModel.IsSearching)) return;
             if (ViewModel.IsSearching)
             {
+                SearchCancelIcon.Glyph = "\uE711";   // Cancel X
+                SearchCancelLabel.Text = "Cancel";
+                SearchCancelButton.Style = (Style)Application.Current.Resources["DefaultButtonStyle"];
                 _autoScrollEnabled = AutoScrollResultsCheckBox.IsChecked == true;
                 _autoScrollTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
                 _autoScrollTimer.Tick += OnAutoScrollTick;
@@ -134,6 +138,9 @@ public sealed partial class MainWindow : Window
             }
             else
             {
+                SearchCancelIcon.Glyph = "\uE721";   // Search magnifier
+                SearchCancelLabel.Text = "Search";
+                SearchCancelButton.Style = (Style)Application.Current.Resources["AccentButtonStyle"];
                 _autoScrollTimer?.Stop();
             }
         };
@@ -278,15 +285,27 @@ public sealed partial class MainWindow : Window
             ResultsList.ScrollIntoView(ViewModel.ResultGroups[^1]);
     }
 
-    private async void OnSearchClick(object sender, RoutedEventArgs e)
+    private void OnFilterBoxTextChanged(object sender, TextChangedEventArgs e)
     {
-        HideQuerySuggestions();
-        if (!await ClearPreviewPanelForNewSearchAsync()) return;
-        await ViewModel.StartSearchAsync();
+        if (sender is TextBox tb)
+            tb.FontStyle = string.IsNullOrEmpty(tb.Text)
+                ? Windows.UI.Text.FontStyle.Italic
+                : Windows.UI.Text.FontStyle.Normal;
     }
 
-    private async void OnCancelClick(object sender, RoutedEventArgs e)
-        => await ViewModel.CancelAsync();
+    private async void OnSearchCancelClick(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.IsSearching)
+        {
+            await ViewModel.CancelAsync();
+        }
+        else
+        {
+            HideQuerySuggestions();
+            if (!await ClearPreviewPanelForNewSearchAsync()) return;
+            await ViewModel.StartSearchAsync();
+        }
+    }
 
     private async void OnQuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
     {
@@ -300,18 +319,14 @@ public sealed partial class MainWindow : Window
             ViewModel.Query = submittedQuery;
 
         HideQuerySuggestions(sender);
+        if (!await ClearPreviewPanelForNewSearchAsync()) return;
         await ViewModel.StartSearchAsync();
     }
 
     private async void OnQueryKeyDown(object sender, KeyRoutedEventArgs e)
     {
-        if (e.Key == VirtualKey.Enter && !IsShiftDown())
-        {
-            e.Handled = true;
-            HideQuerySuggestions(sender as AutoSuggestBox);
-            await ViewModel.StartSearchAsync();
-        }
-        else if (e.Key == VirtualKey.Escape && ViewModel.IsSearching)
+        // Enter is handled by OnQuerySubmitted — only handle Escape here.
+        if (e.Key == VirtualKey.Escape && ViewModel.IsSearching)
         {
             e.Handled = true;
             await ViewModel.CancelAsync();
@@ -325,7 +340,13 @@ public sealed partial class MainWindow : Window
         target.IsSuggestionListOpen = false;
         target.ItemsSource = null;
         target.IsSuggestionListOpen = false;
-        DispatcherQueue.TryEnqueue(() => target.IsSuggestionListOpen = false);
+        // The AutoSuggestBox sometimes re-opens its popup after QuerySubmitted.
+        // Fight back with a deferred close.
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            target.IsSuggestionListOpen = false;
+            DispatcherQueue.TryEnqueue(() => target.IsSuggestionListOpen = false);
+        });
     }
 
     private void RestoreQuerySuggestions(AutoSuggestBox? box = null)
@@ -443,14 +464,31 @@ public sealed partial class MainWindow : Window
         _ = dialog.ShowAsync();
     }
 
+    /// <summary>Creates a label with a small refresh icon indicating the setting takes effect on the next search.</summary>
+    private static StackPanel NextSearchLabel(string text)
+    {
+        var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        panel.Children.Add(new TextBlock { Text = text });
+        var icon = new FontIcon { Glyph = "\uE72C", FontSize = 11, Opacity = 0.5, VerticalAlignment = VerticalAlignment.Center };
+        ToolTipService.SetToolTip(icon, "Takes effect on the next search");
+        panel.Children.Add(icon);
+        return panel;
+    }
+
     private FrameworkElement BuildSettingsPanel()
     {
         var sp = new StackPanel { Spacing = 8, Width = 480 };
 
+        // Legend for the next-search icon
+        var legend = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Opacity = 0.6, Margin = new Thickness(0, 0, 0, 4) };
+        legend.Children.Add(new FontIcon { Glyph = "\uE72C", FontSize = 11 });
+        legend.Children.Add(new TextBlock { Text = "= takes effect on the next search", FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+        sp.Children.Add(legend);
+
         // ── Search Defaults ──
         sp.Children.Add(new TextBlock { Text = "Search Defaults", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16, Margin = new Thickness(0, 4, 0, 0) });
 
-        sp.Children.Add(new TextBlock { Text = "Context lines (lines shown before & after each match in results):" });
+        sp.Children.Add(NextSearchLabel("Context lines (lines shown before & after each match in results):"));
         var ctx = new NumberBox { Value = ViewModel.ContextLines, Minimum = 0, Maximum = 50 };
         ctx.ValueChanged += (_, args) => ViewModel.ContextLines = (int)args.NewValue;
         sp.Children.Add(ctx);
@@ -460,12 +498,12 @@ public sealed partial class MainWindow : Window
         prevCtx.ValueChanged += (_, args) => ViewModel.PreviewContextLines = (int)args.NewValue;
         sp.Children.Add(prevCtx);
 
-        sp.Children.Add(new TextBlock { Text = "Default include globs (comma/semicolon-separated):" });
+        sp.Children.Add(NextSearchLabel("Default include globs (comma/semicolon-separated):"));
         var incGlobs = new TextBox { Text = ViewModel.IncludeGlobs, PlaceholderText = "e.g. *.cs;*.ts" };
         incGlobs.TextChanged += (_, _) => ViewModel.IncludeGlobs = incGlobs.Text;
         sp.Children.Add(incGlobs);
 
-        sp.Children.Add(new TextBlock { Text = "Default exclude globs (comma/semicolon-separated):" });
+        sp.Children.Add(NextSearchLabel("Default exclude globs (comma/semicolon-separated):"));
         var excGlobs = new TextBox { Text = ViewModel.ExcludeGlobs, PlaceholderText = "e.g. node_modules;bin;obj;.git" };
         excGlobs.TextChanged += (_, _) => ViewModel.ExcludeGlobs = excGlobs.Text;
         sp.Children.Add(excGlobs);
@@ -473,31 +511,35 @@ public sealed partial class MainWindow : Window
         // ── Search Limits ──
         sp.Children.Add(new TextBlock { Text = "Search Limits", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16, Margin = new Thickness(0, 12, 0, 0) });
 
-        sp.Children.Add(new TextBlock { Text = "Max results (0 = unlimited, non-zero values capped at 50,000):" });
+        sp.Children.Add(NextSearchLabel("Max results (0 = unlimited, non-zero values capped at 50,000):"));
         var max = new NumberBox { Value = ViewModel.MaxResults, Minimum = 0 };
         max.ValueChanged += (_, args) => ViewModel.MaxResults = (int)args.NewValue;
         sp.Children.Add(max);
         sp.Children.Add(new TextBlock { Text = "Stops the search after this many matches. Set to 0 for no limit (memory pressure will still protect against runaway usage).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-        sp.Children.Add(new TextBlock { Text = "Max file size to search (MB, 0 = no limit):" });
+        sp.Children.Add(NextSearchLabel("Max file size to search (MB, 0 = no limit):"));
         var size = new NumberBox { Value = ViewModel.MaxFileSizeBytes / (1024d * 1024d), Minimum = 0 };
         size.ValueChanged += (_, args) => ViewModel.MaxFileSizeBytes = (long)(args.NewValue * 1024 * 1024);
         sp.Children.Add(size);
         sp.Children.Add(new TextBlock { Text = "Files larger than this are skipped during search. Also used by the Everything SDK to pre-filter results.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-        var skipBinary = new CheckBox { Content = "Skip binary files", IsChecked = ViewModel.SkipBinary };
+        var skipBinary = new CheckBox { Content = NextSearchLabel("Skip binary files"), IsChecked = ViewModel.SkipBinary };
         skipBinary.Checked += (_, _) => ViewModel.SkipBinary = true;
         skipBinary.Unchecked += (_, _) => ViewModel.SkipBinary = false;
         sp.Children.Add(skipBinary);
         sp.Children.Add(new TextBlock { Text = "When enabled, files detected as binary (null bytes, magic bytes) are skipped during content search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-        sp.Children.Add(new TextBlock { Text = "Skip extensions (semicolon-separated, no dots):", Margin = new Thickness(0, 4, 0, 0) });
+        var skipExtLabel = NextSearchLabel("Skip extensions (semicolon-separated, no dots):");
+        skipExtLabel.Margin = new Thickness(0, 4, 0, 0);
+        sp.Children.Add(skipExtLabel);
         var skipExt = new TextBox { Text = ViewModel.SkipExtensions, PlaceholderText = "e.g. exe;dll;zip;png;pdf", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false };
         skipExt.TextChanged += (_, _) => ViewModel.SkipExtensions = skipExt.Text;
         sp.Children.Add(skipExt);
         sp.Children.Add(new TextBlock { Text = "Files with these extensions are skipped entirely — no binary check, no content read.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-        sp.Children.Add(new TextBlock { Text = "Archive extensions (semicolon-separated, no dots):", Margin = new Thickness(0, 4, 0, 0) });
+        var archiveExtLabel = NextSearchLabel("Archive extensions (semicolon-separated, no dots):");
+        archiveExtLabel.Margin = new Thickness(0, 4, 0, 0);
+        sp.Children.Add(archiveExtLabel);
         var archiveExt = new TextBox { Text = ViewModel.ArchiveExtensions, PlaceholderText = "e.g. zip;jar;docx;xlsx;pptx;epub", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false };
         archiveExt.TextChanged += (_, _) => ViewModel.ArchiveExtensions = archiveExt.Text;
         sp.Children.Add(archiveExt);
@@ -506,7 +548,7 @@ public sealed partial class MainWindow : Window
         // ── Performance ──
         sp.Children.Add(new TextBlock { Text = "Performance", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16, Margin = new Thickness(0, 12, 0, 0) });
 
-        sp.Children.Add(new TextBlock { Text = "Content-search parallelism (concurrent file scan threads):" });
+        sp.Children.Add(NextSearchLabel("Content-search parallelism (concurrent file scan threads):"));
         var parallelism = new ComboBox();
         parallelism.Items.Add($"Auto (safe cap · up to {Math.Min(16, Environment.ProcessorCount)})");
         parallelism.Items.Add("1 thread (sequential, HDD safe)");
@@ -528,32 +570,36 @@ public sealed partial class MainWindow : Window
         sp.Children.Add(backend);
         sp.Children.Add(new TextBlock { Text = "Auto tries the Everything SDK first, then es.exe, then .NET recursive enumeration. Requires voidtools Everything to be running for SDK/es.exe.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-        sp.Children.Add(new TextBlock { Text = "Process memory hard cap (MB):" });
+        // ── Memory saving mode ──
+        sp.Children.Add(new TextBlock { Text = "Memory saving mode", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 8, 0, 0) });
+        sp.Children.Add(new TextBlock { Text = "These two settings control when Yagu enters memory-saving mode. Use one or the other — if the hard cap is set (> 0), it takes precedence over the pressure percentage. Changes apply to the next search.", FontSize = 11, Opacity = 0.7, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
+
+        sp.Children.Add(NextSearchLabel("System memory pressure limit (%, 0 = disabled):"));
+        var memPressure = new NumberBox { Value = ViewModel.MemoryPressurePercent, Minimum = 0, Maximum = 100 };
+        memPressure.ValueChanged += (_, args) => ViewModel.MemoryPressurePercent = (int)args.NewValue;
+        sp.Children.Add(memPressure);
+        sp.Children.Add(new TextBlock { Text = "Yagu enters memory-saving mode when total machine RAM usage exceeds this %. Recommended for most users.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+        sp.Children.Add(NextSearchLabel("Process memory hard cap (MB, 0 = use pressure % above):"));
         var memLimit = new NumberBox { Value = ViewModel.MemoryLimitMB, Minimum = 0, Maximum = 65536 };
         memLimit.ValueChanged += (_, args) => ViewModel.MemoryLimitMB = (int)args.NewValue;
         sp.Children.Add(memLimit);
-        sp.Children.Add(new TextBlock { Text = "Maximum working set size for the Yagu process. Set to 0 for auto (25% of physical RAM, minimum 2 GB). Search enters memory-saving mode when this is exceeded.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+        sp.Children.Add(new TextBlock { Text = "When set above 0, memory-saving mode activates when the Yagu process exceeds this working-set size regardless of system memory pressure. Leave at 0 to use the pressure % instead.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-        sp.Children.Add(new TextBlock { Text = "SDK channel buffer size:" });
+        sp.Children.Add(NextSearchLabel("SDK channel buffer size:"));
         var sdkBuf = new NumberBox { Value = ViewModel.SdkChannelBufferSize, Minimum = 16, Maximum = 1000000 };
         sdkBuf.ValueChanged += (_, args) => ViewModel.SdkChannelBufferSize = (int)args.NewValue;
         sp.Children.Add(sdkBuf);
         sp.Children.Add(new TextBlock { Text = "Number of file paths buffered between the Everything SDK producer thread and the consumer. Higher values may improve throughput on large directories but use more memory. Only applies when using the Everything SDK backend.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-        sp.Children.Add(new TextBlock { Text = "System memory pressure limit (%, 0 = disabled):", TextWrapping = TextWrapping.Wrap });
-        var memPressure = new NumberBox { Value = ViewModel.MemoryPressurePercent, Minimum = 0, Maximum = 100 };
-        memPressure.ValueChanged += (_, args) => ViewModel.MemoryPressurePercent = (int)args.NewValue;
-        sp.Children.Add(memPressure);
-        sp.Children.Add(new TextBlock { Text = "Yagu enters memory saving / eviction mode when total machine RAM usage exceeds this %.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
-
         // ── Display ──
         sp.Children.Add(new TextBlock { Text = "Display", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16, Margin = new Thickness(0, 12, 0, 0) });
 
         sp.Children.Add(new TextBlock { Text = "Line truncation length (characters):" });
-        var trunc = new NumberBox { Value = ViewModel.LineTruncationLength, Minimum = 50, Maximum = 10000 };
+        var trunc = new NumberBox { Value = ViewModel.LineTruncationLength, Minimum = 0, Maximum = 10000 };
         trunc.ValueChanged += (_, args) => ViewModel.LineTruncationLength = (int)args.NewValue;
         sp.Children.Add(trunc);
-        sp.Children.Add(new TextBlock { Text = "Lines longer than this are truncated in the results list to prevent UI slowdowns from extremely long lines.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+        sp.Children.Add(new TextBlock { Text = "Lines longer than this are truncated in the results list to prevent UI slowdowns from extremely long lines. Set to 0 to disable truncation.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
         sp.Children.Add(new TextBlock { Text = "Multi-select preview mode:" });
         var previewMode = new ComboBox();
@@ -630,17 +676,43 @@ public sealed partial class MainWindow : Window
         recent.ValueChanged += (_, args) => ViewModel.MaxRecentItems = (int)args.NewValue;
         sp.Children.Add(recent);
 
-        sp.Children.Add(new TextBlock { Text = "Log verbosity level:" });
-        var logLevel = new ComboBox();
-        logLevel.Items.Add("Critical (errors only)");
-        logLevel.Items.Add("Warning (errors + warnings)");
-        logLevel.Items.Add("Info (general activity)");
-        logLevel.Items.Add("Verbose (all details, may slow performance)");
-        logLevel.SelectedIndex = ViewModel.LogLevelIndex;
-        logLevel.SelectionChanged += (_, _) => ViewModel.LogLevelIndex = logLevel.SelectedIndex;
-        sp.Children.Add(logLevel);
+        sp.Children.Add(new TextBlock { Text = "File log level:" });
+        var fileLogLevel = new ComboBox();
+        fileLogLevel.Items.Add("None (logging disabled)");
+        fileLogLevel.Items.Add("Critical (errors only)");
+        fileLogLevel.Items.Add("Warning (errors + warnings)");
+        fileLogLevel.Items.Add("Info (general activity)");
+        fileLogLevel.Items.Add("Verbose (all details, may slow performance)");
+        fileLogLevel.SelectedIndex = ViewModel.FileLogLevelIndex + 1;
+        fileLogLevel.SelectionChanged += (_, _) => ViewModel.FileLogLevelIndex = fileLogLevel.SelectedIndex - 1;
+        sp.Children.Add(fileLogLevel);
+
+        sp.Children.Add(new TextBlock { Text = "Console log level:" });
+        var consoleLogLevel = new ComboBox();
+        consoleLogLevel.Items.Add("None (logging disabled)");
+        consoleLogLevel.Items.Add("Critical (errors only)");
+        consoleLogLevel.Items.Add("Warning (errors + warnings)");
+        consoleLogLevel.Items.Add("Info (general activity)");
+        consoleLogLevel.Items.Add("Verbose (all details, may slow performance)");
+        consoleLogLevel.SelectedIndex = ViewModel.ConsoleLogLevelIndex + 1;
+        consoleLogLevel.SelectionChanged += (_, _) => ViewModel.ConsoleLogLevelIndex = consoleLogLevel.SelectedIndex - 1;
+        sp.Children.Add(consoleLogLevel);
 
         sp.Children.Add(new TextBlock { Text = $"Log file: {LogService.DefaultLogPath()}", FontSize = 11, Opacity = 0.6 });
+
+        // Reset admin warning
+        if (ViewModel.SuppressAdminWarning)
+        {
+            var resetAdmin = new Button { Content = "Re-enable admin privilege warning", FontSize = 12, Padding = new Thickness(8, 4, 8, 4), Margin = new Thickness(0, 4, 0, 0) };
+            resetAdmin.Click += (_, _) =>
+            {
+                ViewModel.SuppressAdminWarning = false;
+                resetAdmin.Content = "Admin warning re-enabled ✓";
+                resetAdmin.IsEnabled = false;
+            };
+            sp.Children.Add(resetAdmin);
+            sp.Children.Add(new TextBlock { Text = "The non-administrator warning was previously dismissed. Click to show it again on next launch.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+        }
 
         // Wrap in ScrollViewer so the dialog is scrollable when content overflows.
         return new ScrollViewer
@@ -682,6 +754,12 @@ public sealed partial class MainWindow : Window
             await UpdatePreviewAsync(g[0]);
     }
 
+    private void OnFileGroupExpanding(Expander sender, ExpanderExpandingEventArgs args)
+    {
+        if (sender.DataContext is FileGroup g)
+            g.SelectAll();
+    }
+
     private void OnResultDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
     {
         if (ResultsList.SelectedItem is FileGroup g && g.Count > 0)
@@ -717,10 +795,9 @@ public sealed partial class MainWindow : Window
         await ShowFullFilePreviewAsync(targets);
     }
 
-    private async void OnWordWrapToggled(object sender, RoutedEventArgs e)
+    private void OnWordWrapToggled(object sender, RoutedEventArgs e)
     {
         ApplyWordWrap(ViewModel.PreviewWordWrap);
-        await ViewModel.PersistSettingsAsync();
     }
 
     private async void OnPreviewModeChanged(object sender, SelectionChangedEventArgs e)
@@ -760,7 +837,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnClosePreviewEdit(object sender, RoutedEventArgs e)
     {
-        if (_previewEditorDirty && !await ConfirmDiscardPreviewEditAsync()) return;
+        if (HasRealEditorChanges() && !await ConfirmDiscardPreviewEditAsync()) return;
         ClosePreviewEditor();
 
         var selected = ViewModel.GetAllSelectedResults();
@@ -796,7 +873,7 @@ public sealed partial class MainWindow : Window
 
     private async Task<bool> ClearPreviewPanelForNewSearchAsync()
     {
-        if (PreviewEditor.Visibility == Visibility.Visible && _previewEditorDirty && !await ConfirmDiscardPreviewEditAsync())
+        if (PreviewEditor.Visibility == Visibility.Visible && HasRealEditorChanges() && !await ConfirmDiscardPreviewEditAsync())
             return false;
 
         _previewResult = null;
@@ -879,6 +956,15 @@ public sealed partial class MainWindow : Window
     {
         if (sender is FrameworkElement { Tag: string path } && !string.IsNullOrWhiteSpace(path))
             SetClipboardText(path, "file group path");
+    }
+
+    private void OnResultsContextMenuOpening(object sender, object e)
+    {
+        bool plural = ResultsList.SelectedItems.Count > 1;
+        CtxCopyPaths.Text = plural ? "Copy File Paths" : "Copy File Path";
+        CtxCopyWithContent.Text = plural ? "Copy Files With Content" : "Copy File With Content";
+        CtxSavePaths.Text = plural ? "Save File Paths\u2026" : "Save File Path\u2026";
+        CtxSaveWithContent.Text = plural ? "Save Files With Content\u2026" : "Save File With Content\u2026";
     }
 
     private void OnCopySelectedFilePaths(object sender, RoutedEventArgs e)
@@ -1214,7 +1300,7 @@ public sealed partial class MainWindow : Window
             var section = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)");
 
             string[]? allLines = null;
-            try { allLines = await File.ReadAllLinesAsync(filePath); } catch (Exception ex) { LogService.Instance.Verbose("Preview", $"Cannot read file for concatenated preview: {filePath}", ex); }
+            try { allLines = await ReadAllLinesWithEncodingAsync(filePath); } catch (Exception ex) { LogService.Instance.Verbose("Preview", $"Cannot read file for concatenated preview: {filePath}", ex); }
 
             foreach (var r in results)
             {
@@ -1289,7 +1375,7 @@ public sealed partial class MainWindow : Window
             var matchLines = new HashSet<int>(results.Select(r => r.LineNumber));
 
             string[]? allLines = null;
-            try { allLines = await File.ReadAllLinesAsync(filePath); } catch (Exception ex) { LogService.Instance.Verbose("Preview", $"Cannot read file for multi-highlight preview: {filePath}", ex); }
+            try { allLines = await ReadAllLinesWithEncodingAsync(filePath); } catch (Exception ex) { LogService.Instance.Verbose("Preview", $"Cannot read file for multi-highlight preview: {filePath}", ex); }
 
             if (allLines != null)
             {
@@ -1379,6 +1465,29 @@ public sealed partial class MainWindow : Window
             ScrollPreviewToLine(scrollBlock, scrollPara);
     }
 
+    /// <summary>
+    /// Read all lines using the same encoding detection as the search engine
+    /// so that line numbers in the preview match the search results.
+    /// </summary>
+    private static async Task<string[]> ReadAllLinesWithEncodingAsync(string filePath)
+    {
+        await using var fs = new FileStream(
+            filePath, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            bufferSize: 64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var encoding = Helpers.EncodingDetector.DetectEncoding(fs);
+        if (encoding is System.Text.UTF8Encoding)
+            encoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
+        fs.Position = 0;
+        using var reader = new StreamReader(fs, encoding, detectEncodingFromByteOrderMarks: true);
+        var lines = new List<string>();
+        string? line;
+        while ((line = await reader.ReadLineAsync()) != null)
+            lines.Add(line);
+        return lines.ToArray();
+    }
+
     private static List<(string line, int lineNum)> GetPreviewLines(SearchResult r, string[]? allLines, int previewLines, bool fullFile)
     {
         var lines = new List<(string, int)>();
@@ -1427,7 +1536,7 @@ public sealed partial class MainWindow : Window
         string[]? allLines = null;
         if (fullFile)
         {
-            try { allLines = await File.ReadAllLinesAsync(r.FilePath); } catch (Exception ex) { LogService.Instance.Verbose("Preview", $"Cannot read file for single-file preview: {r.FilePath}", ex); }
+            try { allLines = await ReadAllLinesWithEncodingAsync(r.FilePath); } catch (Exception ex) { LogService.Instance.Verbose("Preview", $"Cannot read file for single-file preview: {r.FilePath}", ex); }
         }
 
         var lines = GetPreviewLines(r, allLines, ViewModel.PreviewContextLines, fullFile);
@@ -1746,7 +1855,7 @@ public sealed partial class MainWindow : Window
 
     private async Task ShowFullFileEditorAsync(SearchResult result)
     {
-        if (PreviewEditor.Visibility == Visibility.Visible && _previewEditorDirty)
+        if (PreviewEditor.Visibility == Visibility.Visible && HasRealEditorChanges())
         {
             ViewModel.StatusText = "Save or close the current editor before loading another full file.";
             return;
@@ -1768,20 +1877,64 @@ public sealed partial class MainWindow : Window
 
             _previewEditorPath = result.FilePath;
             _previewEditorEncoding = document.Encoding;
-            _suppressPreviewEditorTextChanged = true;
-            PreviewEditor.Text = document.Text;
-            _suppressPreviewEditorTextChanged = false;
-            _previewEditorDirty = false;
 
             // Archive entries are read-only (cannot save back into zip)
             bool isArchive = ZipArchiveSearcher.IsArchivePath(result.FilePath);
             PreviewEditor.IsReadOnly = isArchive;
 
+            // Progressively load text in chunks to avoid freezing the UI on large files.
+            _suppressPreviewEditorTextChanged = true;
             SetPreviewEditorVisible(true);
+
+            const int chunkSize = 256 * 1024; // 256 KB per chunk
+            var text = document.Text;
+            if (text.Length <= chunkSize)
+            {
+                PreviewEditor.Text = text;
+            }
+            else
+            {
+                // Load the first chunk immediately so the user sees content right away.
+                PreviewEditor.Text = text[..chunkSize];
+                int loaded = chunkSize;
+                while (loaded < text.Length)
+                {
+                    if (cts.IsCancellationRequested) break;
+                    // Yield to let the UI render the previous chunk.
+                    await Task.Delay(1, cts.Token).ConfigureAwait(true);
+                    int end = Math.Min(loaded + chunkSize, text.Length);
+                    // Append next chunk by selecting the end and inserting.
+                    PreviewEditor.Select(PreviewEditor.Text.Length, 0);
+                    PreviewEditor.SelectedText = text[loaded..end];
+                    loaded = end;
+                }
+            }
+
+            _previewEditorOriginalText = PreviewEditor.Text;
+            _suppressPreviewEditorTextChanged = false;
+            _previewEditorDirty = false;
+            UpdateEditorDirtyIndicator();
+
             PreviewEditor.Focus(FocusState.Programmatic);
 
             // Scroll to the match line and highlight the matched text.
-            ScrollEditorToMatch(document.Text, result);
+            ScrollEditorToMatch(text, result);
+
+            // WinUI 3 TextBox may fire deferred TextChanged after a bulk text
+            // load (line-ending normalisation, layout pass, etc.).  If that
+            // sets _previewEditorDirty even though the text is unchanged,
+            // clear it again so the indicator doesn't show a false positive.
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (_previewEditorOriginalText is not null
+                    && PreviewEditor.Visibility == Visibility.Visible
+                    && _previewEditorDirty
+                    && PreviewEditor.Text == _previewEditorOriginalText)
+                {
+                    _previewEditorDirty = false;
+                    UpdatePreviewEditorButtons();
+                }
+            });
 
             string label = isArchive ? "viewing (read-only)" : "editing";
             ViewModel.StatusText = $"Loaded {Path.GetFileName(result.FilePath)} ({FormatBytes(document.ByteLength)}) for {label}.";
@@ -1946,6 +2099,7 @@ public sealed partial class MainWindow : Window
         try
         {
             await File.WriteAllTextAsync(_previewEditorPath, PreviewEditor.Text, _previewEditorEncoding).ConfigureAwait(true);
+            _previewEditorOriginalText = PreviewEditor.Text;
             _previewEditorDirty = false;
             UpdatePreviewEditorButtons();
             ViewModel.StatusText = $"Saved {_previewEditorPath}.";
@@ -1964,19 +2118,27 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>Returns true if the caller should proceed (edits were saved or discarded), false to cancel.</summary>
     private async Task<bool> ConfirmDiscardPreviewEditAsync()
     {
         var dialog = new ContentDialog
         {
             XamlRoot = ((FrameworkElement)Content).XamlRoot,
-            Title = "Discard unsaved changes?",
+            Title = "Unsaved changes",
             Content = "The right-panel editor has unsaved changes.",
-            PrimaryButtonText = "Discard",
-            CloseButtonText = "Keep Editing",
-            DefaultButton = ContentDialogButton.Close,
+            PrimaryButtonText = "Save",
+            SecondaryButtonText = "Discard",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
         };
 
-        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+        var choice = await dialog.ShowAsync();
+        if (choice == ContentDialogResult.Primary)
+        {
+            // Save first, then allow the close/navigation to proceed.
+            return await SavePreviewEditAsync();
+        }
+        return choice == ContentDialogResult.Secondary; // Discard → true, Cancel → false
     }
 
     private bool TryLeavePreviewEditorForPreviewChange()
@@ -1989,7 +2151,7 @@ public sealed partial class MainWindow : Window
         }
 
         if (PreviewEditor.Visibility != Visibility.Visible) return true;
-        if (_previewEditorDirty)
+        if (HasRealEditorChanges())
         {
             ViewModel.StatusText = "Save or close the right-panel editor before changing the preview.";
             return false;
@@ -2011,6 +2173,7 @@ public sealed partial class MainWindow : Window
         _previewEditorPath = null;
         _previewEditorEncoding = null;
         _previewEditorDirty = false;
+        _previewEditorOriginalText = null;
 
         if (clearText)
         {
@@ -2028,12 +2191,44 @@ public sealed partial class MainWindow : Window
         PreviewScrollViewer.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
         SavePreviewEditButton.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         ClosePreviewEditButton.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        if (visible)
+            PreviewToolbarContent.Visibility = Visibility.Visible;
         ApplyWordWrap(ViewModel.PreviewWordWrap);
     }
+
+    /// <summary>
+    /// Returns true only if the editor text actually differs from the
+    /// originally-loaded content.  This avoids false positives caused by
+    /// WinUI 3 TextBox raising deferred TextChanged events after a bulk load.
+    /// </summary>
+    private bool HasRealEditorChanges() =>
+        _previewEditorDirty
+        && _previewEditorOriginalText is not null
+        && PreviewEditor.Text != _previewEditorOriginalText;
 
     private void UpdatePreviewEditorButtons()
     {
         SavePreviewEditButton.IsEnabled = PreviewEditor.Visibility == Visibility.Visible && _previewEditorDirty && _previewEditorPath is not null;
+        UpdateEditorDirtyIndicator();
+    }
+
+    private void UpdateEditorDirtyIndicator()
+    {
+        if (_previewEditorPath is null) return;
+        string baseName = _previewEditorPath;
+        // Strip any existing dirty indicator prefix.
+        if (PreviewFileLabel.Text.StartsWith("● ", StringComparison.Ordinal))
+        {
+            var existingTooltip = ToolTipService.GetToolTip(PreviewFileLabel) as string;
+            baseName = existingTooltip ?? PreviewFileLabel.Text[2..];
+        }
+        else
+        {
+            baseName = PreviewFileLabel.Text;
+        }
+        SetPreviewFileLabel(
+            _previewEditorDirty ? $"● {baseName}" : baseName,
+            baseName);
     }
 
     private void ShowPreviewMessage(string message)
@@ -2183,9 +2378,68 @@ public sealed partial class MainWindow : Window
         });
     }
 
+    private bool _splitterDragging;
+    private double _splitterStartX;
+    private double _col0StartWidth;
+    private double _col2StartWidth;
+
     private void OnSplitterPressed(object sender, PointerRoutedEventArgs e)
     {
-        // Minimal placeholder — full splitter implementation would track pointer move.
+        var border = (Border)sender;
+        _splitterDragging = true;
+        _splitterStartX = e.GetCurrentPoint(SplitPaneGrid).Position.X;
+        _col0StartWidth = SplitPaneGrid.ColumnDefinitions[0].ActualWidth;
+        _col2StartWidth = SplitPaneGrid.ColumnDefinitions[2].ActualWidth;
+        border.CapturePointer(e.Pointer);
+        e.Handled = true;
+    }
+
+    private void OnSplitterMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_splitterDragging) return;
+        double currentX = e.GetCurrentPoint(SplitPaneGrid).Position.X;
+        double delta = currentX - _splitterStartX;
+        double newCol0 = _col0StartWidth + delta;
+        double newCol2 = _col2StartWidth - delta;
+        double minWidth = 200;
+        if (newCol0 < minWidth || newCol2 < minWidth) return;
+        SplitPaneGrid.ColumnDefinitions[0].Width = new GridLength(newCol0, GridUnitType.Pixel);
+        SplitPaneGrid.ColumnDefinitions[2].Width = new GridLength(newCol2, GridUnitType.Pixel);
+        e.Handled = true;
+    }
+
+    private void OnSplitterReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_splitterDragging) return;
+        _splitterDragging = false;
+        ((Border)sender).ReleasePointerCapture(e.Pointer);
+        // Convert back to star sizing so the layout adapts on window resize.
+        double col0 = SplitPaneGrid.ColumnDefinitions[0].ActualWidth;
+        double col2 = SplitPaneGrid.ColumnDefinitions[2].ActualWidth;
+        double total = col0 + col2;
+        if (total > 0)
+        {
+            SplitPaneGrid.ColumnDefinitions[0].Width = new GridLength(col0 / total, GridUnitType.Star);
+            SplitPaneGrid.ColumnDefinitions[2].Width = new GridLength(col2 / total, GridUnitType.Star);
+        }
+        e.Handled = true;
+    }
+
+    private void OnSplitterPointerEntered(object sender, PointerRoutedEventArgs e)
+    {
+        SplitterBorder.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+            Microsoft.UI.Colors.Gray);
+        SplitterBorder.Opacity = 0.5;
+    }
+
+    private void OnSplitterPointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_splitterDragging)
+        {
+            SplitterBorder.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                Microsoft.UI.Colors.Transparent);
+            SplitterBorder.Opacity = 1.0;
+        }
     }
 
     private async void OnContentLoaded(object sender, RoutedEventArgs e)
@@ -2524,5 +2778,242 @@ public sealed partial class MainWindow : Window
     {
         if (sender is TextBlock tb)
             tb.TextDecorations = Windows.UI.Text.TextDecorations.None;
+    }
+
+    // ── Find / Replace bar ─────────────────────────────────────────────
+
+    private int _findIndex = -1; // last match start index in PreviewEditor.Text
+
+    private void OnCtrlFInvoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        OpenFindBar(showReplace: false);
+    }
+
+    private void OnCtrlHInvoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        if (PreviewEditor.Visibility != Visibility.Visible) return; // replace only in editor
+        OpenFindBar(showReplace: true);
+    }
+
+    private void OpenFindBar(bool showReplace)
+    {
+        FindBar.Visibility = Visibility.Visible;
+        if (showReplace)
+        {
+            ReplaceRow.Visibility = Visibility.Visible;
+            FindReplaceToggle.IsChecked = true;
+        }
+
+        // Pre-fill with selected text from the editor
+        if (PreviewEditor.Visibility == Visibility.Visible && PreviewEditor.SelectedText.Length > 0 && !PreviewEditor.SelectedText.Contains('\n'))
+            FindTextBox.Text = PreviewEditor.SelectedText;
+
+        FindTextBox.Focus(FocusState.Programmatic);
+        FindTextBox.SelectAll();
+    }
+
+    private void OnCloseFindBar(object sender, RoutedEventArgs e)
+    {
+        CloseFindBar();
+    }
+
+    private void CloseFindBar()
+    {
+        FindBar.Visibility = Visibility.Collapsed;
+        ReplaceRow.Visibility = Visibility.Collapsed;
+        FindReplaceToggle.IsChecked = false;
+        _findIndex = -1;
+        FindStatusText.Text = string.Empty;
+
+        // Return focus to the editor or preview
+        if (PreviewEditor.Visibility == Visibility.Visible)
+            PreviewEditor.Focus(FocusState.Programmatic);
+    }
+
+    private void OnFindReplaceToggle(object sender, RoutedEventArgs e)
+    {
+        bool show = FindReplaceToggle.IsChecked == true;
+        ReplaceRow.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        // Replace only makes sense in the editor
+        if (show && PreviewEditor.Visibility != Visibility.Visible)
+        {
+            ReplaceRow.Visibility = Visibility.Collapsed;
+            FindReplaceToggle.IsChecked = false;
+        }
+    }
+
+    private void OnFindTextBoxKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key == VirtualKey.Escape) { CloseFindBar(); e.Handled = true; return; }
+        if (e.Key == VirtualKey.Enter)
+        {
+            bool shift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
+                             .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+            if (shift) FindPrevious(); else FindNext();
+            e.Handled = true;
+        }
+    }
+
+    private void OnReplaceTextBoxKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key == VirtualKey.Escape) { CloseFindBar(); e.Handled = true; return; }
+        if (e.Key == VirtualKey.Enter) { ReplaceOne(); e.Handled = true; }
+    }
+
+    private void OnFindTextBoxTextChanged(object sender, TextChangedEventArgs e)
+    {
+        _findIndex = -1; // reset so next find starts from current selection
+        UpdateFindStatus();
+    }
+
+    private void OnFindOptionChanged(object sender, RoutedEventArgs e)
+    {
+        _findIndex = -1;
+        UpdateFindStatus();
+    }
+
+    private void OnFindNext(object sender, RoutedEventArgs e) => FindNext();
+    private void OnFindPrevious(object sender, RoutedEventArgs e) => FindPrevious();
+    private void OnReplaceOne(object sender, RoutedEventArgs e) => ReplaceOne();
+    private void OnReplaceAll(object sender, RoutedEventArgs e) => ReplaceAll();
+
+    private StringComparison FindComparison =>
+        FindMatchCaseCheckBox.IsChecked == true ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+
+    private string FindTarget => PreviewEditor.Visibility == Visibility.Visible ? PreviewEditor.Text : GetPreviewBlockText();
+
+    private string GetPreviewBlockText()
+    {
+        var sb = new StringBuilder();
+        foreach (var block in PreviewBlock.Blocks)
+        {
+            if (block is Microsoft.UI.Xaml.Documents.Paragraph p)
+            {
+                foreach (var inline in p.Inlines)
+                {
+                    if (inline is Microsoft.UI.Xaml.Documents.Run run) sb.Append(run.Text);
+                }
+                sb.AppendLine();
+            }
+        }
+        return sb.ToString();
+    }
+
+    private void FindNext()
+    {
+        var needle = FindTextBox.Text;
+        if (string.IsNullOrEmpty(needle)) return;
+        var haystack = FindTarget;
+        if (haystack.Length == 0) { FindStatusText.Text = "No content"; return; }
+
+        int startPos = _findIndex >= 0 ? _findIndex + needle.Length : 0;
+        if (startPos >= haystack.Length) startPos = 0;
+
+        int idx = haystack.IndexOf(needle, startPos, FindComparison);
+        if (idx < 0 && startPos > 0)
+            idx = haystack.IndexOf(needle, 0, FindComparison); // wrap around
+
+        if (idx < 0) { FindStatusText.Text = "No matches"; _findIndex = -1; return; }
+
+        _findIndex = idx;
+        SelectFindMatch(idx, needle.Length);
+        UpdateFindStatus();
+    }
+
+    private void FindPrevious()
+    {
+        var needle = FindTextBox.Text;
+        if (string.IsNullOrEmpty(needle)) return;
+        var haystack = FindTarget;
+        if (haystack.Length == 0) { FindStatusText.Text = "No content"; return; }
+
+        int startPos = _findIndex > 0 ? _findIndex - 1 : haystack.Length - 1;
+
+        // Search backwards by scanning substring before startPos
+        int idx = haystack.LastIndexOf(needle, startPos, FindComparison);
+        if (idx < 0 && startPos < haystack.Length - 1)
+            idx = haystack.LastIndexOf(needle, haystack.Length - 1, FindComparison); // wrap around
+
+        if (idx < 0) { FindStatusText.Text = "No matches"; _findIndex = -1; return; }
+
+        _findIndex = idx;
+        SelectFindMatch(idx, needle.Length);
+        UpdateFindStatus();
+    }
+
+    private void SelectFindMatch(int index, int length)
+    {
+        if (PreviewEditor.Visibility == Visibility.Visible)
+        {
+            PreviewEditor.Focus(FocusState.Programmatic);
+            PreviewEditor.Select(index, length);
+        }
+    }
+
+    private void UpdateFindStatus()
+    {
+        var needle = FindTextBox.Text;
+        if (string.IsNullOrEmpty(needle)) { FindStatusText.Text = string.Empty; return; }
+        var haystack = FindTarget;
+        int count = 0;
+        int pos = 0;
+        while ((pos = haystack.IndexOf(needle, pos, FindComparison)) >= 0)
+        {
+            count++;
+            pos += needle.Length;
+        }
+        FindStatusText.Text = count == 0 ? "No matches" : $"{count} match{(count == 1 ? "" : "es")}";
+    }
+
+    private void ReplaceOne()
+    {
+        if (PreviewEditor.Visibility != Visibility.Visible) return;
+        var needle = FindTextBox.Text;
+        if (string.IsNullOrEmpty(needle)) return;
+
+        // If the current selection matches the needle, replace it; otherwise find next first
+        if (PreviewEditor.SelectedText.Equals(needle, FindComparison))
+        {
+            int selStart = PreviewEditor.SelectionStart;
+            PreviewEditor.SelectedText = ReplaceTextBox.Text;
+            _findIndex = selStart;
+        }
+        FindNext();
+    }
+
+    private void ReplaceAll()
+    {
+        if (PreviewEditor.Visibility != Visibility.Visible) return;
+        var needle = FindTextBox.Text;
+        if (string.IsNullOrEmpty(needle)) return;
+
+        var replacement = ReplaceTextBox.Text;
+        var text = PreviewEditor.Text;
+        var sb = new StringBuilder(text.Length);
+        int count = 0;
+        int pos = 0;
+        while (true)
+        {
+            int idx = text.IndexOf(needle, pos, FindComparison);
+            if (idx < 0) { sb.Append(text, pos, text.Length - pos); break; }
+            sb.Append(text, pos, idx - pos);
+            sb.Append(replacement);
+            count++;
+            pos = idx + needle.Length;
+        }
+
+        if (count > 0)
+        {
+            _suppressPreviewEditorTextChanged = true;
+            PreviewEditor.Text = sb.ToString();
+            _suppressPreviewEditorTextChanged = false;
+            _previewEditorDirty = true;
+            UpdatePreviewEditorButtons();
+        }
+
+        _findIndex = -1;
+        FindStatusText.Text = count > 0 ? $"Replaced {count}" : "No matches";
     }
 }

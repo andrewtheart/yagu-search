@@ -59,8 +59,8 @@ public sealed class SearchOptions
         };
     }
 
-    /// <summary>Hard process working-set cap in bytes. 0 = no hard cap.</summary>
-    public long MaxProcessMemoryBytes { get; init; } = 4L * 1024 * 1024 * 1024;
+    /// <summary>Hard process working-set cap in bytes. 0 = auto (50% of physical RAM, min 2 GB).</summary>
+    public long MaxProcessMemoryBytes { get; init; }
 
     /// <summary>System-wide memory pressure threshold (0-100). 0 = disabled.</summary>
     public int MemoryPressurePercent { get; init; } = 80;

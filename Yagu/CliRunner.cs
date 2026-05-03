@@ -101,7 +101,7 @@ internal static class CliRunner
 
         // Configure the file-lister backend from settings (same as App() constructor).
         FileLister.Backend = (FileListerBackend)settings.FileListerBackendIndex;
-        LogService.Init((LogLevel)settings.LogLevelIndex);
+        LogService.Init((LogLevel)settings.LogLevelIndex, (LogLevel)settings.ConsoleLogLevelIndex);
 
         var options = BuildSearchOptions(args, settings);
 

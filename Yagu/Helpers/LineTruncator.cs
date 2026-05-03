@@ -7,11 +7,11 @@ public static class LineTruncator
 
     public readonly record struct DisplayLine(string Text, int MatchStart);
 
-    /// <summary>Lines longer than 2× this value are truncated to this length + ellipsis.</summary>
+    /// <summary>Lines longer than 2× this value are truncated to this length + ellipsis. 0 = no truncation.</summary>
     public static int TruncatedLength
     {
         get => _truncatedLength;
-        set => _truncatedLength = Math.Max(50, value);
+        set => _truncatedLength = value == 0 ? 0 : Math.Max(50, value);
     }
 
     public static int MaxDisplayLength => TruncatedLength * 2;
@@ -20,14 +20,14 @@ public static class LineTruncator
     public static string Truncate(string line)
     {
         if (line is null) return string.Empty;
-        if (line.Length <= MaxDisplayLength) return line;
+        if (TruncatedLength == 0 || line.Length <= MaxDisplayLength) return line;
         return string.Concat(line.AsSpan(0, TruncatedLength), Ellipsis);
     }
 
     public static DisplayLine TruncateAroundMatch(string? line, int matchStart, int matchLength)
     {
         line ??= string.Empty;
-        if (line.Length <= MaxDisplayLength || matchStart < 0 || matchLength <= 0 || matchStart >= line.Length)
+        if (TruncatedLength == 0 || line.Length <= MaxDisplayLength || matchStart < 0 || matchLength <= 0 || matchStart >= line.Length)
             return new DisplayLine(Truncate(line), matchStart);
 
         int safeMatchLength = Math.Min(matchLength, line.Length - matchStart);

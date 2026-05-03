@@ -678,7 +678,7 @@ public sealed class ContentSearcher
                 while (decodeBytes > 0 && (ptr[decodeBytes] & 0xC0) == 0x80) decodeBytes--;
             }
             var s = System.Text.Encoding.UTF8.GetString(ptr, decodeBytes);
-            if (bytesTruncated && s.Length <= LineTruncator.MaxDisplayLength)
+            if (LineTruncator.TruncatedLength > 0 && bytesTruncated && s.Length <= LineTruncator.MaxDisplayLength)
             {
                 int keep = Math.Min(s.Length, LineTruncator.TruncatedLength);
                 return string.Concat(s.AsSpan(0, keep), LineTruncator.Ellipsis);

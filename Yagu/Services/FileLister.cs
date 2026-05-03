@@ -332,7 +332,10 @@ public sealed class FileLister : IFileLister
                         if (wantSize)
                             requestFlags |= EverythingSdk.EVERYTHING_REQUEST_SIZE;
                         EverythingSdk.SetRequestFlags(requestFlags);
-                        EverythingSdk.SetSort(EverythingSdk.EVERYTHING_SORT_PATH_ASCENDING);
+                        // Do NOT call SetSort: requesting an explicit sort (especially
+                        // path-ascending) forces a slow non-indexed sort unless the user
+                        // has enabled fast-sort in Everything. Letting the SDK return
+                        // results in its native (unsorted) order is much faster.
                         if (maxFiles > 0)
                             EverythingSdk.SetMax((uint)maxFiles);
                         else
@@ -564,7 +567,8 @@ public sealed class FileLister : IFileLister
                 EverythingSdk.SetOffset(0);
                 EverythingSdk.SetMax(25);
                 EverythingSdk.SetRequestFlags(EverythingSdk.EVERYTHING_REQUEST_FULL_PATH_AND_FILE_NAME);
-                EverythingSdk.SetSort(EverythingSdk.EVERYTHING_SORT_PATH_ASCENDING);
+                // Do NOT call SetSort — see note in the main query path; requesting an
+                // explicit sort can be slow when fast-sort is not enabled in Everything.
 
                 if (!EverythingSdk.Query(bWait: true))
                 {

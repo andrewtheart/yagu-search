@@ -37,6 +37,7 @@ public sealed partial class MainViewModel : ObservableObject
     private AppSettings _settings;
     private readonly SearchResultCollection _resultCollection = new();
     private ResultStore? _resultStore;
+    private CancellationTokenSource _metadataCts = new();
     private System.Diagnostics.Stopwatch? _searchTimer;
     private long _bytesScanned;
 
@@ -66,7 +67,8 @@ public sealed partial class MainViewModel : ObservableObject
         EditorCommand = _settings.EditorCommand;
         PreviewModeIndex = _settings.PreviewModeIndex;
         PreviewWordWrap = _settings.PreviewWordWrap;
-        LogLevelIndex = _settings.LogLevelIndex;
+        FileLogLevelIndex = _settings.LogLevelIndex;
+        ConsoleLogLevelIndex = _settings.ConsoleLogLevelIndex;
         FileListerBackendIndex = _settings.FileListerBackendIndex;
         ParallelismIndex = _settings.ParallelismIndex;
         LineTruncationLength = _settings.LineTruncationLength;
@@ -113,13 +115,14 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial bool GroupByDirectory { get; set; }
     [ObservableProperty] public partial int PreviewModeIndex { get; set; } = 1; // 0 = Concatenated, 1 = Multi-highlight
     [ObservableProperty] public partial bool PreviewWordWrap { get; set; }
-    [ObservableProperty] public partial int LogLevelIndex { get; set; } // 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
+    [ObservableProperty] public partial int FileLogLevelIndex { get; set; } // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
+    [ObservableProperty] public partial int ConsoleLogLevelIndex { get; set; } = -1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] public partial int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
     [ObservableProperty] public partial int ParallelismIndex { get; set; } // 0 = Auto, 1 = 1 thread, 2 = half cores, 3 = 2x cores, 4 = all cores
     [ObservableProperty] public partial int LineTruncationLength { get; set; } = 500;
     [ObservableProperty] public partial int MaxRecentItems { get; set; } = 20;
     [ObservableProperty] public partial bool GlobalHotkeyEnabled { get; set; }
-    [ObservableProperty] public partial int MemoryLimitMB { get; set; } = 4096;
+    [ObservableProperty] public partial int MemoryLimitMB { get; set; }
     [ObservableProperty] public partial int MemoryPressurePercent { get; set; } = 80;
     [ObservableProperty] public partial int SdkChannelBufferSize { get; set; } = 4096;
     [ObservableProperty] public partial bool SkipBinary { get; set; } = true;
@@ -283,6 +286,13 @@ public sealed partial class MainViewModel : ObservableObject
         ["docx"] = "Office", ["xlsx"] = "Office", ["pptx"] = "Office",
         ["odt"] = "OpenDoc", ["ods"] = "OpenDoc", ["odp"] = "OpenDoc",
         ["epub"] = "eBooks",
+        ["whl"] = "Python",
+        ["gz"] = "Compressed", ["tar"] = "Compressed", ["7z"] = "Compressed",
+        ["rar"] = "Compressed", ["bz2"] = "Compressed", ["xz"] = "Compressed",
+        ["iso"] = "Disk Images", ["cab"] = "Installers", ["msi"] = "Installers",
+        ["tgz"] = "Compressed", ["tbz2"] = "Compressed", ["txz"] = "Compressed",
+        ["zst"] = "Compressed", ["zstd"] = "Compressed", ["br"] = "Compressed",
+        ["lz4"] = "Compressed", ["lzma"] = "Compressed",
     };
 
     private static string CategorizeArchiveExtension(string ext) =>
@@ -440,10 +450,15 @@ public sealed partial class MainViewModel : ObservableObject
     partial void OnGroupByDirectoryChanged(bool value) => ApplySortAndFilter();
     partial void OnIncludeGlobsChanged(string value) => ApplySortAndFilter();
     partial void OnExcludeGlobsChanged(string value) => ApplySortAndFilter();
-    partial void OnLogLevelIndexChanged(int value)
+    partial void OnFileLogLevelIndexChanged(int value)
     {
-        LogService.Instance.Level = (LogLevel)value;
-        LogService.Instance.Info("Settings", $"Log level changed to {(LogLevel)value}");
+        LogService.Instance.FileLevel = (LogLevel)value;
+        LogService.Instance.Info("Settings", $"File log level changed to {(LogLevel)value}");
+    }
+    partial void OnConsoleLogLevelIndexChanged(int value)
+    {
+        LogService.Instance.ConsoleLevel = (LogLevel)value;
+        LogService.Instance.Info("Settings", $"Console log level changed to {(LogLevel)value}");
     }
 
     partial void OnFileListerBackendIndexChanged(int value)
@@ -470,6 +485,20 @@ public sealed partial class MainViewModel : ObservableObject
         {
             ErrorText = "Enter a search query.";
             return;
+        }
+
+        // Validate: skip extensions must not contradict archive extensions when archive search is on.
+        if (SearchInsideArchives)
+        {
+            var skipSet = ParseExtensionSet(SkipExtensions);
+            var archiveSet = ParseExtensionSet(ArchiveExtensions);
+            var conflicts = skipSet.Intersect(archiveSet, StringComparer.OrdinalIgnoreCase).OrderBy(e => e, StringComparer.OrdinalIgnoreCase).ToList();
+            if (conflicts.Count > 0)
+            {
+                ErrorText = $"Conflicting extensions found in both Skip and Archive lists: {string.Join(", ", conflicts.Select(e => $".{e}"))}. " +
+                            "Remove them from the Skip list or the Archive list to proceed.";
+                return;
+            }
         }
 
         int runId = System.Threading.Interlocked.Increment(ref _searchRunId);
@@ -517,8 +546,22 @@ public sealed partial class MainViewModel : ObservableObject
             var token = cts.Token;
             LogService.Instance.Info("Search", $"Starting search #{runId}: query='{Query}', dir='{Directory}', regex={UseRegex}, caseSensitive={CaseSensitive}, mode={SearchModeIndex}");
 
+            // Yield to the UI message pump periodically so the app stays responsive
+            // when the events channel is draining many buffered items synchronously.
+            // Without this, the await foreach completes synchronously for thousands of
+            // already-buffered items, starving the WinUI message pump and freezing the UI.
+            long yieldTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+            long yieldIntervalTicks = System.Diagnostics.Stopwatch.Frequency / 60; // ~16ms (one frame)
+
             await foreach (var evt in _search.SearchAsync(options, token).ConfigureAwait(true))
             {
+                long now = System.Diagnostics.Stopwatch.GetTimestamp();
+                if (now - yieldTimestamp >= yieldIntervalTicks)
+                {
+                    await Task.Delay(1, token).ConfigureAwait(true);
+                    yieldTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+                }
+
                 if (!IsCurrentSearch(runId, cts))
                 {
                     LogService.Instance.Info("Search", $"Ignoring stale search #{runId} event after a newer search started");
@@ -584,8 +627,15 @@ public sealed partial class MainViewModel : ObservableObject
                         UpdateSkipBreakdown(c.Summary.SkipReasons);
                         Truncated = c.Summary.Truncated;
                         Degraded = c.Summary.Degraded;
-                        StatusText = BuildCompletionStatus(c.Summary, completedElapsed);
+                        // Use the actual file-group count so the status bar matches
+                        // the clipboard export. Filename-only matches create UI
+                        // groups but aren't tracked by the engine's filesWithMatches
+                        // counter when content search is also active.
+                        var actualFileCount = Math.Max(c.Summary.FilesWithMatches, _resultCollection.AllGroups.Count);
+                        var displaySummary = c.Summary with { FilesWithMatches = actualFileCount };
+                        StatusText = BuildCompletionStatus(displaySummary, completedElapsed);
                         ApplySortAndFilter();
+                        ShowSearchCompleteToast(displaySummary, completedElapsed);
                         break;
                 }
             }
@@ -644,11 +694,22 @@ public sealed partial class MainViewModel : ObservableObject
     private void ResetStateForNewSearch()
     {
         _cts = null;
+
+        // Cancel pending metadata tasks first so fire-and-forget closures
+        // release their FileGroup references promptly.
+        _metadataCts.Cancel();
+        _metadataCts.Dispose();
+        _metadataCts = new CancellationTokenSource();
+
         _resultCollection.Clear();
         FileMetadataCache.Clear();
 
         _resultStore?.Dispose();
         _resultStore = new ResultStore();
+
+        // Force a gen-2 collection so the previous search's result graph
+        // is reclaimed before the new search starts allocating.
+        GC.Collect(2, GCCollectionMode.Forced, blocking: false);
 
         ErrorText = null;
         FallbackReason = null;
@@ -831,7 +892,7 @@ public sealed partial class MainViewModel : ObservableObject
         // Load metadata on a worker thread — the FileInfo syscall on the UI
         // dispatcher was a measurable stall on searches with thousands of
         // distinct files.
-        group.BeginLoadMetadata(action => _dispatcher.TryEnqueue(() => action()));
+        group.BeginLoadMetadata(action => _dispatcher.TryEnqueue(() => action()), _metadataCts.Token);
     }
 
     private void NotifyResultAvailabilityChanged()
@@ -939,7 +1000,8 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.EditorCommand = EditorCommand;
         _settings.PreviewModeIndex = PreviewModeIndex;
         _settings.PreviewWordWrap = PreviewWordWrap;
-        _settings.LogLevelIndex = LogLevelIndex;
+        _settings.LogLevelIndex = FileLogLevelIndex;
+        _settings.ConsoleLogLevelIndex = ConsoleLogLevelIndex;
         _settings.FileListerBackendIndex = FileListerBackendIndex;
         _settings.ParallelismIndex = ParallelismIndex;
         _settings.LineTruncationLength = LineTruncationLength;
@@ -1009,5 +1071,35 @@ public sealed partial class MainViewModel : ObservableObject
     private static int ResolveParallelism(int index)
     {
         return SearchOptions.ResolveContentSearchParallelism(index, Environment.ProcessorCount);
+    }
+
+    private static void ShowSearchCompleteToast(SearchSummary s, TimeSpan elapsed)
+    {
+        try
+        {
+            var title = s.Cancelled ? "Search Cancelled" : "Search Complete";
+            var body = $"{s.TotalMatches:N0} matches in {s.FilesWithMatches:N0} files";
+            if (s.FilesSkipped > 0)
+                body += $" — {s.FilesSkipped:N0} skipped";
+            body += $" ({elapsed.TotalSeconds:F1}s)";
+
+            var xml = $"""
+                <toast>
+                  <visual>
+                    <binding template="ToastGeneric">
+                      <text>{System.Security.SecurityElement.Escape(title)}</text>
+                      <text>{System.Security.SecurityElement.Escape(body)}</text>
+                    </binding>
+                  </visual>
+                </toast>
+                """;
+
+            var notification = new Microsoft.Windows.AppNotifications.AppNotification(xml);
+            Microsoft.Windows.AppNotifications.AppNotificationManager.Default.Show(notification);
+        }
+        catch
+        {
+            // Toast failures should never break the app.
+        }
     }
 }

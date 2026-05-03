@@ -27,6 +27,8 @@ public sealed class SearchResultCollection
 
     public void Clear()
     {
+        foreach (var group in _allGroups)
+            group.Cleanup();
         VisibleGroups.Clear();
         _allGroups.Clear();
         _index.Clear();
