@@ -9,7 +9,8 @@
 //!      transfers to the caller, which must release it via `qg_free_result`.
 
 use crate::scan::{
-    looks_binary, scan_bytes_ex, scan_bytes_with_matcher_ex, MatchRecord, ScanError, ScanOptions,
+    looks_binary, scan_bytes_ex, scan_bytes_streaming_ex,
+    scan_bytes_with_matcher_streaming_ex, MatchRecord, MatchView, ScanError, ScanOptions,
 };
 use memmap2::Mmap;
 use std::fs::File;
@@ -604,8 +605,10 @@ pub struct QgMatchView {
 /// Callback returns 0 to continue, non-zero to stop scanning early.
 pub type QgMatchCallback = unsafe extern "C" fn(ctx: *mut c_void, m: *const QgMatchView) -> c_int;
 
+/// Pack a slice-of-slices view (used by the streaming scan path) into the
+/// packed `[u32 len][bytes...]` wire format consumed by the .NET host.
 #[inline]
-fn pack_lines(lines: &[Vec<u8>], buf: &mut Vec<u8>) {
+fn pack_lines_borrowed(lines: &[&[u8]], buf: &mut Vec<u8>) {
     buf.clear();
     for l in lines {
         buf.extend_from_slice(&(l.len() as u32).to_le_bytes());
@@ -720,39 +723,39 @@ pub unsafe extern "C" fn qg_search_file_stream(
         }
     };
 
-    let scan_result = scan_bytes_ex(bytes, pattern, &scan_opts, cancel_check, |rec: MatchRecord| {
+    let scan_result = scan_bytes_streaming_ex(bytes, pattern, &scan_opts, cancel_check, |view: MatchView<'_>| {
         if let Some(flag) = cancel_atomic {
             if flag.load(Ordering::Relaxed) != 0 {
                 return false;
             }
         }
 
-        pack_lines(&rec.context_before, &mut before_buf);
-        pack_lines(&rec.context_after, &mut after_buf);
+        pack_lines_borrowed(view.context_before, &mut before_buf);
+        pack_lines_borrowed(view.context_after, &mut after_buf);
 
-        let view = QgMatchView {
-            line_number: rec.line_number,
-            match_start: rec.match_start,
-            match_len: rec.match_len,
-            line_ptr: rec.line.as_ptr(),
-            line_len: rec.line.len(),
+        let qg_view = QgMatchView {
+            line_number: view.line_number,
+            match_start: view.match_start,
+            match_len: view.match_len,
+            line_ptr: view.line.as_ptr(),
+            line_len: view.line.len(),
             ctx_before_ptr: if before_buf.is_empty() {
                 std::ptr::null()
             } else {
                 before_buf.as_ptr()
             },
             ctx_before_bytes: before_buf.len(),
-            ctx_before_count: rec.context_before.len() as c_uint,
+            ctx_before_count: view.context_before.len() as c_uint,
             ctx_after_ptr: if after_buf.is_empty() {
                 std::ptr::null()
             } else {
                 after_buf.as_ptr()
             },
             ctx_after_bytes: after_buf.len(),
-            ctx_after_count: rec.context_after.len() as c_uint,
+            ctx_after_count: view.context_after.len() as c_uint,
         };
 
-        let cb_result = on_match(on_match_ctx, &view as *const QgMatchView);
+        let cb_result = on_match(on_match_ctx, &qg_view as *const QgMatchView);
         cb_result == 0
     });
 
@@ -952,44 +955,44 @@ pub unsafe extern "C" fn qg_session_search_file_stream(
         }
     };
 
-    let scan_result = scan_bytes_with_matcher_ex(
+    let scan_result = scan_bytes_with_matcher_streaming_ex(
         bytes,
         &*sess.matcher,
         &sess.scan_opts,
         cancel_check,
-        |rec: MatchRecord| {
+        |view: MatchView<'_>| {
             if let Some(flag) = cancel_atomic {
                 if flag.load(Ordering::Relaxed) != 0 {
                     return false;
                 }
             }
 
-            pack_lines(&rec.context_before, &mut before_buf);
-            pack_lines(&rec.context_after, &mut after_buf);
+            pack_lines_borrowed(view.context_before, &mut before_buf);
+            pack_lines_borrowed(view.context_after, &mut after_buf);
 
-            let view = QgMatchView {
-                line_number: rec.line_number,
-                match_start: rec.match_start,
-                match_len: rec.match_len,
-                line_ptr: rec.line.as_ptr(),
-                line_len: rec.line.len(),
+            let qg_view = QgMatchView {
+                line_number: view.line_number,
+                match_start: view.match_start,
+                match_len: view.match_len,
+                line_ptr: view.line.as_ptr(),
+                line_len: view.line.len(),
                 ctx_before_ptr: if before_buf.is_empty() {
                     std::ptr::null()
                 } else {
                     before_buf.as_ptr()
                 },
                 ctx_before_bytes: before_buf.len(),
-                ctx_before_count: rec.context_before.len() as c_uint,
+                ctx_before_count: view.context_before.len() as c_uint,
                 ctx_after_ptr: if after_buf.is_empty() {
                     std::ptr::null()
                 } else {
                     after_buf.as_ptr()
                 },
                 ctx_after_bytes: after_buf.len(),
-                ctx_after_count: rec.context_after.len() as c_uint,
+                ctx_after_count: view.context_after.len() as c_uint,
             };
 
-            let cb_result = on_match(on_match_ctx, &view as *const QgMatchView);
+            let cb_result = on_match(on_match_ctx, &qg_view as *const QgMatchView);
             cb_result == 0
         },
     );
@@ -1293,35 +1296,35 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                         }
                     };
 
-                    let scan_result = scan_bytes_with_matcher_ex(
+                    let scan_result = scan_bytes_with_matcher_streaming_ex(
                         bytes,
                         &*sess.matcher,
                         &sess.scan_opts,
                         cancel_check,
-                        |rec: MatchRecord| {
-                            pack_lines(&rec.context_before, &mut before_buf);
-                            pack_lines(&rec.context_after, &mut after_buf);
+                        |view: MatchView<'_>| {
+                            pack_lines_borrowed(view.context_before, &mut before_buf);
+                            pack_lines_borrowed(view.context_after, &mut after_buf);
 
-                            let view = QgMatchView {
-                                line_number: rec.line_number,
-                                match_start: rec.match_start,
-                                match_len: rec.match_len,
-                                line_ptr: rec.line.as_ptr(),
-                                line_len: rec.line.len(),
+                            let qg_view = QgMatchView {
+                                line_number: view.line_number,
+                                match_start: view.match_start,
+                                match_len: view.match_len,
+                                line_ptr: view.line.as_ptr(),
+                                line_len: view.line.len(),
                                 ctx_before_ptr: if before_buf.is_empty() {
                                     std::ptr::null()
                                 } else {
                                     before_buf.as_ptr()
                                 },
                                 ctx_before_bytes: before_buf.len(),
-                                ctx_before_count: rec.context_before.len() as c_uint,
+                                ctx_before_count: view.context_before.len() as c_uint,
                                 ctx_after_ptr: if after_buf.is_empty() {
                                     std::ptr::null()
                                 } else {
                                     after_buf.as_ptr()
                                 },
                                 ctx_after_bytes: after_buf.len(),
-                                ctx_after_count: rec.context_after.len() as c_uint,
+                                ctx_after_count: view.context_after.len() as c_uint,
                             };
 
                             let cb_result = {
@@ -1329,7 +1332,7 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                                 on_match(
                                     ctx_wrapper.0,
                                     i as c_uint,
-                                    &view as *const QgMatchView,
+                                    &qg_view as *const QgMatchView,
                                 )
                             };
                             if cb_result != 0 {
@@ -1406,19 +1409,21 @@ mod tests {
         assert_eq!(qg_abi_version(), 4);
     }
 
-    // ---- pack_lines ----
+    // ---- pack_lines_borrowed ----
     #[test]
     fn pack_lines_empty() {
         let mut buf = Vec::new();
-        pack_lines(&[], &mut buf);
+        pack_lines_borrowed(&[], &mut buf);
         assert!(buf.is_empty());
     }
 
     #[test]
     fn pack_lines_multiple() {
-        let lines = vec![b"hello".to_vec(), b"world".to_vec()];
+        let a = b"hello".as_slice();
+        let b = b"world".as_slice();
+        let lines: [&[u8]; 2] = [a, b];
         let mut buf = Vec::new();
-        pack_lines(&lines, &mut buf);
+        pack_lines_borrowed(&lines, &mut buf);
         // Should contain: u32(5) + "hello" + u32(5) + "world"
         assert_eq!(buf.len(), 4 + 5 + 4 + 5);
         let len1 = u32::from_le_bytes(buf[0..4].try_into().unwrap());
@@ -1429,7 +1434,8 @@ mod tests {
     #[test]
     fn pack_lines_clears_previous_content() {
         let mut buf = vec![0xFFu8; 100];
-        pack_lines(&[b"x".to_vec()], &mut buf);
+        let x = b"x".as_slice();
+        pack_lines_borrowed(&[x], &mut buf);
         assert_eq!(buf.len(), 4 + 1);
     }
 

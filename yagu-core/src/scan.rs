@@ -17,6 +17,29 @@ pub struct MatchRecord {
     pub context_after: Vec<Vec<u8>>,
 }
 
+/// Borrowed match view used by the streaming scan API (`scan_bytes_..._streaming_ex`).
+///
+/// Unlike [`MatchRecord`], `MatchView` does NOT own its byte data — the
+/// slices borrow from buffers controlled by the scanner (the file's mmap'd
+/// bytes for the no-truncation fast path, or a reusable scratch buffer for
+/// truncated lines). Callers must copy any data they need to retain past the
+/// emit closure's return.
+///
+/// Designed to eliminate per-match `Vec<u8>` allocations on the hot streaming
+/// path (the dominant cost when scanning C:\ produces millions of matches).
+pub struct MatchView<'a> {
+    pub line_number: u64,
+    pub match_start: u32,
+    pub match_len: u32,
+    pub line: &'a [u8],
+    /// Context-before lines, oldest first. Borrowed from the scanner's
+    /// before-context ring buffer.
+    pub context_before: &'a [&'a [u8]],
+    /// Context-after lines, in line order. Borrowed from the pending record's
+    /// after-context buffer (only populated when `options.context_after > 0`).
+    pub context_after: &'a [&'a [u8]],
+}
+
 #[derive(Debug, Clone)]
 pub struct ScanOptions {
     pub case_sensitive: bool,
@@ -229,6 +252,233 @@ pub fn scan_bytes_with_matcher_ex(
     Ok(emitted)
 }
 
+// ---------------------------------------------------------------------------
+// Streaming variant: emits borrowed `MatchView`s instead of owned
+// `MatchRecord`s. Designed for the FFI streaming path which immediately
+// serializes each match and discards the data — there is no value in owning
+// per-match `Vec<u8>` allocations only to free them on the next iteration.
+// ---------------------------------------------------------------------------
+
+/// Internal pending match for the streaming scan path.
+///
+/// The before-context snapshot must be owned (the scanner's before-ring
+/// rotates as the loop advances). Same for the match line: we cannot keep a
+/// borrow into `bytes` here because future iterations may need to replace the
+/// line slice we'd be holding (Rust's borrow checker, not lifetime).
+struct PendingMatchOwned {
+    line_number: u64,
+    match_start: u32,
+    match_len: u32,
+    line: Vec<u8>,
+    context_before: Vec<Vec<u8>>,
+    context_after: Vec<Vec<u8>>,
+    after_remaining: usize,
+}
+
+/// Streaming scan that emits `MatchView<'_>` (borrowed slices) per match.
+///
+/// Allocation profile compared to [`scan_bytes_with_matcher_ex`]:
+///
+/// * **Match line**: borrowed from `bytes` directly when no truncation is
+///   needed (~all lines under 4 KiB). When truncation is required, written
+///   into a reusable scratch buffer — one allocation amortized across all
+///   matches, not per match.
+/// * **Context-before view**: built into a reusable `Vec<&[u8]>` of pointers
+///   per emit; the underlying truncated-line storage in the before-ring is
+///   the same as the owned-record path.
+/// * **Pending after-context**: allocates owned snapshots (unavoidable —
+///   the before-ring rotates and the match line must outlive future loop
+///   iterations). Only triggered when `options.context_after > 0`.
+///
+/// All other semantics (cancellation, max_results, skip_binary, regex/literal
+/// matching, zero-width-match handling) match `scan_bytes_with_matcher_ex`.
+pub fn scan_bytes_with_matcher_streaming_ex<F>(
+    bytes: &[u8],
+    matcher: &dyn LineMatcher,
+    options: &ScanOptions,
+    mut should_cancel: impl FnMut() -> bool,
+    mut emit: F,
+) -> Result<usize, ScanError>
+where
+    F: FnMut(MatchView<'_>) -> bool,
+{
+    if options.skip_binary && looks_binary(bytes) {
+        return Err(ScanError::BinarySkipped);
+    }
+
+    let mut emitted = 0usize;
+    let mut before: VecDeque<Vec<u8>> = VecDeque::with_capacity(options.context_before);
+    let mut pending: VecDeque<PendingMatchOwned> = VecDeque::new();
+
+    // Reusable byte scratch for the (rare) match-line truncation path.
+    // Declared once per scan call so we pay zero per-match allocations on
+    // the hot no-truncation path. We deliberately do NOT reuse a
+    // `Vec<&[u8]>` for context-before: the borrow-checker fixes its inner
+    // lifetime at construction, which would prevent any later mutation of
+    // `before`. Building a small local Vec per match (capacity <= ~10) is
+    // cheap and keeps the lifetime story clean.
+    let mut match_line_scratch: Vec<u8> = Vec::new();
+
+    for (line_number, line) in (1_u64..).zip(bytes.lines()) {
+        if should_cancel() {
+            return Ok(emitted);
+        }
+
+        // Fill in pending after-context with this line.
+        if !pending.is_empty() {
+            for entry in pending.iter_mut() {
+                if entry.after_remaining > 0 {
+                    entry
+                        .context_after
+                        .push(copy_context_line_for_record(line));
+                    entry.after_remaining -= 1;
+                }
+            }
+            // Flush completed pending records.
+            while let Some(front) = pending.front() {
+                if front.after_remaining != 0 {
+                    break;
+                }
+                let rec = pending.pop_front().unwrap();
+                if !emit_pending(&rec, &mut emit) {
+                    return Ok(emitted);
+                }
+                emitted += 1;
+                if options.max_results != 0 && emitted >= options.max_results {
+                    return Ok(emitted);
+                }
+            }
+        }
+
+        // Find every match in this line.
+        let mut search_from = 0usize;
+        while search_from <= line.len() {
+            match matcher.find(&line[search_from..]) {
+                None => break,
+                Some((start_rel, len)) => {
+                    let start = search_from + start_rel;
+                    if len == 0 {
+                        search_from = start + 1;
+                        continue;
+                    }
+
+                    if options.context_after == 0 {
+                        // Immediate-emit fast path: zero per-match heap
+                        // allocations on the no-truncation path (the line is
+                        // borrowed from `bytes`, the small `Vec<&[u8]>` for
+                        // before-context is stack-friendly when its capacity
+                        // is small — typical context_before is 0..5).
+                        let (display_line, display_start) = if line.len() <= MAX_EMITTED_LINE_BYTES
+                        {
+                            (line, start as u32)
+                        } else {
+                            // Reuse scratch instead of allocating a fresh Vec.
+                            match_line_scratch.clear();
+                            let adjusted =
+                                copy_match_line_into(&mut match_line_scratch, line, start, len);
+                            (match_line_scratch.as_slice(), adjusted)
+                        };
+
+                        let before_view: Vec<&[u8]> =
+                            before.iter().map(|v| v.as_slice()).collect();
+
+                        let view = MatchView {
+                            line_number,
+                            match_start: display_start,
+                            match_len: len as u32,
+                            line: display_line,
+                            context_before: &before_view,
+                            context_after: &[],
+                        };
+
+                        if !emit(view) {
+                            return Ok(emitted);
+                        }
+                        emitted += 1;
+                        if options.max_results != 0 && emitted >= options.max_results {
+                            return Ok(emitted);
+                        }
+                    } else {
+                        // Pending-after path: snapshot match line + before-ring.
+                        let (match_line, display_start) =
+                            copy_match_line_for_record(line, start, len);
+                        let context_before: Vec<Vec<u8>> = before.iter().cloned().collect();
+                        pending.push_back(PendingMatchOwned {
+                            line_number,
+                            match_start: display_start,
+                            match_len: len as u32,
+                            line: match_line,
+                            context_before,
+                            context_after: Vec::with_capacity(options.context_after),
+                            after_remaining: options.context_after,
+                        });
+                    }
+
+                    search_from = start + len;
+                }
+            }
+        }
+
+        // Update before-context ring buffer with the just-scanned line.
+        if options.context_before > 0 {
+            if before.len() == options.context_before {
+                before.pop_front();
+            }
+            before.push_back(copy_context_line_for_record(line));
+        }
+    }
+
+    // Flush any pending (after-context never completed because EOF).
+    while let Some(rec) = pending.pop_front() {
+        if !emit_pending(&rec, &mut emit) {
+            return Ok(emitted);
+        }
+        emitted += 1;
+        if options.max_results != 0 && emitted >= options.max_results {
+            return Ok(emitted);
+        }
+    }
+
+    Ok(emitted)
+}
+
+/// Build a borrowed view from an owned pending record and dispatch it.
+/// Allocates two small `Vec<&[u8]>` per call (cheap pointer Vecs); pending
+/// flush is the uncommon path (only when `options.context_after > 0`).
+#[inline]
+fn emit_pending<F>(rec: &PendingMatchOwned, emit: &mut F) -> bool
+where
+    F: FnMut(MatchView<'_>) -> bool,
+{
+    let before_view: Vec<&[u8]> = rec.context_before.iter().map(|v| v.as_slice()).collect();
+    let after_view: Vec<&[u8]> = rec.context_after.iter().map(|v| v.as_slice()).collect();
+
+    let view = MatchView {
+        line_number: rec.line_number,
+        match_start: rec.match_start,
+        match_len: rec.match_len,
+        line: &rec.line,
+        context_before: &before_view,
+        context_after: &after_view,
+    };
+    emit(view)
+}
+
+/// Like [`scan_bytes_with_matcher_streaming_ex`] but builds the matcher inline.
+pub fn scan_bytes_streaming_ex<F>(
+    bytes: &[u8],
+    pattern: &str,
+    options: &ScanOptions,
+    should_cancel: impl FnMut() -> bool,
+    emit: F,
+) -> Result<usize, ScanError>
+where
+    F: FnMut(MatchView<'_>) -> bool,
+{
+    let matcher = build_matcher(pattern, options)?;
+    scan_bytes_with_matcher_streaming_ex(bytes, &*matcher, options, should_cancel, emit)
+}
+
 #[inline]
 pub(crate) fn copy_context_line_for_record(line: &[u8]) -> Vec<u8> {
     if line.len() <= MAX_EMITTED_LINE_BYTES {
@@ -250,6 +500,27 @@ pub(crate) fn copy_match_line_for_record(line: &[u8], match_start: usize, match_
     if line.len() <= MAX_EMITTED_LINE_BYTES {
         return (line.to_vec(), match_start as u32);
     }
+    let mut out = Vec::new();
+    let adjusted = copy_match_line_into(&mut out, line, match_start, match_len);
+    (out, adjusted)
+}
+
+/// Truncating copy of `line` into `out` (cleared first), returning the
+/// adjusted match-start offset within the written bytes. Used by both the
+/// owned-record and streaming scan paths so the truncation logic stays in
+/// one place; the streaming path passes a reusable scratch buffer to
+/// eliminate per-match allocations on the (rare) truncation path.
+pub(crate) fn copy_match_line_into(
+    out: &mut Vec<u8>,
+    line: &[u8],
+    match_start: usize,
+    match_len: usize,
+) -> u32 {
+    out.clear();
+    if line.len() <= MAX_EMITTED_LINE_BYTES {
+        out.extend_from_slice(line);
+        return match_start as u32;
+    }
 
     let safe_start = match_start.min(line.len());
     let safe_len = match_len.min(line.len().saturating_sub(safe_start));
@@ -265,42 +536,30 @@ pub(crate) fn copy_match_line_for_record(line: &[u8], match_start: usize, match_
     start = snap_to_char_boundary_start(line, start);
     end = snap_to_char_boundary_end(line, end);
     if end <= start {
-        return (
-            copy_context_line_for_record(line),
-            match_start.min(MAX_EMITTED_LINE_BYTES) as u32,
-        );
+        // Fallback: emit the truncation-marker form via copy_context_line_for_record.
+        let ctx = copy_context_line_for_record(line);
+        out.extend_from_slice(&ctx);
+        return match_start.min(MAX_EMITTED_LINE_BYTES) as u32;
     }
 
     let has_prefix = start > 0;
     let has_suffix = end < line.len();
-    let mut output = Vec::with_capacity(
+    out.reserve(
         (end - start)
-            + if has_prefix {
-                TRUNCATION_MARKER.len()
-            } else {
-                0
-            }
-            + if has_suffix {
-                TRUNCATION_MARKER.len()
-            } else {
-                0
-            },
+            + if has_prefix { TRUNCATION_MARKER.len() } else { 0 }
+            + if has_suffix { TRUNCATION_MARKER.len() } else { 0 },
     );
     if has_prefix {
-        output.extend_from_slice(TRUNCATION_MARKER);
+        out.extend_from_slice(TRUNCATION_MARKER);
     }
-    output.extend_from_slice(&line[start..end]);
+    out.extend_from_slice(&line[start..end]);
     if has_suffix {
-        output.extend_from_slice(TRUNCATION_MARKER);
+        out.extend_from_slice(TRUNCATION_MARKER);
     }
 
     let adjusted = safe_start.saturating_sub(start)
-        + if has_prefix {
-            TRUNCATION_MARKER.len()
-        } else {
-            0
-        };
-    (output, adjusted.min(u32::MAX as usize) as u32)
+        + if has_prefix { TRUNCATION_MARKER.len() } else { 0 };
+    adjusted.min(u32::MAX as usize) as u32
 }
 
 fn snap_to_char_boundary_start(line: &[u8], mut index: usize) -> usize {
@@ -1490,5 +1749,153 @@ mod tests {
         let bytes = b"foo\nbar\nfoo\n";
         let n = scan_bytes_ex(bytes, "foo", &opts(), || false, |_| true).unwrap();
         assert_eq!(n, 2);
+    }
+
+    // ---- Streaming API tests ----
+
+    #[test]
+    fn streaming_emits_all_matches_borrowed() {
+        let bytes = b"foo bar foo baz\nbaz foo\n";
+        let mut hits: Vec<(u64, u32, Vec<u8>)> = Vec::new();
+        scan_bytes_streaming_ex(bytes, "foo", &opts(), || false, |v| {
+            hits.push((v.line_number, v.match_start, v.line.to_vec()));
+            true
+        })
+        .unwrap();
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0], (1, 0, b"foo bar foo baz".to_vec()));
+        assert_eq!(hits[1], (1, 8, b"foo bar foo baz".to_vec()));
+        assert_eq!(hits[2], (2, 4, b"baz foo".to_vec()));
+    }
+
+    #[test]
+    fn streaming_borrows_line_from_input_no_truncation() {
+        // For a short line, MatchView.line should point INTO `bytes` itself
+        // (no allocation, no copy).
+        let bytes = b"hello world\n";
+        let bytes_range = bytes.as_ptr_range();
+        let mut saw = false;
+        scan_bytes_streaming_ex(bytes, "world", &opts(), || false, |v| {
+            let p = v.line.as_ptr();
+            assert!(p >= bytes_range.start && p < bytes_range.end,
+                    "match line should borrow from input, not be a fresh alloc");
+            assert_eq!(v.line, b"hello world");
+            saw = true;
+            true
+        })
+        .unwrap();
+        assert!(saw);
+    }
+
+    #[test]
+    fn streaming_truncates_long_lines_into_scratch() {
+        // Build a 10 KiB line so MAX_EMITTED_LINE_BYTES (4096) kicks in.
+        let mut line = vec![b'.'; 10 * 1024];
+        line.extend_from_slice(b"NEEDLE");
+        line.extend_from_slice(&vec![b'.'; 4 * 1024]);
+        line.push(b'\n');
+        let mut emitted_len: usize = 0;
+        scan_bytes_streaming_ex(&line, "NEEDLE", &opts(), || false, |v| {
+            emitted_len = v.line.len();
+            // Truncated form should fit comfortably inside (4096 + 2x marker).
+            assert!(v.line.len() <= MAX_EMITTED_LINE_BYTES + 2 * TRUNCATION_MARKER.len());
+            assert!(v.line.windows(6).any(|w| w == b"NEEDLE"));
+            true
+        })
+        .unwrap();
+        assert!(emitted_len > 0);
+    }
+
+    #[test]
+    fn streaming_with_before_context() {
+        let bytes = b"a\nb\nc\nfoo\n";
+        let o = ScanOptions {
+            context_before: 2,
+            ..opts()
+        };
+        let mut got_before: Vec<Vec<u8>> = Vec::new();
+        scan_bytes_streaming_ex(bytes, "foo", &o, || false, |v| {
+            for ctx in v.context_before {
+                got_before.push(ctx.to_vec());
+            }
+            true
+        })
+        .unwrap();
+        assert_eq!(got_before, vec![b"b".to_vec(), b"c".to_vec()]);
+    }
+
+    #[test]
+    fn streaming_with_after_context_pending_path() {
+        let bytes = b"foo\na\nb\nc\n";
+        let o = ScanOptions {
+            context_after: 2,
+            ..opts()
+        };
+        let mut got_after: Vec<Vec<u8>> = Vec::new();
+        scan_bytes_streaming_ex(bytes, "foo", &o, || false, |v| {
+            for ctx in v.context_after {
+                got_after.push(ctx.to_vec());
+            }
+            true
+        })
+        .unwrap();
+        assert_eq!(got_after, vec![b"a".to_vec(), b"b".to_vec()]);
+    }
+
+    #[test]
+    fn streaming_max_results_caps_emission() {
+        let bytes = b"foo\nfoo\nfoo\nfoo\n";
+        let o = ScanOptions {
+            max_results: 2,
+            ..opts()
+        };
+        let mut count = 0;
+        scan_bytes_streaming_ex(bytes, "foo", &o, || false, |_| {
+            count += 1;
+            true
+        })
+        .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn streaming_callback_returning_false_stops_scan() {
+        let bytes = b"foo\nfoo\nfoo\n";
+        let mut count = 0;
+        scan_bytes_streaming_ex(bytes, "foo", &opts(), || false, |_| {
+            count += 1;
+            count < 1 // stop after first
+        })
+        .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn streaming_cancellation_stops_scan() {
+        let bytes = b"foo\nfoo\nfoo\n";
+        scan_bytes_streaming_ex(bytes, "foo", &opts(), || true, |_| true).unwrap();
+    }
+
+    #[test]
+    fn streaming_skip_binary_returns_error() {
+        let bytes = b"hello\x00world\n";
+        let result = scan_bytes_streaming_ex(bytes, "hello", &opts(), || false, |_| true);
+        assert!(matches!(result, Err(ScanError::BinarySkipped)));
+    }
+
+    #[test]
+    fn streaming_regex_match() {
+        let bytes = b"fn foo() {}\nfn bar() {}\n";
+        let o = ScanOptions {
+            use_regex: true,
+            ..opts()
+        };
+        let mut count = 0;
+        scan_bytes_streaming_ex(bytes, r"\bfn\s+\w+", &o, || false, |_| {
+            count += 1;
+            true
+        })
+        .unwrap();
+        assert_eq!(count, 2);
     }
 }
