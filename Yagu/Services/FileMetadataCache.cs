@@ -4,7 +4,7 @@ namespace Yagu.Services;
 
 internal readonly record struct FileMetadata(long Length, DateTime LastModified);
 
-internal readonly record struct FileSearchOutcome(int MatchCount, long BytesScanned);
+internal readonly record struct FileSearchOutcome(int MatchCount, long BytesScanned, int EntriesScanned = 0);
 
 internal static class FileMetadataCache
 {

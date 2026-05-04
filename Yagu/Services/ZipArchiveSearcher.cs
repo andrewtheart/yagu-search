@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Channels;
@@ -6,6 +7,10 @@ using Yagu.Helpers;
 using Yagu.Models;
 
 namespace Yagu.Services;
+
+// Concurrency gate for archive entry decompression — limits simultaneous
+// MemoryStream allocations to prevent memory spikes on large archives.
+// Mirrors ContentSearcher.s_nativeGate for regular file scanning.
 
 /// <summary>
 /// Searches inside ZIP archives for text content. Supports nested zips
@@ -27,6 +32,26 @@ public static class ZipArchiveSearcher
 
     /// <summary>Maximum size of a single ZIP entry that will be searched (64 MB).</summary>
     public const long MaxEntrySize = 64L * 1024 * 1024;
+
+    /// <summary>
+    /// Concurrency gate for entry decompression — limits simultaneous MemoryStream
+    /// allocations across all archive searches to prevent memory spikes.
+    /// </summary>
+    private static readonly SemaphoreSlim s_entryGate = new(
+        Math.Min(32, Environment.ProcessorCount * 2),
+        Math.Min(32, Environment.ProcessorCount * 2));
+
+    /// <summary>
+    /// Eagerly loads System.IO.Compression and JITs the hot search path
+    /// on a background thread so the first archive hit doesn't pay the
+    /// ~20 ms assembly-load + JIT cost.
+    /// </summary>
+    public static void WarmUp()
+    {
+        // Touch ZipArchive to force assembly load; the JIT will also
+        // compile the static constructor and any referenced methods.
+        RuntimeHelpers.RunClassConstructor(typeof(ZipArchive).TypeHandle);
+    }
 
     /// <summary>
     /// Returns true if <paramref name="filePath"/> contains the archive separator,
@@ -73,6 +98,20 @@ public static class ZipArchiveSearcher
     }
 
     /// <summary>
+    /// Returns true if the file has an extension present in the configured
+    /// archive extensions set. This is an I/O-free alternative to
+    /// <see cref="IsZipByHeader(string)"/> for use in hot loops where
+    /// opening every file is prohibitive.
+    /// </summary>
+    public static bool HasZipExtension(string filePath, IReadOnlySet<string> archiveExtensions)
+    {
+        var ext = Path.GetExtension(filePath.AsSpan());
+        if (ext.Length <= 1) return false;
+        // archiveExtensions stores extensions without the dot (e.g. "zip", "jar")
+        return archiveExtensions.Contains(ext[1..].ToString());
+    }
+
+    /// <summary>
     /// Detects whether a file is a ZIP archive by reading the first 4 bytes.
     /// </summary>
     public static bool IsZipByHeader(string filePath)
@@ -106,9 +145,9 @@ public static class ZipArchiveSearcher
 
     /// <summary>
     /// Search all text entries inside a ZIP archive for matches. Writes results to the channel.
-    /// Returns the total number of matches found across all entries.
+    /// Returns the total number of matches and entries scanned across all entries.
     /// </summary>
-    public static async Task<int> SearchArchiveAsync(
+    public static async Task<(int MatchCount, int EntriesScanned)> SearchArchiveAsync(
         string archivePath,
         Regex? regex,
         string? literal,
@@ -118,14 +157,14 @@ public static class ZipArchiveSearcher
         CancellationToken cancellationToken,
         int nestingDepth = 0)
     {
-        if (nestingDepth > MaxNestingDepth) return 0;
+        if (nestingDepth > MaxNestingDepth) return (0, 0);
 
-        int totalMatches = 0;
+        (int matchCount, int entriesScanned) = (0, 0);
 
         try
         {
             using var fs = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan | FileOptions.Asynchronous);
-            totalMatches = await SearchArchiveStreamAsync(
+            (matchCount, entriesScanned) = await SearchArchiveStreamAsync(
                 fs, archivePath, regex, literal, literalComparison, options, writer, cancellationToken, nestingDepth).ConfigureAwait(false);
         }
         catch (InvalidDataException ex)
@@ -137,13 +176,13 @@ public static class ZipArchiveSearcher
             LogService.Instance.Verbose("ZipArchiveSearcher", $"Error searching archive: {archivePath}", ex);
         }
 
-        return totalMatches;
+        return (matchCount, entriesScanned);
     }
 
     /// <summary>
     /// Search entries from a ZIP archive stream. Used for both top-level and nested archives.
     /// </summary>
-    private static async Task<int> SearchArchiveStreamAsync(
+    internal static async Task<(int MatchCount, int EntriesScanned)> SearchArchiveStreamAsync(
         Stream archiveStream,
         string archiveDisplayPath,
         Regex? regex,
@@ -155,6 +194,7 @@ public static class ZipArchiveSearcher
         int nestingDepth)
     {
         int totalMatches = 0;
+        int entriesScanned = 0;
 
         ZipArchive archive;
         try
@@ -163,72 +203,27 @@ public static class ZipArchiveSearcher
         }
         catch (InvalidDataException)
         {
-            return 0; // Not a valid zip
+            return (0, 0); // Not a valid zip
         }
+
+        // Hoist GlobMatcher outside the loop — one allocation per archive instead of per entry.
+        GlobMatcher? globMatcher = (options.IncludeGlobs.Count > 0 || options.ExcludeGlobs.Count > 0)
+            ? new GlobMatcher(options.IncludeGlobs, options.ExcludeGlobs)
+            : null;
 
         using (archive)
         {
+            // Collect entries that pass zero-cost filters (no decompression needed).
+            var candidates = new List<ZipArchiveEntry>();
             foreach (var entry in archive.Entries)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
                 // Skip directories
                 if (string.IsNullOrEmpty(entry.Name)) continue;
 
-                // Skip entries that are too large
+                // Skip entries that are too large (metadata-only check, no I/O)
                 if (entry.Length > MaxEntrySize) continue;
 
-                // Apply glob filtering on the entry name
-                if (options.IncludeGlobs.Count > 0 || options.ExcludeGlobs.Count > 0)
-                {
-                    var globMatcher = new GlobMatcher(options.IncludeGlobs, options.ExcludeGlobs);
-                    if (!globMatcher.Matches(entry.FullName))
-                        continue;
-                }
-
-                // Build the virtual path: archivePath?/entry/path
-                string virtualPath = $"{archiveDisplayPath}{ArchiveSeparator}/{entry.FullName}";
-
-                using var entryStream = entry.Open();
-
-                // Read the entry into a MemoryStream so we can peek and potentially re-read
-                using var ms = new MemoryStream();
-                await entryStream.CopyToAsync(ms, cancellationToken).ConfigureAwait(false);
-                ms.Position = 0;
-
-                // Check if this entry is itself a ZIP archive (nested)
-                if (nestingDepth < MaxNestingDepth && ms.Length >= 4)
-                {
-                    long savedPos = ms.Position;
-                    bool isNestedZip = IsZipByHeader(ms);
-                    ms.Position = savedPos;
-
-                    if (isNestedZip)
-                    {
-                        // Recurse into the nested archive
-                        string nestedArchivePath = $"{archiveDisplayPath}{ArchiveSeparator}/{entry.FullName}";
-                        int nestedMatches = await SearchArchiveStreamAsync(
-                            ms, nestedArchivePath, regex, literal, literalComparison,
-                            options, writer, cancellationToken, nestingDepth + 1).ConfigureAwait(false);
-                        totalMatches += nestedMatches;
-                        continue;
-                    }
-                }
-
-                ms.Position = 0;
-
-                // Binary detection — skip binary entries
-                if (options.SkipBinary)
-                {
-                    long savedPos = ms.Position;
-                    if (BinaryDetector.IsBinary(ms))
-                    {
-                        continue;
-                    }
-                    ms.Position = savedPos;
-                }
-
-                // Extension-based skip
+                // Extension-based skip (string check, no I/O)
                 if (options.SkipExtensions.Count > 0)
                 {
                     var ext = Path.GetExtension(entry.FullName);
@@ -236,19 +231,127 @@ public static class ZipArchiveSearcher
                         continue;
                 }
 
-                // Detect encoding and search
-                ms.Position = 0;
-                var encoding = EncodingDetector.DetectEncoding(ms);
-                ms.Position = 0;
-                using var reader = new StreamReader(ms, encoding, detectEncodingFromByteOrderMarks: true);
+                // Glob filtering (string check, no I/O)
+                if (globMatcher is not null && !globMatcher.Matches(entry.FullName))
+                    continue;
 
-                int matches = await SearchEntryLinesAsync(
-                    virtualPath, reader, regex, literal, literalComparison, options, writer, cancellationToken).ConfigureAwait(false);
-                totalMatches += matches;
+                candidates.Add(entry);
+            }
+
+            // Process entries in parallel, bounded by the concurrency gate.
+            // ZipArchive itself is not thread-safe for concurrent entry.Open()
+            // calls, so we must extract entries sequentially but can search
+            // the decompressed content in parallel.
+            var tasks = new List<Task<(int MatchCount, int EntriesScanned)>>(candidates.Count);
+            foreach (var entry in candidates)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                // Build the virtual path: archivePath?/entry/path
+                string virtualPath = $"{archiveDisplayPath}{ArchiveSeparator}/{entry.FullName}";
+
+                // ── Peek phase: read only the first 8 KB to detect binary/zip ──
+                using var entryStream = entry.Open();
+                var peekBuf = new byte[BinaryDetector.SampleBytes];
+                int peekRead = 0;
+                while (peekRead < peekBuf.Length)
+                {
+                    int n = await entryStream.ReadAsync(peekBuf.AsMemory(peekRead), cancellationToken).ConfigureAwait(false);
+                    if (n <= 0) break;
+                    peekRead += n;
+                }
+
+                if (peekRead == 0) continue;
+
+                // Binary detection on the peek buffer — skip before full decompression.
+                if (options.SkipBinary && BinaryDetector.IsBinary(peekBuf.AsSpan(0, peekRead)))
+                {
+                    // But still check for nested ZIP (binary zips should be recursed into).
+                    if (nestingDepth < MaxNestingDepth && peekRead >= 4
+                        && BinaryDetector.IsZipMagic(peekBuf.AsSpan(0, Math.Min(peekRead, 4))))
+                    {
+                        // Need full content for recursive archive search
+                    }
+                    else
+                    {
+                        continue;
+                    }
+                }
+
+                // Check for nested ZIP via the peek buffer (no extra read).
+                bool isNestedZip = nestingDepth < MaxNestingDepth && peekRead >= 4
+                    && BinaryDetector.IsZipMagic(peekBuf.AsSpan(0, Math.Min(peekRead, 4)));
+
+                // ── Full load phase (only reached for text entries or nested zips) ──
+                await s_entryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                MemoryStream ms;
+                try
+                {
+                    // Pre-allocate from the entry's known uncompressed size when available.
+                    ms = entry.Length > 0 ? new MemoryStream((int)Math.Min(entry.Length, MaxEntrySize)) : new MemoryStream();
+                    ms.Write(peekBuf, 0, peekRead);
+                    await entryStream.CopyToAsync(ms, cancellationToken).ConfigureAwait(false);
+                    ms.Position = 0;
+                }
+                catch
+                {
+                    s_entryGate.Release();
+                    throw;
+                }
+
+                // Release the decompression gate immediately — the MemoryStream is
+                // fully populated and the gate's purpose (limiting concurrent
+                // decompression I/O) is satisfied.  Holding it during search
+                // was the main throughput bottleneck on large archives.
+                s_entryGate.Release();
+
+                entriesScanned++;
+
+                if (isNestedZip)
+                {
+                    // Launch nested archive search as a task.
+                    string nestedArchivePath = virtualPath;
+                    tasks.Add(Task.Run(async () =>
+                    {
+                        using (ms)
+                        {
+                            return await SearchArchiveStreamAsync(
+                                ms, nestedArchivePath, regex, literal, literalComparison,
+                                options, writer, cancellationToken, nestingDepth + 1).ConfigureAwait(false);
+                        }
+                    }, cancellationToken));
+                    continue;
+                }
+
+                // Detect encoding and search — launch as parallel task.
+                tasks.Add(Task.Run(async () =>
+                {
+                    using (ms)
+                    {
+                        var encoding = EncodingDetector.DetectEncoding(ms);
+                        ms.Position = 0;
+                        using var reader = new StreamReader(ms, encoding, detectEncodingFromByteOrderMarks: true);
+
+                        int matches = await SearchEntryLinesAsync(
+                            virtualPath, reader, regex, literal, literalComparison, options, writer, cancellationToken).ConfigureAwait(false);
+                        return (matches, 0); // entries already counted above
+                    }
+                }, cancellationToken));
+            }
+
+            // Await all parallel entry searches.
+            if (tasks.Count > 0)
+            {
+                var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+                foreach (var (m, e) in results)
+                {
+                    totalMatches += m;
+                    entriesScanned += e; // aggregate nested archive entries
+                }
             }
         }
 
-        return totalMatches;
+        return (totalMatches, entriesScanned);
     }
 
     /// <summary>

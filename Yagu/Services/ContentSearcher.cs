@@ -119,41 +119,48 @@ public sealed class ContentSearcher
         if (options.MaxFileSizeBytes > 0 && fileLength > options.MaxFileSizeBytes) return new FileSearchOutcome(SkipTooLarge, 0);
 
         // Extension-based skip — no binary sniff, no content read.
-        // When SearchInsideArchives is enabled, don't skip files that are
-        // actually ZIP archives (detected by header), regardless of extension.
+        // When SearchInsideArchives is enabled, defer the skip decision to
+        // the ZIP header check below so archive files with skippable
+        // extensions (e.g. .jar, .war) are still searched.
+        bool hasSkippableExtension = false;
         if (options.SkipExtensions.Count > 0)
         {
             var ext = Path.GetExtension(filePath);
             if (ext.Length > 1 && options.SkipExtensions.Contains(ext.AsSpan(1).ToString()))
             {
-                // Allow through if archive search is on and the file has a ZIP header
-                if (!options.SearchInsideArchives || !ZipArchiveSearcher.IsZipByHeader(filePath))
+                if (!options.SearchInsideArchives)
                     return new FileSearchOutcome(SkipByExtension, 0);
+                hasSkippableExtension = true; // resolve after ZIP header check
             }
         }
 
-        // ZIP archive search: before the normal scan paths, peek the file header
-        // and redirect to the archive searcher if it's a ZIP file.
+        // ZIP archive search: open the file once and reuse the stream for
+        // both the header check and the archive searcher, eliminating the
+        // 2–3 redundant CreateFile round-trips the old code path incurred.
         if (options.SearchInsideArchives)
         {
             try
             {
-                using var peekFs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.Asynchronous);
+                using var archiveFs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan | FileOptions.Asynchronous);
                 var headerBuf = new byte[4];
                 int headerRead = 0;
                 while (headerRead < 4)
                 {
-                    int n = await peekFs.ReadAsync(headerBuf.AsMemory(headerRead), cancellationToken).ConfigureAwait(false);
+                    int n = await archiveFs.ReadAsync(headerBuf.AsMemory(headerRead), cancellationToken).ConfigureAwait(false);
                     if (n <= 0) break;
                     headerRead += n;
                 }
                 if (headerRead >= 4 && BinaryDetector.IsZipMagic(headerBuf[..headerRead]))
                 {
-                    int archiveMatches = await ZipArchiveSearcher.SearchArchiveAsync(
-                        filePath, regex, literal, literalComparison, options, writer, cancellationToken).ConfigureAwait(false);
-                    if (watched) FileWatchDiagnostics.Checkpoint(filePath, "EXIT-ZIP", totalSw!.ElapsedMilliseconds, $"produced={archiveMatches}");
-                    return new FileSearchOutcome(archiveMatches, archiveMatches >= 0 ? fileLength : 0);
+                    archiveFs.Position = 0; // rewind — ZipArchive needs the full stream from the start
+                    var archiveResult = await ZipArchiveSearcher.SearchArchiveStreamAsync(
+                        archiveFs, filePath, regex, literal, literalComparison, options, writer, cancellationToken, 0).ConfigureAwait(false);
+                    if (watched) FileWatchDiagnostics.Checkpoint(filePath, "EXIT-ZIP", totalSw!.ElapsedMilliseconds, $"produced={archiveResult.MatchCount} entries={archiveResult.EntriesScanned}");
+                    return new FileSearchOutcome(archiveResult.MatchCount, archiveResult.MatchCount >= 0 ? fileLength : 0, archiveResult.EntriesScanned);
                 }
+                // Not a ZIP — if the extension was skippable, skip now.
+                if (hasSkippableExtension)
+                    return new FileSearchOutcome(SkipByExtension, 0);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

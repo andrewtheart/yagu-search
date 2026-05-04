@@ -84,6 +84,14 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             if (Count == PageSize + 1 || (!addedToVisible && Count % HiddenNotificationInterval == 0))
                 NotifyMoreStateChanged();
         }
+        else if (e.Action == NotifyCollectionChangedAction.Remove && e.OldItems is not null)
+        {
+            foreach (SearchResult item in e.OldItems)
+                VisibleResults.Remove(item);
+            NotifyMoreStateChanged();
+            NotifySelectionChanged();
+            OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(MatchCount)));
+        }
         else if (e.Action == NotifyCollectionChangedAction.Reset)
         {
             VisibleResults.Clear();

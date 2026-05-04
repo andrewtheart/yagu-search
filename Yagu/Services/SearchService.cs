@@ -510,22 +510,27 @@ public sealed class SearchService
                                             zipFile, regex, literal, cmp, effectiveOptions,
                                             contentResults.Writer, cancellationToken, session: null).ConfigureAwait(false);
                                         int produced = outcome.MatchCount;
-                                        Interlocked.Increment(ref filesScanned);
+
+                                        // Count individual archive entries as files so the
+                                        // files/sec metric stays meaningful during archive scans.
+                                        // Fall back to 1 for non-archive files or errors.
+                                        int fileCount = Math.Max(1, outcome.EntriesScanned);
+                                        Interlocked.Add(ref filesScanned, fileCount);
+
                                         if (produced < 0)
                                         {
                                             Interlocked.Increment(ref filesSkipped);
                                         }
-                                        else if (produced > 0)
-                                        {
-                                            Interlocked.Increment(ref filesWithMatches);
-                                            Interlocked.Add(ref bytesScanned, outcome.BytesScanned);
-                                            int newTotal = Interlocked.Add(ref totalMatches, produced);
-                                            if (options.MaxResults > 0 && newTotal >= options.MaxResults)
-                                                Volatile.Write(ref truncated, 1);
-                                        }
                                         else
                                         {
-                                            Interlocked.Increment(ref filesScanned);
+                                            Interlocked.Add(ref bytesScanned, outcome.BytesScanned);
+                                            if (produced > 0)
+                                            {
+                                                Interlocked.Increment(ref filesWithMatches);
+                                                int newTotal = Interlocked.Add(ref totalMatches, produced);
+                                                if (options.MaxResults > 0 && newTotal >= options.MaxResults)
+                                                    Volatile.Write(ref truncated, 1);
+                                            }
                                         }
                                     }
                                     catch (OperationCanceledException) { }
@@ -573,16 +578,22 @@ public sealed class SearchService
                                     }
                                 }
 
+                                // Track in-flight ZIP tasks so they don't block native batching.
+                                var zipTasks = new List<Task>();
+
                                 while (Volatile.Read(ref truncated) == 0)
                                 {
                                     while (batch.Count < nativeBatchSize && pending.Reader.TryRead(out var bufferedFile))
                                     {
-                                        // Route ZIP archives to the managed searcher by
-                                        // peeking the file header (4 bytes). This detects
-                                        // zips regardless of extension (.docx, .jar, etc.).
-                                        if (options.SearchInsideArchives && ZipArchiveSearcher.IsZipByHeader(bufferedFile))
+                                        // Route ZIP archives to the managed searcher.
+                                        // Use extension-based check (no I/O) instead of opening
+                                        // every file for a 4-byte header peek — the old IsZipByHeader
+                                        // approach consumed 24% of CPU and doubled file opens.
+                                        // ContentSearcher still validates the ZIP header when it
+                                        // opens the file, so false positives are harmless.
+                                        if (options.SearchInsideArchives && ZipArchiveSearcher.HasZipExtension(bufferedFile, options.ArchiveExtensions))
                                         {
-                                            await ScanZipViaManagedAsync(bufferedFile).ConfigureAwait(false);
+                                            zipTasks.Add(ScanZipViaManagedAsync(bufferedFile));
                                         }
                                         else
                                         {
@@ -614,6 +625,13 @@ public sealed class SearchService
                                 if (batch.Count > 0 && Volatile.Read(ref truncated) == 0)
                                 {
                                     FlushNativeBatch();
+                                }
+
+                                // Wait for any in-flight ZIP searches to complete.
+                                if (zipTasks.Count > 0)
+                                {
+                                    try { await Task.WhenAll(zipTasks).ConfigureAwait(false); }
+                                    catch (OperationCanceledException) { }
                                 }
                             }
                             finally
@@ -775,11 +793,35 @@ public sealed class SearchService
                     }
                 }
 
-                await foreach (var r in contentResults.Reader.ReadAllAsync(cancellationToken))
+                // Drain the content channel, flushing partial batches after a
+                // short timeout so the UI sees results promptly even when matches
+                // arrive infrequently (e.g. a rare query across millions of files).
+                const int PartialFlushDelayMs = 250;
+                while (await contentResults.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
                 {
-                    (contentBatch ??= new List<SearchResult>(ContentBatchSize)).Add(r);
-                    if (contentBatch.Count >= ContentBatchSize)
+                    while (contentResults.Reader.TryRead(out var r))
+                    {
+                        (contentBatch ??= new List<SearchResult>(ContentBatchSize)).Add(r);
+                        if (contentBatch.Count >= ContentBatchSize)
+                            await FlushContentBatchAsync().ConfigureAwait(false);
+                    }
+
+                    // If we have a partial batch, wait briefly for more items before flushing.
+                    if (contentBatch is { Count: > 0 })
+                    {
+                        using var delayCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                        delayCts.CancelAfter(PartialFlushDelayMs);
+                        try
+                        {
+                            if (await contentResults.Reader.WaitToReadAsync(delayCts.Token).ConfigureAwait(false))
+                                continue; // More items available — loop back to drain them.
+                        }
+                        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                        {
+                            // Timeout expired, not a real cancellation — flush what we have.
+                        }
                         await FlushContentBatchAsync().ConfigureAwait(false);
+                    }
                 }
 
                 await FlushContentBatchAsync().ConfigureAwait(false);

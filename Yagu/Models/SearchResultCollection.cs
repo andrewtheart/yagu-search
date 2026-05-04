@@ -36,6 +36,19 @@ public sealed class SearchResultCollection
         _index.TrimExcess();
     }
 
+    /// <summary>Remove an entire file group and its results from the collection.</summary>
+    public void RemoveGroup(FileGroup group)
+    {
+        _index.Remove(group.FilePath);
+        _allGroups.Remove(group);
+        VisibleGroups.Remove(group);
+        group.Cleanup();
+    }
+
+    /// <summary>Look up the <see cref="FileGroup"/> for the given file path, or null if not found.</summary>
+    public FileGroup? FindGroup(string filePath) =>
+        _index.TryGetValue(filePath, out var group) ? group : null;
+
     public bool Add(
         SearchResult result,
         Action<FileGroup>? initializeNewGroup = null,

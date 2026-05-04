@@ -373,6 +373,13 @@ public sealed partial class MainWindow : Window
             e.Handled = true;
             await ViewModel.CancelAsync();
         }
+        // Down arrow opens the search history dropdown.
+        else if (e.Key == VirtualKey.Down && !QueryBox.IsSuggestionListOpen
+                 && ViewModel.SearchHistory.Count > 0)
+        {
+            RestoreQuerySuggestions();
+            QueryBox.IsSuggestionListOpen = true;
+        }
     }
 
     private void HideQuerySuggestions(AutoSuggestBox? box = null)
@@ -1049,6 +1056,8 @@ public sealed partial class MainWindow : Window
             await UpdateMultiSelectPreviewAsync();
         else if (_previewResult is not null)
             await ShowSingleFilePreviewAsync(_previewResult, fullFile: false);
+        else
+            ShowPreviewMessage("No matches remain for this file.");
     }
 
     private void OnPreviewEditorTextChanged(object sender, TextChangedEventArgs e)
@@ -1108,6 +1117,21 @@ public sealed partial class MainWindow : Window
     {
         if (_previewResult is null) return;
         await ShowFullFileEditorAsync(_previewResult);
+    }
+
+    private void OnClearPreview(object sender, RoutedEventArgs e)
+    {
+        _previewResult = null;
+        SetPreviewFileLabel(string.Empty);
+        ClosePreviewEditor();
+        ShowPreviewBlockSurface();
+        PreviewBlock.Blocks.Clear();
+        PreviewSectionsPanel.Children.Clear();
+        FullFileButton.IsEnabled = true;
+        PreviewToolbarContent.Visibility = Visibility.Collapsed;
+        _matchParagraphs.Clear();
+        _currentMatchIndex = -1;
+        HideMatchNavPanel();
     }
 
     private void OnShowInExplorer(object sender, RoutedEventArgs e)
@@ -1205,6 +1229,16 @@ public sealed partial class MainWindow : Window
     {
         if (sender is FrameworkElement { Tag: string path } && !string.IsNullOrWhiteSpace(path))
             SetClipboardText(path, "file group path");
+    }
+
+    private void OnFileHeaderContextMenuOpening(object sender, object e)
+    {
+        if (sender is MenuFlyout flyout)
+        {
+            int count = ResultsList.SelectedItems.Count;
+            if (flyout.Items.Count > 0 && flyout.Items[0] is MenuFlyoutItem previewItem)
+                previewItem.Text = $"Preview selected ({count})";
+        }
     }
 
     private void OnResultsContextMenuOpening(object sender, object e)
@@ -1546,45 +1580,61 @@ public sealed partial class MainWindow : Window
         foreach (var r in selected)
             ViewModel.HydrateResult(r);
 
+        // Group by file first so we know file count for the loading message.
+        var byFile = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in selected)
+        {
+            if (!byFile.TryGetValue(r.FilePath, out var list))
+            {
+                list = new List<SearchResult>();
+                byFile[r.FilePath] = list;
+            }
+            list.Add(r);
+        }
+
+        // Show loading indicator immediately for large previews.
+        if (byFile.Count > PreviewSectionPageSize)
+            ShowPreviewLoading($"Reading {byFile.Count:N0} files\u2026");
+
         PreviewToolbarContent.Visibility = Visibility.Visible;
         if (ViewModel.PreviewModeIndex == 1)
-            await ShowMultiHighlightPreviewAsync(selected, scrollTarget, gen, scrollToTop);
+            await ShowMultiHighlightPreviewAsync(selected, byFile, scrollTarget, gen, scrollToTop);
         else
-            await ShowConcatenatedPreviewAsync(selected, scrollTarget, gen, scrollToTop);
+            await ShowConcatenatedPreviewAsync(selected, byFile, scrollTarget, gen, scrollToTop);
     }
 
-    private async Task ShowConcatenatedPreviewAsync(List<SearchResult> selected, SearchResult? scrollTarget, int gen, bool scrollToTop)
+    private async Task ShowConcatenatedPreviewAsync(
+        List<SearchResult> selected,
+        Dictionary<string, List<SearchResult>> byFile,
+        SearchResult? scrollTarget, int gen, bool scrollToTop)
     {
         ShowPreviewSectionsSurface();
+        _matchParagraphs.Clear();
+        _currentMatchIndex = -1;
         int previewLines = ViewModel.PreviewContextLines;
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
 
         RichTextBlock? scrollBlock = null;
         Paragraph? scrollPara = null;
 
-        // Group by file to show file headers
-        var byFile = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var r in selected)
-        {
-            var key = r.FilePath;
-            if (!byFile.TryGetValue(key, out var list))
-            {
-                list = new List<SearchResult>();
-                byFile[key] = list;
-            }
-            list.Add(r);
-        }
-
         // Reorder so scrollTarget's file comes first (will appear at top)
-        var orderedFiles = OrderByFileFirst(byFile, scrollTarget?.FilePath);
+        var orderedFiles = OrderByFileFirst(byFile, scrollTarget?.FilePath).ToList();
 
-        foreach (var (filePath, results) in orderedFiles)
+        // Determine which files to render in this page.
+        int pageEnd = Math.Min(orderedFiles.Count, PreviewSectionPageSize);
+        var pageFiles = orderedFiles.GetRange(0, pageEnd);
+
+        // Batch-read page file contents off the UI thread.
+        var fileContents = await ReadAllFileContentsAsync(pageFiles);
+        if (_previewUpdateGen != gen) return;
+        HidePreviewLoading();
+
+        int fileIndex = 0;
+        foreach (var (filePath, results) in pageFiles)
         {
-            var section = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
+            var (section, _) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
 
-            string[]? allLines = null;
-            try { allLines = await ReadAllLinesWithEncodingAsync(filePath); } catch (Exception ex) { LogService.Instance.Verbose("Preview", $"Cannot read file for concatenated preview: {filePath}", ex); }
-            if (_previewUpdateGen != gen) return;
+            fileContents.TryGetValue(filePath, out string[]? allLines);
 
             foreach (var r in results)
             {
@@ -1592,7 +1642,6 @@ public sealed partial class MainWindow : Window
                 var sep = new Paragraph();
                 var label = $"\u00A0Line\u00A0{r.LineNumber}\u00A0";
                 var lineChar = '\u2500'; // ─ box-drawing horizontal
-                // Use short fixed dividers so the separator never wraps.
                 const int shortLeft = 6;
                 const int shortRight = 6;
                 var sepRun = new Run { Text = $"{new string(lineChar, shortLeft)}{label}{new string(lineChar, shortRight)}" };
@@ -1608,6 +1657,12 @@ public sealed partial class MainWindow : Window
                     var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
                     section.Blocks.Add(para);
 
+                    if (isMatchLine)
+                    {
+                        _sectionMatchNavs.TryGetValue(section, out var sn);
+                        AddMatchEntries(_matchParagraphs, sn, section, para, line, rx);
+                    }
+
                     if (scrollTarget is not null && isMatchLine
                         && r.LineNumber == scrollTarget.LineNumber
                         && string.Equals(r.FilePath, scrollTarget.FilePath, StringComparison.OrdinalIgnoreCase))
@@ -1616,6 +1671,13 @@ public sealed partial class MainWindow : Window
                         scrollPara = para;
                     }
                 }
+            }
+
+            // Yield to the UI thread periodically so the app stays responsive.
+            if (++fileIndex % PreviewYieldBatchSize == 0)
+            {
+                await Task.Delay(1).ConfigureAwait(true);
+                if (_previewUpdateGen != gen) return;
             }
         }
 
@@ -1626,13 +1688,23 @@ public sealed partial class MainWindow : Window
             selected.Count == 1 ? selected[0].FilePath : string.Join(Environment.NewLine, byFile.Keys));
         _previewResult = selected[0];
 
+        UpdateMatchNavPanel();
+        UpdateSectionMatchNavPanels();
+
         if (scrollToTop)
             PreviewScrollViewer.ChangeView(null, 0, null, disableAnimation: true);
         else if (scrollBlock is not null && scrollPara is not null)
             ScrollPreviewToLine(scrollBlock, scrollPara);
+
+        // Auto-load remaining files using the efficient off-tree batched approach.
+        if (pageEnd < orderedFiles.Count)
+            await AutoLoadRemainingSectionsAsync(orderedFiles, pageEnd, selected, gen);
     }
 
-    private async Task ShowMultiHighlightPreviewAsync(List<SearchResult> selected, SearchResult? scrollTarget, int gen, bool scrollToTop)
+    private async Task ShowMultiHighlightPreviewAsync(
+        List<SearchResult> selected,
+        Dictionary<string, List<SearchResult>> byFile,
+        SearchResult? scrollTarget, int gen, bool scrollToTop)
     {
         ShowPreviewSectionsSurface();
         _matchParagraphs.Clear();
@@ -1642,32 +1714,27 @@ public sealed partial class MainWindow : Window
         RichTextBlock? scrollBlock = null;
         Paragraph? scrollPara = null;
 
-        // Group by file
-        var byFile = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var r in selected)
-        {
-            var key = r.FilePath;
-            if (!byFile.TryGetValue(key, out var list))
-            {
-                list = new List<SearchResult>();
-                byFile[key] = list;
-            }
-            list.Add(r);
-        }
-
         // Reorder so scrollTarget's file comes first (will appear at top)
-        var orderedFiles = OrderByFileFirst(byFile, scrollTarget?.FilePath);
+        var orderedFiles = OrderByFileFirst(byFile, scrollTarget?.FilePath).ToList();
 
-        foreach (var (filePath, results) in orderedFiles)
+        // Determine which files to render in this page.
+        int pageEnd = Math.Min(orderedFiles.Count, PreviewSectionPageSize);
+        var pageFiles = orderedFiles.GetRange(0, pageEnd);
+
+        // Batch-read page file contents off the UI thread.
+        var fileContents = await ReadAllFileContentsAsync(pageFiles);
+        if (_previewUpdateGen != gen) return;
+        HidePreviewLoading();
+
+        int fileIndex = 0;
+        foreach (var (filePath, results) in pageFiles)
         {
-            var section = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
+            var (section, _) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
 
             // Collect all match line numbers in this file
             var matchLines = new HashSet<int>(results.Select(r => r.LineNumber));
 
-            string[]? allLines = null;
-            try { allLines = await ReadAllLinesWithEncodingAsync(filePath); } catch (Exception ex) { LogService.Instance.Verbose("Preview", $"Cannot read file for multi-highlight preview: {filePath}", ex); }
-            if (_previewUpdateGen != gen) return;
+            fileContents.TryGetValue(filePath, out string[]? allLines);
 
             if (allLines != null)
             {
@@ -1714,8 +1781,8 @@ public sealed partial class MainWindow : Window
                         section.Blocks.Add(para);
                         if (isMatchLine)
                         {
-                            _matchParagraphs.Add((section, para));
-                            if (_sectionMatchNavs.TryGetValue(section, out var sn)) sn.Matches.Add(para);
+                            _sectionMatchNavs.TryGetValue(section, out var sn);
+                            AddMatchEntries(_matchParagraphs, sn, section, para, allLines[i], rx);
                         }
 
                         if (scrollTarget is not null && isMatchLine && lineNum == scrollTarget.LineNumber
@@ -1740,8 +1807,8 @@ public sealed partial class MainWindow : Window
                         section.Blocks.Add(para);
                         if (isMatchLine)
                         {
-                            _matchParagraphs.Add((section, para));
-                            if (_sectionMatchNavs.TryGetValue(section, out var sn)) sn.Matches.Add(para);
+                            _sectionMatchNavs.TryGetValue(section, out var sn);
+                            AddMatchEntries(_matchParagraphs, sn, section, para, line, rx);
                         }
 
                         if (scrollTarget is not null && isMatchLine
@@ -1754,8 +1821,16 @@ public sealed partial class MainWindow : Window
                     }
                 }
             }
+
+            // Yield to the UI thread periodically so the app stays responsive.
+            if (++fileIndex % PreviewYieldBatchSize == 0)
+            {
+                await Task.Delay(1).ConfigureAwait(true);
+                if (_previewUpdateGen != gen) return;
+            }
         }
 
+        // Add "Show more" button if there are remaining files.
         SetPreviewFileLabel(
             selected.Count == 1
                 ? selected[0].FilePath
@@ -1774,6 +1849,10 @@ public sealed partial class MainWindow : Window
             PreviewScrollViewer.ChangeView(null, 0, null, disableAnimation: true);
         else if (scrollBlock is not null && scrollPara is not null)
             ScrollPreviewToLine(scrollBlock, scrollPara);
+
+        // Auto-load remaining files using the efficient off-tree batched approach.
+        if (pageEnd < orderedFiles.Count)
+            await AutoLoadRemainingSectionsAsync(orderedFiles, pageEnd, selected, gen);
     }
 
     private static IEnumerable<KeyValuePair<string, List<SearchResult>>> OrderByFileFirst(
@@ -1799,6 +1878,339 @@ public sealed partial class MainWindow : Window
     /// Read all lines using the same encoding detection as the search engine
     /// so that line numbers in the preview match the search results.
     /// </summary>
+
+    /// <summary>Number of file sections to build before yielding to the UI message pump.</summary>
+    private const int PreviewYieldBatchSize = 5;
+
+    /// <summary>Max file sections to render in one page. Remaining are loaded on demand via "Show more".</summary>
+    private const int PreviewSectionPageSize = 50;
+
+    /// <summary>
+    /// Batch-read all file contents off the UI thread so the per-file loop only does
+    /// XAML element construction (which must be on the UI thread) without interleaving I/O waits.
+    /// </summary>
+    private static async Task<Dictionary<string, string[]?>> ReadAllFileContentsAsync(
+        List<KeyValuePair<string, List<SearchResult>>> orderedFiles)
+    {
+        return await Task.Run(() =>
+        {
+            var result = new Dictionary<string, string[]?>(orderedFiles.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var (filePath, _) in orderedFiles)
+            {
+                if (result.ContainsKey(filePath)) continue;
+                try
+                {
+                    result[filePath] = ReadAllLinesWithEncodingSync(filePath);
+                }
+                catch
+                {
+                    result[filePath] = null;
+                }
+            }
+            return result;
+        }).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Automatically loads all remaining file sections using the efficient off-tree batched approach
+    /// (same code path as "Show all files"). Called after the first page is rendered inline.
+    /// </summary>
+    private async Task AutoLoadRemainingSectionsAsync(
+        List<KeyValuePair<string, List<SearchResult>>> orderedFiles,
+        int pageStart,
+        List<SearchResult> allSelected,
+        int gen)
+    {
+        // Create a placeholder panel that LoadMoreSectionsAsync will remove.
+        var placeholder = new StackPanel();
+        PreviewSectionsPanel.Children.Add(placeholder);
+        await LoadMoreSectionsAsync(placeholder, orderedFiles, pageStart, orderedFiles.Count, allSelected, gen);
+    }
+
+    private void AddShowMoreSectionsButton(
+        List<KeyValuePair<string, List<SearchResult>>> orderedFiles,
+        int nextIndex,
+        List<SearchResult> allSelected,
+        int gen)
+    {
+        int remaining = orderedFiles.Count - nextIndex;
+
+        var moreBtn = new Button { Content = $"Show {remaining:N0} more file(s)\u2026" };
+        var allBtn = new Button { Content = "Show all files" };
+
+        var panel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Spacing = 8,
+            Margin = new Thickness(0, 12, 0, 8),
+        };
+        panel.Children.Add(moreBtn);
+        panel.Children.Add(allBtn);
+
+        moreBtn.Click += async (_, _) => await LoadMoreSectionsAsync(panel, orderedFiles, nextIndex, nextIndex + PreviewSectionPageSize, allSelected, gen);
+        allBtn.Click += async (_, _) => await LoadMoreSectionsAsync(panel, orderedFiles, nextIndex, orderedFiles.Count, allSelected, gen);
+
+        PreviewSectionsPanel.Children.Add(panel);
+    }
+
+    private void ShowProgressOverlay(string message, int percent)
+    {
+        PreviewProgressText.Text = message;
+        PreviewProgressPercent.Text = $"{percent}%";
+        PreviewProgressRing.IsActive = true;
+        PreviewProgressOverlay.Visibility = Visibility.Visible;
+    }
+
+    private void UpdateProgressOverlay(int percent)
+    {
+        PreviewProgressPercent.Text = $"{percent}%";
+    }
+
+    private void HideProgressOverlay()
+    {
+        PreviewProgressRing.IsActive = false;
+        PreviewProgressOverlay.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>Max sections kept expanded during bulk "Show all" loads to reduce layout cost.</summary>
+    private const int BulkExpandLimit = 10;
+
+    private async Task LoadMoreSectionsAsync(
+        StackPanel buttonPanel,
+        List<KeyValuePair<string, List<SearchResult>>> orderedFiles,
+        int pageStart, int requestedEnd,
+        List<SearchResult> allSelected,
+        int gen)
+    {
+        if (_previewUpdateGen != gen) return;
+
+        // Remove the button panel.
+        PreviewSectionsPanel.Children.Remove(buttonPanel);
+
+        // When loading all remaining files, process in page-sized chunks
+        // with a longer yield between pages so the layout engine stays responsive.
+        bool loadingAll = requestedEnd - pageStart > PreviewSectionPageSize;
+        int cursor = pageStart;
+        int finalEnd = Math.Min(orderedFiles.Count, requestedEnd);
+        int totalToLoad = finalEnd - pageStart;
+        int totalSectionsAdded = 0;
+
+        // Show progress overlay for "Show all" operations.
+        if (loadingAll)
+            ShowProgressOverlay($"Loading {totalToLoad:N0} files\u2026", 0);
+
+        while (cursor < finalEnd)
+        {
+            int chunkEnd = Math.Min(finalEnd, cursor + PreviewSectionPageSize);
+            var pageFiles = orderedFiles.GetRange(cursor, chunkEnd - cursor);
+
+            var fileContents = await ReadAllFileContentsAsync(pageFiles);
+            if (_previewUpdateGen != gen) { HideProgressOverlay(); return; }
+
+            Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
+            bool isHighlight = ViewModel.PreviewModeIndex == 1;
+            int previewLines = ViewModel.PreviewContextLines;
+
+            // Build sections off-tree to avoid layout cycles, then add in small batches.
+            var pendingExpanders = new List<Expander>();
+            foreach (var (filePath, results) in pageFiles)
+            {
+                // Collapse sections beyond the first BulkExpandLimit during bulk loads.
+                bool expanded = !loadingAll || totalSectionsAdded < BulkExpandLimit;
+                var (section, expander) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results,
+                    isExpanded: expanded, addToPanel: false);
+                fileContents.TryGetValue(filePath, out string[]? allLines);
+
+                if (isHighlight)
+                    BuildHighlightSection(section, results, allLines, previewLines, rx);
+                else
+                    BuildConcatenatedSection(section, results, allLines, previewLines, rx);
+
+                pendingExpanders.Add(expander);
+                totalSectionsAdded++;
+            }
+
+            // Add built sections to the visual tree in small batches with yields.
+            for (int i = 0; i < pendingExpanders.Count; i++)
+            {
+                PreviewSectionsPanel.Children.Add(pendingExpanders[i]);
+
+                if ((i + 1) % PreviewYieldBatchSize == 0)
+                {
+                    int filesLoaded = (cursor - pageStart) + i + 1;
+                    if (loadingAll)
+                        UpdateProgressOverlay((int)((double)filesLoaded / totalToLoad * 100));
+
+                    await Task.Delay(1).ConfigureAwait(true);
+                    if (_previewUpdateGen != gen) { HideProgressOverlay(); return; }
+                }
+            }
+
+            cursor = chunkEnd;
+
+            // Update progress after completing each chunk.
+            if (loadingAll)
+                UpdateProgressOverlay((int)((double)(cursor - pageStart) / totalToLoad * 100));
+
+            // Longer yield between pages so layout can fully process the batch.
+            if (loadingAll && cursor < finalEnd)
+            {
+                await Task.Delay(50).ConfigureAwait(true);
+                if (_previewUpdateGen != gen) { HideProgressOverlay(); return; }
+            }
+        }
+
+        HideProgressOverlay();
+
+        // Add another "Show more" button if still more remain.
+        if (finalEnd < orderedFiles.Count)
+            AddShowMoreSectionsButton(orderedFiles, finalEnd, allSelected, gen);
+
+        // Update match count and file count to reflect all loaded files.
+        int loadedFiles = PreviewSectionsPanel.Children.OfType<Expander>().Count();
+        SetPreviewFileLabel(
+            $"{_matchParagraphs.Count:N0} selected matches across {loadedFiles:N0} file(s)",
+            string.Join(Environment.NewLine, orderedFiles.Take(finalEnd).Select(kv => kv.Key)));
+        UpdateMatchNavPanel();
+        UpdateSectionMatchNavPanels();
+    }
+
+    private void BuildConcatenatedSection(
+        RichTextBlock section, List<SearchResult> results,
+        string[]? allLines, int previewLines, Regex? rx)
+    {
+        foreach (var r in results)
+        {
+            var sep = new Paragraph();
+            var label = $"\u00A0Line\u00A0{r.LineNumber}\u00A0";
+            var sepRun = new Run { Text = $"{new string('\u2500', 6)}{label}{new string('\u2500', 6)}" };
+            sepRun.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 60, 140, 60));
+            sep.Inlines.Add(sepRun);
+            sep.Margin = new Thickness(0, 8, 0, 4);
+            section.Blocks.Add(sep);
+
+            var lines = GetPreviewLines(r, allLines, previewLines, fullFile: false);
+            foreach (var (line, lineNum) in lines)
+            {
+                bool isMatchLine = lineNum == r.LineNumber;
+                var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
+                section.Blocks.Add(para);
+                if (isMatchLine)
+                {
+                    _sectionMatchNavs.TryGetValue(section, out var sn);
+                    AddMatchEntries(_matchParagraphs, sn, section, para, line, rx);
+                }
+            }
+        }
+    }
+
+    private void BuildHighlightSection(
+        RichTextBlock section, List<SearchResult> results,
+        string[]? allLines, int previewLines, Regex? rx)
+    {
+        var matchLines = new HashSet<int>(results.Select(r => r.LineNumber));
+
+        if (allLines != null)
+        {
+            var ranges = new List<(int start, int end)>();
+            foreach (var lineNum in matchLines.OrderBy(n => n))
+            {
+                int s = Math.Max(0, lineNum - 1 - previewLines);
+                int e = Math.Min(allLines.Length - 1, lineNum - 1 + previewLines);
+                ranges.Add((s, e));
+            }
+            var merged = new List<(int start, int end)>();
+            foreach (var range in ranges.OrderBy(r => r.start))
+            {
+                if (merged.Count > 0 && range.start <= merged[^1].end + 1)
+                    merged[^1] = (merged[^1].start, Math.Max(merged[^1].end, range.end));
+                else
+                    merged.Add(range);
+            }
+            bool firstRange = true;
+            foreach (var (start, end) in merged)
+            {
+                if (!firstRange)
+                {
+                    var gap = new Paragraph();
+                    var gapRun = new Run { Text = "  \u22EE" };
+                    gapRun.Foreground = new SolidColorBrush(Microsoft.UI.Colors.DimGray);
+                    gap.Inlines.Add(gapRun);
+                    section.Blocks.Add(gap);
+                }
+                firstRange = false;
+                for (int i = start; i <= end; i++)
+                {
+                    int lineNum = i + 1;
+                    bool isMatchLine = matchLines.Contains(lineNum);
+                    var matchResult = results.FirstOrDefault(r => r.LineNumber == lineNum) ?? results[0];
+                    var para = MakePreviewParagraph(allLines[i], lineNum, isMatchLine, matchResult, rx);
+                    section.Blocks.Add(para);
+                    if (isMatchLine)
+                    {
+                        _sectionMatchNavs.TryGetValue(section, out var sn);
+                        AddMatchEntries(_matchParagraphs, sn, section, para, allLines[i], rx);
+                    }
+                }
+            }
+        }
+        else
+        {
+            foreach (var r in results)
+            {
+                var lines = GetPreviewLines(r, null, previewLines, fullFile: false);
+                foreach (var (line, lineNum) in lines)
+                {
+                    bool isMatchLine = lineNum == r.LineNumber;
+                    var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
+                    section.Blocks.Add(para);
+                    if (isMatchLine)
+                    {
+                        _sectionMatchNavs.TryGetValue(section, out var sn);
+                        AddMatchEntries(_matchParagraphs, sn, section, para, line, rx);
+                    }
+                }
+            }
+        }
+    }
+
+    private static string[] ReadAllLinesWithEncodingSync(string filePath)
+    {
+        using var fs = new FileStream(
+            filePath, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            bufferSize: 64 * 1024,
+            FileOptions.SequentialScan);
+        var encoding = Helpers.EncodingDetector.DetectEncoding(fs);
+        if (encoding is System.Text.UTF8Encoding)
+            encoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
+        fs.Position = 0;
+        using var reader = new StreamReader(fs, encoding, detectEncodingFromByteOrderMarks: true);
+        var content = reader.ReadToEnd();
+
+        if (content.Length == 0)
+            return Array.Empty<string>();
+
+        var lines = new List<string>();
+        int start = 0;
+        for (int i = 0; i < content.Length; i++)
+        {
+            if (content[i] == '\n')
+            {
+                int end = (i > start && content[i - 1] == '\r') ? i - 1 : i;
+                lines.Add(content[start..end]);
+                start = i + 1;
+            }
+        }
+        if (start < content.Length)
+        {
+            int end = content[content.Length - 1] == '\r' ? content.Length - 1 : content.Length;
+            lines.Add(content[start..end]);
+        }
+        return lines.ToArray();
+    }
+
     /// <summary>
     /// Reads all lines from a file, splitting only on <c>\n</c> (stripping optional
     /// trailing <c>\r</c>).  This matches the Rust <c>bstr::ByteSlice::lines()</c>
@@ -1875,8 +2287,7 @@ public sealed partial class MainWindow : Window
             section.Blocks.Add(para);
             if (isMatch)
             {
-                _matchParagraphs.Add((section, para));
-                if (sn is not null) sn.Matches.Add(para);
+                AddMatchEntries(_matchParagraphs, sn, section, para, allLines[i], rx);
             }
         }
 
@@ -1960,6 +2371,7 @@ public sealed partial class MainWindow : Window
         PreviewSectionsPanel.Children.Clear();
         PreviewSectionsPanel.Visibility = Visibility.Collapsed;
         PreviewBlock.Visibility = Visibility.Visible;
+        HidePreviewLoading();
         SetPerFileToolbarVisibility(Visibility.Visible);
         HideMatchNavPanel();
         // Restore outer horizontal scroll for single-file block view.
@@ -1973,10 +2385,26 @@ public sealed partial class MainWindow : Window
         PreviewBlock.Visibility = Visibility.Collapsed;
         PreviewSectionsPanel.Children.Clear();
         PreviewSectionsPanel.Visibility = Visibility.Visible;
+        HidePreviewLoading();
         SetPerFileToolbarVisibility(Visibility.Collapsed);
         HideMatchNavPanel();
         // Sections have their own per-section horizontal scroll; outer viewer stays vertical-only.
         PreviewScrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+    }
+
+    private void ShowPreviewLoading(string message = "Loading preview\u2026")
+    {
+        PreviewMessagePanel.Visibility = Visibility.Collapsed;
+        PreviewSectionsPanel.Visibility = Visibility.Collapsed;
+        PreviewLoadingText.Text = message;
+        PreviewLoadingRing.IsActive = true;
+        PreviewLoadingPanel.Visibility = Visibility.Visible;
+    }
+
+    private void HidePreviewLoading()
+    {
+        PreviewLoadingRing.IsActive = false;
+        PreviewLoadingPanel.Visibility = Visibility.Collapsed;
     }
 
     private void SetPerFileToolbarVisibility(Visibility visibility)
@@ -1999,7 +2427,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private RichTextBlock AddPreviewSection(string filePath, string? detail = null, List<SearchResult>? results = null)
+    private (RichTextBlock block, Expander expander) AddPreviewSection(string filePath, string? detail = null, List<SearchResult>? results = null, bool isExpanded = true, bool addToPanel = true)
     {
         var block = new RichTextBlock
         {
@@ -2036,7 +2464,7 @@ public sealed partial class MainWindow : Window
         {
             Header = BuildPreviewSectionHeader(filePath, detail, block, results),
             Content = sectionScroller,
-            IsExpanded = true,
+            IsExpanded = isExpanded,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             Tag = block,
@@ -2047,8 +2475,9 @@ public sealed partial class MainWindow : Window
                 ActivateSectionForBlock(b);
         };
         ToolTipService.SetToolTip(expander, filePath);
-        PreviewSectionsPanel.Children.Add(expander);
-        return block;
+        if (addToPanel)
+            PreviewSectionsPanel.Children.Add(expander);
+        return (block, expander);
     }
 
     private FrameworkElement BuildPreviewSectionHeader(string filePath, string? detail, RichTextBlock? sectionBlock = null, List<SearchResult>? sectionResults = null)
@@ -2166,6 +2595,20 @@ public sealed partial class MainWindow : Window
                 await ShowFullFileEditorAsync(result);
         };
         buttonPanel.Children.Add(editorBtn);
+
+        // Open containing folder in Explorer
+        var explorerBtn = new Button
+        {
+            Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
+            Content = new FontIcon { Glyph = "\uED25", FontSize = 12 },
+        };
+        ToolTipService.SetToolTip(explorerBtn, "Open containing folder in Explorer");
+        explorerBtn.Click += (_, _) =>
+        {
+            try { Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = false }); }
+            catch (Exception ex) { LogService.Instance.Warning("MainWindow", $"Failed to show in Explorer: {path}", ex); }
+        };
+        buttonPanel.Children.Add(explorerBtn);
 
         // Dismiss button — remove this file section from the preview
         var dismissBtn = new Button
@@ -2302,7 +2745,7 @@ public sealed partial class MainWindow : Window
     private RichTextBlock AddFullFileSection(FullFilePreviewTarget target, long? byteLength)
     {
         var detail = byteLength.HasValue ? FormatBytes(byteLength.Value) : null;
-        return AddPreviewSection(target.FilePath, detail);
+        return AddPreviewSection(target.FilePath, detail).block;
     }
 
     private static void AddFullFileError(RichTextBlock section, string message)
@@ -2430,7 +2873,7 @@ public sealed partial class MainWindow : Window
             });
 
             string label = isArchive ? "viewing (read-only)" : "editing";
-            ViewModel.StatusText = $"Loaded {Path.GetFileName(result.FilePath)} ({FormatBytes(document.ByteLength)}) for {label}.";
+            ViewModel.StatusText = $"Loaded {Path.GetFileName(result.FilePath)} ({FormatBytes(document.ByteLength)}, {GetEncodingDisplayName(document.Encoding)}) for {label}.";
         }
         catch (OperationCanceledException)
         {
@@ -2607,10 +3050,36 @@ public sealed partial class MainWindow : Window
                 }
             }
 
-            await File.WriteAllTextAsync(_previewEditorPath, PreviewEditor.Text, _previewEditorEncoding).ConfigureAwait(true);
-            _previewEditorOriginalText = PreviewEditor.Text;
+            var textToSave = PreviewEditor.Text;
+            if (TextHasUnencodableCharacters(textToSave, _previewEditorEncoding))
+            {
+                var encDialog = new ContentDialog
+                {
+                    XamlRoot = ((FrameworkElement)Content).XamlRoot,
+                    Title = "Encoding Warning",
+                    Content = $"This file contains characters that cannot be represented in {GetEncodingDisplayName(_previewEditorEncoding)}. Save as UTF-8 instead?",
+                    PrimaryButtonText = "Save as UTF-8",
+                    CloseButtonText = "Cancel",
+                    DefaultButton = ContentDialogButton.Primary,
+                };
+                var encChoice = await encDialog.ShowAsync();
+                if (encChoice != ContentDialogResult.Primary) return false;
+                _previewEditorEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+            }
+
+            await File.WriteAllTextAsync(_previewEditorPath, textToSave, _previewEditorEncoding).ConfigureAwait(true);
+            _previewEditorOriginalText = textToSave;
             _previewEditorDirty = false;
             UpdatePreviewEditorButtons();
+
+            // Re-validate search results for this file against the saved content.
+            bool fileStillHasMatches = ViewModel.RevalidateFileResults(_previewEditorPath, PreviewEditor.Text);
+            if (!fileStillHasMatches && _previewResult?.FilePath is not null &&
+                string.Equals(_previewResult.FilePath, _previewEditorPath, StringComparison.OrdinalIgnoreCase))
+            {
+                _previewResult = null;
+            }
+
             ViewModel.StatusText = $"Saved {_previewEditorPath}.";
             return true;
         }
@@ -2787,6 +3256,35 @@ public sealed partial class MainWindow : Window
 
     private sealed class PreviewLoadException(string message) : Exception(message);
 
+    private static string GetEncodingDisplayName(Encoding enc)
+    {
+        var name = enc.WebName.ToUpperInvariant();
+        if (name == "UTF-8" && enc.GetPreamble().Length > 0) return "UTF-8 BOM";
+        if (name == "UTF-16") return "UTF-16 LE";
+        return name;
+    }
+
+    /// <summary>
+    /// Returns true if <paramref name="text"/> contains characters that cannot
+    /// be losslessly encoded with <paramref name="encoding"/> (e.g. lone surrogates).
+    /// </summary>
+    private static bool TextHasUnencodableCharacters(string text, Encoding encoding)
+    {
+        try
+        {
+            var strict = Encoding.GetEncoding(
+                encoding.CodePage,
+                EncoderFallback.ExceptionFallback,
+                DecoderFallback.ExceptionFallback);
+            strict.GetByteCount(text);
+            return false;
+        }
+        catch (EncoderFallbackException)
+        {
+            return true;
+        }
+    }
+
     private static Regex? BuildHighlightRegex(string query, bool caseSensitive, bool useRegex)
     {
         if (string.IsNullOrEmpty(query)) return null;
@@ -2805,6 +3303,31 @@ public sealed partial class MainWindow : Window
     }
 
     private static readonly SolidColorBrush s_matchGutterBrush = new(Microsoft.UI.Colors.LimeGreen);
+
+    /// <summary>
+    /// Returns the number of individual regex match occurrences on a line (minimum 1 for a match line).
+    /// </summary>
+    private static int CountRegexMatches(string? line, Regex? rx)
+    {
+        if (rx is null || string.IsNullOrEmpty(line)) return 1;
+        int count = rx.Matches(line).Count;
+        return count > 0 ? count : 1;
+    }
+
+    private static void AddMatchEntries(
+        List<(RichTextBlock block, Paragraph para)> matchParagraphs,
+        SectionMatchNav? sn,
+        RichTextBlock section, Paragraph para,
+        string? line, Regex? rx)
+    {
+        int count = CountRegexMatches(line, rx);
+        for (int i = 0; i < count; i++)
+        {
+            matchParagraphs.Add((section, para));
+            sn?.Matches.Add(para);
+        }
+    }
+
     private static readonly SolidColorBrush s_contextGutterBrush = new(Windows.UI.Color.FromArgb(255, 80, 80, 80));
     private static readonly SolidColorBrush s_gutterSepBrush = new(Windows.UI.Color.FromArgb(255, 60, 60, 60));
     private static readonly SolidColorBrush s_contextTextBrush = new(Windows.UI.Color.FromArgb(255, 110, 110, 110));
@@ -3473,26 +3996,36 @@ public sealed partial class MainWindow : Window
 
     private int _findIndex = -1; // last match start index in PreviewEditor.Text
 
-    private void OnCtrlFInvoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    private void OnRootGridPreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
-        args.Handled = true;
-        OpenFindBar(showReplace: false);
+        if (e.Key == Windows.System.VirtualKey.F && Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down))
+        {
+            e.Handled = true;
+            OpenFindBar(showReplace: false);
+        }
+        else if (e.Key == Windows.System.VirtualKey.H && Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down))
+        {
+            e.Handled = true;
+            OpenFindBar(showReplace: true);
+        }
     }
 
-    private void OnCtrlHInvoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    private void OnOpenFindReplaceBar(object sender, RoutedEventArgs e)
     {
-        args.Handled = true;
-        if (PreviewEditor.Visibility != Visibility.Visible) return; // replace only in editor
         OpenFindBar(showReplace: true);
     }
 
     private void OpenFindBar(bool showReplace)
     {
         FindBar.Visibility = Visibility.Visible;
+        bool inEditor = PreviewEditor.Visibility == Visibility.Visible;
         if (showReplace)
         {
             ReplaceRow.Visibility = Visibility.Visible;
             FindReplaceToggle.IsChecked = true;
+            ReplaceOneButton.IsEnabled = inEditor;
+            ReplaceAllButton.IsEnabled = inEditor;
+            ReplaceInFilesButton.IsEnabled = ViewModel.HasResults;
         }
 
         // Pre-fill with selected text from the editor
@@ -3525,12 +4058,11 @@ public sealed partial class MainWindow : Window
     {
         bool show = FindReplaceToggle.IsChecked == true;
         ReplaceRow.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-        // Replace only makes sense in the editor
-        if (show && PreviewEditor.Visibility != Visibility.Visible)
-        {
-            ReplaceRow.Visibility = Visibility.Collapsed;
-            FindReplaceToggle.IsChecked = false;
-        }
+        // Single-file replace buttons only make sense in the editor
+        bool inEditor = PreviewEditor.Visibility == Visibility.Visible;
+        ReplaceOneButton.IsEnabled = inEditor;
+        ReplaceAllButton.IsEnabled = inEditor;
+        ReplaceInFilesButton.IsEnabled = ViewModel.HasResults;
     }
 
     private void OnFindTextBoxKeyDown(object sender, KeyRoutedEventArgs e)
@@ -3724,5 +4256,147 @@ public sealed partial class MainWindow : Window
 
         _findIndex = -1;
         FindStatusText.Text = count > 0 ? $"Replaced {count}" : "No matches";
+    }
+
+    private async void OnReplaceInAllFiles(object sender, RoutedEventArgs e)
+    {
+        var needle = FindTextBox.Text;
+        if (string.IsNullOrEmpty(needle)) { FindStatusText.Text = "Enter text to find"; return; }
+
+        var replacement = ReplaceTextBox.Text;
+        var comparison = FindComparison;
+        var groups = ViewModel.ResultGroups.ToList();
+
+        if (groups.Count == 0) { FindStatusText.Text = "No result files"; return; }
+
+        ReplaceInFilesButton.IsEnabled = false;
+        FindStatusText.Text = "Scanning files…";
+
+        // Collect changes off the UI thread.
+        var changes = await Task.Run(() =>
+        {
+            var list = new List<(string Path, string Original, string Replaced, Encoding Encoding, int Count)>();
+            foreach (var group in groups)
+            {
+                if (group.IsArchiveEntry) continue;
+                var path = group.FilePath;
+                if (!File.Exists(path)) continue;
+                try
+                {
+                    Encoding encoding;
+                    string original;
+                    using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                               FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan))
+                    {
+                        encoding = Helpers.EncodingDetector.DetectEncoding(stream);
+                        if (encoding is System.Text.UTF8Encoding)
+                            encoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
+                        using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true);
+                        original = reader.ReadToEnd();
+                        encoding = reader.CurrentEncoding;
+                    }
+
+                    var sb = new System.Text.StringBuilder(original.Length);
+                    int replaceCount = 0;
+                    int pos = 0;
+                    while (true)
+                    {
+                        int idx = original.IndexOf(needle, pos, comparison);
+                        if (idx < 0) { sb.Append(original, pos, original.Length - pos); break; }
+                        sb.Append(original, pos, idx - pos);
+                        sb.Append(replacement);
+                        replaceCount++;
+                        pos = idx + needle.Length;
+                    }
+                    if (replaceCount > 0)
+                    {
+                        var replaced = sb.ToString();
+                        if (!TextHasUnencodableCharacters(replaced, encoding))
+                            list.Add((path, original, replaced, encoding, replaceCount));
+                    }
+                }
+                catch { /* skip unreadable files */ }
+            }
+            return list;
+        });
+
+        if (changes.Count == 0)
+        {
+            FindStatusText.Text = "No matches in any file";
+            ReplaceInFilesButton.IsEnabled = true;
+            return;
+        }
+
+        int totalReplacements = changes.Sum(c => c.Count);
+
+        // Confirm before writing.
+        var dialog = new ContentDialog
+        {
+            XamlRoot = ((FrameworkElement)Content).XamlRoot,
+            Title = "Replace in All Files",
+            Content = $"Replace {totalReplacements:N0} occurrence{(totalReplacements == 1 ? "" : "s")} across {changes.Count:N0} file{(changes.Count == 1 ? "" : "s")}?",
+            PrimaryButtonText = "Replace",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+
+        var choice = await dialog.ShowAsync();
+        if (choice != ContentDialogResult.Primary)
+        {
+            FindStatusText.Text = "Cancelled";
+            ReplaceInFilesButton.IsEnabled = true;
+            return;
+        }
+
+        // Write changes to disk.
+        int written = 0;
+        int errors = 0;
+        bool backupEnabled = ViewModel.BackupBeforeSave;
+        await Task.Run(() =>
+        {
+            foreach (var (path, _, replaced, encoding, _) in changes)
+            {
+                try
+                {
+                    if (backupEnabled)
+                    {
+                        var bakPath = path + ".bak";
+                        if (!File.Exists(bakPath))
+                            File.Copy(path, bakPath, overwrite: false);
+                        else
+                        {
+                            int suffix = 2;
+                            while (File.Exists($"{path}.bak-{suffix}")) suffix++;
+                            File.Copy(path, $"{path}.bak-{suffix}", overwrite: false);
+                        }
+                    }
+                    File.WriteAllText(path, replaced, encoding);
+                    Interlocked.Increment(ref written);
+                }
+                catch
+                {
+                    Interlocked.Increment(ref errors);
+                }
+            }
+        });
+
+        // Re-validate results for each changed file.
+        foreach (var (path, _, replaced, _, _) in changes)
+        {
+            ViewModel.RevalidateFileResults(path, replaced);
+        }
+
+        // Refresh preview if the currently shown file was affected.
+        if (_previewResult is { } current && changes.Any(c =>
+                string.Equals(c.Path, current.FilePath, StringComparison.OrdinalIgnoreCase)))
+        {
+            await ShowSingleFilePreviewAsync(current, fullFile: false);
+        }
+
+        var statusParts = new List<string> { $"Replaced in {written:N0} file{(written == 1 ? "" : "s")}" };
+        if (errors > 0) statusParts.Add($"{errors} error{(errors == 1 ? "" : "s")}");
+        FindStatusText.Text = string.Join(", ", statusParts);
+        ViewModel.StatusText = FindStatusText.Text;
+        ReplaceInFilesButton.IsEnabled = true;
     }
 }

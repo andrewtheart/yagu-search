@@ -32,6 +32,10 @@ public partial class App : Application
         LogService.Init((LogLevel)settings.LogLevelIndex, (LogLevel)settings.ConsoleLogLevelIndex);
         FileLister.Backend = (FileListerBackend)settings.FileListerBackendIndex;
         _ = ResultStore.CleanupOrphanedTempFilesAsync();
+
+        // Eagerly load System.IO.Compression on a background thread so the
+        // first archive search doesn't pay the ~20 ms assembly-load + JIT cost.
+        Task.Run(ZipArchiveSearcher.WarmUp);
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)

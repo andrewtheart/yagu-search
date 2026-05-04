@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
 using Yagu.Models;
+using Yagu.Helpers;
 using Yagu.Services;
 
 namespace Yagu.ViewModels;
@@ -1021,6 +1022,99 @@ public sealed partial class MainViewModel : ObservableObject
                 LogService.Instance.Warning("ViewModel", $"Could not hydrate result at offset {result.DiskOffset}: {ex.Message}");
             }
         }
+    }
+
+    /// <summary>
+    /// Re-scan a file's content against the current query and update the result list.
+    /// Removes matches that no longer exist and updates surviving match text/positions.
+    /// </summary>
+    /// <param name="filePath">The saved file path.</param>
+    /// <param name="savedText">The text that was written to disk.</param>
+    /// <returns>True if the file group still has matches; false if it was removed entirely.</returns>
+    public bool RevalidateFileResults(string filePath, string savedText)
+    {
+        var group = _resultCollection.FindGroup(filePath);
+        if (group is null) return false;
+
+        // Build the same matcher the search engine uses.
+        var query = Query;
+        if (string.IsNullOrEmpty(query)) return group.Count > 0;
+
+        System.Text.RegularExpressions.Regex? regex = null;
+        string? literal = null;
+        StringComparison literalComparison = StringComparison.OrdinalIgnoreCase;
+
+        if (UseRegex)
+        {
+            var regexOptions = System.Text.RegularExpressions.RegexOptions.Multiline;
+            if (!CaseSensitive) regexOptions |= System.Text.RegularExpressions.RegexOptions.IgnoreCase;
+            try { regex = new System.Text.RegularExpressions.Regex(query, regexOptions, TimeSpan.FromSeconds(5)); }
+            catch { return group.Count > 0; } // invalid regex — don't remove anything
+        }
+        else
+        {
+            literal = query;
+            literalComparison = CaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        }
+
+        // Split saved text into lines.
+        var lines = savedText.Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (lines[i].EndsWith('\r'))
+                lines[i] = lines[i][..^1];
+        }
+
+        int contextLineCount = ContextLines;
+
+        // Build new results from the saved content.
+        var newResults = new List<SearchResult>();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var matches = ContentSearcher.FindMatches(lines[i], regex, literal, literalComparison);
+            if (matches.Count == 0) continue;
+
+            // Build context before/after.
+            var before = new List<string>(contextLineCount);
+            for (int b = Math.Max(0, i - contextLineCount); b < i; b++)
+                before.Add(Helpers.LineTruncator.Truncate(lines[b]));
+            var after = new List<string>(contextLineCount);
+            for (int a = i + 1; a <= Math.Min(lines.Length - 1, i + contextLineCount); a++)
+                after.Add(Helpers.LineTruncator.Truncate(lines[a]));
+
+            foreach (var (start, length) in matches)
+            {
+                var displayLine = Helpers.LineTruncator.TruncateAroundMatch(lines[i], start, length);
+                newResults.Add(new SearchResult(
+                    FilePath: filePath,
+                    LineNumber: i + 1,
+                    MatchLine: displayLine.Text,
+                    MatchStartColumn: displayLine.MatchStart,
+                    MatchLength: length,
+                    ContextBefore: before,
+                    ContextAfter: after));
+            }
+        }
+
+        // Replace the group contents.
+        int removedCount = group.Count;
+        group.Clear();
+        if (newResults.Count > 0)
+        {
+            foreach (var r in newResults)
+                group.Add(r);
+        }
+        else
+        {
+            _resultCollection.RemoveGroup(group);
+        }
+
+        // Adjust MatchesFound to reflect the delta.
+        int delta = newResults.Count - removedCount;
+        MatchesFound = Math.Max(0, MatchesFound + delta);
+
+        NotifyResultAvailabilityChanged();
+        return newResults.Count > 0;
     }
 
     private static string BuildCompletionStatus(SearchSummary s, TimeSpan elapsed)
