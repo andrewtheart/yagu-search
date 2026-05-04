@@ -1799,6 +1799,14 @@ public sealed partial class MainWindow : Window
     /// Read all lines using the same encoding detection as the search engine
     /// so that line numbers in the preview match the search results.
     /// </summary>
+    /// <summary>
+    /// Reads all lines from a file, splitting only on <c>\n</c> (stripping optional
+    /// trailing <c>\r</c>).  This matches the Rust <c>bstr::ByteSlice::lines()</c>
+    /// behaviour used by the native search engine so that line numbers agree between
+    /// the searcher and the preview panel.  C#'s <c>StreamReader.ReadLine</c> also
+    /// splits on lone <c>\r</c>, which creates phantom extra lines in binary files
+    /// and causes the highlighted line to drift from the actual match.
+    /// </summary>
     private static async Task<string[]> ReadAllLinesWithEncodingAsync(string filePath)
     {
         await using var fs = new FileStream(
@@ -1811,10 +1819,29 @@ public sealed partial class MainWindow : Window
             encoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
         fs.Position = 0;
         using var reader = new StreamReader(fs, encoding, detectEncodingFromByteOrderMarks: true);
+        var content = await reader.ReadToEndAsync();
+
+        // Split on \n only (matching bstr::lines), strip trailing \r from each line.
+        if (content.Length == 0)
+            return Array.Empty<string>();
+
         var lines = new List<string>();
-        string? line;
-        while ((line = await reader.ReadLineAsync()) != null)
-            lines.Add(line);
+        int start = 0;
+        for (int i = 0; i < content.Length; i++)
+        {
+            if (content[i] == '\n')
+            {
+                int end = (i > start && content[i - 1] == '\r') ? i - 1 : i;
+                lines.Add(content[start..end]);
+                start = i + 1;
+            }
+        }
+        // Trailing content after last \n (bstr::lines includes it if non-empty).
+        if (start < content.Length)
+        {
+            int end = content[content.Length - 1] == '\r' ? content.Length - 1 : content.Length;
+            lines.Add(content[start..end]);
+        }
         return lines.ToArray();
     }
 

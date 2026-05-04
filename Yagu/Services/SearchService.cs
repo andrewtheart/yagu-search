@@ -160,6 +160,7 @@ public sealed class SearchService
             SingleWriter = false,
             FullMode = BoundedChannelFullMode.Wait,
         });
+        LogService.Instance.Warning("SearchService", $"Pipeline channels created: events=2048, pending=1024, contentResults={contentCap}");
 
         int filesScanned = 0;
         int filesSkipped = 0;
@@ -172,6 +173,10 @@ public sealed class SearchService
         int everDegraded = 0;        // 1 once memory-saving mode was used during this search
         int evictionInFlight = 0;    // 1 while an eviction event is being processed by the UI
         int pressureCycles = 0;      // total number of memory pressure events emitted
+        int nativeBatchesProcessed = 0; // total native batches flushed
+        int contentChannelDrops = 0;    // times TryWrite to contentResults failed (channel full)
+        long forwarderItemsForwarded = 0; // total results forwarded from contentResults → events
+        long forwarderWriteStallMs = 0;   // cumulative ms the forwarder was blocked writing to events channel
         string? fallbackReason = null;
         // Skip-reason tallies
         int skipBinary = 0, skipAccessDenied = 0, skipIOError = 0, skipTooLarge = 0;
@@ -257,6 +262,8 @@ public sealed class SearchService
 
             try
             {
+                int discoveryLogCounter = 0;
+                var discoveryLogTimer = Stopwatch.StartNew();
                 await foreach (var path in _fileLister.ListFilesAsync(options.Directory, includeExts, maxFiles: 0, cancellationToken).WithCancellation(cancellationToken))
                 {
                     if (Volatile.Read(ref truncated) != 0) break;
@@ -318,6 +325,14 @@ public sealed class SearchService
                     {
                         Interlocked.Increment(ref filesScanned);
                     }
+
+                    // Periodic discovery progress (every 100k files or 5s)
+                    discoveryLogCounter++;
+                    if (discoveryLogCounter % 100_000 == 0 || discoveryLogTimer.ElapsedMilliseconds >= 5000)
+                    {
+                        LogService.Instance.Warning("Discovery", $"Progress: {discoveryLogCounter:N0} files enumerated, {Volatile.Read(ref totalDiscovered):N0} discovered, elapsed={sw.Elapsed.TotalSeconds:F1}s");
+                        discoveryLogTimer.Restart();
+                    }
                 }
                 await FlushFilenameBatchAsync().ConfigureAwait(false);
                 Volatile.Write(ref skipDirectories, _fileLister.SkippedDirectories);
@@ -328,11 +343,11 @@ public sealed class SearchService
                 }
                 await events.Writer.WriteAsync(new SearchEvent.DiscoveryComplete(CurrentTotalFiles()), cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) { LogService.Instance.Info("SearchService", "Discovery cancelled"); }
+            catch (OperationCanceledException) { LogService.Instance.Warning("SearchService", "Discovery cancelled"); }
             catch (Exception ex) { LogService.Instance.Warning("SearchService", "Discovery failed", ex); }
             finally
             {
-                LogService.Instance.Info("SearchService", $"Discovery finished: {Volatile.Read(ref totalDiscovered):N0} files discovered, total={CurrentTotalFiles():N0}, {sw.Elapsed.TotalSeconds:F2}s elapsed");
+                LogService.Instance.Warning("SearchService", $"Discovery finished: {Volatile.Read(ref totalDiscovered):N0} files discovered, total={CurrentTotalFiles():N0}, {sw.Elapsed.TotalSeconds:F2}s elapsed");
                 pending.Writer.TryComplete();
             }
         }, CancellationToken.None);
@@ -403,7 +418,7 @@ public sealed class SearchService
                                     var memoryPressureEvent = new SearchEvent.MemoryPressure(
                                         (evictedCount) =>
                                         {
-                                            LogService.Instance.Info("SearchService",
+                                            LogService.Instance.Warning("SearchService",
                                                 $"Eviction acknowledged: freed {evictedCount}; continuing in memory-saving mode");
                                             _ = Task.Run(() => CollectForMemoryPressureIfDue(TimeSpan.FromSeconds(3)));
                                             Volatile.Write(ref evictionInFlight, 0);
@@ -434,7 +449,7 @@ public sealed class SearchService
                         {
                             Volatile.Write(ref degraded, 0);
                             string diagnostics = GetMemoryDiagnostics();
-                            LogService.Instance.Info("SearchService",
+                            LogService.Instance.Warning("SearchService",
                                 $"Memory pressure relieved: {diagnostics} - leaving memory-saving mode");
                             var relievedEvent = new SearchEvent.MemoryPressureRelieved(diagnostics);
                             if (!events.Writer.TryWrite(relievedEvent))
@@ -523,17 +538,39 @@ public sealed class SearchService
                                     }
                                 }
 
+                                var batchFlushSw = new Stopwatch();
+                                long lastBatchLogTicks = Stopwatch.GetTimestamp();
+                                const long BatchLogIntervalSec = 10;
+
                                 void FlushNativeBatch()
                                 {
                                     if (batch.Count == 0) return;
+                                    int batchNum = Interlocked.Increment(ref nativeBatchesProcessed);
+                                    int batchFileCount = batch.Count;
+                                    batchFlushSw.Restart();
                                     ProcessNativeBatch(batch, batchSession, degradedSession, parallelism, cancelPtr,
                                         options, contentResults.Writer,
                                         ref filesScanned, ref filesSkipped, ref filesWithMatches, ref totalMatches,
-                                        ref bytesScanned, ref truncated, ref degraded,
+                                        ref bytesScanned, ref truncated, ref degraded, ref contentChannelDrops,
                                         ref skipBinary, ref skipAccessDenied, ref skipIOError,
                                         ref skipTooLarge, ref skipNotFound, ref skipOther);
+                                    batchFlushSw.Stop();
                                     CheckMemoryPressure();
                                     batch.Clear();
+
+                                    // Periodic batch processing summary (every BatchLogIntervalSec seconds)
+                                    long now = Stopwatch.GetTimestamp();
+                                    if ((now - lastBatchLogTicks) >= Stopwatch.Frequency * BatchLogIntervalSec)
+                                    {
+                                        lastBatchLogTicks = now;
+                                        string memDiag = GetMemoryDiagnostics();
+                                        LogService.Instance.Warning("Workers",
+                                            $"Batch #{batchNum}: {batchFileCount} files in {batchFlushSw.ElapsedMilliseconds}ms | " +
+                                            $"scanned={Volatile.Read(ref filesScanned):N0}, matches={Volatile.Read(ref totalMatches):N0}, " +
+                                            $"withMatches={Volatile.Read(ref filesWithMatches):N0}, skipped={Volatile.Read(ref filesSkipped):N0}, " +
+                                            $"degraded={Volatile.Read(ref degraded) != 0}, channelDrops={Volatile.Read(ref contentChannelDrops)}, " +
+                                            $"elapsed={sw.Elapsed.TotalSeconds:F1}s, {memDiag}");
+                                    }
                                 }
 
                                 while (Volatile.Read(ref truncated) == 0)
@@ -673,11 +710,17 @@ public sealed class SearchService
 
                     workersDone:;
                 }
-                catch (OperationCanceledException) { LogService.Instance.Info("SearchService", "Content workers cancelled"); }
+                catch (OperationCanceledException) { LogService.Instance.Warning("SearchService", "Content workers cancelled"); }
                 catch (Exception ex) { LogService.Instance.Warning("SearchService", "Content workers failed", ex); }
                 finally
                 {
-                    LogService.Instance.Info("SearchService", $"Content workers finished: {filesScanned:N0} scanned, {filesWithMatches:N0} with matches, {totalMatches:N0} total matches, {Volatile.Read(ref pressureCycles)} pressure cycles, {sw.Elapsed.TotalSeconds:F2}s elapsed");
+                    string finishMemDiag = GetMemoryDiagnostics();
+                    LogService.Instance.Warning("SearchService",
+                        $"Content workers finished: scanned={filesScanned:N0}, withMatches={filesWithMatches:N0}, " +
+                        $"totalMatches={totalMatches:N0}, skipped={Volatile.Read(ref filesSkipped):N0}, " +
+                        $"batches={Volatile.Read(ref nativeBatchesProcessed)}, pressureCycles={Volatile.Read(ref pressureCycles)}, " +
+                        $"channelDrops={Volatile.Read(ref contentChannelDrops)}, " +
+                        $"elapsed={sw.Elapsed.TotalSeconds:F2}s, {finishMemDiag}");
                     contentResults.Writer.TryComplete();
                 }
             }, CancellationToken.None);
@@ -694,13 +737,42 @@ public sealed class SearchService
             {
                 const int ContentBatchSize = 256;
                 List<SearchResult>? contentBatch = null;
+                long fwdLogLastTicks = Stopwatch.GetTimestamp();
+                const long FwdLogIntervalSec = 10;
+                long fwdBatchesFlushed = 0;
+                var fwdWriteSw = new Stopwatch();
 
                 async ValueTask FlushContentBatchAsync()
                 {
                     if (contentBatch is null || contentBatch.Count == 0) return;
                     var batch = contentBatch;
                     contentBatch = null;
+                    fwdWriteSw.Restart();
                     await events.Writer.WriteAsync(new SearchEvent.MatchBatch(batch), cancellationToken).ConfigureAwait(false);
+                    fwdWriteSw.Stop();
+                    long stallMs = fwdWriteSw.ElapsedMilliseconds;
+                    Interlocked.Add(ref forwarderItemsForwarded, batch.Count);
+                    Interlocked.Add(ref forwarderWriteStallMs, stallMs);
+                    fwdBatchesFlushed++;
+
+                    // Log if the write took a long time (events channel full — UI not draining fast enough)
+                    if (stallMs > 500)
+                    {
+                        LogService.Instance.Warning("Forwarder",
+                            $"Backpressure: WriteAsync to events channel took {stallMs}ms " +
+                            $"(batch={batch.Count} items, totalForwarded={Volatile.Read(ref forwarderItemsForwarded):N0})");
+                    }
+
+                    // Periodic throughput log
+                    long now = Stopwatch.GetTimestamp();
+                    if ((now - fwdLogLastTicks) >= Stopwatch.Frequency * FwdLogIntervalSec)
+                    {
+                        fwdLogLastTicks = now;
+                        LogService.Instance.Warning("Forwarder",
+                            $"Throughput: forwarded={Volatile.Read(ref forwarderItemsForwarded):N0}, " +
+                            $"batchesFlushed={fwdBatchesFlushed}, cumulativeStallMs={Volatile.Read(ref forwarderWriteStallMs)}, " +
+                            $"elapsed={sw.Elapsed.TotalSeconds:F1}s");
+                    }
                 }
 
                 await foreach (var r in contentResults.Reader.ReadAllAsync(cancellationToken))
@@ -711,9 +783,13 @@ public sealed class SearchService
                 }
 
                 await FlushContentBatchAsync().ConfigureAwait(false);
+                LogService.Instance.Warning("Forwarder",
+                    $"Completed: forwarded={Volatile.Read(ref forwarderItemsForwarded):N0}, " +
+                    $"batchesFlushed={fwdBatchesFlushed}, cumulativeStallMs={Volatile.Read(ref forwarderWriteStallMs)}, " +
+                    $"elapsed={sw.Elapsed.TotalSeconds:F1}s");
             }
-            catch (OperationCanceledException) { }
-            catch (Exception ex) { LogService.Instance.Warning("SearchService", "Forwarder failed", ex); }
+            catch (OperationCanceledException) { LogService.Instance.Warning("Forwarder", "Cancelled"); }
+            catch (Exception ex) { LogService.Instance.Warning("Forwarder", "Failed", ex); }
         }, CancellationToken.None);
 
         var pipelineComplete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -764,7 +840,8 @@ public sealed class SearchService
         int totalSkipped = Volatile.Read(ref filesSkipped) + directorySkips + earlySkips;
         int nonAccessDeniedDirectorySkips = Math.Max(0, directorySkips - _fileLister.AccessDeniedDirectories);
         var skipReasons = new SkipBreakdown(skipBinary, accessDeniedSkips, skipIOError, skipTooLarge + earlyTooLargeSkips, skipNotFound, skipEncoding, skipOther, skipByExtension, nonAccessDeniedDirectorySkips, earlySkips, skipGlobExcluded);
-        LogService.Instance.Info("SearchService", $"Search complete: {totalMatches} matches in {filesWithMatches} files, {filesScanned} scanned, {totalSkipped} skipped ({skipReasons}), earlyFiltered={earlySkips}, degraded={wasDegraded}, truncated={wasTruncated}, {sw.Elapsed.TotalSeconds:F2}s");
+        LogService.Instance.Warning("SearchService", $"Search complete: {totalMatches} matches in {filesWithMatches} files, {filesScanned} scanned, {totalSkipped} skipped ({skipReasons}), earlyFiltered={earlySkips}, degraded={wasDegraded}, truncated={wasTruncated}, " +
+            $"batches={Volatile.Read(ref nativeBatchesProcessed)}, pressureCycles={pressureCycles}, forwarderItems={Volatile.Read(ref forwarderItemsForwarded):N0}, forwarderStallMs={Volatile.Read(ref forwarderWriteStallMs)}, channelDrops={Volatile.Read(ref contentChannelDrops)}, {sw.Elapsed.TotalSeconds:F2}s");
         yield return new SearchEvent.Completed(new SearchSummary(
             TotalFiles: totalFiles,
             FilesScanned: filesScanned,
@@ -1035,7 +1112,7 @@ public sealed class SearchService
         ChannelWriter<SearchResult> contentWriter,
         ref int filesScanned, ref int filesSkipped, ref int filesWithMatches,
         ref int totalMatches, ref long bytesScanned, ref int truncated,
-        ref int degraded,
+        ref int degraded, ref int contentChannelDrops,
         ref int skipBinary, ref int skipAccessDenied, ref int skipIOError,
         ref int skipTooLarge, ref int skipNotFound, ref int skipOther)
     {
@@ -1053,6 +1130,13 @@ public sealed class SearchService
             Interlocked.Add(ref totalMatches, sink.TotalEmitted);
         if (sink.Truncated)
             Volatile.Write(ref truncated, 1);
+        if (sink.ChannelFullDrops > 0)
+        {
+            Interlocked.Add(ref contentChannelDrops, sink.ChannelFullDrops);
+            LogService.Instance.Warning("Workers",
+                $"Content channel full: {sink.ChannelFullDrops} results could not be written (TryWrite failed). " +
+                $"Scanner stopped for this batch. Total drops={Volatile.Read(ref contentChannelDrops)}");
+        }
 
         // Post-batch: reconcile per-file stats.
         for (int i = 0; i < batch.Count; i++)
@@ -1109,6 +1193,7 @@ public sealed class SearchService
 
         public bool Truncated { get; private set; }
         public int TotalEmitted { get; private set; }
+        public int ChannelFullDrops { get; private set; }
         public Exception? CapturedException { get; set; }
         public string? ErrorMessage { get; set; }
 
@@ -1219,6 +1304,7 @@ public sealed class SearchService
                 {
                     if (!_writer.TryWrite(r))
                     {
+                        ChannelFullDrops += buf.Count; // approximate: remaining items in buffer
                         _stopped = true;
                         break;
                     }

@@ -588,7 +588,7 @@ public sealed partial class MainViewModel : ObservableObject
             cts = new CancellationTokenSource();
             _cts = cts;
             var token = cts.Token;
-            LogService.Instance.Info("Search", $"Starting search #{runId}: query='{Query}', dir='{Directory}', regex={UseRegex}, caseSensitive={CaseSensitive}, mode={SearchModeIndex}");
+            LogService.Instance.Warning("Search", $"Starting search #{runId}: query='{Query}', dir='{Directory}', regex={UseRegex}, caseSensitive={CaseSensitive}, mode={SearchModeIndex}");
 
             // Yield to the UI message pump periodically so the app stays responsive
             // when the events channel is draining many buffered items synchronously.
@@ -597,19 +597,40 @@ public sealed partial class MainViewModel : ObservableObject
             long yieldTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
             long yieldIntervalTicks = System.Diagnostics.Stopwatch.Frequency / 60; // ~16ms (one frame)
 
+            // UI consumer diagnostics
+            long uiEventsReceived = 0;
+            long uiMatchesReceived = 0;
+            long uiYieldCount = 0;
+            long uiLastLogTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            const long UiLogIntervalSec = 10;
+            var uiEventSw = new System.Diagnostics.Stopwatch();
+
             await foreach (var evt in _search.SearchAsync(options, token).ConfigureAwait(true))
             {
+                uiEventsReceived++;
                 long now = System.Diagnostics.Stopwatch.GetTimestamp();
                 if (now - yieldTimestamp >= yieldIntervalTicks)
                 {
+                    uiYieldCount++;
                     await Task.Delay(1, token).ConfigureAwait(true);
                     yieldTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
                 }
 
                 if (!IsCurrentSearch(runId, cts))
                 {
-                    LogService.Instance.Info("Search", $"Ignoring stale search #{runId} event after a newer search started");
+                    LogService.Instance.Warning("Search", $"Ignoring stale search #{runId} event after a newer search started");
                     break;
+                }
+
+                // Periodic UI consumer throughput log
+                now = System.Diagnostics.Stopwatch.GetTimestamp();
+                if ((now - uiLastLogTicks) >= System.Diagnostics.Stopwatch.Frequency * UiLogIntervalSec)
+                {
+                    uiLastLogTicks = now;
+                    LogService.Instance.Warning("UIConsumer",
+                        $"Events received={uiEventsReceived:N0}, matchesReceived={uiMatchesReceived:N0}, " +
+                        $"groups={_resultCollection.AllGroups.Count:N0}, yields={uiYieldCount:N0}, " +
+                        $"degraded={Degraded}, diskEvicted={_resultStore?.EvictedCount ?? 0:N0}");
                 }
 
                 switch (evt)
@@ -622,6 +643,7 @@ public sealed partial class MainViewModel : ObservableObject
                         StatusText = $"Searching {d.TotalFiles:N0} files…";
                         break;
                     case SearchEvent.Match m:
+                        uiMatchesReceived++;
                         AddMatch(m.Result);
                         break;
                     case SearchEvent.MatchBatch mb:
@@ -630,7 +652,16 @@ public sealed partial class MainViewModel : ObservableObject
                         // PropertyChanged churn from each ResultGroups.Add to the absolute
                         // minimum. The list itself was produced by the discovery thread —
                         // we own it now and don't need a copy.
+                        uiMatchesReceived += mb.Results.Count;
+                        uiEventSw.Restart();
                         AddMatches(mb.Results);
+                        uiEventSw.Stop();
+                        if (uiEventSw.ElapsedMilliseconds > 200)
+                        {
+                            LogService.Instance.Warning("UIConsumer",
+                                $"Slow AddMatches: {mb.Results.Count} results took {uiEventSw.ElapsedMilliseconds}ms " +
+                                $"(groups={_resultCollection.AllGroups.Count:N0})");
+                        }
                         break;
                     case SearchEvent.Progress p:
                         FilesScanned = p.Snapshot.FilesScanned;
@@ -647,11 +678,11 @@ public sealed partial class MainViewModel : ObservableObject
                         break;
                     case SearchEvent.MemoryPressure mp:
                         DegradedNoticeText = "Memory pressure — paging results to disk";
-                        LogService.Instance.Info("ViewModel", $"Memory pressure event received — starting eviction ({_resultCollection.AllGroups.Count:N0} groups, {MatchesFound:N0} matches)");
+                        LogService.Instance.Warning("ViewModel", $"Memory pressure event received — starting eviction ({_resultCollection.AllGroups.Count:N0} groups, {MatchesFound:N0} matches)");
                         var evictSw = System.Diagnostics.Stopwatch.StartNew();
                         int evictedCount = EvictAllResults();
                         evictSw.Stop();
-                        LogService.Instance.Info("ViewModel", $"Eviction + acknowledge complete in {evictSw.ElapsedMilliseconds}ms (freed {evictedCount:N0})");
+                        LogService.Instance.Warning("ViewModel", $"Eviction + acknowledge complete in {evictSw.ElapsedMilliseconds}ms (freed {evictedCount:N0})");
                         mp.AcknowledgeEviction(evictedCount);   // Signal workers they can resume
                         Degraded = true;
                         break;
@@ -659,9 +690,13 @@ public sealed partial class MainViewModel : ObservableObject
                         Degraded = false;
                         DegradedNoticeText = string.Empty;
                         UpdateFilesPerSecond();
-                        LogService.Instance.Info("ViewModel", $"Memory pressure relieved — leaving memory-saving mode ({relieved.Diagnostics})");
+                        LogService.Instance.Warning("ViewModel", $"Memory pressure relieved — leaving memory-saving mode ({relieved.Diagnostics})");
                         break;
                     case SearchEvent.Completed c:
+                        LogService.Instance.Warning("UIConsumer",
+                            $"Search #{runId} completed: uiEvents={uiEventsReceived:N0}, uiMatches={uiMatchesReceived:N0}, " +
+                            $"groups={_resultCollection.AllGroups.Count:N0}, yields={uiYieldCount:N0}, " +
+                            $"diskEvicted={_resultStore?.EvictedCount ?? 0:N0}");
                         var completedElapsed = StopSearchTimer();
                         FilesScanned = c.Summary.FilesScanned;
                         TotalFiles = c.Summary.TotalFiles;
