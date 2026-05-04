@@ -30,6 +30,7 @@ public sealed partial class MainWindow : Window
 {
     public MainViewModel ViewModel { get; }
     private bool _suppressPreviewUpdate;
+    private int _previewUpdateGen;
     private bool _autoScrollEnabled = false;
     private bool _querySuggestionsDetached;
     private DispatcherTimer? _autoScrollTimer;
@@ -822,12 +823,12 @@ public sealed partial class MainWindow : Window
     {
         public List<Paragraph> Matches { get; } = new();
         public int CurrentIndex { get; set; } = -1;
-        public TextBlock Label { get; set; } = null!;
-        public StackPanel Panel { get; set; } = null!;
         public ScrollViewer Scroller { get; set; } = null!;
         public RichTextBlock Block { get; set; } = null!;
     }
     private readonly Dictionary<RichTextBlock, SectionMatchNav> _sectionMatchNavs = new();
+    private SectionMatchNav? _activeSectionNav;
+    private static readonly SolidColorBrush s_activeExpanderBrush = new(Windows.UI.Color.FromArgb(25, 80, 180, 255));
 
     private void EnsurePreviewPanelVisible()
     {
@@ -847,10 +848,16 @@ public sealed partial class MainWindow : Window
             await UpdatePreviewAsync(g[0]);
     }
 
-    private void OnFileGroupExpanding(Expander sender, ExpanderExpandingEventArgs args)
+    private async void OnFileGroupExpanding(Expander sender, ExpanderExpandingEventArgs args)
     {
         if (sender.DataContext is FileGroup g)
+        {
+            _suppressPreviewUpdate = true;
             g.SelectAll();
+            var scrollTarget = g.Count > 0 ? g[0] : null;
+            try { await UpdateMultiSelectPreviewAsync(scrollTarget, scrollToTop: true); }
+            finally { _suppressPreviewUpdate = false; }
+        }
     }
 
     private void OnResultDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
@@ -1007,13 +1014,17 @@ public sealed partial class MainWindow : Window
         rtb.Blocks.Add(para);
     }
 
-    private void OnMatchCheckChanged(object sender, RoutedEventArgs e)
+    private async void OnMatchCheckChanged(object sender, RoutedEventArgs e)
     {
         if (_suppressPreviewUpdate) return;
         if (sender is FrameworkElement fe && fe.DataContext is SearchResult r)
         {
             var group = FindParentGroup(r);
             group?.NotifySelectionChanged();
+
+            var selected = ViewModel.GetAllSelectedResults();
+            if (selected.Count >= 2)
+                await UpdateMultiSelectPreviewAsync(scrollTarget: r, scrollToTop: true);
         }
     }
 
@@ -1023,8 +1034,9 @@ public sealed partial class MainWindow : Window
         {
             _suppressPreviewUpdate = true;
             g.SelectAll();
-            _suppressPreviewUpdate = false;
-            await UpdateMultiSelectPreviewAsync();
+            var scrollTarget = g.Count > 0 ? g[0] : null;
+            try { await UpdateMultiSelectPreviewAsync(scrollTarget, scrollToTop: true); }
+            finally { _suppressPreviewUpdate = false; }
         }
     }
 
@@ -1034,8 +1046,8 @@ public sealed partial class MainWindow : Window
         {
             _suppressPreviewUpdate = true;
             g.DeselectAll();
-            _suppressPreviewUpdate = false;
-            await UpdateMultiSelectPreviewAsync();
+            try { await UpdateMultiSelectPreviewAsync(); }
+            finally { _suppressPreviewUpdate = false; }
         }
     }
 
@@ -1342,8 +1354,10 @@ public sealed partial class MainWindow : Window
         await ShowSingleFilePreviewAsync(r, fullFile: false);
     }
 
-    private async Task UpdateMultiSelectPreviewAsync(SearchResult? scrollTarget = null)
+    private async Task UpdateMultiSelectPreviewAsync(SearchResult? scrollTarget = null, bool scrollToTop = false)
     {
+        int gen = ++_previewUpdateGen;
+
         if (!TryLeavePreviewEditorForPreviewChange()) return;
 
         EnsurePreviewPanelVisible();
@@ -1365,12 +1379,12 @@ public sealed partial class MainWindow : Window
 
         PreviewToolbarContent.Visibility = Visibility.Visible;
         if (ViewModel.PreviewModeIndex == 1)
-            await ShowMultiHighlightPreviewAsync(selected, scrollTarget);
+            await ShowMultiHighlightPreviewAsync(selected, scrollTarget, gen, scrollToTop);
         else
-            await ShowConcatenatedPreviewAsync(selected, scrollTarget);
+            await ShowConcatenatedPreviewAsync(selected, scrollTarget, gen, scrollToTop);
     }
 
-    private async Task ShowConcatenatedPreviewAsync(List<SearchResult> selected, SearchResult? scrollTarget)
+    private async Task ShowConcatenatedPreviewAsync(List<SearchResult> selected, SearchResult? scrollTarget, int gen, bool scrollToTop)
     {
         ShowPreviewSectionsSurface();
         int previewLines = ViewModel.PreviewContextLines;
@@ -1392,12 +1406,16 @@ public sealed partial class MainWindow : Window
             list.Add(r);
         }
 
-        foreach (var (filePath, results) in byFile)
+        // Reorder so scrollTarget's file comes first (will appear at top)
+        var orderedFiles = OrderByFileFirst(byFile, scrollTarget?.FilePath);
+
+        foreach (var (filePath, results) in orderedFiles)
         {
             var section = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
 
             string[]? allLines = null;
             try { allLines = await ReadAllLinesWithEncodingAsync(filePath); } catch (Exception ex) { LogService.Instance.Verbose("Preview", $"Cannot read file for concatenated preview: {filePath}", ex); }
+            if (_previewUpdateGen != gen) return;
 
             foreach (var r in results)
             {
@@ -1439,11 +1457,13 @@ public sealed partial class MainWindow : Window
             selected.Count == 1 ? selected[0].FilePath : string.Join(Environment.NewLine, byFile.Keys));
         _previewResult = selected[0];
 
-        if (scrollBlock is not null && scrollPara is not null)
+        if (scrollToTop)
+            PreviewScrollViewer.ChangeView(null, 0, null, disableAnimation: true);
+        else if (scrollBlock is not null && scrollPara is not null)
             ScrollPreviewToLine(scrollBlock, scrollPara);
     }
 
-    private async Task ShowMultiHighlightPreviewAsync(List<SearchResult> selected, SearchResult? scrollTarget)
+    private async Task ShowMultiHighlightPreviewAsync(List<SearchResult> selected, SearchResult? scrollTarget, int gen, bool scrollToTop)
     {
         ShowPreviewSectionsSurface();
         _matchParagraphs.Clear();
@@ -1466,7 +1486,10 @@ public sealed partial class MainWindow : Window
             list.Add(r);
         }
 
-        foreach (var (filePath, results) in byFile)
+        // Reorder so scrollTarget's file comes first (will appear at top)
+        var orderedFiles = OrderByFileFirst(byFile, scrollTarget?.FilePath);
+
+        foreach (var (filePath, results) in orderedFiles)
         {
             var section = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
 
@@ -1475,6 +1498,7 @@ public sealed partial class MainWindow : Window
 
             string[]? allLines = null;
             try { allLines = await ReadAllLinesWithEncodingAsync(filePath); } catch (Exception ex) { LogService.Instance.Verbose("Preview", $"Cannot read file for multi-highlight preview: {filePath}", ex); }
+            if (_previewUpdateGen != gen) return;
 
             if (allLines != null)
             {
@@ -1573,8 +1597,33 @@ public sealed partial class MainWindow : Window
         UpdateMatchNavPanel();
         UpdateSectionMatchNavPanels();
 
-        if (scrollBlock is not null && scrollPara is not null)
+        // Activate the section for the clicked file
+        if (scrollBlock is not null)
+            ActivateSectionForBlock(scrollBlock);
+
+        if (scrollToTop)
+            PreviewScrollViewer.ChangeView(null, 0, null, disableAnimation: true);
+        else if (scrollBlock is not null && scrollPara is not null)
             ScrollPreviewToLine(scrollBlock, scrollPara);
+    }
+
+    private static IEnumerable<KeyValuePair<string, List<SearchResult>>> OrderByFileFirst(
+        Dictionary<string, List<SearchResult>> byFile, string? firstFilePath)
+    {
+        if (firstFilePath is null || !byFile.ContainsKey(firstFilePath))
+            return byFile;
+
+        // Yield the target file first, then the rest in their original order.
+        return Enumerate();
+        IEnumerable<KeyValuePair<string, List<SearchResult>>> Enumerate()
+        {
+            yield return new KeyValuePair<string, List<SearchResult>>(firstFilePath, byFile[firstFilePath]);
+            foreach (var kvp in byFile)
+            {
+                if (!string.Equals(kvp.Key, firstFilePath, StringComparison.OrdinalIgnoreCase))
+                    yield return kvp;
+            }
+        }
     }
 
     /// <summary>
@@ -1613,6 +1662,11 @@ public sealed partial class MainWindow : Window
         var matchLines = new HashSet<int>(results.Select(r => r.LineNumber));
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
 
+        // Remove old paragraph references for this section
+        _matchParagraphs.RemoveAll(m => m.block == section);
+        if (_sectionMatchNavs.TryGetValue(section, out var sn))
+            sn.Matches.Clear();
+
         section.Blocks.Clear();
         for (int i = 0; i < allLines.Length; i++)
         {
@@ -1623,6 +1677,11 @@ public sealed partial class MainWindow : Window
                 : results[0];
             var para = MakePreviewParagraph(allLines[i], lineNum, isMatch, matchResult, rx, truncate: false);
             section.Blocks.Add(para);
+            if (isMatch)
+            {
+                _matchParagraphs.Add((section, para));
+                if (sn is not null) sn.Matches.Add(para);
+            }
         }
 
         if (allLines.Length == 0)
@@ -1633,6 +1692,11 @@ public sealed partial class MainWindow : Window
             para.Inlines.Add(run);
             section.Blocks.Add(para);
         }
+
+        // Update navigation state
+        UpdateMatchNavPanel();
+        if (_activeSectionNav == sn)
+            UpdateSectionNavOverlay();
     }
 
     private static List<(string line, int lineNum)> GetPreviewLines(SearchResult r, string[]? allLines, int previewLines, bool fullFile)
@@ -1752,6 +1816,9 @@ public sealed partial class MainWindow : Window
             Padding = new Thickness(8, 4, 0, 8),
             Child = block,
         };
+        block.AddHandler(UIElement.PointerPressedEvent,
+            new PointerEventHandler((_, _) => ActivateSectionForBlock(block)),
+            handledEventsToo: true);
 
         var sectionScroller = new ScrollViewer
         {
@@ -1762,76 +1829,29 @@ public sealed partial class MainWindow : Window
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
         };
 
-        // Per-section match nav overlay
-        var navLabel = new TextBlock { FontSize = 11, Opacity = 0.8, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 2, 0) };
-        var prevBtn = new Button
-        {
-            Style = (Style)Application.Current.Resources["AccentButtonStyle"],
-            Width = 24, Height = 24, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
-            CornerRadius = new CornerRadius(4),
-            Content = new FontIcon { Glyph = "\uE70E", FontSize = 11 },
-        };
-        ToolTipService.SetToolTip(prevBtn, "Previous match in file (↑)");
-        var nextBtn = new Button
-        {
-            Style = (Style)Application.Current.Resources["AccentButtonStyle"],
-            Width = 24, Height = 24, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
-            CornerRadius = new CornerRadius(4),
-            Content = new FontIcon { Glyph = "\uE70D", FontSize = 11 },
-        };
-        ToolTipService.SetToolTip(nextBtn, "Next match in file (↓)");
-
-        var navInner = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3 };
-        navInner.Children.Add(navLabel);
-        navInner.Children.Add(prevBtn);
-        navInner.Children.Add(nextBtn);
-
-        var navBorder = new Border
-        {
-            Background = (Brush)Application.Current.Resources["AcrylicBackgroundFillColorBaseBrush"],
-            BorderBrush = new SolidColorBrush((Windows.UI.Color)Application.Current.Resources["SystemAccentColor"]),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(5, 3, 5, 3),
-            Child = navInner,
-        };
-
-        var navPanel = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            VerticalAlignment = VerticalAlignment.Top,
-            Margin = new Thickness(0, 4, 8, 0),
-            Visibility = Visibility.Collapsed,
-        };
-        navPanel.Children.Add(navBorder);
-
         var sectionNav = new SectionMatchNav
         {
-            Label = navLabel,
-            Panel = navPanel,
             Scroller = sectionScroller,
             Block = block,
         };
         _sectionMatchNavs[block] = sectionNav;
 
-        prevBtn.Click += (_, _) => OnSectionPrevMatch(sectionNav);
-        nextBtn.Click += (_, _) => OnSectionNextMatch(sectionNav);
-
-        // Wrap scroller + nav overlay in a Grid
-        var wrapper = new Grid();
-        wrapper.Children.Add(sectionScroller);
-        wrapper.Children.Add(navPanel);
-
         var expander = new Expander
         {
             Header = BuildPreviewSectionHeader(filePath, detail, block, results),
-            Content = wrapper,
+            Content = sectionScroller,
             IsExpanded = true,
             HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Tag = block,
+        };
+        expander.Expanding += (s, _) =>
+        {
+            if (s is Expander exp && exp.Tag is RichTextBlock b)
+                ActivateSectionForBlock(b);
         };
         ToolTipService.SetToolTip(expander, filePath);
-        PreviewSectionsPanel.Children.Insert(0, expander);
+        PreviewSectionsPanel.Children.Add(expander);
         return block;
     }
 
@@ -1961,7 +1981,8 @@ public sealed partial class MainWindow : Window
         if (sectionBlock is not null)
         {
             var capturedBlock = sectionBlock;
-            dismissBtn.Click += (_, _) => RemovePreviewSection(capturedBlock);
+            var capturedPath = filePath;
+            dismissBtn.Click += (_, _) => RemovePreviewSection(capturedBlock, capturedPath);
         }
         buttonPanel.Children.Add(dismissBtn);
 
@@ -1971,34 +1992,36 @@ public sealed partial class MainWindow : Window
         return grid;
     }
 
-    private void RemovePreviewSection(RichTextBlock block)
+    private void RemovePreviewSection(RichTextBlock block, string filePath)
     {
         // Find and remove the Expander containing this block
         for (int i = PreviewSectionsPanel.Children.Count - 1; i >= 0; i--)
         {
             if (PreviewSectionsPanel.Children[i] is Expander expander
-                && expander.Content is Grid wrapper)
+                && expander.Content is ScrollViewer sv
+                && sv.Content is Border border
+                && border.Child == block)
             {
-                // The wrapper Grid contains a ScrollViewer whose content Border holds the block
-                foreach (var child in wrapper.Children)
+                PreviewSectionsPanel.Children.RemoveAt(i);
+
+                // Remove per-section match nav data
+                _sectionMatchNavs.Remove(block);
+
+                // Remove global matches for this block
+                _matchParagraphs.RemoveAll(m => m.block == block);
+                _currentMatchIndex = -1;
+                UpdateMatchNavPanel();
+                UpdateSectionMatchNavPanels();
+
+                // Deselect and collapse the file group in the left panel
+                var group = ViewModel.ResultGroups
+                    .FirstOrDefault(g => string.Equals(g.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
+                if (group is not null)
                 {
-                    if (child is ScrollViewer sv
-                        && sv.Content is Border border
-                        && border.Child == block)
-                    {
-                        PreviewSectionsPanel.Children.RemoveAt(i);
-
-                        // Remove per-section match nav data
-                        _sectionMatchNavs.Remove(block);
-
-                        // Remove global matches for this block
-                        _matchParagraphs.RemoveAll(m => m.block == block);
-                        _currentMatchIndex = -1;
-                        UpdateMatchNavPanel();
-                        UpdateSectionMatchNavPanels();
-                        return;
-                    }
+                    group.DeselectAll();
+                    group.IsExpanded = false;
                 }
+                return;
             }
         }
     }
@@ -2640,7 +2663,19 @@ public sealed partial class MainWindow : Window
         {
             try
             {
-                var pointer = targetPara.ContentStart;
+                // Find the highlighted (Gold/Bold) Run within the paragraph for precise positioning.
+                TextPointer? pointer = null;
+                foreach (var inline in targetPara.Inlines)
+                {
+                    if (inline is Run run && run.FontWeight.Weight == Microsoft.UI.Text.FontWeights.Bold.Weight
+                        && run.Foreground is SolidColorBrush brush
+                        && brush.Color == Microsoft.UI.Colors.Gold)
+                    {
+                        pointer = run.ContentStart;
+                        break;
+                    }
+                }
+                pointer ??= targetPara.ContentStart;
                 if (pointer is null) return;
 
                 var rect = pointer.GetCharacterRect(LogicalDirection.Forward);
@@ -2660,12 +2695,21 @@ public sealed partial class MainWindow : Window
         });
     }
 
+    private int MatchNavFileCount => _matchParagraphs.Select(m => m.block).Distinct().Count();
+
+    private string FormatMatchNavLabel(int index)
+    {
+        int fileCount = MatchNavFileCount;
+        return $"Match {index + 1} of {_matchParagraphs.Count} (across {fileCount} file{(fileCount != 1 ? "s" : "")})";
+    }
+
     private void UpdateMatchNavPanel()
     {
         if (_matchParagraphs.Count > 0)
         {
             MatchNavPanel.Visibility = Visibility.Visible;
-            MatchNavLabel.Text = $"{_matchParagraphs.Count} matches";
+            _currentMatchIndex = 0;
+            MatchNavLabel.Text = FormatMatchNavLabel(0);
         }
         else
         {
@@ -2676,33 +2720,94 @@ public sealed partial class MainWindow : Window
     private void HideMatchNavPanel()
     {
         MatchNavPanel.Visibility = Visibility.Collapsed;
+        SectionNavOverlay.Visibility = Visibility.Collapsed;
         _matchParagraphs.Clear();
         _currentMatchIndex = -1;
         _sectionMatchNavs.Clear();
+        _activeSectionNav = null;
     }
 
     private void UpdateSectionMatchNavPanels()
     {
+        // Find the first section with multiple matches and make it active
+        _activeSectionNav = null;
         foreach (var sn in _sectionMatchNavs.Values)
         {
             if (sn.Matches.Count > 1)
             {
                 sn.CurrentIndex = 0;
-                sn.Panel.Visibility = Visibility.Visible;
-                sn.Label.Text = $"Match 1 of {sn.Matches.Count}";
-            }
-            else
-            {
-                sn.Panel.Visibility = Visibility.Collapsed;
+                _activeSectionNav ??= sn;
             }
         }
+        HighlightActiveExpander();
+        UpdateSectionNavOverlay();
+    }
+
+    private void ActivateSectionForBlock(RichTextBlock block)
+    {
+        if (_sectionMatchNavs.TryGetValue(block, out var sn))
+        {
+            _activeSectionNav = sn;
+            HighlightActiveExpander();
+            UpdateSectionNavOverlay();
+        }
+    }
+
+    private void HighlightActiveExpander()
+    {
+        var activeBlock = _activeSectionNav?.Block;
+        foreach (var child in PreviewSectionsPanel.Children.OfType<Expander>())
+        {
+            bool isActive = child.Tag is RichTextBlock b && b == activeBlock;
+            child.Background = isActive ? s_activeExpanderBrush : null;
+        }
+    }
+
+    private void UpdateSectionNavOverlay()
+    {
+        if (_activeSectionNav is null || _activeSectionNav.Matches.Count <= 1)
+        {
+            SectionNavOverlay.Visibility = Visibility.Collapsed;
+            return;
+        }
+        SectionNavOverlay.Visibility = Visibility.Visible;
+        SectionNavLabel.Text = $"Match {_activeSectionNav.CurrentIndex + 1} of {_activeSectionNav.Matches.Count}";
+    }
+
+    private void OnSectionNavNext(object sender, RoutedEventArgs e)
+    {
+        if (_activeSectionNav is null || _activeSectionNav.Matches.Count == 0) return;
+        OnSectionNextMatch(_activeSectionNav);
+    }
+
+    private void OnSectionNavPrev(object sender, RoutedEventArgs e)
+    {
+        if (_activeSectionNav is null || _activeSectionNav.Matches.Count == 0) return;
+        OnSectionPrevMatch(_activeSectionNav);
+    }
+
+    private void OnSectionNavDismiss(object sender, RoutedEventArgs e)
+    {
+        SectionNavOverlay.Visibility = Visibility.Collapsed;
+    }
+
+    private void OnSectionNavPointerEntered(object sender, PointerRoutedEventArgs e)
+    {
+        SectionNavOverlay.Opacity = 1.0;
+    }
+
+    private void OnSectionNavPointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        SectionNavOverlay.Opacity = 0.75;
     }
 
     private void OnSectionNextMatch(SectionMatchNav sn)
     {
         if (sn.Matches.Count == 0) return;
         sn.CurrentIndex = (sn.CurrentIndex + 1) % sn.Matches.Count;
-        sn.Label.Text = $"Match {sn.CurrentIndex + 1} of {sn.Matches.Count}";
+        _activeSectionNav = sn;
+        HighlightActiveExpander();
+        UpdateSectionNavOverlay();
         ScrollPreviewToLine(sn.Block, sn.Matches[sn.CurrentIndex]);
     }
 
@@ -2710,7 +2815,9 @@ public sealed partial class MainWindow : Window
     {
         if (sn.Matches.Count == 0) return;
         sn.CurrentIndex = (sn.CurrentIndex - 1 + sn.Matches.Count) % sn.Matches.Count;
-        sn.Label.Text = $"Match {sn.CurrentIndex + 1} of {sn.Matches.Count}";
+        _activeSectionNav = sn;
+        HighlightActiveExpander();
+        UpdateSectionNavOverlay();
         ScrollPreviewToLine(sn.Block, sn.Matches[sn.CurrentIndex]);
     }
 
@@ -2719,7 +2826,8 @@ public sealed partial class MainWindow : Window
         if (_matchParagraphs.Count == 0) return;
         _currentMatchIndex = (_currentMatchIndex + 1) % _matchParagraphs.Count;
         var (block, para) = _matchParagraphs[_currentMatchIndex];
-        MatchNavLabel.Text = $"{_currentMatchIndex + 1} / {_matchParagraphs.Count}";
+        MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
+        ActivateSectionForBlock(block);
         ScrollPreviewToLine(block, para);
     }
 
@@ -2728,7 +2836,8 @@ public sealed partial class MainWindow : Window
         if (_matchParagraphs.Count == 0) return;
         _currentMatchIndex = (_currentMatchIndex - 1 + _matchParagraphs.Count) % _matchParagraphs.Count;
         var (block, para) = _matchParagraphs[_currentMatchIndex];
-        MatchNavLabel.Text = $"{_currentMatchIndex + 1} / {_matchParagraphs.Count}";
+        MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
+        ActivateSectionForBlock(block);
         ScrollPreviewToLine(block, para);
     }
 
@@ -3241,18 +3350,38 @@ public sealed partial class MainWindow : Window
     private string GetPreviewBlockText()
     {
         var sb = new StringBuilder();
-        foreach (var block in PreviewBlock.Blocks)
+        if (PreviewSectionsPanel.Visibility == Visibility.Visible)
+        {
+            foreach (var block in EnumeratePreviewSectionBlocks())
+                AppendBlockText(block, sb);
+        }
+        else
+        {
+            AppendBlockText(PreviewBlock, sb);
+        }
+        return sb.ToString();
+    }
+
+    private static void AppendBlockText(RichTextBlock richBlock, StringBuilder sb)
+    {
+        foreach (var block in richBlock.Blocks)
         {
             if (block is Microsoft.UI.Xaml.Documents.Paragraph p)
             {
                 foreach (var inline in p.Inlines)
                 {
                     if (inline is Microsoft.UI.Xaml.Documents.Run run) sb.Append(run.Text);
+                    else if (inline is Microsoft.UI.Xaml.Documents.Span span)
+                    {
+                        foreach (var inner in span.Inlines)
+                        {
+                            if (inner is Microsoft.UI.Xaml.Documents.Run innerRun) sb.Append(innerRun.Text);
+                        }
+                    }
                 }
                 sb.AppendLine();
             }
         }
-        return sb.ToString();
     }
 
     private void FindNext()

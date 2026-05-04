@@ -394,7 +394,7 @@
                                             <SolidColorBrush Color="{ThemeResource SystemAccentColor}" />
                                         </TextBlock.Foreground>
                                     </TextBlock>
-                                    <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="False" Expanding="OnFileGroupExpanding">
+                                    <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}" Expanding="OnFileGroupExpanding">
                                     <Expander.Header>
                                         <StackPanel Orientation="Horizontal" Spacing="8">
                                             <StackPanel.ContextFlyout>
@@ -503,8 +503,12 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <StackPanel Orientation="Horizontal" Padding="12,8" Spacing="6"
+                    <Grid Padding="12,8"
                                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
                         <StackPanel x:Name="PreviewToolbarContent" Orientation="Horizontal" Spacing="6" Visibility="Collapsed">
                             <FontIcon Glyph="&#xE7B3;" FontSize="12" VerticalAlignment="Center" Opacity="0.6" />
                             <TextBlock x:Name="PreviewFileLabel" VerticalAlignment="Center" FontSize="12" Opacity="0.7"
@@ -558,7 +562,32 @@
                                 </StackPanel>
                             </ToggleButton>
                         </StackPanel>
-                    </StackPanel>
+                        <StackPanel x:Name="MatchNavPanel" Grid.Column="1" Visibility="Collapsed"
+                                    Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                            <Border Background="{ThemeResource AcrylicBackgroundFillColorBaseBrush}"
+                                    BorderBrush="{ThemeResource SystemAccentColor}"
+                                    BorderThickness="1" CornerRadius="6" Padding="6,4">
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock x:Name="MatchNavLabel" FontSize="11" Opacity="0.8"
+                                               VerticalAlignment="Center" Margin="2,0" />
+                                    <Button x:Name="PrevMatchButton" Click="OnPrevMatch"
+                                            Style="{StaticResource AccentButtonStyle}"
+                                            Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
+                                            CornerRadius="4"
+                                            ToolTipService.ToolTip="Previous match (↑)">
+                                        <FontIcon Glyph="&#xE70E;" FontSize="12" />
+                                    </Button>
+                                    <Button x:Name="NextMatchButton" Click="OnNextMatch"
+                                            Style="{StaticResource AccentButtonStyle}"
+                                            Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
+                                            CornerRadius="4"
+                                            ToolTipService.ToolTip="Next match (↓)">
+                                        <FontIcon Glyph="&#xE70D;" FontSize="12" />
+                                    </Button>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Grid>
                     <Grid Grid.Row="1">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
@@ -628,34 +657,43 @@
                             </Grid>
                         </ScrollViewer>
 
-                        <!-- Match navigation overlay (multi-highlight mode) -->
-                        <StackPanel x:Name="MatchNavPanel" Grid.Row="1" Visibility="Collapsed"
+                        <!-- Per-section match navigation overlay (file-level, stays visible during scroll) -->
+                        <StackPanel x:Name="SectionNavOverlay" Grid.Row="1" Visibility="Collapsed"
                                     Orientation="Horizontal" Spacing="2"
                                     HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                    Margin="0,0,24,16">
+                                    Margin="0,0,8,8" Opacity="0.75"
+                                    PointerEntered="OnSectionNavPointerEntered"
+                                    PointerExited="OnSectionNavPointerExited">
                             <Border Background="{ThemeResource AcrylicBackgroundFillColorBaseBrush}"
                                     BorderBrush="{ThemeResource SystemAccentColor}"
                                     BorderThickness="1" CornerRadius="6" Padding="6,4">
                                 <StackPanel Orientation="Horizontal" Spacing="4">
-                                    <TextBlock x:Name="MatchNavLabel" FontSize="11" Opacity="0.8"
+                                    <TextBlock x:Name="SectionNavLabel" FontSize="11" Opacity="0.8"
                                                VerticalAlignment="Center" Margin="2,0" />
-                                    <Button x:Name="PrevMatchButton" Click="OnPrevMatch"
+                                    <Button x:Name="SectionPrevButton" Click="OnSectionNavPrev"
                                             Style="{StaticResource AccentButtonStyle}"
                                             Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
                                             CornerRadius="4"
-                                            ToolTipService.ToolTip="Previous match (↑)">
+                                            ToolTipService.ToolTip="Previous match in file">
                                         <FontIcon Glyph="&#xE70E;" FontSize="12" />
                                     </Button>
-                                    <Button x:Name="NextMatchButton" Click="OnNextMatch"
+                                    <Button x:Name="SectionNavNextButton" Click="OnSectionNavNext"
                                             Style="{StaticResource AccentButtonStyle}"
                                             Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
                                             CornerRadius="4"
-                                            ToolTipService.ToolTip="Next match (↓)">
+                                            ToolTipService.ToolTip="Next match in file">
                                         <FontIcon Glyph="&#xE70D;" FontSize="12" />
+                                    </Button>
+                                    <Button Click="OnSectionNavDismiss"
+                                            Width="24" Height="24" MinWidth="0" MinHeight="0" Padding="0"
+                                            CornerRadius="4"
+                                            ToolTipService.ToolTip="Hide (reappears on next navigation)">
+                                        <FontIcon Glyph="&#xE711;" FontSize="10" />
                                     </Button>
                                 </StackPanel>
                             </Border>
                         </StackPanel>
+
                         <TextBox x:Name="PreviewEditor" Grid.Row="1" Visibility="Collapsed" FontFamily="Consolas"
                                  AcceptsReturn="True" TextWrapping="NoWrap"
                                  ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto"
