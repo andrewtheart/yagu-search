@@ -31,6 +31,7 @@ public sealed partial class MainWindow : Window
     public MainViewModel ViewModel { get; }
     private bool _suppressPreviewUpdate;
     private int _previewUpdateGen;
+    private int _lastCheckedGroupIndex = -1;
     private bool _autoScrollEnabled = false;
     private bool _querySuggestionsDetached;
     private DispatcherTimer? _autoScrollTimer;
@@ -869,13 +870,13 @@ public sealed partial class MainWindow : Window
     private bool _previewPanelRevealed;
 
     // Match navigation state for multi-highlight mode
-    private readonly List<(RichTextBlock block, Paragraph para)> _matchParagraphs = new();
+    private readonly List<(RichTextBlock block, Paragraph para, int matchInPara)> _matchParagraphs = new();
     private int _currentMatchIndex = -1;
 
     // Per-section match navigation state
     private sealed class SectionMatchNav
     {
-        public List<Paragraph> Matches { get; } = new();
+        public List<(Paragraph para, int matchInPara)> Matches { get; } = new();
         public int CurrentIndex { get; set; } = -1;
         public ScrollViewer Scroller { get; set; } = null!;
         public RichTextBlock Block { get; set; } = null!;
@@ -883,6 +884,9 @@ public sealed partial class MainWindow : Window
     private readonly Dictionary<RichTextBlock, SectionMatchNav> _sectionMatchNavs = new();
     private SectionMatchNav? _activeSectionNav;
     private static readonly SolidColorBrush s_activeExpanderBrush = new(Windows.UI.Color.FromArgb(25, 80, 180, 255));
+
+    // Active match box highlight state
+    private (Paragraph para, int inlineIndex, Run originalRun)? _activeMatchBox;
 
     private void EnsurePreviewPanelVisible()
     {
@@ -938,6 +942,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private bool TryScrollToPreviewSection(string filePath)
     {
+        LogService.Instance.Verbose("Preview", $"TryScrollToPreviewSection: looking for '{filePath}' among {PreviewSectionsPanel.Children.OfType<Expander>().Count()} sections");
         foreach (var child in PreviewSectionsPanel.Children.OfType<Expander>())
         {
             if (ToolTipService.GetToolTip(child) is string tip
@@ -946,6 +951,8 @@ public sealed partial class MainWindow : Window
                 try
                 {
                     child.IsExpanded = true;
+                    if (child.Tag is RichTextBlock block)
+                        ActivateSectionForBlock(block);
                     var transform = child.TransformToVisual(PreviewScrollViewer);
                     var point = transform.TransformPoint(new Windows.Foundation.Point(0, 0));
                     double targetOffset = PreviewScrollViewer.VerticalOffset + point.Y;
@@ -959,22 +966,168 @@ public sealed partial class MainWindow : Window
         return false;
     }
 
+    private HashSet<string> GetExistingPreviewFilePaths()
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var child in PreviewSectionsPanel.Children.OfType<Expander>())
+        {
+            if (ToolTipService.GetToolTip(child) is string tip)
+                paths.Add(tip);
+        }
+        return paths;
+    }
+
+    /// <summary>
+    /// Ensures the preview panel is in sections mode. If it is already in sections mode,
+    /// existing sections are preserved. If switching from PreviewBlock mode, clears
+    /// PreviewBlock and match state but keeps any already-added section children.
+    /// </summary>
+    private void EnsureSectionsSurface()
+    {
+        if (PreviewSectionsPanel.Visibility == Visibility.Visible)
+        {
+            LogService.Instance.Verbose("Preview", "EnsureSectionsSurface: already visible, preserving existing sections");
+            return;
+        }
+        LogService.Instance.Verbose("Preview", "EnsureSectionsSurface: switching to sections mode, clearing PreviewBlock");
+
+        PreviewBlock.Blocks.Clear();
+        PreviewBlock.Visibility = Visibility.Collapsed;
+        PreviewSectionsPanel.Visibility = Visibility.Visible;
+        HidePreviewLoading();
+        SetPerFileToolbarVisibility(Visibility.Collapsed);
+        HideMatchNavPanel();
+        _matchParagraphs.Clear();
+        _currentMatchIndex = -1;
+        _sectionMatchNavs.Clear();
+        PreviewScrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+    }
+
+    /// <summary>
+    /// Prepends new file sections to the top of the preview panel.
+    /// Shows a loading spinner when adding more than 50 files.
+    /// </summary>
+    private async Task PrependPreviewSectionsForFilesAsync(
+        Dictionary<string, List<SearchResult>> newFiles, string? scrollToFile)
+    {
+        LogService.Instance.Info("Preview", $"PrependPreviewSectionsForFilesAsync: newFiles={newFiles.Count}, scrollToFile='{scrollToFile}'");
+        if (newFiles.Count == 0) return;
+
+        EnsurePreviewPanelVisible();
+        EnsureSectionsSurface();
+        PreviewToolbarContent.Visibility = Visibility.Visible;
+
+        bool showSpinner = newFiles.Count > PreviewSectionPageSize;
+        if (showSpinner)
+            ShowProgressOverlay($"Adding {newFiles.Count:N0} files\u2026", 0);
+
+        Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
+        int previewLines = ViewModel.PreviewContextLines;
+
+        // Batch-read file contents off the UI thread.
+        var fileList = newFiles.ToList();
+        var fileContents = await ReadAllFileContentsAsync(fileList);
+
+        int insertIndex = 0;
+        int fileIndex = 0;
+        int filesToAdd = fileList.Count;
+        foreach (var (filePath, results) in fileList)
+        {
+            var (section, expander) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results, addToPanel: false);
+            PreviewSectionsPanel.Children.Insert(insertIndex++, expander);
+
+            fileContents.TryGetValue(filePath, out string[]? allLines);
+
+            if (ViewModel.PreviewModeIndex == 1)
+                BuildHighlightSection(section, results, allLines, previewLines, rx);
+            else
+                BuildConcatenatedSection(section, results, allLines, previewLines, rx);
+
+            // Yield to the UI thread periodically so the app stays responsive.
+            if (++fileIndex % PreviewYieldBatchSize == 0)
+            {
+                if (showSpinner)
+                    UpdateProgressOverlay(fileIndex * 100 / filesToAdd);
+                await Task.Delay(1).ConfigureAwait(true);
+            }
+        }
+
+        if (showSpinner)
+            HideProgressOverlay();
+
+        // Update match nav and file label to include the new sections.
+        var totalFiles = PreviewSectionsPanel.Children.OfType<Expander>().Count();
+        SetPreviewFileLabel(
+            $"{_matchParagraphs.Count:N0} selected matches across {totalFiles:N0} file(s)",
+            string.Join(Environment.NewLine, GetExistingPreviewFilePaths()));
+        _previewResult = newFiles.Values.First().First();
+        UpdateMatchNavPanel();
+        UpdateSectionMatchNavPanels();
+
+        // Scroll to the target file.
+        if (scrollToFile is not null)
+        {
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                TryScrollToPreviewSection(scrollToFile);
+            });
+        }
+    }
+
     private async void OnFileGroupExpanding(Expander sender, ExpanderExpandingEventArgs args)
     {
         if (sender.DataContext is FileGroup g)
         {
+            LogService.Instance.Info("Preview", $"OnFileGroupExpanding: file='{g.FilePath}', matchCount={g.Count}, setting _suppressPreviewUpdate=true");
             _suppressPreviewUpdate = true;
             g.SelectAll();
-            var scrollTarget = g.Count > 0 ? g[0] : null;
-            try { await UpdateMultiSelectPreviewAsync(scrollTarget, scrollToTop: true); }
-            finally { _suppressPreviewUpdate = false; }
+
+            try
+            {
+                // If this file is already on the right panel, scroll to it.
+                if (TryScrollToPreviewSection(g.FilePath))
+                {
+                    LogService.Instance.Info("Preview", $"OnFileGroupExpanding: already on panel, scrolled to '{g.FilePath}'");
+                    return;
+                }
+
+                // Not present — prepend it.
+                var results = g.Where(r => r.IsSelected).ToList();
+                LogService.Instance.Info("Preview", $"OnFileGroupExpanding: not on panel, prepending {results.Count} results for '{g.FilePath}'");
+                if (results.Count > 0)
+                {
+                    var newFiles = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        [g.FilePath] = results
+                    };
+                    await PrependPreviewSectionsForFilesAsync(newFiles, g.FilePath);
+                }
+            }
+            finally
+            {
+                // Defer turning off suppression to the next low-priority frame so
+                // CheckBox.Checked events from the newly-realized expander content
+                // (template loading) are still suppressed.
+                DispatcherQueue.TryEnqueue(
+                    Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                    () =>
+                    {
+                        LogService.Instance.Info("Preview", "OnFileGroupExpanding: deferred _suppressPreviewUpdate=false");
+                        _suppressPreviewUpdate = false;
+                    });
+            }
         }
     }
 
     private void OnResultDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
     {
-        if (ResultsList.SelectedItem is FileGroup g && g.Count > 0)
-            ViewModel.OpenInEditor(g[0]);
+        if (e.OriginalSource is FrameworkElement fe)
+        {
+            var g = fe.DataContext as FileGroup
+                ?? (fe.DataContext is SearchResult r ? FindParentGroup(r) : null);
+            if (g is not null && g.Count > 0)
+                ViewModel.OpenInEditor(g[0]);
+        }
     }
 
     private async void OnMatchLineTapped(object sender, TappedRoutedEventArgs e)
@@ -986,6 +1139,7 @@ public sealed partial class MainWindow : Window
         if (sender is FrameworkElement fe && fe.DataContext is SearchResult r)
         {
             var selected = ViewModel.GetAllSelectedResults();
+            LogService.Instance.Info("Preview", $"OnMatchLineTapped: file='{r.FilePath}', line={r.LineNumber}, totalSelected={selected.Count}");
             if (selected.Count >= 2)
                 await UpdateMultiSelectPreviewAsync(scrollTarget: r);
             else
@@ -1070,6 +1224,7 @@ public sealed partial class MainWindow : Window
 
     private async void RefreshCurrentPreview()
     {
+        LogService.Instance.Verbose("Preview", "RefreshCurrentPreview called");
         if (PreviewEditor.Visibility == Visibility.Visible) return;
 
         var selected = ViewModel.GetAllSelectedResults();
@@ -1182,40 +1337,114 @@ public sealed partial class MainWindow : Window
         rtb.Blocks.Add(para);
     }
 
-    private async void OnMatchCheckChanged(object sender, RoutedEventArgs e)
+    private void OnSelectAllChecked(object sender, RoutedEventArgs e)
     {
-        if (_suppressPreviewUpdate) return;
-        if (sender is FrameworkElement fe && fe.DataContext is SearchResult r)
+        if (_suppressPreviewUpdate)
         {
-            var group = FindParentGroup(r);
-            group?.NotifySelectionChanged();
+            LogService.Instance.Info("Preview", $"OnSelectAllChecked: SUPPRESSED (group={(sender is FrameworkElement f && f.DataContext is FileGroup fg ? fg.FilePath : "?")}");
+            return;
+        }
+        if (sender is FrameworkElement fe && fe.DataContext is FileGroup g)
+        {
+            // Skip spurious events from ListView virtualization/recycling:
+            // the Checked event fires when a recycled container is re-bound,
+            // but the model already has AllSelected == true.
+            if (g.AllSelected)
+            {
+                LogService.Instance.Info("Preview", $"OnSelectAllChecked: SKIP (model already AllSelected) file='{g.FilePath}'");
+                return;
+            }
 
-            var selected = ViewModel.GetAllSelectedResults();
-            if (selected.Count >= 2)
-                await UpdateMultiSelectPreviewAsync(scrollTarget: r, scrollToTop: true);
+            int currentIndex = ViewModel.ResultGroups.IndexOf(g);
+            LogService.Instance.Info("Preview", $"OnSelectAllChecked: file='{g.FilePath}', matchCount={g.Count}, index={currentIndex}");
+
+            // Shift+Click range selection
+            bool isShift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
+                           .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+            if (isShift && _lastCheckedGroupIndex >= 0 && currentIndex >= 0 && currentIndex != _lastCheckedGroupIndex)
+            {
+                int lo = Math.Min(_lastCheckedGroupIndex, currentIndex);
+                int hi = Math.Max(_lastCheckedGroupIndex, currentIndex);
+                _suppressPreviewUpdate = true;
+                try
+                {
+                    for (int i = lo; i <= hi; i++)
+                        ViewModel.ResultGroups[i].SelectAll();
+                }
+                finally { _suppressPreviewUpdate = false; }
+            }
+            else
+            {
+                _suppressPreviewUpdate = true;
+                try { g.SelectAll(); }
+                finally { _suppressPreviewUpdate = false; }
+            }
+
+            _lastCheckedGroupIndex = currentIndex;
         }
     }
 
-    private async void OnSelectAllChecked(object sender, RoutedEventArgs e)
+    private void OnSelectAllUnchecked(object sender, RoutedEventArgs e)
     {
+        if (_suppressPreviewUpdate)
+        {
+            LogService.Instance.Info("Preview", $"OnSelectAllUnchecked: SUPPRESSED (group={(sender is FrameworkElement f && f.DataContext is FileGroup fg ? fg.FilePath : "?")}");
+            return;
+        }
         if (sender is FrameworkElement fe && fe.DataContext is FileGroup g)
         {
-            _suppressPreviewUpdate = true;
-            g.SelectAll();
-            var scrollTarget = g.Count > 0 ? g[0] : null;
-            try { await UpdateMultiSelectPreviewAsync(scrollTarget, scrollToTop: true); }
-            finally { _suppressPreviewUpdate = false; }
+            // Skip spurious events from ListView virtualization/recycling:
+            // when a selected item scrolls off-screen, the container is recycled
+            // and CheckBox.Unchecked fires even though the model is still selected.
+            if (!g.AllSelected)
+            {
+                LogService.Instance.Info("Preview", $"OnSelectAllUnchecked: SKIP (model already deselected) file='{g.FilePath}'");
+                return;
+            }
+
+            int currentIndex = ViewModel.ResultGroups.IndexOf(g);
+            LogService.Instance.Info("Preview", $"OnSelectAllUnchecked: file='{g.FilePath}', index={currentIndex}");
+
+            // Shift+Click range deselection
+            bool isShift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
+                           .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+            if (isShift && _lastCheckedGroupIndex >= 0 && currentIndex >= 0 && currentIndex != _lastCheckedGroupIndex)
+            {
+                int lo = Math.Min(_lastCheckedGroupIndex, currentIndex);
+                int hi = Math.Max(_lastCheckedGroupIndex, currentIndex);
+                _suppressPreviewUpdate = true;
+                try
+                {
+                    for (int i = lo; i <= hi; i++)
+                        ViewModel.ResultGroups[i].DeselectAll();
+                }
+                finally { _suppressPreviewUpdate = false; }
+            }
+            else
+            {
+                _suppressPreviewUpdate = true;
+                try { g.DeselectAll(); }
+                finally { _suppressPreviewUpdate = false; }
+            }
+
+            _lastCheckedGroupIndex = currentIndex;
         }
     }
 
-    private async void OnSelectAllUnchecked(object sender, RoutedEventArgs e)
+    private void OnResultsListKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
     {
-        if (sender is FrameworkElement fe && fe.DataContext is FileGroup g)
+        if (e.Key == VirtualKey.A &&
+            Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control)
+                .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down))
         {
             _suppressPreviewUpdate = true;
-            g.DeselectAll();
-            try { await UpdateMultiSelectPreviewAsync(); }
+            try
+            {
+                foreach (var g in ViewModel.ResultGroups)
+                    g.SelectAll();
+            }
             finally { _suppressPreviewUpdate = false; }
+            e.Handled = true;
         }
     }
 
@@ -1235,7 +1464,7 @@ public sealed partial class MainWindow : Window
     {
         if (sender is MenuFlyout flyout)
         {
-            int count = ResultsList.SelectedItems.Count;
+            int count = GetCheckedFileGroups().Count;
             if (flyout.Items.Count > 0 && flyout.Items[0] is MenuFlyoutItem previewItem)
                 previewItem.Text = $"Preview selected ({count})";
         }
@@ -1243,7 +1472,7 @@ public sealed partial class MainWindow : Window
 
     private void OnResultsContextMenuOpening(object sender, object e)
     {
-        int count = ResultsList.SelectedItems.Count;
+        int count = GetCheckedFileGroups().Count;
         bool plural = count > 1;
         CtxPreviewSelected.Text = $"Preview selected ({count})";
         CtxCopyPaths.Text = plural ? "Copy File Paths" : "Copy File Path";
@@ -1254,25 +1483,70 @@ public sealed partial class MainWindow : Window
 
     private async void OnPreviewSelectedFiles(object sender, RoutedEventArgs e)
     {
-        // Select all match results within each selected FileGroup
+        var checkedGroups = GetCheckedFileGroups();
+        var groupNames = checkedGroups.Select(g => g.FilePath).ToList();
+        LogService.Instance.Info("Preview", $"OnPreviewSelectedFiles: {groupNames.Count} groups selected: [{string.Join(", ", groupNames.Select(System.IO.Path.GetFileName))}]");
+        // Select all match results within each checked FileGroup
         _suppressPreviewUpdate = true;
-        try
+        foreach (var g in checkedGroups)
+            g.SelectAll();
+
+        // Gather results only from the checked groups
+        var selectedGroups = checkedGroups;
+        var byFile = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var g in selectedGroups)
         {
-            foreach (var item in ResultsList.SelectedItems)
+            foreach (var r in g)
             {
-                if (item is FileGroup g)
-                    g.SelectAll();
+                if (!r.IsSelected) continue;
+                if (!byFile.TryGetValue(r.FilePath, out var list))
+                {
+                    list = new List<SearchResult>();
+                    byFile[r.FilePath] = list;
+                }
+                list.Add(r);
             }
         }
+        if (byFile.Count == 0)
+        {
+            LogService.Instance.Info("Preview", "OnPreviewSelectedFiles: no selected results, returning");
+            return;
+        }
+
+        // Determine which files are new vs already present on the right panel.
+        var existing = GetExistingPreviewFilePaths();
+        LogService.Instance.Info("Preview", $"OnPreviewSelectedFiles: byFile={byFile.Count}, existingOnPanel={existing.Count}");
+        var newFiles = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
+        string? firstExistingFile = null;
+        foreach (var (filePath, results) in byFile)
+        {
+            if (existing.Contains(filePath))
+                firstExistingFile ??= filePath;
+            else
+                newFiles[filePath] = results;
+        }
+
+        bool isSingleFile = byFile.Count == 1;
+
+        LogService.Instance.Info("Preview", $"OnPreviewSelectedFiles: newFiles={newFiles.Count}, isSingleFile={isSingleFile}, firstExistingFile='{firstExistingFile}'");
+        try
+        {
+            if (newFiles.Count > 0)
+            {
+                // For single-file: scroll to the new file after prepending.
+                // For multi-file: no scroll.
+                string? scrollTo = isSingleFile ? newFiles.Keys.First() : null;
+                await PrependPreviewSectionsForFilesAsync(newFiles, scrollTo);
+            }
+            else if (isSingleFile && firstExistingFile is not null)
+            {
+                // Single file already present — just scroll to it.
+                LogService.Instance.Info("Preview", $"OnPreviewSelectedFiles: single file already on panel, scrolling to '{firstExistingFile}'");
+                TryScrollToPreviewSection(firstExistingFile);
+            }
+            // Multi-file with all already present — nothing to do.
+        }
         finally { _suppressPreviewUpdate = false; }
-
-        var selected = ViewModel.GetAllSelectedResults();
-        if (selected.Count == 0) return;
-
-        if (selected.Count >= 2)
-            await UpdateMultiSelectPreviewAsync(scrollTarget: selected[0], scrollToTop: true);
-        else
-            await UpdatePreviewAsync(selected[0]);
     }
 
     private void OnCopySelectedFilePaths(object sender, RoutedEventArgs e)
@@ -1348,14 +1622,16 @@ public sealed partial class MainWindow : Window
 
     private List<string> GetSelectedFilePaths()
     {
-        var paths = new List<string>();
-        foreach (var item in ResultsList.SelectedItems)
-        {
-            if (item is FileGroup g && !string.IsNullOrWhiteSpace(g.FilePath))
-                paths.Add(g.FilePath);
-        }
+        return GetCheckedFileGroups()
+            .Where(g => !string.IsNullOrWhiteSpace(g.FilePath))
+            .Select(g => g.FilePath)
+            .ToList();
+    }
 
-        return paths;
+    /// <summary>Returns all FileGroups whose header checkbox is checked (AllSelected).</summary>
+    private List<FileGroup> GetCheckedFileGroups()
+    {
+        return ViewModel.ResultGroups.Where(g => g.AllSelected).ToList();
     }
 
     private async Task<Windows.Storage.StorageFile?> PickTextExportFileAsync(string suggestedFileName)
@@ -1399,7 +1675,7 @@ public sealed partial class MainWindow : Window
         if (selectedMatches.Count > 0)
             return BuildFullFilePreviewTargets(selectedMatches);
 
-        var selectedGroups = ResultsList.SelectedItems.OfType<FileGroup>()
+        var selectedGroups = GetCheckedFileGroups()
             .Where(g => g.Count > 0)
             .ToList();
         if (selectedGroups.Count > 0)
@@ -1545,6 +1821,7 @@ public sealed partial class MainWindow : Window
 
     private async Task UpdatePreviewAsync(SearchResult r)
     {
+        LogService.Instance.Info("Preview", $"UpdatePreviewAsync: file='{r.FilePath}', line={r.LineNumber}");
         if (!TryLeavePreviewEditorForPreviewChange()) return;
 
         EnsurePreviewPanelVisible();
@@ -1559,6 +1836,7 @@ public sealed partial class MainWindow : Window
 
     private async Task UpdateMultiSelectPreviewAsync(SearchResult? scrollTarget = null, bool scrollToTop = false)
     {
+        LogService.Instance.Info("Preview", $"UpdateMultiSelectPreviewAsync: scrollTarget='{scrollTarget?.FilePath}', scrollToTop={scrollToTop}, caller={new System.Diagnostics.StackTrace().GetFrame(1)?.GetMethod()?.Name}");
         int gen = ++_previewUpdateGen;
 
         if (!TryLeavePreviewEditorForPreviewChange()) return;
@@ -1597,6 +1875,7 @@ public sealed partial class MainWindow : Window
             ShowPreviewLoading($"Reading {byFile.Count:N0} files\u2026");
 
         PreviewToolbarContent.Visibility = Visibility.Visible;
+        LogService.Instance.Info("Preview", $"UpdateMultiSelectPreviewAsync: byFile={byFile.Count} files, {selected.Count} results, mode={ViewModel.PreviewModeIndex}, gen={gen}");
         if (ViewModel.PreviewModeIndex == 1)
             await ShowMultiHighlightPreviewAsync(selected, byFile, scrollTarget, gen, scrollToTop);
         else
@@ -1608,6 +1887,7 @@ public sealed partial class MainWindow : Window
         Dictionary<string, List<SearchResult>> byFile,
         SearchResult? scrollTarget, int gen, bool scrollToTop)
     {
+        LogService.Instance.Info("Preview", $"ShowConcatenatedPreviewAsync: {byFile.Count} files, {selected.Count} results, gen={gen}");
         ShowPreviewSectionsSurface();
         _matchParagraphs.Clear();
         _currentMatchIndex = -1;
@@ -1706,6 +1986,7 @@ public sealed partial class MainWindow : Window
         Dictionary<string, List<SearchResult>> byFile,
         SearchResult? scrollTarget, int gen, bool scrollToTop)
     {
+        LogService.Instance.Info("Preview", $"ShowMultiHighlightPreviewAsync: {byFile.Count} files, {selected.Count} results, gen={gen}");
         ShowPreviewSectionsSurface();
         _matchParagraphs.Clear();
         _currentMatchIndex = -1;
@@ -1764,7 +2045,7 @@ public sealed partial class MainWindow : Window
                     if (!firstRange)
                     {
                         var gap = new Paragraph();
-                        var gapRun = new Run { Text = "  ⋮" };
+                        var gapRun = new Run { Text = "  \u22EE" };
                         gapRun.Foreground = new SolidColorBrush(Microsoft.UI.Colors.DimGray);
                         gap.Inlines.Add(gapRun);
                         section.Blocks.Add(gap);
@@ -1921,6 +2202,7 @@ public sealed partial class MainWindow : Window
         List<SearchResult> allSelected,
         int gen)
     {
+        LogService.Instance.Info("Preview", $"AutoLoadRemainingSectionsAsync: pageStart={pageStart}, totalFiles={orderedFiles.Count}, remaining={orderedFiles.Count - pageStart}, gen={gen}");
         // Create a placeholder panel that LoadMoreSectionsAsync will remove.
         var placeholder = new StackPanel();
         PreviewSectionsPanel.Children.Add(placeholder);
@@ -1954,25 +2236,6 @@ public sealed partial class MainWindow : Window
         PreviewSectionsPanel.Children.Add(panel);
     }
 
-    private void ShowProgressOverlay(string message, int percent)
-    {
-        PreviewProgressText.Text = message;
-        PreviewProgressPercent.Text = $"{percent}%";
-        PreviewProgressRing.IsActive = true;
-        PreviewProgressOverlay.Visibility = Visibility.Visible;
-    }
-
-    private void UpdateProgressOverlay(int percent)
-    {
-        PreviewProgressPercent.Text = $"{percent}%";
-    }
-
-    private void HideProgressOverlay()
-    {
-        PreviewProgressRing.IsActive = false;
-        PreviewProgressOverlay.Visibility = Visibility.Collapsed;
-    }
-
     /// <summary>Max sections kept expanded during bulk "Show all" loads to reduce layout cost.</summary>
     private const int BulkExpandLimit = 10;
 
@@ -1983,6 +2246,7 @@ public sealed partial class MainWindow : Window
         List<SearchResult> allSelected,
         int gen)
     {
+        LogService.Instance.Info("Preview", $"LoadMoreSectionsAsync: pageStart={pageStart}, requestedEnd={requestedEnd}, totalFiles={orderedFiles.Count}, gen={gen}");
         if (_previewUpdateGen != gen) return;
 
         // Remove the button panel.
@@ -2263,7 +2527,7 @@ public sealed partial class MainWindow : Window
         try { allLines = await ReadAllLinesWithEncodingAsync(filePath); }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("Preview", $"Cannot read file for full-file section preview: {filePath}", ex);
+            LogService.Instance.Warning("Preview", $"Cannot read file for full-file section preview: {filePath}", ex);
             return;
         }
 
@@ -2347,6 +2611,7 @@ public sealed partial class MainWindow : Window
 
     private async Task ShowSingleFilePreviewAsync(SearchResult r, bool fullFile)
     {
+        LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync: file='{r.FilePath}', line={r.LineNumber}, fullFile={fullFile}");
         ShowPreviewBlockSurface();
         PreviewBlock.Blocks.Clear();
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
@@ -2354,7 +2619,7 @@ public sealed partial class MainWindow : Window
         string[]? allLines = null;
         if (fullFile)
         {
-            try { allLines = await ReadAllLinesWithEncodingAsync(r.FilePath); } catch (Exception ex) { LogService.Instance.Verbose("Preview", $"Cannot read file for single-file preview: {r.FilePath}", ex); }
+            try { allLines = await ReadAllLinesWithEncodingAsync(r.FilePath); } catch (Exception ex) { LogService.Instance.Warning("Preview", $"Cannot read file for single-file preview: {r.FilePath}", ex); }
         }
 
         var lines = GetPreviewLines(r, allLines, ViewModel.PreviewContextLines, fullFile);
@@ -2381,6 +2646,7 @@ public sealed partial class MainWindow : Window
 
     private void ShowPreviewSectionsSurface()
     {
+        LogService.Instance.Info("Preview", $"ShowPreviewSectionsSurface: clearing {PreviewSectionsPanel.Children.Count} existing sections");
         PreviewBlock.Blocks.Clear();
         PreviewBlock.Visibility = Visibility.Collapsed;
         PreviewSectionsPanel.Children.Clear();
@@ -2407,6 +2673,25 @@ public sealed partial class MainWindow : Window
         PreviewLoadingPanel.Visibility = Visibility.Collapsed;
     }
 
+    private void ShowProgressOverlay(string message, int percent)
+    {
+        PreviewProgressText.Text = message;
+        PreviewProgressPercent.Text = $"{percent}%";
+        PreviewProgressRing.IsActive = true;
+        PreviewProgressOverlay.Visibility = Visibility.Visible;
+    }
+
+    private void UpdateProgressOverlay(int percent)
+    {
+        PreviewProgressPercent.Text = $"{percent}%";
+    }
+
+    private void HideProgressOverlay()
+    {
+        PreviewProgressRing.IsActive = false;
+        PreviewProgressOverlay.Visibility = Visibility.Collapsed;
+    }
+
     private void SetPerFileToolbarVisibility(Visibility visibility)
     {
         CopyPreviewFilePathButton.Visibility = visibility;
@@ -2429,6 +2714,7 @@ public sealed partial class MainWindow : Window
 
     private (RichTextBlock block, Expander expander) AddPreviewSection(string filePath, string? detail = null, List<SearchResult>? results = null, bool isExpanded = true, bool addToPanel = true)
     {
+        LogService.Instance.Verbose("Preview", $"AddPreviewSection: file='{System.IO.Path.GetFileName(filePath)}', detail='{detail}', expanded={isExpanded}, addToPanel={addToPanel}");
         var block = new RichTextBlock
         {
             FontFamily = new FontFamily("Consolas"),
@@ -2667,6 +2953,7 @@ public sealed partial class MainWindow : Window
 
     private async Task ShowFullFilePreviewAsync(IReadOnlyList<FullFilePreviewTarget> targets)
     {
+        LogService.Instance.Info("Preview", $"ShowFullFilePreviewAsync: {targets.Count} targets");
         if (!TryLeavePreviewEditorForPreviewChange()) return;
 
         _previewLoadCts?.Cancel();
@@ -3297,7 +3584,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            LogService.Instance.Verbose("Preview", "Invalid highlight regex", ex);
+            LogService.Instance.Warning("Preview", "Invalid highlight regex", ex);
             return null;
         }
     }
@@ -3315,7 +3602,7 @@ public sealed partial class MainWindow : Window
     }
 
     private static void AddMatchEntries(
-        List<(RichTextBlock block, Paragraph para)> matchParagraphs,
+        List<(RichTextBlock block, Paragraph para, int matchInPara)> matchParagraphs,
         SectionMatchNav? sn,
         RichTextBlock section, Paragraph para,
         string? line, Regex? rx)
@@ -3323,8 +3610,8 @@ public sealed partial class MainWindow : Window
         int count = CountRegexMatches(line, rx);
         for (int i = 0; i < count; i++)
         {
-            matchParagraphs.Add((section, para));
-            sn?.Matches.Add(para);
+            matchParagraphs.Add((section, para, i));
+            sn?.Matches.Add((para, i));
         }
     }
 
@@ -3399,6 +3686,60 @@ public sealed partial class MainWindow : Window
         return LineTruncator.Truncate(line);
     }
 
+    private static readonly SolidColorBrush s_matchBoxBrush = new(Microsoft.UI.Colors.Red);
+
+    private void BoxMatchRun(Paragraph para, int matchInPara)
+    {
+        UnboxCurrentMatch();
+        int goldCount = 0;
+        for (int i = 0; i < para.Inlines.Count; i++)
+        {
+            if (para.Inlines[i] is Run run
+                && run.FontWeight.Weight == Microsoft.UI.Text.FontWeights.Bold.Weight
+                && run.Foreground is SolidColorBrush brush
+                && brush.Color == Microsoft.UI.Colors.Gold)
+            {
+                if (goldCount == matchInPara)
+                {
+                    var tb = new Microsoft.UI.Xaml.Controls.TextBlock
+                    {
+                        Text = run.Text,
+                        FontWeight = Microsoft.UI.Text.FontWeights.Bold,
+                        Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gold),
+                        FontFamily = new FontFamily("Consolas"),
+                        IsTextSelectionEnabled = false,
+                    };
+                    var border = new Border
+                    {
+                        BorderBrush = s_matchBoxBrush,
+                        BorderThickness = new Thickness(1.5),
+                        CornerRadius = new CornerRadius(2),
+                        Padding = new Thickness(1, 0, 1, 0),
+                        Child = tb,
+                    };
+                    var container = new InlineUIContainer { Child = border };
+                    para.Inlines.RemoveAt(i);
+                    para.Inlines.Insert(i, container);
+                    _activeMatchBox = (para, i, run);
+                    return;
+                }
+                goldCount++;
+            }
+        }
+    }
+
+    private void UnboxCurrentMatch()
+    {
+        if (_activeMatchBox is not { } box) return;
+        if (box.inlineIndex < box.para.Inlines.Count
+            && box.para.Inlines[box.inlineIndex] is InlineUIContainer)
+        {
+            box.para.Inlines.RemoveAt(box.inlineIndex);
+            box.para.Inlines.Insert(box.inlineIndex, box.originalRun);
+        }
+        _activeMatchBox = null;
+    }
+
     /// <summary>
     /// Scrolls the outer preview ScrollViewer so that <paramref name="targetPara"/>
     /// inside <paramref name="block"/> is vertically centred in the viewport.
@@ -3412,10 +3753,15 @@ public sealed partial class MainWindow : Window
         {
             try
             {
-                // Find the highlighted (Gold/Bold) Run within the paragraph for precise positioning.
+                // Find the boxed match (InlineUIContainer) or highlighted (Gold/Bold) Run for precise positioning.
                 TextPointer? pointer = null;
                 foreach (var inline in targetPara.Inlines)
                 {
+                    if (inline is InlineUIContainer iuc)
+                    {
+                        pointer = iuc.ContentStart;
+                        break;
+                    }
                     if (inline is Run run && run.FontWeight.Weight == Microsoft.UI.Text.FontWeights.Bold.Weight
                         && run.Foreground is SolidColorBrush brush
                         && brush.Color == Microsoft.UI.Colors.Gold)
@@ -3468,6 +3814,7 @@ public sealed partial class MainWindow : Window
 
     private void HideMatchNavPanel()
     {
+        UnboxCurrentMatch();
         MatchNavPanel.Visibility = Visibility.Collapsed;
         SectionNavOverlay.Visibility = Visibility.Collapsed;
         _matchParagraphs.Clear();
@@ -3478,16 +3825,28 @@ public sealed partial class MainWindow : Window
 
     private void UpdateSectionMatchNavPanels()
     {
-        // Find the first section with multiple matches and make it active
-        _activeSectionNav = null;
+        // Initialize match indices for all sections
         foreach (var sn in _sectionMatchNavs.Values)
         {
             if (sn.Matches.Count > 1)
-            {
                 sn.CurrentIndex = 0;
-                _activeSectionNav ??= sn;
-            }
         }
+
+        // Only auto-activate per-file section nav when there's exactly one file section.
+        // For multi-file views, the user must click/expand a section to activate its nav.
+        if (_sectionMatchNavs.Count == 1)
+        {
+            var sn = _sectionMatchNavs.Values.First();
+            if (sn.Matches.Count > 1)
+                _activeSectionNav = sn;
+            else
+                _activeSectionNav = null;
+        }
+        else
+        {
+            _activeSectionNav = null;
+        }
+
         HighlightActiveExpander();
         UpdateSectionNavOverlay();
     }
@@ -3557,7 +3916,9 @@ public sealed partial class MainWindow : Window
         _activeSectionNav = sn;
         HighlightActiveExpander();
         UpdateSectionNavOverlay();
-        ScrollPreviewToLine(sn.Block, sn.Matches[sn.CurrentIndex]);
+        var (para, matchInPara) = sn.Matches[sn.CurrentIndex];
+        BoxMatchRun(para, matchInPara);
+        ScrollPreviewToLine(sn.Block, para);
     }
 
     private void OnSectionPrevMatch(SectionMatchNav sn)
@@ -3567,16 +3928,19 @@ public sealed partial class MainWindow : Window
         _activeSectionNav = sn;
         HighlightActiveExpander();
         UpdateSectionNavOverlay();
-        ScrollPreviewToLine(sn.Block, sn.Matches[sn.CurrentIndex]);
+        var (para, matchInPara) = sn.Matches[sn.CurrentIndex];
+        BoxMatchRun(para, matchInPara);
+        ScrollPreviewToLine(sn.Block, para);
     }
 
     private void OnNextMatch(object sender, RoutedEventArgs e)
     {
         if (_matchParagraphs.Count == 0) return;
         _currentMatchIndex = (_currentMatchIndex + 1) % _matchParagraphs.Count;
-        var (block, para) = _matchParagraphs[_currentMatchIndex];
+        var (block, para, matchInPara) = _matchParagraphs[_currentMatchIndex];
         MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
         ActivateSectionForBlock(block);
+        BoxMatchRun(para, matchInPara);
         ScrollPreviewToLine(block, para);
     }
 
@@ -3584,9 +3948,10 @@ public sealed partial class MainWindow : Window
     {
         if (_matchParagraphs.Count == 0) return;
         _currentMatchIndex = (_currentMatchIndex - 1 + _matchParagraphs.Count) % _matchParagraphs.Count;
-        var (block, para) = _matchParagraphs[_currentMatchIndex];
+        var (block, para, matchInPara) = _matchParagraphs[_currentMatchIndex];
         MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
         ActivateSectionForBlock(block);
+        BoxMatchRun(para, matchInPara);
         ScrollPreviewToLine(block, para);
     }
 
@@ -3594,6 +3959,16 @@ public sealed partial class MainWindow : Window
     private double _splitterStartX;
     private double _col0StartWidth;
     private double _col2StartWidth;
+
+    private void OnAdvancedOptionsExpanding(Expander sender, ExpanderExpandingEventArgs args)
+    {
+        ChevronRotate.Angle = 0;
+    }
+
+    private void OnAdvancedOptionsCollapsed(Expander sender, ExpanderCollapsedEventArgs args)
+    {
+        ChevronRotate.Angle = -90;
+    }
 
     private void OnSplitterPressed(object sender, PointerRoutedEventArgs e)
     {

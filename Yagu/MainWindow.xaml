@@ -135,10 +135,23 @@
                 </Grid>
 
                 <!-- Advanced options (collapsed by default) -->
-                <Expander x:Name="AdvancedOptionsExpander" Header="Advanced Options"
+                <Expander x:Name="AdvancedOptionsExpander"
                           IsExpanded="False" HorizontalAlignment="Stretch"
                           HorizontalContentAlignment="Stretch" Padding="0"
-                          MinHeight="0" FontSize="12">
+                          MinHeight="0" FontSize="12"
+                          Expanding="OnAdvancedOptionsExpanding"
+                          Collapsed="OnAdvancedOptionsCollapsed">
+                    <Expander.Header>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE76C;" FontSize="10"
+                                      RenderTransformOrigin="0.5,0.5">
+                                <FontIcon.RenderTransform>
+                                    <RotateTransform x:Name="ChevronRotate" Angle="-90" />
+                                </FontIcon.RenderTransform>
+                            </FontIcon>
+                            <TextBlock Text="Advanced Options" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Expander.Header>
                     <StackPanel Spacing="10" Padding="8,6,8,8">
                         <!-- Options row -->
                         <StackPanel Orientation="Horizontal" Spacing="16">
@@ -401,11 +414,12 @@
                     <ListView
                         x:Name="ResultsList"
                         Grid.Row="2"
-                        SelectionMode="Extended"
+                        SelectionMode="None"
                         ShowsScrollingPlaceholders="True"
                         IsItemClickEnabled="True"
                         ItemClick="OnResultItemClick"
                         DoubleTapped="OnResultDoubleTapped"
+                        KeyDown="OnResultsListKeyDown"
                         ItemsSource="{x:Bind ViewModel.ResultGroups, Mode=OneWay}"
                         Padding="4,0">
                         <ListView.ContextFlyout>
@@ -444,10 +458,13 @@
                                     <Expander.Header>
                                         <Grid>
                                             <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
-                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <CheckBox IsChecked="{x:Bind AllSelected, Mode=TwoWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
+                                                  Checked="OnSelectAllChecked" Unchecked="OnSelectAllUnchecked" />
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                                             <StackPanel.ContextFlyout>
                                                 <MenuFlyout Opening="OnFileHeaderContextMenuOpening">
                                                     <MenuFlyoutItem Text="Preview selected" Click="OnPreviewSelectedFiles">
@@ -473,7 +490,7 @@
                                                     </MenuFlyoutItem>
                                                 </MenuFlyout>
                                             </StackPanel.ContextFlyout>
-                                            <FontIcon Glyph="&#xE8B7;" FontSize="14" />
+                                            <FontIcon Glyph="&#xE7C3;" FontSize="14" />
                                             <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" />
                                             <TextBlock Text="{x:Bind MatchCount}" Opacity="0.7" />
                                             <TextBlock Text="matches" Opacity="0.7" />
@@ -481,7 +498,7 @@
                                             <TextBlock Text="{x:Bind FormattedDate}" Opacity="0.5" FontSize="12" />
                                             <TextBlock Text="{x:Bind DirectoryName}" Opacity="0.5" />
                                         </StackPanel>
-                                        <Button Grid.Column="1" Click="OnShowFileGroupInExplorer" Tag="{x:Bind FilePath}"
+                                        <Button Grid.Column="2" Click="OnShowFileGroupInExplorer" Tag="{x:Bind FilePath}"
                                                 Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
                                                 Background="Transparent" BorderThickness="0"
                                                 VerticalAlignment="Center" Margin="4,0,0,0"
@@ -491,12 +508,6 @@
                                         </Grid>
                                     </Expander.Header>
                                     <StackPanel>
-                                        <StackPanel Orientation="Horizontal" Spacing="8" Padding="4,4,0,2">
-                                            <CheckBox Content="Select All" IsChecked="{x:Bind AllSelected, Mode=TwoWay}"
-                                                      FontSize="12" MinHeight="0" Padding="4,0,0,0"
-                                                      Checked="OnSelectAllChecked" Unchecked="OnSelectAllUnchecked" />
-                                            <TextBlock Text="{x:Bind SelectedCountText, Mode=OneWay}" Opacity="0.5" FontSize="11" VerticalAlignment="Center" />
-                                        </StackPanel>
                                         <ItemsControl ItemsSource="{x:Bind VisibleResults}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate x:DataType="models:SearchResult">
@@ -518,8 +529,7 @@
                                                             <ColumnDefinition Width="Auto" />
                                                             <ColumnDefinition Width="*" />
                                                         </Grid.ColumnDefinitions>
-                                                        <CheckBox IsChecked="{x:Bind IsSelected, Mode=TwoWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
-                                                                  Checked="OnMatchCheckChanged" Unchecked="OnMatchCheckChanged" />
+                                                        <CheckBox IsChecked="{x:Bind IsSelected, Mode=TwoWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center" />
                                                         <TextBlock Grid.Column="1" Text="{x:Bind LineNumber}" Opacity="0.6" MinWidth="40" TextAlignment="Right" FontFamily="Consolas" FontSize="12" VerticalAlignment="Center" />
                                                         <RichTextBlock Grid.Column="2" TextTrimming="CharacterEllipsis" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="False" Loaded="OnMatchLineLoaded" VerticalAlignment="Center" />
                                                     </Grid>
