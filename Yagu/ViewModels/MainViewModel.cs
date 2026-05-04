@@ -40,6 +40,10 @@ public sealed partial class MainViewModel : ObservableObject
     private CancellationTokenSource _metadataCts = new();
     private System.Diagnostics.Stopwatch? _searchTimer;
     private long _bytesScanned;
+    private long _prevBytesScanned;
+    private int _prevFilesScanned;
+    private double _prevSampleTime;
+    internal readonly List<(double filesPerSec, double mbPerSec)> ThroughputSamples = new();
 
     public MainViewModel() : this(new SearchService(), new SettingsService(), new EditorLauncher(),
                                    DispatcherQueue.GetForCurrentThread())
@@ -86,6 +90,7 @@ public sealed partial class MainViewModel : ObservableObject
         SkipExtensions = _settings.SkipExtensions;
         SuppressAdminWarning = _settings.SuppressAdminWarning;
         HasCompletedFirstRun = _settings.HasCompletedFirstRun;
+        BackupBeforeSave = _settings.BackupBeforeSave;
 
         Helpers.LineTruncator.TruncatedLength = LineTruncationLength;
 
@@ -138,6 +143,7 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     [ObservableProperty] public partial bool HasCompletedFirstRun { get; set; }
+    [ObservableProperty] public partial bool BackupBeforeSave { get; set; } = true;
 
     /// <summary>Observable collection of skip-extension items for the multi-select dropdown.</summary>
     public ObservableCollection<SkipExtensionItem> SkipExtensionItems { get; } = [];
@@ -384,11 +390,25 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial string? FallbackReason { get; set; }
     [ObservableProperty] public partial int FilesScanned { get; set; }
     [ObservableProperty] public partial int TotalFiles { get; set; }
+
+    public string ProgressTooltip
+    {
+        get
+        {
+            if (TotalFiles <= 0) return "Waiting for file list…";
+            double pct = (double)FilesScanned / TotalFiles * 100;
+            return $"{pct:F1}% complete ({FilesScanned:N0} files out of {TotalFiles:N0} total files)";
+        }
+    }
+
+    partial void OnFilesScannedChanged(int value) => OnPropertyChanged(nameof(ProgressTooltip));
+    partial void OnTotalFilesChanged(int value) => OnPropertyChanged(nameof(ProgressTooltip));
     [ObservableProperty] public partial int MatchesFound { get; set; }
     [ObservableProperty] public partial int FilesSkipped { get; set; }
     [ObservableProperty] public partial int AccessDeniedCount { get; set; }
     [ObservableProperty] public partial bool Truncated { get; set; }
     [ObservableProperty] public partial bool Degraded { get; set; }
+    [ObservableProperty] public partial string DegradedNoticeText { get; set; } = string.Empty;
     [ObservableProperty] public partial string FilesPerSecondText { get; set; } = string.Empty;
 
     /// <summary>Disk-backed store for evicted results. Null before first search.</summary>
@@ -596,14 +616,13 @@ public sealed partial class MainViewModel : ObservableObject
                         AccessDeniedCount = p.Snapshot.AccessDenied;
                         _bytesScanned = p.Snapshot.BytesScanned;
                         UpdateSkipBreakdown(p.Snapshot.SkipReasons);
-                        StatusText = BuildProgressStatus(p.Snapshot);
                         UpdateFilesPerSecond();
                         break;
                     case SearchEvent.Error e:
                         ErrorText = e.Message;
                         break;
                     case SearchEvent.MemoryPressure mp:
-                        StatusText = BuildMemoryPressureStatus(mp);
+                        DegradedNoticeText = "Memory pressure — paging results to disk";
                         LogService.Instance.Info("ViewModel", $"Memory pressure event received — starting eviction ({_resultCollection.AllGroups.Count:N0} groups, {MatchesFound:N0} matches)");
                         var evictSw = System.Diagnostics.Stopwatch.StartNew();
                         int evictedCount = EvictAllResults();
@@ -614,7 +633,8 @@ public sealed partial class MainViewModel : ObservableObject
                         break;
                     case SearchEvent.MemoryPressureRelieved relieved:
                         Degraded = false;
-                        StatusText = BuildCurrentSearchStatus();
+                        DegradedNoticeText = string.Empty;
+                        UpdateFilesPerSecond();
                         LogService.Instance.Info("ViewModel", $"Memory pressure relieved — leaving memory-saving mode ({relieved.Diagnostics})");
                         break;
                     case SearchEvent.Completed c:
@@ -646,6 +666,7 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 var cancelledElapsed = StopSearchTimer();
                 StatusText = BuildCancelledStatus(cancelledElapsed);
+                DegradedNoticeText = string.Empty;
                 LogService.Instance.Info("Search", $"Search #{runId} cancelled by user");
             }
         }
@@ -727,8 +748,18 @@ public sealed partial class MainViewModel : ObservableObject
         UpdateSkipBreakdown(null);
         Truncated = false;
         Degraded = false;
+        DegradedNoticeText = string.Empty;
         IsSearching = true;
         _bytesScanned = 0;
+        _prevBytesScanned = 0;
+        _prevFilesScanned = 0;
+        _prevSampleTime = 0;
+        _prevDisplayTime = 0;
+        _prevDisplayFiles = 0;
+        _prevDisplayBytes = 0;
+        _instantFilesPerSec = 0;
+        _instantMbPerSec = 0;
+        ThroughputSamples.Clear();
         _searchTimer = System.Diagnostics.Stopwatch.StartNew();
         StatusText = "Searching…";
 
@@ -953,16 +984,53 @@ public sealed partial class MainViewModel : ObservableObject
         return $"{filesProcessed / seconds:N1} files/sec, {mbPerSec:N0} MB/s";
     }
 
+    private double _instantFilesPerSec;
+    private double _instantMbPerSec;
+    private double _prevDisplayTime;
+    private int _prevDisplayFiles;
+    private long _prevDisplayBytes;
+
     private void UpdateFilesPerSecond()
     {
         if (_searchTimer is null || FilesScanned == 0)
         {
-            FilesPerSecondText = string.Empty;
             return;
         }
         double seconds = Math.Max(_searchTimer.Elapsed.TotalSeconds, 0.001);
-        double mbPerSec = _bytesScanned / (1024.0 * 1024.0) / seconds;
-        FilesPerSecondText = $"{FilesScanned / seconds:N0} files/sec  {mbPerSec:N0} MB/s";
+        int filesWithMatches = _resultCollection.AllGroups.Count;
+
+        // Update instantaneous rate display (~2s window, like Task Manager)
+        double displayDt = seconds - _prevDisplayTime;
+        if (displayDt >= 2.0)
+        {
+            int deltaFiles = FilesScanned - _prevDisplayFiles;
+            long deltaBytes = _bytesScanned - _prevDisplayBytes;
+            _instantFilesPerSec = deltaFiles / displayDt;
+            _instantMbPerSec = deltaBytes / (1024.0 * 1024.0) / displayDt;
+            _prevDisplayFiles = FilesScanned;
+            _prevDisplayBytes = _bytesScanned;
+            _prevDisplayTime = seconds;
+        }
+
+        StatusText = $"{MatchesFound:N0} matches in {filesWithMatches:N0} files ({seconds:F2}s, {_instantFilesPerSec:N1} files/sec, {_instantMbPerSec:N0} MB/s)";
+
+        // Collect incremental sample for sparkline (~0.15s window, rolling 30s)
+        double dt = seconds - _prevSampleTime;
+        if (dt >= 0.15) // sample ~6-7x per second
+        {
+            int deltaFiles = FilesScanned - _prevFilesScanned;
+            long deltaBytes = _bytesScanned - _prevBytesScanned;
+            double sampleFps = deltaFiles / dt;
+            double sampleMbps = deltaBytes / (1024.0 * 1024.0) / dt;
+            ThroughputSamples.Add((sampleFps, sampleMbps));
+            // Keep only last 30 seconds of samples (30s / 0.15s = 200)
+            const int maxSamples = 200;
+            if (ThroughputSamples.Count > maxSamples)
+                ThroughputSamples.RemoveRange(0, ThroughputSamples.Count - maxSamples);
+            _prevFilesScanned = FilesScanned;
+            _prevBytesScanned = _bytesScanned;
+            _prevSampleTime = seconds;
+        }
     }
 
     partial void OnResultFilterChanged(string value) => ApplySortAndFilter();
@@ -1024,6 +1092,7 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.SkipExtensions = SkipExtensions;
         _settings.SuppressAdminWarning = SuppressAdminWarning;
         _settings.HasCompletedFirstRun = HasCompletedFirstRun;
+        _settings.BackupBeforeSave = BackupBeforeSave;
 
         Helpers.LineTruncator.TruncatedLength = LineTruncationLength;
 

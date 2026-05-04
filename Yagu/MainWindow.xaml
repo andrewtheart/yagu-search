@@ -279,13 +279,13 @@
         </Border>
 
         <!-- Status / progress -->
-        <StackPanel Grid.Row="3" Padding="16,4,16,4" Spacing="4">
-            <TextBlock Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Opacity="0.9" />
+        <StackPanel Grid.Row="3" Padding="16,2,16,2" Spacing="4">
             <ProgressBar
                 Visibility="{x:Bind ViewModel.IsSearching, Mode=OneWay}"
                 Maximum="{x:Bind ViewModel.TotalFiles, Mode=OneWay}"
                 Value="{x:Bind ViewModel.FilesScanned, Mode=OneWay}"
-                IsIndeterminate="False" CornerRadius="2" />
+                IsIndeterminate="False" CornerRadius="3" Height="6"
+                ToolTipService.ToolTip="{x:Bind ViewModel.ProgressTooltip, Mode=OneWay}" />
             <TextBlock Foreground="OrangeRed"
                        Visibility="{x:Bind ViewModel.HasFallbackReason, Mode=OneWay}"
                        Text="{x:Bind ViewModel.FallbackReason, Mode=OneWay}" />
@@ -295,7 +295,7 @@
         </StackPanel>
 
         <!-- Split pane: results + preview -->
-        <Grid x:Name="SplitPaneGrid" Grid.Row="4" Margin="16,4,16,4">
+        <Grid x:Name="SplitPaneGrid" Grid.Row="4" Margin="16,2,16,4">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="ResultsColumn" Width="*" MinWidth="200" />
                 <ColumnDefinition x:Name="SplitterColumn" Width="0" />
@@ -313,8 +313,14 @@
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
-                    <StackPanel Grid.Row="0" Orientation="Horizontal" Padding="12,8" Spacing="8"
-                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
+                    <Grid Grid.Row="0" Padding="12,8"
+                          BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
                         <FontIcon Glyph="&#xE8CB;" FontSize="12" VerticalAlignment="Center" Opacity="0.6" />
                         <TextBlock Text="Sort:" VerticalAlignment="Center" FontSize="12" Opacity="0.7" />
                         <ComboBox SelectedIndex="{x:Bind ViewModel.SortModeIndex, Mode=TwoWay}" VerticalAlignment="Center" FontSize="12">
@@ -345,7 +351,18 @@
                             <NumberBox Value="{x:Bind ViewModel.ContextLines, Mode=TwoWay}" Minimum="0" Maximum="20"
                                        SpinButtonPlacementMode="Compact" MinWidth="80" FontSize="12" />
                         </StackPanel>
-                    </StackPanel>
+                        </StackPanel>
+                        <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.DegradedNoticeText, Mode=OneWay}"
+                                   HorizontalAlignment="Right" VerticalAlignment="Center"
+                                   FontSize="12" Foreground="DarkOrange" Opacity="0.9" Margin="8,0,4,0" />
+                        <Button x:Name="ExpandResultsButton" Grid.Column="2"
+                                Click="OnExpandResultsPanel"
+                                Background="Transparent" BorderThickness="0"
+                                Padding="6,4" VerticalAlignment="Center"
+                                ToolTipService.ToolTip="Expand file list / collapse preview">
+                            <FontIcon x:Name="ExpandResultsIcon" Glyph="&#xE740;" FontSize="12" />
+                        </Button>
+                    </Grid>
 
                     <Grid Grid.Row="1" Margin="8,6">
                         <TextBox PlaceholderText="Filter files…"
@@ -368,6 +385,10 @@
                         Padding="4,0">
                         <ListView.ContextFlyout>
                             <MenuFlyout Opening="OnResultsContextMenuOpening">
+                                <MenuFlyoutItem x:Name="CtxPreviewSelected" Text="Preview selected" Click="OnPreviewSelectedFiles">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8A1;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutSeparator />
                                 <MenuFlyoutItem x:Name="CtxCopyPaths" Text="Copy File Path" Click="OnCopySelectedFilePaths">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
@@ -510,6 +531,7 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel x:Name="PreviewToolbarContent" Orientation="Horizontal" Spacing="6" Visibility="Collapsed">
+                            <!-- File identity -->
                             <FontIcon Glyph="&#xE7B3;" FontSize="12" VerticalAlignment="Center" Opacity="0.6" />
                             <TextBlock x:Name="PreviewFileLabel" VerticalAlignment="Center" FontSize="12" Opacity="0.7"
                                        TextTrimming="CharacterEllipsis" MaxWidth="300" />
@@ -518,33 +540,12 @@
                                 <FontIcon Glyph="&#xE8C8;" FontSize="12" />
                             </Button>
                             <AppBarSeparator x:Name="PreviewToolbarSeparator" />
-                            <Button x:Name="FullFileButton" Click="OnShowFullFile" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Show full file">
+
+                            <!-- View group -->
+                            <Button x:Name="FullFileButton" Click="OnShowFullFile" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Show full file content">
                                 <StackPanel Orientation="Horizontal" Spacing="4">
                                     <FontIcon Glyph="&#xE8A5;" FontSize="12" />
                                     <TextBlock Text="Full File" />
-                                </StackPanel>
-                            </Button>
-                            <Button x:Name="SavePreviewEditButton" Click="OnSavePreviewEdit" FontSize="12" Padding="8,4"
-                                    ToolTipService.ToolTip="Save changes" Visibility="Collapsed" IsEnabled="False">
-                                <StackPanel Orientation="Horizontal" Spacing="4">
-                                    <FontIcon Glyph="&#xE74E;" FontSize="12" />
-                                    <TextBlock Text="Save" />
-                                </StackPanel>
-                            </Button>
-                            <Button x:Name="ClosePreviewEditButton" Click="OnClosePreviewEdit" Width="28" Height="28"
-                                    MinWidth="0" MinHeight="0" Padding="0" ToolTipService.ToolTip="Close editor" Visibility="Collapsed">
-                                <FontIcon Glyph="&#xE711;" FontSize="12" />
-                            </Button>
-                            <Button x:Name="OpenInDefaultAppButton" Click="OnOpenInDefaultApp" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Open with the default Windows application">
-                                <StackPanel Orientation="Horizontal" Spacing="4">
-                                    <FontIcon Glyph="&#xE8A7;" FontSize="12" />
-                                    <TextBlock Text="Open" />
-                                </StackPanel>
-                            </Button>
-                            <Button x:Name="OpenInEditorButton" Click="OnOpenInEditor" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Edit file">
-                                <StackPanel Orientation="Horizontal" Spacing="4">
-                                    <FontIcon Glyph="&#xE70F;" FontSize="12" />
-                                    <TextBlock Text="Editor" />
                                 </StackPanel>
                             </Button>
                             <ComboBox SelectedIndex="{x:Bind ViewModel.PreviewModeIndex, Mode=TwoWay}" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Multi-select preview mode"
@@ -553,7 +554,7 @@
                                 <x:String>Multi-highlight</x:String>
                             </ComboBox>
                             <ToggleButton x:Name="WordWrapToggle" FontSize="12" Padding="8,4"
-                                          ToolTipService.ToolTip="Toggle word wrap"
+                                          ToolTipService.ToolTip="Toggle word wrap in preview"
                                           IsChecked="{x:Bind ViewModel.PreviewWordWrap, Mode=TwoWay}"
                                           Click="OnWordWrapToggled">
                                 <StackPanel Orientation="Horizontal" Spacing="4">
@@ -561,6 +562,41 @@
                                     <TextBlock Text="Wrap" />
                                 </StackPanel>
                             </ToggleButton>
+                            <AppBarSeparator />
+
+                            <!-- Action group -->
+                            <Button x:Name="OpenInDefaultAppButton" Click="OnOpenInDefaultApp" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Open with default Windows application">
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <FontIcon Glyph="&#xE8A7;" FontSize="12" />
+                                    <TextBlock Text="Open" />
+                                </StackPanel>
+                            </Button>
+                            <Button x:Name="OpenInEditorButton" Click="OnOpenInEditor" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Edit file in built-in editor">
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <FontIcon Glyph="&#xE70F;" FontSize="12" />
+                                    <TextBlock Text="Edit" />
+                                </StackPanel>
+                            </Button>
+                            <Button x:Name="ShowInExplorerButton" Click="OnShowInExplorer" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Open containing folder in Explorer">
+                                <FontIcon Glyph="&#xED25;" FontSize="12" />
+                            </Button>
+
+                            <!-- Editor-mode group (visible only when editing) -->
+                            <AppBarSeparator x:Name="EditorSeparator" Visibility="Collapsed" />
+                            <Button x:Name="SavePreviewEditButton" Click="OnSavePreviewEdit" FontSize="12" Padding="8,4"
+                                    ToolTipService.ToolTip="Save changes to file" Visibility="Collapsed" IsEnabled="False">
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <FontIcon Glyph="&#xE74E;" FontSize="12" />
+                                    <TextBlock Text="Save" />
+                                </StackPanel>
+                            </Button>
+                            <Button x:Name="ClosePreviewEditButton" Click="OnClosePreviewEdit" FontSize="12" Padding="8,4"
+                                    ToolTipService.ToolTip="Close editor and return to preview" Visibility="Collapsed">
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <FontIcon Glyph="&#xE72B;" FontSize="12" />
+                                    <TextBlock Text="Back" />
+                                </StackPanel>
+                            </Button>
                         </StackPanel>
                         <StackPanel x:Name="MatchNavPanel" Grid.Column="1" Visibility="Collapsed"
                                     Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
@@ -710,19 +746,22 @@
               BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" ColumnSpacing="16">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" MinWidth="420" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Text="{x:Bind ViewModel.FilesPerSecondText, Mode=OneWay}" Opacity="0.6" FontSize="12" FontFamily="Consolas" />
             <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Opacity="0.8" FontSize="12" />
-            <TextBlock Grid.Column="2" FontSize="12" Opacity="0.6" x:Name="SkipCountBlock"
+            <Polyline x:Name="ThroughputSparkline" Grid.Column="2" Stroke="CornflowerBlue" StrokeThickness="1.2"
+                      VerticalAlignment="Center" HorizontalAlignment="Stretch" Height="20" Opacity="0.7" />
+            <TextBlock Grid.Column="3" FontSize="12" Opacity="0.6" x:Name="SkipCountBlock"
                        Tapped="OnSkipCountTapped" PointerEntered="OnSkipCountPointerEntered"
                        PointerExited="OnSkipCountPointerExited">
                 <Run Text="Skipped: " />
                 <Run Text="{x:Bind ViewModel.FilesSkipped, Mode=OneWay}" />
             </TextBlock>
-            <TextBlock Grid.Column="3" Foreground="DarkOrange" FontSize="12"
+            <TextBlock Grid.Column="4" Foreground="DarkOrange" FontSize="12"
                        Visibility="{x:Bind ViewModel.Truncated, Mode=OneWay}"
                        Text="Results truncated — refine your query" />
         </Grid>

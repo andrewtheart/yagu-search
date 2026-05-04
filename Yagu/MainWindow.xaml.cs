@@ -136,6 +136,8 @@ public sealed partial class MainWindow : Window
                 _autoScrollTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
                 _autoScrollTimer.Tick += OnAutoScrollTick;
                 _autoScrollTimer.Start();
+                ThroughputSparkline.Points.Clear();
+                ThroughputSparkline.Opacity = 0.7;
             }
             else
             {
@@ -143,7 +145,15 @@ public sealed partial class MainWindow : Window
                 SearchCancelLabel.Text = "Search";
                 SearchCancelButton.Style = (Style)Application.Current.Resources["AccentButtonStyle"];
                 _autoScrollTimer?.Stop();
+                UpdateSparkline(); // final update
+                ThroughputSparkline.Opacity = 0.35;
             }
+        };
+
+        ViewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(ViewModel.FilesPerSecondText) or nameof(ViewModel.StatusText))
+                UpdateSparkline();
         };
 
         // Flush logs when the window closes so no diagnostic entries are lost.
@@ -270,6 +280,37 @@ public sealed partial class MainWindow : Window
     {
         if (!_autoScrollEnabled || ViewModel.ResultGroups.Count == 0) return;
         ResultsList.ScrollIntoView(ViewModel.ResultGroups[^1]);
+    }
+
+    private void UpdateSparkline()
+    {
+        var samples = ViewModel.ThroughputSamples;
+        if (samples.Count < 2)
+        {
+            ThroughputSparkline.Points.Clear();
+            return;
+        }
+
+        double width = ThroughputSparkline.ActualWidth;
+        double height = ThroughputSparkline.ActualHeight;
+        if (width <= 0 || height <= 0) return;
+
+        // Use MB/s for the sparkline (more visually interesting than files/s)
+        double max = 1;
+        for (int i = 0; i < samples.Count; i++)
+        {
+            if (samples[i].mbPerSec > max) max = samples[i].mbPerSec;
+        }
+
+        var pts = ThroughputSparkline.Points;
+        pts.Clear();
+        double xStep = width / (samples.Count - 1);
+        for (int i = 0; i < samples.Count; i++)
+        {
+            double x = i * xStep;
+            double y = height - (samples[i].mbPerSec / max * (height - 2)) - 1;
+            pts.Add(new Windows.Foundation.Point(x, y));
+        }
     }
 
     private void SetAutoScrollEnabled(bool enabled)
@@ -680,6 +721,12 @@ public sealed partial class MainWindow : Window
             editor.TextChanged += (_, _) => ViewModel.EditorCommand = editor.Text;
             g.Children.Add(editor);
 
+            var backup = new CheckBox { Content = "Backup file before saving", IsChecked = ViewModel.BackupBeforeSave };
+            backup.Checked += (_, _) => ViewModel.BackupBeforeSave = true;
+            backup.Unchecked += (_, _) => ViewModel.BackupBeforeSave = false;
+            g.Children.Add(backup);
+            g.Children.Add(new TextBlock { Text = "When enabled, the original file is copied to <filename>.bak before saving changes from the built-in editor. If a .bak already exists, uses .bak-2, .bak-3, etc.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
             sp.Children.Add((Border)g.Tag!);
         }
 
@@ -840,12 +887,69 @@ public sealed partial class MainWindow : Window
         PreviewColumn.MinWidth = 200;
         SplitterBorder.Visibility = Visibility.Visible;
         PreviewPanelBorder.Visibility = Visibility.Visible;
+        ExpandResultsIcon.Glyph = "\uE740"; // FullScreen glyph
+        ToolTipService.SetToolTip(ExpandResultsButton, "Expand file list / collapse preview");
+    }
+
+    private void CollapsePreviewPanel()
+    {
+        if (!_previewPanelRevealed) return;
+        _previewPanelRevealed = false;
+        ResultsColumn.Width = new GridLength(1, GridUnitType.Star);
+        SplitterColumn.Width = new GridLength(0);
+        PreviewColumn.Width = new GridLength(0);
+        PreviewColumn.MinWidth = 0;
+        SplitterBorder.Visibility = Visibility.Collapsed;
+        PreviewPanelBorder.Visibility = Visibility.Collapsed;
+        ExpandResultsIcon.Glyph = "\uE73F"; // BackToWindow glyph
+        ToolTipService.SetToolTip(ExpandResultsButton, "Restore preview panel");
+    }
+
+    private void OnExpandResultsPanel(object sender, RoutedEventArgs e)
+    {
+        if (_previewPanelRevealed)
+            CollapsePreviewPanel();
+        else
+            EnsurePreviewPanelVisible();
     }
 
     private async void OnResultItemClick(object sender, ItemClickEventArgs e)
     {
         if (e.ClickedItem is FileGroup g && g.Count > 0)
+        {
+            // If the file is already visible in the multi-select preview sections, scroll to it instead of reloading.
+            if (PreviewSectionsPanel.Visibility == Visibility.Visible && TryScrollToPreviewSection(g[0].FilePath))
+                return;
+
             await UpdatePreviewAsync(g[0]);
+        }
+    }
+
+    /// <summary>
+    /// Scrolls to an existing preview section for the given file path.
+    /// Returns true if the section was found and scrolled to.
+    /// </summary>
+    private bool TryScrollToPreviewSection(string filePath)
+    {
+        foreach (var child in PreviewSectionsPanel.Children.OfType<Expander>())
+        {
+            if (ToolTipService.GetToolTip(child) is string tip
+                && string.Equals(tip, filePath, StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    child.IsExpanded = true;
+                    var transform = child.TransformToVisual(PreviewScrollViewer);
+                    var point = transform.TransformPoint(new Windows.Foundation.Point(0, 0));
+                    double targetOffset = PreviewScrollViewer.VerticalOffset + point.Y;
+                    targetOffset = Math.Max(0, targetOffset);
+                    PreviewScrollViewer.ChangeView(null, targetOffset, null, disableAnimation: false);
+                }
+                catch { /* Layout not ready — ignore */ }
+                return true;
+            }
+        }
+        return false;
     }
 
     private async void OnFileGroupExpanding(Expander sender, ExpanderExpandingEventArgs args)
@@ -983,6 +1087,10 @@ public sealed partial class MainWindow : Window
         PreviewBlock.Blocks.Clear();
         FullFileButton.IsEnabled = true;
         PreviewToolbarContent.Visibility = Visibility.Collapsed;
+
+        // Collapse the preview panel so only the file list shows during search
+        CollapsePreviewPanel();
+
         return true;
     }
 
@@ -1000,6 +1108,16 @@ public sealed partial class MainWindow : Window
     {
         if (_previewResult is null) return;
         await ShowFullFileEditorAsync(_previewResult);
+    }
+
+    private void OnShowInExplorer(object sender, RoutedEventArgs e)
+    {
+        if (_previewResult is null) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{_previewResult.FilePath}\"") { UseShellExecute = false });
+        }
+        catch (Exception ex) { LogService.Instance.Warning("MainWindow", $"Failed to show in Explorer: {_previewResult.FilePath}", ex); }
     }
 
     private void OnMatchLineLoaded(object sender, RoutedEventArgs e)
@@ -1065,11 +1183,36 @@ public sealed partial class MainWindow : Window
 
     private void OnResultsContextMenuOpening(object sender, object e)
     {
-        bool plural = ResultsList.SelectedItems.Count > 1;
+        int count = ResultsList.SelectedItems.Count;
+        bool plural = count > 1;
+        CtxPreviewSelected.Text = $"Preview selected ({count})";
         CtxCopyPaths.Text = plural ? "Copy File Paths" : "Copy File Path";
         CtxCopyWithContent.Text = plural ? "Copy Files With Content" : "Copy File With Content";
         CtxSavePaths.Text = plural ? "Save File Paths\u2026" : "Save File Path\u2026";
         CtxSaveWithContent.Text = plural ? "Save Files With Content\u2026" : "Save File With Content\u2026";
+    }
+
+    private async void OnPreviewSelectedFiles(object sender, RoutedEventArgs e)
+    {
+        // Select all match results within each selected FileGroup
+        _suppressPreviewUpdate = true;
+        try
+        {
+            foreach (var item in ResultsList.SelectedItems)
+            {
+                if (item is FileGroup g)
+                    g.SelectAll();
+            }
+        }
+        finally { _suppressPreviewUpdate = false; }
+
+        var selected = ViewModel.GetAllSelectedResults();
+        if (selected.Count == 0) return;
+
+        if (selected.Count >= 2)
+            await UpdateMultiSelectPreviewAsync(scrollTarget: selected[0], scrollToTop: true);
+        else
+            await UpdatePreviewAsync(selected[0]);
     }
 
     private void OnCopySelectedFilePaths(object sender, RoutedEventArgs e)
@@ -2395,6 +2538,22 @@ public sealed partial class MainWindow : Window
         SavePreviewEditButton.IsEnabled = false;
         try
         {
+            if (ViewModel.BackupBeforeSave && File.Exists(_previewEditorPath))
+            {
+                var bakPath = _previewEditorPath + ".bak";
+                if (!File.Exists(bakPath))
+                {
+                    File.Copy(_previewEditorPath, bakPath, overwrite: false);
+                }
+                else
+                {
+                    int suffix = 2;
+                    while (File.Exists($"{_previewEditorPath}.bak-{suffix}"))
+                        suffix++;
+                    File.Copy(_previewEditorPath, $"{_previewEditorPath}.bak-{suffix}", overwrite: false);
+                }
+            }
+
             await File.WriteAllTextAsync(_previewEditorPath, PreviewEditor.Text, _previewEditorEncoding).ConfigureAwait(true);
             _previewEditorOriginalText = PreviewEditor.Text;
             _previewEditorDirty = false;
@@ -2486,8 +2645,18 @@ public sealed partial class MainWindow : Window
     {
         PreviewEditor.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         PreviewScrollViewer.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+
+        // Editor-mode group
+        EditorSeparator.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         SavePreviewEditButton.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         ClosePreviewEditButton.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+
+        // Hide view/action buttons while editing
+        FullFileButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+        OpenInDefaultAppButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+        OpenInEditorButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+        ShowInExplorerButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+
         if (visible)
             PreviewToolbarContent.Visibility = Visibility.Visible;
         ApplyWordWrap(ViewModel.PreviewWordWrap);
@@ -2543,7 +2712,11 @@ public sealed partial class MainWindow : Window
     private async void OnPreviewBackClick(object sender, RoutedEventArgs e)
     {
         PreviewBackButton.Visibility = Visibility.Collapsed;
-        if (_previewResult is { } result)
+
+        var selected = ViewModel.GetAllSelectedResults();
+        if (selected.Count >= 2)
+            await UpdateMultiSelectPreviewAsync();
+        else if (_previewResult is { } result)
             await UpdatePreviewAsync(result);
     }
 
