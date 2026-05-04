@@ -1120,6 +1120,32 @@ public sealed partial class MainWindow : Window
         catch (Exception ex) { LogService.Instance.Warning("MainWindow", $"Failed to show in Explorer: {_previewResult.FilePath}", ex); }
     }
 
+    private void OnShowFileGroupInExplorer(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: string path } || string.IsNullOrWhiteSpace(path)) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = false });
+        }
+        catch (Exception ex) { LogService.Instance.Warning("MainWindow", $"Failed to show in Explorer: {path}", ex); }
+    }
+
+    // ── Group mode menu handlers ──────────────────────────────────
+
+    private void OnGroupModeNone(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.None;
+    private void OnGroupModeFolder(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.Folder;
+    private void OnGroupModeDateToday(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DateToday;
+    private void OnGroupModeDateYesterday(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DateYesterday;
+    private void OnGroupModeDateThisWeek(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DateThisWeek;
+    private void OnGroupModeDateThisMonth(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DateThisMonth;
+    private void OnGroupModeDateThisYear(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DateThisYear;
+    private void OnGroupModeDatePast2Years(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DatePast2Years;
+    private void OnGroupModeDatePast5Years(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DatePast5Years;
+    private void OnGroupModeDatePast10Years(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DatePast10Years;
+    private void OnGroupModeDatePast20Years(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DatePast20Years;
+    private void OnGroupModeDatePast30Years(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DatePast30Years;
+    private void OnGroupModeDatePast50Years(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DatePast50Years;
+
     private void OnMatchLineLoaded(object sender, RoutedEventArgs e)
     {
         if (sender is not RichTextBlock rtb) return;

@@ -41,7 +41,7 @@ public sealed class UiResultPerformanceTests
     {
         var collection = new SearchResultCollection
         {
-            GroupByDirectory = true,
+            GroupMode = GroupMode.Folder,
             SortModeIndex = 0,
             SortDirectionIndex = 0,
         };
@@ -270,7 +270,7 @@ public class SearchResultCollectionCoverageTests
         var col = new SearchResultCollection();
         col.Add(MakeResult(@"C:\dir1\a.txt"));
         col.Add(MakeResult(@"C:\dir2\b.txt"));
-        col.GroupByDirectory = true;
+        col.GroupMode = GroupMode.Folder;
         col.SortModeIndex = mode;
         col.ApplySortAndFilter();
         Assert.Equal(2, col.VisibleGroups.Count);
@@ -284,7 +284,7 @@ public class SearchResultCollectionCoverageTests
         var col = new SearchResultCollection();
         col.Add(MakeResult(@"C:\zzz\a.txt"));
         col.Add(MakeResult(@"C:\aaa\b.txt"));
-        col.GroupByDirectory = true;
+        col.GroupMode = GroupMode.Folder;
         col.SortDirectionIndex = 1; // ascending
         col.ApplySortAndFilter();
         Assert.Equal(2, col.VisibleGroups.Count);
@@ -388,7 +388,7 @@ public class SearchResultCollectionSortBranchTests
         var col = new SearchResultCollection();
         col.Add(MakeResult(@"C:\dir1\a.txt"));
         col.Add(MakeResult(@"C:\dir2\b.txt"));
-        col.GroupByDirectory = grouped;
+        col.GroupMode = grouped ? GroupMode.Folder : GroupMode.None;
         col.SortModeIndex = mode;
         col.SortDirectionIndex = 1; // ascending
         col.ApplySortAndFilter();

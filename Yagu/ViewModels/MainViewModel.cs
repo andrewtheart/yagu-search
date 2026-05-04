@@ -117,7 +117,26 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial int SearchModeIndex { get; set; }
     [ObservableProperty] public partial int SortModeIndex { get; set; }
     [ObservableProperty] public partial int SortDirectionIndex { get; set; }
-    [ObservableProperty] public partial bool GroupByDirectory { get; set; }
+    [ObservableProperty] public partial int GroupModeIndex { get; set; }
+
+    public GroupMode GroupMode => (GroupMode)GroupModeIndex;
+    public string GroupModeLabel => GroupMode switch
+    {
+        GroupMode.None => "None",
+        GroupMode.Folder => "Folder",
+        GroupMode.DateToday => "Date: Today",
+        GroupMode.DateYesterday => "Date: Yesterday",
+        GroupMode.DateThisWeek => "Date: This week",
+        GroupMode.DateThisMonth => "Date: This month",
+        GroupMode.DateThisYear => "Date: This year",
+        GroupMode.DatePast2Years => "Date: Past 2 years",
+        GroupMode.DatePast5Years => "Date: Past 5 years",
+        GroupMode.DatePast10Years => "Date: Past 10 years",
+        GroupMode.DatePast20Years => "Date: Past 20 years",
+        GroupMode.DatePast30Years => "Date: Past 30 years",
+        GroupMode.DatePast50Years => "Date: Past 50 years",
+        _ => "None",
+    };
     [ObservableProperty] public partial int PreviewModeIndex { get; set; } = 1; // 0 = Concatenated, 1 = Multi-highlight
     [ObservableProperty] public partial bool PreviewWordWrap { get; set; }
     [ObservableProperty] public partial int FileLogLevelIndex { get; set; } // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
@@ -467,7 +486,12 @@ public sealed partial class MainViewModel : ObservableObject
     partial void OnAccessDeniedCountChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); }
     partial void OnSortModeIndexChanged(int value) => ApplySortAndFilter();
     partial void OnSortDirectionIndexChanged(int value) => ApplySortAndFilter();
-    partial void OnGroupByDirectoryChanged(bool value) => ApplySortAndFilter();
+    partial void OnGroupModeIndexChanged(int value)
+    {
+        OnPropertyChanged(nameof(GroupMode));
+        OnPropertyChanged(nameof(GroupModeLabel));
+        ApplySortAndFilter();
+    }
     partial void OnIncludeGlobsChanged(string value) => ApplySortAndFilter();
     partial void OnExcludeGlobsChanged(string value) => ApplySortAndFilter();
     partial void OnFileLogLevelIndexChanged(int value)
@@ -1044,7 +1068,7 @@ public sealed partial class MainViewModel : ObservableObject
         _resultCollection.ExcludeGlobs = ExcludeGlobs;
         _resultCollection.SortModeIndex = SortModeIndex;
         _resultCollection.SortDirectionIndex = SortDirectionIndex;
-        _resultCollection.GroupByDirectory = GroupByDirectory;
+        _resultCollection.GroupMode = GroupMode;
         _resultCollection.ApplySortAndFilter();
 
         OnPropertyChanged(nameof(HasResults));

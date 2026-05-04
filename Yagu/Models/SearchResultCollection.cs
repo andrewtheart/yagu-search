@@ -23,7 +23,7 @@ public sealed class SearchResultCollection
     public string ExcludeGlobs { get; set; } = string.Empty;
     public int SortModeIndex { get; set; }
     public int SortDirectionIndex { get; set; }
-    public bool GroupByDirectory { get; set; }
+    public GroupMode GroupMode { get; set; }
 
     public void Clear()
     {
@@ -143,9 +143,11 @@ public sealed class SearchResultCollection
 
         var filtered = _allGroups.Where(MatchesFilter).ToList();
         bool ascending = SortDirectionIndex == 1;
+        bool groupByDirectory = GroupMode == GroupMode.Folder;
+        bool groupByDate = GroupMode >= GroupMode.DateToday;
 
         List<FileGroup> sortedList;
-        if (GroupByDirectory)
+        if (groupByDirectory)
         {
             if (SortModeIndex == 0)
             {
@@ -168,6 +170,43 @@ public sealed class SearchResultCollection
                 }).ToList();
             }
         }
+        else if (groupByDate)
+        {
+            // Classify each group into a date bucket, then sort by bucket order + secondary sort
+            var bucketOrder = GetDateBucketOrder(GroupMode);
+            var classified = filtered
+                .Select(g => (Group: g, Bucket: ClassifyDateBucket(g.LastModified, GroupMode)))
+                .ToList();
+
+            IOrderedEnumerable<(FileGroup Group, string Bucket)> ordered;
+            if (ascending)
+                ordered = classified.OrderBy(x => bucketOrder.TryGetValue(x.Bucket, out var o) ? o : 999);
+            else
+                ordered = classified.OrderByDescending(x => bucketOrder.TryGetValue(x.Bucket, out var o) ? o : 999);
+
+            sortedList = (SortModeIndex switch
+            {
+                2 => ascending ? ordered.ThenBy(x => x.Group.LastModified) : ordered.ThenByDescending(x => x.Group.LastModified),
+                3 => ascending ? ordered.ThenBy(x => x.Group.FileSize) : ordered.ThenByDescending(x => x.Group.FileSize),
+                4 => ascending
+                    ? ordered.ThenBy(x => x.Group.FileName, StringComparer.OrdinalIgnoreCase)
+                    : ordered.ThenByDescending(x => x.Group.FileName, StringComparer.OrdinalIgnoreCase),
+                _ => ascending ? ordered.ThenBy(x => x.Group.MatchCount) : ordered.ThenByDescending(x => x.Group.MatchCount),
+            }).Select(x => x.Group).ToList();
+
+            // Assign date bucket headers
+            string? lastBucket = null;
+            var classifiedDict = classified.ToDictionary(x => x.Group, x => x.Bucket);
+            foreach (var group in sortedList)
+            {
+                var bucket = classifiedDict[group];
+                if (!string.Equals(bucket, lastBucket, StringComparison.Ordinal))
+                {
+                    group.GroupHeaderText = bucket;
+                    lastBucket = bucket;
+                }
+            }
+        }
         else
         {
             sortedList = (SortModeIndex switch
@@ -185,7 +224,7 @@ public sealed class SearchResultCollection
         foreach (var group in _allGroups)
             group.GroupHeaderText = null;
 
-        if (GroupByDirectory)
+        if (groupByDirectory)
         {
             string? lastDirectory = null;
             foreach (var group in sortedList)
@@ -197,6 +236,7 @@ public sealed class SearchResultCollection
                 }
             }
         }
+        // Date bucket headers are already assigned above in the groupByDate branch
 
         VisibleGroups.Clear();
         VisibleGroups.AddRange(sortedList);
@@ -254,4 +294,67 @@ public sealed class SearchResultCollection
         string.IsNullOrWhiteSpace(s)
             ? []
             : s.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    // ── Date-based grouping helpers ────────────────────────────────
+
+    internal static string ClassifyDateBucket(DateTime lastModified, GroupMode mode)
+    {
+        if (lastModified == default) return "Unknown date";
+
+        var now = DateTime.Now;
+        var today = now.Date;
+
+        if (lastModified.Date == today) return "Today";
+        if (mode == GroupMode.DateToday) return "Older";
+
+        if (lastModified.Date == today.AddDays(-1)) return "Yesterday";
+        if (mode == GroupMode.DateYesterday) return "Older";
+
+        // Monday-based week start
+        int dow = (int)today.DayOfWeek;
+        var startOfWeek = today.AddDays(-(dow == 0 ? 6 : dow - 1));
+        if (lastModified.Date >= startOfWeek) return "This week";
+        if (mode == GroupMode.DateThisWeek) return "Older";
+
+        if (lastModified.Year == today.Year && lastModified.Month == today.Month) return "This month";
+        if (mode == GroupMode.DateThisMonth) return "Older";
+
+        if (lastModified.Year == today.Year) return "This year";
+        if (mode == GroupMode.DateThisYear) return "Older";
+
+        if (lastModified >= today.AddYears(-2)) return "Past 2 years";
+        if (mode == GroupMode.DatePast2Years) return "Older";
+
+        if (lastModified >= today.AddYears(-5)) return "Past 5 years";
+        if (mode == GroupMode.DatePast5Years) return "Older";
+
+        if (lastModified >= today.AddYears(-10)) return "Past 10 years";
+        if (mode == GroupMode.DatePast10Years) return "Older";
+
+        if (lastModified >= today.AddYears(-20)) return "Past 20 years";
+        if (mode == GroupMode.DatePast20Years) return "Older";
+
+        if (lastModified >= today.AddYears(-30)) return "Past 30 years";
+        if (mode == GroupMode.DatePast30Years) return "Older";
+
+        if (lastModified >= today.AddYears(-50)) return "Past 50 years";
+        // DatePast50Years is the widest — everything falls through to Older
+        return "Older";
+    }
+
+    private static readonly string[] DateBucketNames =
+    [
+        "Today", "Yesterday", "This week", "This month", "This year",
+        "Past 2 years", "Past 5 years", "Past 10 years", "Past 20 years",
+        "Past 30 years", "Past 50 years", "Older", "Unknown date"
+    ];
+
+    internal static Dictionary<string, int> GetDateBucketOrder(GroupMode mode)
+    {
+        var order = new Dictionary<string, int>(StringComparer.Ordinal);
+        int idx = 0;
+        foreach (var name in DateBucketNames)
+            order[name] = idx++;
+        return order;
+    }
 }
