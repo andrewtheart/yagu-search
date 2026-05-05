@@ -1022,7 +1022,7 @@ public sealed partial class MainWindow : Window
     private static readonly SolidColorBrush s_activeExpanderBrush = new(Windows.UI.Color.FromArgb(25, 80, 180, 255));
 
     // Active match highlight state
-    private (Paragraph para, Run run, Brush foreground, Windows.UI.Text.TextDecorations textDecorations)? _activeMatchHighlight;
+    private (Paragraph para, Run run, Brush foreground, Windows.UI.Text.TextDecorations textDecorations, int column)? _activeMatchHighlight;
 
     private enum SplitLayoutMode { Split, ResultsMaximized, PreviewMaximized }
     private SplitLayoutMode _splitLayoutMode = SplitLayoutMode.ResultsMaximized;
@@ -2305,6 +2305,9 @@ public sealed partial class MainWindow : Window
         UpdateMatchNavPanel();
         UpdateSectionMatchNavPanels();
 
+        if (scrollBlock is not null && scrollPara is not null)
+            SetCurrentMatchToParagraph(scrollBlock, scrollPara);
+
         if (scrollToTop)
             PreviewScrollViewer.ChangeView(null, 0, null, disableAnimation: true);
         else if (scrollBlock is not null && scrollPara is not null)
@@ -2460,8 +2463,10 @@ public sealed partial class MainWindow : Window
         UpdateMatchNavPanel();
         UpdateSectionMatchNavPanels();
 
-        // Activate the section for the clicked file
-        if (scrollBlock is not null)
+        // Activate the section for the clicked file and align global nav with it.
+        if (scrollBlock is not null && scrollPara is not null)
+            SetCurrentMatchToParagraph(scrollBlock, scrollPara);
+        else if (scrollBlock is not null)
             ActivateSectionForBlock(scrollBlock);
 
         if (scrollToTop)
@@ -4228,6 +4233,7 @@ public sealed partial class MainWindow : Window
     {
         UnboxCurrentMatch();
         int goldCount = 0;
+        int column = 0;
         for (int i = 0; i < para.Inlines.Count; i++)
         {
             if (para.Inlines[i] is Run run
@@ -4237,13 +4243,16 @@ public sealed partial class MainWindow : Window
             {
                 if (goldCount == matchInPara)
                 {
-                    _activeMatchHighlight = (para, run, run.Foreground, run.TextDecorations);
+                    _activeMatchHighlight = (para, run, run.Foreground, run.TextDecorations, column);
                     run.Foreground = s_activeMatchBrush;
                     run.TextDecorations = Windows.UI.Text.TextDecorations.Underline;
                     return;
                 }
                 goldCount++;
             }
+
+            if (para.Inlines[i] is Run textRun)
+                column += textRun.Text?.Length ?? 0;
         }
     }
 
@@ -4291,28 +4300,31 @@ public sealed partial class MainWindow : Window
         {
             ExpandPreviewSectionForBlock(block);
 
-            var pointer = FindMatchPointer(targetPara) ?? targetPara.ContentStart;
-            if (pointer is null)
-            {
-                reason = "no text pointer";
-                return false;
-            }
-
-            var rect = pointer.GetCharacterRect(LogicalDirection.Forward);
             if (PreviewScrollViewer.ViewportHeight <= 0)
             {
                 reason = "preview viewport not ready";
                 return false;
             }
 
+            int paragraphIndex = GetParagraphIndex(block, targetPara);
+            if (paragraphIndex < 0)
+            {
+                reason = "paragraph not found";
+                return false;
+            }
+
             var verticalTransform = block.TransformToVisual(PreviewScrollViewer);
-            var verticalPoint = verticalTransform.TransformPoint(new Windows.Foundation.Point(0, rect.Y));
+            var verticalPoint = verticalTransform.TransformPoint(new Windows.Foundation.Point(0, 0));
+            double lineHeight = EstimatePreviewLineHeight(block);
+            double wrappedLineOffset = EstimateWrappedLineOffset(block, targetPara);
 
-            double targetVerticalOffset = PreviewScrollViewer.VerticalOffset + verticalPoint.Y - PreviewScrollViewer.ViewportHeight / 2;
+            double targetVerticalOffset = PreviewScrollViewer.VerticalOffset + verticalPoint.Y + (paragraphIndex + wrappedLineOffset) * lineHeight - PreviewScrollViewer.ViewportHeight / 2 + lineHeight / 2;
             targetVerticalOffset = Math.Clamp(targetVerticalOffset, 0, PreviewScrollViewer.ScrollableHeight);
-            PreviewScrollViewer.ChangeView(null, targetVerticalOffset, null, disableAnimation: false);
+            double beforeVerticalOffset = PreviewScrollViewer.VerticalOffset;
+            bool verticalAccepted = PreviewScrollViewer.ChangeView(null, targetVerticalOffset, null, disableAnimation: true);
+            LogService.Instance.Verbose("Preview", $"ScrollPreviewToLine: idx={_currentMatchIndex}, para={paragraphIndex}/{block.Blocks.Count}, wrapOffset={wrappedLineOffset:N1}, blockY={verticalPoint.Y:N1}, lineH={lineHeight:N1}, beforeY={beforeVerticalOffset:N1}, targetY={targetVerticalOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}, scrollableH={PreviewScrollViewer.ScrollableHeight:N1}, accepted={verticalAccepted}, wrap={ViewModel.PreviewWordWrap}");
 
-            ScrollMatchHorizontallyIntoView(block, rect);
+            ScrollMatchHorizontallyIntoView(block, targetPara);
             return true;
         }
         catch (Exception ex)
@@ -4322,22 +4334,46 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private TextPointer? FindMatchPointer(Paragraph targetPara)
+    private static int GetParagraphIndex(RichTextBlock block, Paragraph targetPara)
     {
-        if (_activeMatchHighlight is { para: var activePara, run: var activeRun }
-            && ReferenceEquals(activePara, targetPara))
-            return activeRun.ContentStart;
-
-        // Find the highlighted (Gold/Bold) Run for precise positioning.
-        foreach (var inline in targetPara.Inlines)
+        int index = 0;
+        foreach (var item in block.Blocks)
         {
-            if (inline is Run run && run.FontWeight.Weight == Microsoft.UI.Text.FontWeights.Bold.Weight
-                && run.Foreground is SolidColorBrush brush
-                && brush.Color == Microsoft.UI.Colors.Gold)
-                return run.ContentStart;
+            if (ReferenceEquals(item, targetPara))
+                return index;
+            index++;
         }
 
-        return null;
+        return -1;
+    }
+
+    private static double EstimatePreviewLineHeight(RichTextBlock block) => Math.Max(16d, block.FontSize * 1.35d);
+
+    private static double EstimatePreviewCharWidth(RichTextBlock block) => Math.Max(6d, block.FontSize * 0.58d);
+
+    private double EstimateWrappedLineOffset(RichTextBlock block, Paragraph targetPara)
+    {
+        if (!ViewModel.PreviewWordWrap)
+            return 0;
+
+        if (_activeMatchHighlight is not { para: var activePara, column: var column }
+            || !ReferenceEquals(activePara, targetPara))
+            return 0;
+
+        double charWidth = EstimatePreviewCharWidth(block);
+        double availableWidth = GetPreviewTextViewportWidth(block) - 24;
+        int charsPerWrappedLine = Math.Max(1, (int)Math.Floor(availableWidth / charWidth));
+        double wrappedOffset = column / (double)charsPerWrappedLine;
+        LogService.Instance.Verbose("Preview", $"EstimateWrappedLineOffset: idx={_currentMatchIndex}, column={column}, availableW={availableWidth:N1}, charW={charWidth:N1}, charsPerLine={charsPerWrappedLine}, wrappedOffset={wrappedOffset:N1}");
+        return wrappedOffset;
+    }
+
+    private double GetPreviewTextViewportWidth(RichTextBlock block)
+    {
+        if (_sectionMatchNavs.TryGetValue(block, out var sectionNav) && sectionNav.Scroller.ViewportWidth > 0)
+            return sectionNav.Scroller.ViewportWidth;
+
+        return PreviewScrollViewer.ViewportWidth;
     }
 
     private void ExpandPreviewSectionForBlock(RichTextBlock block)
@@ -4352,24 +4388,38 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void ScrollMatchHorizontallyIntoView(RichTextBlock block, Windows.Foundation.Rect rect)
+    private void ScrollMatchHorizontallyIntoView(RichTextBlock block, Paragraph targetPara)
     {
         if (ViewModel.PreviewWordWrap)
+        {
+            LogService.Instance.Verbose("Preview", "ScrollMatchHorizontallyIntoView: skipped because word wrap is enabled");
             return;
+        }
+
+        if (_activeMatchHighlight is not { para: var activePara, run: var activeRun, column: var column }
+            || !ReferenceEquals(activePara, targetPara))
+        {
+            LogService.Instance.Verbose("Preview", "ScrollMatchHorizontallyIntoView: skipped because active match does not match target paragraph");
+            return;
+        }
 
         var scroller = _sectionMatchNavs.TryGetValue(block, out var sectionNav)
             ? sectionNav.Scroller
             : PreviewScrollViewer;
 
         if (scroller.ViewportWidth <= 0 || scroller.ScrollableWidth <= 0)
+        {
+            LogService.Instance.Verbose("Preview", $"ScrollMatchHorizontallyIntoView: skipped, viewportW={scroller.ViewportWidth:N1}, scrollableW={scroller.ScrollableWidth:N1}");
             return;
+        }
 
-        var horizontalTransform = block.TransformToVisual(scroller);
-        var horizontalPoint = horizontalTransform.TransformPoint(new Windows.Foundation.Point(rect.X, rect.Y));
-        double matchCenter = scroller.HorizontalOffset + horizontalPoint.X + Math.Max(0, rect.Width) / 2;
+        double charWidth = EstimatePreviewCharWidth(block);
+        double matchCenter = 8 + column * charWidth + (activeRun.Text?.Length ?? 0) * charWidth / 2;
         double targetHorizontalOffset = matchCenter - scroller.ViewportWidth / 2;
         targetHorizontalOffset = Math.Clamp(targetHorizontalOffset, 0, scroller.ScrollableWidth);
-        scroller.ChangeView(targetHorizontalOffset, null, null, disableAnimation: false);
+        double beforeHorizontalOffset = scroller.HorizontalOffset;
+        bool horizontalAccepted = scroller.ChangeView(targetHorizontalOffset, null, null, disableAnimation: true);
+        LogService.Instance.Verbose("Preview", $"ScrollMatchHorizontallyIntoView: idx={_currentMatchIndex}, column={column}, runLen={activeRun.Text?.Length ?? 0}, charW={charWidth:N1}, beforeX={beforeHorizontalOffset:N1}, targetX={targetHorizontalOffset:N1}, viewportW={scroller.ViewportWidth:N1}, scrollableW={scroller.ScrollableWidth:N1}, accepted={horizontalAccepted}, sectionScroller={_sectionMatchNavs.ContainsKey(block)}");
     }
 
     private int MatchNavFileCount => _matchParagraphs.Select(m => m.block).Distinct().Count() + _lazySections.Count;
@@ -4387,12 +4437,73 @@ public sealed partial class MainWindow : Window
         if (totalMatches > 0)
         {
             MatchNavPanel.Visibility = Visibility.Visible;
-            _currentMatchIndex = 0;
-            MatchNavLabel.Text = FormatMatchNavLabel(0);
+            var activeIndex = FindActiveMatchIndex();
+            if (activeIndex >= 0)
+                _currentMatchIndex = activeIndex;
+            else if (_matchParagraphs.Count > 0)
+            {
+                if (_currentMatchIndex < 0)
+                    _currentMatchIndex = 0;
+                else if (_currentMatchIndex >= _matchParagraphs.Count)
+                    _currentMatchIndex = _matchParagraphs.Count - 1;
+            }
+            else if (_currentMatchIndex < 0)
+            {
+                _currentMatchIndex = 0;
+            }
+
+            MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
         }
         else
         {
             HideMatchNavPanel();
+        }
+    }
+
+    private int FindActiveMatchIndex()
+    {
+        if (_activeMatchHighlight is not { para: var activePara })
+            return -1;
+
+        for (int i = 0; i < _matchParagraphs.Count; i++)
+        {
+            if (ReferenceEquals(_matchParagraphs[i].para, activePara))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private void SetCurrentMatchToParagraph(RichTextBlock block, Paragraph para)
+    {
+        for (int i = 0; i < _matchParagraphs.Count; i++)
+        {
+            var match = _matchParagraphs[i];
+            if (ReferenceEquals(match.block, block) && ReferenceEquals(match.para, para))
+            {
+                _currentMatchIndex = i;
+                MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
+                if (_sectionMatchNavs.TryGetValue(block, out var sn))
+                    SetSectionCurrentMatch(sn, para, match.matchInPara);
+                ActivateSectionForBlock(block);
+                BoxMatchRun(para, match.matchInPara);
+                return;
+            }
+        }
+
+        ActivateSectionForBlock(block);
+    }
+
+    private static void SetSectionCurrentMatch(SectionMatchNav sn, Paragraph para, int matchInPara)
+    {
+        for (int i = 0; i < sn.Matches.Count; i++)
+        {
+            var match = sn.Matches[i];
+            if (ReferenceEquals(match.para, para) && match.matchInPara == matchInPara)
+            {
+                sn.CurrentIndex = i;
+                return;
+            }
         }
     }
 
@@ -4411,11 +4522,16 @@ public sealed partial class MainWindow : Window
 
     private void UpdateSectionMatchNavPanels()
     {
-        // Initialize match indices for all sections
+        // Initialize or clamp match indices for all sections without resetting
+        // the user's current position during background section loading.
         foreach (var sn in _sectionMatchNavs.Values)
         {
-            if (sn.Matches.Count > 1)
+            if (sn.Matches.Count == 0)
+                sn.CurrentIndex = -1;
+            else if (sn.CurrentIndex < 0)
                 sn.CurrentIndex = 0;
+            else if (sn.CurrentIndex >= sn.Matches.Count)
+                sn.CurrentIndex = sn.Matches.Count - 1;
         }
 
         // Only auto-activate per-file section nav when there's exactly one file section.
@@ -4548,6 +4664,8 @@ public sealed partial class MainWindow : Window
         if (_matchParagraphs.Count == 0 || _currentMatchIndex < 0 || _currentMatchIndex >= _matchParagraphs.Count) return;
         var (block, para, matchInPara) = _matchParagraphs[_currentMatchIndex];
         MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
+        if (_sectionMatchNavs.TryGetValue(block, out var sn))
+            SetSectionCurrentMatch(sn, para, matchInPara);
         ActivateSectionForBlock(block);
         BoxMatchRun(para, matchInPara);
         ScrollPreviewToLine(block, para);
@@ -4584,6 +4702,8 @@ public sealed partial class MainWindow : Window
         if (_matchParagraphs.Count == 0 || _currentMatchIndex < 0 || _currentMatchIndex >= _matchParagraphs.Count) return;
         var (block, para, matchInPara) = _matchParagraphs[_currentMatchIndex];
         MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
+        if (_sectionMatchNavs.TryGetValue(block, out var sn))
+            SetSectionCurrentMatch(sn, para, matchInPara);
         ActivateSectionForBlock(block);
         BoxMatchRun(para, matchInPara);
         ScrollPreviewToLine(block, para);
