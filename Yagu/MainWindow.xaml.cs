@@ -1024,40 +1024,92 @@ public sealed partial class MainWindow : Window
     // Active match box highlight state
     private (Paragraph para, int inlineIndex, Run originalRun)? _activeMatchBox;
 
+    private enum SplitLayoutMode { Split, ResultsMaximized, PreviewMaximized }
+    private SplitLayoutMode _splitLayoutMode = SplitLayoutMode.ResultsMaximized;
+
     private void EnsurePreviewPanelVisible()
     {
-        if (_previewPanelRevealed) return;
+        if (_previewPanelRevealed && _splitLayoutMode == SplitLayoutMode.Split) return;
         _previewPanelRevealed = true;
-        ResultsColumn.Width = new GridLength(2, GridUnitType.Star);
-        SplitterColumn.Width = GridLength.Auto;
-        PreviewColumn.Width = new GridLength(3, GridUnitType.Star);
-        PreviewColumn.MinWidth = 200;
-        SplitterBorder.Visibility = Visibility.Visible;
-        PreviewPanelBorder.Visibility = Visibility.Visible;
-        ExpandResultsIcon.Glyph = "\uE740"; // FullScreen glyph
-        ToolTipService.SetToolTip(ExpandResultsButton, "Expand file list / collapse preview");
+        ApplySplitLayout(SplitLayoutMode.Split);
     }
 
     private void CollapsePreviewPanel()
     {
-        if (!_previewPanelRevealed) return;
+        if (!_previewPanelRevealed && _splitLayoutMode == SplitLayoutMode.ResultsMaximized) return;
         _previewPanelRevealed = false;
-        ResultsColumn.Width = new GridLength(1, GridUnitType.Star);
-        SplitterColumn.Width = new GridLength(0);
-        PreviewColumn.Width = new GridLength(0);
-        PreviewColumn.MinWidth = 0;
-        SplitterBorder.Visibility = Visibility.Collapsed;
-        PreviewPanelBorder.Visibility = Visibility.Collapsed;
-        ExpandResultsIcon.Glyph = "\uE73F"; // BackToWindow glyph
-        ToolTipService.SetToolTip(ExpandResultsButton, "Restore preview panel");
+        ApplySplitLayout(SplitLayoutMode.ResultsMaximized);
+    }
+
+    private void ApplySplitLayout(SplitLayoutMode mode)
+    {
+        _splitLayoutMode = mode;
+        switch (mode)
+        {
+            case SplitLayoutMode.Split:
+                ResultsPanelBorder.Visibility = Visibility.Visible;
+                ResultsColumn.Width = new GridLength(2, GridUnitType.Star);
+                ResultsColumn.MinWidth = 200;
+                SplitterColumn.Width = GridLength.Auto;
+                PreviewColumn.Width = new GridLength(3, GridUnitType.Star);
+                PreviewColumn.MinWidth = 200;
+                SplitterBorder.Visibility = Visibility.Visible;
+                PreviewPanelBorder.Visibility = Visibility.Visible;
+                _previewPanelRevealed = true;
+                ExpandResultsIcon.Glyph = "\uE740"; // FullScreen
+                ToolTipService.SetToolTip(ExpandResultsButton, "Maximize file list / hide preview");
+                ExpandPreviewIcon.Glyph = "\uE740"; // FullScreen
+                ToolTipService.SetToolTip(ExpandPreviewButton, "Maximize preview / hide file list");
+                break;
+            case SplitLayoutMode.ResultsMaximized:
+                ResultsPanelBorder.Visibility = Visibility.Visible;
+                ResultsColumn.Width = new GridLength(1, GridUnitType.Star);
+                ResultsColumn.MinWidth = 200;
+                SplitterColumn.Width = new GridLength(0);
+                PreviewColumn.Width = new GridLength(0);
+                PreviewColumn.MinWidth = 0;
+                SplitterBorder.Visibility = Visibility.Collapsed;
+                PreviewPanelBorder.Visibility = Visibility.Collapsed;
+                _previewPanelRevealed = false;
+                ExpandResultsIcon.Glyph = "\uE73F"; // BackToWindow
+                ToolTipService.SetToolTip(ExpandResultsButton, "Restore split view");
+                ExpandPreviewIcon.Glyph = "\uE740";
+                ToolTipService.SetToolTip(ExpandPreviewButton, "Maximize preview / hide file list");
+                break;
+            case SplitLayoutMode.PreviewMaximized:
+                ResultsPanelBorder.Visibility = Visibility.Collapsed;
+                ResultsColumn.Width = new GridLength(0);
+                ResultsColumn.MinWidth = 0;
+                SplitterColumn.Width = new GridLength(0);
+                PreviewColumn.Width = new GridLength(1, GridUnitType.Star);
+                PreviewColumn.MinWidth = 200;
+                SplitterBorder.Visibility = Visibility.Collapsed;
+                PreviewPanelBorder.Visibility = Visibility.Visible;
+                _previewPanelRevealed = true;
+                ExpandResultsIcon.Glyph = "\uE740";
+                ToolTipService.SetToolTip(ExpandResultsButton, "Maximize file list / hide preview");
+                ExpandPreviewIcon.Glyph = "\uE73F"; // BackToWindow
+                ToolTipService.SetToolTip(ExpandPreviewButton, "Restore split view");
+                break;
+        }
     }
 
     private void OnExpandResultsPanel(object sender, RoutedEventArgs e)
     {
-        if (_previewPanelRevealed)
-            CollapsePreviewPanel();
+        // Toggle: maximize results <-> split view (always restore split when not currently maximized).
+        if (_splitLayoutMode == SplitLayoutMode.ResultsMaximized)
+            ApplySplitLayout(SplitLayoutMode.Split);
         else
-            EnsurePreviewPanelVisible();
+            ApplySplitLayout(SplitLayoutMode.ResultsMaximized);
+    }
+
+    private void OnExpandPreviewPanel(object sender, RoutedEventArgs e)
+    {
+        // Toggle: maximize preview <-> split view.
+        if (_splitLayoutMode == SplitLayoutMode.PreviewMaximized)
+            ApplySplitLayout(SplitLayoutMode.Split);
+        else
+            ApplySplitLayout(SplitLayoutMode.PreviewMaximized);
     }
 
     private async void OnResultItemClick(object sender, ItemClickEventArgs e)
@@ -1538,6 +1590,19 @@ public sealed partial class MainWindow : Window
         _matchParagraphs.Clear();
         _currentMatchIndex = -1;
         HideMatchNavPanel();
+
+        // Building a large preview leaves a lot of long-lived allocations on
+        // Gen2 (Paragraph/Run/Inline trees) and the LOH (string[] file-content
+        // buffers). Plain Clear() drops references but the GC won't release
+        // segments back to the OS without a forced collection, so the user
+        // sees process memory stay high. Run a compacting Gen2 GC + LOH
+        // compaction here — this is rare and user-initiated, so the cost is
+        // acceptable in exchange for visibly reclaiming memory.
+        System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+            System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+        GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
     }
 
     private void OnShowInExplorer(object sender, RoutedEventArgs e)
@@ -2762,35 +2827,78 @@ public sealed partial class MainWindow : Window
     /// <summary>
     /// Materializes all remaining lazy sections at once, with a progress overlay.
     /// </summary>
+    private bool _suppressExpandingHandler;
+
     private async Task MaterializeAllLazySectionsAsync()
     {
         if (_lazySections.Count == 0) return;
 
         var lazyBlocks = _lazySections.Keys.ToList();
         int total = lazyBlocks.Count;
+        LogService.Instance.Info("Preview", $"MaterializeAllLazySectionsAsync: starting, total={total}");
         ShowProgressOverlay($"Rendering {total:N0} sections\u2026", 0);
 
-        int done = 0;
-        foreach (var block in lazyBlocks)
+        try
         {
-            MaterializeLazySection(block);
-            if (++done % PreviewYieldBatchSize == 0)
+            int done = 0;
+            foreach (var block in lazyBlocks)
             {
-                UpdateProgressOverlay(done * 100 / total);
-                await Task.Delay(1).ConfigureAwait(true);
+                try
+                {
+                    MaterializeLazySection(block);
+                }
+                catch (Exception ex)
+                {
+                    LogService.Instance.Warning("Preview", "MaterializeLazySection failed for one section; skipping.", ex);
+                }
+                done++;
+                if (done % PreviewYieldBatchSize == 0 || done == total)
+                {
+                    UpdateProgressOverlay(done * 100 / total);
+                    await Task.Delay(1).ConfigureAwait(true);
+                }
+            }
+
+            LogService.Instance.Info("Preview", $"MaterializeAllLazySectionsAsync: materialization complete, expanding sections");
+            UpdateMatchNavPanel();
+            UpdateSectionMatchNavPanels();
+        }
+        finally
+        {
+            // Hide the overlay before the expand phase. Expanding many Expanders triggers
+            // WinUI layout passes that can take noticeable time, but the user's "spinner
+            // forever at 100%" feedback was that the overlay made it look frozen.
+            HideProgressOverlay();
+        }
+
+        // Expand all sections without firing the per-section Expanding side effects
+        // (which would call MaterializeLazySection (no-op now) and ActivateSectionForBlock,
+        // and the latter is O(N) per call so the bulk expand becomes O(N^2) and
+        // appears to hang for hundreds of sections).
+        _suppressExpandingHandler = true;
+        try
+        {
+            int expanded = 0;
+            foreach (var child in PreviewSectionsPanel.Children)
+            {
+                if (child is Expander exp && !exp.IsExpanded)
+                {
+                    try { exp.IsExpanded = true; }
+                    catch (Exception ex)
+                    {
+                        LogService.Instance.Warning("Preview", "Failed to expand section.", ex);
+                    }
+                }
+                expanded++;
+                if (expanded % PreviewYieldBatchSize == 0)
+                    await Task.Delay(1).ConfigureAwait(true);
             }
         }
-
-        HideProgressOverlay();
-        UpdateMatchNavPanel();
-        UpdateSectionMatchNavPanels();
-
-        // Expand all the now-materialized sections
-        foreach (var child in PreviewSectionsPanel.Children)
+        finally
         {
-            if (child is Expander exp && !exp.IsExpanded)
-                exp.IsExpanded = true;
+            _suppressExpandingHandler = false;
         }
+        LogService.Instance.Info("Preview", "MaterializeAllLazySectionsAsync: done");
     }
 
     private static string[] ReadAllLinesWithEncodingSync(string filePath)
@@ -3118,6 +3226,7 @@ public sealed partial class MainWindow : Window
         };
         expander.Expanding += (s, _) =>
         {
+            if (_suppressExpandingHandler) return;
             if (s is Expander exp && exp.Tag is RichTextBlock b)
             {
                 UpdateExpandAllButtonVisibility();
@@ -4004,8 +4113,10 @@ public sealed partial class MainWindow : Window
             line = TruncatePreviewLine(line, rx);
         var para = new Paragraph();
 
-        // Match indicator + line number gutter
-        var indicator = new Run { Text = isMatchLine ? "▎" : " " };
+        // Match indicator + line number gutter.
+        // Use a glyph that Consolas renders at full cell width so match lines
+        // align horizontally with context lines (which use a plain space).
+        var indicator = new Run { Text = isMatchLine ? "│" : " " };
         indicator.Foreground = isMatchLine ? s_matchAccentBrush : s_contextTextBrush;
         para.Inlines.Add(indicator);
 

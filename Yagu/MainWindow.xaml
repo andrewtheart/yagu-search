@@ -326,7 +326,7 @@
             </Grid.ColumnDefinitions>
 
             <!-- Results panel card -->
-            <Border Grid.Column="0" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            <Border x:Name="ResultsPanelBorder" Grid.Column="0" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1" CornerRadius="8">
                 <Grid>
@@ -586,6 +586,7 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel x:Name="PreviewToolbarContent" Orientation="Horizontal" Spacing="6" Visibility="Collapsed">
                             <!-- File identity -->
@@ -697,6 +698,13 @@
                                 </StackPanel>
                             </Border>
                         </StackPanel>
+                        <Button x:Name="ExpandPreviewButton" Grid.Column="2"
+                                Click="OnExpandPreviewPanel"
+                                Background="Transparent" BorderThickness="0"
+                                Padding="6,4" VerticalAlignment="Center" Margin="6,0,0,0"
+                                ToolTipService.ToolTip="Expand preview / collapse file list">
+                            <FontIcon x:Name="ExpandPreviewIcon" Glyph="&#xE740;" FontSize="12" />
+                        </Button>
                     </Grid>
                     <Grid Grid.Row="1">
                         <Grid.RowDefinitions>
