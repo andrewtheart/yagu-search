@@ -1228,16 +1228,18 @@ public sealed partial class MainWindow : Window
             bool expanded = !bulkInsert || fileIndex < BulkExpandLimit;
             var (section, expander) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results,
                 isExpanded: expanded, addToPanel: false);
-            PreviewSectionsPanel.Children.Insert(insertIndex++, expander);
 
             fileContents.TryGetValue(filePath, out string[]? allLines);
 
             if (expanded)
             {
+                // Build paragraphs OFF-TREE first to avoid O(n²) layout recalculations.
+                // Each Blocks.Add on a live tree triggers a full layout pass; building
+                // off-tree defers layout to a single pass when the expander is inserted.
                 if (isHighlight)
-                    BuildHighlightSection(section, results, allLines, previewLines, rx);
+                    await BuildHighlightSectionAsync(section, results, allLines, previewLines, rx);
                 else
-                    BuildConcatenatedSection(section, results, allLines, previewLines, rx);
+                    await BuildConcatenatedSectionAsync(section, results, allLines, previewLines, rx);
             }
             else
             {
@@ -1253,6 +1255,10 @@ public sealed partial class MainWindow : Window
                 };
                 _lazyMatchCount += lazyCount;
             }
+
+            // Insert into the visual tree AFTER content is fully built to avoid
+            // O(n²) layout recalculations from per-paragraph Blocks.Add on a live tree.
+            PreviewSectionsPanel.Children.Insert(insertIndex++, expander);
 
             // Yield to the UI thread periodically so the app stays responsive.
             if (++fileIndex % PreviewYieldBatchSize == 0)
@@ -2228,7 +2234,8 @@ public sealed partial class MainWindow : Window
         int fileIndex = 0;
         foreach (var (filePath, results) in pageFiles)
         {
-            var (section, _) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
+            // Build paragraphs OFF-TREE to avoid O(n²) layout recalculations.
+            var (section, expander) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results, addToPanel: false);
 
             fileContents.TryGetValue(filePath, out string[]? allLines);
 
@@ -2250,13 +2257,13 @@ public sealed partial class MainWindow : Window
                 foreach (var (line, lineNum) in lines)
                 {
                     bool isMatchLine = lineNum == r.LineNumber;
-                    var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
+                    var (para, matchCount) = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
                     section.Blocks.Add(para);
 
                     if (isMatchLine)
                     {
                         _sectionMatchNavs.TryGetValue(section, out var sn);
-                        AddMatchEntries(_matchParagraphs, sn, section, para, line, rx);
+                        AddMatchEntries(_matchParagraphs, sn, section, para, matchCount);
                     }
 
                     if (scrollTarget is not null && isMatchLine
@@ -2268,6 +2275,9 @@ public sealed partial class MainWindow : Window
                     }
                 }
             }
+
+            // Insert into visual tree AFTER all paragraphs are built.
+            PreviewSectionsPanel.Children.Add(expander);
 
             // Yield to the UI thread periodically so the app stays responsive.
             if (++fileIndex % PreviewYieldBatchSize == 0)
@@ -2326,7 +2336,8 @@ public sealed partial class MainWindow : Window
         int fileIndex = 0;
         foreach (var (filePath, results) in pageFiles)
         {
-            var (section, _) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
+            // Build paragraphs OFF-TREE to avoid O(n²) layout recalculations.
+            var (section, expander) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results, addToPanel: false);
 
             // Collect all match line numbers in this file
             var matchLines = new HashSet<int>(results.Select(r => r.LineNumber));
@@ -2374,12 +2385,12 @@ public sealed partial class MainWindow : Window
                         bool isMatchLine = matchLines.Contains(lineNum);
                         // Use first matching result for this line (for column-based highlighting)
                         var matchResult = results.FirstOrDefault(r => r.LineNumber == lineNum) ?? results[0];
-                        var para = MakePreviewParagraph(allLines[i], lineNum, isMatchLine, matchResult, rx);
+                        var (para, matchCount) = MakePreviewParagraph(allLines[i], lineNum, isMatchLine, matchResult, rx);
                         section.Blocks.Add(para);
                         if (isMatchLine)
                         {
                             _sectionMatchNavs.TryGetValue(section, out var sn);
-                            AddMatchEntries(_matchParagraphs, sn, section, para, allLines[i], rx);
+                            AddMatchEntries(_matchParagraphs, sn, section, para, matchCount);
                         }
 
                         if (scrollTarget is not null && isMatchLine && lineNum == scrollTarget.LineNumber
@@ -2400,12 +2411,12 @@ public sealed partial class MainWindow : Window
                     foreach (var (line, lineNum) in lines)
                     {
                         bool isMatchLine = lineNum == r.LineNumber;
-                        var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
+                        var (para, matchCount) = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
                         section.Blocks.Add(para);
                         if (isMatchLine)
                         {
                             _sectionMatchNavs.TryGetValue(section, out var sn);
-                            AddMatchEntries(_matchParagraphs, sn, section, para, line, rx);
+                            AddMatchEntries(_matchParagraphs, sn, section, para, matchCount);
                         }
 
                         if (scrollTarget is not null && isMatchLine
@@ -2418,6 +2429,9 @@ public sealed partial class MainWindow : Window
                     }
                 }
             }
+
+            // Insert into visual tree AFTER all paragraphs are built.
+            PreviewSectionsPanel.Children.Add(expander);
 
             // Yield to the UI thread periodically so the app stays responsive.
             if (++fileIndex % PreviewYieldBatchSize == 0)
@@ -2606,9 +2620,9 @@ public sealed partial class MainWindow : Window
                 {
                     // Eagerly build content for expanded sections.
                     if (isHighlight)
-                        BuildHighlightSection(section, results, allLines, previewLines, rx);
+                        await BuildHighlightSectionAsync(section, results, allLines, previewLines, rx);
                     else
-                        BuildConcatenatedSection(section, results, allLines, previewLines, rx);
+                        await BuildConcatenatedSectionAsync(section, results, allLines, previewLines, rx);
                 }
                 else
                 {
@@ -2677,10 +2691,14 @@ public sealed partial class MainWindow : Window
         UpdateExpandAllButtonVisibility();
     }
 
-    private void BuildConcatenatedSection(
+    /// <summary>Number of paragraphs to add before yielding to the UI message pump inside a section.</summary>
+    private const int SectionYieldBatchSize = 50;
+
+    private async Task BuildConcatenatedSectionAsync(
         RichTextBlock section, List<SearchResult> results,
         string[]? allLines, int previewLines, Regex? rx)
     {
+        int parasBuilt = 0;
         foreach (var r in results)
         {
             var sep = new Paragraph();
@@ -2695,22 +2713,26 @@ public sealed partial class MainWindow : Window
             foreach (var (line, lineNum) in lines)
             {
                 bool isMatchLine = lineNum == r.LineNumber;
-                var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
+                var (para, matchCount) = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
                 section.Blocks.Add(para);
                 if (isMatchLine)
                 {
                     _sectionMatchNavs.TryGetValue(section, out var sn);
-                    AddMatchEntries(_matchParagraphs, sn, section, para, line, rx);
+                    AddMatchEntries(_matchParagraphs, sn, section, para, matchCount);
                 }
+
+                if (++parasBuilt % SectionYieldBatchSize == 0)
+                    await Task.Delay(1).ConfigureAwait(true);
             }
         }
     }
 
-    private void BuildHighlightSection(
+    private async Task BuildHighlightSectionAsync(
         RichTextBlock section, List<SearchResult> results,
         string[]? allLines, int previewLines, Regex? rx)
     {
         var matchLines = new HashSet<int>(results.Select(r => r.LineNumber));
+        int parasBuilt = 0;
 
         if (allLines != null)
         {
@@ -2746,13 +2768,16 @@ public sealed partial class MainWindow : Window
                     int lineNum = i + 1;
                     bool isMatchLine = matchLines.Contains(lineNum);
                     var matchResult = results.FirstOrDefault(r => r.LineNumber == lineNum) ?? results[0];
-                    var para = MakePreviewParagraph(allLines[i], lineNum, isMatchLine, matchResult, rx);
+                    var (para, matchCount) = MakePreviewParagraph(allLines[i], lineNum, isMatchLine, matchResult, rx);
                     section.Blocks.Add(para);
                     if (isMatchLine)
                     {
                         _sectionMatchNavs.TryGetValue(section, out var sn);
-                        AddMatchEntries(_matchParagraphs, sn, section, para, allLines[i], rx);
+                        AddMatchEntries(_matchParagraphs, sn, section, para, matchCount);
                     }
+
+                    if (++parasBuilt % SectionYieldBatchSize == 0)
+                        await Task.Delay(1).ConfigureAwait(true);
                 }
             }
         }
@@ -2764,13 +2789,16 @@ public sealed partial class MainWindow : Window
                 foreach (var (line, lineNum) in lines)
                 {
                     bool isMatchLine = lineNum == r.LineNumber;
-                    var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
+                    var (para, matchCount) = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
                     section.Blocks.Add(para);
                     if (isMatchLine)
                     {
                         _sectionMatchNavs.TryGetValue(section, out var sn);
-                        AddMatchEntries(_matchParagraphs, sn, section, para, line, rx);
+                        AddMatchEntries(_matchParagraphs, sn, section, para, matchCount);
                     }
+
+                    if (++parasBuilt % SectionYieldBatchSize == 0)
+                        await Task.Delay(1).ConfigureAwait(true);
                 }
             }
         }
@@ -2807,18 +2835,18 @@ public sealed partial class MainWindow : Window
     /// Materializes a lazy section: builds paragraphs, adds match entries, and removes it from the lazy dictionary.
     /// Returns true if the section was lazy and has been materialized.
     /// </summary>
-    private bool MaterializeLazySection(RichTextBlock section)
+    private async Task<bool> MaterializeLazySectionAsync(RichTextBlock section)
     {
         if (!_lazySections.Remove(section, out var lazy))
             return false;
 
-        LogService.Instance.Info("Preview", $"MaterializeLazySection: file='{System.IO.Path.GetFileName(lazy.FilePath)}', matches={lazy.MatchCount}");
+        LogService.Instance.Info("Preview", $"MaterializeLazySectionAsync: file='{System.IO.Path.GetFileName(lazy.FilePath)}', matches={lazy.MatchCount}");
 
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
         if (lazy.IsHighlight)
-            BuildHighlightSection(section, lazy.Results, lazy.AllLines, lazy.PreviewLines, rx);
+            await BuildHighlightSectionAsync(section, lazy.Results, lazy.AllLines, lazy.PreviewLines, rx);
         else
-            BuildConcatenatedSection(section, lazy.Results, lazy.AllLines, lazy.PreviewLines, rx);
+            await BuildConcatenatedSectionAsync(section, lazy.Results, lazy.AllLines, lazy.PreviewLines, rx);
 
         _lazyMatchCount -= lazy.MatchCount;
         return true;
@@ -2845,11 +2873,11 @@ public sealed partial class MainWindow : Window
             {
                 try
                 {
-                    MaterializeLazySection(block);
+                    await MaterializeLazySectionAsync(block);
                 }
                 catch (Exception ex)
                 {
-                    LogService.Instance.Warning("Preview", "MaterializeLazySection failed for one section; skipping.", ex);
+                    LogService.Instance.Warning("Preview", "MaterializeLazySectionAsync failed for one section; skipping.", ex);
                 }
                 done++;
                 if (done % PreviewYieldBatchSize == 0 || done == total)
@@ -3016,11 +3044,11 @@ public sealed partial class MainWindow : Window
             var matchResult = isMatch
                 ? results.FirstOrDefault(r => r.LineNumber == lineNum) ?? results[0]
                 : results[0];
-            var para = MakePreviewParagraph(allLines[i], lineNum, isMatch, matchResult, rx, truncate: false);
+            var (para, matchCount) = MakePreviewParagraph(allLines[i], lineNum, isMatch, matchResult, rx, truncate: false);
             section.Blocks.Add(para);
             if (isMatch)
             {
-                AddMatchEntries(_matchParagraphs, sn, section, para, allLines[i], rx);
+                AddMatchEntries(_matchParagraphs, sn, section, para, matchCount);
             }
         }
 
@@ -3095,7 +3123,7 @@ public sealed partial class MainWindow : Window
         foreach (var (line, lineNum) in lines)
         {
             bool isMatchLine = lineNum == r.LineNumber;
-            var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx, truncate: !fullFile);
+            var (para, _) = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx, truncate: !fullFile);
             PreviewBlock.Blocks.Add(para);
         }
     }
@@ -3224,13 +3252,13 @@ public sealed partial class MainWindow : Window
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             Tag = block,
         };
-        expander.Expanding += (s, _) =>
+        expander.Expanding += async (s, _) =>
         {
             if (_suppressExpandingHandler) return;
             if (s is Expander exp && exp.Tag is RichTextBlock b)
             {
                 UpdateExpandAllButtonVisibility();
-                if (MaterializeLazySection(b) && MatchNavPanel.Visibility == Visibility.Visible)
+                if (await MaterializeLazySectionAsync(b) && MatchNavPanel.Visibility == Visibility.Visible)
                     MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
                 // Re-apply the current wrap state in case the user toggled wrap while
                 // this section was collapsed (we skip collapsed sections in
@@ -3546,7 +3574,7 @@ public sealed partial class MainWindow : Window
         while ((line = reader.ReadLine()) is not null)
         {
             var isMatchLine = matchByLine.TryGetValue(lineNumber, out var matchResult);
-            var para = MakePreviewParagraph(line, lineNumber, isMatchLine, matchResult ?? target.Matches[0], rx, truncate: false);
+            var (para, _) = MakePreviewParagraph(line, lineNumber, isMatchLine, matchResult ?? target.Matches[0], rx, truncate: false);
             section.Blocks.Add(para);
             wroteLine = true;
             lineNumber++;
@@ -4087,14 +4115,18 @@ public sealed partial class MainWindow : Window
         return count > 0 ? count : 1;
     }
 
+    /// <summary>
+    /// Adds match navigation entries for a paragraph, using a pre-computed match count
+    /// so the caller can avoid a redundant regex evaluation (MakePreviewParagraph already
+    /// iterates the matches to build highlight Runs).
+    /// </summary>
     private static void AddMatchEntries(
         List<(RichTextBlock block, Paragraph para, int matchInPara)> matchParagraphs,
         SectionMatchNav? sn,
         RichTextBlock section, Paragraph para,
-        string? line, Regex? rx)
+        int matchCount)
     {
-        int count = CountRegexMatches(line, rx);
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < matchCount; i++)
         {
             matchParagraphs.Add((section, para, i));
             sn?.Matches.Add((para, i));
@@ -4106,7 +4138,7 @@ public sealed partial class MainWindow : Window
     private static readonly SolidColorBrush s_contextTextBrush = new(Windows.UI.Color.FromArgb(255, 110, 110, 110));
     private static readonly SolidColorBrush s_matchAccentBrush = new(Windows.UI.Color.FromArgb(255, 70, 140, 70));
 
-    private static Paragraph MakePreviewParagraph(string line, int lineNum, bool isMatchLine, SearchResult r, Regex? rx, bool truncate = true)
+    private static (Paragraph para, int matchCount) MakePreviewParagraph(string line, int lineNum, bool isMatchLine, SearchResult r, Regex? rx, bool truncate = true)
     {
         line ??= string.Empty;
         if (truncate)
@@ -4127,12 +4159,15 @@ public sealed partial class MainWindow : Window
         gutterSep.Foreground = s_gutterSepBrush;
         para.Inlines.Add(gutterSep);
 
+        int matchCount = 0;
+
         // Highlight matches only on the actual match line, not context lines.
         if (rx != null && isMatchLine)
         {
             int lastIdx = 0;
             foreach (System.Text.RegularExpressions.Match m in rx.Matches(line))
             {
+                matchCount++;
                 if (m.Index > lastIdx)
                 {
                     var before = new Run { Text = line[lastIdx..m.Index] };
@@ -4151,15 +4186,19 @@ public sealed partial class MainWindow : Window
                 if (!isMatchLine) tail.Foreground = s_contextTextBrush;
                 para.Inlines.Add(tail);
             }
+            if (matchCount == 0)
+                matchCount = 1;
         }
         else
         {
             var plain = new Run { Text = line };
             if (!isMatchLine) plain.Foreground = s_contextTextBrush;
             para.Inlines.Add(plain);
+            if (isMatchLine)
+                matchCount = 1;
         }
 
-        return para;
+        return (para, matchCount);
     }
 
     private static string TruncatePreviewLine(string line, Regex? rx)
@@ -4425,7 +4464,7 @@ public sealed partial class MainWindow : Window
         ScrollPreviewToLine(sn.Block, para);
     }
 
-    private void OnNextMatch(object sender, RoutedEventArgs e)
+    private async void OnNextMatch(object sender, RoutedEventArgs e)
     {
         int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
         if (totalMatches == 0) return;
@@ -4433,7 +4472,7 @@ public sealed partial class MainWindow : Window
         if (_matchParagraphs.Count == 0 || _currentMatchIndex >= _matchParagraphs.Count - 1)
         {
             // Past the last rendered match — try to materialize the next lazy section.
-            if (_lazyMatchCount > 0 && MaterializeNextLazySection(forward: true))
+            if (_lazyMatchCount > 0 && await MaterializeNextLazySectionAsync(forward: true))
             {
                 // Land on the first match of the newly materialized section.
                 _currentMatchIndex = _matchParagraphs.Count - _lazySectionJustAdded;
@@ -4458,7 +4497,7 @@ public sealed partial class MainWindow : Window
         ScrollPreviewToLine(block, para);
     }
 
-    private void OnPrevMatch(object sender, RoutedEventArgs e)
+    private async void OnPrevMatch(object sender, RoutedEventArgs e)
     {
         int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
         if (totalMatches == 0) return;
@@ -4466,7 +4505,7 @@ public sealed partial class MainWindow : Window
         if (_matchParagraphs.Count == 0 || _currentMatchIndex <= 0)
         {
             // Before the first rendered match — try to materialize the last lazy section.
-            if (_lazyMatchCount > 0 && MaterializeNextLazySection(forward: false))
+            if (_lazyMatchCount > 0 && await MaterializeNextLazySectionAsync(forward: false))
             {
                 // Land on the last match of the newly materialized section.
                 _currentMatchIndex = _matchParagraphs.Count - 1;
@@ -4499,7 +4538,7 @@ public sealed partial class MainWindow : Window
     /// Skips sections that produce zero match entries. Also expands the Expander.
     /// Returns true if at least one materialized section produced match entries.
     /// </summary>
-    private bool MaterializeNextLazySection(bool forward)
+    private async Task<bool> MaterializeNextLazySectionAsync(bool forward)
     {
         _lazySectionJustAdded = 0;
 
@@ -4517,7 +4556,7 @@ public sealed partial class MainWindow : Window
                 && _lazySections.ContainsKey(b))
             {
                 int beforeCount = _matchParagraphs.Count;
-                MaterializeLazySection(b);
+                await MaterializeLazySectionAsync(b);
                 int added = _matchParagraphs.Count - beforeCount;
                 exp.IsExpanded = true;
                 if (added > 0)
