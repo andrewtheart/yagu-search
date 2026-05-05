@@ -1022,7 +1022,7 @@ public sealed partial class MainWindow : Window
     private static readonly SolidColorBrush s_activeExpanderBrush = new(Windows.UI.Color.FromArgb(25, 80, 180, 255));
 
     // Active match box highlight state
-    private (Paragraph para, int inlineIndex, Run originalRun)? _activeMatchBox;
+    private (Paragraph para, int inlineIndex, Run originalRun, FrameworkElement element)? _activeMatchBox;
 
     private enum SplitLayoutMode { Split, ResultsMaximized, PreviewMaximized }
     private SplitLayoutMode _splitLayoutMode = SplitLayoutMode.ResultsMaximized;
@@ -1362,15 +1362,19 @@ public sealed partial class MainWindow : Window
 
     private async void OnShowFullFile(object sender, RoutedEventArgs e)
     {
+        LogService.Instance.Info("Preview", "OnShowFullFile: button clicked");
         var targets = GetFullFilePreviewTargets();
         if (targets.Count == 0)
         {
+            LogService.Instance.Info("Preview", "OnShowFullFile: no targets found");
             ShowPreviewMessage("Select a file or match in the results list first.");
             ViewModel.StatusText = "Select a file or match before showing the full file.";
             return;
         }
 
+        LogService.Instance.Info("Preview", $"OnShowFullFile: {targets.Count} target(s), files=[{string.Join(", ", targets.Select(t => System.IO.Path.GetFileName(t.FilePath)))}]");
         await ShowFullFilePreviewAsync(targets);
+        LogService.Instance.Info("Preview", "OnShowFullFile: completed");
     }
 
     private void OnWordWrapToggled(object sender, RoutedEventArgs e)
@@ -1989,13 +1993,17 @@ public sealed partial class MainWindow : Window
     {
         var selectedMatches = ViewModel.GetAllSelectedResults();
         if (selectedMatches.Count > 0)
+        {
+            LogService.Instance.Info("Preview", $"GetFullFilePreviewTargets: using {selectedMatches.Count} selected matches");
             return BuildFullFilePreviewTargets(selectedMatches);
+        }
 
         var selectedGroups = GetCheckedFileGroups()
             .Where(g => g.Count > 0)
             .ToList();
         if (selectedGroups.Count > 0)
         {
+            LogService.Instance.Info("Preview", $"GetFullFilePreviewTargets: using {selectedGroups.Count} checked file groups");
             var targets = new List<FullFilePreviewTarget>(selectedGroups.Count);
             foreach (var group in selectedGroups)
                 targets.Add(new FullFilePreviewTarget(group.FilePath, group.ToList()));
@@ -2003,10 +2011,14 @@ public sealed partial class MainWindow : Window
         }
 
         if (_previewResult is null)
+        {
+            LogService.Instance.Info("Preview", "GetFullFilePreviewTargets: no preview result, returning empty");
             return [];
+        }
 
         var parent = FindParentGroup(_previewResult);
         var matches = parent is null ? new List<SearchResult> { _previewResult } : parent.ToList();
+        LogService.Instance.Info("Preview", $"GetFullFilePreviewTargets: fallback to current preview file='{System.IO.Path.GetFileName(_previewResult.FilePath)}', matches={matches.Count}");
         return [new FullFilePreviewTarget(_previewResult.FilePath, matches)];
     }
 
@@ -2228,9 +2240,11 @@ public sealed partial class MainWindow : Window
         int fileIndex = 0;
         foreach (var (filePath, results) in pageFiles)
         {
+            var fileSw = System.Diagnostics.Stopwatch.StartNew();
             var (section, _) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
 
             fileContents.TryGetValue(filePath, out string[]? allLines);
+            int parasInFile = 0;
 
             foreach (var r in results)
             {
@@ -2252,6 +2266,7 @@ public sealed partial class MainWindow : Window
                     bool isMatchLine = lineNum == r.LineNumber;
                     var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
                     section.Blocks.Add(para);
+                    parasInFile++;
 
                     if (isMatchLine)
                     {
@@ -2268,6 +2283,9 @@ public sealed partial class MainWindow : Window
                     }
                 }
             }
+
+            fileSw.Stop();
+            LogService.Instance.Verbose("Preview", $"ShowConcatenatedPreviewAsync: file='{System.IO.Path.GetFileName(filePath)}', results={results.Count}, paragraphs={parasInFile}, elapsed={fileSw.ElapsedMilliseconds}ms");
 
             // Yield to the UI thread periodically so the app stays responsive.
             if (++fileIndex % PreviewYieldBatchSize == 0)
@@ -2326,6 +2344,7 @@ public sealed partial class MainWindow : Window
         int fileIndex = 0;
         foreach (var (filePath, results) in pageFiles)
         {
+            var fileSw = System.Diagnostics.Stopwatch.StartNew();
             var (section, _) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
 
             // Collect all match line numbers in this file
@@ -2418,6 +2437,9 @@ public sealed partial class MainWindow : Window
                     }
                 }
             }
+
+            fileSw.Stop();
+            LogService.Instance.Verbose("Preview", $"ShowMultiHighlightPreviewAsync: file='{System.IO.Path.GetFileName(filePath)}', results={results.Count}, blocks={section.Blocks.Count}, elapsed={fileSw.ElapsedMilliseconds}ms");
 
             // Yield to the UI thread periodically so the app stays responsive.
             if (++fileIndex % PreviewYieldBatchSize == 0)
@@ -2681,6 +2703,8 @@ public sealed partial class MainWindow : Window
         RichTextBlock section, List<SearchResult> results,
         string[]? allLines, int previewLines, Regex? rx)
     {
+        var buildSw = System.Diagnostics.Stopwatch.StartNew();
+        int parasBuilt = 0;
         foreach (var r in results)
         {
             var sep = new Paragraph();
@@ -2697,6 +2721,7 @@ public sealed partial class MainWindow : Window
                 bool isMatchLine = lineNum == r.LineNumber;
                 var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
                 section.Blocks.Add(para);
+                parasBuilt++;
                 if (isMatchLine)
                 {
                     _sectionMatchNavs.TryGetValue(section, out var sn);
@@ -2704,12 +2729,16 @@ public sealed partial class MainWindow : Window
                 }
             }
         }
+        buildSw.Stop();
+        LogService.Instance.Info("Preview", $"BuildConcatenatedSection: results={results.Count}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, elapsed={buildSw.ElapsedMilliseconds}ms");
     }
 
     private void BuildHighlightSection(
         RichTextBlock section, List<SearchResult> results,
         string[]? allLines, int previewLines, Regex? rx)
     {
+        var buildSw = System.Diagnostics.Stopwatch.StartNew();
+        int parasBuilt = 0;
         var matchLines = new HashSet<int>(results.Select(r => r.LineNumber));
 
         if (allLines != null)
@@ -2748,6 +2777,7 @@ public sealed partial class MainWindow : Window
                     var matchResult = results.FirstOrDefault(r => r.LineNumber == lineNum) ?? results[0];
                     var para = MakePreviewParagraph(allLines[i], lineNum, isMatchLine, matchResult, rx);
                     section.Blocks.Add(para);
+                    parasBuilt++;
                     if (isMatchLine)
                     {
                         _sectionMatchNavs.TryGetValue(section, out var sn);
@@ -2766,6 +2796,7 @@ public sealed partial class MainWindow : Window
                     bool isMatchLine = lineNum == r.LineNumber;
                     var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
                     section.Blocks.Add(para);
+                    parasBuilt++;
                     if (isMatchLine)
                     {
                         _sectionMatchNavs.TryGetValue(section, out var sn);
@@ -2774,6 +2805,8 @@ public sealed partial class MainWindow : Window
                 }
             }
         }
+        buildSw.Stop();
+        LogService.Instance.Info("Preview", $"BuildHighlightSection: results={results.Count}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, hasAllLines={allLines != null}, elapsed={buildSw.ElapsedMilliseconds}ms");
     }
 
     /// <summary>
@@ -2812,6 +2845,7 @@ public sealed partial class MainWindow : Window
         if (!_lazySections.Remove(section, out var lazy))
             return false;
 
+        var matSw = System.Diagnostics.Stopwatch.StartNew();
         LogService.Instance.Info("Preview", $"MaterializeLazySection: file='{System.IO.Path.GetFileName(lazy.FilePath)}', matches={lazy.MatchCount}");
 
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
@@ -2821,6 +2855,8 @@ public sealed partial class MainWindow : Window
             BuildConcatenatedSection(section, lazy.Results, lazy.AllLines, lazy.PreviewLines, rx);
 
         _lazyMatchCount -= lazy.MatchCount;
+        matSw.Stop();
+        LogService.Instance.Info("Preview", $"MaterializeLazySection complete: file='{System.IO.Path.GetFileName(lazy.FilePath)}', elapsed={matSw.ElapsedMilliseconds}ms, remainingLazy={_lazySections.Count}");
         return true;
     }
 
@@ -3081,6 +3117,7 @@ public sealed partial class MainWindow : Window
     private async Task ShowSingleFilePreviewAsync(SearchResult r, bool fullFile)
     {
         LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync: file='{r.FilePath}', line={r.LineNumber}, fullFile={fullFile}");
+        var singleSw = System.Diagnostics.Stopwatch.StartNew();
         ShowPreviewBlockSurface();
         PreviewBlock.Blocks.Clear();
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
@@ -3091,13 +3128,17 @@ public sealed partial class MainWindow : Window
             try { allLines = await ReadAllLinesWithEncodingAsync(r.FilePath); } catch (Exception ex) { LogService.Instance.Warning("Preview", $"Cannot read file for single-file preview: {r.FilePath}", ex); }
         }
 
+        int lineCount = 0;
         var lines = GetPreviewLines(r, allLines, ViewModel.PreviewContextLines, fullFile);
         foreach (var (line, lineNum) in lines)
         {
             bool isMatchLine = lineNum == r.LineNumber;
             var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx, truncate: !fullFile);
             PreviewBlock.Blocks.Add(para);
+            lineCount++;
         }
+        singleSw.Stop();
+        LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync complete: lines={lineCount}, blocks={PreviewBlock.Blocks.Count}, elapsed={singleSw.ElapsedMilliseconds}ms");
     }
 
     private void ShowPreviewBlockSurface()
@@ -3469,7 +3510,9 @@ public sealed partial class MainWindow : Window
 
                 try
                 {
+                    LogService.Instance.Info("Preview", $"ShowFullFilePreviewAsync: loading file '{System.IO.Path.GetFileName(target.FilePath)}', matches={target.Matches.Count}");
                     var document = await LoadPreviewDocumentAsync(target.FilePath, cts.Token).ConfigureAwait(true);
+                    LogService.Instance.Info("Preview", $"ShowFullFilePreviewAsync: loaded '{System.IO.Path.GetFileName(target.FilePath)}', bytes={document.ByteLength:N0}, textLen={document.Text.Length:N0}");
                     var section = AddFullFileSection(target, document.ByteLength);
                     RenderFullFileDocument(section, target, document.Text, rx);
                     filesLoaded++;
@@ -3532,6 +3575,7 @@ public sealed partial class MainWindow : Window
 
     private static void RenderFullFileDocument(RichTextBlock section, FullFilePreviewTarget target, string text, Regex? rx)
     {
+        var renderSw = System.Diagnostics.Stopwatch.StartNew();
         var matchByLine = new Dictionary<int, SearchResult>();
         foreach (var result in target.Matches.OrderBy(r => r.LineNumber))
         {
@@ -3552,6 +3596,9 @@ public sealed partial class MainWindow : Window
             lineNumber++;
         }
 
+        renderSw.Stop();
+        LogService.Instance.Info("Preview", $"RenderFullFileDocument: file='{System.IO.Path.GetFileName(target.FilePath)}', lines={lineNumber - 1}, matches={matchByLine.Count}, blocks={section.Blocks.Count}, elapsed={renderSw.ElapsedMilliseconds}ms");
+
         if (!wroteLine)
         {
             var para = new Paragraph();
@@ -3564,8 +3611,11 @@ public sealed partial class MainWindow : Window
 
     private async Task ShowFullFileEditorAsync(SearchResult result)
     {
+        LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: start file='{System.IO.Path.GetFileName(result.FilePath)}'");
+        var editorSw = System.Diagnostics.Stopwatch.StartNew();
         if (PreviewEditor.Visibility == Visibility.Visible && HasRealEditorChanges())
         {
+            LogService.Instance.Info("Preview", "ShowFullFileEditorAsync: blocked - editor has unsaved changes");
             ViewModel.StatusText = "Save or close the current editor before loading another full file.";
             return;
         }
@@ -3591,43 +3641,33 @@ public sealed partial class MainWindow : Window
             bool isArchive = ZipArchiveSearcher.IsArchivePath(result.FilePath);
             PreviewEditor.IsReadOnly = isArchive;
 
-            // Progressively load text in chunks to avoid freezing the UI on large files.
-            _suppressPreviewEditorTextChanged = true;
-            SetPreviewEditorVisible(true);
-
-            const int chunkSize = 256 * 1024; // 256 KB per chunk
             var text = document.Text;
-            if (text.Length <= chunkSize)
-            {
-                PreviewEditor.Text = text;
-            }
-            else
-            {
-                // Load the first chunk immediately so the user sees content right away.
-                PreviewEditor.Text = text[..chunkSize];
-                int loaded = chunkSize;
-                while (loaded < text.Length)
-                {
-                    if (cts.IsCancellationRequested) break;
-                    // Yield to let the UI render the previous chunk.
-                    await Task.Delay(1, cts.Token).ConfigureAwait(true);
-                    int end = Math.Min(loaded + chunkSize, text.Length);
-                    // Append next chunk by selecting the end and inserting.
-                    PreviewEditor.Select(PreviewEditor.Text.Length, 0);
-                    PreviewEditor.SelectedText = text[loaded..end];
-                    loaded = end;
-                }
-            }
 
+            // Assign while collapsed so TextBox does one document load instead of
+            // repeatedly re-laying out an ever-growing text buffer.
+            var textSetSw = System.Diagnostics.Stopwatch.StartNew();
+            _suppressPreviewEditorTextChanged = true;
+            PreviewEditor.Text = text;
             _previewEditorOriginalText = PreviewEditor.Text;
             _suppressPreviewEditorTextChanged = false;
+            textSetSw.Stop();
+            LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: assigned TextBox text, textLen={text.Length:N0}, elapsed={textSetSw.ElapsedMilliseconds}ms");
+
             _previewEditorDirty = false;
             UpdateEditorDirtyIndicator();
+
+            var showEditorSw = System.Diagnostics.Stopwatch.StartNew();
+            SetPreviewEditorVisible(true);
+            showEditorSw.Stop();
+            LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: editor visible, elapsed={showEditorSw.ElapsedMilliseconds}ms");
 
             PreviewEditor.Focus(FocusState.Programmatic);
 
             // Scroll to the match line and highlight the matched text.
+            var scrollSw = System.Diagnostics.Stopwatch.StartNew();
             ScrollEditorToMatch(text, result);
+            scrollSw.Stop();
+            LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: scrolled to match line={result.LineNumber}, elapsed={scrollSw.ElapsedMilliseconds}ms");
 
             // WinUI 3 TextBox may fire deferred TextChanged after a bulk text
             // load (line-ending normalisation, layout pass, etc.).  If that
@@ -3673,6 +3713,8 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
+            editorSw.Stop();
+            LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: done file='{System.IO.Path.GetFileName(result.FilePath)}', elapsed={editorSw.ElapsedMilliseconds}ms");
             if (ReferenceEquals(_previewLoadCts, cts))
                 _previewLoadCts = null;
             cts.Dispose();
@@ -3716,9 +3758,13 @@ public sealed partial class MainWindow : Window
 
     private static async Task<PreviewTextDocument> LoadPreviewDocumentAsync(string filePath, CancellationToken cancellationToken)
     {
+        var loadSw = System.Diagnostics.Stopwatch.StartNew();
+        LogService.Instance.Verbose("Preview", $"LoadPreviewDocumentAsync: start file='{System.IO.Path.GetFileName(filePath)}'");
+
         // Handle archive entry paths: extract the entry to a memory stream
         if (ZipArchiveSearcher.IsArchivePath(filePath))
         {
+            LogService.Instance.Verbose("Preview", $"LoadPreviewDocumentAsync: archive path, delegating to LoadArchiveEntryPreviewAsync");
             return await LoadArchiveEntryPreviewAsync(filePath, cancellationToken).ConfigureAwait(false);
         }
 
@@ -3757,6 +3803,8 @@ public sealed partial class MainWindow : Window
                 encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
             using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true, bufferSize: 128 * 1024, leaveOpen: false);
             var text = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+            loadSw.Stop();
+            LogService.Instance.Info("Preview", $"LoadPreviewDocumentAsync: done file='{System.IO.Path.GetFileName(filePath)}', bytes={info.Length:N0}, textLen={text.Length:N0}, elapsed={loadSw.ElapsedMilliseconds}ms");
             return new PreviewTextDocument(text, reader.CurrentEncoding, info.Length);
         }
         catch (PreviewLoadException) { throw; }
@@ -4208,7 +4256,7 @@ public sealed partial class MainWindow : Window
                     var container = new InlineUIContainer { Child = border };
                     para.Inlines.RemoveAt(i);
                     para.Inlines.Insert(i, container);
-                    _activeMatchBox = (para, i, run);
+                    _activeMatchBox = (para, i, run, border);
                     return;
                 }
                 goldCount++;
@@ -4230,52 +4278,186 @@ public sealed partial class MainWindow : Window
 
     /// <summary>
     /// Scrolls the outer preview ScrollViewer so that <paramref name="targetPara"/>
-    /// inside <paramref name="block"/> is vertically centred in the viewport.
+    /// inside <paramref name="block"/> is centred in the viewport.
     /// Must be called after the content has been added to the visual tree;
     /// actual scrolling is deferred to a low-priority dispatcher tick so layout
     /// has time to complete.
     /// </summary>
     private void ScrollPreviewToLine(RichTextBlock block, Paragraph targetPara)
     {
+        ScrollPreviewToLine(block, targetPara, attemptsRemaining: 3);
+    }
+
+    private void ScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, int attemptsRemaining)
+    {
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
-            try
+            if (TryScrollPreviewToLine(block, targetPara, out var reason))
+                return;
+
+            if (attemptsRemaining > 0)
             {
-                // Find the boxed match (InlineUIContainer) or highlighted (Gold/Bold) Run for precise positioning.
-                TextPointer? pointer = null;
-                foreach (var inline in targetPara.Inlines)
-                {
-                    if (inline is InlineUIContainer iuc)
-                    {
-                        pointer = iuc.ContentStart;
-                        break;
-                    }
-                    if (inline is Run run && run.FontWeight.Weight == Microsoft.UI.Text.FontWeights.Bold.Weight
-                        && run.Foreground is SolidColorBrush brush
-                        && brush.Color == Microsoft.UI.Colors.Gold)
-                    {
-                        pointer = run.ContentStart;
-                        break;
-                    }
-                }
-                pointer ??= targetPara.ContentStart;
-                if (pointer is null) return;
-
-                var rect = pointer.GetCharacterRect(LogicalDirection.Forward);
-                var transform = block.TransformToVisual(PreviewScrollViewer);
-                var point = transform.TransformPoint(new Windows.Foundation.Point(0, rect.Y));
-
-                double viewportHeight = PreviewScrollViewer.ViewportHeight;
-                double targetOffset = PreviewScrollViewer.VerticalOffset + point.Y - viewportHeight / 2;
-                targetOffset = Math.Max(0, targetOffset);
-
-                PreviewScrollViewer.ChangeView(null, targetOffset, null, disableAnimation: false);
+                ScrollPreviewToLine(block, targetPara, attemptsRemaining - 1);
+                return;
             }
-            catch
-            {
-                // Layout may not be ready — silently ignore.
-            }
+
+            LogService.Instance.Verbose("Preview", $"ScrollPreviewToLine: skipped after layout retries ({reason})");
         });
+    }
+
+    private bool TryScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, out string reason)
+    {
+        reason = string.Empty;
+        try
+        {
+            ExpandPreviewSectionForBlock(block);
+            PreviewScrollViewer.UpdateLayout();
+            block.UpdateLayout();
+
+            if (_activeMatchBox is { para: var activePara, element: var activeElement }
+                && ReferenceEquals(activePara, targetPara)
+                && TryScrollToMatchElement(block, activeElement, out reason))
+            {
+                return true;
+            }
+
+            var pointer = FindMatchPointer(targetPara) ?? targetPara.ContentStart;
+            if (pointer is null)
+            {
+                reason = "no text pointer";
+                return false;
+            }
+
+            var rect = pointer.GetCharacterRect(LogicalDirection.Forward);
+            if (PreviewScrollViewer.ViewportHeight <= 0)
+            {
+                reason = "preview viewport not ready";
+                return false;
+            }
+
+            var verticalTransform = block.TransformToVisual(PreviewScrollViewer);
+            var verticalPoint = verticalTransform.TransformPoint(new Windows.Foundation.Point(0, rect.Y));
+
+            double targetVerticalOffset = PreviewScrollViewer.VerticalOffset + verticalPoint.Y - PreviewScrollViewer.ViewportHeight / 2;
+            targetVerticalOffset = Math.Clamp(targetVerticalOffset, 0, PreviewScrollViewer.ScrollableHeight);
+            PreviewScrollViewer.ChangeView(null, targetVerticalOffset, null, disableAnimation: false);
+
+            ScrollMatchHorizontallyIntoView(block, rect);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            reason = ex.GetType().Name;
+            return false;
+        }
+    }
+
+    private bool TryScrollToMatchElement(RichTextBlock block, FrameworkElement matchElement, out string reason)
+    {
+        reason = string.Empty;
+        try
+        {
+            matchElement.UpdateLayout();
+            if (matchElement.ActualWidth <= 0 || matchElement.ActualHeight <= 0)
+            {
+                reason = "active match element not measured";
+                return false;
+            }
+
+            if (PreviewScrollViewer.ViewportHeight <= 0)
+            {
+                reason = "preview viewport not ready";
+                return false;
+            }
+
+            var verticalTransform = matchElement.TransformToVisual(PreviewScrollViewer);
+            var verticalPoint = verticalTransform.TransformPoint(new Windows.Foundation.Point(0, 0));
+            double matchVerticalCenter = PreviewScrollViewer.VerticalOffset + verticalPoint.Y + matchElement.ActualHeight / 2;
+            double targetVerticalOffset = matchVerticalCenter - PreviewScrollViewer.ViewportHeight / 2;
+            targetVerticalOffset = Math.Clamp(targetVerticalOffset, 0, PreviewScrollViewer.ScrollableHeight);
+            PreviewScrollViewer.ChangeView(null, targetVerticalOffset, null, disableAnimation: false);
+
+            ScrollMatchElementHorizontallyIntoView(block, matchElement);
+            LogService.Instance.Verbose("Preview", $"ScrollPreviewToLine: scrolled active element vertical={targetVerticalOffset:N0}, viewport={PreviewScrollViewer.ViewportHeight:N0}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            reason = ex.GetType().Name;
+            return false;
+        }
+    }
+
+    private TextPointer? FindMatchPointer(Paragraph targetPara)
+    {
+        // Find the boxed match (InlineUIContainer) or highlighted (Gold/Bold) Run for precise positioning.
+        foreach (var inline in targetPara.Inlines)
+        {
+            if (inline is InlineUIContainer iuc)
+                return iuc.ContentStart;
+
+            if (inline is Run run && run.FontWeight.Weight == Microsoft.UI.Text.FontWeights.Bold.Weight
+                && run.Foreground is SolidColorBrush brush
+                && brush.Color == Microsoft.UI.Colors.Gold)
+                return run.ContentStart;
+        }
+
+        return null;
+    }
+
+    private void ExpandPreviewSectionForBlock(RichTextBlock block)
+    {
+        foreach (var child in PreviewSectionsPanel.Children.OfType<Expander>())
+        {
+            if (ReferenceEquals(child.Tag, block))
+            {
+                child.IsExpanded = true;
+                child.UpdateLayout();
+                return;
+            }
+        }
+    }
+
+    private void ScrollMatchHorizontallyIntoView(RichTextBlock block, Windows.Foundation.Rect rect)
+    {
+        if (ViewModel.PreviewWordWrap)
+            return;
+
+        var scroller = _sectionMatchNavs.TryGetValue(block, out var sectionNav)
+            ? sectionNav.Scroller
+            : PreviewScrollViewer;
+
+        scroller.UpdateLayout();
+        if (scroller.ViewportWidth <= 0 || scroller.ScrollableWidth <= 0)
+            return;
+
+        var horizontalTransform = block.TransformToVisual(scroller);
+        var horizontalPoint = horizontalTransform.TransformPoint(new Windows.Foundation.Point(rect.X, rect.Y));
+        double matchCenter = scroller.HorizontalOffset + horizontalPoint.X + Math.Max(0, rect.Width) / 2;
+        double targetHorizontalOffset = matchCenter - scroller.ViewportWidth / 2;
+        targetHorizontalOffset = Math.Clamp(targetHorizontalOffset, 0, scroller.ScrollableWidth);
+        scroller.ChangeView(targetHorizontalOffset, null, null, disableAnimation: false);
+    }
+
+    private void ScrollMatchElementHorizontallyIntoView(RichTextBlock block, FrameworkElement matchElement)
+    {
+        if (ViewModel.PreviewWordWrap)
+            return;
+
+        var scroller = _sectionMatchNavs.TryGetValue(block, out var sectionNav)
+            ? sectionNav.Scroller
+            : PreviewScrollViewer;
+
+        scroller.UpdateLayout();
+        if (scroller.ViewportWidth <= 0 || scroller.ScrollableWidth <= 0)
+            return;
+
+        var horizontalTransform = matchElement.TransformToVisual(scroller);
+        var horizontalPoint = horizontalTransform.TransformPoint(new Windows.Foundation.Point(0, 0));
+        double matchCenter = scroller.HorizontalOffset + horizontalPoint.X + matchElement.ActualWidth / 2;
+        double targetHorizontalOffset = matchCenter - scroller.ViewportWidth / 2;
+        targetHorizontalOffset = Math.Clamp(targetHorizontalOffset, 0, scroller.ScrollableWidth);
+        scroller.ChangeView(targetHorizontalOffset, null, null, disableAnimation: false);
     }
 
     private int MatchNavFileCount => _matchParagraphs.Select(m => m.block).Distinct().Count() + _lazySections.Count;
