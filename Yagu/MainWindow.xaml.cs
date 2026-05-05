@@ -1021,8 +1021,8 @@ public sealed partial class MainWindow : Window
     private int _lazyMatchCount; // total matches in un-rendered sections
     private static readonly SolidColorBrush s_activeExpanderBrush = new(Windows.UI.Color.FromArgb(25, 80, 180, 255));
 
-    // Active match box highlight state
-    private (Paragraph para, int inlineIndex, Run originalRun, FrameworkElement element)? _activeMatchBox;
+    // Active match highlight state
+    private (Paragraph para, Run run, Brush foreground, Windows.UI.Text.TextDecorations textDecorations)? _activeMatchHighlight;
 
     private enum SplitLayoutMode { Split, ResultsMaximized, PreviewMaximized }
     private SplitLayoutMode _splitLayoutMode = SplitLayoutMode.ResultsMaximized;
@@ -4222,7 +4222,7 @@ public sealed partial class MainWindow : Window
         return LineTruncator.Truncate(line);
     }
 
-    private static readonly SolidColorBrush s_matchBoxBrush = new(Microsoft.UI.Colors.Red);
+    private static readonly SolidColorBrush s_activeMatchBrush = new(Microsoft.UI.Colors.OrangeRed);
 
     private void BoxMatchRun(Paragraph para, int matchInPara)
     {
@@ -4237,26 +4237,9 @@ public sealed partial class MainWindow : Window
             {
                 if (goldCount == matchInPara)
                 {
-                    var tb = new Microsoft.UI.Xaml.Controls.TextBlock
-                    {
-                        Text = run.Text,
-                        FontWeight = Microsoft.UI.Text.FontWeights.Bold,
-                        Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gold),
-                        FontFamily = new FontFamily("Consolas"),
-                        IsTextSelectionEnabled = false,
-                    };
-                    var border = new Border
-                    {
-                        BorderBrush = s_matchBoxBrush,
-                        BorderThickness = new Thickness(1.5),
-                        CornerRadius = new CornerRadius(2),
-                        Padding = new Thickness(1, 0, 1, 0),
-                        Child = tb,
-                    };
-                    var container = new InlineUIContainer { Child = border };
-                    para.Inlines.RemoveAt(i);
-                    para.Inlines.Insert(i, container);
-                    _activeMatchBox = (para, i, run, border);
+                    _activeMatchHighlight = (para, run, run.Foreground, run.TextDecorations);
+                    run.Foreground = s_activeMatchBrush;
+                    run.TextDecorations = Windows.UI.Text.TextDecorations.Underline;
                     return;
                 }
                 goldCount++;
@@ -4266,14 +4249,10 @@ public sealed partial class MainWindow : Window
 
     private void UnboxCurrentMatch()
     {
-        if (_activeMatchBox is not { } box) return;
-        if (box.inlineIndex < box.para.Inlines.Count
-            && box.para.Inlines[box.inlineIndex] is InlineUIContainer)
-        {
-            box.para.Inlines.RemoveAt(box.inlineIndex);
-            box.para.Inlines.Insert(box.inlineIndex, box.originalRun);
-        }
-        _activeMatchBox = null;
+        if (_activeMatchHighlight is not { } highlight) return;
+        highlight.run.Foreground = highlight.foreground;
+        highlight.run.TextDecorations = highlight.textDecorations;
+        _activeMatchHighlight = null;
     }
 
     /// <summary>
@@ -4311,15 +4290,6 @@ public sealed partial class MainWindow : Window
         try
         {
             ExpandPreviewSectionForBlock(block);
-            PreviewScrollViewer.UpdateLayout();
-            block.UpdateLayout();
-
-            if (_activeMatchBox is { para: var activePara, element: var activeElement }
-                && ReferenceEquals(activePara, targetPara)
-                && TryScrollToMatchElement(block, activeElement, out reason))
-            {
-                return true;
-            }
 
             var pointer = FindMatchPointer(targetPara) ?? targetPara.ContentStart;
             if (pointer is null)
@@ -4352,50 +4322,15 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private bool TryScrollToMatchElement(RichTextBlock block, FrameworkElement matchElement, out string reason)
-    {
-        reason = string.Empty;
-        try
-        {
-            matchElement.UpdateLayout();
-            if (matchElement.ActualWidth <= 0 || matchElement.ActualHeight <= 0)
-            {
-                reason = "active match element not measured";
-                return false;
-            }
-
-            if (PreviewScrollViewer.ViewportHeight <= 0)
-            {
-                reason = "preview viewport not ready";
-                return false;
-            }
-
-            var verticalTransform = matchElement.TransformToVisual(PreviewScrollViewer);
-            var verticalPoint = verticalTransform.TransformPoint(new Windows.Foundation.Point(0, 0));
-            double matchVerticalCenter = PreviewScrollViewer.VerticalOffset + verticalPoint.Y + matchElement.ActualHeight / 2;
-            double targetVerticalOffset = matchVerticalCenter - PreviewScrollViewer.ViewportHeight / 2;
-            targetVerticalOffset = Math.Clamp(targetVerticalOffset, 0, PreviewScrollViewer.ScrollableHeight);
-            PreviewScrollViewer.ChangeView(null, targetVerticalOffset, null, disableAnimation: false);
-
-            ScrollMatchElementHorizontallyIntoView(block, matchElement);
-            LogService.Instance.Verbose("Preview", $"ScrollPreviewToLine: scrolled active element vertical={targetVerticalOffset:N0}, viewport={PreviewScrollViewer.ViewportHeight:N0}");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            reason = ex.GetType().Name;
-            return false;
-        }
-    }
-
     private TextPointer? FindMatchPointer(Paragraph targetPara)
     {
-        // Find the boxed match (InlineUIContainer) or highlighted (Gold/Bold) Run for precise positioning.
+        if (_activeMatchHighlight is { para: var activePara, run: var activeRun }
+            && ReferenceEquals(activePara, targetPara))
+            return activeRun.ContentStart;
+
+        // Find the highlighted (Gold/Bold) Run for precise positioning.
         foreach (var inline in targetPara.Inlines)
         {
-            if (inline is InlineUIContainer iuc)
-                return iuc.ContentStart;
-
             if (inline is Run run && run.FontWeight.Weight == Microsoft.UI.Text.FontWeights.Bold.Weight
                 && run.Foreground is SolidColorBrush brush
                 && brush.Color == Microsoft.UI.Colors.Gold)
@@ -4412,7 +4347,6 @@ public sealed partial class MainWindow : Window
             if (ReferenceEquals(child.Tag, block))
             {
                 child.IsExpanded = true;
-                child.UpdateLayout();
                 return;
             }
         }
@@ -4427,34 +4361,12 @@ public sealed partial class MainWindow : Window
             ? sectionNav.Scroller
             : PreviewScrollViewer;
 
-        scroller.UpdateLayout();
         if (scroller.ViewportWidth <= 0 || scroller.ScrollableWidth <= 0)
             return;
 
         var horizontalTransform = block.TransformToVisual(scroller);
         var horizontalPoint = horizontalTransform.TransformPoint(new Windows.Foundation.Point(rect.X, rect.Y));
         double matchCenter = scroller.HorizontalOffset + horizontalPoint.X + Math.Max(0, rect.Width) / 2;
-        double targetHorizontalOffset = matchCenter - scroller.ViewportWidth / 2;
-        targetHorizontalOffset = Math.Clamp(targetHorizontalOffset, 0, scroller.ScrollableWidth);
-        scroller.ChangeView(targetHorizontalOffset, null, null, disableAnimation: false);
-    }
-
-    private void ScrollMatchElementHorizontallyIntoView(RichTextBlock block, FrameworkElement matchElement)
-    {
-        if (ViewModel.PreviewWordWrap)
-            return;
-
-        var scroller = _sectionMatchNavs.TryGetValue(block, out var sectionNav)
-            ? sectionNav.Scroller
-            : PreviewScrollViewer;
-
-        scroller.UpdateLayout();
-        if (scroller.ViewportWidth <= 0 || scroller.ScrollableWidth <= 0)
-            return;
-
-        var horizontalTransform = matchElement.TransformToVisual(scroller);
-        var horizontalPoint = horizontalTransform.TransformPoint(new Windows.Foundation.Point(0, 0));
-        double matchCenter = scroller.HorizontalOffset + horizontalPoint.X + matchElement.ActualWidth / 2;
         double targetHorizontalOffset = matchCenter - scroller.ViewportWidth / 2;
         targetHorizontalOffset = Math.Clamp(targetHorizontalOffset, 0, scroller.ScrollableWidth);
         scroller.ChangeView(targetHorizontalOffset, null, null, disableAnimation: false);
@@ -4609,6 +4521,7 @@ public sealed partial class MainWindow : Window
 
     private void OnNextMatch(object sender, RoutedEventArgs e)
     {
+        var navSw = System.Diagnostics.Stopwatch.StartNew();
         int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
         if (totalMatches == 0) return;
 
@@ -4638,10 +4551,13 @@ public sealed partial class MainWindow : Window
         ActivateSectionForBlock(block);
         BoxMatchRun(para, matchInPara);
         ScrollPreviewToLine(block, para);
+        navSw.Stop();
+        LogService.Instance.Verbose("Preview", $"OnNextMatch: index={_currentMatchIndex}, elapsed={navSw.ElapsedMilliseconds}ms");
     }
 
     private void OnPrevMatch(object sender, RoutedEventArgs e)
     {
+        var navSw = System.Diagnostics.Stopwatch.StartNew();
         int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
         if (totalMatches == 0) return;
 
@@ -4671,6 +4587,8 @@ public sealed partial class MainWindow : Window
         ActivateSectionForBlock(block);
         BoxMatchRun(para, matchInPara);
         ScrollPreviewToLine(block, para);
+        navSw.Stop();
+        LogService.Instance.Verbose("Preview", $"OnPrevMatch: index={_currentMatchIndex}, elapsed={navSw.ElapsedMilliseconds}ms");
     }
 
     // Tracks how many match entries the last MaterializeNextLazySection call added.
