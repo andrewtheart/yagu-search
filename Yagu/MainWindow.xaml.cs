@@ -1023,6 +1023,7 @@ public sealed partial class MainWindow : Window
 
     // Active match highlight state
     private (Paragraph para, Run run, Brush foreground, Windows.UI.Text.TextDecorations textDecorations, int column)? _activeMatchHighlight;
+    private int _matchScrollRequestId;
 
     private enum SplitLayoutMode { Split, ResultsMaximized, PreviewMaximized }
     private SplitLayoutMode _splitLayoutMode = SplitLayoutMode.ResultsMaximized;
@@ -1399,10 +1400,18 @@ public sealed partial class MainWindow : Window
         var wrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
         var hbar = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
 
-        PreviewBlock.TextWrapping = wrapping;
-        PreviewEditor.TextWrapping = wrapping;
+        InvalidatePendingMatchScrolls();
+        UnboxCurrentMatch();
+
+        if (PreviewBlock.TextWrapping != wrapping)
+            PreviewBlock.TextWrapping = wrapping;
+        if (PreviewEditor.TextWrapping != wrapping)
+            PreviewEditor.TextWrapping = wrapping;
         foreach (var block in EnumeratePreviewSectionBlocks())
-            block.TextWrapping = wrapping;
+        {
+            if (block.TextWrapping != wrapping)
+                block.TextWrapping = wrapping;
+        }
         if (PreviewSectionsPanel.Visibility != Visibility.Visible)
             PreviewScrollViewer.HorizontalScrollBarVisibility = hbar;
         foreach (var expander in PreviewSectionsPanel.Children.OfType<Expander>())
@@ -1424,10 +1433,16 @@ public sealed partial class MainWindow : Window
             WordWrapToggle.IsEnabled = false;
             var wrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
             var hbar = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+            LogService.Instance.Info("Preview", $"ApplyWordWrapAsync: start wrap={wrap}");
+
+            InvalidatePendingMatchScrolls();
+            UnboxCurrentMatch();
 
             // Cheap, always-visible controls first.
-            PreviewBlock.TextWrapping = wrapping;
-            PreviewEditor.TextWrapping = wrapping;
+            if (PreviewBlock.TextWrapping != wrapping)
+                PreviewBlock.TextWrapping = wrapping;
+            if (PreviewEditor.TextWrapping != wrapping)
+                PreviewEditor.TextWrapping = wrapping;
             ScrollViewer.SetHorizontalScrollBarVisibility(PreviewEditor, hbar);
             if (PreviewSectionsPanel.Visibility != Visibility.Visible)
                 PreviewScrollViewer.HorizontalScrollBarVisibility = hbar;
@@ -1451,7 +1466,8 @@ public sealed partial class MainWindow : Window
                 // handler in AddPreviewSection).
                 if (expander.IsExpanded && expander.Tag is RichTextBlock block)
                 {
-                    block.TextWrapping = wrapping;
+                    if (block.TextWrapping != wrapping)
+                        block.TextWrapping = wrapping;
 
                     processed++;
                     // Yield to the UI thread between heavy sections so the toggle remains
@@ -1465,6 +1481,12 @@ public sealed partial class MainWindow : Window
             }
 
             ViewModel.StatusText = string.Empty;
+            LogService.Instance.Info("Preview", $"ApplyWordWrapAsync: done wrap={wrap}, sections={totalSections}, processedExpanded={processed}");
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("Preview", $"ApplyWordWrapAsync failed: wrap={wrap}", ex);
+            ViewModel.StatusText = "Could not apply word wrap to the current preview.";
         }
         finally
         {
@@ -2264,22 +2286,16 @@ public sealed partial class MainWindow : Window
                 foreach (var (line, lineNum) in lines)
                 {
                     bool isMatchLine = lineNum == r.LineNumber;
-                    var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
-                    section.Blocks.Add(para);
-                    parasInFile++;
-
-                    if (isMatchLine)
-                    {
-                        _sectionMatchNavs.TryGetValue(section, out var sn);
-                        AddMatchEntries(_matchParagraphs, sn, section, para, line, rx);
-                    }
+                    _sectionMatchNavs.TryGetValue(section, out var sn);
+                    var firstPara = AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true, _matchParagraphs, sn, out int addedParagraphs);
+                    parasInFile += addedParagraphs;
 
                     if (scrollTarget is not null && isMatchLine
                         && r.LineNumber == scrollTarget.LineNumber
                         && string.Equals(r.FilePath, scrollTarget.FilePath, StringComparison.OrdinalIgnoreCase))
                     {
                         scrollBlock = section;
-                        scrollPara = para;
+                        scrollPara = firstPara;
                     }
                 }
             }
@@ -2396,19 +2412,14 @@ public sealed partial class MainWindow : Window
                         bool isMatchLine = matchLines.Contains(lineNum);
                         // Use first matching result for this line (for column-based highlighting)
                         var matchResult = results.FirstOrDefault(r => r.LineNumber == lineNum) ?? results[0];
-                        var para = MakePreviewParagraph(allLines[i], lineNum, isMatchLine, matchResult, rx);
-                        section.Blocks.Add(para);
-                        if (isMatchLine)
-                        {
-                            _sectionMatchNavs.TryGetValue(section, out var sn);
-                            AddMatchEntries(_matchParagraphs, sn, section, para, allLines[i], rx);
-                        }
+                        _sectionMatchNavs.TryGetValue(section, out var sn);
+                        var firstPara = AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatchLine, matchResult, rx, truncate: true, _matchParagraphs, sn, out _);
 
                         if (scrollTarget is not null && isMatchLine && lineNum == scrollTarget.LineNumber
                             && string.Equals(filePath, scrollTarget.FilePath, StringComparison.OrdinalIgnoreCase))
                         {
                             scrollBlock = section;
-                            scrollPara = para;
+                            scrollPara = firstPara;
                         }
                     }
                 }
@@ -2422,20 +2433,15 @@ public sealed partial class MainWindow : Window
                     foreach (var (line, lineNum) in lines)
                     {
                         bool isMatchLine = lineNum == r.LineNumber;
-                        var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
-                        section.Blocks.Add(para);
-                        if (isMatchLine)
-                        {
-                            _sectionMatchNavs.TryGetValue(section, out var sn);
-                            AddMatchEntries(_matchParagraphs, sn, section, para, line, rx);
-                        }
+                        _sectionMatchNavs.TryGetValue(section, out var sn);
+                        var firstPara = AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true, _matchParagraphs, sn, out _);
 
                         if (scrollTarget is not null && isMatchLine
                             && r.LineNumber == scrollTarget.LineNumber
                             && string.Equals(r.FilePath, scrollTarget.FilePath, StringComparison.OrdinalIgnoreCase))
                         {
                             scrollBlock = section;
-                            scrollPara = para;
+                            scrollPara = firstPara;
                         }
                     }
                 }
@@ -2508,6 +2514,9 @@ public sealed partial class MainWindow : Window
 
     /// <summary>Max file sections to render in one page. Remaining are loaded on demand via "Show more".</summary>
     private const int PreviewSectionPageSize = 50;
+
+    /// <summary>XAML paragraph chunk size for very long physical lines; all text is still rendered.</summary>
+    private const int PreviewLineLayoutSegmentChars = 4096;
 
     /// <summary>
     /// Batch-read all file contents off the UI thread so the per-file loop only does
@@ -2724,14 +2733,9 @@ public sealed partial class MainWindow : Window
             foreach (var (line, lineNum) in lines)
             {
                 bool isMatchLine = lineNum == r.LineNumber;
-                var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
-                section.Blocks.Add(para);
-                parasBuilt++;
-                if (isMatchLine)
-                {
-                    _sectionMatchNavs.TryGetValue(section, out var sn);
-                    AddMatchEntries(_matchParagraphs, sn, section, para, line, rx);
-                }
+                _sectionMatchNavs.TryGetValue(section, out var sn);
+                AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true, _matchParagraphs, sn, out int addedParagraphs);
+                parasBuilt += addedParagraphs;
             }
         }
         buildSw.Stop();
@@ -2780,14 +2784,9 @@ public sealed partial class MainWindow : Window
                     int lineNum = i + 1;
                     bool isMatchLine = matchLines.Contains(lineNum);
                     var matchResult = results.FirstOrDefault(r => r.LineNumber == lineNum) ?? results[0];
-                    var para = MakePreviewParagraph(allLines[i], lineNum, isMatchLine, matchResult, rx);
-                    section.Blocks.Add(para);
-                    parasBuilt++;
-                    if (isMatchLine)
-                    {
-                        _sectionMatchNavs.TryGetValue(section, out var sn);
-                        AddMatchEntries(_matchParagraphs, sn, section, para, allLines[i], rx);
-                    }
+                    _sectionMatchNavs.TryGetValue(section, out var sn);
+                    AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatchLine, matchResult, rx, truncate: true, _matchParagraphs, sn, out int addedParagraphs);
+                    parasBuilt += addedParagraphs;
                 }
             }
         }
@@ -2799,14 +2798,9 @@ public sealed partial class MainWindow : Window
                 foreach (var (line, lineNum) in lines)
                 {
                     bool isMatchLine = lineNum == r.LineNumber;
-                    var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx);
-                    section.Blocks.Add(para);
-                    parasBuilt++;
-                    if (isMatchLine)
-                    {
-                        _sectionMatchNavs.TryGetValue(section, out var sn);
-                        AddMatchEntries(_matchParagraphs, sn, section, para, line, rx);
-                    }
+                    _sectionMatchNavs.TryGetValue(section, out var sn);
+                    AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true, _matchParagraphs, sn, out int addedParagraphs);
+                    parasBuilt += addedParagraphs;
                 }
             }
         }
@@ -3044,12 +3038,33 @@ public sealed partial class MainWindow : Window
         var matchLines = new HashSet<int>(results.Select(r => r.LineNumber));
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
 
-        // Remove old paragraph references for this section
+        int insertionIndex = _matchParagraphs.FindIndex(m => ReferenceEquals(m.block, section));
+        if (insertionIndex < 0)
+            insertionIndex = _matchParagraphs.Count;
+
+        int currentSectionOrdinal = -1;
+        for (int i = 0, ordinal = 0; i < _matchParagraphs.Count; i++)
+        {
+            if (!ReferenceEquals(_matchParagraphs[i].block, section))
+                continue;
+
+            if (i == _currentMatchIndex)
+            {
+                currentSectionOrdinal = ordinal;
+                break;
+            }
+
+            ordinal++;
+        }
+
+        UnboxCurrentMatch();
+
         _matchParagraphs.RemoveAll(m => m.block == section);
-        if (_sectionMatchNavs.TryGetValue(section, out var sn))
-            sn.Matches.Clear();
+        _sectionMatchNavs.TryGetValue(section, out var sn);
+        sn?.Matches.Clear();
 
         section.Blocks.Clear();
+        var sectionMatches = new List<(RichTextBlock block, Paragraph para, int matchInPara)>();
         for (int i = 0; i < allLines.Length; i++)
         {
             int lineNum = i + 1;
@@ -3057,12 +3072,20 @@ public sealed partial class MainWindow : Window
             var matchResult = isMatch
                 ? results.FirstOrDefault(r => r.LineNumber == lineNum) ?? results[0]
                 : results[0];
-            var para = MakePreviewParagraph(allLines[i], lineNum, isMatch, matchResult, rx, truncate: false);
-            section.Blocks.Add(para);
-            if (isMatch)
-            {
-                AddMatchEntries(_matchParagraphs, sn, section, para, allLines[i], rx);
-            }
+            AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatch, matchResult, rx, truncate: false, sectionMatches, sn, out _);
+        }
+
+        (Paragraph para, int matchInPara)? matchToReveal = null;
+        if (sectionMatches.Count > 0)
+        {
+            insertionIndex = Math.Clamp(insertionIndex, 0, _matchParagraphs.Count);
+            _matchParagraphs.InsertRange(insertionIndex, sectionMatches);
+
+            int revealOrdinal = currentSectionOrdinal >= 0
+                ? Math.Min(currentSectionOrdinal, sectionMatches.Count - 1)
+                : 0;
+            var revealEntry = sectionMatches[revealOrdinal];
+            matchToReveal = (revealEntry.para, revealEntry.matchInPara);
         }
 
         if (allLines.Length == 0)
@@ -3076,8 +3099,12 @@ public sealed partial class MainWindow : Window
 
         // Update navigation state
         UpdateMatchNavPanel();
-        if (_activeSectionNav == sn)
-            UpdateSectionNavOverlay();
+        UpdateSectionMatchNavPanels();
+        if (matchToReveal is { } reveal)
+        {
+            SetCurrentMatchToMatch(section, reveal.para, reveal.matchInPara);
+            ScrollPreviewToLine(section, reveal.para);
+        }
     }
 
     private static List<(string line, int lineNum)> GetPreviewLines(SearchResult r, string[]? allLines, int previewLines, bool fullFile)
@@ -3138,9 +3165,8 @@ public sealed partial class MainWindow : Window
         foreach (var (line, lineNum) in lines)
         {
             bool isMatchLine = lineNum == r.LineNumber;
-            var para = MakePreviewParagraph(line, lineNum, isMatchLine, r, rx, truncate: !fullFile);
-            PreviewBlock.Blocks.Add(para);
-            lineCount++;
+            AddPreviewLineParagraphs(PreviewBlock, line, lineNum, isMatchLine, r, rx, truncate: !fullFile, null, null, out int addedParagraphs);
+            lineCount += addedParagraphs;
         }
         singleSw.Stop();
         LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync complete: lines={lineCount}, blocks={PreviewBlock.Blocks.Count}, elapsed={singleSw.ElapsedMilliseconds}ms");
@@ -3506,6 +3532,8 @@ public sealed partial class MainWindow : Window
             ShowPreviewSectionsSurface();
 
             int filesLoaded = 0;
+            (RichTextBlock block, Paragraph para, int matchInPara)? firstMatch = null;
+            (RichTextBlock block, Paragraph para, int matchInPara)? preferredMatch = null;
             foreach (var target in targets)
             {
                 cts.Token.ThrowIfCancellationRequested();
@@ -3519,7 +3547,10 @@ public sealed partial class MainWindow : Window
                     var document = await LoadPreviewDocumentAsync(target.FilePath, cts.Token).ConfigureAwait(true);
                     LogService.Instance.Info("Preview", $"ShowFullFilePreviewAsync: loaded '{System.IO.Path.GetFileName(target.FilePath)}', bytes={document.ByteLength:N0}, textLen={document.Text.Length:N0}");
                     var section = AddFullFileSection(target, document.ByteLength);
-                    RenderFullFileDocument(section, target, document.Text, rx);
+                    _sectionMatchNavs.TryGetValue(section, out var sectionNav);
+                    var renderedMatch = RenderFullFileDocument(section, target, document.Text, rx, _matchParagraphs, sectionNav, _previewResult);
+                    firstMatch ??= renderedMatch.firstMatch;
+                    preferredMatch ??= renderedMatch.preferredMatch;
                     filesLoaded++;
                 }
                 catch (OperationCanceledException) { throw; }
@@ -3545,6 +3576,16 @@ public sealed partial class MainWindow : Window
             }
 
             _previewResult = targets[0].Matches[0];
+            UpdateMatchNavPanel();
+            UpdateSectionMatchNavPanels();
+
+            var matchToReveal = preferredMatch ?? firstMatch;
+            if (matchToReveal is { } match)
+            {
+                SetCurrentMatchToMatch(match.block, match.para, match.matchInPara);
+                ScrollPreviewToLine(match.block, match.para);
+            }
+
             ViewModel.StatusText = targets.Count == 1
                 ? $"Loaded full file preview for {Path.GetFileName(targets[0].FilePath)}."
                 : $"Loaded full file preview for {filesLoaded:N0}/{targets.Count:N0} selected files.";
@@ -3578,7 +3619,17 @@ public sealed partial class MainWindow : Window
         section.Blocks.Add(para);
     }
 
-    private static void RenderFullFileDocument(RichTextBlock section, FullFilePreviewTarget target, string text, Regex? rx)
+    private static (
+        (RichTextBlock block, Paragraph para, int matchInPara)? firstMatch,
+        (RichTextBlock block, Paragraph para, int matchInPara)? preferredMatch)
+        RenderFullFileDocument(
+            RichTextBlock section,
+            FullFilePreviewTarget target,
+            string text,
+            Regex? rx,
+            List<(RichTextBlock block, Paragraph para, int matchInPara)> matchParagraphs,
+            SectionMatchNav? sectionNav,
+            SearchResult? preferredResult)
     {
         var renderSw = System.Diagnostics.Stopwatch.StartNew();
         var matchByLine = new Dictionary<int, SearchResult>();
@@ -3592,11 +3643,24 @@ public sealed partial class MainWindow : Window
         string? line;
         int lineNumber = 1;
         bool wroteLine = false;
+        (RichTextBlock block, Paragraph para, int matchInPara)? firstMatch = null;
+        (RichTextBlock block, Paragraph para, int matchInPara)? preferredMatch = null;
         while ((line = reader.ReadLine()) is not null)
         {
             var isMatchLine = matchByLine.TryGetValue(lineNumber, out var matchResult);
-            var para = MakePreviewParagraph(line, lineNumber, isMatchLine, matchResult ?? target.Matches[0], rx, truncate: false);
-            section.Blocks.Add(para);
+            int beforeCount = matchParagraphs.Count;
+            AddPreviewLineParagraphs(section, line, lineNumber, isMatchLine, matchResult ?? target.Matches[0], rx, truncate: false, matchParagraphs, sectionNav, out _);
+            if (isMatchLine && matchParagraphs.Count > beforeCount)
+            {
+                var entry = matchParagraphs[beforeCount];
+                firstMatch ??= entry;
+                if (preferredResult is not null
+                    && lineNumber == preferredResult.LineNumber
+                    && string.Equals(target.FilePath, preferredResult.FilePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    preferredMatch ??= entry;
+                }
+            }
             wroteLine = true;
             lineNumber++;
         }
@@ -3612,6 +3676,8 @@ public sealed partial class MainWindow : Window
             para.Inlines.Add(run);
             section.Blocks.Add(para);
         }
+
+        return (firstMatch, preferredMatch);
     }
 
     private async Task ShowFullFileEditorAsync(SearchResult result)
@@ -4135,18 +4201,24 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private static int CountRegexMatches(string? line, Regex? rx)
     {
-        if (rx is null || string.IsNullOrEmpty(line)) return 1;
+        return CountRegexMatches(line, rx, minimumOne: true);
+    }
+
+    private static int CountRegexMatches(string? line, Regex? rx, bool minimumOne)
+    {
+        if (rx is null || string.IsNullOrEmpty(line)) return minimumOne ? 1 : 0;
         int count = rx.Matches(line).Count;
-        return count > 0 ? count : 1;
+        return count > 0 || !minimumOne ? count : 1;
     }
 
     private static void AddMatchEntries(
         List<(RichTextBlock block, Paragraph para, int matchInPara)> matchParagraphs,
         SectionMatchNav? sn,
         RichTextBlock section, Paragraph para,
-        string? line, Regex? rx)
+        string? line, Regex? rx,
+        bool minimumOne = true)
     {
-        int count = CountRegexMatches(line, rx);
+        int count = CountRegexMatches(line, rx, minimumOne);
         for (int i = 0; i < count; i++)
         {
             matchParagraphs.Add((section, para, i));
@@ -4158,6 +4230,76 @@ public sealed partial class MainWindow : Window
     private static readonly SolidColorBrush s_gutterSepBrush = new(Windows.UI.Color.FromArgb(255, 60, 60, 60));
     private static readonly SolidColorBrush s_contextTextBrush = new(Windows.UI.Color.FromArgb(255, 110, 110, 110));
     private static readonly SolidColorBrush s_matchAccentBrush = new(Windows.UI.Color.FromArgb(255, 70, 140, 70));
+
+    private static Paragraph AddPreviewLineParagraphs(
+        RichTextBlock section,
+        string? line,
+        int lineNum,
+        bool isMatchLine,
+        SearchResult result,
+        Regex? rx,
+        bool truncate,
+        List<(RichTextBlock block, Paragraph para, int matchInPara)>? matchParagraphs,
+        SectionMatchNav? sectionNav,
+        out int paragraphsAdded)
+    {
+        line ??= string.Empty;
+        if (truncate)
+            line = TruncatePreviewLine(line, rx);
+
+        Paragraph? firstParagraph = null;
+        bool addedMatchEntries = false;
+        paragraphsAdded = 0;
+
+        foreach (var segment in EnumeratePreviewLineLayoutSegments(line))
+        {
+            var para = MakePreviewParagraph(segment, lineNum, isMatchLine, result, rx, truncate: false);
+            section.Blocks.Add(para);
+            firstParagraph ??= para;
+            paragraphsAdded++;
+
+            if (!isMatchLine || matchParagraphs is null)
+                continue;
+
+            int beforeCount = matchParagraphs.Count;
+            AddMatchEntries(
+                matchParagraphs,
+                sectionNav,
+                section,
+                para,
+                segment,
+                rx,
+                minimumOne: rx is null && !addedMatchEntries);
+            if (matchParagraphs.Count > beforeCount)
+                addedMatchEntries = true;
+        }
+
+        if (isMatchLine && matchParagraphs is not null && !addedMatchEntries && firstParagraph is not null)
+            AddMatchEntries(matchParagraphs, sectionNav, section, firstParagraph, string.Empty, rx: null);
+
+        return firstParagraph ?? throw new InvalidOperationException("Preview line renderer did not create a paragraph.");
+    }
+
+    private static IEnumerable<string> EnumeratePreviewLineLayoutSegments(string line)
+    {
+        if (line.Length == 0)
+        {
+            yield return string.Empty;
+            yield break;
+        }
+
+        if (line.Length <= PreviewLineLayoutSegmentChars)
+        {
+            yield return line;
+            yield break;
+        }
+
+        for (int start = 0; start < line.Length; start += PreviewLineLayoutSegmentChars)
+        {
+            int length = Math.Min(PreviewLineLayoutSegmentChars, line.Length - start);
+            yield return line.Substring(start, length);
+        }
+    }
 
     private static Paragraph MakePreviewParagraph(string line, int lineNum, bool isMatchLine, SearchResult r, Regex? rx, bool truncate = true)
     {
@@ -4273,19 +4415,26 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void ScrollPreviewToLine(RichTextBlock block, Paragraph targetPara)
     {
-        ScrollPreviewToLine(block, targetPara, attemptsRemaining: 3);
+        int requestId = ++_matchScrollRequestId;
+        if (TryScrollPreviewToLine(block, targetPara, out _))
+            return;
+
+        ScrollPreviewToLine(block, targetPara, attemptsRemaining: 3, requestId);
     }
 
-    private void ScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, int attemptsRemaining)
+    private void ScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, int attemptsRemaining, int requestId)
     {
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
+            if (requestId != _matchScrollRequestId)
+                return;
+
             if (TryScrollPreviewToLine(block, targetPara, out var reason))
                 return;
 
             if (attemptsRemaining > 0)
             {
-                ScrollPreviewToLine(block, targetPara, attemptsRemaining - 1);
+                ScrollPreviewToLine(block, targetPara, attemptsRemaining - 1, requestId);
                 return;
             }
 
@@ -4293,12 +4442,21 @@ public sealed partial class MainWindow : Window
         });
     }
 
+    private void InvalidatePendingMatchScrolls()
+    {
+        _matchScrollRequestId++;
+    }
+
     private bool TryScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, out string reason)
     {
         reason = string.Empty;
         try
         {
-            ExpandPreviewSectionForBlock(block);
+            if (ExpandPreviewSectionForBlock(block))
+            {
+                reason = "section expanded; waiting for layout";
+                return false;
+            }
 
             if (PreviewScrollViewer.ViewportHeight <= 0)
             {
@@ -4376,23 +4534,27 @@ public sealed partial class MainWindow : Window
         return PreviewScrollViewer.ViewportWidth;
     }
 
-    private void ExpandPreviewSectionForBlock(RichTextBlock block)
+    private bool ExpandPreviewSectionForBlock(RichTextBlock block)
     {
         foreach (var child in PreviewSectionsPanel.Children.OfType<Expander>())
         {
             if (ReferenceEquals(child.Tag, block))
             {
+                if (child.IsExpanded)
+                    return false;
+
                 child.IsExpanded = true;
-                return;
+                return true;
             }
         }
+
+        return false;
     }
 
     private void ScrollMatchHorizontallyIntoView(RichTextBlock block, Paragraph targetPara)
     {
         if (ViewModel.PreviewWordWrap)
         {
-            LogService.Instance.Verbose("Preview", "ScrollMatchHorizontallyIntoView: skipped because word wrap is enabled");
             return;
         }
 
@@ -4422,7 +4584,9 @@ public sealed partial class MainWindow : Window
         LogService.Instance.Verbose("Preview", $"ScrollMatchHorizontallyIntoView: idx={_currentMatchIndex}, column={column}, runLen={activeRun.Text?.Length ?? 0}, charW={charWidth:N1}, beforeX={beforeHorizontalOffset:N1}, targetX={targetHorizontalOffset:N1}, viewportW={scroller.ViewportWidth:N1}, scrollableW={scroller.ScrollableWidth:N1}, accepted={horizontalAccepted}, sectionScroller={_sectionMatchNavs.ContainsKey(block)}");
     }
 
-    private int MatchNavFileCount => _matchParagraphs.Select(m => m.block).Distinct().Count() + _lazySections.Count;
+    private int MatchNavFileCount => _sectionMatchNavs.Count > 0
+        ? _sectionMatchNavs.Count
+        : _matchParagraphs.Select(m => m.block).Distinct().Count() + _lazySections.Count;
 
     private string FormatMatchNavLabel(int index)
     {
@@ -4475,11 +4639,16 @@ public sealed partial class MainWindow : Window
     }
 
     private void SetCurrentMatchToParagraph(RichTextBlock block, Paragraph para)
+        => SetCurrentMatchToMatch(block, para, matchInPara: null);
+
+    private void SetCurrentMatchToMatch(RichTextBlock block, Paragraph para, int? matchInPara)
     {
         for (int i = 0; i < _matchParagraphs.Count; i++)
         {
             var match = _matchParagraphs[i];
-            if (ReferenceEquals(match.block, block) && ReferenceEquals(match.para, para))
+            if (ReferenceEquals(match.block, block)
+                && ReferenceEquals(match.para, para)
+                && (matchInPara is null || match.matchInPara == matchInPara.Value))
             {
                 _currentMatchIndex = i;
                 MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);

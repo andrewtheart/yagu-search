@@ -157,6 +157,36 @@ Uninstall the context menu entry:
 
 The registered command launches `Yagu.exe --dir "%V"` for folder and folder-background right-clicks.
 
+### Build Installer (EXE)
+
+The installer is built with [Inno Setup 6](https://jrsoftware.org/isdl.php) (free). Install it first:
+
+```powershell
+winget install JRSoftware.InnoSetup
+```
+
+Then build the installer from the repo root:
+
+```powershell
+.\build-installer.ps1
+```
+
+This builds Yagu in Release, stages the output, and compiles an installer EXE at `installer\output\YaguSetup-<version>.exe`.
+
+To skip the build step and use existing Release output:
+
+```powershell
+.\build-installer.ps1 -SkipBuild
+```
+
+To specify a custom Inno Setup path:
+
+```powershell
+.\build-installer.ps1 -InnoSetupPath "C:\Path\To\ISCC.exe"
+```
+
+The installer creates a Start Menu shortcut, optional desktop icon, optional Explorer context menu, and a full uninstaller.
+
 ## Repository Layout
 
 | Path | Purpose |
