@@ -40,13 +40,25 @@ internal static class Program
         var con = GetConsoleWindow();
         if (con != 0) ShowWindow(con, SW_HIDE);
 
-        // Enforce single instance via a named mutex.
-        App.InstanceMutex = new Mutex(true, @"Global\YaguSingleInstance", out bool createdNew);
+        // If launched as part of an elevated relaunch, wait for the old (non-elevated)
+        // process to fully exit so its single-instance mutex is released.
+        WaitForPredecessorExit(args);
+
+        // Enforce single instance via a named mutex. Retry briefly to absorb the small
+        // race window where a relaunch (e.g. "Restart as administrator") is still
+        // releasing the mutex from the previous process.
+        bool createdNew = false;
+        for (int attempt = 0; attempt < 20; attempt++)
+        {
+            App.InstanceMutex = new Mutex(true, @"Global\YaguSingleInstance", out createdNew);
+            if (createdNew) break;
+            App.InstanceMutex.Dispose();
+            App.InstanceMutex = null;
+            Thread.Sleep(150);
+        }
         if (!createdNew)
         {
             // Another instance already owns the mutex — activate it and exit.
-            App.InstanceMutex.Dispose();
-            App.InstanceMutex = null;
             ActivateExistingInstance();
             return;
         }
@@ -105,6 +117,30 @@ internal static class Program
         catch
         {
             // Best-effort — if we can't find/activate the window, just exit quietly.
+        }
+    }
+
+    /// <summary>
+    /// If the command line includes <c>--wait-for-pid &lt;n&gt;</c>, block until that
+    /// process has exited (with a generous timeout). Used by elevated relaunch to
+    /// avoid racing the predecessor's single-instance mutex.
+    /// </summary>
+    private static void WaitForPredecessorExit(string[] args)
+    {
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (!string.Equals(args[i], "--wait-for-pid", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!int.TryParse(args[i + 1], out int pid)) return;
+            try
+            {
+                using var proc = Process.GetProcessById(pid);
+                proc.WaitForExit(5000);
+            }
+            catch
+            {
+                // Process already gone — nothing to wait for.
+            }
+            return;
         }
     }
 }

@@ -76,4 +76,20 @@ public sealed class SearchOptions
 
     /// <summary>Bounded channel buffer capacity for the Everything SDK streaming path.</summary>
     public int SdkChannelBufferSize { get; init; } = 4096;
+
+    /// <summary>
+    /// When true (default) and the current process is not elevated, file listing
+    /// excludes well-known admin-protected paths (System Volume Information,
+    /// $Recycle.Bin, Windows\System32\config, etc.) to avoid wasting time on
+    /// guaranteed-access-denied trees.
+    /// </summary>
+    public bool ExcludeAdminProtectedPaths { get; init; } = true;
+
+    /// <summary>
+    /// Optional override list of admin-protected path segments. Each entry is a
+    /// substring like <c>\Windows\System32\config</c>. When null/empty the
+    /// built-in <see cref="Services.FileLister.DefaultAdminProtectedPathSegments"/>
+    /// is used.
+    /// </summary>
+    public IReadOnlyList<string>? AdminProtectedPathSegments { get; init; }
 }

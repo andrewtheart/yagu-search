@@ -90,6 +90,10 @@ public sealed partial class MainViewModel : ObservableObject
         ArchiveExtensions = _settings.ArchiveExtensions;
         SkipExtensions = _settings.SkipExtensions;
         SuppressAdminWarning = _settings.SuppressAdminWarning;
+        ExcludeAdminProtectedPaths = _settings.ExcludeAdminProtectedPaths;
+        AdminProtectedPathSegments = string.IsNullOrWhiteSpace(_settings.AdminProtectedPathSegments)
+            ? AppSettings.DefaultAdminProtectedPathSegments
+            : _settings.AdminProtectedPathSegments;
         HasCompletedFirstRun = _settings.HasCompletedFirstRun;
         BackupBeforeSave = _settings.BackupBeforeSave;
 
@@ -161,6 +165,9 @@ public sealed partial class MainViewModel : ObservableObject
         get => _suppressAdminWarning;
         set => SetProperty(ref _suppressAdminWarning, value);
     }
+
+    [ObservableProperty] public partial bool ExcludeAdminProtectedPaths { get; set; } = true;
+    [ObservableProperty] public partial string AdminProtectedPathSegments { get; set; } = AppSettings.DefaultAdminProtectedPathSegments;
 
     [ObservableProperty] public partial bool HasCompletedFirstRun { get; set; }
     [ObservableProperty] public partial bool BackupBeforeSave { get; set; } = true;
@@ -584,6 +591,8 @@ public sealed partial class MainViewModel : ObservableObject
                 MaxProcessMemoryBytes = MemoryLimitMB > 0 ? (long)MemoryLimitMB * 1024 * 1024 : 0,
                 MemoryPressurePercent = MemoryPressurePercent,
                 SdkChannelBufferSize = SdkChannelBufferSize,
+                ExcludeAdminProtectedPaths = ExcludeAdminProtectedPaths,
+                AdminProtectedPathSegments = Yagu.Services.FileLister.ParseAdminProtectedSegments(AdminProtectedPathSegments),
             };
 
             cts = new CancellationTokenSource();
@@ -1244,6 +1253,8 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.ArchiveExtensions = ArchiveExtensions;
         _settings.SkipExtensions = SkipExtensions;
         _settings.SuppressAdminWarning = SuppressAdminWarning;
+        _settings.ExcludeAdminProtectedPaths = ExcludeAdminProtectedPaths;
+        _settings.AdminProtectedPathSegments = AdminProtectedPathSegments;
         _settings.HasCompletedFirstRun = HasCompletedFirstRun;
         _settings.BackupBeforeSave = BackupBeforeSave;
 

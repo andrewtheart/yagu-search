@@ -48,6 +48,28 @@ public sealed class AppSettings
     public string SkipExtensions { get; set; } = DefaultSkipExtensions;
     /// <summary>When true, do not show the non-admin access warning banner on startup.</summary>
     public bool SuppressAdminWarning { get; set; }
+    /// <summary>When true (default) and the process is not elevated, file listing skips well-known admin-protected paths (System Volume Information, $Recycle.Bin, Windows\System32\config, etc.) to speed up search.</summary>
+    public bool ExcludeAdminProtectedPaths { get; set; } = true;
+    /// <summary>Semicolon- or newline-separated list of path segments (e.g. <c>\Windows\System32\config</c>) treated as admin-protected. Used only when <see cref="ExcludeAdminProtectedPaths"/> is true and the process is not elevated. Empty falls back to the built-in defaults.</summary>
+    public string AdminProtectedPathSegments { get; set; } = DefaultAdminProtectedPathSegments;
+    public const string DefaultAdminProtectedPathSegments =
+        @"\Windows\System32\config;" +
+        @"\Windows\System32\LogFiles\WMI;" +
+        @"\Windows\System32\Microsoft\Protect;" +
+        @"\Windows\System32\sru;" +
+        @"\Windows\CSC;" +
+        @"\Windows\Installer;" +
+        @"\Windows\ServiceProfiles;" +
+        @"\Windows\security;" +
+        @"\Windows\Minidump;" +
+        @"\Windows\appcompat\Programs\Install;" +
+        @"\Windows\PrintService;" +
+        @"\Windows\WaaS;" +
+        @"\Windows\ModemLogs;" +
+        @"\System Volume Information;" +
+        @"\$Recycle.Bin;" +
+        @"\Recovery;" +
+        @"\Config.Msi";
     /// <summary>Whether the first-run experience has been completed (context menu prompt, etc.).</summary>
     public bool HasCompletedFirstRun { get; set; }
     /// <summary>When true, do not show the "another instance is already running" dialog on startup.</summary>

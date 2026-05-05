@@ -98,6 +98,116 @@ public sealed class FileLister : IFileLister
     /// <summary>Exclude glob patterns to push into the Everything SDK query (SDK path only).</summary>
     public IReadOnlyList<string> EarlyExcludeGlobs { get; set; } = [];
 
+    /// <summary>
+    /// When true and the current process is NOT elevated, skip directories that
+    /// typically require administrator rights (e.g. <c>C:\Windows\System32\config</c>,
+    /// <c>C:\System Volume Information</c>, <c>$Recycle.Bin</c>). Avoids burning
+    /// time on access-denied trees during listing. Default true.
+    /// </summary>
+    public bool ExcludeAdminProtectedPaths { get; set; } = true;
+
+    // Lazily evaluated once per process. Process elevation cannot change at runtime.
+    private static readonly Lazy<bool> s_isElevated = new(() =>
+    {
+        try
+        {
+            using var id = System.Security.Principal.WindowsIdentity.GetCurrent();
+            var principal = new System.Security.Principal.WindowsPrincipal(id);
+            return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+        }
+        catch { return true; /* fail-open: assume elevated, do not exclude */ }
+    });
+
+    /// <summary>
+    /// Path-segment substrings (always wrapped in <c>\</c>) that are excluded when
+    /// <see cref="ExcludeAdminProtectedPaths"/> is true and the process is not elevated.
+    /// Format chosen so the same list works for both Everything (<c>!"\segment\"</c>)
+    /// and the .NET fallback (substring match against the directory path).
+    /// Override via <see cref="AdminProtectedPathSegmentsOverride"/>.
+    /// </summary>
+    public static readonly IReadOnlyList<string> DefaultAdminProtectedPathSegments =
+    [
+        @"\Windows\System32\config",
+        @"\Windows\System32\LogFiles\WMI",
+        @"\Windows\System32\Microsoft\Protect",
+        @"\Windows\System32\sru",
+        @"\Windows\CSC",
+        @"\Windows\Installer",
+        @"\Windows\ServiceProfiles",
+        @"\Windows\security",
+        @"\Windows\Minidump",
+        @"\Windows\appcompat\Programs\Install",
+        @"\Windows\PrintService",
+        @"\Windows\WaaS",
+        @"\Windows\ModemLogs",
+        @"\System Volume Information",
+        @"\$Recycle.Bin",
+        @"\Recovery",
+        @"\Config.Msi",
+    ];
+
+    /// <summary>
+    /// User-configured admin-protected path segments. When null or empty,
+    /// <see cref="DefaultAdminProtectedPathSegments"/> is used.
+    /// </summary>
+    public IReadOnlyList<string>? AdminProtectedPathSegmentsOverride { get; set; }
+
+    /// <summary>Effective list of admin-protected path segments after considering the override.</summary>
+    private IReadOnlyList<string> EffectiveAdminProtectedPathSegments =>
+        AdminProtectedPathSegmentsOverride is { Count: > 0 } o ? o : DefaultAdminProtectedPathSegments;
+
+    /// <summary>Returns true if listing should skip well-known admin-protected paths.</summary>
+    private bool ShouldExcludeAdminPaths => ExcludeAdminProtectedPaths && !s_isElevated.Value;
+
+    /// <summary>
+    /// Returns true if <paramref name="path"/> matches one of the effective admin-protected segments.
+    /// Used by the .NET fallback enumerator to avoid recursing into protected trees.
+    /// </summary>
+    private bool IsAdminProtectedPath(string path)
+    {
+        foreach (var raw in EffectiveAdminProtectedPathSegments)
+        {
+            var seg = NormalizeAdminSegment(raw);
+            if (seg is null) continue;
+            // Match either the segment as-is (path ends with the segment, e.g. "C:\Windows\Installer")
+            // or the segment followed by a separator (path ends with the segment dir).
+            if (path.EndsWith(seg, StringComparison.OrdinalIgnoreCase)) return true;
+            if (path.IndexOf(seg + "\\", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Normalises a user-entered admin-protected segment to the canonical
+    /// <c>\Folder\Subfolder</c> form: ensures it starts with <c>\</c>, strips any
+    /// trailing slash, and trims whitespace. Returns null for empty input.
+    /// </summary>
+    private static string? NormalizeAdminSegment(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var s = raw.Trim().Replace('/', '\\');
+        if (!s.StartsWith('\\')) s = "\\" + s;
+        s = s.TrimEnd('\\');
+        return s.Length > 1 ? s : null;
+    }
+
+    /// <summary>
+    /// Splits a user-entered string of admin-protected segments (one per line or
+    /// semicolon-separated) into a list of normalised segments.
+    /// </summary>
+    public static List<string> ParseAdminProtectedSegments(string raw)
+    {
+        var list = new List<string>();
+        if (string.IsNullOrWhiteSpace(raw)) return list;
+        foreach (var part in raw.Split(['\n', '\r', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var n = NormalizeAdminSegment(part);
+            if (n is not null && !list.Contains(n, StringComparer.OrdinalIgnoreCase))
+                list.Add(n);
+        }
+        return list;
+    }
+
     /// <summary>Bounded channel buffer capacity for the Everything SDK streaming path. Default 4096.</summary>
     public int SdkChannelBufferSize { get; set; } = 4096;
 
@@ -289,6 +399,20 @@ public sealed class FileLister : IFileLister
                     query += $" !\"\\{p}\\\"";
                 }
                 // Complex globs are left to the GlobMatcher post-filter.
+            }
+        }
+
+        // Exclude well-known admin-protected paths when not elevated.
+        if (ShouldExcludeAdminPaths)
+        {
+            foreach (var seg in EffectiveAdminProtectedPathSegments)
+            {
+                var s = NormalizeAdminSegment(seg);
+                if (s is null) continue;
+                // Trailing '\' anchors the segment as a folder boundary so a folder
+                // named "Recovery" deep in a project tree is excluded too — that
+                // matches user intent: skip protected trees.
+                query += $" !\"{s}\\\"";
             }
         }
 
@@ -762,6 +886,8 @@ public sealed class FileLister : IFileLister
         var stack = new Stack<string>();
         stack.Push(directory);
 
+        bool excludeAdminPaths = ShouldExcludeAdminPaths;
+
         var extSet = includeExtensions is { Count: > 0 }
             ? new HashSet<string>(includeExtensions.Select(e => "." + NormalizeExtension(e)).Where(s => s.Length > 1), StringComparer.OrdinalIgnoreCase)
             : null;
@@ -860,6 +986,12 @@ public sealed class FileLister : IFileLister
                                 if (visited.Contains(resolved)) continue;
                             }
                             catch (Exception ex) { LogService.Instance.Verbose("FileLister", $"Cannot resolve reparse: {entry}", ex); continue; }
+                        }
+                        if (excludeAdminPaths && IsAdminProtectedPath(entry))
+                        {
+                            // Don't even attempt to recurse — these always fail with
+                            // access-denied for non-elevated processes.
+                            continue;
                         }
                         stack.Push(entry);
                     }

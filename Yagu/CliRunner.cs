@@ -431,6 +431,8 @@ internal static class CliRunner
             MemoryPressurePercent = s.MemoryPressurePercent,
             SkipExtensions        = skipExtensions,
             SdkChannelBufferSize  = s.SdkChannelBufferSize,
+            ExcludeAdminProtectedPaths = s.ExcludeAdminProtectedPaths,
+            AdminProtectedPathSegments = Yagu.Services.FileLister.ParseAdminProtectedSegments(s.AdminProtectedPathSegments),
         };
     }
 

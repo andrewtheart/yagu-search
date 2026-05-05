@@ -60,6 +60,7 @@
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <TextBlock Text="Limited access"
                                FontWeight="SemiBold"
@@ -70,10 +71,14 @@
                                TextWrapping="NoWrap"
                                VerticalAlignment="Center" />
                     <Button Grid.Column="2"
+                            Content="Learn more..."
+                            Click="OnAdminLearnMore"
+                            Padding="8,4" />
+                    <Button Grid.Column="3"
                             Content="Restart as Admin"
                             Click="OnRestartAsAdmin"
                             Padding="8,4" />
-                    <Button Grid.Column="3"
+                    <Button Grid.Column="4"
                             Content="Don't show again"
                             Click="OnDontShowAdminWarningAgain"
                             Padding="8,4" />
@@ -631,6 +636,13 @@
                             </Button>
                             <Button x:Name="ShowInExplorerButton" Click="OnShowInExplorer" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Open containing folder in Explorer">
                                 <FontIcon Glyph="&#xED25;" FontSize="12" />
+                            </Button>
+                            <Button x:Name="ExpandAllSectionsButton" Click="OnExpandAllSections" FontSize="12" Padding="8,4"
+                                    ToolTipService.ToolTip="Expand and render all collapsed sections" Visibility="Collapsed">
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <FontIcon Glyph="&#xE740;" FontSize="12" />
+                                    <TextBlock Text="Expand All" />
+                                </StackPanel>
                             </Button>
                             <Button x:Name="ClearPreviewButton" Click="OnClearPreview" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Clear all files from preview">
                                 <StackPanel Orientation="Horizontal" Spacing="4">

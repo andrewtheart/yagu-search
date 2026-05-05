@@ -446,7 +446,33 @@ public sealed partial class MainWindow : Window
         {
             var exe = Environment.ProcessPath;
             if (exe is null) return;
-            var args = string.Join(" ", Environment.GetCommandLineArgs().Skip(1));
+
+            // Strip any pre-existing --wait-for-pid <n> tokens, then append our own
+            // pointing at the current process so the elevated instance waits for us
+            // to fully exit (and release the single-instance mutex) before starting.
+            var existing = Environment.GetCommandLineArgs().Skip(1).ToList();
+            for (int i = existing.Count - 2; i >= 0; i--)
+            {
+                if (string.Equals(existing[i], "--wait-for-pid", StringComparison.OrdinalIgnoreCase))
+                {
+                    existing.RemoveAt(i + 1);
+                    existing.RemoveAt(i);
+                }
+            }
+            existing.Add("--wait-for-pid");
+            existing.Add(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            var args = string.Join(" ", existing.Select(a => a.Contains(' ') ? $"\"{a}\"" : a));
+
+            // Release the single-instance mutex BEFORE starting the elevated process,
+            // so there's no race where the new instance sees the mutex still owned.
+            try
+            {
+                App.InstanceMutex?.ReleaseMutex();
+            }
+            catch (ApplicationException) { /* not owned — ignore */ }
+            App.InstanceMutex?.Dispose();
+            App.InstanceMutex = null;
+
             Process.Start(new ProcessStartInfo
             {
                 FileName = exe,
@@ -458,7 +484,13 @@ public sealed partial class MainWindow : Window
         }
         catch (System.ComponentModel.Win32Exception)
         {
-            // User cancelled the UAC prompt — do nothing
+            // User cancelled the UAC prompt — re-acquire the mutex so this instance
+            // remains the single instance, then do nothing.
+            try
+            {
+                App.InstanceMutex = new System.Threading.Mutex(true, @"Global\YaguSingleInstance", out _);
+            }
+            catch { /* best-effort */ }
         }
     }
 
@@ -467,6 +499,69 @@ public sealed partial class MainWindow : Window
         ViewModel.SuppressAdminWarning = true;
         await ViewModel.PersistSettingsAsync();
         AdminBanner.IsOpen = false;
+    }
+
+    private async void OnAdminLearnMore(object sender, RoutedEventArgs e)
+    {
+        var segments = Yagu.Services.FileLister.ParseAdminProtectedSegments(ViewModel.AdminProtectedPathSegments);
+        if (segments.Count == 0) segments.AddRange(Yagu.Services.FileLister.DefaultAdminProtectedPathSegments);
+
+        var sp = new StackPanel { Spacing = 8 };
+        sp.Children.Add(new TextBlock
+        {
+            Text = "Some paths are not accessible by non-administrative processes. Currently, Yagu is configured to skip the following administrator-only paths while running in non-administrator mode:",
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        // Use a ScrollViewer + StackPanel of TextBlocks instead of a multiline TextBox.
+        // WinUI TextBox programmatic Text with multiple newlines is fiddly; a list of
+        // TextBlocks is simpler and renders reliably.
+        var listPanel = new StackPanel { Spacing = 2 };
+        foreach (var seg in segments)
+        {
+            listPanel.Children.Add(new TextBlock
+            {
+                Text = seg,
+                FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
+                IsTextSelectionEnabled = true,
+            });
+        }
+        var scroller = new ScrollViewer
+        {
+            Content = listPanel,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Height = 220,
+            Padding = new Thickness(8),
+            Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["LayerFillColorDefaultBrush"],
+            BorderThickness = new Thickness(1),
+            BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["ControlElevationBorderBrush"],
+            CornerRadius = new CornerRadius(4),
+        };
+        sp.Children.Add(scroller);
+
+        sp.Children.Add(new TextBlock
+        {
+            Text = "This list is not exhaustive, and some other protected paths may be inaccessible and fail during search.",
+            TextWrapping = TextWrapping.Wrap,
+            Opacity = 0.8,
+        });
+        sp.Children.Add(new TextBlock
+        {
+            Text = "To modify this list, please go to the Settings page (click the gear on the top right of the app).",
+            TextWrapping = TextWrapping.Wrap,
+            Opacity = 0.8,
+        });
+
+        var dlg = new ContentDialog
+        {
+            Title = "Admin-protected paths",
+            Content = sp,
+            CloseButtonText = "Close",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = this.Content.XamlRoot,
+        };
+        await dlg.ShowAsync();
     }
 
     private async Task PickFolderAsync(Windows.Storage.Pickers.FolderPicker picker)
@@ -623,6 +718,34 @@ public sealed partial class MainWindow : Window
             skipBinary.Unchecked += (_, _) => ViewModel.SkipBinary = false;
             g.Children.Add(skipBinary);
             g.Children.Add(new TextBlock { Text = "When enabled, files detected as binary (null bytes, magic bytes) are skipped during content search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            var skipAdmin = new CheckBox { Content = NextSearchLabel("Skip admin-protected paths when not elevated"), IsChecked = ViewModel.ExcludeAdminProtectedPaths };
+            skipAdmin.Checked += (_, _) => ViewModel.ExcludeAdminProtectedPaths = true;
+            skipAdmin.Unchecked += (_, _) => ViewModel.ExcludeAdminProtectedPaths = false;
+            g.Children.Add(skipAdmin);
+            g.Children.Add(new TextBlock { Text = "When the process is not elevated, exclude directories that always require admin (System Volume Information, $Recycle.Bin, Windows\\System32\\config, Windows\\Installer, etc.). Speeds up search by skipping guaranteed access-denied trees. No effect when running as administrator.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            var adminSegLabel = NextSearchLabel("Admin-protected path segments (one per line or semicolon-separated):");
+            adminSegLabel.Margin = new Thickness(0, 4, 0, 0);
+            g.Children.Add(adminSegLabel);
+            var adminSeg = new TextBox
+            {
+                Text = ViewModel.AdminProtectedPathSegments,
+                PlaceholderText = @"\Windows\System32\config;\System Volume Information",
+                TextWrapping = TextWrapping.Wrap,
+                AcceptsReturn = true,
+                Height = 100,
+            };
+            adminSeg.TextChanged += (_, _) => ViewModel.AdminProtectedPathSegments = adminSeg.Text;
+            g.Children.Add(adminSeg);
+            var resetAdminSeg = new Button { Content = "Reset to defaults", Margin = new Thickness(0, 4, 0, 0) };
+            resetAdminSeg.Click += (_, _) =>
+            {
+                adminSeg.Text = AppSettings.DefaultAdminProtectedPathSegments;
+                ViewModel.AdminProtectedPathSegments = adminSeg.Text;
+            };
+            g.Children.Add(resetAdminSeg);
+            g.Children.Add(new TextBlock { Text = "Each entry is a path substring like \\Windows\\System32\\config. Anchored with backslashes so it matches the folder anywhere in the tree. Only applied when the process is not elevated.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             var skipExtLabel = NextSearchLabel("Skip extensions (semicolon-separated, no dots):");
             skipExtLabel.Margin = new Thickness(0, 4, 0, 0);
@@ -883,6 +1006,19 @@ public sealed partial class MainWindow : Window
     }
     private readonly Dictionary<RichTextBlock, SectionMatchNav> _sectionMatchNavs = new();
     private SectionMatchNav? _activeSectionNav;
+
+    // Lazy section rendering — deferred content building for collapsed sections
+    private sealed class LazySection
+    {
+        public required string FilePath { get; init; }
+        public required List<SearchResult> Results { get; init; }
+        public string[]? AllLines { get; init; }
+        public int PreviewLines { get; init; }
+        public bool IsHighlight { get; init; }
+        public int MatchCount { get; init; } // pre-computed match count for nav label
+    }
+    private readonly Dictionary<RichTextBlock, LazySection> _lazySections = new();
+    private int _lazyMatchCount; // total matches in un-rendered sections
     private static readonly SolidColorBrush s_activeExpanderBrush = new(Windows.UI.Color.FromArgb(25, 80, 180, 255));
 
     // Active match box highlight state
@@ -1028,20 +1164,43 @@ public sealed partial class MainWindow : Window
         var fileList = newFiles.ToList();
         var fileContents = await ReadAllFileContentsAsync(fileList);
 
+        bool isHighlight = ViewModel.PreviewModeIndex == 1;
+        // For large bulk inserts, defer content building for sections beyond BulkExpandLimit.
+        bool bulkInsert = fileList.Count > BulkExpandLimit;
+
         int insertIndex = 0;
         int fileIndex = 0;
         int filesToAdd = fileList.Count;
         foreach (var (filePath, results) in fileList)
         {
-            var (section, expander) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results, addToPanel: false);
+            bool expanded = !bulkInsert || fileIndex < BulkExpandLimit;
+            var (section, expander) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results,
+                isExpanded: expanded, addToPanel: false);
             PreviewSectionsPanel.Children.Insert(insertIndex++, expander);
 
             fileContents.TryGetValue(filePath, out string[]? allLines);
 
-            if (ViewModel.PreviewModeIndex == 1)
-                BuildHighlightSection(section, results, allLines, previewLines, rx);
+            if (expanded)
+            {
+                if (isHighlight)
+                    BuildHighlightSection(section, results, allLines, previewLines, rx);
+                else
+                    BuildConcatenatedSection(section, results, allLines, previewLines, rx);
+            }
             else
-                BuildConcatenatedSection(section, results, allLines, previewLines, rx);
+            {
+                int lazyCount = ComputeMatchCount(results, allLines, isHighlight, previewLines, rx);
+                _lazySections[section] = new LazySection
+                {
+                    FilePath = filePath,
+                    Results = results,
+                    AllLines = allLines,
+                    PreviewLines = previewLines,
+                    IsHighlight = isHighlight,
+                    MatchCount = lazyCount,
+                };
+                _lazyMatchCount += lazyCount;
+            }
 
             // Yield to the UI thread periodically so the app stays responsive.
             if (++fileIndex % PreviewYieldBatchSize == 0)
@@ -1057,12 +1216,14 @@ public sealed partial class MainWindow : Window
 
         // Update match nav and file label to include the new sections.
         var totalFiles = PreviewSectionsPanel.Children.OfType<Expander>().Count();
+        int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
         SetPreviewFileLabel(
-            $"{_matchParagraphs.Count:N0} selected matches across {totalFiles:N0} file(s)",
+            $"{totalMatches:N0} selected matches across {totalFiles:N0} file(s)",
             string.Join(Environment.NewLine, GetExistingPreviewFilePaths()));
         _previewResult = newFiles.Values.First().First();
         UpdateMatchNavPanel();
         UpdateSectionMatchNavPanels();
+        UpdateExpandAllButtonVisibility();
 
         // Scroll to the target file.
         if (scrollToFile is not null)
@@ -1162,7 +1323,9 @@ public sealed partial class MainWindow : Window
 
     private void OnWordWrapToggled(object sender, RoutedEventArgs e)
     {
-        ApplyWordWrap(ViewModel.PreviewWordWrap);
+        // Apply asynchronously / incrementally so the UI doesn't freeze when many large
+        // preview sections are loaded on the right panel.
+        _ = ApplyWordWrapAsync(ViewModel.PreviewWordWrap);
     }
 
     private async void OnPreviewModeChanged(object sender, SelectionChangedEventArgs e)
@@ -1172,27 +1335,94 @@ public sealed partial class MainWindow : Window
             await UpdateMultiSelectPreviewAsync();
     }
 
+    // Synchronous variant retained for callers that already run inside an async preview
+    // refresh (e.g. ShowSingleFilePreviewAsync). Only safe when the number of preview
+    // sections is small or known. Prefer ApplyWordWrapAsync for user-initiated toggles.
     private void ApplyWordWrap(bool wrap)
     {
-        PreviewBlock.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
-        PreviewEditor.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
+        var wrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
+        var hbar = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+
+        PreviewBlock.TextWrapping = wrapping;
+        PreviewEditor.TextWrapping = wrapping;
         foreach (var block in EnumeratePreviewSectionBlocks())
-            block.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
-        // For single-file block view, toggle outer scroll; for sections view it stays disabled.
+            block.TextWrapping = wrapping;
         if (PreviewSectionsPanel.Visibility != Visibility.Visible)
-        {
-            PreviewScrollViewer.HorizontalScrollBarVisibility =
-                wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
-        }
-        // Toggle each per-section horizontal scroller.
+            PreviewScrollViewer.HorizontalScrollBarVisibility = hbar;
         foreach (var expander in PreviewSectionsPanel.Children.OfType<Expander>())
         {
             if (expander.Content is ScrollViewer sv)
-                sv.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+                sv.HorizontalScrollBarVisibility = hbar;
         }
-        ScrollViewer.SetHorizontalScrollBarVisibility(
-            PreviewEditor,
-            wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto);
+        ScrollViewer.SetHorizontalScrollBarVisibility(PreviewEditor, hbar);
+    }
+
+    private bool _applyingWordWrap;
+
+    private async Task ApplyWordWrapAsync(bool wrap)
+    {
+        if (_applyingWordWrap) return;
+        _applyingWordWrap = true;
+        try
+        {
+            WordWrapToggle.IsEnabled = false;
+            var wrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
+            var hbar = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+
+            // Cheap, always-visible controls first.
+            PreviewBlock.TextWrapping = wrapping;
+            PreviewEditor.TextWrapping = wrapping;
+            ScrollViewer.SetHorizontalScrollBarVisibility(PreviewEditor, hbar);
+            if (PreviewSectionsPanel.Visibility != Visibility.Visible)
+                PreviewScrollViewer.HorizontalScrollBarVisibility = hbar;
+
+            // Snapshot the expanders so we don't touch the panel children mid-iteration if
+            // anything reflows during a yield.
+            var expanders = PreviewSectionsPanel.Children.OfType<Expander>().ToList();
+            var totalSections = expanders.Count;
+            if (totalSections > 0)
+                ViewModel.StatusText = $"Applying word wrap to {totalSections} section(s)...";
+
+            int processed = 0;
+            foreach (var expander in expanders)
+            {
+                // Always toggle the per-section scrollbar (cheap, doesn't relayout the text).
+                if (expander.Content is ScrollViewer sv)
+                    sv.HorizontalScrollBarVisibility = hbar;
+
+                // Only re-measure expanded sections; collapsed ones are not visible and
+                // will pick up the current wrap state when re-expanded (see Expanding
+                // handler in AddPreviewSection).
+                if (expander.IsExpanded && expander.Tag is RichTextBlock block)
+                {
+                    block.TextWrapping = wrapping;
+
+                    processed++;
+                    // Yield to the UI thread between heavy sections so the toggle remains
+                    // responsive and the window keeps painting.
+                    if (processed % 2 == 0)
+                    {
+                        await Task.Yield();
+                        await DispatchIdleAsync();
+                    }
+                }
+            }
+
+            ViewModel.StatusText = string.Empty;
+        }
+        finally
+        {
+            WordWrapToggle.IsEnabled = true;
+            _applyingWordWrap = false;
+        }
+    }
+
+    private Task DispatchIdleAsync()
+    {
+        var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => tcs.TrySetResult(null)))
+            tcs.TrySetResult(null);
+        return tcs.Task;
     }
 
     private async void OnSavePreviewEdit(object sender, RoutedEventArgs e)
@@ -1272,6 +1502,27 @@ public sealed partial class MainWindow : Window
     {
         if (_previewResult is null) return;
         await ShowFullFileEditorAsync(_previewResult);
+    }
+
+    private async void OnExpandAllSections(object sender, RoutedEventArgs e)
+    {
+        ExpandAllSectionsButton.IsEnabled = false;
+        try
+        {
+            await MaterializeAllLazySectionsAsync();
+        }
+        finally
+        {
+            ExpandAllSectionsButton.IsEnabled = true;
+            UpdateExpandAllButtonVisibility();
+        }
+    }
+
+    private void UpdateExpandAllButtonVisibility()
+    {
+        ExpandAllSectionsButton.Visibility = _lazySections.Count > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     private void OnClearPreview(object sender, RoutedEventArgs e)
@@ -2286,10 +2537,29 @@ public sealed partial class MainWindow : Window
                     isExpanded: expanded, addToPanel: false);
                 fileContents.TryGetValue(filePath, out string[]? allLines);
 
-                if (isHighlight)
-                    BuildHighlightSection(section, results, allLines, previewLines, rx);
+                if (expanded)
+                {
+                    // Eagerly build content for expanded sections.
+                    if (isHighlight)
+                        BuildHighlightSection(section, results, allLines, previewLines, rx);
+                    else
+                        BuildConcatenatedSection(section, results, allLines, previewLines, rx);
+                }
                 else
-                    BuildConcatenatedSection(section, results, allLines, previewLines, rx);
+                {
+                    // Defer content building for collapsed sections (lazy rendering).
+                    int lazyCount = ComputeMatchCount(results, allLines, isHighlight, previewLines, rx);
+                    _lazySections[section] = new LazySection
+                    {
+                        FilePath = filePath,
+                        Results = results,
+                        AllLines = allLines,
+                        PreviewLines = previewLines,
+                        IsHighlight = isHighlight,
+                        MatchCount = lazyCount,
+                    };
+                    _lazyMatchCount += lazyCount;
+                }
 
                 pendingExpanders.Add(expander);
                 totalSectionsAdded++;
@@ -2333,11 +2603,13 @@ public sealed partial class MainWindow : Window
 
         // Update match count and file count to reflect all loaded files.
         int loadedFiles = PreviewSectionsPanel.Children.OfType<Expander>().Count();
+        int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
         SetPreviewFileLabel(
-            $"{_matchParagraphs.Count:N0} selected matches across {loadedFiles:N0} file(s)",
+            $"{totalMatches:N0} selected matches across {loadedFiles:N0} file(s)",
             string.Join(Environment.NewLine, orderedFiles.Take(finalEnd).Select(kv => kv.Key)));
         UpdateMatchNavPanel();
         UpdateSectionMatchNavPanels();
+        UpdateExpandAllButtonVisibility();
     }
 
     private void BuildConcatenatedSection(
@@ -2439,6 +2711,88 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Pre-computes the total regex match count for a section without building any UI elements.
+    /// Used for lazy sections so the global nav label can show the correct total.
+    /// </summary>
+    private static int ComputeMatchCount(
+        List<SearchResult> results, string[]? allLines,
+        bool isHighlight, int previewLines, Regex? rx)
+    {
+        int total = 0;
+        if (isHighlight && allLines != null)
+        {
+            var matchLines = new HashSet<int>(results.Select(r => r.LineNumber));
+            foreach (int lineNum in matchLines)
+            {
+                int idx = lineNum - 1;
+                if (idx >= 0 && idx < allLines.Length)
+                    total += CountRegexMatches(allLines[idx], rx);
+            }
+        }
+        else
+        {
+            foreach (var r in results)
+                total += CountRegexMatches(r.MatchLine, rx);
+        }
+        return total;
+    }
+
+    /// <summary>
+    /// Materializes a lazy section: builds paragraphs, adds match entries, and removes it from the lazy dictionary.
+    /// Returns true if the section was lazy and has been materialized.
+    /// </summary>
+    private bool MaterializeLazySection(RichTextBlock section)
+    {
+        if (!_lazySections.Remove(section, out var lazy))
+            return false;
+
+        LogService.Instance.Info("Preview", $"MaterializeLazySection: file='{System.IO.Path.GetFileName(lazy.FilePath)}', matches={lazy.MatchCount}");
+
+        Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
+        if (lazy.IsHighlight)
+            BuildHighlightSection(section, lazy.Results, lazy.AllLines, lazy.PreviewLines, rx);
+        else
+            BuildConcatenatedSection(section, lazy.Results, lazy.AllLines, lazy.PreviewLines, rx);
+
+        _lazyMatchCount -= lazy.MatchCount;
+        return true;
+    }
+
+    /// <summary>
+    /// Materializes all remaining lazy sections at once, with a progress overlay.
+    /// </summary>
+    private async Task MaterializeAllLazySectionsAsync()
+    {
+        if (_lazySections.Count == 0) return;
+
+        var lazyBlocks = _lazySections.Keys.ToList();
+        int total = lazyBlocks.Count;
+        ShowProgressOverlay($"Rendering {total:N0} sections\u2026", 0);
+
+        int done = 0;
+        foreach (var block in lazyBlocks)
+        {
+            MaterializeLazySection(block);
+            if (++done % PreviewYieldBatchSize == 0)
+            {
+                UpdateProgressOverlay(done * 100 / total);
+                await Task.Delay(1).ConfigureAwait(true);
+            }
+        }
+
+        HideProgressOverlay();
+        UpdateMatchNavPanel();
+        UpdateSectionMatchNavPanels();
+
+        // Expand all the now-materialized sections
+        foreach (var child in PreviewSectionsPanel.Children)
+        {
+            if (child is Expander exp && !exp.IsExpanded)
+                exp.IsExpanded = true;
+        }
+    }
+
     private static string[] ReadAllLinesWithEncodingSync(string filePath)
     {
         using var fs = new FileStream(
@@ -2523,6 +2877,13 @@ public sealed partial class MainWindow : Window
 
     private async Task ExpandSectionToFullFileAsync(RichTextBlock section, string filePath, List<SearchResult> results)
     {
+        // Remove lazy section data if it was never rendered
+        if (_lazySections.Remove(section, out var lazySec))
+        {
+            _lazyMatchCount -= lazySec.MatchCount;
+            UpdateExpandAllButtonVisibility();
+        }
+
         string[]? allLines = null;
         try { allLines = await ReadAllLinesWithEncodingAsync(filePath); }
         catch (Exception ex)
@@ -2758,7 +3119,19 @@ public sealed partial class MainWindow : Window
         expander.Expanding += (s, _) =>
         {
             if (s is Expander exp && exp.Tag is RichTextBlock b)
+            {
+                UpdateExpandAllButtonVisibility();
+                if (MaterializeLazySection(b) && MatchNavPanel.Visibility == Visibility.Visible)
+                    MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
+                // Re-apply the current wrap state in case the user toggled wrap while
+                // this section was collapsed (we skip collapsed sections in
+                // ApplyWordWrapAsync to keep the toggle responsive for huge previews).
+                var wrap = ViewModel.PreviewWordWrap;
+                b.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
+                if (exp.Content is ScrollViewer scroller)
+                    scroller.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
                 ActivateSectionForBlock(b);
+            }
         };
         ToolTipService.SetToolTip(expander, filePath);
         if (addToPanel)
@@ -2931,6 +3304,10 @@ public sealed partial class MainWindow : Window
 
                 // Remove per-section match nav data
                 _sectionMatchNavs.Remove(block);
+
+                // Remove lazy section data if it was never rendered
+                if (_lazySections.Remove(block, out var lazy))
+                    _lazyMatchCount -= lazy.MatchCount;
 
                 // Remove global matches for this block
                 _matchParagraphs.RemoveAll(m => m.block == block);
@@ -3790,17 +4167,19 @@ public sealed partial class MainWindow : Window
         });
     }
 
-    private int MatchNavFileCount => _matchParagraphs.Select(m => m.block).Distinct().Count();
+    private int MatchNavFileCount => _matchParagraphs.Select(m => m.block).Distinct().Count() + _lazySections.Count;
 
     private string FormatMatchNavLabel(int index)
     {
+        int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
         int fileCount = MatchNavFileCount;
-        return $"Match {index + 1} of {_matchParagraphs.Count} (across {fileCount} file{(fileCount != 1 ? "s" : "")})";
+        return $"Match {index + 1} of {totalMatches} (across {fileCount} file{(fileCount != 1 ? "s" : "")})";
     }
 
     private void UpdateMatchNavPanel()
     {
-        if (_matchParagraphs.Count > 0)
+        int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
+        if (totalMatches > 0)
         {
             MatchNavPanel.Visibility = Visibility.Visible;
             _currentMatchIndex = 0;
@@ -3821,6 +4200,8 @@ public sealed partial class MainWindow : Window
         _currentMatchIndex = -1;
         _sectionMatchNavs.Clear();
         _activeSectionNav = null;
+        _lazySections.Clear();
+        _lazyMatchCount = 0;
     }
 
     private void UpdateSectionMatchNavPanels()
@@ -3935,8 +4316,30 @@ public sealed partial class MainWindow : Window
 
     private void OnNextMatch(object sender, RoutedEventArgs e)
     {
-        if (_matchParagraphs.Count == 0) return;
-        _currentMatchIndex = (_currentMatchIndex + 1) % _matchParagraphs.Count;
+        int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
+        if (totalMatches == 0) return;
+
+        if (_matchParagraphs.Count == 0 || _currentMatchIndex >= _matchParagraphs.Count - 1)
+        {
+            // Past the last rendered match — try to materialize the next lazy section.
+            if (_lazyMatchCount > 0 && MaterializeNextLazySection(forward: true))
+            {
+                // Land on the first match of the newly materialized section.
+                _currentMatchIndex = _matchParagraphs.Count - _lazySectionJustAdded;
+                UpdateSectionMatchNavPanels();
+            }
+            else
+            {
+                // Wrap to start.
+                _currentMatchIndex = 0;
+            }
+        }
+        else
+        {
+            _currentMatchIndex++;
+        }
+
+        if (_matchParagraphs.Count == 0 || _currentMatchIndex < 0 || _currentMatchIndex >= _matchParagraphs.Count) return;
         var (block, para, matchInPara) = _matchParagraphs[_currentMatchIndex];
         MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
         ActivateSectionForBlock(block);
@@ -3946,13 +4349,75 @@ public sealed partial class MainWindow : Window
 
     private void OnPrevMatch(object sender, RoutedEventArgs e)
     {
-        if (_matchParagraphs.Count == 0) return;
-        _currentMatchIndex = (_currentMatchIndex - 1 + _matchParagraphs.Count) % _matchParagraphs.Count;
+        int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
+        if (totalMatches == 0) return;
+
+        if (_matchParagraphs.Count == 0 || _currentMatchIndex <= 0)
+        {
+            // Before the first rendered match — try to materialize the last lazy section.
+            if (_lazyMatchCount > 0 && MaterializeNextLazySection(forward: false))
+            {
+                // Land on the last match of the newly materialized section.
+                _currentMatchIndex = _matchParagraphs.Count - 1;
+                UpdateSectionMatchNavPanels();
+            }
+            else
+            {
+                // Wrap to end.
+                _currentMatchIndex = _matchParagraphs.Count - 1;
+            }
+        }
+        else
+        {
+            _currentMatchIndex--;
+        }
+
+        if (_matchParagraphs.Count == 0 || _currentMatchIndex < 0 || _currentMatchIndex >= _matchParagraphs.Count) return;
         var (block, para, matchInPara) = _matchParagraphs[_currentMatchIndex];
         MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
         ActivateSectionForBlock(block);
         BoxMatchRun(para, matchInPara);
         ScrollPreviewToLine(block, para);
+    }
+
+    // Tracks how many match entries the last MaterializeNextLazySection call added.
+    private int _lazySectionJustAdded;
+
+    /// <summary>
+    /// Finds the next (or previous) lazy section in visual order and materializes it.
+    /// Skips sections that produce zero match entries. Also expands the Expander.
+    /// Returns true if at least one materialized section produced match entries.
+    /// </summary>
+    private bool MaterializeNextLazySection(bool forward)
+    {
+        _lazySectionJustAdded = 0;
+
+        // Walk expanders in visual order. Skip already-rendered sections and any
+        // newly-materialized section that produces zero match entries.
+        var children = PreviewSectionsPanel.Children;
+        int start = forward ? 0 : children.Count - 1;
+        int end = forward ? children.Count : -1;
+        int step = forward ? 1 : -1;
+
+        for (int i = start; i != end; i += step)
+        {
+            if (children[i] is Expander exp
+                && exp.Tag is RichTextBlock b
+                && _lazySections.ContainsKey(b))
+            {
+                int beforeCount = _matchParagraphs.Count;
+                MaterializeLazySection(b);
+                int added = _matchParagraphs.Count - beforeCount;
+                exp.IsExpanded = true;
+                if (added > 0)
+                {
+                    _lazySectionJustAdded = added;
+                    return true;
+                }
+                // Otherwise keep walking — try the next lazy section.
+            }
+        }
+        return false;
     }
 
     private bool _splitterDragging;

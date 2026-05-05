@@ -127,6 +127,8 @@ public sealed class SearchService
 
             concreteLister.EarlyExcludeGlobs = options.ExcludeGlobs;
             concreteLister.SdkChannelBufferSize = options.SdkChannelBufferSize;
+            concreteLister.ExcludeAdminProtectedPaths = options.ExcludeAdminProtectedPaths;
+            concreteLister.AdminProtectedPathSegmentsOverride = options.AdminProtectedPathSegments;
         }
 
         bool searchContent = options.SearchMode != SearchMode.FileNames;
