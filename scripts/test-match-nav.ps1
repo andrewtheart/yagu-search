@@ -3,12 +3,12 @@
 
 param(
     [string]$Directory = "C:",
-    [string]$Query = "test",
+    [string]$Query = "a",
     [string]$ScreenshotDir = "D:\yagu\TestResults\MatchNavScreenshots",
-    [int]$MatchIterations = 1000,
-    [int]$SearchWaitSeconds = 30,
-    [int]$PreviewLoadSeconds = 30,
-    [int]$MaxFiles = 1000
+    [int]$MatchIterations = 200,
+    [int]$SearchWaitSeconds = 15,
+    [int]$PreviewLoadSeconds = 120,
+    [int]$MaxFiles = 500
 )
 
 Add-Type -AssemblyName UIAutomationClient
@@ -41,7 +41,8 @@ public class YaguInput {
         System.Threading.Thread.Sleep(50);
         keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, IntPtr.Zero);
     }
-    public static void Activate(IntPtr hWnd) { ShowWindow(hWnd, 9); BringWindowToTop(hWnd); SetForegroundWindow(hWnd); }
+    public static void Activate(IntPtr hWnd) { ShowWindow(hWnd, 5); BringWindowToTop(hWnd); SetForegroundWindow(hWnd); }
+    public static void Maximize(IntPtr hWnd) { ShowWindow(hWnd, 3); }
 }
 "@ -ErrorAction SilentlyContinue
 
@@ -64,9 +65,11 @@ function Activate-YaguWindow {
     }
 }
 
-function Take-Screenshot([string]$Name) {
-    Activate-YaguWindow
-    Start-Sleep -Milliseconds 200
+function Take-Screenshot([string]$Name, [switch]$Fast) {
+    if (-not $Fast) {
+        Activate-YaguWindow
+        Start-Sleep -Milliseconds 200
+    }
     $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
     $bmp = [System.Drawing.Bitmap]::new($bounds.Width, $bounds.Height)
     $graphics = [System.Drawing.Graphics]::FromImage($bmp)
@@ -75,7 +78,7 @@ function Take-Screenshot([string]$Name) {
     $path = Join-Path $ScreenshotDir "$Name.png"
     $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     $bmp.Dispose()
-    Write-Host "  Screenshot saved: $path"
+    if (-not $Fast) { Write-Host "  Screenshot saved: $path" }
 }
 
 function Find-Element {
@@ -207,6 +210,19 @@ if (-not $yaguWindow) {
 Write-Host "  Found window: $($yaguWindow.Current.Name)"
 $script:yaguWindow = $yaguWindow
 Activate-YaguWindow
+
+# Maximize the window first thing so all subsequent UI interactions and
+# screenshots have the full screen real estate available.
+Write-Host "  Maximizing Yagu window..."
+try {
+    $hwnd = [IntPtr]$yaguWindow.Current.NativeWindowHandle
+    if ($hwnd -ne [IntPtr]::Zero) {
+        [YaguInput]::Maximize($hwnd)
+        Start-Sleep -Milliseconds 500
+    }
+} catch {
+    Write-Host "  Warning: failed to maximize window: $_"
+}
 
 # 3. The app auto-searches when launched with --dir and --query. Wait for search.
 Write-Host "[3] Waiting ${SearchWaitSeconds}s for search to gather results..."
@@ -354,7 +370,21 @@ if ($resultsList) {
         $maxScrollIter = 200
         $lastCb = $first
         $seenNames = [System.Collections.Generic.HashSet[string]]::new()
-        try { [void]$seenNames.Add($first.Element.Current.Name) } catch { }
+        # Parallel ordered list so we can deterministically pick the item at
+        # index ($targetItems - 1) once we've overshot. HashSet iteration order
+        # is undefined in .NET, so relying on it caused the script to select
+        # ~2000 files instead of ~500.
+        $orderedNames = New-Object System.Collections.Generic.List[string]
+        # Map from file Name → onscreen checkbox record (most recent sighting),
+        # so that once we know the cutoff Name we can recover its rect/CY for
+        # the shift-click target without scrolling back.
+        $cbByName = @{}
+        try {
+            if ([void]$seenNames.Add($first.Element.Current.Name)) {
+                $orderedNames.Add($first.Element.Current.Name)
+                $cbByName[$first.Element.Current.Name] = $first
+            }
+        } catch { }
 
         while ($scrollIter -lt $maxScrollIter) {
             if ($seenNames.Count -ge $targetItems) {
@@ -376,36 +406,66 @@ if ($resultsList) {
 
             $visible = Get-OnscreenFileCheckboxes
             foreach ($v in $visible) {
-                try { [void]$seenNames.Add($v.Element.Current.Name) } catch { }
-            }
-
-            # Find the bottom-most visible checkbox whose name we've already seen
-            # (counts toward our target). If we've hit the target, the last visible
-            # one is the right shift-click target. Otherwise the last visible is
-            # still our running candidate.
-            if ($visible.Count -gt 0) {
-                if ($seenNames.Count -le $targetItems) {
-                    $lastCb = $visible[-1]
-                } else {
-                    # Overshot — pick the visible checkbox whose ordinal (in scroll
-                    # order) lands at exactly $targetItems. We can't know the true
-                    # ordinal of each onscreen item, but the names are added in
-                    # scroll order; clamp by stopping at the first visible whose
-                    # 1-based index in $seenNames exceeds $targetItems.
-                    $orderedNames = New-Object System.Collections.Generic.List[string]
-                    $orderedNames.AddRange([System.Collections.Generic.IEnumerable[string]]$seenNames)
-                    $cutoffName = $orderedNames[[Math]::Min($targetItems - 1, $orderedNames.Count - 1)]
-                    foreach ($v in $visible) {
-                        try {
-                            if ($v.Element.Current.Name -eq $cutoffName) { $lastCb = $v; break }
-                        } catch { }
-                    }
-                }
+                try {
+                    $n = $v.Element.Current.Name
+                    if ($seenNames.Add($n)) { $orderedNames.Add($n) }
+                    $cbByName[$n] = $v
+                } catch { }
             }
 
             $scrollIter++
         }
         Write-Host "  Scroll done: iter=$scrollIter, uniqueSeen=$($seenNames.Count), target=$targetItems"
+
+        # Deterministically pick the cutoff: the item at index ($targetItems - 1)
+        # in scroll order, clamped to whatever we actually saw.
+        $cutoffIdx = [Math]::Min($targetItems - 1, $orderedNames.Count - 1)
+        if ($cutoffIdx -lt 0) { $cutoffIdx = 0 }
+        $cutoffName = $orderedNames[$cutoffIdx]
+        if ($cbByName.ContainsKey($cutoffName)) {
+            $lastCb = $cbByName[$cutoffName]
+        }
+
+        # If the cutoff item isn't currently onscreen, scroll it back into view
+        # before the shift+click. Otherwise the click coordinates point at a
+        # stale rect and we'd select the wrong range.
+        $needsRescroll = $true
+        try {
+            $curOnscreen = Get-OnscreenFileCheckboxes
+            foreach ($v in $curOnscreen) {
+                try {
+                    if ($v.Element.Current.Name -eq $cutoffName) {
+                        $lastCb = $v
+                        $needsRescroll = $false
+                        break
+                    }
+                } catch { }
+            }
+        } catch { }
+
+        if ($needsRescroll -and $scrollPattern -and $scrollPattern.Current.VerticallyScrollable) {
+            # Cutoff scrolled past viewport. Walk backward in small increments
+            # until we find it on screen again.
+            for ($s = 0; $s -lt 50; $s++) {
+                try { $scrollPattern.ScrollVertical([System.Windows.Automation.ScrollAmount]::SmallDecrement) } catch { break }
+                Start-Sleep -Milliseconds 40
+                $curOnscreen = Get-OnscreenFileCheckboxes
+                $found = $false
+                foreach ($v in $curOnscreen) {
+                    try {
+                        if ($v.Element.Current.Name -eq $cutoffName) {
+                            $lastCb = $v
+                            $found = $true
+                            break
+                        }
+                    } catch { }
+                }
+                if ($found) { break }
+            }
+        }
+
+        $effectiveCount = $cutoffIdx + 1
+        Write-Host "  Cutoff item index=$cutoffIdx (selecting $effectiveCount file(s))"
 
         # Step C: Shift+click the last visible checkbox to select the entire range.
         $lx = [int]($lastCb.Rect.X + $lastCb.Rect.Width / 2)
@@ -414,7 +474,7 @@ if ($resultsList) {
         ShiftLeftClick-At $lx $ly
         Start-Sleep -Milliseconds 600
 
-        $selectedCount = $seenNames.Count  # best-effort estimate; real count comes from Pre-right-click diagnostics
+        $selectedCount = $effectiveCount  # best-effort estimate; real count comes from Pre-right-click diagnostics
     }
 } else {
     Write-Host "  WARNING: Could not find results list."
@@ -596,12 +656,30 @@ Take-Screenshot "02-preview-loaded"
 
 # 8. Click "Next match" button repeatedly and take screenshots
 Write-Host "[8] Navigating matches (up to $MatchIterations iterations)..."
+
+# Resolve the Next-match button and match-label once. The UI elements are
+# stable for the lifetime of the preview, so re-finding them every iteration
+# was burning ~hundreds of ms per click for no benefit.
+#
+# The MatchNavPanel is Visibility=Collapsed until the preview has populated and
+# a match is active, so on big corpora the button can take a while to appear.
+# Use a generous timeout here.
+$nextBtn = Find-Element -Parent $yaguWindow -AutomationId "NextMatchButton" -TimeoutSeconds 120
+if (-not $nextBtn) {
+    $nextBtn = Find-Element -Parent $yaguWindow -Name "Next match (↓)" -TimeoutSeconds 10
+}
+if (-not $nextBtn) {
+    Write-Error "Next match button not found before navigation loop."
+    exit 1
+}
+$matchLabel = Find-Element -Parent $yaguWindow -AutomationId "MatchNavLabel" -TimeoutSeconds 5
+
 for ($i = 1; $i -le $MatchIterations; $i++) {
-    # Check the match label (e.g. "Match 5 of 500") to see if we've reached the last match
-    $matchLabel = Find-Element -Parent $yaguWindow -AutomationId "MatchNavLabel" -TimeoutSeconds 2
+    # Check the match label (e.g. "Match 5 of 500") to see if we've reached the last match.
     if ($matchLabel) {
-        $labelText = $matchLabel.Current.Name
-        if ($labelText -match 'Match\s+(\d+)\s+of\s+(\d+)') {
+        $labelText = $null
+        try { $labelText = $matchLabel.Current.Name } catch { }
+        if ($labelText -and $labelText -match 'Match\s+(\d+)\s+of\s+(\d+)') {
             $cur = [int]$Matches[1]
             $total = [int]$Matches[2]
             if ($cur -ge $total) {
@@ -611,27 +689,12 @@ for ($i = 1; $i -le $MatchIterations; $i++) {
         }
     }
 
-    Write-Host "  Match navigation $i/$MatchIterations..."
-    
-    # Find the Next match button by AutomationId
-    $nextBtn = Find-Element -Parent $yaguWindow -AutomationId "NextMatchButton" -TimeoutSeconds 5
-    if (-not $nextBtn) {
-        # Try by tooltip/name
-        $nextBtn = Find-Element -Parent $yaguWindow -Name "Next match (↓)" -TimeoutSeconds 3
-    }
-    
-    if ($nextBtn) {
-        Click-Element $nextBtn
-        Start-Sleep -Milliseconds 500
-        # After clicking Next on iteration $i (starting at match 1), we are now on
-        # match ($i + 1). Name the screenshot to reflect the actual match number
-        # so 03-match-NN.png shows match NN. Match 1 is captured in 02-preview-loaded.
-        Take-Screenshot ("03-match-{0:D2}" -f ($i + 1))
-    } else {
-        Write-Host "  WARNING: Next match button not found at iteration $i"
-        Take-Screenshot ("03-match-{0:D2}-NOTFOUND" -f ($i + 1))
-        break
-    }
+    Click-Element $nextBtn
+    Start-Sleep -Milliseconds 500
+    # After clicking Next on iteration $i (starting at match 1), we are now on
+    # match ($i + 1). Name the screenshot to reflect the actual match number
+    # so 03-match-NN.png shows match NN. Match 1 is captured in 02-preview-loaded.
+    Take-Screenshot ("03-match-{0:D2}" -f ($i + 1)) -Fast
 }
 
 Write-Host ""

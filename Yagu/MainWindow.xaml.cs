@@ -2890,7 +2890,14 @@ public sealed partial class MainWindow : Window
                 if (done % PreviewYieldBatchSize == 0 || done == total)
                 {
                     UpdateProgressOverlay(done * 100 / total);
-                    await Task.Delay(1).ConfigureAwait(true);
+                    // Use DispatchIdleAsync (DispatcherQueue.TryEnqueue) instead of
+                    // Task.Delay(1).ConfigureAwait(true). On WinUI 3 the UI thread does
+                    // not necessarily have a SynchronizationContext installed, so a
+                    // Task.Delay continuation can resume on a threadpool thread; any
+                    // subsequent XAML touch from there triggers a CoreMessagingXP
+                    // fail-fast (exception 0xE0464645). DispatchIdleAsync guarantees
+                    // we resume on the UI thread.
+                    await DispatchIdleAsync();
                 }
             }
 
@@ -2910,23 +2917,41 @@ public sealed partial class MainWindow : Window
         // (which would call MaterializeLazySection (no-op now) and ActivateSectionForBlock,
         // and the latter is O(N) per call so the bulk expand becomes O(N^2) and
         // appears to hang for hundreds of sections).
+        //
+        // Crash mitigation: with 2000+ Expanders, flipping IsExpanded in a tight loop
+        // queues thousands of concurrent expand-state storyboards and content-reveal
+        // theme transitions on CoreMessagingXP, which fail-fasts (0xE0464645) when its
+        // dispatcher buffers fill up. Two mitigations applied here:
+        //   1) Clear the per-Expander ContentTransitions so each expansion does not
+        //      schedule the default reveal theme transition (the biggest offender).
+        //   2) Yield to the UI dispatcher via DispatchIdleAsync between batches so the
+        //      messaging queue can drain. Smaller batch (1) than the materialize loop
+        //      because each Expander expansion still triggers a layout pass.
         _suppressExpandingHandler = true;
         try
         {
             int expanded = 0;
+            const int expandYieldBatchSize = 1;
             foreach (var child in PreviewSectionsPanel.Children)
             {
                 if (child is Expander exp && !exp.IsExpanded)
                 {
-                    try { exp.IsExpanded = true; }
+                    try
+                    {
+                        // Suppress the content-reveal theme transition that fires
+                        // when IsExpanded flips. The chevron-rotation storyboard in
+                        // the Expander template still runs but is comparatively cheap.
+                        exp.ContentTransitions = null;
+                        exp.IsExpanded = true;
+                    }
                     catch (Exception ex)
                     {
                         LogService.Instance.Warning("Preview", "Failed to expand section.", ex);
                     }
                 }
                 expanded++;
-                if (expanded % PreviewYieldBatchSize == 0)
-                    await Task.Delay(1).ConfigureAwait(true);
+                if (expanded % expandYieldBatchSize == 0)
+                    await DispatchIdleAsync();
             }
         }
         finally
