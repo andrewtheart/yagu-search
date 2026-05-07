@@ -41,7 +41,7 @@ public sealed class AppSettings
     /// <summary>Whether to skip binary files during content search. Default true.</summary>
     public bool SkipBinary { get; set; } = true;
     /// <summary>When true, detect ZIP archives by file header and search text files inside them. Default true.</summary>
-    public bool SearchInsideArchives { get; set; } = true;
+    public bool SearchInsideArchives { get; set; }
     /// <summary>Semicolon-separated file extensions that are known ZIP-like containers (bypassed from skip-extensions when archive search is on). e.g. "zip;jar;docx;xlsx".</summary>
     public string ArchiveExtensions { get; set; } = DefaultArchiveExtensions;
     /// <summary>Semicolon-separated file extensions to skip entirely (no binary check, no content read). e.g. "exe;dll;zip;png;jpg".</summary>

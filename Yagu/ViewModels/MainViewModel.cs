@@ -156,7 +156,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial int SdkChannelBufferSize { get; set; } = 4096;
     [ObservableProperty] public partial bool SkipBinary { get; set; } = true;
     [ObservableProperty] public partial string SkipExtensions { get; set; } = AppSettings.DefaultSkipExtensions;
-    [ObservableProperty] public partial bool SearchInsideArchives { get; set; } = true;
+    [ObservableProperty] public partial bool SearchInsideArchives { get; set; }
     [ObservableProperty] public partial string ArchiveExtensions { get; set; } = AppSettings.DefaultArchiveExtensions;
 
     private bool _suppressAdminWarning;

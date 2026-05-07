@@ -164,7 +164,7 @@
                             <CheckBox Content="Regex" IsChecked="{x:Bind ViewModel.UseRegex, Mode=TwoWay}" MinWidth="0" />
                             <CheckBox Content="Search archives" IsChecked="{x:Bind ViewModel.SearchInsideArchives, Mode=TwoWay}"
                                       VerticalAlignment="Center" MinWidth="0"
-                                      ToolTipService.ToolTip="Detect ZIP archives by file header and search text files inside them (supports nested zips)" />
+                                      ToolTipService.ToolTip="Searches inside ZIP archives for text matches. This has a performance penalty — only enable if you expect results inside ZIP files." />
                             <DropDownButton Content="{x:Bind ViewModel.ArchiveExtensionsSummary, Mode=OneWay}"
                                             VerticalAlignment="Center" FontSize="12"
                                             ToolTipService.ToolTip="ZIP-like extensions to bypass from skip list when archive search is on">
@@ -467,7 +467,8 @@
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
-                                        <CheckBox IsChecked="{x:Bind AllSelected, Mode=TwoWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
+                                        <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
+                                                  IsChecked="{x:Bind AllSelected, Mode=TwoWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
                                                   Checked="OnSelectAllChecked" Unchecked="OnSelectAllUnchecked" />
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                                             <StackPanel.ContextFlyout>

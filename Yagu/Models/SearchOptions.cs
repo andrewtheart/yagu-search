@@ -69,7 +69,7 @@ public sealed class SearchOptions
     public IReadOnlySet<string> SkipExtensions { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>When true, detect ZIP archives by file header and search their contents recursively (including nested zips).</summary>
-    public bool SearchInsideArchives { get; init; } = true;
+    public bool SearchInsideArchives { get; init; }
 
     /// <summary>Set of file extensions (with leading dots, case-insensitive) that are known ZIP-like containers. Used to bypass skip-extensions at the file-lister layer when archive search is enabled.</summary>
     public IReadOnlySet<string> ArchiveExtensions { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

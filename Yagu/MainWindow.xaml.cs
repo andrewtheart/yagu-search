@@ -4471,18 +4471,44 @@ public sealed partial class MainWindow : Window
                 return false;
             }
 
-            var verticalTransform = block.TransformToVisual(PreviewScrollViewer);
-            var verticalPoint = verticalTransform.TransformPoint(new Windows.Foundation.Point(0, 0));
             double lineHeight = EstimatePreviewLineHeight(block);
-            double wrappedLineOffset = EstimateWrappedLineOffset(block, targetPara);
 
-            double targetVerticalOffset = PreviewScrollViewer.VerticalOffset + verticalPoint.Y + (paragraphIndex + wrappedLineOffset) * lineHeight - PreviewScrollViewer.ViewportHeight / 2 + lineHeight / 2;
+            // Use the run's actual rendered character rect (in PreviewScrollViewer
+            // coordinates) when available — this avoids cumulative line-height
+            // estimation error which grew unbounded for paragraphs deep in the
+            // RichTextBlock (off by ~2.5px/paragraph for FontSize=14).
+            double? actualRunAbsY = TryGetActiveOrParaAbsY(block, targetPara, out double actualRunHeight);
+
+            double targetVerticalOffset;
+            double wrappedLineOffset;
+            double blockY;
+            double cumulativeHeight;
+
+            if (actualRunAbsY is double runAbsY)
+            {
+                wrappedLineOffset = 0;
+                blockY = double.NaN;
+                cumulativeHeight = double.NaN;
+                double effectiveH = actualRunHeight > 0 ? actualRunHeight : lineHeight;
+                targetVerticalOffset = runAbsY - PreviewScrollViewer.ViewportHeight / 2 + effectiveH / 2;
+            }
+            else
+            {
+                var verticalTransform = block.TransformToVisual(PreviewScrollViewer);
+                var verticalPoint = verticalTransform.TransformPoint(new Windows.Foundation.Point(0, 0));
+                blockY = verticalPoint.Y;
+                wrappedLineOffset = EstimateWrappedLineOffset(block, targetPara);
+                cumulativeHeight = EstimateCumulativeHeightBefore(block, targetPara, lineHeight);
+                targetVerticalOffset = PreviewScrollViewer.VerticalOffset + verticalPoint.Y + cumulativeHeight + wrappedLineOffset * lineHeight - PreviewScrollViewer.ViewportHeight / 2 + lineHeight / 2;
+            }
+
             targetVerticalOffset = Math.Clamp(targetVerticalOffset, 0, PreviewScrollViewer.ScrollableHeight);
             double beforeVerticalOffset = PreviewScrollViewer.VerticalOffset;
             bool verticalAccepted = PreviewScrollViewer.ChangeView(null, targetVerticalOffset, null, disableAnimation: true);
-            LogService.Instance.Verbose("Preview", $"ScrollPreviewToLine: idx={_currentMatchIndex}, para={paragraphIndex}/{block.Blocks.Count}, wrapOffset={wrappedLineOffset:N1}, blockY={verticalPoint.Y:N1}, lineH={lineHeight:N1}, beforeY={beforeVerticalOffset:N1}, targetY={targetVerticalOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}, scrollableH={PreviewScrollViewer.ScrollableHeight:N1}, accepted={verticalAccepted}, wrap={ViewModel.PreviewWordWrap}");
+            LogService.Instance.Info("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, para={paragraphIndex}/{block.Blocks.Count}, mode={(actualRunAbsY is null ? "estimated" : "rect")}, runAbsY={(actualRunAbsY ?? double.NaN):N1}, wrapOffset={wrappedLineOffset:N1}, blockY={blockY:N1}, lineH={lineHeight:N1}, beforeY={beforeVerticalOffset:N1}, targetY={targetVerticalOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}, scrollableH={PreviewScrollViewer.ScrollableHeight:N1}, accepted={verticalAccepted}, wrap={ViewModel.PreviewWordWrap}");
 
             ScrollMatchHorizontallyIntoView(block, targetPara);
+            VerifyActiveMatchVisibleAfterScroll(block, targetPara, paragraphIndex);
             return true;
         }
         catch (Exception ex)
@@ -4505,6 +4531,128 @@ public sealed partial class MainWindow : Window
         return -1;
     }
 
+    /// <summary>
+    /// Returns the absolute Y coordinate (in PreviewScrollViewer content space) of the
+    /// currently boxed match run if it belongs to <paramref name="targetPara"/>, else the
+    /// paragraph's first character. Returns null if layout has not produced a valid rect.
+    /// </summary>
+    private double? TryGetActiveOrParaAbsY(RichTextBlock block, Paragraph targetPara, out double height)
+    {
+        height = 0;
+        try
+        {
+            // Prefer the boxed (active) match run if it belongs to the target paragraph.
+            if (_activeMatchHighlight is { para: var activePara, run: var activeRun }
+                && ReferenceEquals(activePara, targetPara) && activeRun is not null)
+            {
+                var rect = activeRun.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+                if (rect.Height > 0)
+                {
+                    var t = block.TransformToVisual(PreviewScrollViewer);
+                    var p = t.TransformPoint(new Windows.Foundation.Point(rect.X, rect.Y));
+                    height = rect.Height;
+                    return PreviewScrollViewer.VerticalOffset + p.Y;
+                }
+            }
+
+            // Fallback: paragraph's first character rect.
+            var paraRect = targetPara.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+            if (paraRect.Height > 0)
+            {
+                var t = block.TransformToVisual(PreviewScrollViewer);
+                var p = t.TransformPoint(new Windows.Foundation.Point(paraRect.X, paraRect.Y));
+                height = paraRect.Height;
+                return PreviewScrollViewer.VerticalOffset + p.Y;
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    /// <summary>
+    /// Post-scroll diagnostic: after layout settles, log where the boxed (active) match
+    /// actually rendered relative to the preview viewport. Helps diagnose cases where the
+    /// nav advances but the highlighted match is off-screen or hidden.
+    /// </summary>
+    private void VerifyActiveMatchVisibleAfterScroll(RichTextBlock block, Paragraph targetPara, int paragraphIndex, int correctionAttempt = 0)
+    {
+        int navIdx = _currentMatchIndex;
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            try
+            {
+                if (_activeMatchHighlight is not { para: var activePara, run: var activeRun, column: var column })
+                {
+                    LogService.Instance.Info("MatchNav", $"VerifyActiveMatch: idx={navIdx} -- NO active highlight set");
+                    return;
+                }
+
+                bool paraMatches = ReferenceEquals(activePara, targetPara);
+                int activeIdx = -1;
+                for (int i = 0; i < _matchParagraphs.Count; i++)
+                {
+                    var m = _matchParagraphs[i];
+                    if (ReferenceEquals(m.para, activePara)) { activeIdx = i; break; }
+                }
+
+                double vpH = PreviewScrollViewer.ViewportHeight;
+                double vpTop = PreviewScrollViewer.VerticalOffset;
+                double vpBottom = vpTop + vpH;
+
+                double paraY = double.NaN;
+                try
+                {
+                    var t = block.TransformToVisual(PreviewScrollViewer);
+                    var p = t.TransformPoint(new Windows.Foundation.Point(0, 0));
+                    paraY = vpTop + p.Y;
+                }
+                catch { }
+
+                double runY = double.NaN;
+                double runH = double.NaN;
+                try
+                {
+                    var rect = activeRun.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+                    var t = block.TransformToVisual(PreviewScrollViewer);
+                    var p = t.TransformPoint(new Windows.Foundation.Point(rect.X, rect.Y));
+                    runY = vpTop + p.Y;
+                    runH = rect.Height;
+                }
+                catch { }
+
+                bool runOnScreen = !double.IsNaN(runY) && runY >= vpTop && (runY + (double.IsNaN(runH) ? 0 : runH)) <= vpBottom;
+                string runText = activeRun.Text ?? "";
+                if (runText.Length > 30) runText = runText.Substring(0, 30) + "…";
+
+                LogService.Instance.Info("MatchNav",
+                    $"VerifyActiveMatch: idx={navIdx}, activeIdx={activeIdx}, paraMatches={paraMatches}, paraIdx={paragraphIndex}, " +
+                    $"col={column}, runText='{runText}', runFG={(activeRun.Foreground is SolidColorBrush sb ? sb.Color.ToString() : "?")}, " +
+                    $"vpTop={vpTop:N1}, vpBottom={vpBottom:N1}, vpH={vpH:N1}, paraAbsY={paraY:N1}, runAbsY={runY:N1}, runH={runH:N1}, runOnScreen={runOnScreen}");
+
+                // Self-correcting: if the run isn't centered/visible but we now have an
+                // accurate rect, perform a corrective scroll. Limit to 2 attempts to
+                // avoid loops if layout is unstable.
+                if (!runOnScreen && !double.IsNaN(runY) && !double.IsNaN(runH) && runH > 0 && correctionAttempt < 2)
+                {
+                    double effectiveH = runH > 0 ? runH : EstimatePreviewLineHeight(block);
+                    double correctedTarget = runY - vpH / 2 + effectiveH / 2;
+                    correctedTarget = Math.Clamp(correctedTarget, 0, PreviewScrollViewer.ScrollableHeight);
+                    if (Math.Abs(correctedTarget - vpTop) > 1)
+                    {
+                        bool accepted = PreviewScrollViewer.ChangeView(null, correctedTarget, null, disableAnimation: true);
+                        LogService.Instance.Info("MatchNav",
+                            $"VerifyActiveMatch: corrective scroll idx={navIdx}, attempt={correctionAttempt + 1}, fromY={vpTop:N1}, toY={correctedTarget:N1}, accepted={accepted}");
+                        VerifyActiveMatchVisibleAfterScroll(block, targetPara, paragraphIndex, correctionAttempt + 1);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Info("MatchNav", $"VerifyActiveMatch: exception {ex.GetType().Name}: {ex.Message}");
+            }
+        });
+    }
+
     private static double EstimatePreviewLineHeight(RichTextBlock block) => Math.Max(16d, block.FontSize * 1.35d);
 
     private static double EstimatePreviewCharWidth(RichTextBlock block) => Math.Max(6d, block.FontSize * 0.58d);
@@ -4524,6 +4672,36 @@ public sealed partial class MainWindow : Window
         double wrappedOffset = column / (double)charsPerWrappedLine;
         LogService.Instance.Verbose("Preview", $"EstimateWrappedLineOffset: idx={_currentMatchIndex}, column={column}, availableW={availableWidth:N1}, charW={charWidth:N1}, charsPerLine={charsPerWrappedLine}, wrappedOffset={wrappedOffset:N1}");
         return wrappedOffset;
+    }
+
+    private double EstimateCumulativeHeightBefore(RichTextBlock block, Paragraph targetPara, double lineHeight)
+    {
+        double availableWidth = GetPreviewTextViewportWidth(block) - 24;
+        double charWidth = EstimatePreviewCharWidth(block);
+        int charsPerLine = ViewModel.PreviewWordWrap ? Math.Max(1, (int)Math.Floor(availableWidth / charWidth)) : int.MaxValue;
+
+        double height = 0;
+        foreach (var b in block.Blocks)
+        {
+            if (ReferenceEquals(b, targetPara))
+                break;
+            if (b is Paragraph p)
+            {
+                int textLen = 0;
+                foreach (var inline in p.Inlines)
+                {
+                    if (inline is Run r)
+                        textLen += r.Text?.Length ?? 0;
+                }
+                int wrappedLines = Math.Max(1, (int)Math.Ceiling((double)Math.Max(1, textLen) / charsPerLine));
+                height += wrappedLines * lineHeight;
+            }
+            else
+            {
+                height += lineHeight;
+            }
+        }
+        return height;
     }
 
     private double GetPreviewTextViewportWidth(RichTextBlock block)
