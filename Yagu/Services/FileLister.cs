@@ -246,6 +246,13 @@ public sealed class FileLister : IFileLister
         Volatile.Write(ref _earlyExcludedByExtensionFiles, 0);
         if (string.IsNullOrWhiteSpace(directory)) yield break;
 
+        // Normalize drive-letter-only paths ("C:" → "C:\"). On Windows,
+        // Path.GetFullPath("C:") returns the *current directory of the C drive*
+        // (e.g., "C:\Program Files\Yagu" when launched from there), not "C:\".
+        // Always anchor a bare drive letter to its root.
+        if (directory.Length == 2 && directory[1] == ':' && char.IsLetter(directory[0]))
+            directory += "\\";
+
         var fullDir = Path.GetFullPath(directory);
         if (!Directory.Exists(fullDir))
         {

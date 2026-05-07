@@ -594,7 +594,7 @@ for ($i = 1; $i -le $MatchIterations; $i++) {
     
     if ($nextBtn) {
         Click-Element $nextBtn
-        Start-Sleep -Seconds 2
+        Start-Sleep -Seconds 1
         Take-Screenshot ("03-match-{0:D2}" -f $i)
     } else {
         Write-Host "  WARNING: Next match button not found at iteration $i"
