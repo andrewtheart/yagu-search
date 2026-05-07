@@ -4418,6 +4418,25 @@ public sealed partial class MainWindow : Window
     private void ScrollPreviewToLine(RichTextBlock block, Paragraph targetPara)
     {
         int requestId = ++_matchScrollRequestId;
+        // Force a synchronous layout pass before the first scroll attempt so the
+        // active run's character rect is available (mode=rect). Without this, the
+        // first ScrollPreviewToLine after a click commonly fires before WinUI has
+        // measured the run, falls back to mode=estimated, and lands hundreds of
+        // pixels off. The original symptom was "first click misses; hovering the
+        // mouse over the body fixes it" — hover was forcing the same realization
+        // we now do explicitly.
+        bool layoutForced = false;
+        string layoutEx = "";
+        try
+        {
+            block.UpdateLayout();
+            PreviewScrollViewer.UpdateLayout();
+            layoutForced = true;
+        }
+        catch (Exception ex) { layoutEx = ex.GetType().Name; }
+        LogService.Instance.Info("MatchNav",
+            $"ScrollPreviewToLine: entry idx={_currentMatchIndex}, requestId={requestId}, forcedLayout={layoutForced}{(layoutEx.Length > 0 ? $", layoutEx={layoutEx}" : "")}");
+
         if (TryScrollPreviewToLine(block, targetPara, out _))
             return;
 
@@ -4446,17 +4465,20 @@ public sealed partial class MainWindow : Window
         // Re-center on subsequent layout passes too: when many lines/Runs in a freshly
         // expanded section are measured/arranged, the absolute Y of our paragraph
         // can shift by hundreds of pixels after our initial scroll. Hook
-        // LayoutUpdated and re-issue the scroll if the active run drifts off
-        // screen. Keep the handler attached for a wall-clock window (~1500 ms)
-        // so we catch late layout passes that happen after the WinUI Expander
-        // animation finishes settling. Detach early once the run has been
-        // confirmed on-screen across two consecutive layout passes (stable).
+        // LayoutUpdated on the PreviewScrollViewer (NOT the block — the Expander
+        // animation reflows ancestors/siblings without firing block.LayoutUpdated
+        // on every pass) and re-issue the scroll if the active run drifts off
+        // screen. We track two timers: an "idle" timer reset on every rescroll
+        // (so we keep watching as long as layout is still moving) and an
+        // absolute hard cap to guard against pathological infinite reflow.
         int requestId = _matchScrollRequestId;
         int idxAtAttach = _currentMatchIndex;
         EventHandler<object>? handler = null;
-        var watchdog = System.Diagnostics.Stopwatch.StartNew();
-        const int kWindowMs = 2000;
-        const int kMaxRescrolls = 20;
+        var idleStopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var hardCapStopwatch = System.Diagnostics.Stopwatch.StartNew();
+        const int kIdleWindowMs = 1500;        // detach if no rescroll needed for 1.5 s
+        const int kHardCapMs = 5000;           // never watch longer than 5 s total
+        const int kMaxRescrolls = 30;
         int rescrolls = 0;
         int consecutiveOnScreen = 0;
         int layoutPasses = 0;
@@ -4466,13 +4488,30 @@ public sealed partial class MainWindow : Window
         {
             if (handler is null) return;
             layoutPasses++;
-            if (requestId != _matchScrollRequestId || watchdog.ElapsedMilliseconds > kWindowMs || rescrolls >= kMaxRescrolls)
+            if (requestId != _matchScrollRequestId
+                || idleStopwatch.ElapsedMilliseconds > kIdleWindowMs
+                || hardCapStopwatch.ElapsedMilliseconds > kHardCapMs
+                || rescrolls >= kMaxRescrolls)
             {
                 string reason = requestId != _matchScrollRequestId
                     ? $"new-request(curr={_matchScrollRequestId})"
-                    : (watchdog.ElapsedMilliseconds > kWindowMs ? "timeout" : "max-rescrolls");
+                    : (hardCapStopwatch.ElapsedMilliseconds > kHardCapMs
+                        ? "hard-cap"
+                        : (idleStopwatch.ElapsedMilliseconds > kIdleWindowMs ? "idle" : "max-rescrolls"));
                 // Take a final snapshot of the active highlight at detach time.
+                // If the run has drifted off-screen since our last rescroll AND we
+                // still have hardCap budget AND this is an idle (not new-request /
+                // hard-cap / max-rescrolls) detach, issue one more corrective
+                // scroll and STAY attached. Without this rescue, materialize-path
+                // navs commonly look correct at first verify (~30ms in) but then
+                // the section continues reflowing for another 100-1500ms, the run
+                // drifts off-screen, no LayoutUpdated fires for the final settle,
+                // and we detach silently \u2014 leaving the user looking at empty
+                // space below the match.
                 string snapshot = "(no-highlight)";
+                bool snapshotOnScr = true; // assume on-screen if we can't measure
+                double snapshotRunY = double.NaN;
+                double snapshotRunH = double.NaN;
                 try
                 {
                     if (_activeMatchHighlight is { para: var ap, run: var ar } && ar is not null)
@@ -4484,15 +4523,45 @@ public sealed partial class MainWindow : Window
                         double vTop = PreviewScrollViewer.VerticalOffset;
                         double vH = PreviewScrollViewer.ViewportHeight;
                         double rY = vTop + p2.Y;
-                        bool onScr = rY >= vTop && rY + rect2.Height <= vTop + vH;
+                        bool onScr = rect2.Height > 0 && rY >= vTop && rY + rect2.Height <= vTop + vH;
                         bool sameRun = ReferenceEquals(ap, targetPara);
-                        snapshot = $"fg={fg}, sameRun={sameRun}, onScr={onScr}, runY={rY:N1}";
+                        snapshot = $"fg={fg}, sameRun={sameRun}, onScr={onScr}, runY={rY:N1}, runH={rect2.Height:N1}";
+                        snapshotOnScr = onScr || rect2.Height <= 0;
+                        snapshotRunY = rY;
+                        snapshotRunH = rect2.Height;
                     }
                 }
                 catch { }
+
+                bool isIdleDetach = reason == "idle";
+                bool canRescue = isIdleDetach
+                    && !snapshotOnScr
+                    && !double.IsNaN(snapshotRunY)
+                    && !double.IsNaN(snapshotRunH)
+                    && snapshotRunH > 0
+                    && hardCapStopwatch.ElapsedMilliseconds < kHardCapMs - 200
+                    && rescrolls < kMaxRescrolls;
+                if (canRescue)
+                {
+                    double vH2 = PreviewScrollViewer.ViewportHeight;
+                    double target = snapshotRunY - vH2 / 2 + snapshotRunH / 2;
+                    target = Math.Clamp(target, 0, PreviewScrollViewer.ScrollableHeight);
+                    double vpTop2 = PreviewScrollViewer.VerticalOffset;
+                    if (Math.Abs(target - vpTop2) > 1)
+                    {
+                        rescrolls++;
+                        idleStopwatch.Restart();
+                        consecutiveOnScreen = 0;
+                        bool accepted2 = PreviewScrollViewer.ChangeView(null, target, null, disableAnimation: true);
+                        LogService.Instance.Info("MatchNav",
+                            $"ScrollAfterMaterialization: detach-rescue idx={idxAtAttach}, snapshot={snapshot}, fromY={vpTop2:N1}, toY={target:N1}, accepted={accepted2}, rescrolls={rescrolls}, total={hardCapStopwatch.ElapsedMilliseconds}ms (staying attached)");
+                        return; // do NOT detach \u2014 keep watching
+                    }
+                }
+
                 LogService.Instance.Info("MatchNav",
-                    $"ScrollAfterMaterialization: detach idx={idxAtAttach}, reason={reason}, layoutPasses={layoutPasses}, rescrolls={rescrolls}, elapsed={watchdog.ElapsedMilliseconds}ms, finalVpTop={PreviewScrollViewer.VerticalOffset:N1}, snapshot={snapshot}");
-                block.LayoutUpdated -= handler;
+                    $"ScrollAfterMaterialization: detach idx={idxAtAttach}, reason={reason}, layoutPasses={layoutPasses}, rescrolls={rescrolls}, idle={idleStopwatch.ElapsedMilliseconds}ms, total={hardCapStopwatch.ElapsedMilliseconds}ms, finalVpTop={PreviewScrollViewer.VerticalOffset:N1}, snapshot={snapshot}");
+                PreviewScrollViewer.LayoutUpdated -= handler;
                 handler = null;
                 return;
             }
@@ -4518,9 +4587,10 @@ public sealed partial class MainWindow : Window
                             if (Math.Abs(target - vpTop) > 1)
                             {
                                 rescrolls++;
+                                idleStopwatch.Restart();
                                 bool accepted = PreviewScrollViewer.ChangeView(null, target, null, disableAnimation: true);
                                 LogService.Instance.Info("MatchNav",
-                                    $"ScrollAfterMaterialization: post-layout re-center #{rescrolls} idx={_currentMatchIndex}, runY={runY:N1}, vpTop={vpTop:N1}, vpH={vpH:N1}, toY={target:N1}, accepted={accepted}, elapsed={watchdog.ElapsedMilliseconds}ms");
+                                    $"ScrollAfterMaterialization: post-layout re-center #{rescrolls} idx={_currentMatchIndex}, runY={runY:N1}, vpTop={vpTop:N1}, vpH={vpH:N1}, toY={target:N1}, accepted={accepted}, total={hardCapStopwatch.ElapsedMilliseconds}ms");
                             }
                         }
                         else
@@ -4532,11 +4602,11 @@ public sealed partial class MainWindow : Window
                             // 1\u20132 ms in, before the animation re-shuffles layout and pushes
                             // the active run back off-screen with no one watching.
                             const int kMinElapsedForEarlyDetachMs = 600;
-                            if (consecutiveOnScreen >= 2 && watchdog.ElapsedMilliseconds >= kMinElapsedForEarlyDetachMs)
+                            if (consecutiveOnScreen >= 2 && hardCapStopwatch.ElapsedMilliseconds >= kMinElapsedForEarlyDetachMs)
                             {
                                 LogService.Instance.Info("MatchNav",
-                                    $"ScrollAfterMaterialization: detach idx={idxAtAttach}, reason=stable-on-screen, layoutPasses={layoutPasses}, rescrolls={rescrolls}, elapsed={watchdog.ElapsedMilliseconds}ms, finalVpTop={PreviewScrollViewer.VerticalOffset:N1}, runY={runY:N1}");
-                                block.LayoutUpdated -= handler;
+                                    $"ScrollAfterMaterialization: detach idx={idxAtAttach}, reason=stable-on-screen, layoutPasses={layoutPasses}, rescrolls={rescrolls}, idle={idleStopwatch.ElapsedMilliseconds}ms, total={hardCapStopwatch.ElapsedMilliseconds}ms, finalVpTop={PreviewScrollViewer.VerticalOffset:N1}, runY={runY:N1}");
+                                PreviewScrollViewer.LayoutUpdated -= handler;
                                 handler = null;
                             }
                         }
@@ -4547,12 +4617,67 @@ public sealed partial class MainWindow : Window
             {
                 if (handler is not null)
                 {
-                    block.LayoutUpdated -= handler;
+                    PreviewScrollViewer.LayoutUpdated -= handler;
                     handler = null;
                 }
             }
         };
-        block.LayoutUpdated += handler;
+        PreviewScrollViewer.LayoutUpdated += handler;
+
+        // Also poll on a 100ms DispatcherTimer. LayoutUpdated only fires when WinUI
+        // actually invalidates layout, but the Expander animation can finish a
+        // pass and leave the run drifted off-screen without firing another
+        // LayoutUpdated. Polling guarantees drift is caught within ~100ms instead
+        // of waiting for the 1.5s idle timeout's detach-rescue.
+        var pollTimer = new Microsoft.UI.Xaml.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(100)
+        };
+        EventHandler<object>? pollHandler = null;
+        pollHandler = (_, __) =>
+        {
+            if (handler is null)
+            {
+                // Watcher already detached \u2014 stop polling.
+                pollTimer.Stop();
+                if (pollHandler is not null) pollTimer.Tick -= pollHandler;
+                return;
+            }
+            try
+            {
+                if (_activeMatchHighlight is { para: var activePara, run: var activeRun }
+                    && ReferenceEquals(activePara, targetPara) && activeRun is not null)
+                {
+                    var rect = activeRun.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+                    if (rect.Height > 0)
+                    {
+                        var t = block.TransformToVisual(PreviewScrollViewer);
+                        var p = t.TransformPoint(new Windows.Foundation.Point(rect.X, rect.Y));
+                        double vpTop = PreviewScrollViewer.VerticalOffset;
+                        double vpH = PreviewScrollViewer.ViewportHeight;
+                        double runY = vpTop + p.Y;
+                        bool onScreen = runY >= vpTop && runY + rect.Height <= vpTop + vpH;
+                        if (!onScreen && rescrolls < kMaxRescrolls)
+                        {
+                            double target = runY - vpH / 2 + rect.Height / 2;
+                            target = Math.Clamp(target, 0, PreviewScrollViewer.ScrollableHeight);
+                            if (Math.Abs(target - vpTop) > 1)
+                            {
+                                rescrolls++;
+                                idleStopwatch.Restart();
+                                consecutiveOnScreen = 0;
+                                bool accepted = PreviewScrollViewer.ChangeView(null, target, null, disableAnimation: true);
+                                LogService.Instance.Info("MatchNav",
+                                    $"ScrollAfterMaterialization: poll re-center #{rescrolls} idx={_currentMatchIndex}, runY={runY:N1}, vpTop={vpTop:N1}, vpH={vpH:N1}, toY={target:N1}, accepted={accepted}, total={hardCapStopwatch.ElapsedMilliseconds}ms");
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+        };
+        pollTimer.Tick += pollHandler;
+        pollTimer.Start();
     }
 
     private void ScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, int attemptsRemaining, int requestId)
@@ -4770,6 +4895,30 @@ public sealed partial class MainWindow : Window
                 const int kHardCap = 6;
                 bool layoutMoved = !double.IsNaN(previousParaAbsY) && Math.Abs(paraY - previousParaAbsY) > 2.0;
                 int nextAttempt = layoutMoved ? correctionAttempt : correctionAttempt + 1;
+
+                // If the run hasn't been measured yet (runH == 0 or NaN), the layout
+                // pass hasn't reached this paragraph. Force an explicit UpdateLayout
+                // and re-enqueue verification so we try again after layout has had
+                // another tick. Without this we silently leave the user looking at
+                // the wrong content — and the only way to recover used to be moving
+                // the mouse over the preview panel (which forces realization).
+                if ((double.IsNaN(runH) || runH <= 0) && nextAttempt <= kHardCap)
+                {
+                    bool layoutForced = false;
+                    string layoutEx = "";
+                    try
+                    {
+                        block.UpdateLayout();
+                        PreviewScrollViewer.UpdateLayout();
+                        layoutForced = true;
+                    }
+                    catch (Exception ex) { layoutEx = ex.GetType().Name; }
+                    LogService.Instance.Info("MatchNav",
+                        $"VerifyActiveMatch: run not yet measured (runH={runH:N1}), forcedLayout={layoutForced}{(layoutEx.Length > 0 ? $", layoutEx={layoutEx}" : "")}, re-enqueue verify idx={navIdx}, attempt={nextAttempt}/{kHardCap}");
+                    VerifyActiveMatchVisibleAfterScroll(block, targetPara, paragraphIndex, nextAttempt, paraY);
+                    return;
+                }
+
                 if (!runOnScreen && !double.IsNaN(runY) && !double.IsNaN(runH) && runH > 0 && nextAttempt <= kHardCap)
                 {
                     double effectiveH = runH > 0 ? runH : EstimatePreviewLineHeight(block);
