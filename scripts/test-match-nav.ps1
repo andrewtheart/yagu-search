@@ -8,7 +8,7 @@ param(
     [int]$MatchIterations = 1000,
     [int]$SearchWaitSeconds = 30,
     [int]$PreviewLoadSeconds = 30,
-    [int]$MaxFiles = 100
+    [int]$MaxFiles = 1000
 )
 
 Add-Type -AssemblyName UIAutomationClient
@@ -342,43 +342,70 @@ if ($resultsList) {
         LeftClick-At $fx $fy
         Start-Sleep -Milliseconds 400
 
-        # Step B: scroll progressively until we've passed approximately $MaxFiles items,
-        # OR reached end of list. We don't know exact item count, so scroll down repeatedly
-        # then pick the LAST visible checkbox each time.
+        # Step B: scroll progressively until we've seen approximately $MaxFiles unique
+        # file checkboxes, OR reached end of list. Track UNIQUE checkboxes by their
+        # Name (file path) so the count reflects reality rather than a per-page
+        # estimate. The previous heuristic (estPerPage * iter + visible) consistently
+        # undershot — each LargeIncrement scrolls by viewport pixels which can span
+        # far more file groups than were visible at the top (variable row heights
+        # when matches are expanded), so the loop kept going and selected ~186.
         $targetItems = $MaxFiles
         $scrollIter = 0
-        $maxScrollIter = 50
+        $maxScrollIter = 200
         $lastCb = $first
-        $totalItemsEstimate = $firstCheckboxes.Count
+        $seenNames = [System.Collections.Generic.HashSet[string]]::new()
+        try { [void]$seenNames.Add($first.Element.Current.Name) } catch { }
 
         while ($scrollIter -lt $maxScrollIter) {
-            # Scroll down one page
+            if ($seenNames.Count -ge $targetItems) {
+                Write-Host "  Seen $($seenNames.Count) unique file checkboxes (target=$targetItems); stopping scroll."
+                break
+            }
+
             $scrollPos = -1
             if ($scrollPattern -and $scrollPattern.Current.VerticallyScrollable) {
                 $scrollPos = $scrollPattern.Current.VerticalScrollPercent
-                if ($scrollPos -ge 99.5) { 
+                if ($scrollPos -ge 99.5) {
                     Write-Host "  Reached end of list (scroll=$scrollPos%)."
-                    break 
+                    break
                 }
                 try { $scrollPattern.ScrollVertical([System.Windows.Automation.ScrollAmount]::LargeIncrement) } catch { break }
             } else { break }
 
-            Start-Sleep -Milliseconds 350
+            Start-Sleep -Milliseconds 40
 
             $visible = Get-OnscreenFileCheckboxes
-            if ($visible.Count -gt 0) {
-                $lastCb = $visible[-1]
-                # Estimate items so far: roughly itemsPerPage * scrollIter + visible.Count
-                $estPerPage = if ($firstCheckboxes.Count -gt 0) { $firstCheckboxes.Count } else { 11 }
-                $totalItemsEstimate = $estPerPage * ($scrollIter + 1) + $visible.Count
+            foreach ($v in $visible) {
+                try { [void]$seenNames.Add($v.Element.Current.Name) } catch { }
             }
 
-            if ($totalItemsEstimate -ge $targetItems) {
-                Write-Host "  Estimated $totalItemsEstimate items visited; stopping scroll."
-                break
+            # Find the bottom-most visible checkbox whose name we've already seen
+            # (counts toward our target). If we've hit the target, the last visible
+            # one is the right shift-click target. Otherwise the last visible is
+            # still our running candidate.
+            if ($visible.Count -gt 0) {
+                if ($seenNames.Count -le $targetItems) {
+                    $lastCb = $visible[-1]
+                } else {
+                    # Overshot — pick the visible checkbox whose ordinal (in scroll
+                    # order) lands at exactly $targetItems. We can't know the true
+                    # ordinal of each onscreen item, but the names are added in
+                    # scroll order; clamp by stopping at the first visible whose
+                    # 1-based index in $seenNames exceeds $targetItems.
+                    $orderedNames = New-Object System.Collections.Generic.List[string]
+                    $orderedNames.AddRange([System.Collections.Generic.IEnumerable[string]]$seenNames)
+                    $cutoffName = $orderedNames[[Math]::Min($targetItems - 1, $orderedNames.Count - 1)]
+                    foreach ($v in $visible) {
+                        try {
+                            if ($v.Element.Current.Name -eq $cutoffName) { $lastCb = $v; break }
+                        } catch { }
+                    }
+                }
             }
+
             $scrollIter++
         }
+        Write-Host "  Scroll done: iter=$scrollIter, uniqueSeen=$($seenNames.Count), target=$targetItems"
 
         # Step C: Shift+click the last visible checkbox to select the entire range.
         $lx = [int]($lastCb.Rect.X + $lastCb.Rect.Width / 2)
@@ -387,7 +414,7 @@ if ($resultsList) {
         ShiftLeftClick-At $lx $ly
         Start-Sleep -Milliseconds 600
 
-        $selectedCount = $totalItemsEstimate  # best-effort estimate; real count comes from Pre-right-click diagnostics
+        $selectedCount = $seenNames.Count  # best-effort estimate; real count comes from Pre-right-click diagnostics
     }
 } else {
     Write-Host "  WARNING: Could not find results list."
@@ -511,57 +538,58 @@ if ($clickTarget) {
     Write-Host "  WARNING: No group header elements found with valid bounding rectangle"
 }
 
-# 7. Wait for preview to finish loading by polling visibility of the loading overlays.
+# 7. Wait for preview to finish loading. Strategy:
+#    - Poll for any UI element whose Name contains "Adding" (e.g. status text like
+#      "Adding 12 of 100..." that the app shows while populating the preview).
+#    - If we never see it within a short grace window, assume the preview is
+#      already populated and proceed immediately (no point waiting).
+#    - If we DO see it, wait until it disappears, then a small settle delay.
 Write-Host "[7] Waiting for preview to render (max ${PreviewLoadSeconds}s)..."
 
-function Test-PreviewLoading {
+function Find-AddingElement {
     param([System.Windows.Automation.AutomationElement]$Window)
-    foreach ($id in @("PreviewLoadingPanel", "PreviewProgressOverlay", "PreviewLoadingRing", "PreviewProgressRing")) {
-        $el = $Window.FindFirst(
+    try {
+        $all = $Window.FindAll(
             [System.Windows.Automation.TreeScope]::Descendants,
-            [System.Windows.Automation.PropertyCondition]::new(
-                [System.Windows.Automation.AutomationElement]::AutomationIdProperty, $id))
-        if ($el) {
+            [System.Windows.Automation.Condition]::TrueCondition)
+        foreach ($el in $all) {
             try {
-                if (-not $el.Current.IsOffscreen) { return $true }
+                $name = $el.Current.Name
+                if ($name -and $name -match 'Adding' -and -not $el.Current.IsOffscreen) {
+                    return $el
+                }
             } catch { }
         }
-    }
-    # Also check by visible "Loading" text
-    $loadingText = $Window.FindFirst(
-        [System.Windows.Automation.TreeScope]::Descendants,
-        [System.Windows.Automation.PropertyCondition]::new(
-            [System.Windows.Automation.AutomationElement]::NameProperty, "Loading preview…"))
-    if ($loadingText) {
-        try { if (-not $loadingText.Current.IsOffscreen) { return $true } } catch { }
-    }
-    return $false
+    } catch { }
+    return $null
 }
 
-# Give the overlay a moment to appear first.
-Start-Sleep -Seconds 1
-
-$loadDeadline = (Get-Date).AddSeconds($PreviewLoadSeconds)
-$wasLoading = $false
-while ((Get-Date) -lt $loadDeadline) {
-    $isLoading = Test-PreviewLoading -Window $yaguWindow
-    if ($isLoading) {
-        $wasLoading = $true
-        Write-Host "  Preview is loading..."
-        Start-Sleep -Seconds 1
-        continue
-    }
-    if ($wasLoading) {
-        Write-Host "  Preview overlay disappeared — preview ready."
-        # Small grace period to let layout settle
-        Start-Sleep -Seconds 1
-        break
-    }
-    # Not yet started loading; wait a bit more
-    Start-Sleep -Milliseconds 500
+# Short grace window to detect "Adding"; if it never appears, just proceed.
+$detectDeadline = (Get-Date).AddSeconds(2)
+$adding = $null
+while ((Get-Date) -lt $detectDeadline) {
+    $adding = Find-AddingElement -Window $yaguWindow
+    if ($adding) { break }
+    Start-Sleep -Milliseconds 200
 }
-if ((Get-Date) -ge $loadDeadline) {
-    Write-Host "  WARNING: timed out waiting for preview to finish loading."
+
+if (-not $adding) {
+    Write-Host "  No 'Adding' indicator detected within grace window; proceeding."
+} else {
+    Write-Host "  Detected 'Adding...' indicator: '$($adding.Current.Name)'. Waiting for it to disappear..."
+    $loadDeadline = (Get-Date).AddSeconds($PreviewLoadSeconds)
+    while ((Get-Date) -lt $loadDeadline) {
+        $stillAdding = Find-AddingElement -Window $yaguWindow
+        if (-not $stillAdding) {
+            Write-Host "  'Adding' indicator gone — preview ready."
+            Start-Sleep -Milliseconds 500
+            break
+        }
+        Start-Sleep -Milliseconds 300
+    }
+    if ((Get-Date) -ge $loadDeadline) {
+        Write-Host "  WARNING: timed out waiting for 'Adding' indicator to disappear."
+    }
 }
 
 Take-Screenshot "02-preview-loaded"
@@ -594,7 +622,7 @@ for ($i = 1; $i -le $MatchIterations; $i++) {
     
     if ($nextBtn) {
         Click-Element $nextBtn
-        Start-Sleep -Milliseconds 2500
+        Start-Sleep -Milliseconds 500
         # After clicking Next on iteration $i (starting at match 1), we are now on
         # match ($i + 1). Name the screenshot to reflect the actual match number
         # so 03-match-NN.png shows match NN. Match 1 is captured in 02-preview-loaded.
