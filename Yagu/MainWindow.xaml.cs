@@ -4639,10 +4639,29 @@ public sealed partial class MainWindow : Window
                     correctedTarget = Math.Clamp(correctedTarget, 0, PreviewScrollViewer.ScrollableHeight);
                     if (Math.Abs(correctedTarget - vpTop) > 1)
                     {
+                        // Wait for the ChangeView to actually settle before re-verifying.
+                        // Recursing on the next dispatcher tick is too eager: the
+                        // ScrollViewer's VerticalOffset hasn't been committed yet, so
+                        // the recursive call sees the stale vpTop, computes the same
+                        // target, and ChangeView rejects it as a duplicate. We end up
+                        // bailing out at the 2-attempt cap with the run still off-screen.
+                        EventHandler<ScrollViewerViewChangedEventArgs>? handler = null;
+                        handler = (_, ev) =>
+                        {
+                            if (ev.IsIntermediate) return;
+                            PreviewScrollViewer.ViewChanged -= handler;
+                            VerifyActiveMatchVisibleAfterScroll(block, targetPara, paragraphIndex, correctionAttempt + 1);
+                        };
+                        PreviewScrollViewer.ViewChanged += handler;
                         bool accepted = PreviewScrollViewer.ChangeView(null, correctedTarget, null, disableAnimation: true);
                         LogService.Instance.Info("MatchNav",
                             $"VerifyActiveMatch: corrective scroll idx={navIdx}, attempt={correctionAttempt + 1}, fromY={vpTop:N1}, toY={correctedTarget:N1}, accepted={accepted}");
-                        VerifyActiveMatchVisibleAfterScroll(block, targetPara, paragraphIndex, correctionAttempt + 1);
+                        if (!accepted)
+                        {
+                            // ChangeView rejected the request — no ViewChanged will fire,
+                            // so detach the handler to avoid leaking.
+                            PreviewScrollViewer.ViewChanged -= handler;
+                        }
                     }
                 }
             }
