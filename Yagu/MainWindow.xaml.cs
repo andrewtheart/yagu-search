@@ -4388,6 +4388,7 @@ public sealed partial class MainWindow : Window
                     _activeMatchHighlight = (para, run, run.Foreground, run.TextDecorations, column);
                     run.Foreground = s_activeMatchBrush;
                     run.TextDecorations = Windows.UI.Text.TextDecorations.Underline;
+                    LogService.Instance.Info("MatchNav", $"BoxMatchRun: idx={_currentMatchIndex}, matchInPara={matchInPara}, col={column}, runText='{run.Text}'");
                     return;
                 }
                 goldCount++;
@@ -4398,9 +4399,10 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void UnboxCurrentMatch()
+    private void UnboxCurrentMatch([System.Runtime.CompilerServices.CallerMemberName] string caller = "")
     {
         if (_activeMatchHighlight is not { } highlight) return;
+        LogService.Instance.Info("MatchNav", $"UnboxCurrentMatch: idx={_currentMatchIndex}, caller={caller}");
         highlight.run.Foreground = highlight.foreground;
         highlight.run.TextDecorations = highlight.textDecorations;
         _activeMatchHighlight = null;
@@ -4420,6 +4422,137 @@ public sealed partial class MainWindow : Window
             return;
 
         ScrollPreviewToLine(block, targetPara, attemptsRemaining: 3, requestId);
+    }
+
+    /// <summary>
+    /// Variant used immediately after MaterializeNextLazySection: forces a synchronous
+    /// layout pass on the freshly-expanded section so the run's character rect is
+    /// available BEFORE the first ScrollPreviewToLine, then hooks LayoutUpdated to
+    /// re-center if the section continues to settle on subsequent layout passes.
+    /// Without this the corrective scroll loop in VerifyActiveMatchVisibleAfterScroll
+    /// converges on a stale position because the Expander's content is still reflowing.
+    /// </summary>
+    private void ScrollAfterMaterialization(RichTextBlock block, Paragraph targetPara)
+    {
+        try
+        {
+            block.UpdateLayout();
+            PreviewScrollViewer.UpdateLayout();
+        }
+        catch { }
+
+        ScrollPreviewToLine(block, targetPara);
+
+        // Re-center on subsequent layout passes too: when many lines/Runs in a freshly
+        // expanded section are measured/arranged, the absolute Y of our paragraph
+        // can shift by hundreds of pixels after our initial scroll. Hook
+        // LayoutUpdated and re-issue the scroll if the active run drifts off
+        // screen. Keep the handler attached for a wall-clock window (~1500 ms)
+        // so we catch late layout passes that happen after the WinUI Expander
+        // animation finishes settling. Detach early once the run has been
+        // confirmed on-screen across two consecutive layout passes (stable).
+        int requestId = _matchScrollRequestId;
+        int idxAtAttach = _currentMatchIndex;
+        EventHandler<object>? handler = null;
+        var watchdog = System.Diagnostics.Stopwatch.StartNew();
+        const int kWindowMs = 2000;
+        const int kMaxRescrolls = 20;
+        int rescrolls = 0;
+        int consecutiveOnScreen = 0;
+        int layoutPasses = 0;
+        LogService.Instance.Info("MatchNav",
+            $"ScrollAfterMaterialization: attach idx={idxAtAttach}, requestId={requestId}");
+        handler = (_, __) =>
+        {
+            if (handler is null) return;
+            layoutPasses++;
+            if (requestId != _matchScrollRequestId || watchdog.ElapsedMilliseconds > kWindowMs || rescrolls >= kMaxRescrolls)
+            {
+                string reason = requestId != _matchScrollRequestId
+                    ? $"new-request(curr={_matchScrollRequestId})"
+                    : (watchdog.ElapsedMilliseconds > kWindowMs ? "timeout" : "max-rescrolls");
+                // Take a final snapshot of the active highlight at detach time.
+                string snapshot = "(no-highlight)";
+                try
+                {
+                    if (_activeMatchHighlight is { para: var ap, run: var ar } && ar is not null)
+                    {
+                        var fg = (ar.Foreground as SolidColorBrush)?.Color.ToString() ?? "(non-solid)";
+                        var rect2 = ar.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+                        var t2 = block.TransformToVisual(PreviewScrollViewer);
+                        var p2 = t2.TransformPoint(new Windows.Foundation.Point(rect2.X, rect2.Y));
+                        double vTop = PreviewScrollViewer.VerticalOffset;
+                        double vH = PreviewScrollViewer.ViewportHeight;
+                        double rY = vTop + p2.Y;
+                        bool onScr = rY >= vTop && rY + rect2.Height <= vTop + vH;
+                        bool sameRun = ReferenceEquals(ap, targetPara);
+                        snapshot = $"fg={fg}, sameRun={sameRun}, onScr={onScr}, runY={rY:N1}";
+                    }
+                }
+                catch { }
+                LogService.Instance.Info("MatchNav",
+                    $"ScrollAfterMaterialization: detach idx={idxAtAttach}, reason={reason}, layoutPasses={layoutPasses}, rescrolls={rescrolls}, elapsed={watchdog.ElapsedMilliseconds}ms, finalVpTop={PreviewScrollViewer.VerticalOffset:N1}, snapshot={snapshot}");
+                block.LayoutUpdated -= handler;
+                handler = null;
+                return;
+            }
+            try
+            {
+                if (_activeMatchHighlight is { para: var activePara, run: var activeRun }
+                    && ReferenceEquals(activePara, targetPara) && activeRun is not null)
+                {
+                    var rect = activeRun.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+                    if (rect.Height > 0)
+                    {
+                        var t = block.TransformToVisual(PreviewScrollViewer);
+                        var p = t.TransformPoint(new Windows.Foundation.Point(rect.X, rect.Y));
+                        double vpTop = PreviewScrollViewer.VerticalOffset;
+                        double vpH = PreviewScrollViewer.ViewportHeight;
+                        double runY = vpTop + p.Y;
+                        bool onScreen = runY >= vpTop && runY + rect.Height <= vpTop + vpH;
+                        if (!onScreen)
+                        {
+                            consecutiveOnScreen = 0;
+                            double target = runY - vpH / 2 + rect.Height / 2;
+                            target = Math.Clamp(target, 0, PreviewScrollViewer.ScrollableHeight);
+                            if (Math.Abs(target - vpTop) > 1)
+                            {
+                                rescrolls++;
+                                bool accepted = PreviewScrollViewer.ChangeView(null, target, null, disableAnimation: true);
+                                LogService.Instance.Info("MatchNav",
+                                    $"ScrollAfterMaterialization: post-layout re-center #{rescrolls} idx={_currentMatchIndex}, runY={runY:N1}, vpTop={vpTop:N1}, vpH={vpH:N1}, toY={target:N1}, accepted={accepted}, elapsed={watchdog.ElapsedMilliseconds}ms");
+                            }
+                        }
+                        else
+                        {
+                            consecutiveOnScreen++;
+                            // Two consecutive on-screen confirmations \u2192 layout has stabilised,
+                            // BUT only allow early detach after the WinUI Expander animation
+                            // has had time to play (~600 ms). Otherwise we routinely detach
+                            // 1\u20132 ms in, before the animation re-shuffles layout and pushes
+                            // the active run back off-screen with no one watching.
+                            const int kMinElapsedForEarlyDetachMs = 600;
+                            if (consecutiveOnScreen >= 2 && watchdog.ElapsedMilliseconds >= kMinElapsedForEarlyDetachMs)
+                            {
+                                LogService.Instance.Info("MatchNav",
+                                    $"ScrollAfterMaterialization: detach idx={idxAtAttach}, reason=stable-on-screen, layoutPasses={layoutPasses}, rescrolls={rescrolls}, elapsed={watchdog.ElapsedMilliseconds}ms, finalVpTop={PreviewScrollViewer.VerticalOffset:N1}, runY={runY:N1}");
+                                block.LayoutUpdated -= handler;
+                                handler = null;
+                            }
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                if (handler is not null)
+                {
+                    block.LayoutUpdated -= handler;
+                    handler = null;
+                }
+            }
+        };
+        block.LayoutUpdated += handler;
     }
 
     private void ScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, int attemptsRemaining, int requestId)
@@ -4574,7 +4707,7 @@ public sealed partial class MainWindow : Window
     /// actually rendered relative to the preview viewport. Helps diagnose cases where the
     /// nav advances but the highlighted match is off-screen or hidden.
     /// </summary>
-    private void VerifyActiveMatchVisibleAfterScroll(RichTextBlock block, Paragraph targetPara, int paragraphIndex, int correctionAttempt = 0)
+    private void VerifyActiveMatchVisibleAfterScroll(RichTextBlock block, Paragraph targetPara, int paragraphIndex, int correctionAttempt = 0, double previousParaAbsY = double.NaN)
     {
         int navIdx = _currentMatchIndex;
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
@@ -4630,9 +4763,14 @@ public sealed partial class MainWindow : Window
                     $"vpTop={vpTop:N1}, vpBottom={vpBottom:N1}, vpH={vpH:N1}, paraAbsY={paraY:N1}, runAbsY={runY:N1}, runH={runH:N1}, runOnScreen={runOnScreen}");
 
                 // Self-correcting: if the run isn't centered/visible but we now have an
-                // accurate rect, perform a corrective scroll. Limit to 2 attempts to
-                // avoid loops if layout is unstable.
-                if (!runOnScreen && !double.IsNaN(runY) && !double.IsNaN(runH) && runH > 0 && correctionAttempt < 2)
+                // accurate rect, perform a corrective scroll. Allow extra attempts when
+                // the layout is still shifting under us (paraAbsY changed since the
+                // previous attempt) — those don't count against the cap because the
+                // miss was caused by a moving target, not by a bad scroll computation.
+                const int kHardCap = 6;
+                bool layoutMoved = !double.IsNaN(previousParaAbsY) && Math.Abs(paraY - previousParaAbsY) > 2.0;
+                int nextAttempt = layoutMoved ? correctionAttempt : correctionAttempt + 1;
+                if (!runOnScreen && !double.IsNaN(runY) && !double.IsNaN(runH) && runH > 0 && nextAttempt <= kHardCap)
                 {
                     double effectiveH = runH > 0 ? runH : EstimatePreviewLineHeight(block);
                     double correctedTarget = runY - vpH / 2 + effectiveH / 2;
@@ -4640,22 +4778,18 @@ public sealed partial class MainWindow : Window
                     if (Math.Abs(correctedTarget - vpTop) > 1)
                     {
                         // Wait for the ChangeView to actually settle before re-verifying.
-                        // Recursing on the next dispatcher tick is too eager: the
-                        // ScrollViewer's VerticalOffset hasn't been committed yet, so
-                        // the recursive call sees the stale vpTop, computes the same
-                        // target, and ChangeView rejects it as a duplicate. We end up
-                        // bailing out at the 2-attempt cap with the run still off-screen.
                         EventHandler<ScrollViewerViewChangedEventArgs>? handler = null;
+                        double capturedParaY = paraY;
                         handler = (_, ev) =>
                         {
                             if (ev.IsIntermediate) return;
                             PreviewScrollViewer.ViewChanged -= handler;
-                            VerifyActiveMatchVisibleAfterScroll(block, targetPara, paragraphIndex, correctionAttempt + 1);
+                            VerifyActiveMatchVisibleAfterScroll(block, targetPara, paragraphIndex, nextAttempt, capturedParaY);
                         };
                         PreviewScrollViewer.ViewChanged += handler;
                         bool accepted = PreviewScrollViewer.ChangeView(null, correctedTarget, null, disableAnimation: true);
                         LogService.Instance.Info("MatchNav",
-                            $"VerifyActiveMatch: corrective scroll idx={navIdx}, attempt={correctionAttempt + 1}, fromY={vpTop:N1}, toY={correctedTarget:N1}, accepted={accepted}");
+                            $"VerifyActiveMatch: corrective scroll idx={navIdx}, attempt={nextAttempt}/{kHardCap}, layoutMoved={layoutMoved}, fromY={vpTop:N1}, toY={correctedTarget:N1}, accepted={accepted}");
                         if (!accepted)
                         {
                             // ChangeView rejected the request — no ViewChanged will fire,
@@ -5007,6 +5141,7 @@ public sealed partial class MainWindow : Window
         int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
         if (totalMatches == 0) return;
 
+        bool justMaterialized = false;
         if (_matchParagraphs.Count == 0 || _currentMatchIndex >= _matchParagraphs.Count - 1)
         {
             // Past the last rendered match — try to materialize the next lazy section.
@@ -5015,6 +5150,7 @@ public sealed partial class MainWindow : Window
                 // Land on the first match of the newly materialized section.
                 _currentMatchIndex = _matchParagraphs.Count - _lazySectionJustAdded;
                 UpdateSectionMatchNavPanels();
+                justMaterialized = true;
             }
             else
             {
@@ -5034,7 +5170,9 @@ public sealed partial class MainWindow : Window
             SetSectionCurrentMatch(sn, para, matchInPara);
         ActivateSectionForBlock(block);
         BoxMatchRun(para, matchInPara);
-        ScrollPreviewToLine(block, para);
+        LogService.Instance.Info("MatchNav", $"OnNextMatch: idx={_currentMatchIndex}, path={(justMaterialized ? "materialize" : "normal")}");
+        if (justMaterialized) ScrollAfterMaterialization(block, para);
+        else ScrollPreviewToLine(block, para);
         navSw.Stop();
         LogService.Instance.Verbose("Preview", $"OnNextMatch: index={_currentMatchIndex}, elapsed={navSw.ElapsedMilliseconds}ms");
     }
@@ -5045,6 +5183,7 @@ public sealed partial class MainWindow : Window
         int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
         if (totalMatches == 0) return;
 
+        bool justMaterialized = false;
         if (_matchParagraphs.Count == 0 || _currentMatchIndex <= 0)
         {
             // Before the first rendered match — try to materialize the last lazy section.
@@ -5053,6 +5192,7 @@ public sealed partial class MainWindow : Window
                 // Land on the last match of the newly materialized section.
                 _currentMatchIndex = _matchParagraphs.Count - 1;
                 UpdateSectionMatchNavPanels();
+                justMaterialized = true;
             }
             else
             {
@@ -5072,7 +5212,9 @@ public sealed partial class MainWindow : Window
             SetSectionCurrentMatch(sn, para, matchInPara);
         ActivateSectionForBlock(block);
         BoxMatchRun(para, matchInPara);
-        ScrollPreviewToLine(block, para);
+        LogService.Instance.Info("MatchNav", $"OnPrevMatch: idx={_currentMatchIndex}, path={(justMaterialized ? "materialize" : "normal")}");
+        if (justMaterialized) ScrollAfterMaterialization(block, para);
+        else ScrollPreviewToLine(block, para);
         navSw.Stop();
         LogService.Instance.Verbose("Preview", $"OnPrevMatch: index={_currentMatchIndex}, elapsed={navSw.ElapsedMilliseconds}ms");
     }
@@ -5109,6 +5251,7 @@ public sealed partial class MainWindow : Window
                 if (added > 0)
                 {
                     _lazySectionJustAdded = added;
+                    LogService.Instance.Info("MatchNav", $"MaterializeNextLazySection: forward={forward}, added={added}, expanderIdx={i}, isExpanded={exp.IsExpanded}");
                     return true;
                 }
                 // Otherwise keep walking — try the next lazy section.

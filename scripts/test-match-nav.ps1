@@ -594,11 +594,14 @@ for ($i = 1; $i -le $MatchIterations; $i++) {
     
     if ($nextBtn) {
         Click-Element $nextBtn
-        Start-Sleep -Seconds 1
-        Take-Screenshot ("03-match-{0:D2}" -f $i)
+        Start-Sleep -Milliseconds 2500
+        # After clicking Next on iteration $i (starting at match 1), we are now on
+        # match ($i + 1). Name the screenshot to reflect the actual match number
+        # so 03-match-NN.png shows match NN. Match 1 is captured in 02-preview-loaded.
+        Take-Screenshot ("03-match-{0:D2}" -f ($i + 1))
     } else {
         Write-Host "  WARNING: Next match button not found at iteration $i"
-        Take-Screenshot ("03-match-{0:D2}-NOTFOUND" -f $i)
+        Take-Screenshot ("03-match-{0:D2}-NOTFOUND" -f ($i + 1))
         break
     }
 }
