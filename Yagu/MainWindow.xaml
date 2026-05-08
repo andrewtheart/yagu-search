@@ -14,12 +14,12 @@
     <Grid x:Name="RootGrid" AllowDrop="True" DragOver="OnDragOver" Drop="OnDrop"
           PreviewKeyDown="OnRootGridPreviewKeyDown">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />  <!-- Custom title bar -->
+            <RowDefinition x:Name="TitleBarRow" Height="Auto" />  <!-- Custom title bar -->
             <RowDefinition Height="Auto" />  <!-- Admin banner -->
             <RowDefinition Height="Auto" />  <!-- Search card -->
             <RowDefinition Height="Auto" />  <!-- Status / progress -->
-            <RowDefinition Height="*" />     <!-- Split pane -->
-            <RowDefinition Height="Auto" />  <!-- Status bar -->
+            <RowDefinition x:Name="SplitPaneRow" Height="*" />     <!-- Split pane -->
+            <RowDefinition x:Name="StatusBarRow" Height="Auto" />  <!-- Status bar -->
         </Grid.RowDefinitions>
 
         <!-- Custom title bar -->
@@ -49,42 +49,38 @@
         </Grid>
 
         <!-- Admin elevation banner (hidden when running elevated) -->
-        <InfoBar x:Name="AdminBanner" Grid.Row="1"
-                 Severity="Warning" IsOpen="False" IsClosable="True"
-                 Title=""
-                 Message="">
-            <InfoBar.Content>
-                <Grid ColumnSpacing="12" VerticalAlignment="Center">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Text="Limited access"
-                               FontWeight="SemiBold"
-                               TextWrapping="NoWrap"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text="Some files may not be readable without administrator privileges."
-                               Grid.Column="1"
-                               TextWrapping="NoWrap"
-                               VerticalAlignment="Center" />
-                    <Button Grid.Column="2"
-                            Content="Learn more..."
-                            Click="OnAdminLearnMore"
-                            Padding="8,4" />
-                    <Button Grid.Column="3"
-                            Content="Restart as Admin"
-                            Click="OnRestartAsAdmin"
-                            Padding="8,4" />
-                    <Button Grid.Column="4"
-                            Content="Don't show again"
-                            Click="OnDontShowAdminWarningAgain"
-                            Padding="8,4" />
-                </Grid>
-            </InfoBar.Content>
-        </InfoBar>
+        <Border x:Name="AdminBanner" Grid.Row="1" Visibility="Collapsed"
+                Background="#332000" Padding="10,4,10,4">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <!-- Warning icon + text -->
+                <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                    <FontIcon Glyph="&#xE7BA;" FontSize="14" Foreground="#FFD54F" VerticalAlignment="Center" />
+                    <TextBlock FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center">
+                        <Run Text="Limited access" />
+                        <Run Text="  " />
+                        <Run Text="Some files may not be readable without administrator privileges." FontWeight="Normal" />
+                    </TextBlock>
+                </StackPanel>
+                <!-- Action buttons -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"
+                            HorizontalAlignment="Left" Margin="16,0,0,0" VerticalAlignment="Center">
+                    <Button Content="Learn more..." FontSize="12" Padding="6,1" Click="OnAdminLearnMore" />
+                    <Button Content="Restart as Admin" FontSize="12" Padding="6,1" Click="OnRestartAsAdmin" />
+                    <Button Content="Don't show again" FontSize="12" Padding="6,1" Click="OnDontShowAdminWarningAgain" />
+                </StackPanel>
+                <!-- Close button -->
+                <Button Grid.Column="2" Click="OnAdminBannerCloseClick"
+                        Background="Transparent" BorderThickness="0" Padding="6,2"
+                        VerticalAlignment="Center">
+                    <FontIcon Glyph="&#xE711;" FontSize="12" />
+                </Button>
+            </Grid>
+        </Border>
 
         <!-- Search controls card -->
         <Border Grid.Row="2" Margin="16,4,16,4" Padding="16,12"
@@ -108,12 +104,19 @@
                         TextChanged="OnDirectoryTextChanged"
                         SuggestionChosen="OnDirectorySuggestionChosen"
                         QuerySubmitted="OnDirectoryQuerySubmitted" />
-                    <Button Grid.Column="2" Click="OnBrowseDirectory" ToolTipService.ToolTip="Browse for folder" Padding="8,6">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <FontIcon Glyph="&#xED25;" FontSize="14" />
-                            <TextBlock Text="Browse" />
-                        </StackPanel>
-                    </Button>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4">
+                        <Button Click="OnBrowseDirectory" ToolTipService.ToolTip="Browse for folder" Padding="8,6">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xED25;" FontSize="14" />
+                                <TextBlock Text="Browse" />
+                            </StackPanel>
+                        </Button>
+                        <ToggleButton x:Name="PinButton" Click="OnPinToggle"
+                                      ToolTipService.ToolTip="Pin window (prevent minimize to tray)"
+                                      Padding="8,6" IsChecked="False">
+                            <FontIcon x:Name="PinIcon" Glyph="&#xE718;" FontSize="14" />
+                        </ToggleButton>
+                    </StackPanel>
                 </Grid>
 
                 <!-- Search bar -->

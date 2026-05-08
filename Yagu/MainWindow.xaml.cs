@@ -58,9 +58,11 @@ public sealed partial class MainWindow : Window
     private IntPtr _hwnd;
     private bool _hotkeyHookInstalled;
     private bool _suppressHotkeySettingChange;
+    private Helpers.TrayIcon? _trayIcon;
 
     private static readonly UIntPtr HotkeySubclassId = new(0x5147484Bu);
     private const int SW_RESTORE = 9;
+    private const int SW_HIDE = 0;
 
     private delegate IntPtr SubclassProc(IntPtr hWnd, uint message, UIntPtr wParam, IntPtr lParam, UIntPtr subclassId, UIntPtr refData);
 
@@ -80,6 +82,7 @@ public sealed partial class MainWindow : Window
     private static extern bool SetForegroundWindow(IntPtr hWnd);
 
     private bool _autoSearchOnLoad;
+    private bool _launcherMode;
 
     public MainWindow(string? startupDirectory, string? startupQuery = null)
     {
@@ -137,6 +140,12 @@ public sealed partial class MainWindow : Window
 
         ((FrameworkElement)Content).Loaded += OnContentLoaded;
 
+        // Start in compact "launcher" mode unless we have a query to auto-run.
+        if (!_autoSearchOnLoad)
+        {
+            EnterLauncherMode();
+        }
+
         // Auto-scroll the file list as new results arrive (timer-based to avoid
         // per-Add overhead on the hot CollectionChanged path).
         ResultsList.PointerWheelChanged += (_, e) =>
@@ -149,6 +158,7 @@ public sealed partial class MainWindow : Window
             if (e.PropertyName != nameof(ViewModel.IsSearching)) return;
             if (ViewModel.IsSearching)
             {
+                if (_launcherMode) ExitLauncherMode();
                 SearchCancelIcon.Glyph = "\uE711";   // Cancel X
                 SearchCancelLabel.Text = "Cancel";
                 ToolTipService.SetToolTip(SearchCancelButton, "Cancel search (F5)");
@@ -178,9 +188,14 @@ public sealed partial class MainWindow : Window
                 UpdateSparkline();
         };
 
+        // Hide to system tray when the window loses focus.
+        this.Activated += OnWindowActivated;
+
         // Flush logs when the window closes so no diagnostic entries are lost.
         this.Closed += (_, _) =>
         {
+            _trayIcon?.Dispose();
+            _trayIcon = null;
             _hotkeyService.Dispose();
             RemoveGlobalHotkeyHook();
             LogService.Instance.Info("MainWindow", "Window closing — flushing logs");
@@ -191,7 +206,7 @@ public sealed partial class MainWindow : Window
         using var identity = WindowsIdentity.GetCurrent();
         var principal = new WindowsPrincipal(identity);
         if (!principal.IsInRole(WindowsBuiltInRole.Administrator) && !ViewModel.SuppressAdminWarning)
-            AdminBanner.IsOpen = true;
+            AdminBanner.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
     }
 
     private void UpdateTitleBarInsets()
@@ -209,6 +224,120 @@ public sealed partial class MainWindow : Window
             AppTitleBar.Padding = new Thickness(16, 0, rightDip, 0);
         }
         catch { /* AppWindow not always available; ignore */ }
+    }
+
+    /// <summary>
+    /// Compact "launcher" mode: hides the title bar, results panel, and status bar,
+    /// switches to a borderless small window centered at the top of the screen.
+    /// </summary>
+    private void EnterLauncherMode()
+    {
+        if (_launcherMode) return;
+        _launcherMode = true;
+
+        TitleBarRow.Height = new GridLength(0);
+        SplitPaneRow.Height = new GridLength(0);
+        StatusBarRow.Height = new GridLength(0);
+        AppTitleBar.Visibility = Visibility.Collapsed;
+        SplitPaneGrid.Visibility = Visibility.Collapsed;
+
+        try { ExtendsContentIntoTitleBar = false; } catch { }
+
+        try
+        {
+            if (AppWindow?.Presenter is Microsoft.UI.Windowing.OverlappedPresenter op)
+            {
+                op.SetBorderAndTitleBar(true, false);
+                op.IsResizable = true;
+                op.IsMaximizable = false;
+                op.IsMinimizable = false;
+            }
+        }
+        catch { }
+    }
+
+    private void PositionLauncherWindow()
+    {
+        try
+        {
+            if (AppWindow is null) return;
+            var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(
+                AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
+            if (displayArea is null) return;
+            var wa = displayArea.WorkArea;
+            double scale = (Content?.XamlRoot?.RasterizationScale) ?? 1.0;
+
+            // Force a layout pass so DesiredSize reflects only the currently
+            // visible rows (admin banner + search card), then measure.
+            RootGrid.UpdateLayout();
+            RootGrid.Measure(new Windows.Foundation.Size(1100, double.PositiveInfinity));
+            double desiredHeightDip = RootGrid.DesiredSize.Height;
+            if (desiredHeightDip < 60) desiredHeightDip = 170;
+
+            int width = (int)(1100 * scale);
+            int height = (int)((desiredHeightDip + 4) * scale);
+            int x = wa.X + Math.Max(0, (wa.Width - width) / 2);
+            int y = wa.Y + (int)(4 * scale);
+            AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(x, y, width, height));
+
+            // Re-fit once after layout has fully settled (admin banner can wrap
+            // and the actual height becomes accurate only on a later tick).
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                if (!_launcherMode) return;
+                try
+                {
+                    RootGrid.UpdateLayout();
+                    RootGrid.Measure(new Windows.Foundation.Size(1100, double.PositiveInfinity));
+                    double h = RootGrid.DesiredSize.Height;
+                    if (h < 60) return;
+                    int newHeight = (int)((h + 4) * scale);
+                    if (Math.Abs(newHeight - height) < 4) return;
+                    int newY = wa.Y + (int)(4 * scale);
+                    AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(x, newY, width, newHeight));
+                }
+                catch { }
+            });
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// Restores the full layout (results panel + status bar) but keeps the
+    /// borderless launcher chrome and current window position. The window
+    /// just grows downward in place to make room for the results.
+    /// </summary>
+    private void ExitLauncherMode()
+    {
+        if (!_launcherMode) return;
+        _launcherMode = false;
+
+        SplitPaneRow.Height = new GridLength(1, GridUnitType.Star);
+        StatusBarRow.Height = GridLength.Auto;
+        SplitPaneGrid.Visibility = Visibility.Visible;
+
+        // Grow the borderless window downward in place so the results panel
+        // has room. Keep the current X/Y/width — do NOT recenter.
+        try
+        {
+            if (AppWindow is null) return;
+            var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(
+                AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
+            if (displayArea is null) return;
+            var wa = displayArea.WorkArea;
+            double scale = (Content?.XamlRoot?.RasterizationScale) ?? 1.0;
+
+            int curX = AppWindow.Position.X;
+            int curY = AppWindow.Position.Y;
+            int curWidth = AppWindow.Size.Width;
+            int desiredHeight = (int)(800 * scale);
+            int maxHeight = Math.Max(0, wa.Y + wa.Height - curY);
+            int newHeight = Math.Min(desiredHeight, maxHeight);
+            if (newHeight < AppWindow.Size.Height) newHeight = AppWindow.Size.Height;
+
+            AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(curX, curY, curWidth, newHeight));
+        }
+        catch { }
     }
 
     private void InitializeGlobalHotkey()
@@ -275,17 +404,125 @@ public sealed partial class MainWindow : Window
 
     private void OnGlobalHotkeyPressed()
     {
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            if (_hwnd != IntPtr.Zero)
-            {
-                ShowWindow(_hwnd, SW_RESTORE);
-                SetForegroundWindow(_hwnd);
-            }
+        DispatcherQueue.TryEnqueue(async () => await ResetToLauncherModeAsync());
+    }
 
-            Activate();
-            FocusSearchBox();
-        });
+    private bool _pinned;
+
+    private void OnPinToggle(object sender, RoutedEventArgs e)
+    {
+        _pinned = PinButton.IsChecked == true;
+        PinIcon.Glyph = _pinned ? "\uE840" : "\uE718";
+    }
+
+    private void OnWindowActivated(object sender, WindowActivatedEventArgs args)
+    {
+        if (args.WindowActivationState == WindowActivationState.Deactivated && !_pinned)
+        {
+            HideToTray();
+        }
+    }
+
+    private void HideToTray()
+    {
+        if (_hwnd == IntPtr.Zero) return;
+
+        bool firstDock = false;
+
+        // Lazily create the tray icon on first hide.
+        if (_trayIcon is null)
+        {
+            var icoPath = Path.Combine(AppContext.BaseDirectory, "Assets", "yagu.ico");
+            _trayIcon = new Helpers.TrayIcon("Yagu", icoPath);
+            _trayIcon.OpenResetRequested += () =>
+            {
+                DispatcherQueue.TryEnqueue(async () => await ResetToLauncherModeAsync());
+            };
+            _trayIcon.OpenExistingRequested += () =>
+            {
+                DispatcherQueue.TryEnqueue(() => RestoreWindowFromTray());
+            };
+            _trayIcon.CloseRequested += () =>
+            {
+                DispatcherQueue.TryEnqueue(() => Close());
+            };
+            firstDock = !HasShownTrayNotification();
+        }
+
+        ShowWindow(_hwnd, SW_HIDE);
+
+        if (firstDock)
+        {
+            var msg = "Yagu is still running in the system tray. Right-click the tray icon to reopen or close it.";
+            if (ViewModel.GlobalHotkeyEnabled && _hotkeyService.IsRegistered)
+                msg += $" You can also press {HotkeyService.FormatCtrlShift(ViewModel.GlobalHotkeyKey[0])} to restore it.";
+            _trayIcon!.ShowBalloon("Yagu minimized to tray", msg);
+            MarkTrayNotificationShown();
+        }
+    }
+
+    private void RestoreWindowFromTray()
+    {
+        if (_hwnd != IntPtr.Zero)
+        {
+            ShowWindow(_hwnd, SW_RESTORE);
+            SetForegroundWindow(_hwnd);
+        }
+        Activate();
+        FocusSearchBox();
+    }
+
+    private static string TrayNotificationFlagPath =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Yagu", ".tray-notified");
+
+    private static bool HasShownTrayNotification() => File.Exists(TrayNotificationFlagPath);
+
+    private static void MarkTrayNotificationShown()
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(TrayNotificationFlagPath)!;
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(TrayNotificationFlagPath, "1");
+        }
+        catch { }
+    }
+
+    private async Task ResetToLauncherModeAsync()
+    {
+        // Cancel any running search
+        if (ViewModel.IsSearching)
+            await ViewModel.CancelAsync();
+
+        // Clear results and preview
+        _previewResult = null;
+        SetPreviewFileLabel(string.Empty);
+        ClosePreviewEditor();
+        ShowPreviewBlockSurface();
+        PreviewBlock.Blocks.Clear();
+        PreviewSectionsPanel.Children.Clear();
+        FullFileButton.IsEnabled = true;
+        PreviewToolbarContent.Visibility = Visibility.Collapsed;
+        _matchParagraphs.Clear();
+        InvalidateParagraphIndexCache();
+        _currentMatchIndex = -1;
+        HideMatchNavPanel();
+        ViewModel.ResultGroups.Clear();
+        ViewModel.StatusText = string.Empty;
+        ViewModel.Query = string.Empty;
+
+        // Re-enter launcher mode
+        EnterLauncherMode();
+
+        if (_hwnd != IntPtr.Zero)
+        {
+            ShowWindow(_hwnd, SW_RESTORE);
+            SetForegroundWindow(_hwnd);
+        }
+
+        Activate();
+        PositionLauncherWindow();
+        FocusSearchBox();
     }
 
     private void RemoveGlobalHotkeyHook()
@@ -541,7 +778,17 @@ public sealed partial class MainWindow : Window
     {
         ViewModel.SuppressAdminWarning = true;
         await ViewModel.PersistSettingsAsync();
-        AdminBanner.IsOpen = false;
+        AdminBanner.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+        if (_launcherMode)
+            PositionLauncherWindow();
+    }
+
+    private void OnAdminBannerCloseClick(object sender, RoutedEventArgs e)
+    {
+        AdminBanner.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+        if (_launcherMode)
+            PositionLauncherWindow();
+        FocusSearchBox();
     }
 
     private async void OnAdminLearnMore(object sender, RoutedEventArgs e)
@@ -2484,6 +2731,37 @@ public sealed partial class MainWindow : Window
     {
         PreviewFileLabel.Text = text;
         ToolTipService.SetToolTip(PreviewFileLabel, string.IsNullOrWhiteSpace(tooltip) ? text : tooltip);
+        if (!string.IsNullOrWhiteSpace(text)) EnsureWidthForPreview();
+    }
+
+    /// <summary>
+    /// When a preview file is shown while the window is still at the narrow
+    /// launcher width (~1100 dip), grow it horizontally to a normal width so
+    /// the preview pane has room. Position stays anchored on the left.
+    /// </summary>
+    private void EnsureWidthForPreview()
+    {
+        try
+        {
+            if (AppWindow is null) return;
+            var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(
+                AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
+            if (displayArea is null) return;
+            var wa = displayArea.WorkArea;
+            double scale = (Content?.XamlRoot?.RasterizationScale) ?? 1.0;
+            int desiredWidth = (int)(1200 * scale);
+            int curWidth = AppWindow.Size.Width;
+            if (curWidth >= desiredWidth) return;
+
+            int curX = AppWindow.Position.X;
+            int curY = AppWindow.Position.Y;
+            int curHeight = AppWindow.Size.Height;
+            int maxWidth = Math.Max(0, wa.X + wa.Width - curX);
+            int newWidth = Math.Min(desiredWidth, maxWidth);
+            if (newWidth <= curWidth) return;
+            AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(curX, curY, newWidth, curHeight));
+        }
+        catch { }
     }
 
     private FileGroup? FindParentGroup(SearchResult r)
@@ -5837,11 +6115,45 @@ public sealed partial class MainWindow : Window
     private void OnAdvancedOptionsExpanding(Expander sender, ExpanderExpandingEventArgs args)
     {
         ChevronRotate.Angle = 0;
+        if (_launcherMode)
+            ListenForExpanderResize();
     }
 
     private void OnAdvancedOptionsCollapsed(Expander sender, ExpanderCollapsedEventArgs args)
     {
         ChevronRotate.Angle = -90;
+        if (_launcherMode)
+            ListenForExpanderResize();
+    }
+
+    /// <summary>
+    /// Tracks the expander animation by resizing the window on every
+    /// SizeChanged event, keeping content and window perfectly in sync.
+    /// A debounce timer detects when the animation has finished and
+    /// unsubscribes the handler.
+    /// </summary>
+    private void ListenForExpanderResize()
+    {
+        var timer = DispatcherQueue.CreateTimer();
+        timer.Interval = TimeSpan.FromMilliseconds(300);
+        timer.IsRepeating = false;
+
+        void handler(object s, SizeChangedEventArgs e)
+        {
+            if (_launcherMode) PositionLauncherWindow();
+            timer.Stop();
+            timer.Start();
+        }
+
+        timer.Tick += (t, a) =>
+        {
+            timer.Stop();
+            RootGrid.SizeChanged -= handler;
+            if (_launcherMode) PositionLauncherWindow();
+        };
+
+        RootGrid.SizeChanged += handler;
+        timer.Start();
     }
 
     private void OnSplitterPressed(object sender, PointerRoutedEventArgs e)
@@ -5907,6 +6219,7 @@ public sealed partial class MainWindow : Window
     {
         ((FrameworkElement)sender).Loaded -= OnContentLoaded;
         ApplyWordWrap(ViewModel.PreviewWordWrap);
+        if (_launcherMode) PositionLauncherWindow();
         await CheckEverythingAsync();
         await CheckFirstRunContextMenuAsync();
 
