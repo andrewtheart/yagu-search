@@ -5599,6 +5599,7 @@ public sealed partial class MainWindow : Window
         if (totalMatches > 0)
         {
             MatchNavPanel.Visibility = Visibility.Visible;
+            bool hadActiveHighlight = _activeMatchHighlight is not null;
             var activeIndex = FindActiveMatchIndex();
             if (activeIndex >= 0)
                 _currentMatchIndex = activeIndex;
@@ -5615,6 +5616,22 @@ public sealed partial class MainWindow : Window
             }
 
             MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
+
+            // If the label says "Match 1 of N" but nothing is actually boxed/red yet,
+            // box the current match and scroll to it.  Without this, the very first
+            // match after a preview load shows a count but no visible highlight until
+            // the user clicks Next.
+            if (!hadActiveHighlight
+                && _currentMatchIndex >= 0
+                && _currentMatchIndex < _matchParagraphs.Count)
+            {
+                var (block, para, matchInPara) = _matchParagraphs[_currentMatchIndex];
+                if (_sectionMatchNavs.TryGetValue(block, out var sn))
+                    SetSectionCurrentMatch(sn, para, matchInPara);
+                ActivateSectionForBlock(block);
+                BoxMatchRun(para, matchInPara);
+                ScrollPreviewToLine(block, para);
+            }
         }
         else
         {
