@@ -144,6 +144,7 @@ public sealed partial class MainWindow : Window
             {
                 SearchCancelIcon.Glyph = "\uE711";   // Cancel X
                 SearchCancelLabel.Text = "Cancel";
+                ToolTipService.SetToolTip(SearchCancelButton, "Cancel search (F5)");
                 SearchCancelButton.Style = (Style)Application.Current.Resources["DefaultButtonStyle"];
                 _autoScrollEnabled = AutoScrollResultsCheckBox.IsChecked == true;
                 _autoScrollTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
@@ -156,6 +157,7 @@ public sealed partial class MainWindow : Window
             {
                 SearchCancelIcon.Glyph = "\uE721";   // Search magnifier
                 SearchCancelLabel.Text = "Search";
+                ToolTipService.SetToolTip(SearchCancelButton, "Search (F5)");
                 SearchCancelButton.Style = (Style)Application.Current.Resources["AccentButtonStyle"];
                 _autoScrollTimer?.Stop();
                 UpdateSparkline(); // final update
@@ -1051,6 +1053,10 @@ public sealed partial class MainWindow : Window
     // Match navigation state for multi-highlight mode
     private readonly List<(RichTextBlock block, Paragraph para, int matchInPara)> _matchParagraphs = new();
     private int _currentMatchIndex = -1;
+    // Set to true once we've auto-scrolled to the first match for the current
+    // preview load; reset by HideMatchNavPanel / preview-clear paths so a fresh
+    // preview re-triggers the auto-scroll-to-first-match.
+    private bool _initialMatchScrolled;
     // Paragraph → index cache for O(1) lookup in large files.
     // Invalidated whenever a block's Blocks collection changes (full-file toggle, section materialize, clear).
     private readonly Dictionary<RichTextBlock, Dictionary<Paragraph, int>> _paraIndexCache = new();
@@ -1065,6 +1071,14 @@ public sealed partial class MainWindow : Window
     }
     private readonly Dictionary<RichTextBlock, SectionMatchNav> _sectionMatchNavs = new();
     private SectionMatchNav? _activeSectionNav;
+    // Expander → file path, used to render the sticky file-header overlay
+    // (shown when the active expander's own header has scrolled out of view).
+    private readonly Dictionary<Expander, string> _expanderFilePaths = new();
+    // Cached metadata for rebuilding a section header inside the sticky overlay.
+    private readonly Dictionary<Expander, (string FilePath, string? Detail, RichTextBlock Block, List<SearchResult>? Results)> _expanderHeaderArgs = new();
+    // The expander whose header is currently mirrored in StickyFileHeader, so we
+    // only rebuild + replace its child when the topmost-in-viewport changes.
+    private Expander? _stickyHeaderExpander;
 
     // Lazy section rendering — deferred content building for collapsed sections
     private sealed class LazySection
@@ -1291,6 +1305,7 @@ public sealed partial class MainWindow : Window
     {
         if (e.IsIntermediate) return;
         TryAutoLoadMoreOnScroll();
+        UpdateStickyFileHeader();
         if (_lazySections.Count == 0) return;
         if (_viewportMaterializePending) return;
         _viewportMaterializePending = true;
@@ -1301,6 +1316,116 @@ public sealed partial class MainWindow : Window
             _viewportMaterializePending = false;
             MaterializeVisibleLazySections();
         });
+    }
+
+    /// <summary>
+    /// Shows a sticky file-header banner at the top of the preview viewport when
+    /// the topmost visible Expander's own header has scrolled above the viewport,
+    /// so the user always knows which file the visible content belongs to.
+    /// </summary>
+    private void UpdateStickyFileHeader()
+    {        try
+        {
+            if (PreviewSectionsPanel.Visibility != Visibility.Visible
+                || PreviewSectionsPanel.Children.Count == 0)
+            {
+                StickyFileHeader.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            var sv = PreviewScrollViewer;
+            double vpTop = 0; // viewport-relative top (we transform expanders into ScrollViewer space)
+            double vpBottom = sv.ViewportHeight;
+            if (vpBottom <= 0)
+            {
+                StickyFileHeader.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            Expander? topMostInView = null;
+            bool anyHeaderAboveViewport = false;
+            foreach (var child in PreviewSectionsPanel.Children)
+            {
+                if (child is not Expander exp) continue;
+                Windows.Foundation.Point topLeft;
+                double height;
+                try
+                {
+                    var t = exp.TransformToVisual(sv);
+                    topLeft = t.TransformPoint(new Windows.Foundation.Point(0, 0));
+                    height = exp.ActualHeight;
+                }
+                catch { continue; }
+                double expTop = topLeft.Y;
+                double expBottom = expTop + height;
+                if (expBottom <= vpTop) continue;       // entirely above
+                if (expTop >= vpBottom) break;          // entirely below — children are in order
+                if (expTop < vpTop)
+                {
+                    anyHeaderAboveViewport = true;
+                    topMostInView = exp;
+                    break;                               // first visible-but-header-clipped expander wins
+                }
+                // Header is in view — no sticky needed for this section.
+                break;
+            }
+
+            if (!anyHeaderAboveViewport || topMostInView is null
+                || !_expanderFilePaths.TryGetValue(topMostInView, out var path))
+            {
+                StickyFileHeader.Visibility = Visibility.Collapsed;
+                StickyFileHeader.Child = null;
+                _stickyHeaderExpander = null;
+                return;
+            }
+
+            // Only rebuild the header content when the active section changes —
+            // otherwise we'd thrash event handlers on every ViewChanged tick.
+            if (!ReferenceEquals(_stickyHeaderExpander, topMostInView))
+            {
+                FrameworkElement? headerContent = null;
+                if (_expanderHeaderArgs.TryGetValue(topMostInView, out var args))
+                {
+                    headerContent = BuildPreviewSectionHeader(args.FilePath, args.Detail, args.Block, args.Results);
+                }
+                else
+                {
+                    headerContent = BuildPreviewSectionHeader(path, detail: null);
+                }
+                StickyFileHeader.Child = headerContent;
+                _stickyHeaderExpander = topMostInView;
+            }
+            StickyFileHeader.Visibility = Visibility.Visible;
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("Preview",
+                $"UpdateStickyFileHeader threw: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Tap on the sticky file-header banner (outside any of its action buttons)
+    /// toggles expand/collapse on the section it represents. Button taps do not
+    /// reach here because Button handles the Tapped routed event itself.
+    /// </summary>
+    private void StickyFileHeader_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+    {
+        if (e.Handled) return;
+        var expander = _stickyHeaderExpander;
+        if (expander is null) return;
+        try
+        {
+            expander.IsExpanded = !expander.IsExpanded;
+            // After collapse, the topmost section will be a different one; refresh.
+            UpdateStickyFileHeader();
+            e.Handled = true;
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("Preview",
+                $"StickyFileHeader_Tapped threw: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -3784,7 +3909,11 @@ public sealed partial class MainWindow : Window
                 try { LogService.Instance.Flush(); } catch { }
             }
         };
-        ToolTipService.SetToolTip(expander, filePath);
+        // Tooltip is set on the header grid only (BuildPreviewSectionHeader);
+        // setting it on the Expander itself would also show when hovering the
+        // content body, which is noisy.
+        _expanderFilePaths[expander] = filePath;
+        _expanderHeaderArgs[expander] = (filePath, detail, block, results);
         if (addToPanel)
             PreviewSectionsPanel.Children.Add(expander);
         return (block, expander);
@@ -3955,6 +4084,14 @@ public sealed partial class MainWindow : Window
 
                 // Remove per-section match nav data
                 _sectionMatchNavs.Remove(block);
+                _expanderFilePaths.Remove(expander);
+                _expanderHeaderArgs.Remove(expander);
+                if (ReferenceEquals(_stickyHeaderExpander, expander))
+                {
+                    _stickyHeaderExpander = null;
+                    StickyFileHeader.Child = null;
+                    StickyFileHeader.Visibility = Visibility.Collapsed;
+                }
 
                 // Remove lazy section data if it was never rendered
                 if (_lazySections.Remove(block, out var lazy))
@@ -4293,8 +4430,54 @@ public sealed partial class MainWindow : Window
         if (selectStart > text.Length) selectStart = charOffset;
         if (selectStart + selectLength > text.Length) selectLength = 0;
 
+        // PERF: TextBox.Select() forces the text formatter to lay out the entire
+        // document up to the selection. On large files (~2 MB) this can freeze
+        // the UI thread for tens of seconds. For large texts we instead scroll
+        // the TextBox's inner ScrollViewer programmatically using an estimated
+        // line height, and skip the selection (caret-only would still trigger
+        // layout). This keeps the UI responsive.
+        const int LargeTextThreshold = 256 * 1024;
+        if (text.Length > LargeTextThreshold)
+        {
+            int targetLine = Math.Max(1, result.LineNumber);
+            // Defer scrolling so the editor has a chance to render its template first
+            // (the inner ScrollViewer is created during template application).
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                try
+                {
+                    var sv = FindFirstScrollViewerInTree(PreviewEditor);
+                    if (sv is null) return;
+                    double lineHeight = PreviewEditor.FontSize * 1.4;
+                    if (lineHeight < 1) lineHeight = 19;
+                    double targetY = (targetLine - 1) * lineHeight;
+                    double viewport = sv.ViewportHeight > 0 ? sv.ViewportHeight : 0;
+                    double centered = Math.Max(0, targetY - viewport / 2);
+                    sv.ChangeView(null, centered, null, disableAnimation: true);
+                }
+                catch (Exception ex)
+                {
+                    LogService.Instance.Warning("Preview", $"ScrollEditorToMatch deferred scroll failed: {ex.GetType().Name}: {ex.Message}");
+                }
+            });
+            return;
+        }
+
         // Select the match — this auto-scrolls the TextBox to the selection.
         PreviewEditor.Select(selectStart, Math.Max(selectLength, 0));
+    }
+
+    private static ScrollViewer? FindFirstScrollViewerInTree(DependencyObject root)
+    {
+        int count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < count; i++)
+        {
+            var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(root, i);
+            if (child is ScrollViewer sv) return sv;
+            var result = FindFirstScrollViewerInTree(child);
+            if (result is not null) return result;
+        }
+        return null;
     }
 
     private static async Task<PreviewTextDocument> LoadPreviewDocumentAsync(string filePath, CancellationToken cancellationToken)
@@ -5620,17 +5803,36 @@ public sealed partial class MainWindow : Window
             // If the label says "Match 1 of N" but nothing is actually boxed/red yet,
             // box the current match and scroll to it.  Without this, the very first
             // match after a preview load shows a count but no visible highlight until
-            // the user clicks Next.
-            if (!hadActiveHighlight
-                && _currentMatchIndex >= 0
-                && _currentMatchIndex < _matchParagraphs.Count)
+            // the user clicks Next.  Reuse the known-good OnNextMatch code path:
+            // setting _currentMatchIndex = -1 makes the next click land on index 0
+            // and run the same Box+Scroll flow that works for subsequent navigation.
+            if (!_initialMatchScrolled
+                && !hadActiveHighlight
+                && _matchParagraphs.Count > 0)
             {
-                var (block, para, matchInPara) = _matchParagraphs[_currentMatchIndex];
-                if (_sectionMatchNavs.TryGetValue(block, out var sn))
-                    SetSectionCurrentMatch(sn, para, matchInPara);
-                ActivateSectionForBlock(block);
-                BoxMatchRun(para, matchInPara);
-                ScrollPreviewToLine(block, para);
+                _initialMatchScrolled = true;
+                // Two chained Low-priority dispatches so this runs AFTER the
+                // TryScrollToPreviewSection call that PrependPreviewSectionsForFilesAsync
+                // also queues — otherwise that scroll-to-section overrides our
+                // scroll-to-first-match and the user lands at the file header
+                // instead of the first highlight.
+                DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+                {
+                    DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+                    {
+                        if (_matchParagraphs.Count == 0) return;
+                        if (_activeMatchHighlight is not null
+                            && _activeMatchHighlight.Value.para is var ap
+                            && ReferenceEquals(ap, _matchParagraphs[0].para))
+                        {
+                            // Already on first match — just make sure it's visible.
+                            ScrollPreviewToLine(_matchParagraphs[0].block, _matchParagraphs[0].para);
+                            return;
+                        }
+                        _currentMatchIndex = -1;
+                        OnNextMatch(this, new RoutedEventArgs());
+                    });
+                });
             }
         }
         else
@@ -5708,6 +5910,12 @@ public sealed partial class MainWindow : Window
         _deferredButtonPanel = null;
         _deferredCursor = 0;
         _autoLoadMoreInFlight = false;
+        _initialMatchScrolled = false;
+        _expanderFilePaths.Clear();
+        _expanderHeaderArgs.Clear();
+        _stickyHeaderExpander = null;
+        StickyFileHeader.Child = null;
+        StickyFileHeader.Visibility = Visibility.Collapsed;
     }
 
     private void UpdateSectionMatchNavPanels()

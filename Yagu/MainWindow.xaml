@@ -133,7 +133,11 @@
                         TextChanged="OnQueryTextChanged"
                         LostFocus="OnQueryLostFocus"
                         KeyDown="OnQueryKeyDown" />
-                    <Button x:Name="SearchCancelButton" Grid.Column="2" Click="OnSearchCancelClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,6">
+                    <Button x:Name="SearchCancelButton" Grid.Column="2" Click="OnSearchCancelClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,6"
+                            ToolTipService.ToolTip="Search (F5)">
+                        <Button.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="F5" />
+                        </Button.KeyboardAccelerators>
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <FontIcon x:Name="SearchCancelIcon" Glyph="&#xE721;" FontSize="14" />
                             <TextBlock x:Name="SearchCancelLabel" Text="Search" />
@@ -386,7 +390,7 @@
                         <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                             <TextBlock Text="Context:" VerticalAlignment="Center" FontSize="12" Opacity="0.7" />
                             <NumberBox Value="{x:Bind ViewModel.ContextLines, Mode=TwoWay}" Minimum="0" Maximum="20"
-                                       SpinButtonPlacementMode="Compact" MinWidth="80" FontSize="12" />
+                                       SpinButtonPlacementMode="Compact" MinWidth="64" Width="64" FontSize="12" />
                         </StackPanel>
                         </StackPanel>
                         <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.DegradedNoticeText, Mode=OneWay}"
@@ -672,7 +676,7 @@
                             <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                                 <TextBlock Text="Preview Context:" VerticalAlignment="Center" FontSize="12" Opacity="0.7" />
                                 <NumberBox Value="{x:Bind ViewModel.PreviewContextLines, Mode=TwoWay}" Minimum="0" Maximum="50"
-                                           SpinButtonPlacementMode="Compact" MinWidth="90" FontSize="12" />
+                                           SpinButtonPlacementMode="Compact" MinWidth="64" Width="64" FontSize="12" />
                             </StackPanel>
 
                             <!-- Editor-mode group (visible only when editing) -->
@@ -809,6 +813,19 @@
                                 </StackPanel>
                             </Grid>
                         </ScrollViewer>
+
+                        <!-- Sticky file header: shown when the actual file expander header
+                             of the section currently in view has scrolled out the top.
+                             Content is built dynamically from BuildPreviewSectionHeader so
+                             it mirrors the per-file action buttons (Show full file, Copy
+                             path, Open, Edit, Show in Explorer, Dismiss). -->
+                        <Border x:Name="StickyFileHeader" Grid.Row="1" Visibility="Collapsed"
+                                VerticalAlignment="Top" HorizontalAlignment="Stretch"
+                                Background="{ThemeResource AcrylicBackgroundFillColorBaseBrush}"
+                                BorderBrush="{ThemeResource SystemAccentColor}"
+                                BorderThickness="0,0,0,1"
+                                Padding="12,6"
+                                Tapped="StickyFileHeader_Tapped" />
 
                         <!-- Progress overlay for "Show all files" -->
                         <Grid x:Name="PreviewProgressOverlay" Grid.Row="1" Visibility="Collapsed">
