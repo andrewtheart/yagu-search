@@ -18,7 +18,6 @@ internal static class Program
     [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, nint lParam);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint hWnd, out uint lpdwProcessId);
 
-    private const int SW_HIDE = 0;
     private const int SW_RESTORE = 9;
 
     /// <summary>
@@ -35,10 +34,6 @@ internal static class Program
             Environment.Exit(exitCode);
             return;
         }
-
-        // GUI mode: hide the console window that Exe output type creates.
-        var con = GetConsoleWindow();
-        if (con != 0) ShowWindow(con, SW_HIDE);
 
         // If launched as part of an elevated relaunch, wait for the old (non-elevated)
         // process to fully exit so its single-instance mutex is released.

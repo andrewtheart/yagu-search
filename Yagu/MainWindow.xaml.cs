@@ -34,6 +34,7 @@ public sealed partial class MainWindow : Window
     private int _lastCheckedGroupIndex = -1;
     private bool _autoScrollEnabled = false;
     private bool _querySuggestionsDetached;
+    private long _hideSuggestionsTick;
     private DispatcherTimer? _autoScrollTimer;
     private const long FullFilePreviewLimitBytes = 1L * 1024 * 1024 * 1024;
     private CancellationTokenSource? _previewLoadCts;
@@ -388,6 +389,7 @@ public sealed partial class MainWindow : Window
     {
         var target = box ?? QueryBox;
         _querySuggestionsDetached = true;
+        _hideSuggestionsTick = Environment.TickCount64;
         target.IsSuggestionListOpen = false;
         target.ItemsSource = null;
         target.IsSuggestionListOpen = false;
@@ -403,6 +405,9 @@ public sealed partial class MainWindow : Window
     private void RestoreQuerySuggestions(AutoSuggestBox? box = null)
     {
         if (!_querySuggestionsDetached) return;
+        // After a deliberate hide (Enter to search), suppress re-attach briefly
+        // so the AutoSuggestBox's spurious TextChanged events don't reopen the popup.
+        if (Environment.TickCount64 - _hideSuggestionsTick < 400) return;
         var target = box ?? QueryBox;
         _querySuggestionsDetached = false;
         target.ItemsSource = ViewModel.SearchHistory;
@@ -897,7 +902,7 @@ public sealed partial class MainWindow : Window
             backup.Checked += (_, _) => ViewModel.BackupBeforeSave = true;
             backup.Unchecked += (_, _) => ViewModel.BackupBeforeSave = false;
             g.Children.Add(backup);
-            g.Children.Add(new TextBlock { Text = "When enabled, the original file is copied to <filename>.bak before saving changes from the built-in editor. If a .bak already exists, uses .bak-2, .bak-3, etc.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            g.Children.Add(new TextBlock { Text = "When enabled, the original file is copied to <filename>.yagubak before saving changes from the built-in editor. If a .yagubak already exists, uses .yagubak-2, .yagubak-3, etc.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             sp.Children.Add((Border)g.Tag!);
         }
@@ -1036,6 +1041,9 @@ public sealed partial class MainWindow : Window
     // Match navigation state for multi-highlight mode
     private readonly List<(RichTextBlock block, Paragraph para, int matchInPara)> _matchParagraphs = new();
     private int _currentMatchIndex = -1;
+    // Paragraph → index cache for O(1) lookup in large files.
+    // Invalidated whenever a block's Blocks collection changes (full-file toggle, section materialize, clear).
+    private readonly Dictionary<RichTextBlock, Dictionary<Paragraph, int>> _paraIndexCache = new();
 
     // Per-section match navigation state
     private sealed class SectionMatchNav
@@ -1228,6 +1236,7 @@ public sealed partial class MainWindow : Window
         SetPerFileToolbarVisibility(Visibility.Collapsed);
         HideMatchNavPanel();
         _matchParagraphs.Clear();
+        InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
         _sectionMatchNavs.Clear();
         PreviewScrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
@@ -1672,6 +1681,7 @@ public sealed partial class MainWindow : Window
         FullFileButton.IsEnabled = true;
         PreviewToolbarContent.Visibility = Visibility.Collapsed;
         _matchParagraphs.Clear();
+        InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
         HideMatchNavPanel();
 
@@ -2320,6 +2330,7 @@ public sealed partial class MainWindow : Window
         LogService.Instance.Info("Preview", $"ShowConcatenatedPreviewAsync: {byFile.Count} files, {selected.Count} results, gen={gen}");
         ShowPreviewSectionsSurface();
         _matchParagraphs.Clear();
+        InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
         int previewLines = ViewModel.PreviewContextLines;
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
@@ -2422,6 +2433,7 @@ public sealed partial class MainWindow : Window
         LogService.Instance.Info("Preview", $"ShowMultiHighlightPreviewAsync: {byFile.Count} files, {selected.Count} results, gen={gen}");
         ShowPreviewSectionsSurface();
         _matchParagraphs.Clear();
+        InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
 
@@ -3169,6 +3181,7 @@ public sealed partial class MainWindow : Window
         sn?.Matches.Clear();
 
         section.Blocks.Clear();
+        InvalidateParagraphIndexCache(section);
         var sectionMatches = new List<(RichTextBlock block, Paragraph para, int matchInPara)>();
         for (int i = 0; i < allLines.Length; i++)
         {
@@ -4033,7 +4046,7 @@ public sealed partial class MainWindow : Window
         {
             if (ViewModel.BackupBeforeSave && File.Exists(_previewEditorPath))
             {
-                var bakPath = _previewEditorPath + ".bak";
+                var bakPath = _previewEditorPath + ".yagubak";
                 if (!File.Exists(bakPath))
                 {
                     File.Copy(_previewEditorPath, bakPath, overwrite: false);
@@ -4041,9 +4054,9 @@ public sealed partial class MainWindow : Window
                 else
                 {
                     int suffix = 2;
-                    while (File.Exists($"{_previewEditorPath}.bak-{suffix}"))
+                    while (File.Exists($"{_previewEditorPath}.yagubak-{suffix}"))
                         suffix++;
-                    File.Copy(_previewEditorPath, $"{_previewEditorPath}.bak-{suffix}", overwrite: false);
+                    File.Copy(_previewEditorPath, $"{_previewEditorPath}.yagubak-{suffix}", overwrite: false);
                 }
             }
 
@@ -4493,7 +4506,8 @@ public sealed partial class MainWindow : Window
                     _activeMatchHighlight = (para, run, run.Foreground, run.TextDecorations, column);
                     run.Foreground = s_activeMatchBrush;
                     run.TextDecorations = Windows.UI.Text.TextDecorations.Underline;
-                    LogService.Instance.Info("MatchNav", $"BoxMatchRun: idx={_currentMatchIndex}, matchInPara={matchInPara}, col={column}, runText='{run.Text}'");
+                    if (LogService.Instance.IsInfoEnabled)
+                        LogService.Instance.Info("MatchNav", $"BoxMatchRun: idx={_currentMatchIndex}, matchInPara={matchInPara}, col={column}, runText='{run.Text}'");
                     return;
                 }
                 goldCount++;
@@ -4523,26 +4537,28 @@ public sealed partial class MainWindow : Window
     private void ScrollPreviewToLine(RichTextBlock block, Paragraph targetPara)
     {
         int requestId = ++_matchScrollRequestId;
-        // Force a synchronous layout pass before the first scroll attempt so the
-        // active run's character rect is available (mode=rect). Without this, the
-        // first ScrollPreviewToLine after a click commonly fires before WinUI has
-        // measured the run, falls back to mode=estimated, and lands hundreds of
-        // pixels off. The original symptom was "first click misses; hovering the
-        // mouse over the body fixes it" — hover was forcing the same realization
-        // we now do explicitly.
+        // Only force a synchronous layout pass if the run's character rect is not
+        // already available.  For large files (86k+ paragraphs) UpdateLayout() is
+        // extremely expensive; skipping it when the rect is valid removes the
+        // primary source of match-nav lag.
         bool layoutForced = false;
         string layoutEx = "";
-        try
+        double? preCheckRect = TryGetActiveOrParaAbsY(block, targetPara, out _);
+        if (preCheckRect is null)
         {
-            block.UpdateLayout();
-            PreviewScrollViewer.UpdateLayout();
-            layoutForced = true;
+            try
+            {
+                block.UpdateLayout();
+                PreviewScrollViewer.UpdateLayout();
+                layoutForced = true;
+            }
+            catch (Exception ex) { layoutEx = ex.GetType().Name; }
         }
-        catch (Exception ex) { layoutEx = ex.GetType().Name; }
-        LogService.Instance.Info("MatchNav",
-            $"ScrollPreviewToLine: entry idx={_currentMatchIndex}, requestId={requestId}, forcedLayout={layoutForced}{(layoutEx.Length > 0 ? $", layoutEx={layoutEx}" : "")}");
+        if (LogService.Instance.IsInfoEnabled)
+            LogService.Instance.Info("MatchNav",
+                $"ScrollPreviewToLine: entry idx={_currentMatchIndex}, requestId={requestId}, forcedLayout={layoutForced}, rectPreCheck={preCheckRect is not null}{(layoutEx.Length > 0 ? $", layoutEx={layoutEx}" : "")}");
 
-        if (TryScrollPreviewToLine(block, targetPara, out _))
+        if (TryScrollPreviewToLine(block, targetPara, preCheckRect, out _))
             return;
 
         ScrollPreviewToLine(block, targetPara, attemptsRemaining: 3, requestId);
@@ -4792,7 +4808,7 @@ public sealed partial class MainWindow : Window
             if (requestId != _matchScrollRequestId)
                 return;
 
-            if (TryScrollPreviewToLine(block, targetPara, out var reason))
+            if (TryScrollPreviewToLine(block, targetPara, null, out var reason))
                 return;
 
             if (attemptsRemaining > 0)
@@ -4810,7 +4826,7 @@ public sealed partial class MainWindow : Window
         _matchScrollRequestId++;
     }
 
-    private bool TryScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, out string reason)
+    private bool TryScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, double? preCheckedAbsY, out string reason)
     {
         reason = string.Empty;
         try
@@ -4827,51 +4843,59 @@ public sealed partial class MainWindow : Window
                 return false;
             }
 
-            int paragraphIndex = GetParagraphIndex(block, targetPara);
-            if (paragraphIndex < 0)
-            {
-                reason = "paragraph not found";
-                return false;
-            }
-
             double lineHeight = EstimatePreviewLineHeight(block);
 
             // Use the run's actual rendered character rect (in PreviewScrollViewer
             // coordinates) when available — this avoids cumulative line-height
             // estimation error which grew unbounded for paragraphs deep in the
             // RichTextBlock (off by ~2.5px/paragraph for FontSize=14).
-            double? actualRunAbsY = TryGetActiveOrParaAbsY(block, targetPara, out double actualRunHeight);
+            // Re-use the pre-checked value when the caller already probed.
+            double actualRunHeight = 0;
+            double? actualRunAbsY = preCheckedAbsY ?? TryGetActiveOrParaAbsY(block, targetPara, out actualRunHeight);
+            if (preCheckedAbsY is not null)
+                actualRunAbsY = TryGetActiveOrParaAbsY(block, targetPara, out actualRunHeight);
 
             double targetVerticalOffset;
-            double wrappedLineOffset;
-            double blockY;
-            double cumulativeHeight;
 
             if (actualRunAbsY is double runAbsY)
             {
-                wrappedLineOffset = 0;
-                blockY = double.NaN;
-                cumulativeHeight = double.NaN;
                 double effectiveH = actualRunHeight > 0 ? actualRunHeight : lineHeight;
                 targetVerticalOffset = runAbsY - PreviewScrollViewer.ViewportHeight / 2 + effectiveH / 2;
             }
             else
             {
+                // Estimated path — need paragraph index for height estimation.
+                int paragraphIndex = GetParagraphIndex(block, targetPara);
+                if (paragraphIndex < 0)
+                {
+                    reason = "paragraph not found";
+                    return false;
+                }
                 var verticalTransform = block.TransformToVisual(PreviewScrollViewer);
                 var verticalPoint = verticalTransform.TransformPoint(new Windows.Foundation.Point(0, 0));
-                blockY = verticalPoint.Y;
-                wrappedLineOffset = EstimateWrappedLineOffset(block, targetPara);
-                cumulativeHeight = EstimateCumulativeHeightBefore(block, targetPara, lineHeight);
+                double wrappedLineOffset = EstimateWrappedLineOffset(block, targetPara);
+                double cumulativeHeight = EstimateCumulativeHeightBefore(block, targetPara, lineHeight);
                 targetVerticalOffset = PreviewScrollViewer.VerticalOffset + verticalPoint.Y + cumulativeHeight + wrappedLineOffset * lineHeight - PreviewScrollViewer.ViewportHeight / 2 + lineHeight / 2;
+
+                if (LogService.Instance.IsInfoEnabled)
+                    LogService.Instance.Info("MatchNav", $"ScrollPreviewToLine(estimated): idx={_currentMatchIndex}, para={paragraphIndex}/{block.Blocks.Count}, wrapOffset={wrappedLineOffset:N1}, blockY={verticalPoint.Y:N1}, lineH={lineHeight:N1}, cumulH={cumulativeHeight:N1}");
             }
 
             targetVerticalOffset = Math.Clamp(targetVerticalOffset, 0, PreviewScrollViewer.ScrollableHeight);
-            double beforeVerticalOffset = PreviewScrollViewer.VerticalOffset;
-            bool verticalAccepted = PreviewScrollViewer.ChangeView(null, targetVerticalOffset, null, disableAnimation: true);
-            LogService.Instance.Info("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, para={paragraphIndex}/{block.Blocks.Count}, mode={(actualRunAbsY is null ? "estimated" : "rect")}, runAbsY={(actualRunAbsY ?? double.NaN):N1}, wrapOffset={wrappedLineOffset:N1}, blockY={blockY:N1}, lineH={lineHeight:N1}, beforeY={beforeVerticalOffset:N1}, targetY={targetVerticalOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}, scrollableH={PreviewScrollViewer.ScrollableHeight:N1}, accepted={verticalAccepted}, wrap={ViewModel.PreviewWordWrap}");
+            PreviewScrollViewer.ChangeView(null, targetVerticalOffset, null, disableAnimation: true);
+
+            if (LogService.Instance.IsInfoEnabled)
+                LogService.Instance.Info("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, mode={(actualRunAbsY is null ? "estimated" : "rect")}, targetY={targetVerticalOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}");
 
             ScrollMatchHorizontallyIntoView(block, targetPara);
-            VerifyActiveMatchVisibleAfterScroll(block, targetPara, paragraphIndex);
+            // Skip post-scroll verification when the rect path gave us an accurate
+            // position — the corrective loop in Verify is expensive on large files
+            // and unnecessary when the initial scroll was pixel-accurate.
+            if (actualRunAbsY is null)
+            {
+                int paraIdx = GetParagraphIndex(block, targetPara);
+                VerifyActiveMatchVisibleAfterScroll(block, targetPara, paraIdx);
+            }
             return true;
         }
         catch (Exception ex)
@@ -4881,17 +4905,32 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private static int GetParagraphIndex(RichTextBlock block, Paragraph targetPara)
+    private int GetParagraphIndex(RichTextBlock block, Paragraph targetPara)
     {
-        int index = 0;
+        // Try the cache first (O(1) amortised).
+        if (_paraIndexCache.TryGetValue(block, out var map) && map.TryGetValue(targetPara, out int cached))
+            return cached;
+
+        // Cache miss — build the full map for this block.
+        map = new Dictionary<Paragraph, int>(block.Blocks.Count);
+        int idx = 0;
         foreach (var item in block.Blocks)
         {
-            if (ReferenceEquals(item, targetPara))
-                return index;
-            index++;
+            if (item is Paragraph p)
+                map[p] = idx;
+            idx++;
         }
+        _paraIndexCache[block] = map;
 
-        return -1;
+        return map.TryGetValue(targetPara, out int result) ? result : -1;
+    }
+
+    private void InvalidateParagraphIndexCache(RichTextBlock? block = null)
+    {
+        if (block is not null)
+            _paraIndexCache.Remove(block);
+        else
+            _paraIndexCache.Clear();
     }
 
     /// <summary>
@@ -4950,13 +4989,17 @@ public sealed partial class MainWindow : Window
                     return;
                 }
 
-                bool paraMatches = ReferenceEquals(activePara, targetPara);
-                int activeIdx = -1;
-                for (int i = 0; i < _matchParagraphs.Count; i++)
+                // Bail out if the user has already navigated to a different match
+                // since this verification was enqueued — avoids expensive work on
+                // stale requests (especially the UpdateLayout fallback).
+                if (_currentMatchIndex != navIdx)
                 {
-                    var m = _matchParagraphs[i];
-                    if (ReferenceEquals(m.para, activePara)) { activeIdx = i; break; }
+                    LogService.Instance.Verbose("MatchNav", $"VerifyActiveMatch: stale (current={_currentMatchIndex}, enqueued={navIdx}), skipping");
+                    return;
                 }
+
+                bool paraMatches = ReferenceEquals(activePara, targetPara);
+                int activeIdx = navIdx;
 
                 double vpH = PreviewScrollViewer.ViewportHeight;
                 double vpTop = PreviewScrollViewer.VerticalOffset;
@@ -5267,6 +5310,7 @@ public sealed partial class MainWindow : Window
         MatchNavPanel.Visibility = Visibility.Collapsed;
         SectionNavOverlay.Visibility = Visibility.Collapsed;
         _matchParagraphs.Clear();
+        InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
         _sectionMatchNavs.Clear();
         _activeSectionNav = null;
@@ -5424,11 +5468,13 @@ public sealed partial class MainWindow : Window
             SetSectionCurrentMatch(sn, para, matchInPara);
         ActivateSectionForBlock(block);
         BoxMatchRun(para, matchInPara);
-        LogService.Instance.Info("MatchNav", $"OnNextMatch: idx={_currentMatchIndex}, path={(justMaterialized ? "materialize" : "normal")}");
+        if (LogService.Instance.IsInfoEnabled)
+            LogService.Instance.Info("MatchNav", $"OnNextMatch: idx={_currentMatchIndex}, path={(justMaterialized ? "materialize" : "normal")}");
         if (justMaterialized) ScrollAfterMaterialization(block, para);
         else ScrollPreviewToLine(block, para);
         navSw.Stop();
-        LogService.Instance.Verbose("Preview", $"OnNextMatch: index={_currentMatchIndex}, elapsed={navSw.ElapsedMilliseconds}ms");
+        if (LogService.Instance.IsVerboseEnabled)
+            LogService.Instance.Verbose("Preview", $"OnNextMatch: index={_currentMatchIndex}, elapsed={navSw.ElapsedMilliseconds}ms");
     }
 
     private void OnPrevMatch(object sender, RoutedEventArgs e)
@@ -5466,11 +5512,13 @@ public sealed partial class MainWindow : Window
             SetSectionCurrentMatch(sn, para, matchInPara);
         ActivateSectionForBlock(block);
         BoxMatchRun(para, matchInPara);
-        LogService.Instance.Info("MatchNav", $"OnPrevMatch: idx={_currentMatchIndex}, path={(justMaterialized ? "materialize" : "normal")}");
+        if (LogService.Instance.IsInfoEnabled)
+            LogService.Instance.Info("MatchNav", $"OnPrevMatch: idx={_currentMatchIndex}, path={(justMaterialized ? "materialize" : "normal")}");
         if (justMaterialized) ScrollAfterMaterialization(block, para);
         else ScrollPreviewToLine(block, para);
         navSw.Stop();
-        LogService.Instance.Verbose("Preview", $"OnPrevMatch: index={_currentMatchIndex}, elapsed={navSw.ElapsedMilliseconds}ms");
+        if (LogService.Instance.IsVerboseEnabled)
+            LogService.Instance.Verbose("Preview", $"OnPrevMatch: index={_currentMatchIndex}, elapsed={navSw.ElapsedMilliseconds}ms");
     }
 
     // Tracks how many match entries the last MaterializeNextLazySection call added.
@@ -6294,14 +6342,14 @@ public sealed partial class MainWindow : Window
                 {
                     if (backupEnabled)
                     {
-                        var bakPath = path + ".bak";
+                        var bakPath = path + ".yagubak";
                         if (!File.Exists(bakPath))
                             File.Copy(path, bakPath, overwrite: false);
                         else
                         {
                             int suffix = 2;
-                            while (File.Exists($"{path}.bak-{suffix}")) suffix++;
-                            File.Copy(path, $"{path}.bak-{suffix}", overwrite: false);
+                            while (File.Exists($"{path}.yagubak-{suffix}")) suffix++;
+                            File.Copy(path, $"{path}.yagubak-{suffix}", overwrite: false);
                         }
                     }
                     File.WriteAllText(path, replaced, encoding);

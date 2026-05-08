@@ -87,6 +87,12 @@ public sealed class LogService : IDisposable
     public void Info(string source, string message)
         => Write(LogLevel.Info, source, message, null);
 
+    public bool IsInfoEnabled => (_fileLevel != LogLevel.None && LogLevel.Info <= _fileLevel)
+                              || (_consoleLevel != LogLevel.None && LogLevel.Info <= _consoleLevel);
+
+    public bool IsVerboseEnabled => (_fileLevel != LogLevel.None && LogLevel.Verbose <= _fileLevel)
+                                 || (_consoleLevel != LogLevel.None && LogLevel.Verbose <= _consoleLevel);
+
     public void Verbose(string source, string message)
         => Write(LogLevel.Verbose, source, message, null);
 

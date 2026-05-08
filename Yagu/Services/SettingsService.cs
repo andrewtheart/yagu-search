@@ -74,7 +74,7 @@ public sealed class AppSettings
     public bool HasCompletedFirstRun { get; set; }
     /// <summary>When true, do not show the "another instance is already running" dialog on startup.</summary>
     public bool SuppressMultiInstanceWarning { get; set; }
-    /// <summary>When true, back up the file to .bak before saving in the built-in editor. Default true.</summary>
+    /// <summary>When true, back up the file to .yagubak before saving in the built-in editor. Default true.</summary>
     public bool BackupBeforeSave { get; set; } = true;
 
     public const int MaxRecent = 20; // kept for backward compat; prefer MaxRecentItems
