@@ -321,6 +321,10 @@ public sealed class ContentSearcher
         // Each pending entry accumulates context-after lines in a mutable list,
         // building the final SearchResult only once when the context is complete.
         var pendingAfter = new Queue<(SearchResult Partial, List<string> AfterLines, int Remaining)>();
+        // Per-file freelist of context-after List<string> buffers. Match-dense files
+        // (thousands of hits) used to allocate one List+backing array per match; we
+        // now copy into a sized string[] on emit and recycle the List for reuse.
+        Stack<List<string>>? afterListPool = contextLines > 0 ? new Stack<List<string>>() : null;
         int lineNumber = 0;
         int matchCount = 0;
         bool metadataCached = false;
@@ -342,7 +346,10 @@ public sealed class ContentSearcher
                     int newLeft = left - 1;
                     if (newLeft <= 0)
                     {
-                        await writer.WriteAsync(partial with { ContextAfter = afterLines }, cancellationToken).ConfigureAwait(false);
+                        var finalAfter = afterLines.Count == 0 ? Array.Empty<string>() : afterLines.ToArray();
+                        afterLines.Clear();
+                        afterListPool?.Push(afterLines);
+                        await writer.WriteAsync(partial with { ContextAfter = finalAfter }, cancellationToken).ConfigureAwait(false);
                     }
                     else
                     {
@@ -379,7 +386,8 @@ public sealed class ContentSearcher
                     }
                     else
                     {
-                        pendingAfter.Enqueue((partial, new List<string>(contextLines), contextLines));
+                        var bucket = afterListPool is { Count: > 0 } pool ? pool.Pop() : new List<string>(contextLines);
+                        pendingAfter.Enqueue((partial, bucket, contextLines));
                     }
                 }
                 if (matchCount >= perFileCap) break;
@@ -392,7 +400,8 @@ public sealed class ContentSearcher
         while (pendingAfter.Count > 0)
         {
             var (partial, afterLines, _) = pendingAfter.Dequeue();
-            await writer.WriteAsync(partial with { ContextAfter = afterLines }, cancellationToken).ConfigureAwait(false);
+            var finalAfter = afterLines.Count == 0 ? Array.Empty<string>() : afterLines.ToArray();
+            await writer.WriteAsync(partial with { ContextAfter = finalAfter }, cancellationToken).ConfigureAwait(false);
         }
 
         return matchCount;

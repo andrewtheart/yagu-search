@@ -799,7 +799,12 @@ public sealed partial class MainViewModel : ObservableObject
         // (potentially gigabytes of SearchResult strings) is reclaimed before
         // the new search starts allocating.  Follow with WaitForPendingFinalizers
         // to release any weak-referenced finalizable objects, then a second pass
-        // to collect objects freed by finalizers.
+        // to collect objects freed by finalizers.  Request a one-shot LOH
+        // compaction so the many large arrays from the previous search
+        // (per-match context lists, pooled buffers, big strings) don't leave
+        // the heap fragmented for the next run.
+        System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+            System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         GC.WaitForPendingFinalizers();
         GC.Collect(0, GCCollectionMode.Forced, blocking: true);
