@@ -83,7 +83,7 @@
         </Border>
 
         <!-- Search controls card -->
-        <Border Grid.Row="2" Margin="16,4,16,4" Padding="16,12"
+        <Border Grid.Row="2" Margin="16,10,16,4" Padding="16,12"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1" CornerRadius="8">
@@ -111,11 +111,11 @@
                                 <TextBlock Text="Browse" />
                             </StackPanel>
                         </Button>
-                        <ToggleButton x:Name="PinButton" Click="OnPinToggle"
-                                      ToolTipService.ToolTip="Pin window (prevent minimize to tray)"
-                                      Padding="8,6" IsChecked="False">
-                            <FontIcon x:Name="PinIcon" Glyph="&#xE718;" FontSize="14" />
-                        </ToggleButton>
+                        <Button x:Name="PinButton" Click="OnPinToggle"
+                                      ToolTipService.ToolTip="Minimize to system tray when window loses focus"
+                                      Padding="8,6">
+                            <FontIcon x:Name="PinIcon" Glyph="&#xE77A;" FontSize="14" />
+                        </Button>
                     </StackPanel>
                 </Grid>
 
@@ -477,13 +477,21 @@
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="500" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
                                         <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
                                                   IsChecked="{x:Bind AllSelected, Mode=TwoWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
                                                   Checked="OnSelectAllChecked" Unchecked="OnSelectAllUnchecked" />
-                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                        <!-- Match count badge -->
+                                        <Border Grid.Column="1" Background="#1A6B5A" CornerRadius="4" Padding="8,2" VerticalAlignment="Center" Margin="0,0,10,0" MinWidth="50">
+                                            <TextBlock VerticalAlignment="Center" HorizontalTextAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#B0E0D0">
+                                                <Run Text="{x:Bind MatchCount}" /><Run Text=" matches" />
+                                            </TextBlock>
+                                        </Border>
+                                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
                                             <StackPanel.ContextFlyout>
                                                 <MenuFlyout Opening="OnFileHeaderContextMenuOpening">
                                                     <MenuFlyoutItem Text="Preview selected" Click="OnPreviewSelectedFiles">
@@ -509,18 +517,20 @@
                                                     </MenuFlyoutItem>
                                                 </MenuFlyout>
                                             </StackPanel.ContextFlyout>
-                                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                                <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                                <TextBlock Text="{x:Bind MatchCount}" Opacity="0.6" />
-                                                <TextBlock Text="matches" Opacity="0.6" />
-                                            </StackPanel>
-                                            <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
-                                                <TextBlock Text="{x:Bind FormattedSize}" Opacity="0.45" FontSize="11" />
-                                                <TextBlock Text="{x:Bind FormattedDate}" Opacity="0.45" FontSize="11" />
-                                                <TextBlock Text="{x:Bind DirectoryName}" Opacity="0.45" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis" />
+                                            <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,2,0,0">
+                                                <TextBlock Opacity="0.45" FontSize="11">
+                                                    <Run Text="Modified:" /><Run Text=" " /><Run Text="{x:Bind FormattedDate}" /><Run Text=" | Size:" /><Run Text=" " /><Run Text="{x:Bind FormattedSize}" />
+                                                </TextBlock>
                                             </StackPanel>
                                         </StackPanel>
-                                        <Button Grid.Column="2" Click="OnShowFileGroupInExplorer" Tag="{x:Bind FilePath}"
+                                        <!-- Directory path right-aligned -->
+                                        <TextBlock Grid.Column="3" Text="{x:Bind DirectoryName}"
+                                                   ToolTipService.ToolTip="{x:Bind DirectoryName}"
+                                                   Opacity="0.45" FontSize="11" VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   HorizontalAlignment="Left" Margin="12,0,4,0" />
+                                        <Button Grid.Column="4" Click="OnShowFileGroupInExplorer" Tag="{x:Bind FilePath}"
                                                 Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
                                                 Background="Transparent" BorderThickness="0"
                                                 VerticalAlignment="Center" Margin="4,0,0,0"

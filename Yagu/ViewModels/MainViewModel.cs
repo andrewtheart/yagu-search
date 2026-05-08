@@ -98,6 +98,7 @@ public sealed partial class MainViewModel : ObservableObject
             : _settings.AdminProtectedPathSegments;
         HasCompletedFirstRun = _settings.HasCompletedFirstRun;
         BackupBeforeSave = _settings.BackupBeforeSave;
+        WindowFocusBehavior = _settings.WindowFocusBehavior;
 
         Helpers.LineTruncator.TruncatedLength = LineTruncationLength;
 
@@ -173,6 +174,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     [ObservableProperty] public partial bool HasCompletedFirstRun { get; set; }
     [ObservableProperty] public partial bool BackupBeforeSave { get; set; } = true;
+    [ObservableProperty] public partial int WindowFocusBehavior { get; set; } // 0 = MinimizeToTray, 1 = StayOpen, 2 = AlwaysOnTop
 
     /// <summary>Observable collection of skip-extension items for the multi-select dropdown.</summary>
     public ObservableCollection<SkipExtensionItem> SkipExtensionItems { get; } = [];
@@ -1258,6 +1260,7 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.AdminProtectedPathSegments = AdminProtectedPathSegments;
         _settings.HasCompletedFirstRun = HasCompletedFirstRun;
         _settings.BackupBeforeSave = BackupBeforeSave;
+        _settings.WindowFocusBehavior = WindowFocusBehavior;
 
         Helpers.LineTruncator.TruncatedLength = LineTruncationLength;
 

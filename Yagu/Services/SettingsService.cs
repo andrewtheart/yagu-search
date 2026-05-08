@@ -76,6 +76,8 @@ public sealed class AppSettings
     public bool SuppressMultiInstanceWarning { get; set; }
     /// <summary>When true, back up the file to .yagubak before saving in the built-in editor. Default true.</summary>
     public bool BackupBeforeSave { get; set; } = true;
+    /// <summary>Default window focus behavior in launcher mode. 0 = Minimize to tray, 1 = Stay open, 2 = Always on top.</summary>
+    public int WindowFocusBehavior { get; set; } // 0 = MinimizeToTray (default)
 
     public const int MaxRecent = 20; // kept for backward compat; prefer MaxRecentItems
 }

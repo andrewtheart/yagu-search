@@ -81,6 +81,12 @@ public sealed partial class MainWindow : Window
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
 
+    [DllImport("user32.dll")]
+    private static extern int GetDpiForWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetricsForDpi(int nIndex, uint dpi);
+
     private bool _autoSearchOnLoad;
     private bool _launcherMode;
 
@@ -254,6 +260,16 @@ public sealed partial class MainWindow : Window
             }
         }
         catch { }
+
+        // Apply saved window-focus behaviour as the initial pin state.
+        _pinState = ViewModel.WindowFocusBehavior switch
+        {
+            1 => PinState.StayOpen,
+            2 => PinState.AlwaysOnTop,
+            3 => PinState.FullWindow,
+            _ => PinState.MinimizeToTray,
+        };
+        ApplyPinState();
     }
 
     private void PositionLauncherWindow()
@@ -270,12 +286,27 @@ public sealed partial class MainWindow : Window
             // Force a layout pass so DesiredSize reflects only the currently
             // visible rows (admin banner + search card), then measure.
             RootGrid.UpdateLayout();
-            RootGrid.Measure(new Windows.Foundation.Size(1100, double.PositiveInfinity));
+            RootGrid.Measure(new Windows.Foundation.Size(1400, double.PositiveInfinity));
             double desiredHeightDip = RootGrid.DesiredSize.Height;
             if (desiredHeightDip < 60) desiredHeightDip = 170;
 
-            int width = (int)(1100 * scale);
-            int height = (int)((desiredHeightDip + 4) * scale);
+            // Non-client chrome (border/resize grip) eats into the outer rect.
+            // AppWindow.Size vs ClientSize may not be updated synchronously after
+            // SetBorderAndTitleBar, so query the Win32 frame metrics directly.
+            int chromeHeight = 0;
+            try
+            {
+                int dpi = GetDpiForWindow(_hwnd);
+                int frameY = GetSystemMetricsForDpi(33 /* SM_CYFRAME */, (uint)dpi);
+                int padded = GetSystemMetricsForDpi(92 /* SM_CXPADDEDBORDER */, (uint)dpi);
+                chromeHeight = (frameY + padded) * 2; // top + bottom border
+            }
+            catch { }
+
+            LogService.Instance.Info("Launcher", $"PositionLauncherWindow: desiredH={desiredHeightDip:F1} dip, scale={scale:F2}, chromeH={chromeHeight}px, outer={AppWindow.Size.Height}, client={AppWindow.ClientSize.Height}");
+
+            int width = (int)(1400 * scale);
+            int height = (int)(desiredHeightDip * scale) + chromeHeight;
             int x = wa.X + Math.Max(0, (wa.Width - width) / 2);
             int y = wa.Y + (int)(4 * scale);
             AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(x, y, width, height));
@@ -287,14 +318,32 @@ public sealed partial class MainWindow : Window
                 if (!_launcherMode) return;
                 try
                 {
+                    // Re-query scale — on the first call XamlRoot may not be ready
+                    // and scale captures as 1.0, producing a wrong pixel height.
+                    double deferredScale = (Content?.XamlRoot?.RasterizationScale) ?? 1.0;
+                    int chrome = 0;
+                    try
+                    {
+                        int dpi2 = GetDpiForWindow(_hwnd);
+                        int fy2 = GetSystemMetricsForDpi(33, (uint)dpi2);
+                        int pd2 = GetSystemMetricsForDpi(92, (uint)dpi2);
+                        chrome = (fy2 + pd2) * 2;
+                    }
+                    catch { }
+
                     RootGrid.UpdateLayout();
-                    RootGrid.Measure(new Windows.Foundation.Size(1100, double.PositiveInfinity));
+                    RootGrid.Measure(new Windows.Foundation.Size(1400, double.PositiveInfinity));
                     double h = RootGrid.DesiredSize.Height;
                     if (h < 60) return;
-                    int newHeight = (int)((h + 4) * scale);
-                    if (Math.Abs(newHeight - height) < 4) return;
-                    int newY = wa.Y + (int)(4 * scale);
-                    AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(x, newY, width, newHeight));
+                    int newHeight = (int)(h * deferredScale) + chrome;
+                    // Compare against current actual window height, not the
+                    // captured value (which may have been set with wrong scale).
+                    if (Math.Abs(newHeight - AppWindow.Size.Height) < 4) return;
+                    int newY = wa.Y + (int)(4 * deferredScale);
+                    int newWidth = (int)(1400 * deferredScale);
+                    int newX = wa.X + Math.Max(0, (wa.Width - newWidth) / 2);
+                    AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(newX, newY, newWidth, newHeight));
+                    LogService.Instance.Info("Launcher", $"PositionLauncherWindow (deferred): h={h:F1} dip, scale={deferredScale:F2}, chrome={chrome}px, newHeight={newHeight}px");
                 }
                 catch { }
             });
@@ -407,17 +456,143 @@ public sealed partial class MainWindow : Window
         DispatcherQueue.TryEnqueue(async () => await ResetToLauncherModeAsync());
     }
 
-    private bool _pinned;
+    /// <summary>Window pin state: MinimizeToTray (default), StayOpen, AlwaysOnTop, FullWindow.</summary>
+    private enum PinState { MinimizeToTray, StayOpen, AlwaysOnTop, FullWindow }
+
+    private PinState _pinState = PinState.MinimizeToTray;
 
     private void OnPinToggle(object sender, RoutedEventArgs e)
     {
-        _pinned = PinButton.IsChecked == true;
-        PinIcon.Glyph = _pinned ? "\uE840" : "\uE718";
+        _pinState = _pinState switch
+        {
+            PinState.MinimizeToTray => PinState.StayOpen,
+            PinState.StayOpen => PinState.AlwaysOnTop,
+            PinState.AlwaysOnTop => PinState.FullWindow,
+            _ => PinState.MinimizeToTray,
+        };
+        ApplyPinState();
+    }
+
+    private void SetAlwaysOnTop(bool onTop)
+    {
+        try
+        {
+            if (AppWindow?.Presenter is Microsoft.UI.Windowing.OverlappedPresenter op)
+                op.IsAlwaysOnTop = onTop;
+        }
+        catch { }
+    }
+
+    private void ApplyPinState()
+    {
+        switch (_pinState)
+        {
+            case PinState.MinimizeToTray:
+                PinIcon.Glyph = "\uE77A"; // UnPin
+                ToolTipService.SetToolTip(PinButton, "Minimize to system tray when window loses focus");
+                SetAlwaysOnTop(false);
+                RestoreToLauncherChrome();
+                break;
+            case PinState.StayOpen:
+                PinIcon.Glyph = "\uE840"; // Pin
+                ToolTipService.SetToolTip(PinButton, "Window stays open (won't minimize to tray)");
+                SetAlwaysOnTop(false);
+                RestoreToLauncherChrome();
+                break;
+            case PinState.AlwaysOnTop:
+                PinIcon.Glyph = "\uE72E"; // Lock
+                ToolTipService.SetToolTip(PinButton, "Window stays on top of all other windows");
+                SetAlwaysOnTop(true);
+                RestoreToLauncherChrome();
+                break;
+            case PinState.FullWindow:
+                PinIcon.Glyph = "\uE740"; // FullScreen / expand — traditional window
+                ToolTipService.SetToolTip(PinButton, "Traditional window with title bar (click to return to launcher)");
+                SetAlwaysOnTop(false);
+                SwitchToFullWindow();
+                break;
+        }
+    }
+
+    /// <summary>Switch from compact launcher to a traditional window with title bar and all chrome.</summary>
+    private void SwitchToFullWindow()
+    {
+        _launcherMode = false;
+
+        // Show title bar row and app title bar
+        TitleBarRow.Height = GridLength.Auto;
+        AppTitleBar.Visibility = Visibility.Visible;
+
+        // Show results pane and status bar
+        SplitPaneRow.Height = new GridLength(1, GridUnitType.Star);
+        StatusBarRow.Height = GridLength.Auto;
+        SplitPaneGrid.Visibility = Visibility.Visible;
+
+        try { ExtendsContentIntoTitleBar = true; } catch { }
+        try
+        {
+            if (AppWindow?.Presenter is Microsoft.UI.Windowing.OverlappedPresenter op)
+            {
+                op.SetBorderAndTitleBar(true, true);
+                op.IsResizable = true;
+                op.IsMaximizable = true;
+                op.IsMinimizable = true;
+            }
+        }
+        catch { }
+
+        // Resize to a comfortable traditional window size, using work area
+        try
+        {
+            if (AppWindow is null) return;
+            var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(
+                AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
+            if (displayArea is null) return;
+            var wa = displayArea.WorkArea;
+
+            // Use most of the work area for a proper traditional window
+            int width = Math.Max((int)(wa.Width * 0.85), 1400);
+            if (width > wa.Width) width = wa.Width;
+            int height = Math.Max((int)(wa.Height * 0.85), 900);
+            if (height > wa.Height) height = wa.Height;
+            int x = wa.X + Math.Max(0, (wa.Width - width) / 2);
+            int y = wa.Y + Math.Max(0, (wa.Height - height) / 2);
+            AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(x, y, width, height));
+        }
+        catch { }
+    }
+
+    /// <summary>Restore compact launcher chrome (borderless, no title bar) when leaving FullWindow state.</summary>
+    private void RestoreToLauncherChrome()
+    {
+        _launcherMode = true;
+
+        // If coming back from full window, hide the title bar and extra rows again
+        TitleBarRow.Height = new GridLength(0);
+        AppTitleBar.Visibility = Visibility.Collapsed;
+        SplitPaneRow.Height = new GridLength(0);
+        StatusBarRow.Height = new GridLength(0);
+        SplitPaneGrid.Visibility = Visibility.Collapsed;
+
+        try { ExtendsContentIntoTitleBar = false; } catch { }
+        try
+        {
+            if (AppWindow?.Presenter is Microsoft.UI.Windowing.OverlappedPresenter op)
+            {
+                op.SetBorderAndTitleBar(true, false);
+                op.IsResizable = true;
+                op.IsMaximizable = false;
+                op.IsMinimizable = false;
+            }
+        }
+        catch { }
+
+        PositionLauncherWindow();
     }
 
     private void OnWindowActivated(object sender, WindowActivatedEventArgs args)
     {
-        if (args.WindowActivationState == WindowActivationState.Deactivated && !_pinned)
+        if (args.WindowActivationState == WindowActivationState.Deactivated && _pinState == PinState.MinimizeToTray)
         {
             HideToTray();
         }
@@ -922,6 +1097,7 @@ public sealed partial class MainWindow : Window
         "Performance" => "\uE9F5",       // SpeedHigh
         "Display" => "\uE7B5",           // View
         "Editor" => "\uE70F",            // Edit
+        "Window" => "\uE737",            // Window
         "General" => "\uE713",           // Settings
         _ => "\uE7FC",                   // Placeholder
     };
@@ -1169,6 +1345,24 @@ public sealed partial class MainWindow : Window
             backup.Unchecked += (_, _) => ViewModel.BackupBeforeSave = false;
             g.Children.Add(backup);
             g.Children.Add(new TextBlock { Text = "When enabled, the original file is copied to <filename>.yagubak before saving changes from the built-in editor. If a .yagubak already exists, uses .yagubak-2, .yagubak-3, etc.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            sp.Children.Add((Border)g.Tag!);
+        }
+
+        // ── Window ──
+        {
+            var g = MakeSettingsGroup("Window");
+
+            g.Children.Add(new TextBlock { Text = "Default window focus behavior (launcher mode):" });
+            var focusBehavior = new ComboBox();
+            focusBehavior.Items.Add("Minimize to system tray (default)");
+            focusBehavior.Items.Add("Stay open (don't minimize on focus loss)");
+            focusBehavior.Items.Add("Always on top (stay above all windows)");
+            focusBehavior.Items.Add("Traditional window (full window with title bar)");
+            focusBehavior.SelectedIndex = ViewModel.WindowFocusBehavior;
+            focusBehavior.SelectionChanged += (_, _) => ViewModel.WindowFocusBehavior = focusBehavior.SelectedIndex;
+            g.Children.Add(focusBehavior);
+            g.Children.Add(new TextBlock { Text = "Controls what happens when the launcher window loses focus. This sets the default; you can override per-session using the pin button next to Browse.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             sp.Children.Add((Border)g.Tag!);
         }
@@ -2432,17 +2626,15 @@ public sealed partial class MainWindow : Window
             int currentIndex = ViewModel.ResultGroups.IndexOf(g);
             LogService.Instance.Info("Preview", $"OnSelectAllChecked: file='{g.FilePath}', matchCount={g.Count}, index={currentIndex}");
 
-            // Shift+Click range selection
+            // Shift+Click: check all from top of list to clicked item
             bool isShift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
                            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
-            if (isShift && _lastCheckedGroupIndex >= 0 && currentIndex >= 0 && currentIndex != _lastCheckedGroupIndex)
+            if (isShift && currentIndex >= 0)
             {
-                int lo = Math.Min(_lastCheckedGroupIndex, currentIndex);
-                int hi = Math.Max(_lastCheckedGroupIndex, currentIndex);
                 _suppressPreviewUpdate = true;
                 try
                 {
-                    for (int i = lo; i <= hi; i++)
+                    for (int i = 0; i <= currentIndex; i++)
                         ViewModel.ResultGroups[i].SelectAll();
                 }
                 finally { _suppressPreviewUpdate = false; }
@@ -2479,17 +2671,15 @@ public sealed partial class MainWindow : Window
             int currentIndex = ViewModel.ResultGroups.IndexOf(g);
             LogService.Instance.Info("Preview", $"OnSelectAllUnchecked: file='{g.FilePath}', index={currentIndex}");
 
-            // Shift+Click range deselection
+            // Shift+Click: uncheck all from top of list to clicked item
             bool isShift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
                            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
-            if (isShift && _lastCheckedGroupIndex >= 0 && currentIndex >= 0 && currentIndex != _lastCheckedGroupIndex)
+            if (isShift && currentIndex >= 0)
             {
-                int lo = Math.Min(_lastCheckedGroupIndex, currentIndex);
-                int hi = Math.Max(_lastCheckedGroupIndex, currentIndex);
                 _suppressPreviewUpdate = true;
                 try
                 {
-                    for (int i = lo; i <= hi; i++)
+                    for (int i = 0; i <= currentIndex; i++)
                         ViewModel.ResultGroups[i].DeselectAll();
                 }
                 finally { _suppressPreviewUpdate = false; }
@@ -2736,7 +2926,7 @@ public sealed partial class MainWindow : Window
 
     /// <summary>
     /// When a preview file is shown while the window is still at the narrow
-    /// launcher width (~1100 dip), grow it horizontally to a normal width so
+    /// launcher width (~1400 dip), grow it horizontally to a normal width so
     /// the preview pane has room. Position stays anchored on the left.
     /// </summary>
     private void EnsureWidthForPreview()
