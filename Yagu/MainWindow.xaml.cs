@@ -94,6 +94,13 @@ public sealed partial class MainWindow : Window
         SyncLayoutToggles(ViewModel.PreviewModeIndex);
         Title = AppInfo.WindowTitle;
 
+        // PreviewBlock's built-in text-selection swallows DoubleTapped by
+        // marking it handled. AddHandler with handledEventsToo: true is the
+        // only way to still receive it.
+        PreviewBlock.AddHandler(UIElement.DoubleTappedEvent,
+            new Microsoft.UI.Xaml.Input.DoubleTappedEventHandler(OnPreviewBlockDoubleTapped),
+            handledEventsToo: true);
+
         // Extend content into the title bar for a modern Windows 11 look
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
@@ -1414,6 +1421,16 @@ public sealed partial class MainWindow : Window
         if (e.Handled) return;
         var expander = _stickyHeaderExpander;
         if (expander is null) return;
+
+        // The buttons inside the sticky header (Show full file, Copy, Open,
+        // Edit, Show in Explorer, Dismiss) raise Click via PointerPressed but
+        // do NOT mark the bubbling Tapped event as handled. Without this guard,
+        // a click on any of those buttons would also collapse the file
+        // expander. Walk up from the original source and bail if a Button is
+        // in the path.
+        if (e.OriginalSource is DependencyObject src && IsInsideButton(src))
+            return;
+
         try
         {
             expander.IsExpanded = !expander.IsExpanded;
@@ -1426,6 +1443,15 @@ public sealed partial class MainWindow : Window
             LogService.Instance.Warning("Preview",
                 $"StickyFileHeader_Tapped threw: {ex.GetType().Name}: {ex.Message}");
         }
+    }
+
+    private static bool IsInsideButton(DependencyObject element)
+    {
+        for (var node = element; node is not null; node = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(node))
+        {
+            if (node is ButtonBase) return true;
+        }
+        return false;
     }
 
     /// <summary>
@@ -3855,6 +3881,20 @@ public sealed partial class MainWindow : Window
             new PointerEventHandler((_, _) => ActivateSectionForBlock(block)),
             handledEventsToo: true);
 
+        // Double-click anywhere in this section's preview text to open the
+        // inline editor positioned at the clicked line. Use AddHandler with
+        // handledEventsToo so RichTextBlock's built-in text-selection logic
+        // (which marks DoubleTapped handled when it selects a word) doesn't
+        // swallow the event before we see it.
+        var capturedSectionPath = filePath;
+        block.AddHandler(UIElement.DoubleTappedEvent,
+            new Microsoft.UI.Xaml.Input.DoubleTappedEventHandler(async (s, e) =>
+            {
+                if (s is RichTextBlock rtb)
+                    await EnterPreviewEditorAtPointAsync(rtb, e, capturedSectionPath);
+            }),
+            handledEventsToo: true);
+
         var sectionScroller = new ScrollViewer
         {
             Content = content,
@@ -4287,6 +4327,83 @@ public sealed partial class MainWindow : Window
         return (firstMatch, preferredMatch);
     }
 
+    private async void OnPreviewBlockDoubleTapped(object sender, Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e)
+    {
+        if (sender is RichTextBlock rtb)
+            await EnterPreviewEditorAtPointAsync(rtb, e, _previewResult?.FilePath);
+    }
+
+    /// <summary>
+    /// Handles a double-tap inside a preview <see cref="RichTextBlock"/> by opening
+    /// the inline editor for the file and placing the caret on the clicked line.
+    /// </summary>
+    private async Task EnterPreviewEditorAtPointAsync(
+        RichTextBlock block,
+        Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e,
+        string? filePath)
+    {
+        try
+        {
+            if (filePath is null) return;
+
+            var pt = e.GetPosition(block);
+            var tp = block.GetPositionFromPoint(pt);
+            int lineNum = tp is null ? -1 : ResolveLineNumberAtPointer(block, tp);
+            if (lineNum <= 0) return;
+
+            // Reuse an existing SearchResult for this file when possible (it has
+            // MatchLine/column data that ScrollEditorToMatch uses for highlighting),
+            // otherwise synthesise one with just the target line.
+            var existing = ViewModel.ResultGroups
+                .FirstOrDefault(g => string.Equals(g.FilePath, filePath, StringComparison.OrdinalIgnoreCase))
+                ?.FirstOrDefault();
+            SearchResult target = existing is not null
+                ? existing with { LineNumber = lineNum }
+                : new SearchResult(filePath, lineNum, string.Empty, 0, 0,
+                    Array.Empty<string>(), Array.Empty<string>());
+
+            e.Handled = true;
+            await ShowFullFileEditorAsync(target);
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("Preview",
+                $"EnterPreviewEditorAtPointAsync threw: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Walks the paragraphs of <paramref name="block"/> and finds the one
+    /// containing <paramref name="tp"/>, then parses the line number from the
+    /// gutter <see cref="Run"/> created by <see cref="MakePreviewParagraph"/>.
+    /// Returns -1 when the line number cannot be determined.
+    /// </summary>
+    private static int ResolveLineNumberAtPointer(RichTextBlock block, TextPointer tp)
+    {
+        int tpOff = tp.Offset;
+        foreach (var b in block.Blocks)
+        {
+            if (b is not Paragraph para) continue;
+            int start = para.ContentStart.Offset;
+            int end = para.ContentEnd.Offset;
+            if (tpOff < start || tpOff > end) continue;
+
+            // The gutter run created by MakePreviewParagraph has text "{lineNum,5} ".
+            // Indicator is index 0, gutter is index 1, separator is index 2.
+            for (int i = 0; i < Math.Min(3, para.Inlines.Count); i++)
+            {
+                if (para.Inlines[i] is Run r
+                    && int.TryParse(r.Text.AsSpan().Trim(), out int n)
+                    && n > 0)
+                {
+                    return n;
+                }
+            }
+            return -1;
+        }
+        return -1;
+    }
+
     private async Task ShowFullFileEditorAsync(SearchResult result)
     {
         LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: start file='{System.IO.Path.GetFileName(result.FilePath)}'");
@@ -4304,12 +4421,12 @@ public sealed partial class MainWindow : Window
 
         ClosePreviewEditor(clearText: true, cancelLoad: false);
         SetPreviewFileLabel(result.FilePath);
-        ShowPreviewMessage($"Loading full file for editing (limit {FormatBytes(FullFilePreviewLimitBytes)})...");
+        ShowPreviewMessage($"Loading full file for editing...");
         FullFileButton.IsEnabled = false;
 
         try
         {
-            var document = await LoadPreviewDocumentAsync(result.FilePath, cts.Token).ConfigureAwait(true);
+            var document = await LoadPreviewDocumentAsync(result.FilePath, cts.Token, enforceLimit: false).ConfigureAwait(true);
             if (cts.IsCancellationRequested) return;
 
             _previewEditorPath = result.FilePath;
@@ -4480,7 +4597,7 @@ public sealed partial class MainWindow : Window
         return null;
     }
 
-    private static async Task<PreviewTextDocument> LoadPreviewDocumentAsync(string filePath, CancellationToken cancellationToken)
+    private static async Task<PreviewTextDocument> LoadPreviewDocumentAsync(string filePath, CancellationToken cancellationToken, bool enforceLimit = true)
     {
         var loadSw = System.Diagnostics.Stopwatch.StartNew();
         LogService.Instance.Verbose("Preview", $"LoadPreviewDocumentAsync: start file='{System.IO.Path.GetFileName(filePath)}'");
@@ -4489,7 +4606,7 @@ public sealed partial class MainWindow : Window
         if (ZipArchiveSearcher.IsArchivePath(filePath))
         {
             LogService.Instance.Verbose("Preview", $"LoadPreviewDocumentAsync: archive path, delegating to LoadArchiveEntryPreviewAsync");
-            return await LoadArchiveEntryPreviewAsync(filePath, cancellationToken).ConfigureAwait(false);
+            return await LoadArchiveEntryPreviewAsync(filePath, cancellationToken, enforceLimit).ConfigureAwait(false);
         }
 
         FileInfo info;
@@ -4498,7 +4615,7 @@ public sealed partial class MainWindow : Window
 
         if (!info.Exists)
             throw new PreviewLoadException("Could not load full file: it no longer exists.");
-        if (info.Length > FullFilePreviewLimitBytes)
+        if (enforceLimit && info.Length > FullFilePreviewLimitBytes)
             throw new PreviewLoadException($"Full-file preview is limited to {FormatBytes(FullFilePreviewLimitBytes)}. This file is {FormatBytes(info.Length)}.");
 
         try
@@ -4537,14 +4654,14 @@ public sealed partial class MainWindow : Window
         catch (IOException ex) { throw new PreviewLoadException($"Could not load full file: {ex.Message}"); }
     }
 
-    private static async Task<PreviewTextDocument> LoadArchiveEntryPreviewAsync(string archivePath, CancellationToken cancellationToken)
+    private static async Task<PreviewTextDocument> LoadArchiveEntryPreviewAsync(string archivePath, CancellationToken cancellationToken, bool enforceLimit = true)
     {
         try
         {
             using var ms = await ZipArchiveSearcher.ExtractToMemoryAsync(archivePath, cancellationToken).ConfigureAwait(false);
             long byteLength = ms.Length;
 
-            if (byteLength > FullFilePreviewLimitBytes)
+            if (enforceLimit && byteLength > FullFilePreviewLimitBytes)
                 throw new PreviewLoadException($"Full-file preview is limited to {FormatBytes(FullFilePreviewLimitBytes)}. This entry is {FormatBytes(byteLength)}.");
 
             int probeSize = (int)Math.Min(BinaryDetector.SampleBytes, Math.Max(0, byteLength));
