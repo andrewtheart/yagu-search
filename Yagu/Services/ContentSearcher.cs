@@ -205,8 +205,8 @@ public sealed class ContentSearcher
         catch (DecoderFallbackException ex) { LogService.Instance.Verbose("ContentSearcher", $"Encoding error searching: {filePath}", ex); return new FileSearchOutcome(SkipEncoding, 0); }
     }
 
-    [ExcludeFromCodeCoverage]
-    private static async Task<int> SearchStreamAsync(
+
+    internal static async Task<int> SearchStreamAsync(
         string filePath,
         Regex? regex,
         string? literal,
@@ -261,8 +261,8 @@ public sealed class ContentSearcher
         return await SearchLinesAsync(filePath, reader, regex, literal, literalComparison, options, writer, cancellationToken, metadata).ConfigureAwait(false);
     }
 
-    [ExcludeFromCodeCoverage]
-    private static async Task<int> SearchMappedAsync(
+
+    internal static async Task<int> SearchMappedAsync(
         string filePath,
         long length,
         Regex? regex,
@@ -479,8 +479,8 @@ public sealed class ContentSearcher
         () => System.Runtime.InteropServices.Marshal.AllocHGlobal(sizeof(int)),
         trackAllValues: false);
 
-    [ExcludeFromCodeCoverage]
-    private static async Task<int> TryNativeAsync(
+
+    internal static async Task<int> TryNativeAsync(
         string filePath,
         SearchOptions options,
         ChannelWriter<SearchResult> writer,
@@ -568,8 +568,8 @@ public sealed class ContentSearcher
     /// pointer-backed data into managed strings, and writes <see cref="SearchResult"/>
     /// items into the channel.
     /// </summary>
-    [ExcludeFromCodeCoverage]
-    private sealed class StreamingSink : Native.IStreamingSink
+
+    internal sealed class StreamingSink : Native.IStreamingSink
     {
         private readonly string _filePath;
         private readonly ChannelWriter<SearchResult> _writer;
@@ -640,7 +640,7 @@ public sealed class ContentSearcher
     /// Used by both the per-file <see cref="StreamingSink"/> and the batch
     /// <see cref="SearchService"/> parallel scan sink.
     /// </summary>
-    [ExcludeFromCodeCoverage]
+
     internal static class NativeMatchDecoder
     {
         internal static unsafe (string Line, int MatchStart, int MatchLength) DecodeMatchLine(byte* ptr, int len, int matchStartBytes, int matchLenBytes)
@@ -677,7 +677,7 @@ public sealed class ContentSearcher
         /// Decode a UTF-8 byte buffer to a managed string, hard-capped to keep huge
         /// lines off the LOH.
         /// </summary>
-        [ExcludeFromCodeCoverage]
+
         internal static unsafe string DecodeAndTruncate(byte* ptr, int len)
         {
             if (ptr == null || len <= 0) return string.Empty;

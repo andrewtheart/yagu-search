@@ -16,7 +16,7 @@ public sealed class EditorLauncher
     /// <summary>Test seam: when set, replaces Process.Start calls.</summary>
     internal static Action<ProcessStartInfo>? TestProcessLauncher = null;
 
-    [ExcludeFromCodeCoverage]
+
     private static void LaunchProcess(ProcessStartInfo psi)
     {
         if (TestProcessLauncher != null) TestProcessLauncher(psi);
@@ -83,7 +83,7 @@ public sealed class EditorLauncher
         catch (Exception ex) { LogService.Instance.Warning("EditorLauncher", $"Failed to open folder for {filePath}", ex); return false; }
     }
 
-    [ExcludeFromCodeCoverage]
+
     public static bool OpenTerminalAt(string filePath)
     {
         try

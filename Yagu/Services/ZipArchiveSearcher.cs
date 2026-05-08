@@ -129,7 +129,7 @@ public static class ZipArchiveSearcher
     /// Detects whether a stream starts with ZIP magic bytes (PK\x03\x04).
     /// The stream position is not reset.
     /// </summary>
-    [ExcludeFromCodeCoverage]
+
     public static bool IsZipByHeader(Stream stream)
     {
         Span<byte> magic = stackalloc byte[4];
@@ -450,7 +450,7 @@ public static class ZipArchiveSearcher
     /// Extract a specific entry from a (possibly nested) zip archive to a temporary file.
     /// Returns the path to the temporary file. Caller is responsible for deleting it.
     /// </summary>
-    [ExcludeFromCodeCoverage]
+
     public static async Task<string> ExtractToTempFileAsync(string archivePath, CancellationToken cancellationToken = default)
     {
         var segments = SplitAllSegments(archivePath);
@@ -512,7 +512,7 @@ public static class ZipArchiveSearcher
     /// Extract a specific entry from a (possibly nested) zip archive into a
     /// <see cref="MemoryStream"/>. Returns the stream positioned at 0.
     /// </summary>
-    [ExcludeFromCodeCoverage]
+
     public static async Task<MemoryStream> ExtractToMemoryAsync(string archivePath, CancellationToken cancellationToken = default)
     {
         var segments = SplitAllSegments(archivePath);
@@ -562,7 +562,7 @@ public static class ZipArchiveSearcher
     /// Cleans up any temp files created by <see cref="ExtractToTempFileAsync"/>.
     /// Safe to call at app shutdown.
     /// </summary>
-    [ExcludeFromCodeCoverage]
+
     public static void CleanupTempFiles()
     {
         try

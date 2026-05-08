@@ -12,7 +12,7 @@ namespace Yagu.Native;
 /// IMPORTANT: The Everything SDK uses global state. All calls must be
 /// serialized via <see cref="Lock"/>.
 /// </summary>
-[ExcludeFromCodeCoverage]
+
 internal static class EverythingSdk
 {
     private const string DllName = "Everything64.dll";

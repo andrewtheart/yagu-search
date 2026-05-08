@@ -107,9 +107,11 @@ public sealed class FileLister : IFileLister
     public bool ExcludeAdminProtectedPaths { get; set; } = true;
 
     // Lazily evaluated once per process. Process elevation cannot change at runtime.
-    [ExcludeFromCodeCoverage]
-    private static bool CheckIsElevated()
+
+    internal static Func<bool>? ElevationOverride = null; // test seam
+    internal static bool CheckIsElevated()
     {
+        if (ElevationOverride is not null) return ElevationOverride();
         try
         {
             using var id = System.Security.Principal.WindowsIdentity.GetCurrent();
@@ -155,20 +157,20 @@ public sealed class FileLister : IFileLister
     public IReadOnlyList<string>? AdminProtectedPathSegmentsOverride { get; set; }
 
     /// <summary>Effective list of admin-protected path segments after considering the override.</summary>
-    [ExcludeFromCodeCoverage]
-    private IReadOnlyList<string> EffectiveAdminProtectedPathSegments =>
+
+    internal IReadOnlyList<string> EffectiveAdminProtectedPathSegments =>
         AdminProtectedPathSegmentsOverride is { Count: > 0 } o ? o : DefaultAdminProtectedPathSegments;
 
     /// <summary>Returns true if listing should skip well-known admin-protected paths.</summary>
-    [ExcludeFromCodeCoverage]
-    private bool ShouldExcludeAdminPaths => ExcludeAdminProtectedPaths && !s_isElevated.Value;
+
+    internal bool ShouldExcludeAdminPaths => ExcludeAdminProtectedPaths && !s_isElevated.Value;
 
     /// <summary>
     /// Returns true if <paramref name="path"/> matches one of the effective admin-protected segments.
     /// Used by the .NET fallback enumerator to avoid recursing into protected trees.
     /// </summary>
-    [ExcludeFromCodeCoverage]
-    private bool IsAdminProtectedPath(string path)
+
+    internal bool IsAdminProtectedPath(string path)
     {
         foreach (var raw in EffectiveAdminProtectedPathSegments)
         {
@@ -187,8 +189,8 @@ public sealed class FileLister : IFileLister
     /// <c>\Folder\Subfolder</c> form: ensures it starts with <c>\</c>, strips any
     /// trailing slash, and trims whitespace. Returns null for empty input.
     /// </summary>
-    [ExcludeFromCodeCoverage]
-    private static string? NormalizeAdminSegment(string raw)
+
+    internal static string? NormalizeAdminSegment(string raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
         var s = raw.Trim().Replace('/', '\\');
@@ -237,7 +239,7 @@ public sealed class FileLister : IFileLister
 
     internal FileLister(Func<string, ProcessStartInfo, IProcess>? processFactory) => _processFactory = processFactory;
 
-    [ExcludeFromCodeCoverage]
+
     public async IAsyncEnumerable<string> ListFilesAsync(
         string directory,
         IReadOnlyList<string> includeExtensions,
@@ -346,7 +348,7 @@ public sealed class FileLister : IFileLister
     // ── Everything SDK (in-process) ────────────────────────────────
     private static bool _sdkAvailable = true; // set to false on first load failure
 
-    [ExcludeFromCodeCoverage]
+
     private async IAsyncEnumerable<string> RunEverythingSdkAsync(
         string directory,
         IReadOnlyList<string> includeExtensions,
@@ -607,7 +609,7 @@ public sealed class FileLister : IFileLister
         }
     }
 
-    [ExcludeFromCodeCoverage]
+
     public static string? FindEsExe()
     {
         var candidates = new List<string>();
@@ -641,7 +643,7 @@ public sealed class FileLister : IFileLister
         return null;
     }
 
-    [ExcludeFromCodeCoverage]
+
     internal static Task<EverythingReadinessResult> WaitForEverythingSdkReadyAsync(
         TimeSpan timeout,
         TimeSpan pollInterval,
@@ -684,7 +686,7 @@ public sealed class FileLister : IFileLister
         return lastResult with { Error = status };
     }
 
-    [ExcludeFromCodeCoverage]
+
     internal static EverythingReadinessResult ProbeEverythingSdkReadiness()
     {
         if (!_sdkAvailable)
@@ -770,7 +772,7 @@ public sealed class FileLister : IFileLister
         }
     }
 
-    [ExcludeFromCodeCoverage]
+
     private async IAsyncEnumerable<string> RunEverythingAsync(
         string esPath,
         string directory,
@@ -842,7 +844,7 @@ public sealed class FileLister : IFileLister
         }
     }
 
-    [ExcludeFromCodeCoverage]
+
     private async Task<int> TryGetEverythingResultCountAsync(
         string esPath,
         IReadOnlyList<string> queryArgs,
@@ -878,8 +880,8 @@ public sealed class FileLister : IFileLister
         }
     }
 
-    [ExcludeFromCodeCoverage]
-    private void SetKnownTotalFiles(uint count) =>
+
+    internal void SetKnownTotalFiles(uint count) =>
         SetKnownTotalFiles(count > int.MaxValue ? int.MaxValue : (int)count);
 
     private void SetKnownTotalFiles(int count) =>
@@ -895,7 +897,7 @@ public sealed class FileLister : IFileLister
         return s;
     }
 
-    [ExcludeFromCodeCoverage]
+
     private async IAsyncEnumerable<string> EnumerateFallbackAsync(
         string directory,
         IReadOnlyList<string> includeExtensions,
@@ -1051,8 +1053,8 @@ public sealed class FileLister : IFileLister
         int ExitCode { get; }
     }
 
-    [ExcludeFromCodeCoverage]
-    private sealed class RealProcess : IProcess
+
+    internal sealed class RealProcess : IProcess
     {
         private readonly Process _p;
         public RealProcess(ProcessStartInfo psi)

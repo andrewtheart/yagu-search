@@ -17,7 +17,7 @@ namespace Yagu.Native;
 /// optional — when it can't be loaded the rest of the app falls back to the
 /// managed <see cref="Services.ContentSearcher"/> implementation.
 /// </summary>
-[ExcludeFromCodeCoverage]
+
 internal static partial class NativeSearcher
 {
     private const string DllName = "yagu_core";
@@ -690,7 +690,7 @@ internal sealed class NativeSearchOutcome
         }
     }
 
-    [ExcludeFromCodeCoverage]
+
     internal ref struct BufferReader
     {
         private ReadOnlySpan<byte> _data;

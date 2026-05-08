@@ -32,7 +32,7 @@ public sealed class SearchService
     /// Stream search results. Caller iterates the channel; the returned task completes
     /// when all files are scanned, the search is cancelled, or the result cap is hit.
     /// </summary>
-    [ExcludeFromCodeCoverage]
+
     public async IAsyncEnumerable<SearchEvent> SearchAsync(
         SearchOptions options,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
@@ -920,8 +920,8 @@ public sealed class SearchService
         return exts;
     }
 
-    [ExcludeFromCodeCoverage]
-    private static void CollectForMemoryPressureIfDue(TimeSpan cooldown)
+
+    internal static void CollectForMemoryPressureIfDue(TimeSpan cooldown)
     {
         long now = Stopwatch.GetTimestamp();
         long last = Volatile.Read(ref s_lastMemoryPressureGcTicks);
@@ -955,8 +955,8 @@ public sealed class SearchService
     /// 25% of total physical RAM (min 2 GB) so the process never runs uncapped.
     /// <paramref name="pressurePercent"/>: system-wide memory pressure threshold 0-100 (0 = disabled).
     /// </summary>
-    [ExcludeFromCodeCoverage]
-    private static bool IsMemoryPressureHigh(long maxProcessBytes, int pressurePercent)
+
+    internal static bool IsMemoryPressureHigh(long maxProcessBytes, int pressurePercent)
     {
         try
         {
@@ -991,8 +991,8 @@ public sealed class SearchService
         return false;
     }
 
-    [ExcludeFromCodeCoverage]
-    private static bool IsMemoryPressureRelieved(long maxProcessBytes, int pressurePercent)
+
+    internal static bool IsMemoryPressureRelieved(long maxProcessBytes, int pressurePercent)
     {
         try
         {
@@ -1059,8 +1059,8 @@ public sealed class SearchService
         return Math.Clamp(workers * 128, 1024, 4096);
     }
 
-    [ExcludeFromCodeCoverage]
-    private static bool TryGetSystemMemoryLoadPercent(out uint systemLoadPercent)
+
+    internal static bool TryGetSystemMemoryLoadPercent(out uint systemLoadPercent)
     {
         var status = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
         if (GlobalMemoryStatusEx(ref status))
@@ -1081,8 +1081,8 @@ public sealed class SearchService
         maxProcessBytes > 0 ? maxProcessBytes : long.MaxValue;
 
     /// <summary>Returns a human-readable snapshot of current memory usage for diagnostics.</summary>
-    [ExcludeFromCodeCoverage]
-    private static string GetMemoryDiagnostics()
+
+    internal static string GetMemoryDiagnostics()
     {
         try
         {
@@ -1101,8 +1101,8 @@ public sealed class SearchService
     }
 
     /// <summary>Auto-calculates a process memory cap: 25% of total physical RAM, minimum 2 GB.</summary>
-    [ExcludeFromCodeCoverage]
-    private static long AutoProcessMemoryCap()
+
+    internal static long AutoProcessMemoryCap()
     {
         try
         {
@@ -1145,8 +1145,8 @@ public sealed class SearchService
     /// Process a batch of files through the Rust parallel scanner, then update all
     /// stats counters. One cancel-int, one GCHandle, no Task.Run per file.
     /// </summary>
-    [ExcludeFromCodeCoverage]
-    private static unsafe void ProcessNativeBatch(
+
+    internal static unsafe void ProcessNativeBatch(
         IReadOnlyList<string> batch,
         Native.NativeSession batchSession,
         Native.NativeSession? degradedSession,
@@ -1217,8 +1217,8 @@ public sealed class SearchService
     /// 112 MB of SearchResult[] + int[] churn). Results reuse the indexed path
     /// string from the input batch instead of hashing per match.
     /// </summary>
-    [ExcludeFromCodeCoverage]
-    private sealed class BatchScanSink : Native.NativeSearcher.IParallelSink, IDisposable
+
+    internal sealed class BatchScanSink : Native.NativeSearcher.IParallelSink, IDisposable
     {
         private readonly IReadOnlyList<string> _paths;
         private readonly ChannelWriter<SearchResult> _writer;
