@@ -4360,15 +4360,20 @@ public sealed partial class MainWindow : Window
             if (lineNum <= 0) return;
 
             // Reuse an existing SearchResult for this file when possible (it has
-            // MatchLine/column data that ScrollEditorToMatch uses for highlighting),
-            // otherwise synthesise one with just the target line.
-            var existing = ViewModel.ResultGroups
-                .FirstOrDefault(g => string.Equals(g.FilePath, filePath, StringComparison.OrdinalIgnoreCase))
-                ?.FirstOrDefault();
-            SearchResult target = existing is not null
-                ? existing with { LineNumber = lineNum }
-                : new SearchResult(filePath, lineNum, string.Empty, 0, 0,
-                    Array.Empty<string>(), Array.Empty<string>());
+            // MatchLine/column data that ScrollEditorToMatch uses for highlighting).
+            // Prefer the result whose LineNumber matches the clicked line so the
+            // editor highlights the exact match the user double-clicked, not the
+            // first match in the file.
+            var fileGroup = ViewModel.ResultGroups
+                .FirstOrDefault(g => string.Equals(g.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
+            SearchResult? existing = fileGroup?.FirstOrDefault(r => r.LineNumber == lineNum)
+                ?? fileGroup?.FirstOrDefault();
+            SearchResult target = existing is not null && existing.LineNumber == lineNum
+                ? existing
+                : existing is not null
+                    ? existing with { LineNumber = lineNum, MatchStartColumn = 0, MatchLength = 0 }
+                    : new SearchResult(filePath, lineNum, string.Empty, 0, 0,
+                        Array.Empty<string>(), Array.Empty<string>());
 
             e.Handled = true;
             await ShowFullFileEditorAsync(target);
@@ -4557,14 +4562,17 @@ public sealed partial class MainWindow : Window
 
         // PERF: TextBox.Select() forces the text formatter to lay out the entire
         // document up to the selection. On large files (~2 MB) this can freeze
-        // the UI thread for tens of seconds. For large texts we instead scroll
-        // the TextBox's inner ScrollViewer programmatically using an estimated
-        // line height, and skip the selection (caret-only would still trigger
-        // layout). This keeps the UI responsive.
+        // the UI thread for tens of seconds when called BEFORE any scroll has
+        // forced layout. For large texts we first scroll the TextBox's inner
+        // ScrollViewer programmatically (cheap), then apply the selection from
+        // a deferred dispatcher tick — by then layout is already settled near
+        // the target line, so Select() only has incremental work to do.
         const int LargeTextThreshold = 256 * 1024;
         if (text.Length > LargeTextThreshold)
         {
             int targetLine = Math.Max(1, result.LineNumber);
+            int capturedStart = selectStart;
+            int capturedLength = Math.Max(0, selectLength);
             // Defer scrolling so the editor has a chance to render its template first
             // (the inner ScrollViewer is created during template application).
             DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
@@ -4579,6 +4587,40 @@ public sealed partial class MainWindow : Window
                     double viewport = sv.ViewportHeight > 0 ? sv.ViewportHeight : 0;
                     double centered = Math.Max(0, targetY - viewport / 2);
                     sv.ChangeView(null, centered, null, disableAnimation: true);
+
+                    // After the scroll has forced layout near the target line,
+                    // apply the selection so the matched text is highlighted.
+                    // Run this on a subsequent dispatcher tick so ChangeView's
+                    // layout pass has time to complete; otherwise Select() may
+                    // re-trigger a snap-scroll that fights our centering.
+                    if (capturedLength > 0 && capturedStart >= 0)
+                    {
+                        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+                        {
+                            try
+                            {
+                                if (PreviewEditor.Visibility != Visibility.Visible) return;
+                                int len = PreviewEditor.Text?.Length ?? 0;
+                                int s = Math.Min(capturedStart, len);
+                                int l = Math.Min(capturedLength, Math.Max(0, len - s));
+                                PreviewEditor.Select(s, l);
+
+                                // Select() snaps the scroll so the selection is just
+                                // barely on-screen (typically near the bottom edge).
+                                // Wait for that scroll to settle, then nudge up by
+                                // (viewport/2 - lineHeight) so the match moves from
+                                // the bottom edge to the middle of the viewport.
+                                // Using a relative offset avoids depending on a
+                                // line-height estimate that doesn't match the
+                                // TextBox's actual font metrics.
+                                CenterEditorOnSelectionAfterScroll();
+                            }
+                            catch (Exception ex)
+                            {
+                                LogService.Instance.Warning("Preview", $"ScrollEditorToMatch deferred select failed: {ex.GetType().Name}: {ex.Message}");
+                            }
+                        });
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -4588,8 +4630,75 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        // Select the match — this auto-scrolls the TextBox to the selection.
+        // Select the match — this auto-scrolls the TextBox so the selection is
+        // just barely visible (typically at the bottom edge). Re-center after
+        // Select's auto-scroll settles.
         PreviewEditor.Select(selectStart, Math.Max(selectLength, 0));
+        CenterEditorOnSelectionAfterScroll();
+    }
+
+    /// <summary>
+    /// After <c>TextBox.Select()</c> has snapped the selection just barely on-screen
+    /// (typically near the bottom edge), wait for the inner ScrollViewer's auto-scroll
+    /// to finish, then nudge the offset up so the selected line lands in the middle
+    /// of the viewport. Uses a relative shift (current offset − (viewport/2 − lineHeight))
+    /// rather than an absolute computed offset so we don't depend on a line-height
+    /// estimate matching the TextBox's actual font metrics.
+    /// </summary>
+    private void CenterEditorOnSelectionAfterScroll()
+    {
+        var sv = FindFirstScrollViewerInTree(PreviewEditor);
+        if (sv is null) return;
+
+        double lineHeight = PreviewEditor.FontSize * 1.4;
+        if (lineHeight < 1) lineHeight = 19;
+
+        void Center()
+        {
+            try
+            {
+                double vp = sv.ViewportHeight;
+                if (vp <= 0) return;
+                // Selection currently sits near the bottom of the viewport (Select()
+                // scrolls just enough to make it barely visible).  In ScrollViewer
+                // coordinates, a line's on-screen Y = lineAbsoluteY - VerticalOffset.
+                // To move the line UP from the bottom edge (vp - lineHeight) to the
+                // middle (vp/2), we need on-screen Y to DECREASE by (vp/2 - lineHeight),
+                // which means VerticalOffset must INCREASE by that amount.
+                double newOffset = sv.VerticalOffset + (vp / 2 - lineHeight);
+                newOffset = Math.Max(0, Math.Min(newOffset, sv.ScrollableHeight));
+                sv.ChangeView(null, newOffset, null, disableAnimation: true);
+            }
+            catch { }
+        }
+
+        // Wait for Select()'s auto-scroll to land before we re-center, otherwise
+        // our ChangeView gets clobbered by Select's pending scroll.
+        EventHandler<ScrollViewerViewChangedEventArgs>? handler = null;
+        bool centered = false;
+        handler = (_, ev) =>
+        {
+            if (ev.IsIntermediate) return;
+            sv.ViewChanged -= handler;
+            if (centered) return;
+            centered = true;
+            Center();
+        };
+        sv.ViewChanged += handler;
+
+        // Safety net: if Select didn't actually move the viewport (selection was
+        // already on-screen), ViewChanged won't fire. Run a deferred Center as a
+        // fallback after a couple of dispatcher ticks.
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                if (centered) return;
+                centered = true;
+                sv.ViewChanged -= handler;
+                Center();
+            });
+        });
     }
 
     private static ScrollViewer? FindFirstScrollViewerInTree(DependencyObject root)
@@ -4835,8 +4944,15 @@ public sealed partial class MainWindow : Window
 
     private void SetPreviewEditorVisible(bool visible)
     {
+        PreviewEditorContainer.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         PreviewEditor.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         PreviewScrollViewer.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+
+        if (visible)
+        {
+            PreviewEditorPathText.Text = _previewEditorPath ?? string.Empty;
+            ToolTipService.SetToolTip(PreviewEditorPathBar, _previewEditorPath ?? string.Empty);
+        }
 
         // Editor-mode group
         EditorSeparator.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
@@ -4848,6 +4964,7 @@ public sealed partial class MainWindow : Window
         OpenInDefaultAppButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
         OpenInEditorButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
         ShowInExplorerButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+        PreviewContextPanel.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
 
         if (visible)
             PreviewToolbarContent.Visibility = Visibility.Visible;
