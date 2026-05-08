@@ -26,8 +26,8 @@ public sealed class AppSettings
     public string GlobalHotkeyKey { get; set; } = HotkeyService.DefaultStartKey.ToString();
     public int PreviewModeIndex { get; set; } = 1; // 0 = Concatenated, 1 = Multi-highlight
     public bool PreviewWordWrap { get; set; }
-    public int LogLevelIndex { get; set; } // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose (file logging)
-    public int ConsoleLogLevelIndex { get; set; } = -1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
+    public int LogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose (file logging)
+    public int ConsoleLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     public int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
     public int ParallelismIndex { get; set; } // 0 = Auto, 1 = 1, 2 = half cores, 3 = 2x cores, 4 = all cores
     public int LineTruncationLength { get; set; } = 500;

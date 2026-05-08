@@ -24,8 +24,8 @@ public sealed class LogService : IDisposable
     private readonly ConcurrentQueue<string> _queue = new();
     private readonly Timer _flushTimer;
     private readonly string _logPath;
-    private LogLevel _fileLevel = LogLevel.Critical;
-    private LogLevel _consoleLevel = LogLevel.None;
+    private LogLevel _fileLevel = LogLevel.Warning;
+    private LogLevel _consoleLevel = LogLevel.Warning;
     private bool _disposed;
 
     /// <summary>Log level for file output.</summary>

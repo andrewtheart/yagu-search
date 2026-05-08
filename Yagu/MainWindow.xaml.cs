@@ -80,6 +80,7 @@ public sealed partial class MainWindow : Window
             _autoSearchOnLoad = !string.IsNullOrWhiteSpace(startupDirectory);
         }
         InitializeComponent();
+        SyncLayoutToggles(ViewModel.PreviewModeIndex);
         Title = AppInfo.WindowTitle;
 
         // Extend content into the title bar for a modern Windows 11 look
@@ -440,6 +441,24 @@ public sealed partial class MainWindow : Window
         // User pressed Enter in the directory box — just accept the text (already bound).
     }
 
+    private void OnDirectoryTextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
+    {
+        // Only respond to user typing, not programmatic changes.
+        if (args.Reason == AutoSuggestionBoxTextChangeReason.UserInput)
+        {
+            _ = ViewModel.UpdateDirectorySuggestionsAsync(sender.Text);
+        }
+    }
+
+    private void OnDirectorySuggestionChosen(AutoSuggestBox sender, AutoSuggestBoxSuggestionChosenEventArgs args)
+    {
+        if (args.SelectedItem is string chosen)
+        {
+            // Append trailing backslash so user can continue drilling down.
+            sender.Text = chosen.EndsWith('\\') ? chosen : chosen + '\\';
+        }
+    }
+
     private void OnRestartAsAdmin(object sender, RoutedEventArgs e)
     {
         try
@@ -579,6 +598,10 @@ public sealed partial class MainWindow : Window
             CloseButtonText = "Close",
             PrimaryButtonText = "Save",
             Content = BuildSettingsPanel(),
+            Resources =
+            {
+                ["ContentDialogMaxWidth"] = 620d,
+            },
         };
         dialog.PrimaryButtonClick += async (_, _) => await ViewModel.PersistSettingsAsync();
         _ = dialog.ShowAsync();
@@ -620,15 +643,42 @@ public sealed partial class MainWindow : Window
         return panel;
     }
 
-    /// <summary>Creates a settings group box: a bordered panel with a header and a content StackPanel.</summary>
+    /// <summary>Icon glyphs for each settings group header.</summary>
+    private static string SettingsGroupIcon(string header) => header switch
+    {
+        "Search Defaults" => "\uE721",   // Search
+        "Search Limits" => "\uE74C",     // Filter
+        "Performance" => "\uE9F5",       // SpeedHigh
+        "Display" => "\uE7B5",           // View
+        "Editor" => "\uE70F",            // Edit
+        "General" => "\uE713",           // Settings
+        _ => "\uE7FC",                   // Placeholder
+    };
+
+    /// <summary>Creates a settings group box: a bordered panel with an icon + header and a content StackPanel.</summary>
     private static StackPanel MakeSettingsGroup(string header)
     {
-        var content = new StackPanel { Spacing = 6, Padding = new Thickness(12, 8, 12, 12) };
+        var content = new StackPanel { Spacing = 8, Padding = new Thickness(14, 10, 14, 14) };
+        var headerPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, VerticalAlignment = VerticalAlignment.Center };
+        headerPanel.Children.Add(new FontIcon
+        {
+            Glyph = SettingsGroupIcon(header),
+            FontSize = 16,
+            Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
+        });
+        headerPanel.Children.Add(new TextBlock
+        {
+            Text = header,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            FontSize = 14,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+
         var border = new Border
         {
             BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6),
+            CornerRadius = new CornerRadius(8),
             Background = (Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
             Child = new StackPanel
             {
@@ -637,37 +687,28 @@ public sealed partial class MainWindow : Window
                     new Border
                     {
                         Background = (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"],
-                        CornerRadius = new CornerRadius(6, 6, 0, 0),
-                        Padding = new Thickness(12, 8, 12, 8),
+                        CornerRadius = new CornerRadius(8, 8, 0, 0),
+                        Padding = new Thickness(14, 10, 14, 10),
                         BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
                         BorderThickness = new Thickness(0, 0, 0, 1),
-                        Child = new TextBlock
-                        {
-                            Text = header,
-                            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                            FontSize = 14,
-                        },
+                        Child = headerPanel,
                     },
                     content,
                 },
             },
         };
-        // Stash the Border as the Tag so callers can retrieve it via .Parent.
-        // We return the content panel for easy Children.Add() calls; the caller
-        // adds (StackPanel).Parent (the outer StackPanel inside the Border) — but
-        // that's the inner panel, not the Border.  Use a simple helper property instead.
         content.Tag = border;
         return content;
     }
 
     private FrameworkElement BuildSettingsPanel()
     {
-        var sp = new StackPanel { Spacing = 12, Width = 480 };
+        var sp = new StackPanel { Spacing = 14, Width = 540 };
 
         // Legend for the next-search icon
-        var legend = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Opacity = 0.6, Margin = new Thickness(0, 0, 0, 0) };
-        legend.Children.Add(new FontIcon { Glyph = "\uE72C", FontSize = 11 });
-        legend.Children.Add(new TextBlock { Text = "= takes effect on the next search", FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+        var legend = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Opacity = 0.6, Margin = new Thickness(2, 0, 0, 2) };
+        legend.Children.Add(new FontIcon { Glyph = "\uE72C", FontSize = 12 });
+        legend.Children.Add(new TextBlock { Text = "= takes effect on the next search", FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
         sp.Children.Add(legend);
 
         // ── Search Defaults ──
@@ -827,7 +868,7 @@ public sealed partial class MainWindow : Window
             g.Children.Add(trunc);
             g.Children.Add(new TextBlock { Text = "Lines longer than this are truncated in the results list to prevent UI slowdowns from extremely long lines. Set to 0 to disable truncation.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-            g.Children.Add(new TextBlock { Text = "Multi-select preview mode:" });
+            g.Children.Add(new TextBlock { Text = "Preview layout:" });
             var previewMode = new ComboBox();
             previewMode.Items.Add("Concatenated (separate match snippets)");
             previewMode.Items.Add("Multi-highlight (unified file view)");
@@ -963,7 +1004,7 @@ public sealed partial class MainWindow : Window
             Content = sp,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            MaxHeight = 500,
+            MaxHeight = 560,
         };
     }
 
@@ -1390,6 +1431,23 @@ public sealed partial class MainWindow : Window
         var selected = ViewModel.GetAllSelectedResults();
         if (selected.Count >= 2)
             await UpdateMultiSelectPreviewAsync();
+    }
+
+    private void OnLayoutOptionClicked(object sender, RoutedEventArgs e)
+    {
+        if (ReferenceEquals(sender, LayoutConcatenated))
+            ViewModel.PreviewModeIndex = 0;
+        else if (ReferenceEquals(sender, LayoutMultiHighlight))
+            ViewModel.PreviewModeIndex = 1;
+
+        SyncLayoutToggles(ViewModel.PreviewModeIndex);
+        OnPreviewModeChanged(sender, new SelectionChangedEventArgs([], []));
+    }
+
+    private void SyncLayoutToggles(int index)
+    {
+        LayoutConcatenated.IsChecked = index == 0;
+        LayoutMultiHighlight.IsChecked = index == 1;
     }
 
     // Synchronous variant retained for callers that already run inside an async preview

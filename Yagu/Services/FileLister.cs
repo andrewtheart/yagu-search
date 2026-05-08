@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Threading.Channels;
+using Microsoft.Win32;
 using Yagu.Native;
 using Yagu.Services;
 
@@ -623,15 +624,62 @@ public sealed class FileLister : IFileLister
                 candidates.Add(Path.Combine(dir.Trim('"'), "es.exe"));
             }
         }
-        // 2. LocalAppData
+        // 2. Registry — Everything writes its install location to Uninstall keys
+        foreach (var installDir in GetEverythingInstallDirsFromRegistry())
+        {
+            candidates.Add(Path.Combine(installDir, "es.exe"));
+        }
+        // 3. LocalAppData
         candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Everything", "es.exe"));
-        // 3. Program Files
+        // 4. Program Files
         candidates.Add(@"C:\Program Files\Everything\es.exe");
         candidates.Add(@"C:\Program Files (x86)\Everything\es.exe");
-        // 4. C:\tools
+        // 5. C:\tools
         candidates.Add(@"C:\tools\es.exe");
 
         return FindEsExe(candidates, File.Exists);
+    }
+
+    internal static List<string> GetEverythingInstallDirsFromRegistry()
+    {
+        var dirs = new List<string>();
+        string[] registryPaths =
+        [
+            @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+            @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+        ];
+        RegistryKey[] roots = [Registry.LocalMachine, Registry.CurrentUser];
+
+        foreach (var root in roots)
+        {
+            foreach (var subPath in registryPaths)
+            {
+                try
+                {
+                    using var key = root.OpenSubKey(subPath);
+                    if (key == null) continue;
+                    foreach (var subKeyName in key.GetSubKeyNames())
+                    {
+                        try
+                        {
+                            using var subKey = key.OpenSubKey(subKeyName);
+                            if (subKey == null) continue;
+                            var displayName = subKey.GetValue("DisplayName") as string;
+                            if (displayName == null || !displayName.Contains("Everything", StringComparison.OrdinalIgnoreCase))
+                                continue;
+                            var installLocation = subKey.GetValue("InstallLocation") as string
+                                ?? Path.GetDirectoryName(subKey.GetValue("UninstallString") as string ?? "");
+                            if (!string.IsNullOrWhiteSpace(installLocation))
+                                dirs.Add(installLocation.Trim('"'));
+                        }
+                        catch { /* skip individual key errors */ }
+                    }
+                }
+                catch { /* skip if registry hive not accessible */ }
+            }
+        }
+
+        return dirs;
     }
 
     internal static string? FindEsExe(IReadOnlyList<string> candidates, Func<string, bool> fileExists)

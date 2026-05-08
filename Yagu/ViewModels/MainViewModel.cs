@@ -45,6 +45,8 @@ public sealed partial class MainViewModel : ObservableObject
     private int _prevFilesScanned;
     private double _prevSampleTime;
     internal readonly List<(double filesPerSec, double mbPerSec)> ThroughputSamples = new();
+    private readonly DirectoryAutoCompleteService _dirAutoComplete = new();
+    private CancellationTokenSource? _dirAutoCompleteCts;
 
     public MainViewModel() : this(new SearchService(), new SettingsService(), new EditorLauncher(),
                                    DispatcherQueue.GetForCurrentThread())
@@ -100,6 +102,7 @@ public sealed partial class MainViewModel : ObservableObject
         Helpers.LineTruncator.TruncatedLength = LineTruncationLength;
 
         foreach (var d in _settings.RecentDirectories) RecentDirectories.Add(d);
+        foreach (var d in _settings.RecentDirectories) DirectorySuggestions.Add(d);
         foreach (var q in _settings.SearchHistory) SearchHistory.Add(q);
 
         SyncSkipExtensionItems();
@@ -143,8 +146,8 @@ public sealed partial class MainViewModel : ObservableObject
     };
     [ObservableProperty] public partial int PreviewModeIndex { get; set; } = 1; // 0 = Concatenated, 1 = Multi-highlight
     [ObservableProperty] public partial bool PreviewWordWrap { get; set; }
-    [ObservableProperty] public partial int FileLogLevelIndex { get; set; } // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
-    [ObservableProperty] public partial int ConsoleLogLevelIndex { get; set; } = -1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
+    [ObservableProperty] public partial int FileLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
+    [ObservableProperty] public partial int ConsoleLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] public partial int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
     [ObservableProperty] public partial int ParallelismIndex { get; set; } // 0 = Auto, 1 = 1 thread, 2 = half cores, 3 = 2x cores, 4 = all cores
     [ObservableProperty] public partial int LineTruncationLength { get; set; } = 500;
@@ -433,6 +436,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     public ObservableCollection<FileGroup> ResultGroups => _resultCollection.VisibleGroups;
     public ObservableCollection<string> RecentDirectories { get; } = [];
+    public ObservableCollection<string> DirectorySuggestions { get; } = [];
     public ObservableCollection<string> SearchHistory { get; } = [];
 
     public bool HasResults => ResultGroups.Count > 0;
@@ -1330,6 +1334,48 @@ public sealed partial class MainViewModel : ObservableObject
         catch
         {
             // Toast failures should never break the app.
+        }
+    }
+
+    /// <summary>
+    /// Called when the directory text changes. Debounces and fetches subdirectory suggestions.
+    /// </summary>
+    internal async Task UpdateDirectorySuggestionsAsync(string text)
+    {
+        // Cancel any previous in-flight lookup.
+        _dirAutoCompleteCts?.Cancel();
+        _dirAutoCompleteCts = new CancellationTokenSource();
+        var ct = _dirAutoCompleteCts.Token;
+
+        try
+        {
+            // Debounce: wait 250ms before querying.
+            await Task.Delay(250, ct).ConfigureAwait(false);
+
+            var suggestions = await _dirAutoComplete.GetSuggestionsAsync(text, ct).ConfigureAwait(false);
+
+            // If no subdirectory suggestions, show recent directories as fallback.
+            if (suggestions.Count == 0 && string.IsNullOrWhiteSpace(text))
+            {
+                _dispatcher.TryEnqueue(() =>
+                {
+                    DirectorySuggestions.Clear();
+                    foreach (var d in _settings.RecentDirectories)
+                        DirectorySuggestions.Add(d);
+                });
+                return;
+            }
+
+            _dispatcher.TryEnqueue(() =>
+            {
+                DirectorySuggestions.Clear();
+                foreach (var s in suggestions)
+                    DirectorySuggestions.Add(s);
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when user keeps typing.
         }
     }
 }

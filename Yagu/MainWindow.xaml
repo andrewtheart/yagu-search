@@ -104,7 +104,9 @@
                         x:Name="DirectoryBox" Grid.Column="1"
                         PlaceholderText="Directory to search (e.g. D:\projects\myapp)"
                         Text="{x:Bind ViewModel.Directory, Mode=TwoWay}"
-                        ItemsSource="{x:Bind ViewModel.RecentDirectories, Mode=OneWay}"
+                        ItemsSource="{x:Bind ViewModel.DirectorySuggestions, Mode=OneWay}"
+                        TextChanged="OnDirectoryTextChanged"
+                        SuggestionChosen="OnDirectorySuggestionChosen"
                         QuerySubmitted="OnDirectoryQuerySubmitted" />
                     <Button Grid.Column="2" Click="OnBrowseDirectory" ToolTipService.ToolTip="Browse for folder" Padding="8,6">
                         <StackPanel Orientation="Horizontal" Spacing="6">
@@ -205,11 +207,6 @@
                                     </Flyout>
                                 </DropDownButton.Flyout>
                             </DropDownButton>
-                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                <TextBlock Text="Preview:" VerticalAlignment="Center" Opacity="0.8" />
-                                <NumberBox Value="{x:Bind ViewModel.PreviewContextLines, Mode=TwoWay}" Minimum="0" Maximum="50"
-                                           SpinButtonPlacementMode="Compact" MinWidth="90" />
-                            </StackPanel>
                             <ComboBox SelectedIndex="{x:Bind ViewModel.SearchModeIndex, Mode=TwoWay}" VerticalAlignment="Center">
                                 <x:String>Content + Names</x:String>
                                 <x:String>Content only</x:String>
@@ -479,7 +476,7 @@
                                         <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
                                                   IsChecked="{x:Bind AllSelected, Mode=TwoWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
                                                   Checked="OnSelectAllChecked" Unchecked="OnSelectAllUnchecked" />
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                             <StackPanel.ContextFlyout>
                                                 <MenuFlyout Opening="OnFileHeaderContextMenuOpening">
                                                     <MenuFlyoutItem Text="Preview selected" Click="OnPreviewSelectedFiles">
@@ -505,13 +502,16 @@
                                                     </MenuFlyoutItem>
                                                 </MenuFlyout>
                                             </StackPanel.ContextFlyout>
-                                            <FontIcon Glyph="&#xE7C3;" FontSize="14" />
-                                            <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" />
-                                            <TextBlock Text="{x:Bind MatchCount}" Opacity="0.7" />
-                                            <TextBlock Text="matches" Opacity="0.7" />
-                                            <TextBlock Text="{x:Bind FormattedSize}" Opacity="0.5" FontSize="12" />
-                                            <TextBlock Text="{x:Bind FormattedDate}" Opacity="0.5" FontSize="12" />
-                                            <TextBlock Text="{x:Bind DirectoryName}" Opacity="0.5" />
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{x:Bind MatchCount}" Opacity="0.6" />
+                                                <TextBlock Text="matches" Opacity="0.6" />
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
+                                                <TextBlock Text="{x:Bind FormattedSize}" Opacity="0.45" FontSize="11" />
+                                                <TextBlock Text="{x:Bind FormattedDate}" Opacity="0.45" FontSize="11" />
+                                                <TextBlock Text="{x:Bind DirectoryName}" Opacity="0.45" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
                                         </StackPanel>
                                         <Button Grid.Column="2" Click="OnShowFileGroupInExplorer" Tag="{x:Bind FilePath}"
                                                 Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
@@ -616,11 +616,15 @@
                                     <TextBlock Text="Full File" />
                                 </StackPanel>
                             </Button>
-                            <ComboBox SelectedIndex="{x:Bind ViewModel.PreviewModeIndex, Mode=TwoWay}" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Multi-select preview mode"
-                                      SelectionChanged="OnPreviewModeChanged">
-                                <x:String>Concatenated</x:String>
-                                <x:String>Multi-highlight</x:String>
-                            </ComboBox>
+                            <DropDownButton x:Name="LayoutDropDown" Content="Layout" VerticalAlignment="Center" FontSize="12"
+                                             ToolTipService.ToolTip="Multi-select preview layout">
+                                <DropDownButton.Flyout>
+                                    <MenuFlyout>
+                                        <ToggleMenuFlyoutItem x:Name="LayoutConcatenated" Text="Concatenated" Click="OnLayoutOptionClicked" />
+                                        <ToggleMenuFlyoutItem x:Name="LayoutMultiHighlight" Text="Multi-highlight" Click="OnLayoutOptionClicked" />
+                                    </MenuFlyout>
+                                </DropDownButton.Flyout>
+                            </DropDownButton>
                             <ToggleButton x:Name="WordWrapToggle" FontSize="12" Padding="8,4"
                                           ToolTipService.ToolTip="Toggle word wrap in preview"
                                           IsChecked="{x:Bind ViewModel.PreviewWordWrap, Mode=TwoWay}"
@@ -665,6 +669,11 @@
                                     Padding="0" ToolTipService.ToolTip="Find &amp; Replace (Ctrl+H)">
                                 <FontIcon Glyph="&#xE721;" FontSize="12" />
                             </Button>
+                            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                <TextBlock Text="Preview Context:" VerticalAlignment="Center" FontSize="12" Opacity="0.7" />
+                                <NumberBox Value="{x:Bind ViewModel.PreviewContextLines, Mode=TwoWay}" Minimum="0" Maximum="50"
+                                           SpinButtonPlacementMode="Compact" MinWidth="90" FontSize="12" />
+                            </StackPanel>
 
                             <!-- Editor-mode group (visible only when editing) -->
                             <AppBarSeparator x:Name="EditorSeparator" Visibility="Collapsed" />

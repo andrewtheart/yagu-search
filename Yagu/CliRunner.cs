@@ -338,6 +338,14 @@ internal static class CliRunner
             var candidate = Path.Combine(dir, "Everything.exe");
             if (File.Exists(candidate)) return candidate;
         }
+
+        // Check registry-discovered install directories
+        foreach (var registryDir in FileLister.GetEverythingInstallDirsFromRegistry())
+        {
+            var candidate = Path.Combine(registryDir, "Everything.exe");
+            if (File.Exists(candidate)) return candidate;
+        }
+
         foreach (var path in new[]
         {
             @"C:\Program Files\Everything\Everything.exe",
