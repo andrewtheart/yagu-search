@@ -1072,6 +1072,9 @@ public sealed partial class MainWindow : Window
     private sealed class SectionMatchNav
     {
         public List<(Paragraph para, int matchInPara)> Matches { get; } = new();
+        // Lazy O(1) lookup from (paragraph, matchInPara) → index in Matches.
+        // Populated on first lookup; invalidated by setting to null when Matches mutates.
+        public Dictionary<(Paragraph, int), int>? IndexByMatch { get; set; }
         public int CurrentIndex { get; set; } = -1;
         public ScrollViewer Scroller { get; set; } = null!;
         public RichTextBlock Block { get; set; } = null!;
@@ -5178,7 +5181,8 @@ public sealed partial class MainWindow : Window
     private void UnboxCurrentMatch([System.Runtime.CompilerServices.CallerMemberName] string caller = "")
     {
         if (_activeMatchHighlight is not { } highlight) return;
-        LogService.Instance.Info("MatchNav", $"UnboxCurrentMatch: idx={_currentMatchIndex}, caller={caller}");
+        if (LogService.Instance.IsInfoEnabled)
+            LogService.Instance.Info("MatchNav", $"UnboxCurrentMatch: idx={_currentMatchIndex}, caller={caller}");
         highlight.run.Foreground = highlight.foreground;
         highlight.run.TextDecorations = highlight.textDecorations;
         _activeMatchHighlight = null;
@@ -6020,15 +6024,18 @@ public sealed partial class MainWindow : Window
 
     private static void SetSectionCurrentMatch(SectionMatchNav sn, Paragraph para, int matchInPara)
     {
-        for (int i = 0; i < sn.Matches.Count; i++)
+        // O(1) lookup once the cache is built. The cache is invalidated by
+        // sites that mutate sn.Matches (see InsertSectionMatches / lazy materialization).
+        var cache = sn.IndexByMatch;
+        if (cache is null || cache.Count != sn.Matches.Count)
         {
-            var match = sn.Matches[i];
-            if (ReferenceEquals(match.para, para) && match.matchInPara == matchInPara)
-            {
-                sn.CurrentIndex = i;
-                return;
-            }
+            cache = new Dictionary<(Paragraph, int), int>(sn.Matches.Count);
+            for (int i = 0; i < sn.Matches.Count; i++)
+                cache[sn.Matches[i]] = i;
+            sn.IndexByMatch = cache;
         }
+        if (cache.TryGetValue((para, matchInPara), out int idx))
+            sn.CurrentIndex = idx;
     }
 
     private void HideMatchNavPanel()
