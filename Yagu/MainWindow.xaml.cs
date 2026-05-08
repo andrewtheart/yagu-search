@@ -33,6 +33,16 @@ public sealed partial class MainWindow : Window
     private int _previewUpdateGen;
     private int _lastCheckedGroupIndex = -1;
     private bool _autoScrollEnabled = false;
+    // Deferred-files state — for tail of newFiles past PreviewSectionPageSize.
+    // The match-nav label includes deferred matches even though their sections
+    // are not yet inserted in the visual tree.
+    private List<KeyValuePair<string, List<SearchResult>>>? _deferredOrderedFiles;
+    private int _deferredCursor;
+    private List<SearchResult>? _deferredAllSelected;
+    private int _deferredGen;
+    private StackPanel? _deferredButtonPanel;
+    private bool _autoLoadMoreInFlight;
+    private const int AutoLoadChunkSize = 5;
     private bool _querySuggestionsDetached;
     private long _hideSuggestionsTick;
     private DispatcherTimer? _autoScrollTimer;
@@ -1068,6 +1078,8 @@ public sealed partial class MainWindow : Window
     }
     private readonly Dictionary<RichTextBlock, LazySection> _lazySections = new();
     private int _lazyMatchCount; // total matches in un-rendered sections
+    private bool _previewViewChangedHooked;
+    private bool _viewportMaterializePending;
     private static readonly SolidColorBrush s_activeExpanderBrush = new(Windows.UI.Color.FromArgb(25, 80, 180, 255));
 
     // Active match highlight state
@@ -1240,6 +1252,202 @@ public sealed partial class MainWindow : Window
         _currentMatchIndex = -1;
         _sectionMatchNavs.Clear();
         PreviewScrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+        EnsurePreviewViewChangedHooked();
+    }
+
+    /// <summary>
+    /// Hooks PreviewScrollViewer.ViewChanged once to drive viewport-based
+    /// lazy section virtualization. Sections outside the viewport remain
+    /// collapsed (and un-materialized) until they scroll close enough to be
+    /// visible, capping peak XAML memory in large multi-file previews.
+    /// </summary>
+    private void EnsurePreviewViewChangedHooked()
+    {
+        if (_previewViewChangedHooked) return;
+        _previewViewChangedHooked = true;
+        PreviewScrollViewer.ViewChanged += OnPreviewScrollViewChanged;
+    }
+
+    /// <summary>
+    /// Yields to the dispatcher at Low priority. Unlike Task.Yield (which
+    /// reposts at Normal priority and can starve Input/Render), this lets
+    /// pointer/keyboard input and frame rendering run before we resume —
+    /// keeping the window marked "responsive" by Windows during long bulk
+    /// preview-build loops.
+    /// </summary>
+    private Task YieldLowAsync()
+    {
+        var tcs = new TaskCompletionSource();
+        if (!DispatcherQueue.TryEnqueue(
+            Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+            () => tcs.SetResult()))
+        {
+            tcs.SetResult();
+        }
+        return tcs.Task;
+    }
+
+    private void OnPreviewScrollViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
+    {
+        if (e.IsIntermediate) return;
+        TryAutoLoadMoreOnScroll();
+        if (_lazySections.Count == 0) return;
+        if (_viewportMaterializePending) return;
+        _viewportMaterializePending = true;
+        // Defer to the next dispatcher pass so multiple ViewChanged events from
+        // a flick/drag coalesce into a single materialization sweep.
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            _viewportMaterializePending = false;
+            MaterializeVisibleLazySections();
+        });
+    }
+
+    /// <summary>
+    /// When the scroll position is near the bottom and there are still files
+    /// behind a "Show more" button, auto-load the next AutoLoadChunkSize
+    /// files. Triggered both by manual scrolling and by match-nav pagination
+    /// (Next-match scrolls the active section into view, which fires
+    /// ViewChanged → this handler).
+    /// </summary>
+    private void TryAutoLoadMoreOnScroll()
+    {
+        if (_autoLoadMoreInFlight) return;
+        var list = _deferredOrderedFiles;
+        var panel = _deferredButtonPanel;
+        var allSelected = _deferredAllSelected;
+        if (list is null || panel is null || allSelected is null) return;
+        if (_deferredCursor >= list.Count) return;
+
+        var sv = PreviewScrollViewer;
+        double vpH = sv.ViewportHeight;
+        if (vpH <= 0) return;
+        // Trigger when within one viewport of the bottom.
+        double remaining = sv.ScrollableHeight - sv.VerticalOffset;
+        if (remaining > vpH) return;
+
+        int chunkEnd = Math.Min(list.Count, _deferredCursor + AutoLoadChunkSize);
+        int chunkSize = chunkEnd - _deferredCursor;
+        int gen = _deferredGen;
+        int pageStart = _deferredCursor;
+        _autoLoadMoreInFlight = true;
+
+        // Replace the button panel contents with a "Loading N more..." indicator
+        // so the user gets feedback during the auto-load. LoadMoreSectionsAsync
+        // will remove this panel and (if more remain) re-add a fresh
+        // "Show more" / "Show all" button pair.
+        try
+        {
+            panel.Children.Clear();
+            panel.Children.Add(new ProgressRing
+            {
+                IsActive = true,
+                Width = 16,
+                Height = 16,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            panel.Children.Add(new TextBlock
+            {
+                Text = $"Loading {chunkSize:N0} more file(s)\u2026",
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+        }
+        catch { /* non-fatal cosmetic update */ }
+
+        _ = AutoLoadMoreChunkAsync(panel, list, pageStart, chunkEnd, allSelected, gen);
+    }
+
+    private async Task AutoLoadMoreChunkAsync(
+        StackPanel panel,
+        List<KeyValuePair<string, List<SearchResult>>> list,
+        int pageStart, int chunkEnd,
+        List<SearchResult> allSelected, int gen)
+    {
+        try
+        {
+            await LoadMoreSectionsAsync(panel, list, pageStart, chunkEnd, allSelected, gen);
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("Preview",
+                $"AutoLoadMoreChunkAsync threw: {ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            _autoLoadMoreInFlight = false;
+        }
+    }
+
+    private void MaterializeVisibleLazySections()
+    {
+        try
+        {
+            if (_lazySections.Count == 0) return;
+            double vpH = PreviewScrollViewer.ViewportHeight;
+            if (vpH <= 0) return;
+            // Pre-materialize up to ~1.5 viewports above and below the visible area
+            // so users see content immediately on small scrolls instead of a flash
+            // of blank/collapsed sections.
+            double bufferPx = vpH * 1.5;
+            var children = PreviewSectionsPanel.Children;
+            // Collect targets first so we don't mutate Expander state while
+            // walking the panel (the Expanding handler can reentrantly scroll
+            // and call back into us via ViewChanged).
+            var toExpand = new List<Expander>();
+            for (int i = 0; i < children.Count; i++)
+            {
+                if (children[i] is not Expander exp || exp.Tag is not RichTextBlock block) continue;
+                if (exp.IsExpanded) continue;
+                if (!_lazySections.ContainsKey(block)) continue;
+
+                double itemY, itemH;
+                try
+                {
+                    var t = exp.TransformToVisual(PreviewScrollViewer);
+                    var p = t.TransformPoint(new Windows.Foundation.Point(0, 0));
+                    itemY = p.Y;
+                    itemH = exp.ActualHeight;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                // Above viewport (and out of buffer) — skip.
+                if (itemY + itemH < -bufferPx) continue;
+                // Below viewport (and out of buffer) — sections are in document order,
+                // so once we're past the buffer we can stop.
+                if (itemY > vpH + bufferPx) break;
+
+                toExpand.Add(exp);
+            }
+
+            // Expand each target on its own dispatcher tick so any synchronous
+            // work done by the Expanding handler (paragraph build, scroll into
+            // view, match-nav update) does not run inside the ViewChanged
+            // callback or recurse into MaterializeVisibleLazySections.
+            foreach (var exp in toExpand)
+            {
+                var captured = exp;
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    try
+                    {
+                        if (!captured.IsExpanded) captured.IsExpanded = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        LogService.Instance.Warning("Preview",
+                            $"MaterializeVisibleLazySections: IsExpanded threw: {ex.GetType().Name}: {ex.Message}");
+                    }
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("Preview",
+                $"MaterializeVisibleLazySections: sweep threw: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -1256,32 +1464,51 @@ public sealed partial class MainWindow : Window
         EnsureSectionsSurface();
         PreviewToolbarContent.Visibility = Visibility.Visible;
 
-        bool showSpinner = newFiles.Count > PreviewSectionPageSize;
+        // Cap the initial render at PreviewSectionPageSize. Adding 10k+
+        // Expanders to a flat StackPanel can crash the WinUI layout engine
+        // (native fail-fast in CoreMessagingXP.dll). The remainder is paged
+        // in via "Show more" using the same machinery as LoadMoreSectionsAsync.
+        var orderedFiles = newFiles.ToList();
+        int totalRequested = orderedFiles.Count;
+        int pageEnd = Math.Min(totalRequested, PreviewSectionPageSize);
+        bool deferRemainder = pageEnd < totalRequested;
+        if (deferRemainder)
+            LogService.Instance.Info("Preview",
+                $"PrependPreviewSectionsForFilesAsync: capping initial render at {pageEnd:N0}/{totalRequested:N0}; remainder deferred to 'Show more'.");
+
+        bool showSpinner = pageEnd > PreviewSectionPageSize / 2 || deferRemainder;
         if (showSpinner)
-            ShowProgressOverlay($"Adding {newFiles.Count:N0} files\u2026", 0);
+            ShowProgressOverlay($"Adding {pageEnd:N0} of {totalRequested:N0} files\u2026", 0);
 
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
         int previewLines = ViewModel.PreviewContextLines;
 
-        // Batch-read file contents off the UI thread.
-        var fileList = newFiles.ToList();
-        var fileContents = await ReadAllFileContentsAsync(fileList);
-
+        // Batch-read file contents off the UI thread — but only for the
+        // sections we will eagerly expand. Lazy/collapsed sections read their
+        // file on demand inside MaterializeLazySection.
+        var fileList = orderedFiles.GetRange(0, pageEnd);
         bool isHighlight = ViewModel.PreviewModeIndex == 1;
-        // For large bulk inserts, defer content building for sections beyond BulkExpandLimit.
         bool bulkInsert = fileList.Count > BulkExpandLimit;
+        int eagerCount = bulkInsert ? Math.Min(BulkExpandLimit, fileList.Count) : fileList.Count;
+        var fileContents = await ReadAllFileContentsAsync(
+            eagerCount == fileList.Count ? fileList : fileList.GetRange(0, eagerCount));
 
-        int insertIndex = 0;
-        int fileIndex = 0;
+        // Build all Expanders OFF-tree first. Adding to PreviewSectionsPanel.Children
+        // while the panel is in the visual tree triggers a layout invalidation per
+        // insert; with 10k+ files that produces a multi-second UI freeze. Building
+        // off-tree is pure C# object construction (no layout cost).
         int filesToAdd = fileList.Count;
+        var built = new List<Expander>(filesToAdd);
+        int fileIndex = 0;
         foreach (var (filePath, results) in fileList)
         {
             bool expanded = !bulkInsert || fileIndex < BulkExpandLimit;
             var (section, expander) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results,
                 isExpanded: expanded, addToPanel: false);
-            PreviewSectionsPanel.Children.Insert(insertIndex++, expander);
 
-            fileContents.TryGetValue(filePath, out string[]? allLines);
+            string[]? allLines = null;
+            if (expanded)
+                fileContents.TryGetValue(filePath, out allLines);
 
             if (expanded)
             {
@@ -1292,12 +1519,14 @@ public sealed partial class MainWindow : Window
             }
             else
             {
-                int lazyCount = ComputeMatchCount(results, allLines, isHighlight, previewLines, rx);
+                // Approximate match count without reading the file. Exact count
+                // is recomputed when the section materializes.
+                int lazyCount = ComputeMatchCount(results, null, isHighlight, previewLines, rx);
                 _lazySections[section] = new LazySection
                 {
                     FilePath = filePath,
                     Results = results,
-                    AllLines = allLines,
+                    AllLines = null,
                     PreviewLines = previewLines,
                     IsHighlight = isHighlight,
                     MatchCount = lazyCount,
@@ -1305,23 +1534,62 @@ public sealed partial class MainWindow : Window
                 _lazyMatchCount += lazyCount;
             }
 
-            // Yield to the UI thread periodically so the app stays responsive.
+            built.Add(expander);
+
+            // Yield to the dispatcher periodically. We use a low-priority repost
+            // (YieldLowAsync) so Input and Render priority work runs before we
+            // resume — without this, Windows flags the window "Not responding"
+            // even though we're pumping the queue.
             if (++fileIndex % PreviewYieldBatchSize == 0)
             {
                 if (showSpinner)
-                    UpdateProgressOverlay(fileIndex * 100 / filesToAdd);
-                await Task.Delay(1).ConfigureAwait(true);
+                    UpdateProgressOverlay(fileIndex * 15 / filesToAdd); // build phase: 0-15%
+                await YieldLowAsync();
+            }
+        }
+
+        // Phase 2: insert built expanders into the live panel in batches.
+        // We insert at the head (insertIndex grows) so newer files appear first.
+        int insertIndex = 0;
+        for (int i = 0; i < built.Count; i++)
+        {
+            PreviewSectionsPanel.Children.Insert(insertIndex++, built[i]);
+            if ((i + 1) % PreviewYieldBatchSize == 0)
+            {
+                if (showSpinner)
+                    UpdateProgressOverlay(15 + (i + 1) * 85 / built.Count); // insert phase: 15-100%
+                await YieldLowAsync();
             }
         }
 
         if (showSpinner)
             HideProgressOverlay();
 
+        // If we capped the initial render, append a "Show more" button so the
+        // user can page in the rest. Uses the same LoadMoreSectionsAsync path
+        // as the file-group flow.
+        if (deferRemainder)
+        {
+            var allSelectedRemainder = new List<SearchResult>();
+            for (int i = pageEnd; i < orderedFiles.Count; i++)
+                allSelectedRemainder.AddRange(orderedFiles[i].Value);
+            int gen = ++_previewUpdateGen;
+            // Stash deferred state so the match-nav label can include not-yet-
+            // inserted matches and so scroll-to-bottom can auto-load the next chunk.
+            _deferredOrderedFiles = orderedFiles;
+            _deferredCursor = pageEnd;
+            _deferredAllSelected = allSelectedRemainder;
+            _deferredGen = gen;
+            AddShowMoreSectionsButton(orderedFiles, pageEnd, allSelectedRemainder, gen);
+        }
+
         // Update match nav and file label to include the new sections.
         var totalFiles = PreviewSectionsPanel.Children.OfType<Expander>().Count();
-        int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
+        var (deferredFileCount, deferredMatchCount) = GetDeferredCounts();
+        int totalMatches = _matchParagraphs.Count + _lazyMatchCount + deferredMatchCount;
+        int grandFileCount = totalFiles + deferredFileCount;
         SetPreviewFileLabel(
-            $"{totalMatches:N0} selected matches across {totalFiles:N0} file(s)",
+            $"{totalMatches:N0} selected matches across {grandFileCount:N0} file(s)",
             string.Join(Environment.NewLine, GetExistingPreviewFilePaths()));
         _previewResult = newFiles.Values.First().First();
         UpdateMatchNavPanel();
@@ -1336,6 +1604,16 @@ public sealed partial class MainWindow : Window
                 TryScrollToPreviewSection(scrollToFile);
             });
         }
+
+        // After layout settles, materialize any lazy sections that already fall
+        // within the viewport (e.g. when the viewport is taller than the
+        // BulkExpandLimit-many initially expanded sections).
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+            MaterializeVisibleLazySections);
+
+        // Flush log synchronously so a subsequent layout-engine fail-fast still
+        // leaves the prior progress lines on disk for diagnostics.
+        try { LogService.Instance.Flush(); } catch { }
     }
 
     private async void OnFileGroupExpanding(Expander sender, ExpanderExpandingEventArgs args)
@@ -2602,7 +2880,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
 
     /// <summary>Number of file sections to build before yielding to the UI message pump.</summary>
-    private const int PreviewYieldBatchSize = 5;
+    private const int PreviewYieldBatchSize = 32;
 
     /// <summary>Max file sections to render in one page. Remaining are loaded on demand via "Show more".</summary>
     private const int PreviewSectionPageSize = 50;
@@ -2678,10 +2956,17 @@ public sealed partial class MainWindow : Window
         allBtn.Click += async (_, _) => await LoadMoreSectionsAsync(panel, orderedFiles, nextIndex, orderedFiles.Count, allSelected, gen);
 
         PreviewSectionsPanel.Children.Add(panel);
+
+        // Track for scroll-driven auto-load and for accurate match-nav totals.
+        _deferredOrderedFiles = orderedFiles;
+        _deferredCursor = nextIndex;
+        _deferredAllSelected = allSelected;
+        _deferredGen = gen;
+        _deferredButtonPanel = panel;
     }
 
     /// <summary>Max sections kept expanded during bulk "Show all" loads to reduce layout cost.</summary>
-    private const int BulkExpandLimit = 10;
+    private const int BulkExpandLimit = 3;
 
     private async Task LoadMoreSectionsAsync(
         StackPanel buttonPanel,
@@ -2695,6 +2980,8 @@ public sealed partial class MainWindow : Window
 
         // Remove the button panel.
         PreviewSectionsPanel.Children.Remove(buttonPanel);
+        if (ReferenceEquals(_deferredButtonPanel, buttonPanel))
+            _deferredButtonPanel = null;
 
         // When loading all remaining files, process in page-sized chunks
         // with a longer yield between pages so the layout engine stays responsive.
@@ -2713,7 +3000,16 @@ public sealed partial class MainWindow : Window
             int chunkEnd = Math.Min(finalEnd, cursor + PreviewSectionPageSize);
             var pageFiles = orderedFiles.GetRange(cursor, chunkEnd - cursor);
 
-            var fileContents = await ReadAllFileContentsAsync(pageFiles);
+            // Only pre-read files we will eagerly expand in this chunk.
+            // For bulk "Show all" loads, that's at most BulkExpandLimit-many
+            // sections across the entire load — the rest are lazy.
+            int chunkEagerCount;
+            if (!loadingAll) chunkEagerCount = pageFiles.Count;
+            else chunkEagerCount = Math.Max(0, Math.Min(pageFiles.Count, BulkExpandLimit - totalSectionsAdded));
+            var fileContents = chunkEagerCount > 0
+                ? await ReadAllFileContentsAsync(
+                    chunkEagerCount == pageFiles.Count ? pageFiles : pageFiles.GetRange(0, chunkEagerCount))
+                : new Dictionary<string, string[]?>(StringComparer.OrdinalIgnoreCase);
             if (_previewUpdateGen != gen) { HideProgressOverlay(); return; }
 
             Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
@@ -2728,7 +3024,10 @@ public sealed partial class MainWindow : Window
                 bool expanded = !loadingAll || totalSectionsAdded < BulkExpandLimit;
                 var (section, expander) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results,
                     isExpanded: expanded, addToPanel: false);
-                fileContents.TryGetValue(filePath, out string[]? allLines);
+
+                string[]? allLines = null;
+                if (expanded)
+                    fileContents.TryGetValue(filePath, out allLines);
 
                 if (expanded)
                 {
@@ -2741,12 +3040,13 @@ public sealed partial class MainWindow : Window
                 else
                 {
                     // Defer content building for collapsed sections (lazy rendering).
-                    int lazyCount = ComputeMatchCount(results, allLines, isHighlight, previewLines, rx);
+                    // Skip pre-reading the file; MaterializeLazySection reads it on demand.
+                    int lazyCount = ComputeMatchCount(results, null, isHighlight, previewLines, rx);
                     _lazySections[section] = new LazySection
                     {
                         FilePath = filePath,
                         Results = results,
-                        AllLines = allLines,
+                        AllLines = null,
                         PreviewLines = previewLines,
                         IsHighlight = isHighlight,
                         MatchCount = lazyCount,
@@ -2769,7 +3069,7 @@ public sealed partial class MainWindow : Window
                     if (loadingAll)
                         UpdateProgressOverlay((int)((double)filesLoaded / totalToLoad * 100));
 
-                    await Task.Delay(1).ConfigureAwait(true);
+                    await YieldLowAsync();
                     if (_previewUpdateGen != gen) { HideProgressOverlay(); return; }
                 }
             }
@@ -2793,16 +3093,30 @@ public sealed partial class MainWindow : Window
         // Add another "Show more" button if still more remain.
         if (finalEnd < orderedFiles.Count)
             AddShowMoreSectionsButton(orderedFiles, finalEnd, allSelected, gen);
+        else
+        {
+            // Exhausted — clear deferred state.
+            _deferredOrderedFiles = null;
+            _deferredAllSelected = null;
+            _deferredButtonPanel = null;
+            _deferredCursor = 0;
+        }
 
         // Update match count and file count to reflect all loaded files.
         int loadedFiles = PreviewSectionsPanel.Children.OfType<Expander>().Count();
-        int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
+        var (deferredFileCount, deferredMatchCount) = GetDeferredCounts();
+        int totalMatches = _matchParagraphs.Count + _lazyMatchCount + deferredMatchCount;
+        int grandFileCount = loadedFiles + deferredFileCount;
         SetPreviewFileLabel(
-            $"{totalMatches:N0} selected matches across {loadedFiles:N0} file(s)",
+            $"{totalMatches:N0} selected matches across {grandFileCount:N0} file(s)",
             string.Join(Environment.NewLine, orderedFiles.Take(finalEnd).Select(kv => kv.Key)));
         UpdateMatchNavPanel();
         UpdateSectionMatchNavPanels();
         UpdateExpandAllButtonVisibility();
+
+        // Materialize any lazy sections that already fall within the viewport.
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+            MaterializeVisibleLazySections);
     }
 
     private void BuildConcatenatedSection(
@@ -2919,6 +3233,19 @@ public sealed partial class MainWindow : Window
                     total += CountRegexMatches(allLines[idx], rx);
             }
         }
+        else if (isHighlight)
+        {
+            // Approximation when we haven't read the file yet: count matches
+            // across one MatchLine per unique line number. MatchLine may be
+            // truncated (ShortPreview), so this can undercount on very long
+            // lines, but it's recomputed exactly when the section materializes.
+            var seen = new HashSet<int>();
+            foreach (var r in results)
+            {
+                if (seen.Add(r.LineNumber))
+                    total += CountRegexMatches(r.MatchLine, rx);
+            }
+        }
         else
         {
             foreach (var r in results)
@@ -2939,11 +3266,25 @@ public sealed partial class MainWindow : Window
         var matSw = System.Diagnostics.Stopwatch.StartNew();
         LogService.Instance.Info("Preview", $"MaterializeLazySection: file='{System.IO.Path.GetFileName(lazy.FilePath)}', matches={lazy.MatchCount}");
 
+        // Lazy file read: bulk inserts skip the upfront read for collapsed
+        // sections. Read the single file now, on demand.
+        string[]? allLines = lazy.AllLines;
+        if (allLines is null)
+        {
+            try { allLines = ReadAllLinesWithEncodingSync(lazy.FilePath); }
+            catch (Exception ex)
+            {
+                LogService.Instance.Warning("Preview",
+                    $"MaterializeLazySection: read failed for '{lazy.FilePath}': {ex.GetType().Name}: {ex.Message}");
+                allLines = null;
+            }
+        }
+
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
         if (lazy.IsHighlight)
-            BuildHighlightSection(section, lazy.Results, lazy.AllLines, lazy.PreviewLines, rx);
+            BuildHighlightSection(section, lazy.Results, allLines, lazy.PreviewLines, rx);
         else
-            BuildConcatenatedSection(section, lazy.Results, lazy.AllLines, lazy.PreviewLines, rx);
+            BuildConcatenatedSection(section, lazy.Results, allLines, lazy.PreviewLines, rx);
 
         _lazyMatchCount -= lazy.MatchCount;
         matSw.Stop();
@@ -3417,19 +3758,30 @@ public sealed partial class MainWindow : Window
         expander.Expanding += (s, _) =>
         {
             if (_suppressExpandingHandler) return;
-            if (s is Expander exp && exp.Tag is RichTextBlock b)
+            try
             {
-                UpdateExpandAllButtonVisibility();
-                if (MaterializeLazySection(b) && MatchNavPanel.Visibility == Visibility.Visible)
-                    MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
-                // Re-apply the current wrap state in case the user toggled wrap while
-                // this section was collapsed (we skip collapsed sections in
-                // ApplyWordWrapAsync to keep the toggle responsive for huge previews).
-                var wrap = ViewModel.PreviewWordWrap;
-                b.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
-                if (exp.Content is ScrollViewer scroller)
-                    scroller.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
-                ActivateSectionForBlock(b);
+                if (s is Expander exp && exp.Tag is RichTextBlock b)
+                {
+                    UpdateExpandAllButtonVisibility();
+                    if (MaterializeLazySection(b) && MatchNavPanel.Visibility == Visibility.Visible)
+                        MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
+                    // Re-apply the current wrap state in case the user toggled wrap while
+                    // this section was collapsed (we skip collapsed sections in
+                    // ApplyWordWrapAsync to keep the toggle responsive for huge previews).
+                    var wrap = ViewModel.PreviewWordWrap;
+                    b.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
+                    if (exp.Content is ScrollViewer scroller)
+                        scroller.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+                    ActivateSectionForBlock(b);
+                }
+            }
+            catch (Exception ex)
+            {
+                // A managed exception that escapes a XAML callback fail-fasts the
+                // process via CoreMessagingXP. Catch + log so we survive.
+                LogService.Instance.Warning("Preview",
+                    $"Expander.Expanding handler threw: {ex.GetType().Name}: {ex.Message}");
+                try { LogService.Instance.Flush(); } catch { }
             }
         };
         ToolTipService.SetToolTip(expander, filePath);
@@ -5216,16 +5568,34 @@ public sealed partial class MainWindow : Window
         ? _sectionMatchNavs.Count
         : _matchParagraphs.Select(m => m.block).Distinct().Count() + _lazySections.Count;
 
+    /// <summary>
+    /// Files and matches not yet inserted into the visual tree (waiting behind
+    /// a "Show more" button). Included in the match-nav grand totals so the
+    /// user sees the true scope of their result set.
+    /// </summary>
+    private (int Files, int Matches) GetDeferredCounts()
+    {
+        var list = _deferredOrderedFiles;
+        if (list is null || _deferredCursor >= list.Count) return (0, 0);
+        int files = list.Count - _deferredCursor;
+        int matches = 0;
+        for (int i = _deferredCursor; i < list.Count; i++)
+            matches += list[i].Value.Count;
+        return (files, matches);
+    }
+
     private string FormatMatchNavLabel(int index)
     {
-        int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
-        int fileCount = MatchNavFileCount;
+        var (deferredFiles, deferredMatches) = GetDeferredCounts();
+        int totalMatches = _matchParagraphs.Count + _lazyMatchCount + deferredMatches;
+        int fileCount = MatchNavFileCount + deferredFiles;
         return $"Match {index + 1} of {totalMatches} (across {fileCount} file{(fileCount != 1 ? "s" : "")})";
     }
 
     private void UpdateMatchNavPanel()
     {
-        int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
+        var (_, deferredMatches) = GetDeferredCounts();
+        int totalMatches = _matchParagraphs.Count + _lazyMatchCount + deferredMatches;
         if (totalMatches > 0)
         {
             MatchNavPanel.Visibility = Visibility.Visible;
@@ -5316,6 +5686,11 @@ public sealed partial class MainWindow : Window
         _activeSectionNav = null;
         _lazySections.Clear();
         _lazyMatchCount = 0;
+        _deferredOrderedFiles = null;
+        _deferredAllSelected = null;
+        _deferredButtonPanel = null;
+        _deferredCursor = 0;
+        _autoLoadMoreInFlight = false;
     }
 
     private void UpdateSectionMatchNavPanels()
