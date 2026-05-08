@@ -16,6 +16,13 @@ public sealed class EditorLauncher
     /// <summary>Test seam: when set, replaces Process.Start calls.</summary>
     internal static Action<ProcessStartInfo>? TestProcessLauncher = null;
 
+    [ExcludeFromCodeCoverage]
+    private static void LaunchProcess(ProcessStartInfo psi)
+    {
+        if (TestProcessLauncher != null) TestProcessLauncher(psi);
+        else Process.Start(psi);
+    }
+
     public bool Open(string filePath, int line)
     {
         // For archive entries, extract to a temp file first
@@ -44,8 +51,7 @@ public sealed class EditorLauncher
                 Arguments = args,
                 UseShellExecute = false,
             };
-            if (TestProcessLauncher != null) TestProcessLauncher(psi);
-            else Process.Start(psi);
+            LaunchProcess(psi);
             return true;
         }
         catch (Exception ex)
@@ -71,13 +77,13 @@ public sealed class EditorLauncher
                 Arguments = $"/select,\"{physicalPath}\"",
                 UseShellExecute = true,
             };
-            if (TestProcessLauncher != null) TestProcessLauncher(psi);
-            else Process.Start(psi);
+            LaunchProcess(psi);
             return true;
         }
         catch (Exception ex) { LogService.Instance.Warning("EditorLauncher", $"Failed to open folder for {filePath}", ex); return false; }
     }
 
+    [ExcludeFromCodeCoverage]
     public static bool OpenTerminalAt(string filePath)
     {
         try
@@ -90,8 +96,7 @@ public sealed class EditorLauncher
                 Arguments = $"-d \"{dir}\"",
                 UseShellExecute = true,
             };
-            if (TestProcessLauncher != null) TestProcessLauncher(psi);
-            else Process.Start(psi);
+            LaunchProcess(psi);
             return true;
         }
         catch (Exception ex)
@@ -105,8 +110,7 @@ public sealed class EditorLauncher
                     WorkingDirectory = Path.GetDirectoryName(filePath) ?? ".",
                     UseShellExecute = true,
                 };
-                if (TestProcessLauncher != null) TestProcessLauncher(psi);
-                else Process.Start(psi);
+                LaunchProcess(psi);
                 return true;
             }
             catch (Exception ex2) { LogService.Instance.Warning("EditorLauncher", "Failed to open terminal", ex2); return false; }

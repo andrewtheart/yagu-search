@@ -17,7 +17,6 @@ public sealed class SearchResultCollection
     public IReadOnlyList<FileGroup> AllGroups => _allGroups;
     public BatchObservableCollection<FileGroup> VisibleGroups { get; } = new();
 
-    public string ResultFilter { get; set; } = string.Empty;
     public string FileNameFilter { get; set; } = string.Empty;
     public string IncludeGlobs { get; set; } = string.Empty;
     public string ExcludeGlobs { get; set; } = string.Empty;
@@ -129,13 +128,22 @@ public sealed class SearchResultCollection
     {
         if (resultStore is null) return 0;
 
+        // Snapshot the group list so we can safely iterate off the UI thread
+        // while new groups may still be appended by the dispatcher.
+        var groupsSnapshot = _allGroups.ToArray();
+
         int evicted = 0;
         resultStore.WriteBatch(writeOne =>
         {
-            foreach (var group in _allGroups)
+            foreach (var group in groupsSnapshot)
             {
-                foreach (var result in group)
+                // Use index-based iteration: the UI thread may append to the
+                // group concurrently, but existing indices remain stable and
+                // EvictWith is idempotent (no-op if already evicted).
+                int count = group.Count;
+                for (int i = 0; i < count; i++)
                 {
+                    var result = group[i];
                     if (!result.IsEvicted)
                     {
                         result.EvictWith(writeOne);
@@ -281,15 +289,7 @@ public sealed class SearchResultCollection
                 return false;
         }
 
-        if (string.IsNullOrWhiteSpace(ResultFilter)) return true;
-        var filter = ResultFilter;
-        if (group.FilePath.Contains(filter, StringComparison.OrdinalIgnoreCase)) return true;
-        foreach (var result in group)
-        {
-            if (result.MatchLine.Contains(filter, StringComparison.OrdinalIgnoreCase)) return true;
-        }
-
-        return false;
+        return true;
     }
 
     private static void EvictNewResultIfNeeded(

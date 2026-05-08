@@ -24,7 +24,7 @@ namespace Yagu.Tests;
 /// </summary>
 public sealed class MatchNavRegressionTests
 {
-    private const int MinRedPixelsPerMatch = 50;
+    private const int MinRedPixelsPerMatch = 100;
 
     private readonly ITestOutputHelper _output;
 
@@ -72,15 +72,10 @@ public sealed class MatchNavRegressionTests
         try
         {
             // Step 1: drive the UI and capture screenshots.
-            // The nav script can legitimately run for a long time depending on the
-            // file corpus, so use an idle-output timeout instead of a wall-clock
-            // one: as long as the script keeps emitting progress lines we keep
-            // waiting; only abort if it stalls (no new stdout/stderr) for 3 min.
             RunPowerShellScript(
                 navScript,
                 $"-ScreenshotDir \"{screenshotDir}\"",
-                timeout: Timeout.InfiniteTimeSpan,
-                idleTimeout: TimeSpan.FromMinutes(5));
+                timeout: TimeSpan.FromMinutes(15));
 
             // Step 2: red-pixel scan over 03-match-*.png. Use Threshold = MinRedPixelsPerMatch - 1
             // so the script only emits rows for screenshots whose count is BELOW the floor;
@@ -134,11 +129,7 @@ public sealed class MatchNavRegressionTests
 
     // ───────────────────────── Helpers ─────────────────────────
 
-    private string RunPowerShellScript(
-        string scriptPath,
-        string scriptArgs,
-        TimeSpan timeout,
-        TimeSpan? idleTimeout = null)
+    private string RunPowerShellScript(string scriptPath, string scriptArgs, TimeSpan timeout)
     {
         var psi = new ProcessStartInfo
         {
@@ -158,70 +149,16 @@ public sealed class MatchNavRegressionTests
 
         var stdout = new System.Text.StringBuilder();
         var stderr = new System.Text.StringBuilder();
-        var lastOutputTicks = Environment.TickCount64;
-        proc.OutputDataReceived += (_, e) =>
-        {
-            if (e.Data is null) return;
-            Interlocked.Exchange(ref lastOutputTicks, Environment.TickCount64);
-            lock (stdout) stdout.AppendLine(e.Data);
-        };
-        proc.ErrorDataReceived += (_, e) =>
-        {
-            if (e.Data is null) return;
-            Interlocked.Exchange(ref lastOutputTicks, Environment.TickCount64);
-            lock (stderr) stderr.AppendLine(e.Data);
-        };
+        proc.OutputDataReceived += (_, e) => { if (e.Data is not null) lock (stdout) stdout.AppendLine(e.Data); };
+        proc.ErrorDataReceived += (_, e) => { if (e.Data is not null) lock (stderr) stderr.AppendLine(e.Data); };
         proc.BeginOutputReadLine();
         proc.BeginErrorReadLine();
 
-        bool exited;
-        if (idleTimeout is { } idle)
+        if (!proc.WaitForExit((int)timeout.TotalMilliseconds))
         {
-            // Idle-based wait: keep polling until the process exits, the wall-clock
-            // timeout elapses (if finite), or the time since the last output line
-            // exceeds idleTimeout.
-            var idleMs = (long)idle.TotalMilliseconds;
-            var hasWallClock = timeout != Timeout.InfiniteTimeSpan && timeout.TotalMilliseconds > 0;
-            var deadlineTicks = hasWallClock
-                ? Environment.TickCount64 + (long)timeout.TotalMilliseconds
-                : long.MaxValue;
-            exited = false;
-            while (true)
-            {
-                if (proc.WaitForExit(500))
-                {
-                    exited = true;
-                    break;
-                }
-                var now = Environment.TickCount64;
-                if (now - Interlocked.Read(ref lastOutputTicks) >= idleMs)
-                {
-                    try { proc.Kill(entireProcessTree: true); } catch { }
-                    throw new TimeoutException(
-                        $"PowerShell script '{Path.GetFileName(scriptPath)}' produced no output for " +
-                        $"{idle.TotalSeconds:F0}s; aborting as stalled.");
-                }
-                if (now >= deadlineTicks)
-                {
-                    try { proc.Kill(entireProcessTree: true); } catch { }
-                    throw new TimeoutException(
-                        $"PowerShell script '{Path.GetFileName(scriptPath)}' did not complete within " +
-                        $"{timeout.TotalSeconds:F0}s.");
-                }
-            }
-        }
-        else
-        {
-            var timeoutMs = timeout == Timeout.InfiniteTimeSpan
-                ? -1
-                : (int)timeout.TotalMilliseconds;
-            exited = proc.WaitForExit(timeoutMs);
-            if (!exited)
-            {
-                try { proc.Kill(entireProcessTree: true); } catch { }
-                throw new TimeoutException(
-                    $"PowerShell script '{Path.GetFileName(scriptPath)}' did not complete within {timeout.TotalSeconds:F0}s.");
-            }
+            try { proc.Kill(entireProcessTree: true); } catch { }
+            throw new TimeoutException(
+                $"PowerShell script '{Path.GetFileName(scriptPath)}' did not complete within {timeout.TotalSeconds:F0}s.");
         }
         // Drain remaining async output buffers.
         proc.WaitForExit();

@@ -265,7 +265,6 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
                             <Grid>
                                 <TextBox PlaceholderText="e.g. ts,js,py or *.cs"
@@ -293,8 +292,6 @@
                                                FontWeight="SemiBold" />
                                 </Border>
                             </Grid>
-                            <TextBox Grid.Column="2" PlaceholderText="Filter results…"
-                                     Text="{x:Bind ViewModel.ResultFilter, Mode=TwoWay}" />
                         </Grid>
                     </StackPanel>
                 </Expander>
@@ -407,13 +404,25 @@
                         </Button>
                     </Grid>
 
-                    <Grid Grid.Row="1" Margin="8,6">
-                        <TextBox PlaceholderText="Filter files…"
-                                 Text="{x:Bind ViewModel.FileNameFilter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                 Padding="30,4,8,4" FontSize="12" />
-                        <FontIcon Glyph="&#xE71C;" FontSize="12" Opacity="0.65"
-                                  HorizontalAlignment="Left" VerticalAlignment="Center"
-                                  Margin="10,0,0,0" IsHitTestVisible="False" />
+                    <Grid Grid.Row="1" Margin="8,6" ColumnSpacing="6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <CheckBox x:Name="SelectAllFilesCheckBox"
+                                  ToolTipService.ToolTip="Select / deselect all files"
+                                  MinWidth="32" MinHeight="0" Padding="0"
+                                  VerticalAlignment="Center"
+                                  Checked="OnSelectAllFilesChecked"
+                                  Unchecked="OnSelectAllFilesUnchecked" />
+                        <Grid Grid.Column="1">
+                            <TextBox PlaceholderText="Filter files…"
+                                     Text="{x:Bind ViewModel.FileNameFilter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     Padding="30,4,8,4" FontSize="12" />
+                            <FontIcon Glyph="&#xE71C;" FontSize="12" Opacity="0.65"
+                                      HorizontalAlignment="Left" VerticalAlignment="Center"
+                                      Margin="10,0,0,0" IsHitTestVisible="False" />
+                        </Grid>
                     </Grid>
 
                     <ListView

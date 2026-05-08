@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Text.Json;
 using Yagu.Models;
@@ -20,6 +21,7 @@ namespace Yagu.Tests;
 /// so CI can diff across commits.
 /// </summary>
 [Collection("PerformanceBenchmarks")]
+[ExcludeFromCodeCoverage]
 public sealed class PerformanceBenchmarkTests : IDisposable
 {
     private const long Megabyte = 1024L * 1024L;

@@ -117,7 +117,6 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial long MaxFileSizeBytes { get; set; } = 100L * 1024 * 1024;
     [ObservableProperty] public partial int MaxResults { get; set; }
     [ObservableProperty] public partial string EditorCommand { get; set; } = EditorLauncher.DefaultCommand;
-    [ObservableProperty] public partial string ResultFilter { get; set; } = string.Empty;
     [ObservableProperty] public partial string FileNameFilter { get; set; } = string.Empty;
     [ObservableProperty] public partial int SearchModeIndex { get; set; }
     [ObservableProperty] public partial int SortModeIndex { get; set; }
@@ -198,15 +197,6 @@ public sealed partial class MainViewModel : ObservableObject
         ["ilk"] = "Binaries", ["iobj"] = "Binaries", ["ipdb"] = "Binaries", ["exp"] = "Binaries",
         ["pyc"] = "Binaries", ["pyo"] = "Binaries", ["class"] = "Binaries", ["dex"] = "Binaries",
         ["wasm"] = "Binaries",
-        // Archives
-        ["zip"] = "Archives", ["gz"] = "Archives", ["tar"] = "Archives", ["7z"] = "Archives",
-        ["rar"] = "Archives", ["bz2"] = "Archives", ["xz"] = "Archives", ["iso"] = "Archives",
-        ["cab"] = "Archives", ["msi"] = "Archives", ["nupkg"] = "Archives", ["whl"] = "Archives",
-        ["jar"] = "Archives", ["war"] = "Archives", ["ear"] = "Archives", ["apk"] = "Archives",
-        ["aab"] = "Archives", ["aar"] = "Archives", ["appx"] = "Archives", ["msix"] = "Archives",
-        ["appxbundle"] = "Archives", ["msixbundle"] = "Archives", ["vsix"] = "Archives",
-        ["tgz"] = "Archives", ["tbz2"] = "Archives", ["txz"] = "Archives", ["zst"] = "Archives",
-        ["zstd"] = "Archives", ["br"] = "Archives", ["lz4"] = "Archives", ["lzma"] = "Archives",
         // Data / Dumps
         ["bin"] = "Data", ["dat"] = "Data", ["db"] = "Data", ["db3"] = "Data",
         ["sqlite"] = "Data", ["sqlite3"] = "Data", ["edb"] = "Data", ["mdb"] = "Data",
@@ -688,13 +678,17 @@ public sealed partial class MainViewModel : ObservableObject
                         break;
                     case SearchEvent.MemoryPressure mp:
                         DegradedNoticeText = "Memory pressure — paging results to disk";
-                        LogService.Instance.Warning("ViewModel", $"Memory pressure event received — starting eviction ({_resultCollection.AllGroups.Count:N0} groups, {MatchesFound:N0} matches)");
-                        var evictSw = System.Diagnostics.Stopwatch.StartNew();
-                        int evictedCount = EvictAllResults();
-                        evictSw.Stop();
-                        LogService.Instance.Warning("ViewModel", $"Eviction + acknowledge complete in {evictSw.ElapsedMilliseconds}ms (freed {evictedCount:N0})");
-                        mp.AcknowledgeEviction(evictedCount);   // Signal workers they can resume
                         Degraded = true;
+                        LogService.Instance.Warning("ViewModel", $"Memory pressure event received — starting eviction ({_resultCollection.AllGroups.Count:N0} groups, {MatchesFound:N0} matches)");
+                        // Run the expensive disk I/O off the UI thread to avoid freezing.
+                        _ = Task.Run(() =>
+                        {
+                            var evictSw = System.Diagnostics.Stopwatch.StartNew();
+                            int evictedCount = EvictAllResults();
+                            evictSw.Stop();
+                            LogService.Instance.Warning("ViewModel", $"Eviction complete in {evictSw.ElapsedMilliseconds}ms (freed {evictedCount:N0})");
+                            mp.AcknowledgeEviction(evictedCount);
+                        });
                         break;
                     case SearchEvent.MemoryPressureRelieved relieved:
                         Degraded = false;
@@ -1195,12 +1189,10 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
-    partial void OnResultFilterChanged(string value) => ApplySortAndFilter();
     partial void OnFileNameFilterChanged(string value) => ApplySortAndFilter();
 
     private void ApplySortAndFilter()
     {
-        _resultCollection.ResultFilter = ResultFilter;
         _resultCollection.FileNameFilter = FileNameFilter;
         _resultCollection.IncludeGlobs = IncludeGlobs;
         _resultCollection.ExcludeGlobs = ExcludeGlobs;

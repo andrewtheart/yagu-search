@@ -1679,6 +1679,28 @@ public sealed partial class MainWindow : Window
         rtb.Blocks.Add(para);
     }
 
+    private void OnSelectAllFilesChecked(object sender, RoutedEventArgs e)
+    {
+        _suppressPreviewUpdate = true;
+        try
+        {
+            foreach (var g in ViewModel.ResultGroups)
+                g.SelectAll();
+        }
+        finally { _suppressPreviewUpdate = false; }
+    }
+
+    private void OnSelectAllFilesUnchecked(object sender, RoutedEventArgs e)
+    {
+        _suppressPreviewUpdate = true;
+        try
+        {
+            foreach (var g in ViewModel.ResultGroups)
+                g.DeselectAll();
+        }
+        finally { _suppressPreviewUpdate = false; }
+    }
+
     private void OnSelectAllChecked(object sender, RoutedEventArgs e)
     {
         if (_suppressPreviewUpdate)

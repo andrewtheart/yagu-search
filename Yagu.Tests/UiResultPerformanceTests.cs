@@ -1,10 +1,12 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using Yagu.Models;
 using Yagu.Services;
 using Xunit.Abstractions;
 
 namespace Yagu.Tests;
 
+[ExcludeFromCodeCoverage]
 public sealed class UiResultPerformanceTests
 {
     private const int LargeResultCount = 100_000;
@@ -56,9 +58,9 @@ public sealed class UiResultPerformanceTests
             maxElapsed: TimeSpan.FromMilliseconds(GetBudget("YAGU_UI_PERF_SORT_MS", 2_500)),
             maxAllocatedBytes: GetBudget("YAGU_UI_PERF_SORT_MB", 32) * Megabyte);
 
-        collection.ResultFilter = $"needle-{LargeResultCount - 1:D6}";
+        collection.FileNameFilter = $"file-{LargeFileCount - 1:D5}";
         var filterMeasurement = Measure(collection.ApplySortAndFilter);
-        WriteMetric("LargeResultContentFilter", filterMeasurement);
+        WriteMetric("LargeResultFileNameFilter", filterMeasurement);
         Assert.Single(collection.VisibleGroups);
         AssertWithinBudget(
             filterMeasurement,
@@ -178,27 +180,6 @@ public class SearchResultCollectionCoverageTests
         Assert.Contains("app.cs", col.VisibleGroups[0].FileName);
     }
 
-    [Fact]
-    public void ResultFilter_FiltersByMatchLine()
-    {
-        var col = new SearchResultCollection();
-        col.Add(MakeResult(@"C:\a.txt", "hello world"));
-        col.Add(MakeResult(@"C:\b.txt", "goodbye world"));
-        col.ResultFilter = "hello";
-        col.ApplySortAndFilter();
-        Assert.Single(col.VisibleGroups);
-    }
-
-    [Fact]
-    public void ResultFilter_MatchesFilePath()
-    {
-        var col = new SearchResultCollection();
-        col.Add(MakeResult(@"C:\special\file.txt", "no match here"));
-        col.ResultFilter = "special";
-        col.ApplySortAndFilter();
-        Assert.Single(col.VisibleGroups);
-    }
-
     [Theory]
     [InlineData(0)] // none
     [InlineData(1)] // match count
@@ -310,6 +291,66 @@ public class SearchResultCollectionCoverageTests
         Assert.Equal(2, evicted);
         // Already evicted, second call evicts nothing
         Assert.Equal(0, col.EvictAll(store));
+    }
+
+    [Fact]
+    public void EvictAll_MultipleResultsInSameGroup_EvictsAll()
+    {
+        using var store = new ResultStore();
+        var col = new SearchResultCollection();
+        col.Add(MakeResult(@"C:\a.txt", "line1"));
+        col.Add(MakeResult(@"C:\a.txt", "line2"));
+        col.Add(MakeResult(@"C:\a.txt", "line3"));
+        Assert.Single(col.AllGroups);
+        Assert.Equal(3, col.AllGroups[0].Count);
+
+        int evicted = col.EvictAll(store);
+        Assert.Equal(3, evicted);
+        Assert.True(col.AllGroups[0][0].IsEvicted);
+        Assert.True(col.AllGroups[0][1].IsEvicted);
+        Assert.True(col.AllGroups[0][2].IsEvicted);
+    }
+
+    [Fact]
+    public void EvictAll_SnapshotsGroups_DoesNotEvictGroupsAddedAfterSnapshot()
+    {
+        using var store = new ResultStore();
+        var col = new SearchResultCollection();
+        col.Add(MakeResult(@"C:\a.txt", "line1"));
+
+        // Evict existing — this tests that snapshot captures the current state
+        int evicted = col.EvictAll(store);
+        Assert.Equal(1, evicted);
+
+        // Add a new result after eviction
+        col.Add(MakeResult(@"C:\b.txt", "line2"));
+        // The new result should NOT be evicted yet
+        Assert.False(col.AllGroups[1][0].IsEvicted);
+
+        // Second evict picks up the new result
+        int evicted2 = col.EvictAll(store);
+        Assert.Equal(1, evicted2);
+        Assert.True(col.AllGroups[1][0].IsEvicted);
+    }
+
+    [Fact]
+    public void EvictAll_SkipsAlreadyEvictedResults_Idempotent()
+    {
+        using var store = new ResultStore();
+        var col = new SearchResultCollection();
+        col.Add(MakeResult(@"C:\a.txt", "line1"));
+        col.Add(MakeResult(@"C:\a.txt", "line2"));
+
+        // Evict once
+        int evicted1 = col.EvictAll(store);
+        Assert.Equal(2, evicted1);
+
+        // Add another result to same group
+        col.Add(MakeResult(@"C:\a.txt", "line3"));
+
+        // Second evict only evicts the new one
+        int evicted2 = col.EvictAll(store);
+        Assert.Equal(1, evicted2);
     }
 
     [Fact]

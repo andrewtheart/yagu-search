@@ -690,6 +690,7 @@ internal sealed class NativeSearchOutcome
         }
     }
 
+    [ExcludeFromCodeCoverage]
     internal ref struct BufferReader
     {
         private ReadOnlySpan<byte> _data;

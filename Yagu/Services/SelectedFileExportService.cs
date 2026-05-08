@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using Yagu.Helpers;
 
@@ -6,8 +7,6 @@ namespace Yagu.Services;
 public static class SelectedFileExportService
 {
     public const string ContentSeparator = "---------------------------------------";
-
-    private static readonly UTF8Encoding Utf8NoBomStrict = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     public static string BuildPathListText(IEnumerable<string> filePaths)
     {

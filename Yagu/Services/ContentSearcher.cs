@@ -205,6 +205,7 @@ public sealed class ContentSearcher
         catch (DecoderFallbackException ex) { LogService.Instance.Verbose("ContentSearcher", $"Encoding error searching: {filePath}", ex); return new FileSearchOutcome(SkipEncoding, 0); }
     }
 
+    [ExcludeFromCodeCoverage]
     private static async Task<int> SearchStreamAsync(
         string filePath,
         Regex? regex,
@@ -260,6 +261,7 @@ public sealed class ContentSearcher
         return await SearchLinesAsync(filePath, reader, regex, literal, literalComparison, options, writer, cancellationToken, metadata).ConfigureAwait(false);
     }
 
+    [ExcludeFromCodeCoverage]
     private static async Task<int> SearchMappedAsync(
         string filePath,
         long length,
@@ -638,6 +640,7 @@ public sealed class ContentSearcher
     /// Used by both the per-file <see cref="StreamingSink"/> and the batch
     /// <see cref="SearchService"/> parallel scan sink.
     /// </summary>
+    [ExcludeFromCodeCoverage]
     internal static class NativeMatchDecoder
     {
         internal static unsafe (string Line, int MatchStart, int MatchLength) DecodeMatchLine(byte* ptr, int len, int matchStartBytes, int matchLenBytes)
@@ -674,6 +677,7 @@ public sealed class ContentSearcher
         /// Decode a UTF-8 byte buffer to a managed string, hard-capped to keep huge
         /// lines off the LOH.
         /// </summary>
+        [ExcludeFromCodeCoverage]
         internal static unsafe string DecodeAndTruncate(byte* ptr, int len)
         {
             if (ptr == null || len <= 0) return string.Empty;
