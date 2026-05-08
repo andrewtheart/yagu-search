@@ -3210,6 +3210,7 @@ public sealed partial class MainWindow : Window
             }
 
             // Add built sections to the visual tree in small batches with yields.
+            if (pendingExpanders.Count > 0) _lastHighlightedActiveBlock = null;
             for (int i = 0; i < pendingExpanders.Count; i++)
             {
                 PreviewSectionsPanel.Children.Add(pendingExpanders[i]);
@@ -3955,7 +3956,10 @@ public sealed partial class MainWindow : Window
         _expanderFilePaths[expander] = filePath;
         _expanderHeaderArgs[expander] = (filePath, detail, block, results);
         if (addToPanel)
+        {
             PreviewSectionsPanel.Children.Add(expander);
+            _lastHighlightedActiveBlock = null;
+        }
         return (block, expander);
     }
 
@@ -4121,6 +4125,7 @@ public sealed partial class MainWindow : Window
                 && border.Child == block)
             {
                 PreviewSectionsPanel.Children.RemoveAt(i);
+                _lastHighlightedActiveBlock = null;
 
                 // Remove per-section match nav data
                 _sectionMatchNavs.Remove(block);
@@ -5189,28 +5194,23 @@ public sealed partial class MainWindow : Window
     private void ScrollPreviewToLine(RichTextBlock block, Paragraph targetPara)
     {
         int requestId = ++_matchScrollRequestId;
-        // Only force a synchronous layout pass if the run's character rect is not
-        // already available.  For large files (86k+ paragraphs) UpdateLayout() is
-        // extremely expensive; skipping it when the rect is valid removes the
-        // primary source of match-nav lag.
-        bool layoutForced = false;
-        string layoutEx = "";
-        double? preCheckRect = TryGetActiveOrParaAbsY(block, targetPara, out _);
-        if (preCheckRect is null)
-        {
-            try
-            {
-                block.UpdateLayout();
-                PreviewScrollViewer.UpdateLayout();
-                layoutForced = true;
-            }
-            catch (Exception ex) { layoutEx = ex.GetType().Name; }
-        }
+        // Fast path: if the target run already has a valid character rect (i.e.
+        // it's near the current viewport and was laid out), use it.
+        // Otherwise, do NOT call block.UpdateLayout() here — on huge files
+        // (86k+ paragraphs) RichTextBlock is not virtualised, so UpdateLayout()
+        // is hundreds of ms.  Use the estimated-position path immediately and
+        // let VerifyActiveMatchVisibleAfterScroll + the deferred retry loop
+        // correct the position once natural layout catches up after ChangeView.
+        // Capture the height alongside the Y so TryScrollPreviewToLine can
+        // skip a second TransformToVisual+GetCharacterRect probe (each of
+        // which can force layout on a non-virtualised RichTextBlock and is
+        // the dominant per-click cost on large files).
+        double? preCheckRect = TryGetActiveOrParaAbsY(block, targetPara, out double preCheckHeight);
         if (LogService.Instance.IsInfoEnabled)
             LogService.Instance.Info("MatchNav",
-                $"ScrollPreviewToLine: entry idx={_currentMatchIndex}, requestId={requestId}, forcedLayout={layoutForced}, rectPreCheck={preCheckRect is not null}{(layoutEx.Length > 0 ? $", layoutEx={layoutEx}" : "")}");
+                $"ScrollPreviewToLine: entry idx={_currentMatchIndex}, requestId={requestId}, rectPreCheck={preCheckRect is not null}");
 
-        if (TryScrollPreviewToLine(block, targetPara, preCheckRect, out _))
+        if (TryScrollPreviewToLine(block, targetPara, preCheckRect, preCheckHeight, out _))
             return;
 
         ScrollPreviewToLine(block, targetPara, attemptsRemaining: 3, requestId);
@@ -5460,7 +5460,7 @@ public sealed partial class MainWindow : Window
             if (requestId != _matchScrollRequestId)
                 return;
 
-            if (TryScrollPreviewToLine(block, targetPara, null, out var reason))
+            if (TryScrollPreviewToLine(block, targetPara, null, 0, out var reason))
                 return;
 
             if (attemptsRemaining > 0)
@@ -5478,7 +5478,7 @@ public sealed partial class MainWindow : Window
         _matchScrollRequestId++;
     }
 
-    private bool TryScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, double? preCheckedAbsY, out string reason)
+    private bool TryScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, double? preCheckedAbsY, double preCheckedHeight, out string reason)
     {
         reason = string.Empty;
         try
@@ -5501,11 +5501,20 @@ public sealed partial class MainWindow : Window
             // coordinates) when available — this avoids cumulative line-height
             // estimation error which grew unbounded for paragraphs deep in the
             // RichTextBlock (off by ~2.5px/paragraph for FontSize=14).
-            // Re-use the pre-checked value when the caller already probed.
-            double actualRunHeight = 0;
-            double? actualRunAbsY = preCheckedAbsY ?? TryGetActiveOrParaAbsY(block, targetPara, out actualRunHeight);
+            // Re-use the pre-checked Y AND height when the caller already probed,
+            // so we do not call TryGetActiveOrParaAbsY twice per click (each call
+            // can force a layout pass on a non-virtualised RichTextBlock).
+            double actualRunHeight;
+            double? actualRunAbsY;
             if (preCheckedAbsY is not null)
+            {
+                actualRunAbsY = preCheckedAbsY;
+                actualRunHeight = preCheckedHeight;
+            }
+            else
+            {
                 actualRunAbsY = TryGetActiveOrParaAbsY(block, targetPara, out actualRunHeight);
+            }
 
             double targetVerticalOffset;
 
@@ -5540,14 +5549,12 @@ public sealed partial class MainWindow : Window
                 LogService.Instance.Info("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, mode={(actualRunAbsY is null ? "estimated" : "rect")}, targetY={targetVerticalOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}");
 
             ScrollMatchHorizontallyIntoView(block, targetPara);
-            // Skip post-scroll verification when the rect path gave us an accurate
-            // position — the corrective loop in Verify is expensive on large files
-            // and unnecessary when the initial scroll was pixel-accurate.
-            if (actualRunAbsY is null)
-            {
-                int paraIdx = GetParagraphIndex(block, targetPara);
-                VerifyActiveMatchVisibleAfterScroll(block, targetPara, paraIdx);
-            }
+            // Always schedule post-scroll verification — even on the rect path the
+            // run can drift off-screen between rapid Next/Prev clicks (Expander
+            // animations, lazy section materialization). Verify is cheap when the
+            // run is already on-screen.
+            int paraIdx = GetParagraphIndex(block, targetPara);
+            VerifyActiveMatchVisibleAfterScroll(block, targetPara, paraIdx);
             return true;
         }
         catch (Exception ex)
@@ -5631,7 +5638,11 @@ public sealed partial class MainWindow : Window
     private void VerifyActiveMatchVisibleAfterScroll(RichTextBlock block, Paragraph targetPara, int paragraphIndex, int correctionAttempt = 0, double previousParaAbsY = double.NaN)
     {
         int navIdx = _currentMatchIndex;
-        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        // Use Normal priority so rapid Next/Prev clicks don't starve the
+        // corrective scroll — Low priority let the verify queue grow without
+        // running until the user stopped clicking, leaving the highlighted
+        // match off-screen for hundreds of ms.
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal, () =>
         {
             try
             {
@@ -5778,6 +5789,16 @@ public sealed partial class MainWindow : Window
 
     private double EstimateCumulativeHeightBefore(RichTextBlock block, Paragraph targetPara, double lineHeight)
     {
+        // Fast path: when word-wrap is off, every paragraph is a single line so
+        // the cumulative height before paragraph N is just N * lineHeight.
+        // Avoids an O(N) walk over every preceding Run on huge files (86k+ paragraphs)
+        // every time the user clicks Next match.
+        if (!ViewModel.PreviewWordWrap)
+        {
+            int paraIdx = GetParagraphIndex(block, targetPara);
+            if (paraIdx >= 0) return paraIdx * lineHeight;
+        }
+
         double availableWidth = GetPreviewTextViewportWidth(block) - 24;
         double charWidth = EstimatePreviewCharWidth(block);
         int charsPerLine = ViewModel.PreviewWordWrap ? Math.Max(1, (int)Math.Floor(availableWidth / charWidth)) : int.MaxValue;
@@ -6078,9 +6099,17 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private RichTextBlock? _lastHighlightedActiveBlock;
+
     private void HighlightActiveExpander()
     {
         var activeBlock = _activeSectionNav?.Block;
+        // Avoid the per-click loop when the active section hasn't changed:
+        // setting Background on every Expander invalidates each section panel
+        // and is wasted work during rapid Next/Prev within a single file.
+        if (ReferenceEquals(activeBlock, _lastHighlightedActiveBlock))
+            return;
+        _lastHighlightedActiveBlock = activeBlock;
         foreach (var child in PreviewSectionsPanel.Children.OfType<Expander>())
         {
             bool isActive = child.Tag is RichTextBlock b && b == activeBlock;
