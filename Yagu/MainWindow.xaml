@@ -840,6 +840,23 @@
                                 Padding="12,6"
                                 Tapped="StickyFileHeader_Tapped" />
 
+                        <Canvas x:Name="ActiveMatchOverlay" Grid.Row="1"
+                            IsHitTestVisible="False" Visibility="Collapsed">
+                            <Border x:Name="ActiveMatchBand"
+                                Height="18"
+                                Background="#2AFF6A00"
+                                BorderBrush="OrangeRed"
+                                BorderThickness="3,0,0,0"
+                                CornerRadius="3" />
+                            <Border x:Name="ActiveMatchWordMarker"
+                                Height="18"
+                                MinWidth="12"
+                                Background="#66FF4500"
+                                BorderBrush="OrangeRed"
+                                BorderThickness="1"
+                                CornerRadius="2" />
+                        </Canvas>
+
                         <!-- Progress overlay for "Show all files" -->
                         <Grid x:Name="PreviewProgressOverlay" Grid.Row="1" Visibility="Collapsed">
                             <Border Background="{ThemeResource AcrylicBackgroundFillColorBaseBrush}"

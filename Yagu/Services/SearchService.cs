@@ -155,7 +155,7 @@ public sealed class SearchService
         // consumer, preventing unbounded memory growth. The native FFI uses TryWrite
         // (stops scanning when full); the managed path uses WriteAsync (backpressure).
         // Channel buffer size — independent of total result limit.
-        int contentCap = options.MaxResults > 0 ? Math.Clamp(options.MaxResults, 512, 4_096) : 4_096;
+        int contentCap = options.MaxResults > 0 ? Math.Clamp(options.MaxResults, 512, 16_384) : 16_384;
         var contentResults = Channel.CreateBounded<SearchResult>(new BoundedChannelOptions(contentCap)
         {
             SingleReader = true,
@@ -1164,7 +1164,7 @@ public sealed class SearchService
             ? degradedSession
             : batchSession;
 
-        using var sink = new BatchScanSink(batch, contentWriter, options.MaxResults, Volatile.Read(ref totalMatches));
+        using var sink = new BatchScanSink(batch, contentWriter, options.MaxResults, Volatile.Read(ref totalMatches), cancelPtr);
 
         Native.NativeSearcher.ScanPathsParallel(
             session, batch, parallelism, (int*)cancelPtr, sink);
@@ -1232,6 +1232,7 @@ public sealed class SearchService
         // from different files (which would corrupt ripgrep-style grouped output).
         // The buffer array is pooled because this object is created for every batch.
         private readonly List<SearchResult>?[] _buffers;
+        private readonly unsafe int* _cancelPtr; // Rust cancel flag — checked during backpressure waits
         private int _runningTotal; // starts from outer totalMatches at batch start
         private bool _stopped;
 
@@ -1241,17 +1242,19 @@ public sealed class SearchService
         public Exception? CapturedException { get; set; }
         public string? ErrorMessage { get; set; }
 
-        public BatchScanSink(
+        public unsafe BatchScanSink(
             IReadOnlyList<string> paths,
             ChannelWriter<SearchResult> writer,
             int maxResults,
-            int currentTotalMatches)
+            int currentTotalMatches,
+            IntPtr cancelPtr)
         {
             _paths = paths;
             _writer = writer;
             _maxResults = maxResults;
             _count = paths.Count;
             _runningTotal = currentTotalMatches;
+            _cancelPtr = (int*)cancelPtr;
             _emitted = ArrayPool<int>.Shared.Rent(paths.Count);
             _statuses = ArrayPool<int>.Shared.Rent(paths.Count);
             _fileLength = ArrayPool<long>.Shared.Rent(paths.Count);
@@ -1346,9 +1349,34 @@ public sealed class SearchService
             {
                 foreach (var r in buf)
                 {
-                    if (!_writer.TryWrite(r))
+                    if (_writer.TryWrite(r))
+                        continue;
+
+                    // Channel full — apply backpressure. Spin-wait for the forwarder to
+                    // drain space instead of silently dropping results. This runs on a
+                    // thread-pool thread inside ProcessNativeBatch, so blocking is safe
+                    // and produces the desired effect: the scanner slows to match the
+                    // consumer's pace.
+                    bool written = false;
+                    var spinWait = new SpinWait();
+                    while (true)
                     {
-                        ChannelFullDrops += buf.Count; // approximate: remaining items in buffer
+                        // Check for cancellation (Rust cancel flag) to avoid deadlock
+                        // when the search is cancelled while we're waiting.
+                        unsafe
+                        {
+                            if (_cancelPtr != null && Volatile.Read(ref *_cancelPtr) != 0)
+                                break;
+                        }
+                        spinWait.SpinOnce(sleep1Threshold: 2);
+                        if (_writer.TryWrite(r))
+                        {
+                            written = true;
+                            break;
+                        }
+                    }
+                    if (!written)
+                    {
                         _stopped = true;
                         break;
                     }

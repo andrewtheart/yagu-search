@@ -46,6 +46,7 @@ public partial class App : Application
                 StartupDirectory = ParseDirArg(System.Environment.GetCommandLineArgs());
             _window = new MainWindow(StartupDirectory, StartupQuery);
             _window.Activate();
+            _window.FocusSearchOnLaunch();
         }
         catch (Exception ex)
         {

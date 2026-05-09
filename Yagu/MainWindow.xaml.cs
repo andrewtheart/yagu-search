@@ -169,6 +169,9 @@ public sealed partial class MainWindow : Window
                 SearchCancelLabel.Text = "Cancel";
                 ToolTipService.SetToolTip(SearchCancelButton, "Cancel search (F5)");
                 SearchCancelButton.Style = (Style)Application.Current.Resources["DefaultButtonStyle"];
+                SearchCancelButton.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 255, 220, 220));
+                SearchCancelButton.BorderBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 216, 80, 80));
+                SearchCancelButton.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 120, 24, 24));
                 _autoScrollEnabled = AutoScrollResultsCheckBox.IsChecked == true;
                 _autoScrollTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
                 _autoScrollTimer.Tick += OnAutoScrollTick;
@@ -182,6 +185,9 @@ public sealed partial class MainWindow : Window
                 SearchCancelLabel.Text = "Search";
                 ToolTipService.SetToolTip(SearchCancelButton, "Search (F5)");
                 SearchCancelButton.Style = (Style)Application.Current.Resources["AccentButtonStyle"];
+                SearchCancelButton.ClearValue(Control.BackgroundProperty);
+                SearchCancelButton.ClearValue(Control.BorderBrushProperty);
+                SearchCancelButton.ClearValue(Control.ForegroundProperty);
                 _autoScrollTimer?.Stop();
                 UpdateSparkline(); // final update
                 ThroughputSparkline.Opacity = 0.35;
@@ -643,6 +649,18 @@ public sealed partial class MainWindow : Window
             ShowWindow(_hwnd, SW_RESTORE);
             SetForegroundWindow(_hwnd);
         }
+        Activate();
+        FocusSearchBox();
+    }
+
+    public void FocusSearchOnLaunch()
+    {
+        if (_hwnd != IntPtr.Zero)
+        {
+            ShowWindow(_hwnd, SW_RESTORE);
+            SetForegroundWindow(_hwnd);
+        }
+
         Activate();
         FocusSearchBox();
     }
@@ -1505,9 +1523,20 @@ public sealed partial class MainWindow : Window
     // preview load; reset by HideMatchNavPanel / preview-clear paths so a fresh
     // preview re-triggers the auto-scroll-to-first-match.
     private bool _initialMatchScrolled;
-    // Paragraph → index cache for O(1) lookup in large files.
-    // Invalidated whenever a block's Blocks collection changes (full-file toggle, section materialize, clear).
-    private readonly Dictionary<RichTextBlock, Dictionary<Paragraph, int>> _paraIndexCache = new();
+    // Paragraph metrics cache for O(1) lookup and O(1) cumulative-height estimates
+    // in large files. Invalidated whenever a block's Blocks collection changes
+    // (full-file toggle, section materialize, clear).
+    private sealed class ParagraphMetrics
+    {
+        public required Dictionary<Paragraph, int> IndexByParagraph { get; init; }
+        public double[]? PrefixHeights;
+        public int PrefixCharsPerLine;
+        public double PrefixLineHeight;
+    }
+    private readonly Dictionary<RichTextBlock, ParagraphMetrics> _paragraphMetricsCache = new();
+    private readonly Dictionary<Paragraph, List<(Run run, int column)>> _paragraphMatchRunCache = new();
+    private readonly Dictionary<RichTextBlock, Expander> _blockExpanderCache = new();
+    private readonly Dictionary<RichTextBlock, double> _blockAbsoluteTopCache = new();
 
     // Per-section match navigation state (class moved to Models/SectionMatchNav.cs)
     private readonly Dictionary<RichTextBlock, SectionMatchNav> _sectionMatchNavs = new();
@@ -1520,6 +1549,10 @@ public sealed partial class MainWindow : Window
     // The expander whose header is currently mirrored in StickyFileHeader, so we
     // only rebuild + replace its child when the topmost-in-viewport changes.
     private Expander? _stickyHeaderExpander;
+
+    private List<KeyValuePair<string, List<SearchResult>>>? _cachedDeferredCountsList;
+    private int _cachedDeferredCountsCursor = -1;
+    private (int Files, int Matches) _cachedDeferredCounts;
 
     // Lazy section rendering — deferred content building for collapsed sections
     private sealed class LazySection
@@ -1537,8 +1570,34 @@ public sealed partial class MainWindow : Window
     private bool _viewportMaterializePending;
     private static readonly SolidColorBrush s_activeExpanderBrush = new(Windows.UI.Color.FromArgb(25, 80, 180, 255));
 
-    // Active match highlight state
-    private (Paragraph para, Run run, Brush foreground, Windows.UI.Text.TextDecorations textDecorations, int column)? _activeMatchHighlight;
+    // Tracks remaining (un-rendered) matches for sections that were truncated to
+    // avoid UI freezes on huge files (see MaxMatchesPerSection). Each click of
+    // "Next match" past the last rendered match in such a section appends the
+    // next chunk of results to the section.
+    private sealed class SectionOverflow
+    {
+        public string? FilePath;
+        public required List<SearchResult> RemainingResults;
+        public required string[]? AllLines;
+        public required int PreviewLines;
+        public required Regex? Rx;
+        public required int OriginalTotal;
+        public required int RenderedSoFar;
+        public Paragraph? NoticePara;
+        /// <summary>True if the section was rendered in multi-highlight mode
+        /// (contiguous line ranges with <c>⋮</c> gap markers) rather than
+        /// concat mode (per-match "── Line N ──" separators).</summary>
+        public bool IsHighlightMode;
+        /// <summary>Highest line index (1-based) already rendered. Used in
+        /// highlight mode to clip overlapping context windows so expansion
+        /// continues directly from the last rendered line.</summary>
+        public int LastRenderedLine;
+    }
+    private readonly Dictionary<RichTextBlock, SectionOverflow> _sectionOverflow = new();
+
+    // Active match state. The active visual marker is rendered as an overlay;
+    // do not mutate Run styling here because RichTextBlock re-renders expensively.
+    private (Paragraph para, Run run, int column, int matchInPara)? _activeMatchHighlight;
     private int _matchScrollRequestId;
 
     private enum SplitLayoutMode { Split, ResultsMaximized, PreviewMaximized }
@@ -2139,6 +2198,7 @@ public sealed partial class MainWindow : Window
         for (int i = 0; i < built.Count; i++)
         {
             PreviewSectionsPanel.Children.Insert(insertIndex++, built[i]);
+            InvalidateScrollPositionCache();
             if ((i + 1) % PreviewYieldBatchSize == 0)
             {
                 if (showSpinner)
@@ -3193,6 +3253,7 @@ public sealed partial class MainWindow : Window
         LogService.Instance.Info("Preview", $"ShowConcatenatedPreviewAsync: {byFile.Count} files, {selected.Count} results, gen={gen}");
         ShowPreviewSectionsSurface();
         _matchParagraphs.Clear();
+        _sectionOverflow.Clear();
         InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
         int previewLines = ViewModel.PreviewContextLines;
@@ -3222,8 +3283,13 @@ public sealed partial class MainWindow : Window
             fileContents.TryGetValue(filePath, out string[]? allLines);
             int parasInFile = 0;
 
+            int matchIndex = 0;
+            int cap = Math.Min(results.Count, MaxMatchesPerSection);
             foreach (var r in results)
             {
+                if (matchIndex >= cap) break;
+                matchIndex++;
+
                 // Separator between matches in same file
                 var sep = new Paragraph();
                 var label = $"\u00A0Line\u00A0{r.LineNumber}\u00A0";
@@ -3252,6 +3318,20 @@ public sealed partial class MainWindow : Window
                         scrollPara = firstPara;
                     }
                 }
+            }
+
+            if (results.Count > cap)
+            {
+                var notice = AppendTruncationNotice(section, results.Count, cap);
+                RegisterSectionOverflow(section,
+                    filePath: filePath,
+                    remainingResults: results.GetRange(cap, results.Count - cap),
+                    allLines: allLines,
+                    previewLines: previewLines,
+                    rx: rx,
+                    originalTotal: results.Count,
+                    renderedSoFar: cap,
+                    noticePara: notice);
             }
 
             fileSw.Stop();
@@ -3296,6 +3376,7 @@ public sealed partial class MainWindow : Window
         LogService.Instance.Info("Preview", $"ShowMultiHighlightPreviewAsync: {byFile.Count} files, {selected.Count} results, gen={gen}");
         ShowPreviewSectionsSurface();
         _matchParagraphs.Clear();
+        _sectionOverflow.Clear();
         InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
@@ -3320,11 +3401,14 @@ public sealed partial class MainWindow : Window
         {
             var fileSw = System.Diagnostics.Stopwatch.StartNew();
             var (section, _) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
-
-            // Collect all match line numbers in this file
-            var matchLines = new HashSet<int>(results.Select(r => r.LineNumber));
+            int sectionMatchStart = _matchParagraphs.Count;
 
             fileContents.TryGetValue(filePath, out string[]? allLines);
+
+            bool initiallyCapped = results.Count > MaxMatchesPerSection;
+            var cappedResults = initiallyCapped ? results.GetRange(0, MaxMatchesPerSection) : results;
+            var matchLines = new HashSet<int>(cappedResults.Select(r => r.LineNumber));
+            int lastRenderedLine1 = 0;
 
             if (allLines != null)
             {
@@ -3366,7 +3450,7 @@ public sealed partial class MainWindow : Window
                         int lineNum = i + 1;
                         bool isMatchLine = matchLines.Contains(lineNum);
                         // Use first matching result for this line (for column-based highlighting)
-                        var matchResult = results.FirstOrDefault(r => r.LineNumber == lineNum) ?? results[0];
+                        var matchResult = cappedResults.FirstOrDefault(r => r.LineNumber == lineNum) ?? cappedResults[0];
                         _sectionMatchNavs.TryGetValue(section, out var sn);
                         var firstPara = AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatchLine, matchResult, rx, truncate: true, _matchParagraphs, sn, out _);
 
@@ -3378,11 +3462,14 @@ public sealed partial class MainWindow : Window
                         }
                     }
                 }
+                if (merged.Count > 0)
+                    lastRenderedLine1 = merged[^1].end + 1;
             }
             else
             {
                 // Fallback: concatenated style
-                foreach (var r in results)
+                int fallbackIndex = 0;
+                foreach (var r in cappedResults)
                 {
                     var lines = GetPreviewLines(r, null, ViewModel.PreviewContextLines, fullFile: false);
                     foreach (var (line, lineNum) in lines)
@@ -3399,7 +3486,47 @@ public sealed partial class MainWindow : Window
                             scrollPara = firstPara;
                         }
                     }
+                    fallbackIndex++;
                 }
+            }
+
+            int renderedCount = Math.Min(results.Count, _matchParagraphs.Count - sectionMatchStart);
+            if (allLines != null && renderedCount < Math.Min(MaxMatchesPerSection, results.Count))
+            {
+                _sectionMatchNavs.TryGetValue(section, out var sn);
+                var pending = results.Skip(renderedCount).ToList();
+                AppendHighlightMatchWindows(
+                    section,
+                    pending,
+                    allLines,
+                    rx,
+                    sn,
+                    MaxMatchesPerSection - renderedCount,
+                    MaxMatchesPerSection - renderedCount,
+                    out int consumed,
+                    out _,
+                    lastRenderedLine1);
+                renderedCount = Math.Min(results.Count, renderedCount + consumed);
+            }
+            else if (allLines == null)
+            {
+                renderedCount = Math.Min(MaxMatchesPerSection, results.Count);
+            }
+            var remaining = results.Skip(renderedCount).ToList();
+            if (remaining.Count > 0)
+            {
+                var notice = AppendTruncationNotice(section, results.Count, renderedCount);
+                RegisterSectionOverflow(section,
+                    filePath: filePath,
+                    remainingResults: remaining,
+                    allLines: allLines,
+                    previewLines: ViewModel.PreviewContextLines,
+                    rx: rx,
+                    originalTotal: results.Count,
+                    renderedSoFar: renderedCount,
+                    noticePara: notice,
+                    isHighlightMode: allLines != null,
+                    lastRenderedLine: lastRenderedLine1);
             }
 
             fileSw.Stop();
@@ -3474,6 +3601,69 @@ public sealed partial class MainWindow : Window
     private const int PreviewLineLayoutSegmentChars = 4096;
 
     /// <summary>
+    /// Maximum matches to render per file section before truncating.
+    /// Prevents multi-second UI freezes when a single file has hundreds
+    /// of thousands of matches (e.g. 600K).
+    /// </summary>
+    private const int MaxMatchesPerSection = 5_000;
+
+    /// <summary>
+    /// Number of additional results to materialize per "Next match" click
+    /// once a section's overflow has been registered. Smaller than the
+    /// initial cap because expanded chunks are appended on the UI thread,
+    /// and each result can produce many match runs (long lines split into
+    /// multiple paragraphs, multi-occurrence regex matches, etc.).
+    /// </summary>
+    private const int MaxMatchesPerExpandChunk = 500;
+
+    /// <summary>
+    /// Hard cap on match entries (paragraphs added to <c>_matchParagraphs</c>)
+    /// produced by a single <see cref="ExpandSectionNextChunk"/> call. Dense
+    /// lines (many regex matches per line) can multiply the result count by
+    /// 20× or more, which would freeze the UI thread for seconds.
+    /// </summary>
+    private const int MaxMatchEntriesPerExpandChunk = 2_000;
+
+    /// <summary>Appends a notice paragraph when a section's matches were truncated.</summary>
+    private static Paragraph AppendTruncationNotice(RichTextBlock section, int totalMatches, int renderedMatches)
+    {
+        var notice = new Paragraph { Margin = new Thickness(0, 12, 0, 4) };
+        var run = new Run
+        {
+            Text = $"\u26A0 Showing first {renderedMatches:N0} of {totalMatches:N0} matches. " +
+                   "Click \u2193 (Next match) to load more, or open in editor to browse all.",
+        };
+        run.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 200, 160, 60));
+        notice.Inlines.Add(run);
+        section.Blocks.Add(notice);
+        return notice;
+    }
+
+    /// <summary>
+    /// Registers a section as having un-rendered overflow matches so that
+    /// "Next match" navigation can progressively load more chunks.
+    /// </summary>
+    private void RegisterSectionOverflow(
+        RichTextBlock section, string? filePath, List<SearchResult> remainingResults,
+        string[]? allLines, int previewLines, Regex? rx, int originalTotal, int renderedSoFar,
+        Paragraph noticePara, bool isHighlightMode = false, int lastRenderedLine = 0)
+    {
+        _sectionOverflow[section] = new SectionOverflow
+        {
+            FilePath = filePath,
+            RemainingResults = remainingResults,
+            AllLines = allLines,
+            PreviewLines = previewLines,
+            Rx = rx,
+            OriginalTotal = originalTotal,
+            RenderedSoFar = renderedSoFar,
+            NoticePara = noticePara,
+            IsHighlightMode = isHighlightMode,
+            LastRenderedLine = lastRenderedLine,
+        };
+    }
+
+    /// <summary>
     /// Batch-read all file contents off the UI thread so the per-file loop only does
     /// XAML element construction (which must be on the UI thread) without interleaving I/O waits.
     /// </summary>
@@ -3513,6 +3703,7 @@ public sealed partial class MainWindow : Window
         // Create a placeholder panel that LoadMoreSectionsAsync will remove.
         var placeholder = new StackPanel();
         PreviewSectionsPanel.Children.Add(placeholder);
+        InvalidateScrollPositionCache();
         await LoadMoreSectionsAsync(placeholder, orderedFiles, pageStart, orderedFiles.Count, allSelected, gen);
     }
 
@@ -3541,6 +3732,7 @@ public sealed partial class MainWindow : Window
         allBtn.Click += async (_, _) => await LoadMoreSectionsAsync(panel, orderedFiles, nextIndex, orderedFiles.Count, allSelected, gen);
 
         PreviewSectionsPanel.Children.Add(panel);
+        InvalidateScrollPositionCache();
 
         // Track for scroll-driven auto-load and for accurate match-nav totals.
         _deferredOrderedFiles = orderedFiles;
@@ -3565,6 +3757,7 @@ public sealed partial class MainWindow : Window
 
         // Remove the button panel.
         PreviewSectionsPanel.Children.Remove(buttonPanel);
+            InvalidateScrollPositionCache();
         if (ReferenceEquals(_deferredButtonPanel, buttonPanel))
             _deferredButtonPanel = null;
 
@@ -3648,6 +3841,7 @@ public sealed partial class MainWindow : Window
             for (int i = 0; i < pendingExpanders.Count; i++)
             {
                 PreviewSectionsPanel.Children.Add(pendingExpanders[i]);
+                InvalidateScrollPositionCache();
 
                 if ((i + 1) % PreviewYieldBatchSize == 0)
                 {
@@ -3711,8 +3905,13 @@ public sealed partial class MainWindow : Window
     {
         var buildSw = System.Diagnostics.Stopwatch.StartNew();
         int parasBuilt = 0;
+        int matchIndex = 0;
+        int cap = Math.Min(results.Count, MaxMatchesPerSection);
         foreach (var r in results)
         {
+            if (matchIndex >= cap) break;
+            matchIndex++;
+
             var sep = new Paragraph();
             var label = $"\u00A0Line\u00A0{r.LineNumber}\u00A0";
             var sepRun = new Run { Text = $"{new string('\u2500', 6)}{label}{new string('\u2500', 6)}" };
@@ -3730,8 +3929,23 @@ public sealed partial class MainWindow : Window
                 parasBuilt += addedParagraphs;
             }
         }
+
+        if (results.Count > cap)
+        {
+            var notice = AppendTruncationNotice(section, results.Count, cap);
+            RegisterSectionOverflow(section,
+                filePath: null,
+                remainingResults: results.GetRange(cap, results.Count - cap),
+                allLines: allLines,
+                previewLines: previewLines,
+                rx: rx,
+                originalTotal: results.Count,
+                renderedSoFar: cap,
+                noticePara: notice);
+        }
+
         buildSw.Stop();
-        LogService.Instance.Info("Preview", $"BuildConcatenatedSection: results={results.Count}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, elapsed={buildSw.ElapsedMilliseconds}ms");
+        LogService.Instance.Info("Preview", $"BuildConcatenatedSection: results={results.Count}, rendered={cap}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, elapsed={buildSw.ElapsedMilliseconds}ms");
     }
 
     private void BuildHighlightSection(
@@ -3740,7 +3954,11 @@ public sealed partial class MainWindow : Window
     {
         var buildSw = System.Diagnostics.Stopwatch.StartNew();
         int parasBuilt = 0;
-        var matchLines = new HashSet<int>(results.Select(r => r.LineNumber));
+        int sectionMatchStart = _matchParagraphs.Count;
+        bool initiallyCapped = results.Count > MaxMatchesPerSection;
+        var cappedResults = initiallyCapped ? results.GetRange(0, MaxMatchesPerSection) : results;
+        var matchLines = new HashSet<int>(cappedResults.Select(r => r.LineNumber));
+        int lastRenderedLine1 = 0;
 
         if (allLines != null)
         {
@@ -3775,16 +3993,18 @@ public sealed partial class MainWindow : Window
                 {
                     int lineNum = i + 1;
                     bool isMatchLine = matchLines.Contains(lineNum);
-                    var matchResult = results.FirstOrDefault(r => r.LineNumber == lineNum) ?? results[0];
+                    var matchResult = cappedResults.FirstOrDefault(r => r.LineNumber == lineNum) ?? cappedResults[0];
                     _sectionMatchNavs.TryGetValue(section, out var sn);
                     AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatchLine, matchResult, rx, truncate: true, _matchParagraphs, sn, out int addedParagraphs);
                     parasBuilt += addedParagraphs;
                 }
             }
+            if (merged.Count > 0)
+                lastRenderedLine1 = merged[^1].end + 1;
         }
         else
         {
-            foreach (var r in results)
+            foreach (var r in cappedResults)
             {
                 var lines = GetPreviewLines(r, null, previewLines, fullFile: false);
                 foreach (var (line, lineNum) in lines)
@@ -3796,8 +4016,51 @@ public sealed partial class MainWindow : Window
                 }
             }
         }
+
+        int renderedCount = Math.Min(results.Count, _matchParagraphs.Count - sectionMatchStart);
+        if (allLines != null && renderedCount < Math.Min(MaxMatchesPerSection, results.Count))
+        {
+            _sectionMatchNavs.TryGetValue(section, out var sn);
+            var pending = results.Skip(renderedCount).ToList();
+            int addedEntries = AppendHighlightMatchWindows(
+                section,
+                pending,
+                allLines,
+                rx,
+                sn,
+                MaxMatchesPerSection - renderedCount,
+                MaxMatchesPerSection - renderedCount,
+                out int consumed,
+                out int addedParagraphs,
+                lastRenderedLine1);
+            renderedCount = Math.Min(results.Count, renderedCount + consumed);
+            parasBuilt += addedParagraphs;
+            _ = addedEntries;
+        }
+        else if (allLines == null)
+        {
+            renderedCount = Math.Min(MaxMatchesPerSection, results.Count);
+        }
+
+        var remaining = results.Skip(renderedCount).ToList();
+        if (remaining.Count > 0)
+        {
+            var notice = AppendTruncationNotice(section, results.Count, renderedCount);
+            RegisterSectionOverflow(section,
+                filePath: null,
+                remainingResults: remaining,
+                allLines: allLines,
+                previewLines: previewLines,
+                rx: rx,
+                originalTotal: results.Count,
+                renderedSoFar: renderedCount,
+                noticePara: notice,
+                isHighlightMode: allLines != null,
+                lastRenderedLine: lastRenderedLine1);
+        }
+
         buildSw.Stop();
-        LogService.Instance.Info("Preview", $"BuildHighlightSection: results={results.Count}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, hasAllLines={allLines != null}, elapsed={buildSw.ElapsedMilliseconds}ms");
+        LogService.Instance.Info("Preview", $"BuildHighlightSection: results={results.Count}, rendered={cappedResults.Count}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, hasAllLines={allLines != null}, elapsed={buildSw.ElapsedMilliseconds}ms");
     }
 
     /// <summary>
@@ -4357,6 +4620,7 @@ public sealed partial class MainWindow : Window
         };
         expander.Expanding += (s, _) =>
         {
+            InvalidateScrollPositionCache();
             if (_suppressExpandingHandler) return;
             try
             {
@@ -4387,11 +4651,13 @@ public sealed partial class MainWindow : Window
         // Tooltip is set on the header grid only (BuildPreviewSectionHeader);
         // setting it on the Expander itself would also show when hovering the
         // content body, which is noisy.
+        _blockExpanderCache[block] = expander;
         _expanderFilePaths[expander] = filePath;
         _expanderHeaderArgs[expander] = (filePath, detail, block, results);
         if (addToPanel)
         {
             PreviewSectionsPanel.Children.Add(expander);
+            InvalidateScrollPositionCache();
             _lastHighlightedActiveBlock = null;
         }
         return (block, expander);
@@ -4559,6 +4825,8 @@ public sealed partial class MainWindow : Window
                 && border.Child == block)
             {
                 PreviewSectionsPanel.Children.RemoveAt(i);
+                _blockExpanderCache.Remove(block);
+                InvalidateParagraphIndexCache(block);
                 _lastHighlightedActiveBlock = null;
 
                 // Remove per-section match nav data
@@ -5040,6 +5308,157 @@ public sealed partial class MainWindow : Window
         return firstParagraph ?? throw new InvalidOperationException("Preview line renderer did not create a paragraph.");
     }
 
+    private readonly record struct PreviewLineWindow(string Text, int SourceStart, int SourceEnd);
+
+    private static PreviewLineWindow TruncatePreviewLineAroundResult(string? line, SearchResult result, Regex? rx)
+    {
+        line ??= string.Empty;
+        int matchStart = result.MatchStartColumn;
+        int matchLength = result.MatchLength;
+        if (matchStart < 0 || matchLength <= 0 || matchStart >= line.Length)
+        {
+            var match = rx?.Match(line);
+            if (match is { Success: true, Length: > 0 })
+            {
+                matchStart = match.Index;
+                matchLength = match.Length;
+            }
+        }
+
+        if (LineTruncator.TruncatedLength == 0
+            || line.Length <= LineTruncator.MaxDisplayLength
+            || matchStart < 0
+            || matchLength <= 0
+            || matchStart >= line.Length)
+        {
+            return new PreviewLineWindow(LineTruncator.Truncate(line), 0, line.Length);
+        }
+
+        int start = Math.Max(0, matchStart);
+        int end = Math.Min(line.Length, start + LineTruncator.TruncatedLength);
+
+        string prefix = start > 0 ? LineTruncator.Ellipsis : string.Empty;
+        string suffix = end < line.Length ? LineTruncator.Ellipsis : string.Empty;
+        string text = string.Concat(prefix, line.AsSpan(start, end - start), suffix);
+        return new PreviewLineWindow(text, start, end);
+    }
+
+    private static Paragraph AddPreviewLineParagraphsAroundResult(
+        RichTextBlock section,
+        string? line,
+        int lineNum,
+        SearchResult result,
+        Regex? rx,
+        List<(RichTextBlock block, Paragraph para, int matchInPara)>? matchParagraphs,
+        SectionMatchNav? sectionNav,
+        out int paragraphsAdded,
+        out int matchEntriesAdded,
+        bool continuationGutter = false)
+    {
+        var window = TruncatePreviewLineAroundResult(line, result, rx);
+        Paragraph? firstParagraph = null;
+        bool addedMatchEntries = false;
+        paragraphsAdded = 0;
+        matchEntriesAdded = 0;
+
+        foreach (var segment in EnumeratePreviewLineLayoutSegments(window.Text))
+        {
+            var para = MakePreviewParagraph(segment, lineNum, isMatchLine: true, result, rx, truncate: false, continuationGutter: continuationGutter || firstParagraph is not null);
+            section.Blocks.Add(para);
+            firstParagraph ??= para;
+            paragraphsAdded++;
+
+            if (matchParagraphs is null)
+                continue;
+
+            int beforeCount = matchParagraphs.Count;
+            AddMatchEntries(
+                matchParagraphs,
+                sectionNav,
+                section,
+                para,
+                segment,
+                rx,
+                minimumOne: rx is null && !addedMatchEntries);
+            int added = matchParagraphs.Count - beforeCount;
+            if (added > 0)
+            {
+                addedMatchEntries = true;
+                matchEntriesAdded += added;
+            }
+        }
+
+        if (matchParagraphs is not null && !addedMatchEntries && firstParagraph is not null)
+        {
+            int beforeCount = matchParagraphs.Count;
+            AddMatchEntries(matchParagraphs, sectionNav, section, firstParagraph, string.Empty, rx: null);
+            matchEntriesAdded += matchParagraphs.Count - beforeCount;
+        }
+
+        return firstParagraph ?? throw new InvalidOperationException("Preview line renderer did not create a paragraph.");
+    }
+
+    private int AppendHighlightMatchWindows(
+        RichTextBlock section,
+        List<SearchResult> pendingResults,
+        string[] allLines,
+        Regex? rx,
+        SectionMatchNav? sectionNav,
+        int maxAdditionalMatchEntries,
+        int maxResultsToConsume,
+        out int consumedResults,
+        out int paragraphsAdded,
+        int previouslyRenderedLine = 0)
+    {
+        consumedResults = 0;
+        paragraphsAdded = 0;
+        int addedMatchEntries = 0;
+        int previousLine = 0;
+
+        while (consumedResults < pendingResults.Count
+               && consumedResults < maxResultsToConsume
+               && addedMatchEntries < maxAdditionalMatchEntries)
+        {
+            var result = pendingResults[consumedResults];
+            int lineIndex = result.LineNumber - 1;
+            if (lineIndex < 0 || lineIndex >= allLines.Length)
+            {
+                consumedResults++;
+                continue;
+            }
+
+            if (previousLine > 0 && result.LineNumber > previousLine + 1)
+            {
+                var gap = new Paragraph();
+                var gapRun = new Run { Text = "  \u22EE" };
+                gapRun.Foreground = new SolidColorBrush(Microsoft.UI.Colors.DimGray);
+                gap.Inlines.Add(gapRun);
+                section.Blocks.Add(gap);
+            }
+            bool continuationGutter = result.LineNumber <= previouslyRenderedLine || result.LineNumber == previousLine;
+            previousLine = result.LineNumber;
+            AddPreviewLineParagraphsAroundResult(
+                section,
+                allLines[lineIndex],
+                result.LineNumber,
+                result,
+                rx,
+                _matchParagraphs,
+                sectionNav,
+                out int addedParagraphs,
+                out int visibleMatches,
+                continuationGutter);
+
+            paragraphsAdded += addedParagraphs;
+            int consume = Math.Max(1, visibleMatches);
+            consume = Math.Min(consume, pendingResults.Count - consumedResults);
+            consumedResults += consume;
+            addedMatchEntries += visibleMatches;
+        }
+
+        return addedMatchEntries;
+    }
+
     private static IEnumerable<string> EnumeratePreviewLineLayoutSegments(string line)
     {
         if (line.Length == 0)
@@ -5061,7 +5480,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private static Paragraph MakePreviewParagraph(string line, int lineNum, bool isMatchLine, SearchResult r, Regex? rx, bool truncate = true)
+    private static Paragraph MakePreviewParagraph(string line, int lineNum, bool isMatchLine, SearchResult r, Regex? rx, bool truncate = true, bool continuationGutter = false)
     {
         line ??= string.Empty;
         if (truncate)
@@ -5075,8 +5494,8 @@ public sealed partial class MainWindow : Window
         indicator.Foreground = isMatchLine ? s_matchAccentBrush : s_contextTextBrush;
         para.Inlines.Add(indicator);
 
-        var gutterRun = new Run { Text = $"{lineNum,5} " };
-        gutterRun.Foreground = isMatchLine ? s_matchGutterBrush : s_contextGutterBrush;
+        var gutterRun = new Run { Text = continuationGutter ? $"{lineNum,5} (cont) " : $"{lineNum,5} " };
+        gutterRun.Foreground = continuationGutter ? s_matchAccentBrush : (isMatchLine ? s_matchGutterBrush : s_contextGutterBrush);
         para.Inlines.Add(gutterRun);
         var gutterSep = new Run { Text = "│ " };
         gutterSep.Foreground = s_gutterSepBrush;
@@ -5129,77 +5548,81 @@ public sealed partial class MainWindow : Window
         return LineTruncator.Truncate(line);
     }
 
-    private static readonly SolidColorBrush s_activeMatchBrush = new(Microsoft.UI.Colors.OrangeRed);
-
     private void BoxMatchRun(Paragraph para, int matchInPara)
     {
         UnboxCurrentMatch();
-        int goldCount = 0;
-        int column = 0;
-        for (int i = 0; i < para.Inlines.Count; i++)
+        var matches = GetMatchRunsForParagraph(para);
+        if ((uint)matchInPara >= (uint)matches.Count)
         {
-            if (para.Inlines[i] is Run run
-                && run.FontWeight.Weight == Microsoft.UI.Text.FontWeights.Bold.Weight
-                && run.Foreground is SolidColorBrush brush
-                && brush.Color == Microsoft.UI.Colors.Gold)
-            {
-                if (goldCount == matchInPara)
-                {
-                    _activeMatchHighlight = (para, run, run.Foreground, run.TextDecorations, column);
-                    run.Foreground = s_activeMatchBrush;
-                    run.TextDecorations = Windows.UI.Text.TextDecorations.Underline;
-                    if (LogService.Instance.IsInfoEnabled)
-                        LogService.Instance.Info("MatchNav", $"BoxMatchRun: idx={_currentMatchIndex}, matchInPara={matchInPara}, col={column}, runText='{run.Text}'");
-                    return;
-                }
-                goldCount++;
-            }
+            _paragraphMatchRunCache.Remove(para);
+            matches = GetMatchRunsForParagraph(para);
+            if ((uint)matchInPara >= (uint)matches.Count)
+                return;
+        }
 
-            if (para.Inlines[i] is Run textRun)
-                column += textRun.Text?.Length ?? 0;
+        var (run, column) = matches[matchInPara];
+        _activeMatchHighlight = (para, run, column, matchInPara);
+        if (LogService.Instance.IsVerboseEnabled)
+        {
+            int paragraphIndex = _matchParagraphs.Count > 0
+                ? GetParagraphIndex(_matchParagraphs[Math.Clamp(_currentMatchIndex, 0, _matchParagraphs.Count - 1)].block, para)
+                : -1;
+            LogService.Instance.Verbose("MatchNav", $"BoxMatchRun: idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}/{matches.Count}, col={column}, runText='{run.Text}'");
         }
     }
 
+    private List<(Run run, int column)> GetMatchRunsForParagraph(Paragraph para)
+    {
+        if (_paragraphMatchRunCache.TryGetValue(para, out var matches))
+            return matches;
+
+        matches = new List<(Run run, int column)>();
+        int column = 0;
+        for (int i = 0; i < para.Inlines.Count; i++)
+        {
+            if (para.Inlines[i] is not Run run)
+                continue;
+
+            if (IsSearchMatchRun(run))
+                matches.Add((run, column));
+
+            column += run.Text?.Length ?? 0;
+        }
+        _paragraphMatchRunCache[para] = matches;
+        return matches;
+    }
+
+    private static bool IsSearchMatchRun(Run run)
+        => run.FontWeight.Weight == Microsoft.UI.Text.FontWeights.Bold.Weight
+           && run.Foreground is SolidColorBrush brush
+           && brush.Color == Microsoft.UI.Colors.Gold;
+
     private void UnboxCurrentMatch([System.Runtime.CompilerServices.CallerMemberName] string caller = "")
     {
-        if (_activeMatchHighlight is not { } highlight) return;
-        if (LogService.Instance.IsInfoEnabled)
-            LogService.Instance.Info("MatchNav", $"UnboxCurrentMatch: idx={_currentMatchIndex}, caller={caller}");
-        highlight.run.Foreground = highlight.foreground;
-        highlight.run.TextDecorations = highlight.textDecorations;
+        if (_activeMatchHighlight is null) return;
+        if (LogService.Instance.IsVerboseEnabled)
+            LogService.Instance.Verbose("MatchNav", $"UnboxCurrentMatch: idx={_currentMatchIndex}, caller={caller}");
         _activeMatchHighlight = null;
     }
 
     /// <summary>
     /// Scrolls the outer preview ScrollViewer so that <paramref name="targetPara"/>
-    /// inside <paramref name="block"/> is centred in the viewport.
+    /// inside <paramref name="block"/> is visible, optionally centered.
     /// Must be called after the content has been added to the visual tree;
     /// actual scrolling is deferred to a low-priority dispatcher tick so layout
     /// has time to complete.
     /// </summary>
-    private void ScrollPreviewToLine(RichTextBlock block, Paragraph targetPara)
+    private void ScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, bool forceCenter = true)
     {
         int requestId = ++_matchScrollRequestId;
-        // Fast path: if the target run already has a valid character rect (i.e.
-        // it's near the current viewport and was laid out), use it.
-        // Otherwise, do NOT call block.UpdateLayout() here — on huge files
-        // (86k+ paragraphs) RichTextBlock is not virtualised, so UpdateLayout()
-        // is hundreds of ms.  Use the estimated-position path immediately and
-        // let VerifyActiveMatchVisibleAfterScroll + the deferred retry loop
-        // correct the position once natural layout catches up after ChangeView.
-        // Capture the height alongside the Y so TryScrollPreviewToLine can
-        // skip a second TransformToVisual+GetCharacterRect probe (each of
-        // which can force layout on a non-virtualised RichTextBlock and is
-        // the dominant per-click cost on large files).
-        double? preCheckRect = TryGetActiveOrParaAbsY(block, targetPara, out double preCheckHeight);
-        if (LogService.Instance.IsInfoEnabled)
-            LogService.Instance.Info("MatchNav",
-                $"ScrollPreviewToLine: entry idx={_currentMatchIndex}, requestId={requestId}, rectPreCheck={preCheckRect is not null}");
+        if (LogService.Instance.IsVerboseEnabled)
+            LogService.Instance.Verbose("MatchNav",
+                $"ScrollPreviewToLine: entry idx={_currentMatchIndex}, requestId={requestId}, mode=estimated, forceCenter={forceCenter}");
 
-        if (TryScrollPreviewToLine(block, targetPara, preCheckRect, preCheckHeight, out _))
+        if (TryScrollPreviewToLine(block, targetPara, verifyAfterScroll: false, forceCenter, out _))
             return;
 
-        ScrollPreviewToLine(block, targetPara, attemptsRemaining: 3, requestId);
+        ScrollPreviewToLine(block, targetPara, attemptsRemaining: 3, requestId, forceCenter);
     }
 
     /// <summary>
@@ -5439,19 +5862,19 @@ public sealed partial class MainWindow : Window
         pollTimer.Start();
     }
 
-    private void ScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, int attemptsRemaining, int requestId)
+    private void ScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, int attemptsRemaining, int requestId, bool forceCenter)
     {
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
             if (requestId != _matchScrollRequestId)
                 return;
 
-            if (TryScrollPreviewToLine(block, targetPara, null, 0, out var reason))
+            if (TryScrollPreviewToLine(block, targetPara, verifyAfterScroll: false, forceCenter, out var reason))
                 return;
 
             if (attemptsRemaining > 0)
             {
-                ScrollPreviewToLine(block, targetPara, attemptsRemaining - 1, requestId);
+                ScrollPreviewToLine(block, targetPara, attemptsRemaining - 1, requestId, forceCenter);
                 return;
             }
 
@@ -5464,7 +5887,7 @@ public sealed partial class MainWindow : Window
         _matchScrollRequestId++;
     }
 
-    private bool TryScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, double? preCheckedAbsY, double preCheckedHeight, out string reason)
+    private bool TryScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, bool verifyAfterScroll, bool forceCenter, out string reason)
     {
         reason = string.Empty;
         try
@@ -5481,139 +5904,199 @@ public sealed partial class MainWindow : Window
                 return false;
             }
 
+            if (forceCenter
+                && _activeMatchHighlight is { para: var activePara }
+                && ReferenceEquals(activePara, targetPara))
+            {
+                if (LogService.Instance.IsVerboseEnabled)
+                    LogService.Instance.Verbose("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, mode=actual-run, forceCenter=True, fromY={PreviewScrollViewer.VerticalOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}");
+
+                ScrollMatchHorizontallyIntoView(block, targetPara);
+                QueueActiveMatchOverlayUpdate(block, targetPara, PreviewScrollViewer.VerticalOffset);
+                return true;
+            }
+
             double lineHeight = EstimatePreviewLineHeight(block);
 
-            // Use the run's actual rendered character rect (in PreviewScrollViewer
-            // coordinates) when available — this avoids cumulative line-height
-            // estimation error which grew unbounded for paragraphs deep in the
-            // RichTextBlock (off by ~2.5px/paragraph for FontSize=14).
-            // Re-use the pre-checked Y AND height when the caller already probed,
-            // so we do not call TryGetActiveOrParaAbsY twice per click (each call
-            // can force a layout pass on a non-virtualised RichTextBlock).
-            double actualRunHeight;
-            double? actualRunAbsY;
-            if (preCheckedAbsY is not null)
+            int paragraphIndex = GetParagraphIndex(block, targetPara);
+            if (paragraphIndex < 0)
             {
-                actualRunAbsY = preCheckedAbsY;
-                actualRunHeight = preCheckedHeight;
+                reason = "paragraph not found";
+                return false;
             }
-            else
-            {
-                actualRunAbsY = TryGetActiveOrParaAbsY(block, targetPara, out actualRunHeight);
-            }
+            double blockTop = GetBlockAbsoluteTop(block);
+            double wrappedLineOffset = EstimateWrappedLineOffset(block, targetPara);
+            double cumulativeHeight = EstimateCumulativeHeightBefore(block, targetPara, lineHeight);
+            double targetLineCenter = blockTop + cumulativeHeight + wrappedLineOffset * lineHeight + lineHeight / 2;
+            double targetVerticalOffset = targetLineCenter - PreviewScrollViewer.ViewportHeight / 2;
 
-            double targetVerticalOffset;
-
-            if (actualRunAbsY is double runAbsY)
-            {
-                double effectiveH = actualRunHeight > 0 ? actualRunHeight : lineHeight;
-                targetVerticalOffset = runAbsY - PreviewScrollViewer.ViewportHeight / 2 + effectiveH / 2;
-            }
-            else
-            {
-                // Estimated path — need paragraph index for height estimation.
-                int paragraphIndex = GetParagraphIndex(block, targetPara);
-                if (paragraphIndex < 0)
-                {
-                    reason = "paragraph not found";
-                    return false;
-                }
-                var verticalTransform = block.TransformToVisual(PreviewScrollViewer);
-                var verticalPoint = verticalTransform.TransformPoint(new Windows.Foundation.Point(0, 0));
-                double wrappedLineOffset = EstimateWrappedLineOffset(block, targetPara);
-                double cumulativeHeight = EstimateCumulativeHeightBefore(block, targetPara, lineHeight);
-                targetVerticalOffset = PreviewScrollViewer.VerticalOffset + verticalPoint.Y + cumulativeHeight + wrappedLineOffset * lineHeight - PreviewScrollViewer.ViewportHeight / 2 + lineHeight / 2;
-
-                if (LogService.Instance.IsInfoEnabled)
-                    LogService.Instance.Info("MatchNav", $"ScrollPreviewToLine(estimated): idx={_currentMatchIndex}, para={paragraphIndex}/{block.Blocks.Count}, wrapOffset={wrappedLineOffset:N1}, blockY={verticalPoint.Y:N1}, lineH={lineHeight:N1}, cumulH={cumulativeHeight:N1}");
-            }
+            if (LogService.Instance.IsVerboseEnabled)
+                LogService.Instance.Verbose("MatchNav", $"ScrollPreviewToLine(estimated): idx={_currentMatchIndex}, para={paragraphIndex}/{block.Blocks.Count}, wrapOffset={wrappedLineOffset:N1}, blockTop={blockTop:N1}, lineH={lineHeight:N1}, cumulH={cumulativeHeight:N1}");
 
             targetVerticalOffset = Math.Clamp(targetVerticalOffset, 0, PreviewScrollViewer.ScrollableHeight);
-            PreviewScrollViewer.ChangeView(null, targetVerticalOffset, null, disableAnimation: true);
+            double beforeVerticalOffset = PreviewScrollViewer.VerticalOffset;
+            bool verticalScrollNeeded = forceCenter;
+            if (!verticalScrollNeeded)
+            {
+                double viewportHeight = PreviewScrollViewer.ViewportHeight;
+                double guard = Math.Min(160, Math.Max(lineHeight * 4, viewportHeight * 0.22));
+                verticalScrollNeeded = targetLineCenter < beforeVerticalOffset + guard
+                    || targetLineCenter > beforeVerticalOffset + viewportHeight - guard;
+            }
 
-            if (LogService.Instance.IsInfoEnabled)
-                LogService.Instance.Info("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, mode={(actualRunAbsY is null ? "estimated" : "rect")}, targetY={targetVerticalOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}");
+            bool verticalScrollRequested = verticalScrollNeeded && Math.Abs(targetVerticalOffset - beforeVerticalOffset) > 1;
+            bool verticalScrollAccepted = false;
+            double overlayVerticalOffset = beforeVerticalOffset;
+            if (verticalScrollRequested)
+            {
+                verticalScrollAccepted = PreviewScrollViewer.ChangeView(null, targetVerticalOffset, null, disableAnimation: true);
+                if (verticalScrollAccepted)
+                    overlayVerticalOffset = targetVerticalOffset;
+            }
+
+            if (LogService.Instance.IsVerboseEnabled)
+                LogService.Instance.Verbose("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, mode=estimated, forceCenter={forceCenter}, verticalScroll={verticalScrollNeeded}, requested={verticalScrollRequested}, accepted={verticalScrollAccepted}, fromY={beforeVerticalOffset:N1}, targetY={targetVerticalOffset:N1}, overlayY={overlayVerticalOffset:N1}, lineCenter={targetLineCenter:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}");
 
             ScrollMatchHorizontallyIntoView(block, targetPara);
-            // Always schedule post-scroll verification — even on the rect path the
-            // run can drift off-screen between rapid Next/Prev clicks (Expander
-            // animations, lazy section materialization). Verify is cheap when the
-            // run is already on-screen.
-            int paraIdx = GetParagraphIndex(block, targetPara);
-            VerifyActiveMatchVisibleAfterScroll(block, targetPara, paraIdx);
+            QueueActiveMatchOverlayUpdate(block, targetPara, overlayVerticalOffset);
+            if (verifyAfterScroll)
+            {
+                int paraIdx = GetParagraphIndex(block, targetPara);
+                VerifyActiveMatchVisibleAfterScroll(block, targetPara, paraIdx);
+            }
             return true;
         }
         catch (Exception ex)
         {
             reason = ex.GetType().Name;
+            HideActiveMatchOverlay();
             return false;
         }
     }
 
-    private int GetParagraphIndex(RichTextBlock block, Paragraph targetPara)
+    private void QueueActiveMatchOverlayUpdate(RichTextBlock block, Paragraph targetPara, double? expectedVerticalOffset = null)
     {
-        // Try the cache first (O(1) amortised).
-        if (_paraIndexCache.TryGetValue(block, out var map) && map.TryGetValue(targetPara, out int cached))
-            return cached;
-
-        // Cache miss — build the full map for this block.
-        map = new Dictionary<Paragraph, int>(block.Blocks.Count);
-        int idx = 0;
-        foreach (var item in block.Blocks)
+        if (_activeMatchHighlight is not { para: var activePara, run: var activeRun }
+            || !ReferenceEquals(activePara, targetPara))
         {
-            if (item is Paragraph p)
-                map[p] = idx;
-            idx++;
+            HideActiveMatchOverlay();
+            return;
         }
-        _paraIndexCache[block] = map;
 
-        return map.TryGetValue(targetPara, out int result) ? result : -1;
+        HideActiveMatchOverlay();
+        int navIndex = _currentMatchIndex;
+        Run targetRun = activeRun;
+
+        void EnqueueUpdate(int retriesRemaining)
+        {
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal, () =>
+            {
+                if (_currentMatchIndex != navIndex
+                    || _activeMatchHighlight is not { para: var currentPara, run: var currentRun }
+                    || !ReferenceEquals(currentPara, targetPara)
+                    || !ReferenceEquals(currentRun, targetRun))
+                {
+                    return;
+                }
+
+                if (!TryUpdateActiveMatchOverlayFromActualRun(block, targetPara, targetRun, expectedVerticalOffset, retryIfCenterRejected: retriesRemaining > 0) && retriesRemaining > 0)
+                    EnqueueUpdate(retriesRemaining - 1);
+            });
+        }
+
+        EnqueueUpdate(retriesRemaining: 2);
     }
 
-    private void InvalidateParagraphIndexCache(RichTextBlock? block = null)
+    private bool TryUpdateActiveMatchOverlayFromActualRun(RichTextBlock block, Paragraph targetPara, Run targetRun, double? expectedVerticalOffset = null, bool retryIfCenterRejected = false)
     {
-        if (block is not null)
-            _paraIndexCache.Remove(block);
-        else
-            _paraIndexCache.Clear();
-    }
-
-    /// <summary>
-    /// Returns the absolute Y coordinate (in PreviewScrollViewer content space) of the
-    /// currently boxed match run if it belongs to <paramref name="targetPara"/>, else the
-    /// paragraph's first character. Returns null if layout has not produced a valid rect.
-    /// </summary>
-    private double? TryGetActiveOrParaAbsY(RichTextBlock block, Paragraph targetPara, out double height)
-    {
-        height = 0;
         try
         {
-            // Prefer the boxed (active) match run if it belongs to the target paragraph.
-            if (_activeMatchHighlight is { para: var activePara, run: var activeRun }
-                && ReferenceEquals(activePara, targetPara) && activeRun is not null)
+            if (_activeMatchHighlight is not { para: var activePara, run: var activeRun, matchInPara: var matchInPara }
+                || !ReferenceEquals(activePara, targetPara)
+                || !ReferenceEquals(activeRun, targetRun))
+                return false;
+
+            double viewportWidth = PreviewScrollViewer.ActualWidth;
+            double viewportHeight = PreviewScrollViewer.ActualHeight;
+            if (viewportWidth <= 0 || viewportHeight <= 0)
+                return false;
+
+            var rect = targetRun.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+            if (double.IsNaN(rect.X) || double.IsNaN(rect.Y) || rect.Height <= 0)
+                return false;
+
+            var transform = block.TransformToVisual(PreviewScrollViewer);
+            var point = transform.TransformPoint(new Windows.Foundation.Point(rect.X, rect.Y));
+            double markerHeight = Math.Max(12, rect.Height);
+            double currentVerticalOffset = PreviewScrollViewer.VerticalOffset;
+            double actualRunTop = currentVerticalOffset + point.Y;
+            double overlayTop = point.Y;
+            double effectiveVerticalOffset = currentVerticalOffset;
+            bool centeredFromActualRun = false;
+            bool actualCenterAccepted = false;
+            if (expectedVerticalOffset.HasValue)
             {
-                var rect = activeRun.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
-                if (rect.Height > 0)
+                double actualTargetVerticalOffset = actualRunTop + markerHeight / 2 - viewportHeight / 2;
+                actualTargetVerticalOffset = Math.Clamp(actualTargetVerticalOffset, 0, PreviewScrollViewer.ScrollableHeight);
+                centeredFromActualRun = true;
+                bool actualCenterNeeded = Math.Abs(actualTargetVerticalOffset - currentVerticalOffset) > 1;
+                if (actualCenterNeeded)
+                    actualCenterAccepted = PreviewScrollViewer.ChangeView(null, actualTargetVerticalOffset, null, disableAnimation: true);
+
+                if (actualCenterAccepted || !actualCenterNeeded)
+                    effectiveVerticalOffset = actualTargetVerticalOffset;
+                else if (retryIfCenterRejected)
                 {
-                    var t = block.TransformToVisual(PreviewScrollViewer);
-                    var p = t.TransformPoint(new Windows.Foundation.Point(rect.X, rect.Y));
-                    height = rect.Height;
-                    return PreviewScrollViewer.VerticalOffset + p.Y;
+                    if (LogService.Instance.IsVerboseEnabled)
+                    {
+                        int paragraphIndex = GetParagraphIndex(block, targetPara);
+                        LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: retry centering idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, scrollY={currentVerticalOffset:N1}, expectedScrollY={expectedVerticalOffset.Value:N1}, actualTargetY={actualTargetVerticalOffset:N1}");
+                    }
+                    return false;
                 }
+                else
+                {
+                    return false;
+                }
+
+                overlayTop = actualRunTop - effectiveVerticalOffset;
             }
 
-            // Fallback: paragraph's first character rect.
-            var paraRect = targetPara.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
-            if (paraRect.Height > 0)
+            if (overlayTop + markerHeight < 0 || overlayTop > viewportHeight)
+                return false;
+
+            double charWidth = Math.Max(EstimatePreviewCharWidth(block), rect.Width > 0 ? rect.Width : 0);
+            double markerWidth = Math.Max(12, (targetRun.Text?.Length ?? 1) * charWidth);
+            double markerLeft = point.X;
+
+            ActiveMatchBand.Height = markerHeight;
+            ActiveMatchBand.Width = viewportWidth;
+            Canvas.SetTop(ActiveMatchBand, overlayTop);
+            Canvas.SetLeft(ActiveMatchBand, 0);
+
+            ActiveMatchWordMarker.Height = markerHeight;
+            ActiveMatchWordMarker.Width = markerWidth;
+            Canvas.SetTop(ActiveMatchWordMarker, overlayTop);
+            Canvas.SetLeft(ActiveMatchWordMarker, markerLeft);
+
+            ActiveMatchOverlay.Visibility = Visibility.Visible;
+            if (LogService.Instance.IsVerboseEnabled)
             {
-                var t = block.TransformToVisual(PreviewScrollViewer);
-                var p = t.TransformPoint(new Windows.Foundation.Point(paraRect.X, paraRect.Y));
-                height = paraRect.Height;
-                return PreviewScrollViewer.VerticalOffset + p.Y;
+                int paragraphIndex = GetParagraphIndex(block, targetPara);
+                string expectedScroll = expectedVerticalOffset.HasValue ? expectedVerticalOffset.Value.ToString("N1") : "actual";
+                LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, rect=({rect.X:N1},{rect.Y:N1},{rect.Width:N1},{rect.Height:N1}), point=({point.X:N1},{point.Y:N1}), scrollY={currentVerticalOffset:N1}, expectedScrollY={expectedScroll}, effectiveScrollY={effectiveVerticalOffset:N1}, centeredActual={centeredFromActualRun}, centerAccepted={actualCenterAccepted}, marker=({markerLeft:N1},{overlayTop:N1},{markerWidth:N1},{markerHeight:N1}), text='{targetRun.Text}'");
             }
+            return true;
         }
-        catch { }
-        return null;
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void HideActiveMatchOverlay()
+    {
+        ActiveMatchOverlay.Visibility = Visibility.Collapsed;
     }
 
     /// <summary>
@@ -5775,26 +6258,56 @@ public sealed partial class MainWindow : Window
 
     private double EstimateCumulativeHeightBefore(RichTextBlock block, Paragraph targetPara, double lineHeight)
     {
-        // Fast path: when word-wrap is off, every paragraph is a single line so
-        // the cumulative height before paragraph N is just N * lineHeight.
-        // Avoids an O(N) walk over every preceding Run on huge files (86k+ paragraphs)
-        // every time the user clicks Next match.
-        if (!ViewModel.PreviewWordWrap)
+        int paraIdx = GetParagraphIndex(block, targetPara);
+        return paraIdx >= 0 ? GetCumulativeHeightBefore(block, paraIdx, lineHeight) : 0;
+    }
+
+    private int GetParagraphIndex(RichTextBlock block, Paragraph targetPara)
+    {
+        var metrics = GetParagraphMetrics(block);
+        return metrics.IndexByParagraph.TryGetValue(targetPara, out int result) ? result : -1;
+    }
+
+    private ParagraphMetrics GetParagraphMetrics(RichTextBlock block)
+    {
+        if (_paragraphMetricsCache.TryGetValue(block, out var metrics))
+            return metrics;
+
+        var map = new Dictionary<Paragraph, int>(block.Blocks.Count);
+        for (int idx = 0; idx < block.Blocks.Count; idx++)
         {
-            int paraIdx = GetParagraphIndex(block, targetPara);
-            if (paraIdx >= 0) return paraIdx * lineHeight;
+            if (block.Blocks[idx] is Paragraph p)
+                map[p] = idx;
         }
+
+        metrics = new ParagraphMetrics { IndexByParagraph = map };
+        _paragraphMetricsCache[block] = metrics;
+        return metrics;
+    }
+
+    private double GetCumulativeHeightBefore(RichTextBlock block, int blockIndex, double lineHeight)
+    {
+        if (blockIndex < 0) return 0;
+        if (!ViewModel.PreviewWordWrap)
+            return blockIndex * lineHeight;
 
         double availableWidth = GetPreviewTextViewportWidth(block) - 24;
         double charWidth = EstimatePreviewCharWidth(block);
-        int charsPerLine = ViewModel.PreviewWordWrap ? Math.Max(1, (int)Math.Floor(availableWidth / charWidth)) : int.MaxValue;
-
-        double height = 0;
-        foreach (var b in block.Blocks)
+        int charsPerLine = Math.Max(1, (int)Math.Floor(availableWidth / charWidth));
+        var metrics = GetParagraphMetrics(block);
+        if (metrics.PrefixHeights is not null
+            && metrics.PrefixHeights.Length == block.Blocks.Count + 1
+            && metrics.PrefixCharsPerLine == charsPerLine
+            && Math.Abs(metrics.PrefixLineHeight - lineHeight) < 0.01)
         {
-            if (ReferenceEquals(b, targetPara))
-                break;
-            if (b is Paragraph p)
+            return metrics.PrefixHeights[Math.Min(blockIndex, metrics.PrefixHeights.Length - 1)];
+        }
+
+        var prefix = new double[block.Blocks.Count + 1];
+        for (int i = 0; i < block.Blocks.Count; i++)
+        {
+            double height = lineHeight;
+            if (block.Blocks[i] is Paragraph p)
             {
                 int textLen = 0;
                 foreach (var inline in p.Inlines)
@@ -5803,14 +6316,44 @@ public sealed partial class MainWindow : Window
                         textLen += r.Text?.Length ?? 0;
                 }
                 int wrappedLines = Math.Max(1, (int)Math.Ceiling((double)Math.Max(1, textLen) / charsPerLine));
-                height += wrappedLines * lineHeight;
+                height = wrappedLines * lineHeight;
             }
-            else
-            {
-                height += lineHeight;
-            }
+            prefix[i + 1] = prefix[i] + height;
         }
-        return height;
+        metrics.PrefixHeights = prefix;
+        metrics.PrefixCharsPerLine = charsPerLine;
+        metrics.PrefixLineHeight = lineHeight;
+        return prefix[Math.Min(blockIndex, prefix.Length - 1)];
+    }
+
+    private void InvalidateParagraphIndexCache(RichTextBlock? block = null)
+    {
+        if (block is not null)
+            _paragraphMetricsCache.Remove(block);
+        else
+            _paragraphMetricsCache.Clear();
+        _paragraphMatchRunCache.Clear();
+        InvalidateScrollPositionCache();
+    }
+
+    private double GetBlockAbsoluteTop(RichTextBlock block)
+    {
+        if (_blockAbsoluteTopCache.TryGetValue(block, out double top))
+            return top;
+
+        var verticalTransform = block.TransformToVisual(PreviewScrollViewer);
+        var verticalPoint = verticalTransform.TransformPoint(new Windows.Foundation.Point(0, 0));
+        top = PreviewScrollViewer.VerticalOffset + verticalPoint.Y;
+        _blockAbsoluteTopCache[block] = top;
+        return top;
+    }
+
+    private void InvalidateScrollPositionCache(RichTextBlock? block = null)
+    {
+        if (block is not null)
+            _blockAbsoluteTopCache.Remove(block);
+        else
+            _blockAbsoluteTopCache.Clear();
     }
 
     private double GetPreviewTextViewportWidth(RichTextBlock block)
@@ -5823,16 +6366,13 @@ public sealed partial class MainWindow : Window
 
     private bool ExpandPreviewSectionForBlock(RichTextBlock block)
     {
-        foreach (var child in PreviewSectionsPanel.Children.OfType<Expander>())
+        if (_blockExpanderCache.TryGetValue(block, out var cachedExpander))
         {
-            if (ReferenceEquals(child.Tag, block))
-            {
-                if (child.IsExpanded)
-                    return false;
+            if (cachedExpander.IsExpanded)
+                return false;
 
-                child.IsExpanded = true;
-                return true;
-            }
+            cachedExpander.IsExpanded = true;
+            return true;
         }
 
         return false;
@@ -5863,12 +6403,29 @@ public sealed partial class MainWindow : Window
         }
 
         double charWidth = EstimatePreviewCharWidth(block);
-        double matchCenter = 8 + column * charWidth + (activeRun.Text?.Length ?? 0) * charWidth / 2;
+        double matchStart = 8 + column * charWidth;
+        double matchWidth = Math.Max(charWidth, (activeRun.Text?.Length ?? 0) * charWidth);
+        double matchEnd = matchStart + matchWidth;
+        double viewportLeft = scroller.HorizontalOffset;
+        double viewportRight = viewportLeft + scroller.ViewportWidth;
+        double guard = Math.Min(96, Math.Max(16, scroller.ViewportWidth * 0.15));
+        if (matchStart >= viewportLeft + guard && matchEnd <= viewportRight - guard)
+        {
+            if (LogService.Instance.IsVerboseEnabled)
+                LogService.Instance.Verbose("Preview", $"ScrollMatchHorizontallyIntoView: skipped visible idx={_currentMatchIndex}, column={column}, viewport=({viewportLeft:N1},{viewportRight:N1})");
+            return;
+        }
+
+        double matchCenter = matchStart + matchWidth / 2;
         double targetHorizontalOffset = matchCenter - scroller.ViewportWidth / 2;
         targetHorizontalOffset = Math.Clamp(targetHorizontalOffset, 0, scroller.ScrollableWidth);
         double beforeHorizontalOffset = scroller.HorizontalOffset;
+        if (Math.Abs(targetHorizontalOffset - beforeHorizontalOffset) <= 1)
+            return;
+
         bool horizontalAccepted = scroller.ChangeView(targetHorizontalOffset, null, null, disableAnimation: true);
-        LogService.Instance.Verbose("Preview", $"ScrollMatchHorizontallyIntoView: idx={_currentMatchIndex}, column={column}, runLen={activeRun.Text?.Length ?? 0}, charW={charWidth:N1}, beforeX={beforeHorizontalOffset:N1}, targetX={targetHorizontalOffset:N1}, viewportW={scroller.ViewportWidth:N1}, scrollableW={scroller.ScrollableWidth:N1}, accepted={horizontalAccepted}, sectionScroller={_sectionMatchNavs.ContainsKey(block)}");
+        if (LogService.Instance.IsVerboseEnabled)
+            LogService.Instance.Verbose("Preview", $"ScrollMatchHorizontallyIntoView: idx={_currentMatchIndex}, column={column}, runLen={activeRun.Text?.Length ?? 0}, charW={charWidth:N1}, beforeX={beforeHorizontalOffset:N1}, targetX={targetHorizontalOffset:N1}, viewportW={scroller.ViewportWidth:N1}, scrollableW={scroller.ScrollableWidth:N1}, accepted={horizontalAccepted}, sectionScroller={_sectionMatchNavs.ContainsKey(block)}");
     }
 
     private int MatchNavFileCount => _sectionMatchNavs.Count > 0
@@ -5884,17 +6441,37 @@ public sealed partial class MainWindow : Window
     {
         var list = _deferredOrderedFiles;
         if (list is null || _deferredCursor >= list.Count) return (0, 0);
+
+        if (ReferenceEquals(list, _cachedDeferredCountsList)
+            && _cachedDeferredCountsCursor == _deferredCursor)
+        {
+            return _cachedDeferredCounts;
+        }
+
         int files = list.Count - _deferredCursor;
         int matches = 0;
         for (int i = _deferredCursor; i < list.Count; i++)
             matches += list[i].Value.Count;
-        return (files, matches);
+        _cachedDeferredCountsList = list;
+        _cachedDeferredCountsCursor = _deferredCursor;
+        _cachedDeferredCounts = (files, matches);
+        return _cachedDeferredCounts;
+    }
+
+    private void InvalidateDeferredCountsCache()
+    {
+        _cachedDeferredCountsList = null;
+        _cachedDeferredCountsCursor = -1;
+        _cachedDeferredCounts = default;
     }
 
     private string FormatMatchNavLabel(int index)
     {
         var (deferredFiles, deferredMatches) = GetDeferredCounts();
-        int totalMatches = _matchParagraphs.Count + _lazyMatchCount + deferredMatches;
+        int overflowRemaining = 0;
+        foreach (var ov in _sectionOverflow.Values)
+            overflowRemaining += ov.RemainingResults.Count;
+        int totalMatches = _matchParagraphs.Count + _lazyMatchCount + deferredMatches + overflowRemaining;
         int fileCount = MatchNavFileCount + deferredFiles;
         return $"Match {index + 1} of {totalMatches} (across {fileCount} file{(fileCount != 1 ? "s" : "")})";
     }
@@ -5967,12 +6544,13 @@ public sealed partial class MainWindow : Window
 
     private int FindActiveMatchIndex()
     {
-        if (_activeMatchHighlight is not { para: var activePara })
+        if (_activeMatchHighlight is not { para: var activePara, matchInPara: var activeMatchInPara })
             return -1;
 
         for (int i = 0; i < _matchParagraphs.Count; i++)
         {
-            if (ReferenceEquals(_matchParagraphs[i].para, activePara))
+            if (ReferenceEquals(_matchParagraphs[i].para, activePara)
+                && _matchParagraphs[i].matchInPara == activeMatchInPara)
                 return i;
         }
 
@@ -6023,6 +6601,7 @@ public sealed partial class MainWindow : Window
     private void HideMatchNavPanel()
     {
         UnboxCurrentMatch();
+        HideActiveMatchOverlay();
         MatchNavPanel.Visibility = Visibility.Collapsed;
         SectionNavOverlay.Visibility = Visibility.Collapsed;
         _matchParagraphs.Clear();
@@ -6032,14 +6611,18 @@ public sealed partial class MainWindow : Window
         _activeSectionNav = null;
         _lazySections.Clear();
         _lazyMatchCount = 0;
+        _sectionOverflow.Clear();
         _deferredOrderedFiles = null;
         _deferredAllSelected = null;
         _deferredButtonPanel = null;
         _deferredCursor = 0;
+        InvalidateDeferredCountsCache();
         _autoLoadMoreInFlight = false;
         _initialMatchScrolled = false;
         _expanderFilePaths.Clear();
         _expanderHeaderArgs.Clear();
+        _blockExpanderCache.Clear();
+        InvalidateScrollPositionCache();
         _stickyHeaderExpander = null;
         StickyFileHeader.Child = null;
         StickyFileHeader.Visibility = Visibility.Collapsed;
@@ -6114,7 +6697,10 @@ public sealed partial class MainWindow : Window
             return;
         }
         SectionNavOverlay.Visibility = Visibility.Visible;
-        SectionNavLabel.Text = $"Match {_activeSectionNav.CurrentIndex + 1} of {_activeSectionNav.Matches.Count}";
+        int total = _activeSectionNav.Matches.Count;
+        if (_sectionOverflow.TryGetValue(_activeSectionNav.Block, out var ov))
+            total += ov.RemainingResults.Count;
+        SectionNavLabel.Text = $"Match {_activeSectionNav.CurrentIndex + 1} of {total}";
     }
 
     private void OnSectionNavNext(object sender, RoutedEventArgs e)
@@ -6147,25 +6733,69 @@ public sealed partial class MainWindow : Window
     private void OnSectionNextMatch(SectionMatchNav sn)
     {
         if (sn.Matches.Count == 0) return;
-        sn.CurrentIndex = (sn.CurrentIndex + 1) % sn.Matches.Count;
+        Paragraph? previousPara = sn.CurrentIndex >= 0 && sn.CurrentIndex < sn.Matches.Count ? sn.Matches[sn.CurrentIndex].para : null;
+        bool wrappedToStart = false;
+        bool expandedOverflow = false;
+        int nextIndex = sn.CurrentIndex + 1;
+        if (nextIndex >= sn.Matches.Count)
+        {
+            if (_sectionOverflow.ContainsKey(sn.Block) && ExpandSectionNextChunk(sn.Block))
+            {
+                nextIndex = sn.CurrentIndex + 1;
+                expandedOverflow = true;
+            }
+            else
+            {
+                nextIndex = 0;
+                wrappedToStart = true;
+            }
+        }
+        sn.CurrentIndex = Math.Clamp(nextIndex, 0, sn.Matches.Count - 1);
         _activeSectionNav = sn;
         HighlightActiveExpander();
         UpdateSectionNavOverlay();
         var (para, matchInPara) = sn.Matches[sn.CurrentIndex];
         BoxMatchRun(para, matchInPara);
-        ScrollPreviewToLine(sn.Block, para);
+        ScrollAfterMatchNavigation(sn.Block, para, justMaterialized: expandedOverflow, sameParagraph: !expandedOverflow && !wrappedToStart && ReferenceEquals(previousPara, para));
     }
 
     private void OnSectionPrevMatch(SectionMatchNav sn)
     {
         if (sn.Matches.Count == 0) return;
+        Paragraph? previousPara = sn.CurrentIndex >= 0 && sn.CurrentIndex < sn.Matches.Count ? sn.Matches[sn.CurrentIndex].para : null;
+        bool wrappedToEnd = sn.CurrentIndex <= 0;
         sn.CurrentIndex = (sn.CurrentIndex - 1 + sn.Matches.Count) % sn.Matches.Count;
         _activeSectionNav = sn;
         HighlightActiveExpander();
         UpdateSectionNavOverlay();
         var (para, matchInPara) = sn.Matches[sn.CurrentIndex];
         BoxMatchRun(para, matchInPara);
-        ScrollPreviewToLine(sn.Block, para);
+        ScrollAfterMatchNavigation(sn.Block, para, justMaterialized: false, sameParagraph: !wrappedToEnd && ReferenceEquals(previousPara, para));
+    }
+
+    private void ScrollAfterMatchNavigation(RichTextBlock block, Paragraph para, bool justMaterialized, bool sameParagraph)
+    {
+        if (justMaterialized)
+        {
+            ScrollAfterMaterialization(block, para);
+            return;
+        }
+
+        if (sameParagraph)
+        {
+            if (ViewModel.PreviewWordWrap)
+            {
+                ScrollPreviewToLine(block, para, forceCenter: true);
+            }
+            else
+            {
+                ScrollMatchHorizontallyIntoView(block, para);
+                QueueActiveMatchOverlayUpdate(block, para);
+            }
+            return;
+        }
+
+        ScrollPreviewToLine(block, para, forceCenter: true);
     }
 
     private void OnNextMatch(object sender, RoutedEventArgs e)
@@ -6173,8 +6803,26 @@ public sealed partial class MainWindow : Window
         var navSw = System.Diagnostics.Stopwatch.StartNew();
         int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
         if (totalMatches == 0) return;
+        Paragraph? previousPara = _currentMatchIndex >= 0 && _currentMatchIndex < _matchParagraphs.Count ? _matchParagraphs[_currentMatchIndex].para : null;
+        bool expandedOverflow = false;
+
+        // If the current match is the last one in its section and that section
+        // still has overflow (was truncated), expand the next chunk before
+        // navigating so the user can progressively reach all matches.
+        if (_sectionOverflow.Count > 0
+            && _matchParagraphs.Count > 0
+            && _currentMatchIndex >= 0
+            && _currentMatchIndex < _matchParagraphs.Count)
+        {
+            var (curBlock, _, _) = _matchParagraphs[_currentMatchIndex];
+            bool atSectionEnd = _currentMatchIndex == _matchParagraphs.Count - 1
+                || !ReferenceEquals(_matchParagraphs[_currentMatchIndex + 1].block, curBlock);
+            if (atSectionEnd && _sectionOverflow.ContainsKey(curBlock))
+                expandedOverflow = ExpandSectionNextChunk(curBlock);
+        }
 
         bool justMaterialized = false;
+        bool wrappedToStart = false;
         if (_matchParagraphs.Count == 0 || _currentMatchIndex >= _matchParagraphs.Count - 1)
         {
             // Past the last rendered match — try to materialize the next lazy section.
@@ -6189,6 +6837,7 @@ public sealed partial class MainWindow : Window
             {
                 // Wrap to start.
                 _currentMatchIndex = 0;
+                wrappedToStart = true;
             }
         }
         else
@@ -6203,10 +6852,9 @@ public sealed partial class MainWindow : Window
             SetSectionCurrentMatch(sn, para, matchInPara);
         ActivateSectionForBlock(block);
         BoxMatchRun(para, matchInPara);
-        if (LogService.Instance.IsInfoEnabled)
-            LogService.Instance.Info("MatchNav", $"OnNextMatch: idx={_currentMatchIndex}, path={(justMaterialized ? "materialize" : "normal")}");
-        if (justMaterialized) ScrollAfterMaterialization(block, para);
-        else ScrollPreviewToLine(block, para);
+        if (LogService.Instance.IsVerboseEnabled)
+            LogService.Instance.Verbose("MatchNav", $"OnNextMatch: idx={_currentMatchIndex}, path={(justMaterialized ? "materialize" : "normal")}");
+        ScrollAfterMatchNavigation(block, para, justMaterialized || expandedOverflow, sameParagraph: !expandedOverflow && !wrappedToStart && ReferenceEquals(previousPara, para));
         navSw.Stop();
         if (LogService.Instance.IsVerboseEnabled)
             LogService.Instance.Verbose("Preview", $"OnNextMatch: index={_currentMatchIndex}, elapsed={navSw.ElapsedMilliseconds}ms");
@@ -6217,8 +6865,10 @@ public sealed partial class MainWindow : Window
         var navSw = System.Diagnostics.Stopwatch.StartNew();
         int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
         if (totalMatches == 0) return;
+        Paragraph? previousPara = _currentMatchIndex >= 0 && _currentMatchIndex < _matchParagraphs.Count ? _matchParagraphs[_currentMatchIndex].para : null;
 
         bool justMaterialized = false;
+        bool wrappedToEnd = false;
         if (_matchParagraphs.Count == 0 || _currentMatchIndex <= 0)
         {
             // Before the first rendered match — try to materialize the last lazy section.
@@ -6233,6 +6883,7 @@ public sealed partial class MainWindow : Window
             {
                 // Wrap to end.
                 _currentMatchIndex = _matchParagraphs.Count - 1;
+                wrappedToEnd = true;
             }
         }
         else
@@ -6247,10 +6898,9 @@ public sealed partial class MainWindow : Window
             SetSectionCurrentMatch(sn, para, matchInPara);
         ActivateSectionForBlock(block);
         BoxMatchRun(para, matchInPara);
-        if (LogService.Instance.IsInfoEnabled)
-            LogService.Instance.Info("MatchNav", $"OnPrevMatch: idx={_currentMatchIndex}, path={(justMaterialized ? "materialize" : "normal")}");
-        if (justMaterialized) ScrollAfterMaterialization(block, para);
-        else ScrollPreviewToLine(block, para);
+        if (LogService.Instance.IsVerboseEnabled)
+            LogService.Instance.Verbose("MatchNav", $"OnPrevMatch: idx={_currentMatchIndex}, path={(justMaterialized ? "materialize" : "normal")}");
+        ScrollAfterMatchNavigation(block, para, justMaterialized, sameParagraph: !wrappedToEnd && ReferenceEquals(previousPara, para));
         navSw.Stop();
         if (LogService.Instance.IsVerboseEnabled)
             LogService.Instance.Verbose("Preview", $"OnPrevMatch: index={_currentMatchIndex}, elapsed={navSw.ElapsedMilliseconds}ms");
@@ -6295,6 +6945,120 @@ public sealed partial class MainWindow : Window
             }
         }
         return false;
+    }
+
+    /// <summary>
+    /// Expands the next chunk of un-rendered matches for a section that was
+    /// truncated at <see cref="MaxMatchesPerSection"/>. Called from match
+    /// navigation when the user reaches the end of the rendered range and
+    /// the section still has overflow. Returns true if any matches were added.
+    /// </summary>
+    private bool ExpandSectionNextChunk(RichTextBlock section)
+    {
+        if (!_sectionOverflow.TryGetValue(section, out var ov)) return false;
+        int chunkSize = Math.Min(MaxMatchesPerExpandChunk, ov.RemainingResults.Count);
+        if (chunkSize <= 0)
+        {
+            _sectionOverflow.Remove(section);
+            return false;
+        }
+
+        // Remove the existing truncation notice (we'll re-append it if more remain).
+        if (ov.NoticePara != null)
+            section.Blocks.Remove(ov.NoticePara);
+
+        // Compute the insertion point in _matchParagraphs (right after this
+        // section's last existing match) before appending new entries.
+        int insertAt = -1;
+        for (int i = _matchParagraphs.Count - 1; i >= 0; i--)
+        {
+            if (ReferenceEquals(_matchParagraphs[i].block, section))
+            {
+                insertAt = i + 1;
+                break;
+            }
+        }
+        if (insertAt < 0) insertAt = _matchParagraphs.Count;
+
+        _sectionMatchNavs.TryGetValue(section, out var sn);
+        int beforeCount = _matchParagraphs.Count;
+
+        // Stop early once we've added enough match entries to keep the UI
+        // responsive — dense lines can produce 20×+ match entries per result.
+        int consumed = 0;
+        if (ov.IsHighlightMode && ov.AllLines != null)
+        {
+            AppendHighlightMatchWindows(
+                section,
+                ov.RemainingResults,
+                ov.AllLines,
+                ov.Rx,
+                sn,
+                MaxMatchEntriesPerExpandChunk,
+                chunkSize,
+                out consumed,
+                out _,
+                ov.LastRenderedLine);
+            for (int i = 0; i < consumed; i++)
+                ov.LastRenderedLine = Math.Max(ov.LastRenderedLine, ov.RemainingResults[i].LineNumber);
+        }
+        else
+        {
+            for (int ri = 0; ri < chunkSize; ri++)
+            {
+                var r = ov.RemainingResults[ri];
+                var sep = new Paragraph { Margin = new Thickness(0, 8, 0, 4) };
+                var label = $"\u00A0Line\u00A0{r.LineNumber}\u00A0";
+                var sepRun = new Run { Text = $"{new string('\u2500', 6)}{label}{new string('\u2500', 6)}" };
+                sepRun.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 60, 140, 60));
+                sep.Inlines.Add(sepRun);
+                section.Blocks.Add(sep);
+
+                var lines = GetPreviewLines(r, ov.AllLines, ov.PreviewLines, fullFile: false);
+                foreach (var (line, lineNum) in lines)
+                {
+                    bool isMatchLine = lineNum == r.LineNumber;
+                    AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, ov.Rx, truncate: true, _matchParagraphs, sn, out _);
+                }
+                consumed++;
+                if (_matchParagraphs.Count - beforeCount >= MaxMatchEntriesPerExpandChunk)
+                    break;
+            }
+        }
+
+        ov.RemainingResults.RemoveRange(0, consumed);
+
+        int addedCount = _matchParagraphs.Count - beforeCount;
+        // AddPreviewLineParagraphs appends to _matchParagraphs at the end. If
+        // there are later sections whose matches come after this section's,
+        // move the newly added entries into the correct slot.
+        if (addedCount > 0 && insertAt < beforeCount)
+        {
+            var newEntries = _matchParagraphs.GetRange(beforeCount, addedCount);
+            _matchParagraphs.RemoveRange(beforeCount, addedCount);
+            _matchParagraphs.InsertRange(insertAt, newEntries);
+            // Shift the current cursor if it sat after the insertion point.
+            if (_currentMatchIndex >= insertAt)
+                _currentMatchIndex += addedCount;
+        }
+
+        InvalidateParagraphIndexCache(section);
+        if (sn != null) sn.IndexByMatch = null;
+
+        ov.RenderedSoFar += consumed;
+
+        if (ov.RemainingResults.Count > 0)
+        {
+            ov.NoticePara = AppendTruncationNotice(section, ov.OriginalTotal, ov.RenderedSoFar);
+        }
+        else
+        {
+            ov.NoticePara = null;
+            _sectionOverflow.Remove(section);
+        }
+
+        LogService.Instance.Info("MatchNav", $"ExpandSectionNextChunk: results={consumed}, addedEntries={addedCount}, renderedSoFar={ov.RenderedSoFar}, remaining={ov.RemainingResults.Count}");
+        return addedCount > 0;
     }
 
     private bool _splitterDragging;
@@ -6410,6 +7174,7 @@ public sealed partial class MainWindow : Window
         ((FrameworkElement)sender).Loaded -= OnContentLoaded;
         ApplyWordWrap(ViewModel.PreviewWordWrap);
         if (_launcherMode) PositionLauncherWindow();
+        FocusSearchOnLaunch();
         await CheckEverythingAsync();
         await CheckFirstRunContextMenuAsync();
 
