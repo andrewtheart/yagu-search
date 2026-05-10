@@ -47,6 +47,7 @@ public sealed partial class MainWindow : Window
     private const int AutoLoadChunkSize = 5;
     private bool _querySuggestionsDetached;
     private long _hideSuggestionsTick;
+    private long _suppressQuerySuggestionsUntilTick;
     private DispatcherTimer? _autoScrollTimer;
     private const long FullFilePreviewLimitBytes = 1L * 1024 * 1024 * 1024;
     private CancellationTokenSource? _previewLoadCts;
@@ -656,7 +657,7 @@ public sealed partial class MainWindow : Window
             SetForegroundWindow(_hwnd);
         }
         Activate();
-        FocusSearchBox();
+        FocusSearchBox(suppressSuggestions: true);
     }
 
     public void FocusSearchOnLaunch()
@@ -833,6 +834,7 @@ public sealed partial class MainWindow : Window
         }
         // Down arrow opens the search history dropdown.
         else if (e.Key == VirtualKey.Down && !QueryBox.IsSuggestionListOpen
+                 && !AreQuerySuggestionsSuppressed()
                  && ViewModel.SearchHistory.Count > 0)
         {
             RestoreQuerySuggestions();
@@ -917,25 +919,44 @@ public sealed partial class MainWindow : Window
 
     private void RestoreQuerySuggestions(AutoSuggestBox? box = null)
     {
+        var target = box ?? QueryBox;
+        if (AreQuerySuggestionsSuppressed())
+        {
+            target.IsSuggestionListOpen = false;
+            return;
+        }
+
         if (!_querySuggestionsDetached) return;
         // After a deliberate hide (Enter to search), suppress re-attach briefly
         // so the AutoSuggestBox's spurious TextChanged events don't reopen the popup.
         if (Environment.TickCount64 - _hideSuggestionsTick < 400) return;
-        var target = box ?? QueryBox;
         _querySuggestionsDetached = false;
         target.ItemsSource = ViewModel.SearchHistory;
         target.IsSuggestionListOpen = false;
     }
 
+    private bool AreQuerySuggestionsSuppressed()
+        => Environment.TickCount64 < _suppressQuerySuggestionsUntilTick;
+
+    private void SuppressQuerySuggestionsFor(int milliseconds, AutoSuggestBox? box = null)
+    {
+        long until = Environment.TickCount64 + milliseconds;
+        if (until > _suppressQuerySuggestionsUntilTick)
+            _suppressQuerySuggestionsUntilTick = until;
+
+        HideQuerySuggestions(box);
+    }
+
     private void OnQueryTextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
     {
-        if (args.Reason == AutoSuggestionBoxTextChangeReason.UserInput)
+        if (args.Reason == AutoSuggestionBoxTextChangeReason.UserInput && !AreQuerySuggestionsSuppressed())
             RestoreQuerySuggestions(sender);
     }
 
     private void OnQueryLostFocus(object sender, RoutedEventArgs e)
     {
-        RestoreQuerySuggestions(sender as AutoSuggestBox);
+        if (!AreQuerySuggestionsSuppressed())
+            RestoreQuerySuggestions(sender as AutoSuggestBox);
     }
 
     private static bool IsShiftDown()
@@ -6439,7 +6460,11 @@ public sealed partial class MainWindow : Window
                 return false;
 
             double viewportWidth = PreviewScrollViewer.ActualWidth;
-            double viewportHeight = PreviewScrollViewer.ActualHeight;
+            double viewportTop = PreviewScrollViewer.Padding.Top;
+            double viewportHeight = PreviewScrollViewer.ViewportHeight;
+            if (viewportHeight <= 0)
+                viewportHeight = Math.Max(0, PreviewScrollViewer.ActualHeight - PreviewScrollViewer.Padding.Top - PreviewScrollViewer.Padding.Bottom);
+            double viewportBottom = viewportTop + viewportHeight;
             if (viewportWidth <= 0 || viewportHeight <= 0)
                 return false;
 
@@ -6469,8 +6494,8 @@ public sealed partial class MainWindow : Window
                 double rowTolerance = Math.Max(4, markerHeight * 0.6);
                 bool actualPointInViewport = point.X >= 0
                     && point.X <= viewportWidth
-                    && point.Y >= 0
-                    && point.Y + markerHeight <= viewportHeight;
+                    && point.Y >= viewportTop
+                    && point.Y + markerHeight <= viewportBottom;
                 if (IsUsableTextRect(endRect) && Math.Abs(endRect.Y - rect.Y) > rowTolerance)
                 {
                     var endPoint = TransformRunRectToOverlay(block, targetPara, endRect);
@@ -6490,7 +6515,7 @@ public sealed partial class MainWindow : Window
                 }
             }
             double currentVerticalOffset = PreviewScrollViewer.VerticalOffset;
-            double actualRunTop = currentVerticalOffset + point.Y;
+            double actualRunTop = currentVerticalOffset + point.Y - viewportTop;
             double overlayTop = point.Y;
             double effectiveVerticalOffset = currentVerticalOffset;
             bool centeredFromActualRun = false;
@@ -6530,12 +6555,12 @@ public sealed partial class MainWindow : Window
                     return false;
                 }
 
-                overlayTop = actualRunTop - effectiveVerticalOffset;
+                overlayTop = actualRunTop - effectiveVerticalOffset + viewportTop;
             }
 
             double viewportGuard = Math.Min(40, Math.Max(8, markerHeight * 0.75));
-            bool markerOutsideViewport = overlayTop < 0 || overlayTop + markerHeight > viewportHeight;
-            bool markerTooCloseToEdge = overlayTop < viewportGuard || overlayTop + markerHeight > viewportHeight - viewportGuard;
+            bool markerOutsideViewport = overlayTop < viewportTop || overlayTop + markerHeight > viewportBottom;
+            bool markerTooCloseToEdge = overlayTop < viewportTop + viewportGuard || overlayTop + markerHeight > viewportBottom - viewportGuard;
             if ((markerOutsideViewport || (expectedVerticalOffset.HasValue && markerTooCloseToEdge)) && retryIfCenterRejected)
             {
                 double correctiveTarget = actualRunTop + markerHeight / 2 - viewportHeight / 2;
@@ -6546,18 +6571,18 @@ public sealed partial class MainWindow : Window
                     if (LogService.Instance.IsVerboseEnabled)
                     {
                         int paragraphIndex = GetParagraphIndex(block, targetPara);
-                        LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: edge correction idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, markerTop={overlayTop:N1}, markerH={markerHeight:N1}, viewportH={viewportHeight:N1}, fromY={currentVerticalOffset:N1}, toY={correctiveTarget:N1}, accepted={accepted}");
+                        LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: edge correction idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, markerTop={overlayTop:N1}, markerH={markerHeight:N1}, viewportTop={viewportTop:N1}, viewportBottom={viewportBottom:N1}, viewportH={viewportHeight:N1}, fromY={currentVerticalOffset:N1}, toY={correctiveTarget:N1}, accepted={accepted}");
                     }
                     return false;
                 }
             }
 
-            if (overlayTop < 0 || overlayTop + markerHeight > viewportHeight)
+            if (overlayTop < viewportTop || overlayTop + markerHeight > viewportBottom)
             {
                 if (LogService.Instance.IsVerboseEnabled)
                 {
                     int paragraphIndex = GetParagraphIndex(block, targetPara);
-                    LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: rejecting offscreen marker idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, markerTop={overlayTop:N1}, markerH={markerHeight:N1}, viewportH={viewportHeight:N1}, scrollY={currentVerticalOffset:N1}");
+                    LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: rejecting offscreen marker idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, markerTop={overlayTop:N1}, markerH={markerHeight:N1}, viewportTop={viewportTop:N1}, viewportBottom={viewportBottom:N1}, viewportH={viewportHeight:N1}, scrollY={currentVerticalOffset:N1}");
                 }
                 return false;
             }
@@ -6761,13 +6786,14 @@ public sealed partial class MainWindow : Window
                 double vpH = PreviewScrollViewer.ViewportHeight;
                 double vpTop = PreviewScrollViewer.VerticalOffset;
                 double vpBottom = vpTop + vpH;
+                double viewportPaddingTop = PreviewScrollViewer.Padding.Top;
 
                 double paraY = double.NaN;
                 try
                 {
                     var t = block.TransformToVisual(PreviewScrollViewer);
                     var p = t.TransformPoint(new Windows.Foundation.Point(0, 0));
-                    paraY = vpTop + p.Y;
+                    paraY = vpTop + p.Y - viewportPaddingTop;
                 }
                 catch { }
 
@@ -6778,7 +6804,7 @@ public sealed partial class MainWindow : Window
                     var rect = activeRun.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
                     var t = block.TransformToVisual(PreviewScrollViewer);
                     var p = t.TransformPoint(new Windows.Foundation.Point(rect.X, rect.Y));
-                    runY = vpTop + p.Y;
+                    runY = vpTop + p.Y - viewportPaddingTop;
                     runH = rect.Height;
                 }
                 catch { }
@@ -7989,9 +8015,24 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void FocusSearchBox()
+    private void FocusSearchBox(bool suppressSuggestions = false)
     {
-        DispatcherQueue.TryEnqueue(() => QueryBox.Focus(FocusState.Programmatic));
+        if (suppressSuggestions)
+            SuppressQuerySuggestionsFor(1000);
+
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (suppressSuggestions)
+                SuppressQuerySuggestionsFor(1000);
+
+            QueryBox.Focus(FocusState.Programmatic);
+
+            if (suppressSuggestions)
+            {
+                QueryBox.IsSuggestionListOpen = false;
+                DispatcherQueue.TryEnqueue(() => QueryBox.IsSuggestionListOpen = false);
+            }
+        });
     }
 
     private async Task CheckEverythingAsync()
