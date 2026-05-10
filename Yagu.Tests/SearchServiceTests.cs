@@ -74,6 +74,44 @@ public class SearchServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task FileSizeRange_FiltersBeforeMatching()
+    {
+        Write("too-small.txt", "needle");
+        Write("in-range.txt", "prefix needle suffix");
+        Write("too-large.txt", "needle " + new string('x', 80));
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            MinFileSizeBytes = 10,
+            MaxFileSizeBytes = 40,
+            MaxResults = 0,
+        };
+
+        int matches = 0;
+        SearchSummary? summary = null;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            switch (evt)
+            {
+                case SearchEvent.Match: matches++; break;
+                case SearchEvent.MatchBatch mb: matches += mb.Results.Count; break;
+                case SearchEvent.Completed c: summary = c.Summary; break;
+            }
+        }
+
+        Assert.Equal(1, matches);
+        Assert.NotNull(summary);
+        Assert.Equal(1, summary!.TotalMatches);
+        Assert.Equal(1, summary.FilesWithMatches);
+        Assert.NotNull(summary.SkipReasons);
+        Assert.True(summary.SkipReasons!.EarlyFiltered >= 2);
+        Assert.True(summary.SkipReasons.TooLarge >= 1);
+    }
+
+    [Fact]
     public async Task InvalidRegex_EmitsError()
     {
         var svc = new SearchService();

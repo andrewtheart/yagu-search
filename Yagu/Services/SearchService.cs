@@ -57,6 +57,7 @@ public sealed class SearchService
                 SearchMode = options.SearchMode,
                 IncludeGlobs = options.IncludeGlobs,
                 ExcludeGlobs = options.ExcludeGlobs,
+                MinFileSizeBytes = options.MinFileSizeBytes,
                 MaxFileSizeBytes = options.MaxFileSizeBytes,
                 MaxResults = SearchOptions.MaxResultsCeiling,
                 MaxMatchesPerFile = options.MaxMatchesPerFile,
@@ -68,6 +69,8 @@ public sealed class SearchService
                 SearchInsideArchives = options.SearchInsideArchives,
                 ArchiveExtensions = options.ArchiveExtensions,
                 SdkChannelBufferSize = options.SdkChannelBufferSize,
+                ExcludeAdminProtectedPaths = options.ExcludeAdminProtectedPaths,
+                AdminProtectedPathSegments = options.AdminProtectedPathSegments,
             };
         }
 
@@ -109,6 +112,7 @@ public sealed class SearchService
         // pre-filter by size/extension without per-file FileInfo calls.
         if (_fileLister is FileLister concreteLister)
         {
+            concreteLister.EarlyMinFileSizeBytes = options.MinFileSizeBytes;
             concreteLister.EarlyMaxFileSizeBytes = options.MaxFileSizeBytes;
 
             // When archive search is enabled, don't let the file lister skip
@@ -184,6 +188,7 @@ public sealed class SearchService
         int skipBinary = 0, skipAccessDenied = 0, skipIOError = 0, skipTooLarge = 0;
         int skipNotFound = 0, skipEncoding = 0, skipOther = 0, skipByExtension = 0, skipDirectories = 0;
         int skipGlobExcluded = 0;
+        int skipSizeFiltered = 0;
 
         int CurrentDirectorySkips() => Math.Max(Volatile.Read(ref skipDirectories), _fileLister.SkippedDirectories);
         int CurrentAccessDeniedSkips() => Volatile.Read(ref skipAccessDenied) + _fileLister.AccessDeniedDirectories;
@@ -217,7 +222,7 @@ public sealed class SearchService
                 Volatile.Read(ref skipOther),
                 Volatile.Read(ref skipByExtension),
                 nonAccessDeniedDirSkips,
-                CurrentEarlySkips(),
+                CurrentEarlySkips() + Volatile.Read(ref skipSizeFiltered),
                 Volatile.Read(ref skipGlobExcluded));
             return new(
                 Volatile.Read(ref filesScanned),
@@ -276,6 +281,17 @@ public sealed class SearchService
                         Interlocked.Increment(ref filesScanned);
                         Interlocked.Increment(ref filesSkipped);
                         Interlocked.Increment(ref skipGlobExcluded);
+                        continue;
+                    }
+
+                    if (_fileLister is not FileLister
+                        && ShouldSkipByFileSize(path, options, out bool tooLarge))
+                    {
+                        Interlocked.Increment(ref filesScanned);
+                        Interlocked.Increment(ref filesSkipped);
+                        Interlocked.Increment(ref skipSizeFiltered);
+                        if (tooLarge)
+                            Interlocked.Increment(ref skipTooLarge);
                         continue;
                     }
 
@@ -696,6 +712,7 @@ public sealed class SearchService
                                     case ContentSearcher.SkipAccessDenied: Interlocked.Increment(ref skipAccessDenied); break;
                                     case ContentSearcher.SkipIOError: Interlocked.Increment(ref skipIOError); break;
                                     case ContentSearcher.SkipTooLarge: Interlocked.Increment(ref skipTooLarge); break;
+                                    case ContentSearcher.SkipTooSmall: Interlocked.Increment(ref skipSizeFiltered); break;
                                     case ContentSearcher.SkipNotFound: Interlocked.Increment(ref skipNotFound); break;
                                     case ContentSearcher.SkipEncoding: Interlocked.Increment(ref skipEncoding); break;
                                     case ContentSearcher.SkipByExtension: Interlocked.Increment(ref skipByExtension); break;
@@ -879,12 +896,13 @@ public sealed class SearchService
         int totalFiles = CurrentTotalFiles();
         int directorySkips = CurrentDirectorySkips();
         int earlySkips = CurrentEarlySkips();
+        int discoverySizeSkips = Volatile.Read(ref skipSizeFiltered);
         int earlyTooLargeSkips = CurrentEarlyTooLargeSkips();
         int accessDeniedSkips = CurrentAccessDeniedSkips();
         int totalSkipped = Volatile.Read(ref filesSkipped) + directorySkips + earlySkips;
         int nonAccessDeniedDirectorySkips = Math.Max(0, directorySkips - _fileLister.AccessDeniedDirectories);
-        var skipReasons = new SkipBreakdown(skipBinary, accessDeniedSkips, skipIOError, skipTooLarge + earlyTooLargeSkips, skipNotFound, skipEncoding, skipOther, skipByExtension, nonAccessDeniedDirectorySkips, earlySkips, skipGlobExcluded);
-        LogService.Instance.Warning("SearchService", $"Search complete: {totalMatches} matches in {filesWithMatches} files, {filesScanned} scanned, {totalSkipped} skipped ({skipReasons}), earlyFiltered={earlySkips}, degraded={wasDegraded}, truncated={wasTruncated}, " +
+        var skipReasons = new SkipBreakdown(skipBinary, accessDeniedSkips, skipIOError, skipTooLarge + earlyTooLargeSkips, skipNotFound, skipEncoding, skipOther, skipByExtension, nonAccessDeniedDirectorySkips, earlySkips + discoverySizeSkips, skipGlobExcluded);
+        LogService.Instance.Warning("SearchService", $"Search complete: {totalMatches} matches in {filesWithMatches} files, {filesScanned} scanned, {totalSkipped} skipped ({skipReasons}), earlyFiltered={earlySkips + discoverySizeSkips}, degraded={wasDegraded}, truncated={wasTruncated}, " +
             $"batches={Volatile.Read(ref nativeBatchesProcessed)}, pressureCycles={pressureCycles}, forwarderItems={Volatile.Read(ref forwarderItemsForwarded):N0}, forwarderStallMs={Volatile.Read(ref forwarderWriteStallMs)}, channelDrops={Volatile.Read(ref contentChannelDrops)}, {sw.Elapsed.TotalSeconds:F2}s");
         yield return new SearchEvent.Completed(new SearchSummary(
             TotalFiles: totalFiles,
@@ -899,6 +917,47 @@ public sealed class SearchService
             Degraded: wasDegraded,
             FallbackReason: fallbackReason,
             SkipReasons: skipReasons));
+    }
+
+    private static bool ShouldSkipByFileSize(string path, SearchOptions options, out bool tooLarge)
+    {
+        tooLarge = false;
+        long minBytes = Math.Max(0, options.MinFileSizeBytes);
+        long maxBytes = Math.Max(0, options.MaxFileSizeBytes);
+        if (minBytes == 0 && maxBytes == 0)
+            return false;
+
+        long length;
+        if (FileMetadataCache.TryGet(path, out var cached))
+        {
+            length = cached.Length;
+        }
+        else
+        {
+            FileInfo fileInfo;
+            try { fileInfo = new FileInfo(path); }
+            catch (Exception ex)
+            {
+                LogService.Instance.Verbose("SearchService", $"Cannot stat file for size filter: {path}", ex);
+                return false;
+            }
+            if (!fileInfo.Exists)
+                return false;
+
+            length = fileInfo.Length;
+            FileMetadataCache.Set(path, new FileMetadata(length, fileInfo.LastWriteTime, fileInfo.CreationTime));
+        }
+
+        if (minBytes > 0 && length < minBytes)
+            return true;
+
+        if (maxBytes > 0 && length > maxBytes)
+        {
+            tooLarge = true;
+            return true;
+        }
+
+        return false;
     }
 
     internal static List<string> ExtractExtensions(IReadOnlyList<string> includeGlobs)

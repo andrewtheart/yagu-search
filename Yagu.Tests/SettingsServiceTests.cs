@@ -22,11 +22,14 @@ public class SettingsServiceTests
             s.RecentDirectories.Add(@"D:\a");
             s.SearchHistory.Add("foo");
             svc.Save(s);
+            var json = File.ReadAllText(temp);
 
             var loaded = svc.Load();
             Assert.Equal(@"D:\proj", loaded.LastDirectory);
-            Assert.True(loaded.CaseSensitive);
-            Assert.True(loaded.UseRegex);
+            Assert.False(loaded.CaseSensitive);
+            Assert.False(loaded.UseRegex);
+            Assert.DoesNotContain("CaseSensitive", json);
+            Assert.DoesNotContain("UseRegex", json);
             Assert.Equal(7, loaded.ContextLines);
             Assert.Single(loaded.RecentDirectories);
             Assert.Single(loaded.SearchHistory);
@@ -225,7 +228,7 @@ public class SettingsServiceNewFieldTests
     }
 
     [Fact]
-    public void RoundTrip_SkipBinary()
+    public void AdvancedOption_SkipBinary_IsInstanceOnly()
     {
         var tmp = Path.Combine(Path.GetTempPath(), "qg-skipbin-" + Guid.NewGuid() + ".json");
         try
@@ -233,8 +236,10 @@ public class SettingsServiceNewFieldTests
             var svc = new SettingsService(tmp);
             var s = new AppSettings { SkipBinary = false };
             svc.Save(s);
+            var json = File.ReadAllText(tmp);
             var loaded = svc.Load();
-            Assert.False(loaded.SkipBinary);
+            Assert.True(loaded.SkipBinary);
+            Assert.DoesNotContain("SkipBinary", json);
         }
         finally { try { File.Delete(tmp); } catch { } }
     }

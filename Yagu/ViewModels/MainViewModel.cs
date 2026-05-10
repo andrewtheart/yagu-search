@@ -70,6 +70,7 @@ public sealed partial class MainViewModel : ObservableObject
         PreviewContextLines = _settings.PreviewContextLines;
         IncludeGlobs = _settings.IncludeGlobs;
         ExcludeGlobs = _settings.ExcludeGlobs;
+        MinFileSizeBytes = _settings.MinFileSizeBytes;
         MaxFileSizeBytes = _settings.MaxFileSizeBytes;
         MaxResults = _settings.MaxResults <= 0 ? 0 : Math.Min(_settings.MaxResults, SearchOptions.MaxResultsCeiling);
         EditorCommand = _settings.EditorCommand;
@@ -122,6 +123,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial int PreviewContextLines { get; set; } = 20;
     [ObservableProperty] public partial string IncludeGlobs { get; set; } = string.Empty;
     [ObservableProperty] public partial string ExcludeGlobs { get; set; } = "node_modules;bin;obj;.git";
+    [ObservableProperty] public partial long MinFileSizeBytes { get; set; }
     [ObservableProperty] public partial long MaxFileSizeBytes { get; set; } = 100L * 1024 * 1024;
     [ObservableProperty] public partial int MaxResults { get; set; }
     [ObservableProperty] public partial string EditorCommand { get; set; } = EditorLauncher.DefaultCommand;
@@ -188,6 +190,40 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial int PreviewEditorMaxSizeMB { get; set; } = 32;
     [ObservableProperty] public partial int PreviewEditorMaxTextLength { get; set; } = 20_000_000;
     [ObservableProperty] public partial int PreviewEditorMaxLineLength { get; set; } = 1_000_000;
+
+    public double MinFileSizeMB
+    {
+        get => MinFileSizeBytes / (1024d * 1024d);
+        set
+        {
+            long bytes = MegabytesToBytes(value);
+            if (MinFileSizeBytes != bytes)
+                MinFileSizeBytes = bytes;
+        }
+    }
+
+    public double MaxFileSizeMB
+    {
+        get => MaxFileSizeBytes / (1024d * 1024d);
+        set
+        {
+            long bytes = MegabytesToBytes(value);
+            if (MaxFileSizeBytes != bytes)
+                MaxFileSizeBytes = bytes;
+        }
+    }
+
+    private static long MegabytesToBytes(double value)
+    {
+        if (double.IsNaN(value) || double.IsInfinity(value) || value <= 0)
+            return 0;
+
+        double bytes = value * 1024d * 1024d;
+        if (bytes >= long.MaxValue)
+            return long.MaxValue;
+
+        return (long)Math.Round(bytes);
+    }
 
     private bool _suppressAdminWarning;
     public bool SuppressAdminWarning
@@ -314,7 +350,6 @@ public sealed partial class MainViewModel : ObservableObject
             _updatingSkipExtensionsFromItems = false;
         }
         OnPropertyChanged(nameof(SkipExtensionsSummary));
-        _ = PersistSettingsAsync();
     }
 
     // ── Archive (ZIP-like) extensions dropdown ────────────────────
@@ -417,7 +452,6 @@ public sealed partial class MainViewModel : ObservableObject
             _updatingArchiveExtensionsFromItems = false;
         }
         OnPropertyChanged(nameof(ArchiveExtensionsSummary));
-        _ = PersistSettingsAsync();
     }
 
     private string _globalHotkeyKey = HotkeyService.DefaultStartKey.ToString();
@@ -537,6 +571,8 @@ public sealed partial class MainViewModel : ObservableObject
     }
     partial void OnIncludeGlobsChanged(string value) => ApplySortAndFilter();
     partial void OnExcludeGlobsChanged(string value) => ApplySortAndFilter();
+    partial void OnMinFileSizeBytesChanged(long value) => OnPropertyChanged(nameof(MinFileSizeMB));
+    partial void OnMaxFileSizeBytesChanged(long value) => OnPropertyChanged(nameof(MaxFileSizeMB));
     partial void OnFileLogLevelIndexChanged(int value)
     {
         LogService.Instance.FileLevel = (LogLevel)value;
@@ -588,6 +624,12 @@ public sealed partial class MainViewModel : ObservableObject
             }
         }
 
+        if (MinFileSizeBytes > 0 && MaxFileSizeBytes > 0 && MinFileSizeBytes > MaxFileSizeBytes)
+        {
+            ErrorText = "Minimum file size cannot be larger than maximum file size.";
+            return;
+        }
+
         int runId = System.Threading.Interlocked.Increment(ref _searchRunId);
         CancelPreviousSearchForNewRun(runId);
 
@@ -616,6 +658,7 @@ public sealed partial class MainViewModel : ObservableObject
                 SearchMode = (SearchMode)SearchModeIndex,
                 IncludeGlobs = SplitCsv(IncludeGlobs),
                 ExcludeGlobs = SplitCsv(ExcludeGlobs),
+                MinFileSizeBytes = MinFileSizeBytes,
                 MaxFileSizeBytes = MaxFileSizeBytes,
                 MaxResults = MaxResults,
                 SkipBinary = SkipBinary,
@@ -1296,6 +1339,7 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.PreviewContextLines = PreviewContextLines;
         _settings.IncludeGlobs = IncludeGlobs;
         _settings.ExcludeGlobs = ExcludeGlobs;
+        _settings.MinFileSizeBytes = MinFileSizeBytes;
         _settings.MaxFileSizeBytes = MaxFileSizeBytes;
         _settings.MaxResults = MaxResults;
         _settings.EditorCommand = EditorCommand;

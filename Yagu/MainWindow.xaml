@@ -297,6 +297,42 @@
                                 </Border>
                             </Grid>
                         </Grid>
+
+                        <!-- Size row -->
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid>
+                                <NumberBox Value="{x:Bind ViewModel.MinFileSizeMB, Mode=TwoWay}"
+                                           Minimum="0" SmallChange="1" LargeChange="10"
+                                           SpinButtonPlacementMode="Compact"
+                                           PlaceholderText="0"
+                                           Padding="72,4,8,4"
+                                           ToolTipService.ToolTip="Minimum file size in MB. 0 includes files of any smaller size." />
+                                <Border Background="#0078D4" CornerRadius="8" Padding="8,2"
+                                        VerticalAlignment="Center" HorizontalAlignment="Left"
+                                        Margin="6,0,0,0" IsHitTestVisible="False">
+                                    <TextBlock Text="Min MB" FontSize="11" Foreground="White"
+                                               FontWeight="SemiBold" />
+                                </Border>
+                            </Grid>
+                            <Grid Grid.Column="1">
+                                <NumberBox Value="{x:Bind ViewModel.MaxFileSizeMB, Mode=TwoWay}"
+                                           Minimum="0" SmallChange="1" LargeChange="10"
+                                           SpinButtonPlacementMode="Compact"
+                                           PlaceholderText="0"
+                                           Padding="72,4,8,4"
+                                           ToolTipService.ToolTip="Maximum file size in MB. 0 disables the upper size limit." />
+                                <Border Background="#0078D4" CornerRadius="8" Padding="8,2"
+                                        VerticalAlignment="Center" HorizontalAlignment="Left"
+                                        Margin="6,0,0,0" IsHitTestVisible="False">
+                                    <TextBlock Text="Max MB" FontSize="11" Foreground="White"
+                                               FontWeight="SemiBold" />
+                                </Border>
+                            </Grid>
+                        </Grid>
                     </StackPanel>
                 </Expander>
             </StackPanel>

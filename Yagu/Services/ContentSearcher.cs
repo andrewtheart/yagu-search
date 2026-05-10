@@ -47,6 +47,7 @@ public sealed class ContentSearcher
     public const int SkipAccessDenied = -2;
     public const int SkipIOError     = -3;
     public const int SkipTooLarge    = -4;
+    public const int SkipTooSmall    = -9;
     public const int SkipNotFound    = -5;
     public const int SkipEncoding    = -6;
     public const int SkipOther       = -7;
@@ -116,6 +117,7 @@ public sealed class ContentSearcher
             metadata = new FileMetadata(fileLength, fi.LastWriteTime, fi.CreationTime);
         }
 
+        if (options.MinFileSizeBytes > 0 && fileLength < options.MinFileSizeBytes) return new FileSearchOutcome(SkipTooSmall, 0);
         if (options.MaxFileSizeBytes > 0 && fileLength > options.MaxFileSizeBytes) return new FileSearchOutcome(SkipTooLarge, 0);
 
         // Extension-based skip — no binary sniff, no content read.

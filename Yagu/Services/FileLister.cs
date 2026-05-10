@@ -90,7 +90,10 @@ public sealed class FileLister : IFileLister
     public int EarlySkippedTooLargeFiles => Volatile.Read(ref _earlySkippedTooLargeFiles);
     public int EarlyExcludedByExtensionFiles => Volatile.Read(ref _earlyExcludedByExtensionFiles);
 
-    /// <summary>Files larger than this are skipped during listing (SDK path only). 0 disables.</summary>
+    /// <summary>Files smaller than this are skipped during listing. 0 disables.</summary>
+    public long EarlyMinFileSizeBytes { get; set; }
+
+    /// <summary>Files larger than this are skipped during listing. 0 disables.</summary>
     public long EarlyMaxFileSizeBytes { get; set; }
 
     /// <summary>Extensions (without dots, case-insensitive) to skip during listing (SDK path only).</summary>
@@ -390,8 +393,8 @@ public sealed class FileLister : IFileLister
             var excludeExts = string.Join(';', skipExts);
             query += $" !ext:{excludeExts}";
         }
-        // Size filtering is handled after the SDK returns metadata so Yagu can
-        // report the files as Too large in the skipped-files breakdown.
+        foreach (var sizeTerm in BuildEverythingSizeFilterTerms(EarlyMinFileSizeBytes, EarlyMaxFileSizeBytes))
+            query += $" {sizeTerm}";
 
         // Translate exclude globs into Everything search syntax.
         // Extension globs ("*.log") → !ext:log   (already handled above for SkipExtensions)
@@ -468,7 +471,7 @@ public sealed class FileLister : IFileLister
                         EverythingSdk.SetMatchCase(false);
                         // Request size alongside paths so we can pre-filter by file size
                         // and extension without per-file FileInfo calls.
-                        bool wantSize = EarlyMaxFileSizeBytes > 0;
+                        bool wantSize = EarlyMinFileSizeBytes > 0 || EarlyMaxFileSizeBytes > 0;
                         uint requestFlags = EverythingSdk.EVERYTHING_REQUEST_FULL_PATH_AND_FILE_NAME;
                         if (wantSize)
                             requestFlags |= EverythingSdk.EVERYTHING_REQUEST_SIZE;
@@ -496,10 +499,13 @@ public sealed class FileLister : IFileLister
                         SetKnownTotalFiles(count);
                         LogService.Instance.Warning("FileLister", $"Everything SDK: {count} returned, {total} total matches, last error={EverythingSdk.GetLastError()}");
                         var buf = new System.Text.StringBuilder(1024);
+                        long earlyMinSize = EarlyMinFileSizeBytes;
                         long earlyMaxSize = EarlyMaxFileSizeBytes;
                         var earlySkipExts = EarlySkipExtensions;
                         bool hasSkipExts = earlySkipExts.Count > 0;
+                        int skippedTooSmall = 0;
                         int skippedTooLarge = 0;
+                        int skippedBySize = 0;
                         int excludedByExtension = 0;
 
                         for (uint i = 0; i < count; i++)
@@ -507,13 +513,18 @@ public sealed class FileLister : IFileLister
                             if (cancellationToken.IsCancellationRequested) break;
 
                             // ── Early skip by file size ──
-                            if (wantSize && earlyMaxSize > 0)
+                            if (wantSize)
                             {
-                                if (EverythingSdk.GetResultSize(i, out long fileSize) && fileSize > earlyMaxSize)
+                                if (EverythingSdk.GetResultSize(i, out long fileSize)
+                                    && IsOutsideEarlyFileSizeRange(fileSize, earlyMinSize, earlyMaxSize, out bool tooLarge))
                                 {
-                                    skippedTooLarge++;
+                                    skippedBySize++;
+                                    if (tooLarge)
+                                        skippedTooLarge++;
+                                    else
+                                        skippedTooSmall++;
                                     Volatile.Write(ref _earlySkippedTooLargeFiles, skippedTooLarge);
-                                    Volatile.Write(ref _earlySkippedFiles, skippedTooLarge);
+                                    Volatile.Write(ref _earlySkippedFiles, skippedBySize);
                                     continue;
                                 }
                             }
@@ -557,9 +568,9 @@ public sealed class FileLister : IFileLister
                             }
                         }
 
-                        if (skippedTooLarge > 0 || excludedByExtension > 0)
+                        if (skippedBySize > 0 || excludedByExtension > 0)
                         {
-                            LogService.Instance.Warning("FileLister", $"Everything SDK: {skippedTooLarge:N0} too-large files skipped, {excludedByExtension:N0} files excluded by extension");
+                            LogService.Instance.Warning("FileLister", $"Everything SDK: {skippedTooSmall:N0} too-small files skipped, {skippedTooLarge:N0} too-large files skipped, {excludedByExtension:N0} files excluded by extension");
                         }
 
                         EverythingSdk.Reset();
@@ -840,6 +851,8 @@ public sealed class FileLister : IFileLister
             var exts = string.Join(';', includeExtensions.Select(NormalizeExtension).Where(s => !string.IsNullOrEmpty(s))!);
             if (!string.IsNullOrEmpty(exts)) args.Add($"ext:{exts}");
         }
+        foreach (var sizeTerm in BuildEverythingSizeFilterTerms(EarlyMinFileSizeBytes, EarlyMaxFileSizeBytes))
+            args.Add(sizeTerm);
         if (maxFiles > 0) { args.Add("-n"); args.Add(maxFiles.ToString()); }
 
         int resultCount = await TryGetEverythingResultCountAsync(esPath, args, cancellationToken).ConfigureAwait(false);
@@ -943,6 +956,34 @@ public sealed class FileLister : IFileLister
         if (s.StartsWith("*.")) s = s[2..];
         else s = s.TrimStart('.', '*');
         return s;
+    }
+
+    private static IEnumerable<string> BuildEverythingSizeFilterTerms(long minBytes, long maxBytes)
+    {
+        minBytes = Math.Max(0, minBytes);
+        maxBytes = Math.Max(0, maxBytes);
+
+        if (minBytes > 0)
+            yield return $"size:>={minBytes}";
+        if (maxBytes > 0)
+            yield return $"size:<={maxBytes}";
+    }
+
+    private static bool IsOutsideEarlyFileSizeRange(long fileSize, long minBytes, long maxBytes, out bool tooLarge)
+    {
+        minBytes = Math.Max(0, minBytes);
+        maxBytes = Math.Max(0, maxBytes);
+        tooLarge = false;
+
+        if (minBytes > 0 && fileSize < minBytes)
+            return true;
+        if (maxBytes > 0 && fileSize > maxBytes)
+        {
+            tooLarge = true;
+            return true;
+        }
+
+        return false;
     }
 
 
@@ -1078,6 +1119,13 @@ public sealed class FileLister : IFileLister
                         if (fsi is FileInfo fileInfo)
                         {
                             FileMetadataCache.Set(entry, new FileMetadata(fileInfo.Length, fileInfo.LastWriteTime, fileInfo.CreationTime));
+                            if (IsOutsideEarlyFileSizeRange(fileInfo.Length, EarlyMinFileSizeBytes, EarlyMaxFileSizeBytes, out bool tooLarge))
+                            {
+                                Interlocked.Increment(ref _earlySkippedFiles);
+                                if (tooLarge)
+                                    Interlocked.Increment(ref _earlySkippedTooLargeFiles);
+                                continue;
+                            }
                         }
                         yield return entry;
                         yielded++;

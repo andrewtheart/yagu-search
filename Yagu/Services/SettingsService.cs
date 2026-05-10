@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Yagu.Models;
 
 namespace Yagu.Services;
@@ -12,13 +13,14 @@ public sealed class AppSettings
     public string? LastDirectory { get; set; }
     public List<string> RecentDirectories { get; set; } = [];
     public List<string> SearchHistory { get; set; } = [];
-    public bool CaseSensitive { get; set; }
-    public bool UseRegex { get; set; }
+    [JsonIgnore] public bool CaseSensitive { get; set; }
+    [JsonIgnore] public bool UseRegex { get; set; }
     public int ContextLines { get; set; } = 3;
     public int PreviewContextLines { get; set; } = 20;
-    public string IncludeGlobs { get; set; } = string.Empty;
-    public string ExcludeGlobs { get; set; } = "node_modules;bin;obj;.git";
-    public long MaxFileSizeBytes { get; set; } = 100L * 1024 * 1024;
+    [JsonIgnore] public string IncludeGlobs { get; set; } = string.Empty;
+    [JsonIgnore] public string ExcludeGlobs { get; set; } = "node_modules;bin;obj;.git";
+    [JsonIgnore] public long MinFileSizeBytes { get; set; }
+    [JsonIgnore] public long MaxFileSizeBytes { get; set; } = 100L * 1024 * 1024;
     public int MaxResults { get; set; } = 0;
     public string EditorCommand { get; set; } = EditorLauncher.DefaultCommand;
     public double SplitPanePosition { get; set; } = 0.5;
@@ -39,13 +41,13 @@ public sealed class AppSettings
     /// <summary>Bounded channel buffer size for the Everything SDK streaming path. Higher values use more memory but can improve throughput.</summary>
     public int SdkChannelBufferSize { get; set; } = 4096;
     /// <summary>Whether to skip binary files during content search. Default true.</summary>
-    public bool SkipBinary { get; set; } = true;
+    [JsonIgnore] public bool SkipBinary { get; set; } = true;
     /// <summary>When true, detect ZIP archives by file header and search text files inside them. Default true.</summary>
-    public bool SearchInsideArchives { get; set; }
+    [JsonIgnore] public bool SearchInsideArchives { get; set; }
     /// <summary>Semicolon-separated file extensions that are known ZIP-like containers (bypassed from skip-extensions when archive search is on). e.g. "zip;jar;docx;xlsx".</summary>
-    public string ArchiveExtensions { get; set; } = DefaultArchiveExtensions;
+    [JsonIgnore] public string ArchiveExtensions { get; set; } = DefaultArchiveExtensions;
     /// <summary>Semicolon-separated file extensions to skip entirely (no binary check, no content read). e.g. "exe;dll;zip;png;jpg".</summary>
-    public string SkipExtensions { get; set; } = DefaultSkipExtensions;
+    [JsonIgnore] public string SkipExtensions { get; set; } = DefaultSkipExtensions;
     /// <summary>When true, do not show the non-admin access warning banner on startup.</summary>
     public bool SuppressAdminWarning { get; set; }
     /// <summary>When true (default) and the process is not elevated, file listing skips well-known admin-protected paths (System Volume Information, $Recycle.Bin, Windows\System32\config, etc.) to speed up search.</summary>

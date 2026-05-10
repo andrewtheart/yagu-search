@@ -27,7 +27,10 @@ public sealed class SearchOptions
     public IReadOnlyList<string> IncludeGlobs { get; init; } = [];
     public IReadOnlyList<string> ExcludeGlobs { get; init; } = [];
 
-    /// <summary>Files larger than this are skipped. 0 disables the limit.</summary>
+    /// <summary>Files smaller than this are skipped. 0 disables the lower bound.</summary>
+    public long MinFileSizeBytes { get; init; }
+
+    /// <summary>Files larger than this are skipped. 0 disables the upper bound.</summary>
     public long MaxFileSizeBytes { get; init; } = 50L * 1024 * 1024;
 
     /// <summary>Stop streaming after this many matches. 0 disables.</summary>
