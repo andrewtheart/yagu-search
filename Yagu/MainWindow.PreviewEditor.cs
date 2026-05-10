@@ -23,6 +23,12 @@ namespace Yagu;
 /// </summary>
 public sealed partial class MainWindow
 {
+    private const int PreviewEditorForceWrapLineLength = 50_000;
+    private long PreviewEditorMaxByteLength => (long)ViewModel.PreviewEditorMaxSizeMB * 1024 * 1024;
+    private int PreviewEditorMaxTextLength => ViewModel.PreviewEditorMaxTextLength;
+    private int PreviewEditorMaxLineLength => ViewModel.PreviewEditorMaxLineLength;
+    private bool _previewEditorForcedWrap;
+
     private async void OnSavePreviewEdit(object sender, RoutedEventArgs e)
     {
         await SavePreviewEditAsync();
@@ -32,14 +38,8 @@ public sealed partial class MainWindow
     {
         if (HasRealEditorChanges() && !await ConfirmDiscardPreviewEditAsync()) return;
         ClosePreviewEditor();
-
-        var selected = ViewModel.GetAllSelectedResults();
-        if (selected.Count >= 2)
-            await UpdateMultiSelectPreviewAsync();
-        else if (_previewResult is not null)
-            await ShowSingleFilePreviewAsync(_previewResult, fullFile: false);
-        else
-            ShowPreviewMessage("No matches remain for this file.");
+        RestorePreviewSurfaceAfterEditor();
+        await Task.CompletedTask;
     }
 
     private void OnPreviewEditorTextChanged(object sender, TextChangedEventArgs e)
@@ -143,13 +143,47 @@ public sealed partial class MainWindow
 
         ClosePreviewEditor(clearText: true, cancelLoad: false);
         SetPreviewFileLabel(result.FilePath);
-        ShowPreviewMessage($"Loading full file for editing...");
+        ViewModel.StatusText = "Loading full file for editing...";
         FullFileButton.IsEnabled = false;
 
         try
         {
+            if (!ZipArchiveSearcher.IsArchivePath(result.FilePath))
+            {
+                try
+                {
+                    var fileInfo = new FileInfo(result.FilePath);
+                    if (fileInfo.Exists && fileInfo.Length > PreviewEditorMaxByteLength)
+                    {
+                        var message = BuildPreviewEditorLimitMessage(
+                            result.FilePath,
+                            $"it is {FormatBytes(fileInfo.Length)}; the built-in editor limit is {FormatBytes(PreviewEditorMaxByteLength)}");
+                        LogService.Instance.Warning("Preview",
+                            $"ShowFullFileEditorAsync: blocked oversized file before load, bytes={fileInfo.Length:N0}, limit={PreviewEditorMaxByteLength:N0}, file='{result.FilePath}'");
+                        RestorePreviewSurfaceAfterEditor();
+                        ViewModel.StatusText = message;
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogService.Instance.Warning("Preview",
+                        $"ShowFullFileEditorAsync: could not preflight editor file size: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+
             var document = await LoadPreviewDocumentAsync(result.FilePath, cts.Token, enforceLimit: false).ConfigureAwait(true);
             if (cts.IsCancellationRequested) return;
+
+            if (TryGetPreviewEditorLimitReason(document, out var limitReason))
+            {
+                var message = BuildPreviewEditorLimitMessage(result.FilePath, limitReason);
+                LogService.Instance.Warning("Preview",
+                    $"ShowFullFileEditorAsync: blocked editor load after read, bytes={document.ByteLength:N0}, textLen={document.Text.Length:N0}, maxLineLen={document.MaxLineLength:N0}, file='{result.FilePath}'");
+                RestorePreviewSurfaceAfterEditor();
+                ViewModel.StatusText = message;
+                return;
+            }
 
             _previewEditorPath = result.FilePath;
             _previewEditorEncoding = document.Encoding;
@@ -159,6 +193,13 @@ public sealed partial class MainWindow
             PreviewEditor.IsReadOnly = isArchive;
 
             var text = document.Text;
+            _previewEditorForcedWrap = document.MaxLineLength >= PreviewEditorForceWrapLineLength;
+            ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || ViewModel.PreviewWordWrap);
+            if (_previewEditorForcedWrap)
+            {
+                LogService.Instance.Info("Preview",
+                    $"ShowFullFileEditorAsync: forcing editor word wrap for long line maxLen={document.MaxLineLength:N0}");
+            }
 
             // Assign while collapsed so TextBox does one document load instead of
             // repeatedly re-laying out an ever-growing text buffer.
@@ -238,6 +279,35 @@ public sealed partial class MainWindow
             FullFileButton.IsEnabled = _previewResult is not null;
             UpdatePreviewEditorButtons();
         }
+    }
+
+    private bool TryGetPreviewEditorLimitReason(PreviewTextDocument document, out string reason)
+    {
+        if (document.ByteLength > PreviewEditorMaxByteLength)
+        {
+            reason = $"it is {FormatBytes(document.ByteLength)}; the built-in editor limit is {FormatBytes(PreviewEditorMaxByteLength)}";
+            return true;
+        }
+
+        if (document.Text.Length > PreviewEditorMaxTextLength)
+        {
+            reason = $"it contains {document.Text.Length:N0} characters; the built-in editor limit is {PreviewEditorMaxTextLength:N0}";
+            return true;
+        }
+
+        if (document.MaxLineLength > PreviewEditorMaxLineLength)
+        {
+            reason = $"its longest line is {document.MaxLineLength:N0} characters; the built-in editor limit is {PreviewEditorMaxLineLength:N0}";
+            return true;
+        }
+
+        reason = string.Empty;
+        return false;
+    }
+
+    private static string BuildPreviewEditorLimitMessage(string filePath, string reason)
+    {
+        return $"Built-in editor skipped {Path.GetFileName(filePath)} because {reason}. Use Open or Show in Explorer for very large files.";
     }
 
     private void ScrollEditorToMatch(string text, SearchResult result)
@@ -526,6 +596,7 @@ public sealed partial class MainWindow
         _previewEditorEncoding = null;
         _previewEditorDirty = false;
         _previewEditorOriginalText = null;
+        _previewEditorForcedWrap = false;
 
         if (clearText)
         {
@@ -564,6 +635,58 @@ public sealed partial class MainWindow
         if (visible)
             PreviewToolbarContent.Visibility = Visibility.Visible;
         ApplyWordWrap(ViewModel.PreviewWordWrap);
+    }
+
+    private void ApplyPreviewEditorWordWrap(bool wrap)
+    {
+        var wrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
+        var horizontalBar = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+        if (PreviewEditor.TextWrapping != wrapping)
+            PreviewEditor.TextWrapping = wrapping;
+        ScrollViewer.SetHorizontalScrollBarVisibility(PreviewEditor, horizontalBar);
+    }
+
+    private void RestorePreviewSurfaceAfterEditor()
+    {
+        HidePreviewLoading();
+        PreviewBackButton.Visibility = Visibility.Collapsed;
+
+        if (PreviewSectionsPanel.Children.Count > 0)
+        {
+            PreviewMessagePanel.Visibility = Visibility.Collapsed;
+            PreviewBlock.Visibility = Visibility.Collapsed;
+            PreviewSectionsPanel.Visibility = Visibility.Visible;
+            SetPerFileToolbarVisibility(Visibility.Collapsed);
+            PreviewToolbarContent.Visibility = Visibility.Visible;
+            PreviewScrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+
+            UpdateMatchNavPanel();
+            if (_activeSectionNav is null && _sectionMatchNavs.Count == 1)
+            {
+                var sectionNav = _sectionMatchNavs.Values.FirstOrDefault();
+                if (sectionNav is not null && sectionNav.Matches.Count > 1)
+                    _activeSectionNav = sectionNav;
+            }
+
+            HighlightActiveExpander();
+            UpdateSectionNavOverlay();
+            return;
+        }
+
+        if (PreviewBlock.Blocks.Count > 0)
+        {
+            PreviewMessagePanel.Visibility = Visibility.Visible;
+            PreviewBlock.Visibility = Visibility.Visible;
+            PreviewSectionsPanel.Visibility = Visibility.Collapsed;
+            SetPerFileToolbarVisibility(Visibility.Visible);
+            PreviewToolbarContent.Visibility = _previewResult is not null ? Visibility.Visible : Visibility.Collapsed;
+            PreviewScrollViewer.HorizontalScrollBarVisibility = ViewModel.PreviewWordWrap
+                ? ScrollBarVisibility.Disabled
+                : ScrollBarVisibility.Auto;
+            return;
+        }
+
+        ShowPreviewMessage("No matches remain for this file.");
     }
 
     /// <summary>

@@ -76,8 +76,14 @@ public sealed class AppSettings
     public bool SuppressMultiInstanceWarning { get; set; }
     /// <summary>When true, back up the file to .yagubak before saving in the built-in editor. Default true.</summary>
     public bool BackupBeforeSave { get; set; } = true;
-    /// <summary>Default window focus behavior in launcher mode. 0 = Minimize to tray, 1 = Stay open, 2 = Always on top.</summary>
+    /// <summary>Default window focus behavior in launcher mode. 0 = Minimize to tray, 1 = Stay open, 2 = Always on top, 3 = Traditional window.</summary>
     public int WindowFocusBehavior { get; set; } // 0 = MinimizeToTray (default)
+    /// <summary>Built-in editor: maximum file size in MB. Files larger than this are blocked from opening.</summary>
+    public int PreviewEditorMaxSizeMB { get; set; } = 32;
+    /// <summary>Built-in editor: maximum total character count. Files with more characters are blocked.</summary>
+    public int PreviewEditorMaxTextLength { get; set; } = 20_000_000;
+    /// <summary>Built-in editor: maximum single-line length in characters. Files with a line longer than this are blocked.</summary>
+    public int PreviewEditorMaxLineLength { get; set; } = 1_000_000;
 
     public const int MaxRecent = 20; // kept for backward compat; prefer MaxRecentItems
 }

@@ -1077,7 +1077,7 @@ public sealed class FileLister : IFileLister
                         // second stat call in ContentSearcher.
                         if (fsi is FileInfo fileInfo)
                         {
-                            FileMetadataCache.Set(entry, new FileMetadata(fileInfo.Length, fileInfo.LastWriteTime));
+                            FileMetadataCache.Set(entry, new FileMetadata(fileInfo.Length, fileInfo.LastWriteTime, fileInfo.CreationTime));
                         }
                         yield return entry;
                         yielded++;

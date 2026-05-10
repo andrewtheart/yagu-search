@@ -45,6 +45,21 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         }
     }
 
+    public string Extension
+    {
+        get
+        {
+            int dotIndex = FilePath.LastIndexOf('.');
+            if (dotIndex < 0 || dotIndex == FilePath.Length - 1)
+                return "No extension";
+
+            var extension = FilePath[(dotIndex + 1)..];
+            return extension.IndexOfAny(['\\', '/', '?']) >= 0
+                ? "No extension"
+                : extension.ToLowerInvariant();
+        }
+    }
+
     /// <summary>Capped subset of items currently rendered in the UI.</summary>
     public BatchObservableCollection<SearchResult> VisibleResults { get; } = new();
 
@@ -135,6 +150,8 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
 
     public long FileSize { get; private set; }
     public DateTime LastModified { get; private set; }
+    public DateTime Created { get; private set; }
+    public DateTime ModifiedOrCreated => LaterOf(LastModified, Created);
     public string FormattedSize => FormatSize(FileSize);
     public string FormattedDate => LastModified == default ? string.Empty : LastModified.ToString("yyyy-MM-dd HH:mm");
 
@@ -161,7 +178,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
 
         if (FileMetadataCache.TryGet(physicalPath, out var cached))
         {
-            ApplyMetadata(cached.Length, cached.LastModified);
+            ApplyMetadata(cached.Length, cached.LastModified, cached.Created);
             return;
         }
 
@@ -170,9 +187,13 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             var fi = new System.IO.FileInfo(physicalPath);
             if (fi.Exists)
             {
-                var metadata = new FileMetadata(fi.Length, fi.LastWriteTime);
+                var metadata = new FileMetadata(fi.Length, fi.LastWriteTime, fi.CreationTime);
                 FileMetadataCache.Set(physicalPath, metadata);
-                ApplyMetadata(metadata.Length, metadata.LastModified);
+                ApplyMetadata(metadata.Length, metadata.LastModified, metadata.Created);
+            }
+            else if (cached != default)
+            {
+                ApplyMetadata(cached.Length, cached.LastModified, cached.Created);
             }
         }
         catch (Exception ex) { LogService.Instance.Verbose("FileGroup", $"Cannot load metadata for {FilePath}", ex); }
@@ -184,22 +205,25 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     /// FileInfo syscall per result group on huge searches. The <paramref name="dispatch"/>
     /// delegate is responsible for marshalling its action onto the UI thread.
     /// </summary>
-    public void BeginLoadMetadata(Action<Action> dispatch, CancellationToken cancellationToken = default)
+    public void BeginLoadMetadata(Action<Action> dispatch, CancellationToken cancellationToken = default, Action<FileGroup>? metadataApplied = null)
     {
         // For archive entries, resolve to the outermost file on disk
         string physicalPath = IsArchiveEntry ? ZipArchiveSearcher.SplitArchivePath(FilePath).ArchivePath : FilePath;
 
         if (FileMetadataCache.TryGet(physicalPath, out var cached))
         {
-            ApplyMetadata(cached.Length, cached.LastModified);
+            ApplyMetadata(cached.Length, cached.LastModified, cached.Created);
+            metadataApplied?.Invoke(this);
             return;
         }
 
         _ = System.Threading.Tasks.Task.Run(() =>
         {
             if (_cleaned || cancellationToken.IsCancellationRequested) return;
-            long size = 0;
-            DateTime modified = default;
+            bool hasCached = FileMetadataCache.TryGet(physicalPath, out var cachedMetadata);
+            long size = hasCached ? cachedMetadata.Length : 0;
+            DateTime modified = hasCached ? cachedMetadata.LastModified : default;
+            DateTime created = hasCached ? cachedMetadata.Created : default;
             try
             {
                 var fi = new System.IO.FileInfo(physicalPath);
@@ -207,7 +231,8 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
                 {
                     size = fi.Length;
                     modified = fi.LastWriteTime;
-                    FileMetadataCache.Set(physicalPath, new FileMetadata(size, modified));
+                    created = fi.CreationTime;
+                    FileMetadataCache.Set(physicalPath, new FileMetadata(size, modified, created));
                 }
             }
             catch (Exception ex) { LogService.Instance.Verbose("FileGroup", $"Cannot load metadata for {FilePath}", ex); return; }
@@ -215,19 +240,33 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             if (_cleaned || cancellationToken.IsCancellationRequested) return;
             dispatch(() =>
             {
-                if (!_cleaned) ApplyMetadata(size, modified);
+                if (!_cleaned)
+                {
+                    ApplyMetadata(size, modified, created);
+                    metadataApplied?.Invoke(this);
+                }
             });
         });
     }
 
-    private void ApplyMetadata(long size, DateTime modified)
+    private void ApplyMetadata(long size, DateTime modified, DateTime created)
     {
         FileSize = size;
         LastModified = modified;
+        Created = created;
         OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(FileSize)));
         OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(LastModified)));
+        OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(Created)));
+        OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(ModifiedOrCreated)));
         OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(FormattedSize)));
         OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(FormattedDate)));
+    }
+
+    private static DateTime LaterOf(DateTime first, DateTime second)
+    {
+        if (first == default) return second;
+        if (second == default) return first;
+        return first >= second ? first : second;
     }
 
     private bool _isExpanded;

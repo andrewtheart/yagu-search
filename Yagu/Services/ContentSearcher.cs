@@ -113,7 +113,7 @@ public sealed class ContentSearcher
             if (!fi.Exists) return new FileSearchOutcome(SkipNotFound, 0);
 
             fileLength = fi.Length;
-            metadata = new FileMetadata(fileLength, fi.LastWriteTime);
+            metadata = new FileMetadata(fileLength, fi.LastWriteTime, fi.CreationTime);
         }
 
         if (options.MaxFileSizeBytes > 0 && fileLength > options.MaxFileSizeBytes) return new FileSearchOutcome(SkipTooLarge, 0);

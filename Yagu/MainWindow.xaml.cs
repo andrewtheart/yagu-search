@@ -14,6 +14,7 @@ using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 using System.Net.Http;
 using System.Security.Principal;
 using Microsoft.Win32;
@@ -31,6 +32,7 @@ public sealed partial class MainWindow : Window
     public MainViewModel ViewModel { get; }
     private bool _suppressPreviewUpdate;
     private int _previewUpdateGen;
+    private readonly HashSet<string> _pendingPreviewFilePaths = new(StringComparer.OrdinalIgnoreCase);
     private int _lastCheckedGroupIndex = -1;
     private bool _autoScrollEnabled = false;
     // Deferred-files state — for tail of newFiles past PreviewSectionPageSize.
@@ -90,9 +92,11 @@ public sealed partial class MainWindow : Window
     private bool _autoSearchOnLoad;
     private bool _launcherMode;
 
-    public MainWindow(string? startupDirectory, string? startupQuery = null)
+    public MainWindow(string? startupDirectory, string? startupQuery = null, int? startupWindowFocusBehavior = null)
     {
         ViewModel = new MainViewModel();
+        if (startupWindowFocusBehavior is >= 0 and <= 3)
+            ViewModel.WindowFocusBehavior = startupWindowFocusBehavior.Value;
         ViewModel.SetDirectoryFromArgs(startupDirectory);
         if (!string.IsNullOrWhiteSpace(startupQuery))
         {
@@ -109,6 +113,7 @@ public sealed partial class MainWindow : Window
         PreviewBlock.AddHandler(UIElement.DoubleTappedEvent,
             new Microsoft.UI.Xaml.Input.DoubleTappedEventHandler(OnPreviewBlockDoubleTapped),
             handledEventsToo: true);
+        PreviewScrollViewer.SizeChanged += OnPreviewViewportSizeChanged;
 
         // Extend content into the title bar for a modern Windows 11 look
         ExtendsContentIntoTitleBar = true;
@@ -147,7 +152,8 @@ public sealed partial class MainWindow : Window
         ((FrameworkElement)Content).Loaded += OnContentLoaded;
 
         // Start in compact "launcher" mode unless we have a query to auto-run.
-        if (!_autoSearchOnLoad)
+        // A CLI window-mode override is explicit, so apply it even for auto-search launches.
+        if (!_autoSearchOnLoad || startupWindowFocusBehavior.HasValue)
         {
             EnterLauncherMode();
         }
@@ -851,6 +857,64 @@ public sealed partial class MainWindow : Window
         });
     }
 
+    private async void OnCopyWindowScreenshotClick(object sender, RoutedEventArgs e)
+    {
+        ScreenshotButton.IsEnabled = false;
+        var previousVisibility = ScreenshotButton.Visibility;
+
+        try
+        {
+            ScreenshotButton.Visibility = Visibility.Collapsed;
+            RootGrid.UpdateLayout();
+            await YieldLowAsync();
+
+            var renderTarget = new RenderTargetBitmap();
+            await renderTarget.RenderAsync(RootGrid);
+
+            if (renderTarget.PixelWidth <= 0 || renderTarget.PixelHeight <= 0)
+                throw new InvalidOperationException("Window content was not ready to capture.");
+
+            var pixelBuffer = await renderTarget.GetPixelsAsync();
+            var pixels = new byte[(int)pixelBuffer.Length];
+            using (var reader = Windows.Storage.Streams.DataReader.FromBuffer(pixelBuffer))
+            {
+                reader.ReadBytes(pixels);
+            }
+
+            var stream = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+            var encoder = await Windows.Graphics.Imaging.BitmapEncoder.CreateAsync(
+                Windows.Graphics.Imaging.BitmapEncoder.PngEncoderId,
+                stream);
+            encoder.SetPixelData(
+                Windows.Graphics.Imaging.BitmapPixelFormat.Bgra8,
+                Windows.Graphics.Imaging.BitmapAlphaMode.Premultiplied,
+                (uint)renderTarget.PixelWidth,
+                (uint)renderTarget.PixelHeight,
+                96,
+                96,
+                pixels);
+            await encoder.FlushAsync();
+            stream.Seek(0);
+
+            var package = new DataPackage();
+            package.SetBitmap(Windows.Storage.Streams.RandomAccessStreamReference.CreateFromStream(stream));
+            Clipboard.SetContent(package);
+            Clipboard.Flush();
+
+            ViewModel.StatusText = $"Screenshot copied to clipboard ({renderTarget.PixelWidth:N0}x{renderTarget.PixelHeight:N0}).";
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("Screenshot", "Could not copy window screenshot to clipboard", ex);
+            ViewModel.StatusText = "Could not copy screenshot to clipboard.";
+        }
+        finally
+        {
+            ScreenshotButton.Visibility = previousVisibility;
+            ScreenshotButton.IsEnabled = true;
+        }
+    }
+
     private void RestoreQuerySuggestions(AutoSuggestBox? box = null)
     {
         if (!_querySuggestionsDetached) return;
@@ -1364,6 +1428,24 @@ public sealed partial class MainWindow : Window
             g.Children.Add(backup);
             g.Children.Add(new TextBlock { Text = "When enabled, the original file is copied to <filename>.yagubak before saving changes from the built-in editor. If a .yagubak already exists, uses .yagubak-2, .yagubak-3, etc.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
+            g.Children.Add(new TextBlock { Text = "Built-in editor limits", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 8, 0, 0) });
+            g.Children.Add(new TextBlock { Text = "Files exceeding any of these limits will not open in the built-in editor. Use the external editor or Show in Explorer for very large files.", FontSize = 11, Opacity = 0.7, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
+
+            g.Children.Add(new TextBlock { Text = "Max file size (MB):" });
+            var edMaxSize = new NumberBox { Value = ViewModel.PreviewEditorMaxSizeMB, Minimum = 1, Maximum = 1024 };
+            edMaxSize.ValueChanged += (_, args) => ViewModel.PreviewEditorMaxSizeMB = (int)args.NewValue;
+            g.Children.Add(edMaxSize);
+
+            g.Children.Add(new TextBlock { Text = "Max total characters:" });
+            var edMaxText = new NumberBox { Value = ViewModel.PreviewEditorMaxTextLength, Minimum = 100_000, Maximum = 200_000_000 };
+            edMaxText.ValueChanged += (_, args) => ViewModel.PreviewEditorMaxTextLength = (int)args.NewValue;
+            g.Children.Add(edMaxText);
+
+            g.Children.Add(new TextBlock { Text = "Max single-line length (characters):" });
+            var edMaxLine = new NumberBox { Value = ViewModel.PreviewEditorMaxLineLength, Minimum = 10_000, Maximum = 100_000_000 };
+            edMaxLine.ValueChanged += (_, args) => ViewModel.PreviewEditorMaxLineLength = (int)args.NewValue;
+            g.Children.Add(edMaxLine);
+
             sp.Children.Add((Border)g.Tag!);
         }
 
@@ -1599,6 +1681,12 @@ public sealed partial class MainWindow : Window
     // do not mutate Run styling here because RichTextBlock re-renders expensively.
     private (Paragraph para, Run run, int column, int matchInPara)? _activeMatchHighlight;
     private int _matchScrollRequestId;
+    private bool _activeMatchOverlayRefreshPending;
+    private int _activeMatchOverlayUpdateRequestId;
+    private RichTextBlock? _activeOverlayStabilityBlock;
+    private double _activeOverlayLastBlockTop = double.NaN;
+    private long _activeOverlayLastMoveTick;
+    private int _activeOverlayStablePasses;
 
     private enum SplitLayoutMode { Split, ResultsMaximized, PreviewMaximized }
     private SplitLayoutMode _splitLayoutMode = SplitLayoutMode.ResultsMaximized;
@@ -1709,8 +1797,8 @@ public sealed partial class MainWindow : Window
         LogService.Instance.Verbose("Preview", $"TryScrollToPreviewSection: looking for '{filePath}' among {PreviewSectionsPanel.Children.OfType<Expander>().Count()} sections");
         foreach (var child in PreviewSectionsPanel.Children.OfType<Expander>())
         {
-            if (ToolTipService.GetToolTip(child) is string tip
-                && string.Equals(tip, filePath, StringComparison.OrdinalIgnoreCase))
+            if (_expanderFilePaths.TryGetValue(child, out var path)
+                && string.Equals(path, filePath, StringComparison.OrdinalIgnoreCase))
             {
                 try
                 {
@@ -1721,7 +1809,7 @@ public sealed partial class MainWindow : Window
                     var point = transform.TransformPoint(new Windows.Foundation.Point(0, 0));
                     double targetOffset = PreviewScrollViewer.VerticalOffset + point.Y;
                     targetOffset = Math.Max(0, targetOffset);
-                    PreviewScrollViewer.ChangeView(null, targetOffset, null, disableAnimation: false);
+                    PreviewScrollViewer.ChangeView(null, targetOffset, null, disableAnimation: true);
                 }
                 catch { /* Layout not ready — ignore */ }
                 return true;
@@ -1730,15 +1818,82 @@ public sealed partial class MainWindow : Window
         return false;
     }
 
+    private bool PreviewSectionExists(string filePath)
+    {
+        foreach (var child in PreviewSectionsPanel.Children.OfType<Expander>())
+        {
+            if (_expanderFilePaths.TryGetValue(child, out var path)
+                && string.Equals(path, filePath, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private HashSet<string> GetExistingPreviewFilePaths()
     {
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var child in PreviewSectionsPanel.Children.OfType<Expander>())
         {
-            if (ToolTipService.GetToolTip(child) is string tip)
-                paths.Add(tip);
+            if (_expanderFilePaths.TryGetValue(child, out var path))
+                paths.Add(path);
         }
         return paths;
+    }
+
+    private void ReorderMatchParagraphsToPreviewSectionOrder()
+    {
+        if (_matchParagraphs.Count <= 1 || PreviewSectionsPanel.Visibility != Visibility.Visible)
+            return;
+
+        var orderedBlocks = PreviewSectionsPanel.Children
+            .OfType<Expander>()
+            .Select(expander => expander.Tag as RichTextBlock)
+            .Where(block => block is not null)
+            .Cast<RichTextBlock>()
+            .ToList();
+        if (orderedBlocks.Count <= 1)
+            return;
+
+        var buckets = new Dictionary<RichTextBlock, List<(RichTextBlock block, Paragraph para, int matchInPara)>>();
+        foreach (var block in orderedBlocks)
+            buckets[block] = new List<(RichTextBlock block, Paragraph para, int matchInPara)>();
+
+        List<(RichTextBlock block, Paragraph para, int matchInPara)>? unmatched = null;
+        foreach (var entry in _matchParagraphs)
+        {
+            if (buckets.TryGetValue(entry.block, out var bucket))
+                bucket.Add(entry);
+            else
+                (unmatched ??= new List<(RichTextBlock block, Paragraph para, int matchInPara)>()).Add(entry);
+        }
+
+        var reordered = new List<(RichTextBlock block, Paragraph para, int matchInPara)>(_matchParagraphs.Count);
+        foreach (var block in orderedBlocks)
+            reordered.AddRange(buckets[block]);
+        if (unmatched is not null)
+            reordered.AddRange(unmatched);
+
+        bool changed = false;
+        for (int i = 0; i < reordered.Count; i++)
+        {
+            if (!ReferenceEquals(reordered[i].block, _matchParagraphs[i].block)
+                || !ReferenceEquals(reordered[i].para, _matchParagraphs[i].para)
+                || reordered[i].matchInPara != _matchParagraphs[i].matchInPara)
+            {
+                changed = true;
+                break;
+            }
+        }
+
+        if (!changed)
+            return;
+
+        _matchParagraphs.Clear();
+        _matchParagraphs.AddRange(reordered);
+        InvalidateParagraphIndexCache();
     }
 
     /// <summary>
@@ -1803,6 +1958,7 @@ public sealed partial class MainWindow : Window
 
     private void OnPreviewScrollViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
+        QueueActiveMatchOverlayRefresh();
         if (e.IsIntermediate) return;
         TryAutoLoadMoreOnScroll();
         UpdateStickyFileHeader();
@@ -2104,6 +2260,35 @@ public sealed partial class MainWindow : Window
         LogService.Instance.Info("Preview", $"PrependPreviewSectionsForFilesAsync: newFiles={newFiles.Count}, scrollToFile='{scrollToFile}'");
         if (newFiles.Count == 0) return;
 
+        var filesToPrepend = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (filePath, results) in newFiles)
+        {
+            if (_pendingPreviewFilePaths.Contains(filePath))
+            {
+                LogService.Instance.Info("Preview", $"PrependPreviewSectionsForFilesAsync: skipping pending file '{filePath}'");
+                continue;
+            }
+
+            if (PreviewSectionExists(filePath))
+            {
+                LogService.Instance.Info("Preview", $"PrependPreviewSectionsForFilesAsync: skipping existing file '{filePath}'");
+                continue;
+            }
+
+            _pendingPreviewFilePaths.Add(filePath);
+            filesToPrepend[filePath] = results;
+        }
+
+        if (filesToPrepend.Count == 0)
+        {
+            if (scrollToFile is not null && PreviewSectionExists(scrollToFile))
+                TryScrollToPreviewSection(scrollToFile);
+            return;
+        }
+
+        try
+        {
+
         EnsurePreviewPanelVisible();
         EnsureSectionsSurface();
         PreviewToolbarContent.Visibility = Visibility.Visible;
@@ -2112,7 +2297,7 @@ public sealed partial class MainWindow : Window
         // Expanders to a flat StackPanel can crash the WinUI layout engine
         // (native fail-fast in CoreMessagingXP.dll). The remainder is paged
         // in via "Show more" using the same machinery as LoadMoreSectionsAsync.
-        var orderedFiles = newFiles.ToList();
+        var orderedFiles = filesToPrepend.ToList();
         int totalRequested = orderedFiles.Count;
         int pageEnd = Math.Min(totalRequested, PreviewSectionPageSize);
         bool deferRemainder = pageEnd < totalRequested;
@@ -2207,6 +2392,13 @@ public sealed partial class MainWindow : Window
             }
         }
 
+        ReorderMatchParagraphsToPreviewSectionOrder();
+        UnboxCurrentMatch();
+        HideActiveMatchOverlay();
+        InvalidatePendingMatchScrolls();
+        _currentMatchIndex = -1;
+        _initialMatchScrolled = false;
+
         if (showSpinner)
             HideProgressOverlay();
 
@@ -2236,7 +2428,7 @@ public sealed partial class MainWindow : Window
         SetPreviewFileLabel(
             $"{totalMatches:N0} selected matches across {grandFileCount:N0} file(s)",
             string.Join(Environment.NewLine, GetExistingPreviewFilePaths()));
-        _previewResult = newFiles.Values.First().First();
+        _previewResult = filesToPrepend.Values.First().First();
         UpdateMatchNavPanel();
         UpdateSectionMatchNavPanels();
         UpdateExpandAllButtonVisibility();
@@ -2259,6 +2451,12 @@ public sealed partial class MainWindow : Window
         // Flush log synchronously so a subsequent layout-engine fail-fast still
         // leaves the prior progress lines on disk for diagnostics.
         try { LogService.Instance.Flush(); } catch { }
+        }
+        finally
+        {
+            foreach (var filePath in filesToPrepend.Keys)
+                _pendingPreviewFilePaths.Remove(filePath);
+        }
     }
 
     private async void OnFileGroupExpanding(Expander sender, ExpanderExpandingEventArgs args)
@@ -2267,6 +2465,7 @@ public sealed partial class MainWindow : Window
         {
             LogService.Instance.Info("Preview", $"OnFileGroupExpanding: file='{g.FilePath}', matchCount={g.Count}, setting _suppressPreviewUpdate=true");
             _suppressPreviewUpdate = true;
+            _initialMatchScrolled = false;
             g.SelectAll();
 
             try
@@ -2303,6 +2502,65 @@ public sealed partial class MainWindow : Window
                         _suppressPreviewUpdate = false;
                     });
             }
+        }
+    }
+
+    private async void OnFileGroupHeaderTapped(object sender, TappedRoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement header
+            || header.DataContext is not FileGroup g
+            || g.Count == 0
+            || IsInsideHeaderCommand(e.OriginalSource as DependencyObject, header))
+        {
+            return;
+        }
+
+        SelectFileGroupMatches(g);
+        _initialMatchScrolled = false;
+
+        // Only add to preview panel if the expander is already open.
+        // When it's collapsed, OnFileGroupExpanding handles the preview add.
+        if (!g.IsExpanded)
+            return;
+
+        var results = g.Where(r => r.IsSelected).ToList();
+        if (results.Count > 0)
+        {
+            if (TryScrollToPreviewSection(g.FilePath))
+                return;
+            var newFiles = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase)
+            {
+                [g.FilePath] = results
+            };
+            await PrependPreviewSectionsForFilesAsync(newFiles, g.FilePath);
+        }
+    }
+
+    private static bool IsInsideHeaderCommand(DependencyObject? source, DependencyObject headerRoot)
+    {
+        for (var current = source; current is not null && !ReferenceEquals(current, headerRoot); current = VisualTreeHelper.GetParent(current))
+        {
+            if (current is ButtonBase)
+                return true;
+        }
+
+        return false;
+    }
+
+    private void SelectFileGroupMatches(FileGroup group)
+    {
+        if (group.AllSelected)
+            return;
+
+        LogService.Instance.Info("Preview", $"SelectFileGroupMatches: file='{group.FilePath}', matchCount={group.Count}");
+        _suppressPreviewUpdate = true;
+        try
+        {
+            group.SelectAll();
+        }
+        finally
+        {
+            _suppressPreviewUpdate = false;
         }
     }
 
@@ -2395,8 +2653,7 @@ public sealed partial class MainWindow : Window
 
         if (PreviewBlock.TextWrapping != wrapping)
             PreviewBlock.TextWrapping = wrapping;
-        if (PreviewEditor.TextWrapping != wrapping)
-            PreviewEditor.TextWrapping = wrapping;
+        ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || wrap);
         foreach (var block in EnumeratePreviewSectionBlocks())
         {
             if (block.TextWrapping != wrapping)
@@ -2409,7 +2666,6 @@ public sealed partial class MainWindow : Window
             if (expander.Content is ScrollViewer sv)
                 sv.HorizontalScrollBarVisibility = hbar;
         }
-        ScrollViewer.SetHorizontalScrollBarVisibility(PreviewEditor, hbar);
     }
 
     private bool _applyingWordWrap;
@@ -2431,9 +2687,7 @@ public sealed partial class MainWindow : Window
             // Cheap, always-visible controls first.
             if (PreviewBlock.TextWrapping != wrapping)
                 PreviewBlock.TextWrapping = wrapping;
-            if (PreviewEditor.TextWrapping != wrapping)
-                PreviewEditor.TextWrapping = wrapping;
-            ScrollViewer.SetHorizontalScrollBarVisibility(PreviewEditor, hbar);
+            ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || wrap);
             if (PreviewSectionsPanel.Visibility != Visibility.Visible)
                 PreviewScrollViewer.HorizontalScrollBarVisibility = hbar;
 
@@ -2619,17 +2873,29 @@ public sealed partial class MainWindow : Window
 
     private void OnGroupModeNone(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.None;
     private void OnGroupModeFolder(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.Folder;
-    private void OnGroupModeDateToday(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DateToday;
-    private void OnGroupModeDateYesterday(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DateYesterday;
-    private void OnGroupModeDateThisWeek(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DateThisWeek;
-    private void OnGroupModeDateThisMonth(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DateThisMonth;
-    private void OnGroupModeDateThisYear(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DateThisYear;
-    private void OnGroupModeDatePast2Years(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DatePast2Years;
-    private void OnGroupModeDatePast5Years(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DatePast5Years;
-    private void OnGroupModeDatePast10Years(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DatePast10Years;
-    private void OnGroupModeDatePast20Years(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DatePast20Years;
-    private void OnGroupModeDatePast30Years(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DatePast30Years;
-    private void OnGroupModeDatePast50Years(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DatePast50Years;
+    private void OnGroupModeDateRangeModified(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DateRangeModified;
+    private void OnGroupModeDateRangeCreated(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DateRangeCreated;
+    private void OnGroupModeDateRangeModifiedCreated(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.DateRangeModifiedCreated;
+    private void OnGroupModeExtension(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.Extension;
+    private void OnGroupModeFileSize(object sender, RoutedEventArgs e) => ViewModel.GroupModeIndex = (int)GroupMode.FileSize;
+
+    private void OnGroupSortAscending(object sender, RoutedEventArgs e) => ViewModel.GroupSortDirectionIndex = 0;
+    private void OnGroupSortDescending(object sender, RoutedEventArgs e) => ViewModel.GroupSortDirectionIndex = 1;
+
+    // ── Date filter menu handlers ─────────────────────────────────
+
+    private void OnDateFilterNone(object sender, RoutedEventArgs e) => ViewModel.DateRangeFilterIndex = (int)DateRangeFilter.None;
+    private void OnDateFilterPastDay(object sender, RoutedEventArgs e) => ViewModel.DateRangeFilterIndex = (int)DateRangeFilter.PastDay;
+    private void OnDateFilterPastWeek(object sender, RoutedEventArgs e) => ViewModel.DateRangeFilterIndex = (int)DateRangeFilter.PastWeek;
+    private void OnDateFilterPastTwoWeeks(object sender, RoutedEventArgs e) => ViewModel.DateRangeFilterIndex = (int)DateRangeFilter.PastTwoWeeks;
+    private void OnDateFilterPastMonth(object sender, RoutedEventArgs e) => ViewModel.DateRangeFilterIndex = (int)DateRangeFilter.PastMonth;
+    private void OnDateFilterPastThreeMonths(object sender, RoutedEventArgs e) => ViewModel.DateRangeFilterIndex = (int)DateRangeFilter.PastThreeMonths;
+    private void OnDateFilterPastSixMonths(object sender, RoutedEventArgs e) => ViewModel.DateRangeFilterIndex = (int)DateRangeFilter.PastSixMonths;
+    private void OnDateFilterPastNineMonths(object sender, RoutedEventArgs e) => ViewModel.DateRangeFilterIndex = (int)DateRangeFilter.PastNineMonths;
+    private void OnDateFilterPastYear(object sender, RoutedEventArgs e) => ViewModel.DateRangeFilterIndex = (int)DateRangeFilter.PastYear;
+    private void OnDateFilterPastTwoYears(object sender, RoutedEventArgs e) => ViewModel.DateRangeFilterIndex = (int)DateRangeFilter.PastTwoYears;
+    private void OnDateFilterPastThreeYears(object sender, RoutedEventArgs e) => ViewModel.DateRangeFilterIndex = (int)DateRangeFilter.PastThreeYears;
+    private void OnDateFilterPastFiveYears(object sender, RoutedEventArgs e) => ViewModel.DateRangeFilterIndex = (int)DateRangeFilter.PastFiveYears;
 
     private void OnMatchLineLoaded(object sender, RoutedEventArgs e)
     {
@@ -3605,7 +3871,7 @@ public sealed partial class MainWindow : Window
     /// Prevents multi-second UI freezes when a single file has hundreds
     /// of thousands of matches (e.g. 600K).
     /// </summary>
-    private const int MaxMatchesPerSection = 5_000;
+    private const int MaxMatchesPerSection = 500;
 
     /// <summary>
     /// Number of additional results to materialize per "Next match" click
@@ -5090,9 +5356,10 @@ public sealed partial class MainWindow : Window
                 encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
             using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true, bufferSize: 128 * 1024, leaveOpen: false);
             var text = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+            int maxLineLength = GetMaxLineLength(text);
             loadSw.Stop();
-            LogService.Instance.Info("Preview", $"LoadPreviewDocumentAsync: done file='{System.IO.Path.GetFileName(filePath)}', bytes={info.Length:N0}, textLen={text.Length:N0}, elapsed={loadSw.ElapsedMilliseconds}ms");
-            return new PreviewTextDocument(text, reader.CurrentEncoding, info.Length);
+            LogService.Instance.Info("Preview", $"LoadPreviewDocumentAsync: done file='{System.IO.Path.GetFileName(filePath)}', bytes={info.Length:N0}, textLen={text.Length:N0}, maxLineLen={maxLineLength:N0}, elapsed={loadSw.ElapsedMilliseconds}ms");
+            return new PreviewTextDocument(text, reader.CurrentEncoding, info.Length, maxLineLength);
         }
         catch (PreviewLoadException) { throw; }
         catch (UnauthorizedAccessException ex) { throw new PreviewLoadException($"Could not load full file: access denied. {ex.Message}"); }
@@ -5126,7 +5393,7 @@ public sealed partial class MainWindow : Window
             ms.Position = 0;
             using var reader = new StreamReader(ms, encoding, detectEncodingFromByteOrderMarks: true, bufferSize: 128 * 1024, leaveOpen: true);
             var text = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
-            return new PreviewTextDocument(text, reader.CurrentEncoding, byteLength);
+            return new PreviewTextDocument(text, reader.CurrentEncoding, byteLength, GetMaxLineLength(text));
         }
         catch (PreviewLoadException) { throw; }
         catch (FileNotFoundException ex) { throw new PreviewLoadException($"Could not find archive entry: {ex.Message}"); }
@@ -5151,15 +5418,10 @@ public sealed partial class MainWindow : Window
         PreviewBackButton.Visibility = showBackButton ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private async void OnPreviewBackClick(object sender, RoutedEventArgs e)
+    private void OnPreviewBackClick(object sender, RoutedEventArgs e)
     {
         PreviewBackButton.Visibility = Visibility.Collapsed;
-
-        var selected = ViewModel.GetAllSelectedResults();
-        if (selected.Count >= 2)
-            await UpdateMultiSelectPreviewAsync();
-        else if (_previewResult is { } result)
-            await UpdatePreviewAsync(result);
+        RestorePreviewSurfaceAfterEditor();
     }
 
     private static string FormatBytes(long bytes)
@@ -5170,7 +5432,27 @@ public sealed partial class MainWindow : Window
         return bytes >= gb ? $"{bytes / gb:F1} GB" : bytes >= mb ? $"{bytes / mb:F1} MB" : bytes >= kb ? $"{bytes / kb:F1} KB" : $"{bytes} B";
     }
 
-    private sealed record PreviewTextDocument(string Text, Encoding Encoding, long ByteLength);
+    private static int GetMaxLineLength(string text)
+    {
+        int max = 0;
+        int current = 0;
+        foreach (char c in text)
+        {
+            if (c is '\r' or '\n')
+            {
+                if (current > max) max = current;
+                current = 0;
+            }
+            else
+            {
+                current++;
+            }
+        }
+
+        return current > max ? current : max;
+    }
+
+    private sealed record PreviewTextDocument(string Text, Encoding Encoding, long ByteLength, int MaxLineLength);
 
     private sealed record FullFilePreviewTarget(string FilePath, List<SearchResult> Matches);
 
@@ -5501,8 +5783,9 @@ public sealed partial class MainWindow : Window
         gutterSep.Foreground = s_gutterSepBrush;
         para.Inlines.Add(gutterSep);
 
-        // Highlight matches only on the actual match line, not context lines.
-        if (rx != null && isMatchLine)
+        // Keep gutter/nav semantics tied to actual match lines, but color every
+        // visible regex hit yellow so context lines don't show unhighlighted matches.
+        if (rx != null)
         {
             int lastIdx = 0;
             foreach (System.Text.RegularExpressions.Match m in rx.Matches(line))
@@ -5562,6 +5845,7 @@ public sealed partial class MainWindow : Window
 
         var (run, column) = matches[matchInPara];
         _activeMatchHighlight = (para, run, column, matchInPara);
+        ResetActiveOverlayLayoutStability();
         if (LogService.Instance.IsVerboseEnabled)
         {
             int paragraphIndex = _matchParagraphs.Count > 0
@@ -5569,6 +5853,14 @@ public sealed partial class MainWindow : Window
                 : -1;
             LogService.Instance.Verbose("MatchNav", $"BoxMatchRun: idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}/{matches.Count}, col={column}, runText='{run.Text}'");
         }
+    }
+
+    private void ResetActiveOverlayLayoutStability()
+    {
+        _activeOverlayStabilityBlock = null;
+        _activeOverlayLastBlockTop = double.NaN;
+        _activeOverlayLastMoveTick = Environment.TickCount64;
+        _activeOverlayStablePasses = 0;
     }
 
     private List<(Run run, int column)> GetMatchRunsForParagraph(Paragraph para)
@@ -5887,6 +6179,52 @@ public sealed partial class MainWindow : Window
         _matchScrollRequestId++;
     }
 
+    private void OnPreviewViewportSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        InvalidateScrollPositionCache();
+        QueueActiveMatchOverlayRefresh();
+    }
+
+    private void QueueActiveMatchOverlayRefresh()
+    {
+        if (_activeMatchHighlight is null || _activeMatchOverlayRefreshPending)
+            return;
+
+        _activeMatchOverlayRefreshPending = true;
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            _activeMatchOverlayRefreshPending = false;
+            RefreshActiveMatchOverlayPosition();
+        });
+    }
+
+    private void RefreshActiveMatchOverlayPosition()
+    {
+        if (_activeMatchHighlight is not { para: var activePara, run: var activeRun })
+        {
+            HideActiveMatchOverlay();
+            return;
+        }
+
+        int activeIndex = FindActiveMatchIndex();
+        if ((uint)activeIndex >= (uint)_matchParagraphs.Count)
+        {
+            HideActiveMatchOverlay();
+            return;
+        }
+
+        var (block, para, _) = _matchParagraphs[activeIndex];
+        if (!ReferenceEquals(para, activePara))
+        {
+            HideActiveMatchOverlay();
+            return;
+        }
+
+        InvalidateScrollPositionCache(block);
+        if (!TryUpdateActiveMatchOverlayFromActualRun(block, para, activeRun))
+            QueueActiveMatchOverlayUpdate(block, para);
+    }
+
     private bool TryScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, bool verifyAfterScroll, bool forceCenter, out string reason)
     {
         reason = string.Empty;
@@ -5986,32 +6324,51 @@ public sealed partial class MainWindow : Window
         HideActiveMatchOverlay();
         int navIndex = _currentMatchIndex;
         Run targetRun = activeRun;
+        int requestId = ++_activeMatchOverlayUpdateRequestId;
 
-        void EnqueueUpdate(int retriesRemaining)
+        bool IsRequestCurrent()
+            => _activeMatchOverlayUpdateRequestId == requestId
+               && _currentMatchIndex == navIndex
+               && _activeMatchHighlight is { para: var currentPara, run: var currentRun }
+               && ReferenceEquals(currentPara, targetPara)
+               && ReferenceEquals(currentRun, targetRun);
+
+        void EnqueueUpdate(int retriesRemaining, int delayMs)
         {
             DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal, () =>
             {
-                if (_currentMatchIndex != navIndex
-                    || _activeMatchHighlight is not { para: var currentPara, run: var currentRun }
-                    || !ReferenceEquals(currentPara, targetPara)
-                    || !ReferenceEquals(currentRun, targetRun))
-                {
+                if (!IsRequestCurrent())
                     return;
-                }
 
                 if (!TryUpdateActiveMatchOverlayFromActualRun(block, targetPara, targetRun, expectedVerticalOffset, retryIfCenterRejected: retriesRemaining > 0) && retriesRemaining > 0)
-                    EnqueueUpdate(retriesRemaining - 1);
+                {
+                    var retryTimer = new Microsoft.UI.Xaml.DispatcherTimer
+                    {
+                        Interval = TimeSpan.FromMilliseconds(delayMs)
+                    };
+                    EventHandler<object>? handler = null;
+                    handler = (_, __) =>
+                    {
+                        retryTimer.Stop();
+                        if (handler is not null)
+                            retryTimer.Tick -= handler;
+                        if (IsRequestCurrent())
+                            EnqueueUpdate(retriesRemaining - 1, Math.Min(delayMs * 2, 250));
+                    };
+                    retryTimer.Tick += handler;
+                    retryTimer.Start();
+                }
             });
         }
 
-        EnqueueUpdate(retriesRemaining: 2);
+        EnqueueUpdate(retriesRemaining: 12, delayMs: 16);
     }
 
     private bool TryUpdateActiveMatchOverlayFromActualRun(RichTextBlock block, Paragraph targetPara, Run targetRun, double? expectedVerticalOffset = null, bool retryIfCenterRejected = false)
     {
         try
         {
-            if (_activeMatchHighlight is not { para: var activePara, run: var activeRun, matchInPara: var matchInPara }
+            if (_activeMatchHighlight is not { para: var activePara, run: var activeRun, column: var activeColumn, matchInPara: var matchInPara }
                 || !ReferenceEquals(activePara, targetPara)
                 || !ReferenceEquals(activeRun, targetRun))
                 return false;
@@ -6021,13 +6378,52 @@ public sealed partial class MainWindow : Window
             if (viewportWidth <= 0 || viewportHeight <= 0)
                 return false;
 
+            if (!IsPreviewSectionBodySettledForActiveOverlay(block, out var layoutReason))
+            {
+                if (LogService.Instance.IsVerboseEnabled)
+                {
+                    int paragraphIndex = GetParagraphIndex(block, targetPara);
+                    LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: retry unsettled section layout idx={_currentMatchIndex}, paraIdx={paragraphIndex}, reason={layoutReason}");
+                }
+                return false;
+            }
+
             var rect = targetRun.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
-            if (double.IsNaN(rect.X) || double.IsNaN(rect.Y) || rect.Height <= 0)
+            if (!IsUsableTextRect(rect))
                 return false;
 
-            var transform = block.TransformToVisual(PreviewScrollViewer);
-            var point = transform.TransformPoint(new Windows.Foundation.Point(rect.X, rect.Y));
+            var endRect = targetRun.ContentEnd.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Backward);
+            var point = TransformRunRectToOverlay(block, targetPara, rect);
             double markerHeight = Math.Max(12, rect.Height);
+            double charWidth = Math.Max(EstimatePreviewCharWidth(block), rect.Width > 0 ? rect.Width : 0);
+            double markerWidth = Math.Max(12, (targetRun.Text?.Length ?? 1) * charWidth);
+            bool usedEndRect = false;
+            bool usedWrappedEstimate = false;
+            if (ViewModel.PreviewWordWrap)
+            {
+                double rowTolerance = Math.Max(4, markerHeight * 0.6);
+                bool actualPointInViewport = point.X >= 0
+                    && point.X <= viewportWidth
+                    && point.Y >= 0
+                    && point.Y + markerHeight <= viewportHeight;
+                if (IsUsableTextRect(endRect) && Math.Abs(endRect.Y - rect.Y) > rowTolerance)
+                {
+                    var endPoint = TransformRunRectToOverlay(block, targetPara, endRect);
+                    point = new Windows.Foundation.Point(Math.Max(0, endPoint.X - markerWidth), endPoint.Y);
+                    usedEndRect = true;
+                }
+                else if (!actualPointInViewport
+                    && TryGetEstimatedWrappedMatchPoint(block, targetPara, activeColumn, markerHeight, point, out var estimatedPoint, out var estimateDetails))
+                {
+                    point = estimatedPoint;
+                    usedWrappedEstimate = true;
+                    if (LogService.Instance.IsVerboseEnabled)
+                    {
+                        int paragraphIndex = GetParagraphIndex(block, targetPara);
+                        LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: using wrapped estimate idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, {estimateDetails}");
+                    }
+                }
+            }
             double currentVerticalOffset = PreviewScrollViewer.VerticalOffset;
             double actualRunTop = currentVerticalOffset + point.Y;
             double overlayTop = point.Y;
@@ -6043,7 +6439,17 @@ public sealed partial class MainWindow : Window
                 if (actualCenterNeeded)
                     actualCenterAccepted = PreviewScrollViewer.ChangeView(null, actualTargetVerticalOffset, null, disableAnimation: true);
 
-                if (actualCenterAccepted || !actualCenterNeeded)
+                if (actualCenterAccepted)
+                {
+                    if (LogService.Instance.IsVerboseEnabled)
+                    {
+                        int paragraphIndex = GetParagraphIndex(block, targetPara);
+                        LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: centering requested idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, fromY={currentVerticalOffset:N1}, toY={actualTargetVerticalOffset:N1}; waiting for settled layout");
+                    }
+                    return false;
+                }
+
+                if (!actualCenterNeeded)
                     effectiveVerticalOffset = actualTargetVerticalOffset;
                 else if (retryIfCenterRejected)
                 {
@@ -6062,11 +6468,9 @@ public sealed partial class MainWindow : Window
                 overlayTop = actualRunTop - effectiveVerticalOffset;
             }
 
-            if (overlayTop + markerHeight < 0 || overlayTop > viewportHeight)
+            if (overlayTop < 0 || overlayTop + markerHeight > viewportHeight)
                 return false;
 
-            double charWidth = Math.Max(EstimatePreviewCharWidth(block), rect.Width > 0 ? rect.Width : 0);
-            double markerWidth = Math.Max(12, (targetRun.Text?.Length ?? 1) * charWidth);
             double markerLeft = point.X;
 
             ActiveMatchBand.Height = markerHeight;
@@ -6084,7 +6488,7 @@ public sealed partial class MainWindow : Window
             {
                 int paragraphIndex = GetParagraphIndex(block, targetPara);
                 string expectedScroll = expectedVerticalOffset.HasValue ? expectedVerticalOffset.Value.ToString("N1") : "actual";
-                LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, rect=({rect.X:N1},{rect.Y:N1},{rect.Width:N1},{rect.Height:N1}), point=({point.X:N1},{point.Y:N1}), scrollY={currentVerticalOffset:N1}, expectedScrollY={expectedScroll}, effectiveScrollY={effectiveVerticalOffset:N1}, centeredActual={centeredFromActualRun}, centerAccepted={actualCenterAccepted}, marker=({markerLeft:N1},{overlayTop:N1},{markerWidth:N1},{markerHeight:N1}), text='{targetRun.Text}'");
+                LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, rect=({rect.X:N1},{rect.Y:N1},{rect.Width:N1},{rect.Height:N1}), endRect=({endRect.X:N1},{endRect.Y:N1},{endRect.Width:N1},{endRect.Height:N1}), point=({point.X:N1},{point.Y:N1}), scrollY={currentVerticalOffset:N1}, expectedScrollY={expectedScroll}, effectiveScrollY={effectiveVerticalOffset:N1}, centeredActual={centeredFromActualRun}, centerAccepted={actualCenterAccepted}, endRectUsed={usedEndRect}, wrapEstimateUsed={usedWrappedEstimate}, marker=({markerLeft:N1},{overlayTop:N1},{markerWidth:N1},{markerHeight:N1}), text='{targetRun.Text}'");
             }
             return true;
         }
@@ -6092,6 +6496,136 @@ public sealed partial class MainWindow : Window
         {
             return false;
         }
+    }
+
+    private static bool IsUsableTextRect(Windows.Foundation.Rect rect)
+        => !double.IsNaN(rect.X)
+           && !double.IsNaN(rect.Y)
+           && rect.Height > 0;
+
+    private Windows.Foundation.Point TransformRunRectToOverlay(RichTextBlock block, Paragraph targetPara, Windows.Foundation.Rect rect)
+    {
+        var transform = block.TransformToVisual(ActiveMatchOverlay);
+        // TextPointer.GetCharacterRect already reports a block-relative Y for
+        // RichTextBlock runs. Adding paragraph cumulative height here double-
+        // counted prior paragraphs and pushed later active-match overlays down.
+        return transform.TransformPoint(new Windows.Foundation.Point(rect.X, rect.Y));
+    }
+
+    private bool IsPreviewSectionBodySettledForActiveOverlay(RichTextBlock block, out string reason)
+    {
+        reason = string.Empty;
+        if (!_blockExpanderCache.TryGetValue(block, out var expander))
+            return true;
+
+        if (!expander.IsExpanded)
+        {
+            reason = "section collapsed";
+            return false;
+        }
+
+        if (expander.Header is not FrameworkElement header || header.ActualHeight <= 0)
+        {
+            reason = "header not measured";
+            return false;
+        }
+
+        try
+        {
+            var expanderPoint = expander.TransformToVisual(ActiveMatchOverlay)
+                .TransformPoint(new Windows.Foundation.Point(0, 0));
+            var blockPoint = block.TransformToVisual(ActiveMatchOverlay)
+                .TransformPoint(new Windows.Foundation.Point(0, 0));
+            double minBodyTop = expanderPoint.Y + Math.Clamp(header.ActualHeight, 24, 80) - 1;
+            if (blockPoint.Y < minBodyTop)
+            {
+                reason = $"blockTop={blockPoint.Y:N1}, expanderTop={expanderPoint.Y:N1}, headerH={header.ActualHeight:N1}, minBodyTop={minBodyTop:N1}";
+                return false;
+            }
+
+            long now = Environment.TickCount64;
+            if (!ReferenceEquals(_activeOverlayStabilityBlock, block)
+                || double.IsNaN(_activeOverlayLastBlockTop))
+            {
+                _activeOverlayStabilityBlock = block;
+                _activeOverlayLastBlockTop = blockPoint.Y;
+                _activeOverlayLastMoveTick = now;
+                _activeOverlayStablePasses = 0;
+                reason = $"waiting for stable section layout: blockTop={blockPoint.Y:N1}";
+                return false;
+            }
+
+            if (Math.Abs(blockPoint.Y - _activeOverlayLastBlockTop) > 0.75)
+            {
+                reason = $"section still moving: prevBlockTop={_activeOverlayLastBlockTop:N1}, blockTop={blockPoint.Y:N1}";
+                _activeOverlayLastBlockTop = blockPoint.Y;
+                _activeOverlayLastMoveTick = now;
+                _activeOverlayStablePasses = 0;
+                return false;
+            }
+
+            _activeOverlayStablePasses++;
+            const int requiredStablePasses = 2;
+            const int requiredStableMilliseconds = 80;
+            long stableFor = now - _activeOverlayLastMoveTick;
+            if (_activeOverlayStablePasses < requiredStablePasses || stableFor < requiredStableMilliseconds)
+            {
+                reason = $"section not stable long enough: blockTop={blockPoint.Y:N1}, passes={_activeOverlayStablePasses}, stableFor={stableFor}ms";
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            reason = ex.GetType().Name;
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool TryGetEstimatedWrappedMatchPoint(
+        RichTextBlock block,
+        Paragraph targetPara,
+        int column,
+        double markerHeight,
+        Windows.Foundation.Point actualPoint,
+        out Windows.Foundation.Point estimatedPoint,
+        out string details)
+    {
+        estimatedPoint = actualPoint;
+        details = string.Empty;
+        if (!ViewModel.PreviewWordWrap || column <= 0)
+            return false;
+
+        double charWidth = EstimatePreviewCharWidth(block);
+        double availableWidth = GetPreviewTextViewportWidth(block) - 24;
+        int charsPerWrappedLine = Math.Max(1, (int)Math.Floor(availableWidth / charWidth));
+        int wrappedLineIndex = column / charsPerWrappedLine;
+        if (wrappedLineIndex <= 0)
+            return false;
+
+        var firstRun = targetPara.Inlines.OfType<Run>().FirstOrDefault();
+        if (firstRun is null)
+            return false;
+
+        var firstRect = firstRun.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+        if (!IsUsableTextRect(firstRect))
+            return false;
+
+        var firstPoint = TransformRunRectToOverlay(block, targetPara, firstRect);
+        double lineHeight = Math.Max(markerHeight, firstRect.Height);
+        double expectedTop = firstPoint.Y + wrappedLineIndex * lineHeight;
+        double rowTolerance = Math.Max(4, lineHeight * 0.6);
+        if (Math.Abs(actualPoint.Y - expectedTop) <= rowTolerance)
+            return false;
+
+        double expectedLeft = firstPoint.X + (column % charsPerWrappedLine) * charWidth;
+        double correctedTop = expectedTop < actualPoint.Y - rowTolerance
+            ? actualPoint.Y
+            : expectedTop;
+        estimatedPoint = new Windows.Foundation.Point(Math.Max(0, expectedLeft), correctedTop);
+        details = $"column={column}, charsPerLine={charsPerWrappedLine}, wrapRow={wrappedLineIndex}, actual=({actualPoint.X:N1},{actualPoint.Y:N1}), estimated=({estimatedPoint.X:N1},{estimatedPoint.Y:N1})";
+        return true;
     }
 
     private void HideActiveMatchOverlay()

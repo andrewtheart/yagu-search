@@ -358,24 +358,30 @@
                             <x:String>Desc</x:String>
                             <x:String>Asc</x:String>
                         </ComboBox>
+                        <FontIcon Glyph="&#xE8FD;" FontSize="12" VerticalAlignment="Center" Opacity="0.6" />
+                        <TextBlock Text="Group:" VerticalAlignment="Center" FontSize="12" Opacity="0.7" />
                         <DropDownButton Content="{x:Bind ViewModel.GroupModeLabel, Mode=OneWay}" VerticalAlignment="Center" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Group results by…">
                             <DropDownButton.Flyout>
                                 <MenuFlyout>
                                     <MenuFlyoutItem Text="None" Click="OnGroupModeNone" />
                                     <MenuFlyoutItem Text="Folder" Click="OnGroupModeFolder" />
-                                    <MenuFlyoutSubItem Text="Date Modified">
-                                        <MenuFlyoutItem Text="Today" Click="OnGroupModeDateToday" />
-                                        <MenuFlyoutItem Text="Yesterday" Click="OnGroupModeDateYesterday" />
-                                        <MenuFlyoutItem Text="This week" Click="OnGroupModeDateThisWeek" />
-                                        <MenuFlyoutItem Text="This month" Click="OnGroupModeDateThisMonth" />
-                                        <MenuFlyoutItem Text="This year" Click="OnGroupModeDateThisYear" />
-                                        <MenuFlyoutItem Text="Past 2 years" Click="OnGroupModeDatePast2Years" />
-                                        <MenuFlyoutItem Text="Past 5 years" Click="OnGroupModeDatePast5Years" />
-                                        <MenuFlyoutItem Text="Past 10 years" Click="OnGroupModeDatePast10Years" />
-                                        <MenuFlyoutItem Text="Past 20 years" Click="OnGroupModeDatePast20Years" />
-                                        <MenuFlyoutItem Text="Past 30 years" Click="OnGroupModeDatePast30Years" />
-                                        <MenuFlyoutItem Text="Past 50 years" Click="OnGroupModeDatePast50Years" />
+                                    <MenuFlyoutSubItem Text="Date range...">
+                                        <MenuFlyoutItem Text="Date range (Modified)" Click="OnGroupModeDateRangeModified" />
+                                        <MenuFlyoutItem Text="Date range (Created)" Click="OnGroupModeDateRangeCreated" />
+                                        <MenuFlyoutItem Text="Date range (Modified + Created)" Click="OnGroupModeDateRangeModifiedCreated" />
                                     </MenuFlyoutSubItem>
+                                    <MenuFlyoutItem Text="Extension" Click="OnGroupModeExtension" />
+                                    <MenuFlyoutItem Text="File size" Click="OnGroupModeFileSize" />
+                                </MenuFlyout>
+                            </DropDownButton.Flyout>
+                        </DropDownButton>
+                        <DropDownButton Content="{x:Bind ViewModel.GroupSortDirectionLabel, Mode=OneWay}"
+                                        VerticalAlignment="Center" FontSize="12" Padding="8,4"
+                                        ToolTipService.ToolTip="Sort group headers">
+                            <DropDownButton.Flyout>
+                                <MenuFlyout>
+                                    <MenuFlyoutItem Text="Ascending" Click="OnGroupSortAscending" />
+                                    <MenuFlyoutItem Text="Descending" Click="OnGroupSortDescending" />
                                 </MenuFlyout>
                             </DropDownButton.Flyout>
                         </DropDownButton>
@@ -412,6 +418,7 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <CheckBox x:Name="SelectAllFilesCheckBox"
                                   ToolTipService.ToolTip="Select / deselect all files"
@@ -427,6 +434,28 @@
                                       HorizontalAlignment="Left" VerticalAlignment="Center"
                                       Margin="10,0,0,0" IsHitTestVisible="False" />
                         </Grid>
+                        <DropDownButton Grid.Column="2"
+                                        Content="{x:Bind ViewModel.DateRangeFilterLabel, Mode=OneWay}"
+                                        VerticalAlignment="Center" FontSize="12" Padding="8,4"
+                                        ToolTipService.ToolTip="Filter files by modified or created date">
+                            <DropDownButton.Flyout>
+                                <MenuFlyout>
+                                    <MenuFlyoutItem Text="Any date" Click="OnDateFilterNone" />
+                                    <MenuFlyoutSeparator />
+                                    <MenuFlyoutItem Text="Last day" Click="OnDateFilterPastDay" />
+                                    <MenuFlyoutItem Text="Last week" Click="OnDateFilterPastWeek" />
+                                    <MenuFlyoutItem Text="Last 2 weeks" Click="OnDateFilterPastTwoWeeks" />
+                                    <MenuFlyoutItem Text="Last month" Click="OnDateFilterPastMonth" />
+                                    <MenuFlyoutItem Text="Last 3 months" Click="OnDateFilterPastThreeMonths" />
+                                    <MenuFlyoutItem Text="Last 6 months" Click="OnDateFilterPastSixMonths" />
+                                    <MenuFlyoutItem Text="Last 9 months" Click="OnDateFilterPastNineMonths" />
+                                    <MenuFlyoutItem Text="Last year" Click="OnDateFilterPastYear" />
+                                    <MenuFlyoutItem Text="Last 2 years" Click="OnDateFilterPastTwoYears" />
+                                    <MenuFlyoutItem Text="Last 3 years" Click="OnDateFilterPastThreeYears" />
+                                    <MenuFlyoutItem Text="Last 5 years" Click="OnDateFilterPastFiveYears" />
+                                </MenuFlyout>
+                            </DropDownButton.Flyout>
+                        </DropDownButton>
                     </Grid>
 
                     <ListView
@@ -474,12 +503,12 @@
                                     </TextBlock>
                                     <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}" Expanding="OnFileGroupExpanding">
                                     <Expander.Header>
-                                        <Grid>
+                                        <Grid Tapped="OnFileGroupHeaderTapped">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="500" />
+                                                <ColumnDefinition Width="650" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
                                         <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
@@ -543,7 +572,7 @@
                                         <ItemsControl ItemsSource="{x:Bind VisibleResults}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate x:DataType="models:SearchResult">
-                                                    <Grid Padding="4,2,8,2" ColumnSpacing="4" Tapped="OnMatchLineTapped" Background="Transparent">
+                                                    <Grid Padding="0,2,8,2" ColumnSpacing="3" Tapped="OnMatchLineTapped" Background="Transparent">
                                                         <Grid.ContextFlyout>
                                                             <MenuFlyout>
                                                                 <MenuFlyoutItem Text="Copy Selected Lines" Click="OnCopySelectedLines">
@@ -561,8 +590,21 @@
                                                             <ColumnDefinition Width="Auto" />
                                                             <ColumnDefinition Width="*" />
                                                         </Grid.ColumnDefinitions>
-                                                        <CheckBox IsChecked="{x:Bind IsSelected, Mode=TwoWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center" />
-                                                        <TextBlock Grid.Column="1" Text="{x:Bind LineNumber}" Opacity="0.6" MinWidth="40" TextAlignment="Right" FontFamily="Consolas" FontSize="12" VerticalAlignment="Center" />
+                                                        <CheckBox IsChecked="{x:Bind IsSelected, Mode=TwoWay}" MinWidth="28" MinHeight="0" Padding="0" VerticalAlignment="Center" />
+                                                        <Border Grid.Column="1" MinWidth="34" Padding="5,1" Margin="-2,0,2,0"
+                                                                CornerRadius="4"
+                                                                Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                                                                BorderBrush="{ThemeResource SystemAccentColor}"
+                                                                BorderThickness="1"
+                                                                VerticalAlignment="Center">
+                                                            <TextBlock Text="{x:Bind LineNumber}"
+                                                                       HorizontalAlignment="Center"
+                                                                       TextAlignment="Center"
+                                                                       FontFamily="Consolas"
+                                                                       FontSize="12"
+                                                                       FontWeight="SemiBold"
+                                                                       Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                                                        </Border>
                                                         <RichTextBlock Grid.Column="2" TextTrimming="CharacterEllipsis" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="False" Loaded="OnMatchLineLoaded" VerticalAlignment="Center" />
                                                     </Grid>
                                                 </DataTemplate>
@@ -841,6 +883,8 @@
                                 Tapped="StickyFileHeader_Tapped" />
 
                         <Canvas x:Name="ActiveMatchOverlay" Grid.Row="1"
+                            HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                            Canvas.ZIndex="20"
                             IsHitTestVisible="False" Visibility="Collapsed">
                             <Border x:Name="ActiveMatchBand"
                                 Height="18"
@@ -981,5 +1025,25 @@
                        FontFamily="Consolas" FontSize="12"
                        IsTextSelectionEnabled="True" />
         </Border>
+
+        <Button x:Name="ScreenshotButton"
+                Grid.RowSpan="6"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Width="44"
+                Height="44"
+                MinWidth="0"
+                MinHeight="0"
+                Margin="0,0,24,24"
+                Padding="0"
+                CornerRadius="22"
+                Style="{StaticResource AccentButtonStyle}"
+                Click="OnCopyWindowScreenshotClick"
+                ToolTipService.ToolTip="Copy window screenshot to clipboard"
+                AutomationProperties.Name="Copy window screenshot to clipboard"
+                Canvas.ZIndex="200"
+                Translation="0,0,48">
+            <FontIcon Glyph="&#xE722;" FontSize="18" />
+        </Button>
     </Grid>
 </Window>

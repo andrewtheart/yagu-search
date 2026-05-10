@@ -23,6 +23,8 @@ public sealed class SearchResultCollection
     public int SortModeIndex { get; set; }
     public int SortDirectionIndex { get; set; }
     public GroupMode GroupMode { get; set; }
+    public int GroupSortDirectionIndex { get; set; }
+    public DateRangeFilter DateRangeFilter { get; set; }
 
     public void Clear()
     {
@@ -86,7 +88,7 @@ public sealed class SearchResultCollection
         // with a single Reset notification instead of one per group.
         List<FileGroup>? newVisibleGroups = null;
 
-        void AddCore(SearchResult result, Func<string, IReadOnlyList<string>, IReadOnlyList<string>, long>? evictWriter)
+        void AddCore(SearchResult result)
         {
             var path = result.FilePath;
             if (!_index.TryGetValue(path, out var group))
@@ -99,22 +101,29 @@ public sealed class SearchResultCollection
                     (newVisibleGroups ??= []).Add(group);
             }
             group.Add(result);
-            if (evictWriter is not null)
-                EvictNewResultIfNeeded(result, evictNewResults, evictWriter);
         }
 
+        // Always add results to the collection without holding the ResultStore lock.
+        // This prevents the UI thread from blocking when a concurrent EvictAll is
+        // writing hundreds of thousands of results under the same lock.
+        for (int i = 0; i < results.Count; i++)
+            AddCore(results[i]);
+
+        // Evict newly-added results on a worker thread so the UI thread never
+        // contends with a concurrent EvictAll that may hold the ResultStore lock
+        // for seconds while flushing hundreds of thousands of results.
         if (evictNewResults && resultStore is not null)
         {
-            resultStore.WriteBatch(writeOne =>
+            // Snapshot the results to evict — the list is owned by us.
+            var toEvict = results;
+            _ = System.Threading.Tasks.Task.Run(() =>
             {
-                for (int i = 0; i < results.Count; i++)
-                    AddCore(results[i], writeOne);
+                resultStore.WriteBatch(writeOne =>
+                {
+                    for (int i = 0; i < toEvict.Count; i++)
+                        EvictNewResultIfNeeded(toEvict[i], true, writeOne);
+                });
             });
-        }
-        else
-        {
-            for (int i = 0; i < results.Count; i++)
-                AddCore(results[i], null);
         }
 
         // Flush new groups to VisibleGroups in one batch notification.
@@ -164,60 +173,90 @@ public sealed class SearchResultCollection
 
         var filtered = _allGroups.Where(MatchesFilter).ToList();
         bool ascending = SortDirectionIndex == 1;
+        bool groupAscending = GroupSortDirectionIndex == 0;
         bool groupByDirectory = GroupMode == GroupMode.Folder;
-        bool groupByDate = GroupMode >= GroupMode.DateToday;
+        bool groupByDateRange = IsDateRangeGroupMode(GroupMode);
+        bool groupByExtension = GroupMode == GroupMode.Extension;
+        bool groupByFileSize = GroupMode == GroupMode.FileSize;
+
+        foreach (var group in _allGroups)
+            group.GroupHeaderText = null;
 
         List<FileGroup> sortedList;
         if (groupByDirectory)
         {
-            if (SortModeIndex == 0)
-            {
-                sortedList = filtered
-                    .GroupBy(group => group.DirectoryName, StringComparer.OrdinalIgnoreCase)
-                    .SelectMany(group => group)
-                    .ToList();
-            }
-            else
-            {
-                var byDirectory = filtered.OrderBy(group => group.DirectoryName, StringComparer.OrdinalIgnoreCase);
-                sortedList = (SortModeIndex switch
-                {
-                    2 => ascending ? byDirectory.ThenBy(group => group.LastModified) : byDirectory.ThenByDescending(group => group.LastModified),
-                    3 => ascending ? byDirectory.ThenBy(group => group.FileSize) : byDirectory.ThenByDescending(group => group.FileSize),
-                    4 => ascending
-                        ? byDirectory.ThenBy(group => group.FileName, StringComparer.OrdinalIgnoreCase).ThenBy(group => group.FilePath, StringComparer.OrdinalIgnoreCase)
-                        : byDirectory.ThenByDescending(group => group.FileName, StringComparer.OrdinalIgnoreCase).ThenByDescending(group => group.FilePath, StringComparer.OrdinalIgnoreCase),
-                    _ => ascending ? byDirectory.ThenBy(group => group.MatchCount) : byDirectory.ThenByDescending(group => group.MatchCount),
-                }).ToList();
-            }
+            var groupsByDirectory = filtered.GroupBy(group => group.DirectoryName, StringComparer.OrdinalIgnoreCase);
+            var orderedGroups = groupAscending
+                ? groupsByDirectory.OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+                : groupsByDirectory.OrderByDescending(group => group.Key, StringComparer.OrdinalIgnoreCase);
+            sortedList = orderedGroups.SelectMany(group => ApplySecondarySort(group, ascending)).ToList();
         }
-        else if (groupByDate)
+        else if (groupByDateRange)
         {
-            // Classify each group into a date bucket, then sort by bucket order + secondary sort
-            var bucketOrder = GetDateBucketOrder(GroupMode);
+            var bucketOrder = GetDateRangeBucketOrder(GroupMode);
             var classified = filtered
-                .Select(g => (Group: g, Bucket: ClassifyDateBucket(g.LastModified, GroupMode)))
+                .Select(group => (Group: group, Bucket: ClassifyDateRangeBucket(GetDateRangeGroupDate(group, GroupMode), GroupMode)))
                 .ToList();
 
-            IOrderedEnumerable<(FileGroup Group, string Bucket)> ordered;
-            if (ascending)
-                ordered = classified.OrderBy(x => bucketOrder.TryGetValue(x.Bucket, out var o) ? o : 999);
-            else
-                ordered = classified.OrderByDescending(x => bucketOrder.TryGetValue(x.Bucket, out var o) ? o : 999);
+            IOrderedEnumerable<(FileGroup Group, string Bucket)> ordered = groupAscending
+                ? classified.OrderBy(item => bucketOrder.TryGetValue(item.Bucket, out var order) ? order : 999)
+                : classified.OrderByDescending(item => bucketOrder.TryGetValue(item.Bucket, out var order) ? order : 999);
 
             sortedList = (SortModeIndex switch
             {
-                2 => ascending ? ordered.ThenBy(x => x.Group.LastModified) : ordered.ThenByDescending(x => x.Group.LastModified),
-                3 => ascending ? ordered.ThenBy(x => x.Group.FileSize) : ordered.ThenByDescending(x => x.Group.FileSize),
+                0 => ordered,
+                2 => ascending ? ordered.ThenBy(item => item.Group.LastModified) : ordered.ThenByDescending(item => item.Group.LastModified),
+                3 => ascending ? ordered.ThenBy(item => item.Group.FileSize) : ordered.ThenByDescending(item => item.Group.FileSize),
                 4 => ascending
-                    ? ordered.ThenBy(x => x.Group.FileName, StringComparer.OrdinalIgnoreCase)
-                    : ordered.ThenByDescending(x => x.Group.FileName, StringComparer.OrdinalIgnoreCase),
-                _ => ascending ? ordered.ThenBy(x => x.Group.MatchCount) : ordered.ThenByDescending(x => x.Group.MatchCount),
-            }).Select(x => x.Group).ToList();
+                    ? ordered.ThenBy(item => item.Group.FileName, StringComparer.OrdinalIgnoreCase)
+                    : ordered.ThenByDescending(item => item.Group.FileName, StringComparer.OrdinalIgnoreCase),
+                _ => ascending ? ordered.ThenBy(item => item.Group.MatchCount) : ordered.ThenByDescending(item => item.Group.MatchCount),
+            }).Select(item => item.Group).ToList();
 
-            // Assign date bucket headers
             string? lastBucket = null;
-            var classifiedDict = classified.ToDictionary(x => x.Group, x => x.Bucket);
+            var classifiedDict = classified.ToDictionary(item => item.Group, item => item.Bucket);
+            foreach (var group in sortedList)
+            {
+                var bucket = classifiedDict[group];
+                if (!string.Equals(bucket, lastBucket, StringComparison.Ordinal))
+                {
+                    group.GroupHeaderText = bucket;
+                    lastBucket = bucket;
+                }
+            }
+        }
+        else if (groupByExtension)
+        {
+            var groupsByExtension = filtered.GroupBy(group => group.Extension, StringComparer.OrdinalIgnoreCase);
+            var orderedGroups = groupAscending
+                ? groupsByExtension.OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+                : groupsByExtension.OrderByDescending(group => group.Key, StringComparer.OrdinalIgnoreCase);
+            sortedList = orderedGroups.SelectMany(group => ApplySecondarySort(group, ascending)).ToList();
+        }
+        else if (groupByFileSize)
+        {
+            var bucketOrder = GetFileSizeBucketOrder();
+            var classified = filtered
+                .Select(group => (Group: group, Bucket: ClassifyFileSizeBucket(group.FileSize)))
+                .ToList();
+
+            var ordered = groupAscending
+                ? classified.OrderBy(item => bucketOrder.TryGetValue(item.Bucket, out var order) ? order : 999)
+                : classified.OrderByDescending(item => bucketOrder.TryGetValue(item.Bucket, out var order) ? order : 999);
+
+            sortedList = (SortModeIndex switch
+            {
+                0 => ordered,
+                2 => ascending ? ordered.ThenBy(item => item.Group.LastModified) : ordered.ThenByDescending(item => item.Group.LastModified),
+                3 => ascending ? ordered.ThenBy(item => item.Group.FileSize) : ordered.ThenByDescending(item => item.Group.FileSize),
+                4 => ascending
+                    ? ordered.ThenBy(item => item.Group.FileName, StringComparer.OrdinalIgnoreCase)
+                    : ordered.ThenByDescending(item => item.Group.FileName, StringComparer.OrdinalIgnoreCase),
+                _ => ascending ? ordered.ThenBy(item => item.Group.MatchCount) : ordered.ThenByDescending(item => item.Group.MatchCount),
+            }).Select(item => item.Group).ToList();
+
+            string? lastBucket = null;
+            var classifiedDict = classified.ToDictionary(item => item.Group, item => item.Bucket);
             foreach (var group in sortedList)
             {
                 var bucket = classifiedDict[group];
@@ -242,9 +281,6 @@ public sealed class SearchResultCollection
             });
         }
 
-        foreach (var group in _allGroups)
-            group.GroupHeaderText = null;
-
         if (groupByDirectory)
         {
             string? lastDirectory = null;
@@ -257,7 +293,18 @@ public sealed class SearchResultCollection
                 }
             }
         }
-        // Date bucket headers are already assigned above in the groupByDate branch
+        else if (groupByExtension)
+        {
+            string? lastExtension = null;
+            foreach (var group in sortedList)
+            {
+                if (!string.Equals(group.Extension, lastExtension, StringComparison.OrdinalIgnoreCase))
+                {
+                    group.GroupHeaderText = group.Extension;
+                    lastExtension = group.Extension;
+                }
+            }
+        }
 
         VisibleGroups.Clear();
         VisibleGroups.AddRange(sortedList);
@@ -289,6 +336,9 @@ public sealed class SearchResultCollection
                 return false;
         }
 
+        if (DateRangeFilter != DateRangeFilter.None && !MatchesDateRange(group.ModifiedOrCreated, DateRangeFilter))
+            return false;
+
         return true;
     }
 
@@ -308,7 +358,176 @@ public sealed class SearchResultCollection
             ? []
             : s.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-    // ── Date-based grouping helpers ────────────────────────────────
+    private IEnumerable<FileGroup> ApplySecondarySort(IEnumerable<FileGroup> groups, bool ascending) => SortModeIndex switch
+    {
+        0 => groups,
+        2 => ascending ? groups.OrderBy(group => group.LastModified) : groups.OrderByDescending(group => group.LastModified),
+        3 => ascending ? groups.OrderBy(group => group.FileSize) : groups.OrderByDescending(group => group.FileSize),
+        4 => ascending
+            ? groups.OrderBy(group => group.FileName, StringComparer.OrdinalIgnoreCase).ThenBy(group => group.FilePath, StringComparer.OrdinalIgnoreCase)
+            : groups.OrderByDescending(group => group.FileName, StringComparer.OrdinalIgnoreCase).ThenByDescending(group => group.FilePath, StringComparer.OrdinalIgnoreCase),
+        _ => ascending ? groups.OrderBy(group => group.MatchCount) : groups.OrderByDescending(group => group.MatchCount),
+    };
+
+    internal static string ClassifyFileSizeBucket(long fileSize)
+    {
+        if (fileSize < 1 * MB) return "< 1MB";
+        if (fileSize < 5 * MB) return "1 - 5 MB";
+        if (fileSize < 10 * MB) return "5 - 10MB";
+        if (fileSize < 50 * MB) return "10 - 50 MB";
+        if (fileSize < 100 * MB) return "50 - 100MB";
+        if (fileSize < 500 * MB) return "100 - 500MB";
+        if (fileSize < 1 * GB) return "500 - 1GB";
+        if (fileSize < 2 * GB) return "1GB - 2GB";
+        if (fileSize < 5 * GB) return "2GB - 5GB";
+        if (fileSize < 50 * GB) return "5GB - 50GB";
+        if (fileSize < 100 * GB) return "50GB - 100GB";
+        if (fileSize < 500 * GB) return "100GB - 500GB";
+        if (fileSize < 1 * TB) return "500GB - 1TB";
+        if (fileSize < 2 * TB) return "1TB - 2TB";
+        if (fileSize < 3 * TB) return "2TB - 3TB";
+        if (fileSize < 4 * TB) return "3TB - 4TB";
+        if (fileSize < 5 * TB) return "4TB - 5TB";
+        if (fileSize < 10 * TB) return "5TB - 10TB";
+        return "10TB+";
+    }
+
+    private static Dictionary<string, int> GetFileSizeBucketOrder()
+    {
+        var order = new Dictionary<string, int>(StringComparer.Ordinal);
+        int index = 0;
+        foreach (var name in FileSizeBucketNames)
+            order[name] = index++;
+        return order;
+    }
+
+    private const long KB = 1024L;
+    private const long MB = 1024L * KB;
+    private const long GB = 1024L * MB;
+    private const long TB = 1024L * GB;
+
+    private static readonly string[] FileSizeBucketNames =
+    [
+        "< 1MB",
+        "1 - 5 MB",
+        "5 - 10MB",
+        "10 - 50 MB",
+        "50 - 100MB",
+        "100 - 500MB",
+        "500 - 1GB",
+        "1GB - 2GB",
+        "2GB - 5GB",
+        "5GB - 50GB",
+        "50GB - 100GB",
+        "100GB - 500GB",
+        "500GB - 1TB",
+        "1TB - 2TB",
+        "2TB - 3TB",
+        "3TB - 4TB",
+        "4TB - 5TB",
+        "5TB - 10TB",
+        "10TB+",
+    ];
+
+    internal static bool MatchesDateRange(DateTime modifiedOrCreated, DateRangeFilter filter)
+    {
+        if (filter == DateRangeFilter.None) return true;
+        if (modifiedOrCreated == default) return false;
+
+        var now = DateTime.Now;
+        return modifiedOrCreated >= GetDateRangeCutoff(now, filter);
+    }
+
+    internal static string ClassifyDateRangeBucket(DateTime modifiedOrCreated)
+        => ClassifyDateRangeBucket(modifiedOrCreated, GroupMode.DateRangeModifiedCreated);
+
+    internal static string ClassifyDateRangeBucket(DateTime date, GroupMode mode)
+    {
+        if (date == default) return "Unknown date";
+
+        var prefix = GetDateRangeBucketPrefix(mode);
+        var now = DateTime.Now;
+        if (date >= now.AddDays(-1)) return $"{prefix} past day";
+        if (date >= now.AddDays(-7)) return $"{prefix} past week";
+        if (date >= now.AddDays(-14)) return $"{prefix} past 2 weeks";
+        if (date >= now.AddMonths(-1)) return $"{prefix} past month";
+        if (date >= now.AddMonths(-3)) return $"{prefix} past 3 months";
+        if (date >= now.AddMonths(-6)) return $"{prefix} past 6 months";
+        if (date >= now.AddMonths(-9)) return $"{prefix} past 9 months";
+        if (date >= now.AddYears(-1)) return $"{prefix} past year";
+        if (date >= now.AddYears(-2)) return $"{prefix} past two years";
+        if (date >= now.AddYears(-3)) return $"{prefix} past three years";
+        if (date >= now.AddYears(-5)) return $"{prefix} past 5 years";
+        return "a long time ago";
+    }
+
+    internal static Dictionary<string, int> GetDateRangeBucketOrder()
+        => GetDateRangeBucketOrder(GroupMode.DateRangeModifiedCreated);
+
+    internal static Dictionary<string, int> GetDateRangeBucketOrder(GroupMode mode)
+    {
+        var order = new Dictionary<string, int>(StringComparer.Ordinal);
+        int idx = 0;
+        foreach (var name in GetDateRangeBucketNames(mode))
+            order[name] = idx++;
+        return order;
+    }
+
+    private static string[] GetDateRangeBucketNames(GroupMode mode)
+    {
+        var prefix = GetDateRangeBucketPrefix(mode);
+        return
+        [
+            $"{prefix} past day",
+            $"{prefix} past week",
+            $"{prefix} past 2 weeks",
+            $"{prefix} past month",
+            $"{prefix} past 3 months",
+            $"{prefix} past 6 months",
+            $"{prefix} past 9 months",
+            $"{prefix} past year",
+            $"{prefix} past two years",
+            $"{prefix} past three years",
+            $"{prefix} past 5 years",
+            "a long time ago",
+            "Unknown date",
+        ];
+    }
+
+    private static string GetDateRangeBucketPrefix(GroupMode mode) => mode switch
+    {
+        GroupMode.DateRangeModified => "Modified",
+        GroupMode.DateRangeCreated => "Created",
+        _ => "Modified/Created",
+    };
+
+    private static DateTime GetDateRangeGroupDate(FileGroup group, GroupMode mode) => mode switch
+    {
+        GroupMode.DateRangeModified => group.LastModified,
+        GroupMode.DateRangeCreated => group.Created,
+        _ => group.ModifiedOrCreated,
+    };
+
+    private static bool IsDateRangeGroupMode(GroupMode mode) => mode is
+        GroupMode.DateRangeModified or
+        GroupMode.DateRangeCreated or
+        GroupMode.DateRangeModifiedCreated;
+
+    private static DateTime GetDateRangeCutoff(DateTime now, DateRangeFilter filter) => filter switch
+    {
+        DateRangeFilter.PastDay => now.AddDays(-1),
+        DateRangeFilter.PastWeek => now.AddDays(-7),
+        DateRangeFilter.PastTwoWeeks => now.AddDays(-14),
+        DateRangeFilter.PastMonth => now.AddMonths(-1),
+        DateRangeFilter.PastThreeMonths => now.AddMonths(-3),
+        DateRangeFilter.PastSixMonths => now.AddMonths(-6),
+        DateRangeFilter.PastNineMonths => now.AddMonths(-9),
+        DateRangeFilter.PastYear => now.AddYears(-1),
+        DateRangeFilter.PastTwoYears => now.AddYears(-2),
+        DateRangeFilter.PastThreeYears => now.AddYears(-3),
+        DateRangeFilter.PastFiveYears => now.AddYears(-5),
+        _ => DateTime.MinValue,
+    };
 
     internal static string ClassifyDateBucket(DateTime lastModified, GroupMode mode)
     {
@@ -323,7 +542,6 @@ public sealed class SearchResultCollection
         if (lastModified.Date == today.AddDays(-1)) return "Yesterday";
         if (mode == GroupMode.DateYesterday) return "Older";
 
-        // Monday-based week start
         int dow = (int)today.DayOfWeek;
         var startOfWeek = today.AddDays(-(dow == 0 ? 6 : dow - 1));
         if (lastModified.Date >= startOfWeek) return "This week";
@@ -351,11 +569,10 @@ public sealed class SearchResultCollection
         if (mode == GroupMode.DatePast30Years) return "Older";
 
         if (lastModified >= today.AddYears(-50)) return "Past 50 years";
-        // DatePast50Years is the widest — everything falls through to Older
         return "Older";
     }
 
-    private static readonly string[] DateBucketNames =
+    private static readonly string[] LegacyDateBucketNames =
     [
         "Today", "Yesterday", "This week", "This month", "This year",
         "Past 2 years", "Past 5 years", "Past 10 years", "Past 20 years",
@@ -366,7 +583,7 @@ public sealed class SearchResultCollection
     {
         var order = new Dictionary<string, int>(StringComparer.Ordinal);
         int idx = 0;
-        foreach (var name in DateBucketNames)
+        foreach (var name in LegacyDateBucketNames)
             order[name] = idx++;
         return order;
     }

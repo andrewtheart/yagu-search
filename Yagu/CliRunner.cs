@@ -99,6 +99,16 @@ internal static class CliRunner
 
         var settings = LoadEffectiveSettings(args);
 
+        // Apply CLI overrides to settings used outside of SearchOptions.
+        if (args.LogLevelIndex.HasValue)         settings.LogLevelIndex = args.LogLevelIndex.Value;
+        if (args.ConsoleLogLevelIndex.HasValue)  settings.ConsoleLogLevelIndex = args.ConsoleLogLevelIndex.Value;
+        if (args.FileListerBackendIndex.HasValue) settings.FileListerBackendIndex = args.FileListerBackendIndex.Value;
+        if (args.LineTruncationLength.HasValue)  settings.LineTruncationLength = args.LineTruncationLength.Value;
+        if (args.PreviewContextLines.HasValue)   settings.PreviewContextLines = args.PreviewContextLines.Value;
+        if (args.PreviewModeIndex.HasValue)      settings.PreviewModeIndex = args.PreviewModeIndex.Value;
+        if (args.PreviewWordWrap.HasValue)       settings.PreviewWordWrap = args.PreviewWordWrap.Value;
+        if (args.EditorCommand != null)          settings.EditorCommand = args.EditorCommand;
+
         // Configure the file-lister backend from settings (same as App() constructor).
         FileLister.Backend = (FileListerBackend)settings.FileListerBackendIndex;
         LogService.Init((LogLevel)settings.LogLevelIndex, (LogLevel)settings.ConsoleLogLevelIndex);
@@ -407,6 +417,12 @@ internal static class CliRunner
             ? (long)args.MemoryLimitMB.Value * 1024 * 1024
             : (long)s.MemoryLimitMB         * 1024 * 1024;
         int maxResults = args.MaxResults ?? s.MaxResults;
+        int memoryPressure = args.MemoryPressurePercent ?? s.MemoryPressurePercent;
+        int sdkBuffer = args.SdkChannelBufferSize ?? s.SdkChannelBufferSize;
+        bool excludeAdminPaths = args.ExcludeAdminProtectedPaths ?? s.ExcludeAdminProtectedPaths;
+        string adminSegments = args.AdminProtectedPathSegments ?? s.AdminProtectedPathSegments;
+        bool searchArchives = args.SearchInsideArchives ?? s.SearchInsideArchives;
+        string archiveExts = args.ArchiveExtensions ?? s.ArchiveExtensions;
 
         var includeGlobs = args.IncludeGlobs.Count > 0
             ? (IReadOnlyList<string>)args.IncludeGlobs
@@ -436,11 +452,13 @@ internal static class CliRunner
             SkipBinary            = skipBinary,
             MaxDegreeOfParallelism = parallelism,
             MaxProcessMemoryBytes = memoryBytes,
-            MemoryPressurePercent = s.MemoryPressurePercent,
+            MemoryPressurePercent = memoryPressure,
             SkipExtensions        = skipExtensions,
-            SdkChannelBufferSize  = s.SdkChannelBufferSize,
-            ExcludeAdminProtectedPaths = s.ExcludeAdminProtectedPaths,
-            AdminProtectedPathSegments = Yagu.Services.FileLister.ParseAdminProtectedSegments(s.AdminProtectedPathSegments),
+            SdkChannelBufferSize  = sdkBuffer,
+            SearchInsideArchives  = searchArchives,
+            ArchiveExtensions     = SplitSemi(archiveExts).ToHashSet(StringComparer.OrdinalIgnoreCase),
+            ExcludeAdminProtectedPaths = excludeAdminPaths,
+            AdminProtectedPathSegments = Yagu.Services.FileLister.ParseAdminProtectedSegments(adminSegments),
         };
     }
 
@@ -619,10 +637,34 @@ internal static class CliRunner
             PERFORMANCE:
                   --threads <n>           Worker threads (0 = auto).
                   --memory-limit <MB>     Process memory cap in megabytes.
+                  --memory-pressure <n>   System memory pressure threshold 0-100 (0 = disabled).
+                  --sdk-channel-buffer <n> Everything SDK channel buffer size.
+                  --file-lister-backend <n> File lister: 0=Auto, 1=SDK, 2=es.exe, 3=Managed.
 
-            OUTPUT:
-                  --line-truncation <n>   Truncate printed lines to N characters (0 = no limit).
+            ARCHIVE SEARCH:
+                  --search-archives       Search inside ZIP-like archives.
+                  --no-search-archives    Do not search inside archives (default).
+                  --archive-extensions <e> Semicolon-separated archive extensions.
+
+            PREVIEW:
+                  --preview-context <n>   Preview context lines (default: 20).
+                  --preview-mode <n>      Preview mode: 0=Concatenated, 1=Multi-highlight.
+                  --preview-word-wrap     Enable word wrap in preview.
+                  --no-preview-word-wrap  Disable word wrap in preview.
+
+            ADMIN / SECURITY:
                   --no-admin-warning      Suppress the non-administrator privilege warning.
+                  --exclude-admin-paths   Skip admin-protected paths (default when non-admin).
+                  --no-exclude-admin-paths Include admin-protected paths.
+                  --admin-protected-paths <s> Semicolon-separated admin-protected path segments.
+
+            LOGGING:
+                  --log-level <n>         File log level: -1=None, 0=Critical, 1=Warning, 2=Info, 3=Verbose.
+                  --console-log-level <n> Console log level (same scale as --log-level).
+
+            MISC:
+                  --line-truncation <n>   Truncate printed lines to N characters (0 = no limit).
+                  --editor-command <cmd>  Editor launch command (e.g. "code -g {file}:{line}").
 
             SETTINGS FILE:
               If .yagu.json exists in the current working directory it is used as the
@@ -863,6 +905,20 @@ internal sealed class CliArgs
     public SearchMode?      SearchMode   { get; private set; }
     public int?             Parallelism  { get; private set; }
     public int?             MemoryLimitMB { get; private set; }
+    public int?             MemoryPressurePercent { get; private set; }
+    public int?             SdkChannelBufferSize { get; private set; }
+    public int?             LineTruncationLength { get; private set; }
+    public int?             PreviewContextLines { get; private set; }
+    public int?             PreviewModeIndex { get; private set; }
+    public bool?            PreviewWordWrap { get; private set; }
+    public int?             LogLevelIndex { get; private set; }
+    public int?             ConsoleLogLevelIndex { get; private set; }
+    public int?             FileListerBackendIndex { get; private set; }
+    public bool?            SearchInsideArchives { get; private set; }
+    public string?          ArchiveExtensions { get; private set; }
+    public string?          EditorCommand { get; private set; }
+    public bool?            ExcludeAdminProtectedPaths { get; private set; }
+    public string?          AdminProtectedPathSegments { get; private set; }
     public bool             SuppressAdminWarning { get; private set; }
     public bool             ShowHelp     { get; private set; }
 
@@ -885,6 +941,12 @@ internal sealed class CliArgs
             if (Eq(tok, "--no-binary"))                    { a.SkipBinary = true; i++; continue; }
             if (Eq(tok, "--binary"))                       { a.SkipBinary = false; i++; continue; }
             if (Eq(tok, "--no-admin-warning"))             { a.SuppressAdminWarning = true; i++; continue; }
+            if (Eq(tok, "--preview-word-wrap"))              { a.PreviewWordWrap = true; i++; continue; }
+            if (Eq(tok, "--no-preview-word-wrap"))           { a.PreviewWordWrap = false; i++; continue; }
+            if (Eq(tok, "--search-archives"))                { a.SearchInsideArchives = true; i++; continue; }
+            if (Eq(tok, "--no-search-archives"))             { a.SearchInsideArchives = false; i++; continue; }
+            if (Eq(tok, "--exclude-admin-paths"))            { a.ExcludeAdminProtectedPaths = true; i++; continue; }
+            if (Eq(tok, "--no-exclude-admin-paths"))         { a.ExcludeAdminProtectedPaths = false; i++; continue; }
 
             string? v;
             if (TryGetVal(raw, ref i, out v, "--directory", "--dir"))
@@ -919,7 +981,17 @@ internal sealed class CliArgs
             if (TryGetInt(raw, ref i, out n, "--max-results"))           { a.MaxResults    = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--threads", "--parallelism")) { a.Parallelism = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--memory-limit"))          { a.MemoryLimitMB = n; continue; }
-            if (TryGetInt(raw, ref i, out n, "--line-truncation"))       { /* stored but unused in CLI output */ i += 0; a.ContextLines ??= null; continue; }
+            if (TryGetInt(raw, ref i, out n, "--memory-pressure"))       { a.MemoryPressurePercent = n; continue; }
+            if (TryGetInt(raw, ref i, out n, "--sdk-channel-buffer"))    { a.SdkChannelBufferSize = n; continue; }
+            if (TryGetInt(raw, ref i, out n, "--line-truncation"))       { a.LineTruncationLength = n; continue; }
+            if (TryGetInt(raw, ref i, out n, "--preview-context"))       { a.PreviewContextLines = n; continue; }
+            if (TryGetInt(raw, ref i, out n, "--preview-mode"))          { a.PreviewModeIndex = n; continue; }
+            if (TryGetInt(raw, ref i, out n, "--log-level"))             { a.LogLevelIndex = n; continue; }
+            if (TryGetInt(raw, ref i, out n, "--console-log-level"))     { a.ConsoleLogLevelIndex = n; continue; }
+            if (TryGetInt(raw, ref i, out n, "--file-lister-backend"))   { a.FileListerBackendIndex = n; continue; }
+            if (TryGetVal(raw, ref i, out v, "--archive-extensions"))    { a.ArchiveExtensions = v; continue; }
+            if (TryGetVal(raw, ref i, out v, "--editor-command"))        { a.EditorCommand = v; continue; }
+            if (TryGetVal(raw, ref i, out v, "--admin-protected-paths")) { a.AdminProtectedPathSegments = v; continue; }
 
             // Positional: first non-flag is the pattern
             if (!tok.StartsWith('-') && a.Pattern is null)

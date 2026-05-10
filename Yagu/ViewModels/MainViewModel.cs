@@ -39,6 +39,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly SearchResultCollection _resultCollection = new();
     private ResultStore? _resultStore;
     private CancellationTokenSource _metadataCts = new();
+    private bool _metadataSortFilterRefreshQueued;
     private System.Diagnostics.Stopwatch? _searchTimer;
     private long _bytesScanned;
     private long _prevBytesScanned;
@@ -99,6 +100,9 @@ public sealed partial class MainViewModel : ObservableObject
         HasCompletedFirstRun = _settings.HasCompletedFirstRun;
         BackupBeforeSave = _settings.BackupBeforeSave;
         WindowFocusBehavior = _settings.WindowFocusBehavior;
+        PreviewEditorMaxSizeMB = _settings.PreviewEditorMaxSizeMB;
+        PreviewEditorMaxTextLength = _settings.PreviewEditorMaxTextLength;
+        PreviewEditorMaxLineLength = _settings.PreviewEditorMaxLineLength;
 
         Helpers.LineTruncator.TruncatedLength = LineTruncationLength;
 
@@ -126,24 +130,44 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial int SortModeIndex { get; set; }
     [ObservableProperty] public partial int SortDirectionIndex { get; set; }
     [ObservableProperty] public partial int GroupModeIndex { get; set; }
+    [ObservableProperty] public partial int GroupSortDirectionIndex { get; set; }
+    [ObservableProperty] public partial int DateRangeFilterIndex { get; set; }
 
     public GroupMode GroupMode => (GroupMode)GroupModeIndex;
     public string GroupModeLabel => GroupMode switch
     {
         GroupMode.None => "None",
         GroupMode.Folder => "Folder",
-        GroupMode.DateToday => "Date: Today",
-        GroupMode.DateYesterday => "Date: Yesterday",
-        GroupMode.DateThisWeek => "Date: This week",
-        GroupMode.DateThisMonth => "Date: This month",
-        GroupMode.DateThisYear => "Date: This year",
-        GroupMode.DatePast2Years => "Date: Past 2 years",
-        GroupMode.DatePast5Years => "Date: Past 5 years",
-        GroupMode.DatePast10Years => "Date: Past 10 years",
-        GroupMode.DatePast20Years => "Date: Past 20 years",
-        GroupMode.DatePast30Years => "Date: Past 30 years",
-        GroupMode.DatePast50Years => "Date: Past 50 years",
+        GroupMode.DateRangeModified => "Date range (Modified)",
+        GroupMode.DateRangeCreated => "Date range (Created)",
+        GroupMode.DateRangeModifiedCreated => "Date range (Modified + Created)",
+        GroupMode.Extension => "Extension",
+        GroupMode.FileSize => "File size",
         _ => "None",
+    };
+    public string GroupSortDirectionLabel => GroupMode switch
+    {
+        GroupMode.FileSize => GroupSortDirectionIndex == 0 ? "Small to large" : "Large to small",
+        GroupMode.DateRangeModified or GroupMode.DateRangeCreated or GroupMode.DateRangeModifiedCreated =>
+            GroupSortDirectionIndex == 0 ? "Recent first" : "Older first",
+        _ => GroupSortDirectionIndex == 0 ? "A-Z" : "Z-A",
+    };
+    public DateRangeFilter DateRangeFilter => (DateRangeFilter)DateRangeFilterIndex;
+    public string DateRangeFilterLabel => DateRangeFilter switch
+    {
+        DateRangeFilter.None => "Any date",
+        DateRangeFilter.PastDay => "Last day",
+        DateRangeFilter.PastWeek => "Last week",
+        DateRangeFilter.PastTwoWeeks => "Last 2 weeks",
+        DateRangeFilter.PastMonth => "Last month",
+        DateRangeFilter.PastThreeMonths => "Last 3 months",
+        DateRangeFilter.PastSixMonths => "Last 6 months",
+        DateRangeFilter.PastNineMonths => "Last 9 months",
+        DateRangeFilter.PastYear => "Last year",
+        DateRangeFilter.PastTwoYears => "Last 2 years",
+        DateRangeFilter.PastThreeYears => "Last 3 years",
+        DateRangeFilter.PastFiveYears => "Last 5 years",
+        _ => "Any date",
     };
     [ObservableProperty] public partial int PreviewModeIndex { get; set; } = 1; // 0 = Concatenated, 1 = Multi-highlight
     [ObservableProperty] public partial bool PreviewWordWrap { get; set; }
@@ -161,6 +185,9 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial string SkipExtensions { get; set; } = AppSettings.DefaultSkipExtensions;
     [ObservableProperty] public partial bool SearchInsideArchives { get; set; }
     [ObservableProperty] public partial string ArchiveExtensions { get; set; } = AppSettings.DefaultArchiveExtensions;
+    [ObservableProperty] public partial int PreviewEditorMaxSizeMB { get; set; } = 32;
+    [ObservableProperty] public partial int PreviewEditorMaxTextLength { get; set; } = 20_000_000;
+    [ObservableProperty] public partial int PreviewEditorMaxLineLength { get; set; } = 1_000_000;
 
     private bool _suppressAdminWarning;
     public bool SuppressAdminWarning
@@ -174,7 +201,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     [ObservableProperty] public partial bool HasCompletedFirstRun { get; set; }
     [ObservableProperty] public partial bool BackupBeforeSave { get; set; } = true;
-    [ObservableProperty] public partial int WindowFocusBehavior { get; set; } // 0 = MinimizeToTray, 1 = StayOpen, 2 = AlwaysOnTop
+    [ObservableProperty] public partial int WindowFocusBehavior { get; set; } // 0 = MinimizeToTray, 1 = StayOpen, 2 = AlwaysOnTop, 3 = FullWindow
 
     /// <summary>Observable collection of skip-extension items for the multi-select dropdown.</summary>
     public ObservableCollection<SkipExtensionItem> SkipExtensionItems { get; } = [];
@@ -494,6 +521,18 @@ public sealed partial class MainViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(GroupMode));
         OnPropertyChanged(nameof(GroupModeLabel));
+        OnPropertyChanged(nameof(GroupSortDirectionLabel));
+        ApplySortAndFilter();
+    }
+    partial void OnGroupSortDirectionIndexChanged(int value)
+    {
+        OnPropertyChanged(nameof(GroupSortDirectionLabel));
+        ApplySortAndFilter();
+    }
+    partial void OnDateRangeFilterIndexChanged(int value)
+    {
+        OnPropertyChanged(nameof(DateRangeFilter));
+        OnPropertyChanged(nameof(DateRangeFilterLabel));
         ApplySortAndFilter();
     }
     partial void OnIncludeGlobsChanged(string value) => ApplySortAndFilter();
@@ -1002,8 +1041,30 @@ public sealed partial class MainViewModel : ObservableObject
         // Load metadata on a worker thread — the FileInfo syscall on the UI
         // dispatcher was a measurable stall on searches with thousands of
         // distinct files.
-        group.BeginLoadMetadata(action => _dispatcher.TryEnqueue(() => action()), _metadataCts.Token);
+        group.BeginLoadMetadata(action => _dispatcher.TryEnqueue(() => action()), _metadataCts.Token, OnResultGroupMetadataLoaded);
     }
+
+    private void OnResultGroupMetadataLoaded(FileGroup group)
+    {
+        if (!IsMetadataSensitiveView)
+            return;
+
+        if (_metadataSortFilterRefreshQueued)
+            return;
+
+        _metadataSortFilterRefreshQueued = true;
+        _dispatcher.TryEnqueue(() =>
+        {
+            _metadataSortFilterRefreshQueued = false;
+            ApplySortAndFilter();
+        });
+    }
+
+    private bool IsMetadataSensitiveView =>
+        DateRangeFilter != DateRangeFilter.None
+        || GroupMode is GroupMode.DateRangeModified or GroupMode.DateRangeCreated or GroupMode.DateRangeModifiedCreated
+        || GroupMode == GroupMode.FileSize
+        || SortModeIndex is 2 or 3;
 
     private void NotifyResultAvailabilityChanged()
     {
@@ -1210,6 +1271,8 @@ public sealed partial class MainViewModel : ObservableObject
         _resultCollection.SortModeIndex = SortModeIndex;
         _resultCollection.SortDirectionIndex = SortDirectionIndex;
         _resultCollection.GroupMode = GroupMode;
+        _resultCollection.GroupSortDirectionIndex = GroupSortDirectionIndex;
+        _resultCollection.DateRangeFilter = DateRangeFilter;
         _resultCollection.ApplySortAndFilter();
 
         OnPropertyChanged(nameof(HasResults));
@@ -1261,6 +1324,9 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.HasCompletedFirstRun = HasCompletedFirstRun;
         _settings.BackupBeforeSave = BackupBeforeSave;
         _settings.WindowFocusBehavior = WindowFocusBehavior;
+        _settings.PreviewEditorMaxSizeMB = PreviewEditorMaxSizeMB;
+        _settings.PreviewEditorMaxTextLength = PreviewEditorMaxTextLength;
+        _settings.PreviewEditorMaxLineLength = PreviewEditorMaxLineLength;
 
         Helpers.LineTruncator.TruncatedLength = LineTruncationLength;
 

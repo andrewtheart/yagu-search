@@ -4,6 +4,12 @@ public enum GroupMode
 {
     None,
     Folder,
+    DateRangeModifiedCreated,
+    DateRange = DateRangeModifiedCreated,
+    Extension,
+    FileSize,
+    DateRangeModified,
+    DateRangeCreated,
     DateToday,
     DateYesterday,
     DateThisWeek,
@@ -15,4 +21,20 @@ public enum GroupMode
     DatePast20Years,
     DatePast30Years,
     DatePast50Years,
+}
+
+public enum DateRangeFilter
+{
+    None,
+    PastDay,
+    PastWeek,
+    PastTwoWeeks,
+    PastMonth,
+    PastThreeMonths,
+    PastSixMonths,
+    PastNineMonths,
+    PastYear,
+    PastTwoYears,
+    PastThreeYears,
+    PastFiveYears,
 }

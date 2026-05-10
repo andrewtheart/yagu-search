@@ -61,6 +61,7 @@ internal static class Program
         // Pass any --dir / --query arguments so App.OnLaunched can pick them up.
         App.StartupDirectory = App.ParseDirArg(args);
         App.StartupQuery = App.ParseStringArg(args, "--query");
+        App.StartupWindowFocusBehavior = App.ParseWindowFocusBehaviorArg(args);
 
         // Normal GUI mode — mirrors the WinUI-generated entry point.
         ComWrappersSupport.InitializeComWrappers();

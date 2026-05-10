@@ -97,7 +97,10 @@ dotnet build Yagu.sln -c Release -p:BuildRustCore=false
 dotnet run -c Release --project Yagu
 dotnet run -c Release --project Yagu -- --dir "D:\projects\myapp"
 dotnet run -c Release --project Yagu -- --dir="D:\projects\myapp"
+dotnet run -c Release --project Yagu -- --window-mode traditional
 ```
+
+`--window-mode` accepts the same four modes exposed in Settings: `minimize-to-tray`, `stay-open`, `always-on-top`, and `traditional`. Numeric values `0` through `3` are also accepted. `--windowing-mode` is available as an alias.
 
 ### Run .NET Tests
 
@@ -112,6 +115,16 @@ dotnet test Yagu.Tests/Yagu.Tests.csproj -c Release
 dotnet test Yagu.Tests/Yagu.Tests.csproj -c Release --filter ContentSearcherTests
 dotnet test Yagu.Tests/Yagu.Tests.csproj -c Release --filter SearchServiceTests
 dotnet test Yagu.Tests/Yagu.Tests.csproj -c Release --filter NativeParityTests
+```
+
+### Run UI Automation Tests
+
+Most tests run without extra setup, but the match-navigation UI regression test is opt-in because it launches Yagu, drives the desktop UI through UI Automation, and captures screenshots. It requires Windows in an interactive desktop session, a Debug build of the app, and `YAGU_RUN_UI_REGRESSION=1`. Without that variable, the test exits early with a skipped message.
+
+```powershell
+dotnet build Yagu/Yagu.csproj -c Debug
+$env:YAGU_RUN_UI_REGRESSION = '1'
+dotnet test Yagu.Tests/Yagu.Tests.csproj -c Release --filter MatchNavRegressionTests
 ```
 
 ### Run Coverage

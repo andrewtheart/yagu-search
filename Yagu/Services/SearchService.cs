@@ -1340,7 +1340,8 @@ public sealed class SearchService
             if (status == Native.NativeSearcher.StatusOk && fileLength > 0 && lastModifiedFileTime > 0)
             {
                 var lastMod = DateTime.FromFileTime((long)lastModifiedFileTime);
-                FileMetadataCache.Set(_paths[idx], new FileMetadata((long)fileLength, lastMod));
+                var created = FileMetadataCache.TryGet(_paths[idx], out var cached) ? cached.Created : default;
+                FileMetadataCache.Set(_paths[idx], new FileMetadata((long)fileLength, lastMod, created));
             }
 
             // Flush this file's buffered results to the channel as a contiguous run.

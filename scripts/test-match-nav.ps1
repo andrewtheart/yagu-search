@@ -180,7 +180,7 @@ Write-Host ""
 # 1. Launch Yagu with directory and query
 Write-Host "[1] Launching Yagu..."
 $proc = Start-Process -FilePath "D:\yagu\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe" `
-    -ArgumentList "--dir `"$Directory`" --query `"$Query`"" `
+    -ArgumentList "--dir `"$Directory`" --query `"$Query`" --window-mode traditional" `
     -PassThru
 
 Start-Sleep -Seconds 5

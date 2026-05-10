@@ -13,6 +13,7 @@ public partial class App : Application
 {
     public static string? StartupDirectory { get; set; }
     public static string? StartupQuery { get; set; }
+    public static int? StartupWindowFocusBehavior { get; set; }
     public static Mutex? InstanceMutex { get; set; }
     public static string CrashLogPath { get; } = Path.Combine(
         Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory, "yagu-crash.log");
@@ -44,7 +45,7 @@ public partial class App : Application
         {
             if (StartupDirectory is null)
                 StartupDirectory = ParseDirArg(System.Environment.GetCommandLineArgs());
-            _window = new MainWindow(StartupDirectory, StartupQuery);
+            _window = new MainWindow(StartupDirectory, StartupQuery, StartupWindowFocusBehavior);
             _window.Activate();
             _window.FocusSearchOnLaunch();
         }
@@ -206,6 +207,24 @@ public partial class App : Application
     }
 
     internal static string? ParseDirArg(string[] args) => ParseStringArg(args, "--dir");
+
+    internal static int? ParseWindowFocusBehaviorArg(string[] args)
+    {
+        var value = ParseStringArg(args, "--window-mode")
+            ?? ParseStringArg(args, "--windowing-mode")
+            ?? ParseStringArg(args, "--window-focus-behavior");
+        if (string.IsNullOrWhiteSpace(value)) return null;
+
+        var normalized = value.Trim().Trim('"').ToLowerInvariant().Replace("_", "-");
+        return normalized switch
+        {
+            "0" or "minimize" or "minimize-to-tray" or "tray" => 0,
+            "1" or "stay-open" or "stayopen" or "open" => 1,
+            "2" or "always-on-top" or "alwaysontop" or "top" => 2,
+            "3" or "traditional" or "traditional-window" or "desktop" or "full-window" or "fullwindow" => 3,
+            _ => null,
+        };
+    }
 
     internal static string? ParseStringArg(string[] args, string name)
     {

@@ -2,7 +2,13 @@ using System.Collections.Concurrent;
 
 namespace Yagu.Services;
 
-internal readonly record struct FileMetadata(long Length, DateTime LastModified);
+internal readonly record struct FileMetadata(long Length, DateTime LastModified, DateTime Created)
+{
+    public FileMetadata(long length, DateTime lastModified)
+        : this(length, lastModified, default)
+    {
+    }
+}
 
 internal readonly record struct FileSearchOutcome(int MatchCount, long BytesScanned, int EntriesScanned = 0);
 
