@@ -1710,6 +1710,7 @@ public sealed partial class MainWindow : Window
     private int _matchScrollRequestId;
     private bool _activeMatchOverlayRefreshPending;
     private int _activeMatchOverlayUpdateRequestId;
+    private int _previewManualScrollVersion;
     private RichTextBlock? _activeOverlayStabilityBlock;
     private double _activeOverlayLastBlockTop = double.NaN;
     private long _activeOverlayLastMoveTick;
@@ -1962,7 +1963,41 @@ public sealed partial class MainWindow : Window
         if (_previewViewChangedHooked) return;
         _previewViewChangedHooked = true;
         PreviewScrollViewer.ViewChanged += OnPreviewScrollViewChanged;
+        PreviewScrollViewer.AddHandler(UIElement.PointerWheelChangedEvent,
+            new PointerEventHandler((_, _) => NotePreviewManualScrollInput("wheel")),
+            handledEventsToo: true);
+        PreviewScrollViewer.AddHandler(UIElement.PointerPressedEvent,
+            new PointerEventHandler((_, _) => NotePreviewManualScrollInput("pointer")),
+            handledEventsToo: true);
+        PreviewScrollViewer.AddHandler(UIElement.KeyDownEvent,
+            new KeyEventHandler((_, e) =>
+            {
+                if (IsPreviewScrollKey(e.Key))
+                    NotePreviewManualScrollInput($"key:{e.Key}");
+            }),
+            handledEventsToo: true);
     }
+
+    private void NotePreviewManualScrollInput(string source)
+    {
+        _previewManualScrollVersion++;
+        InvalidatePendingMatchScrolls();
+        _activeMatchOverlayUpdateRequestId++;
+        HideActiveMatchOverlay();
+        if (LogService.Instance.IsVerboseEnabled)
+            LogService.Instance.Verbose("MatchNav", $"Preview manual scroll input: source={source}, version={_previewManualScrollVersion}");
+    }
+
+    private static bool IsPreviewScrollKey(Windows.System.VirtualKey key)
+        => key is Windows.System.VirtualKey.Up
+            or Windows.System.VirtualKey.Down
+            or Windows.System.VirtualKey.Left
+            or Windows.System.VirtualKey.Right
+            or Windows.System.VirtualKey.PageUp
+            or Windows.System.VirtualKey.PageDown
+            or Windows.System.VirtualKey.Home
+            or Windows.System.VirtualKey.End
+            or Windows.System.VirtualKey.Space;
 
     /// <summary>
     /// Yields to the dispatcher at Low priority. Unlike Task.Yield (which
@@ -6280,7 +6315,7 @@ public sealed partial class MainWindow : Window
 
         InvalidateScrollPositionCache(block);
         if (!TryUpdateActiveMatchOverlayFromActualRun(block, para, activeRun))
-            QueueActiveMatchOverlayUpdate(block, para);
+            HideActiveMatchOverlay();
     }
 
     private bool TryScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, bool verifyAfterScroll, bool forceCenter, out string reason)
@@ -6301,14 +6336,26 @@ public sealed partial class MainWindow : Window
             }
 
             if (forceCenter
-                && _activeMatchHighlight is { para: var activePara }
+                && _activeMatchHighlight is { para: var activePara, run: var activeRun }
                 && ReferenceEquals(activePara, targetPara))
             {
-                // Pre-scroll to an estimated position that accounts for wrapped
-                // line offset within the paragraph. Without this, files with
-                // extremely long lines (thousands of characters) leave the match
-                // outside the viewport because the scroll targets the paragraph
-                // top rather than the wrapped row where the match lives.
+                if (TryGetActiveMatchTargetVerticalOffset(block, targetPara, activeRun, out double actualOffset, out string actualSource))
+                {
+                    double beforeActualVerticalOffset = PreviewScrollViewer.VerticalOffset;
+                    bool requested = Math.Abs(actualOffset - beforeActualVerticalOffset) > 1;
+                    bool accepted = requested && PreviewScrollViewer.ChangeView(null, actualOffset, null, disableAnimation: true);
+
+                    if (LogService.Instance.IsVerboseEnabled)
+                        LogService.Instance.Verbose("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, mode=actual-run, source={actualSource}, forceCenter=True, requested={requested}, accepted={accepted}, fromY={beforeActualVerticalOffset:N1}, targetY={actualOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}");
+
+                    ScrollMatchHorizontallyIntoView(block, targetPara);
+                    QueueActiveMatchOverlayUpdate(block, targetPara, actualOffset);
+                    return true;
+                }
+
+                // Fallback to an estimated position when the active run has not
+                // produced a usable character rect yet. This is common right
+                // after expanding a large section, before WinUI finishes measure.
                 double estLineHeight = EstimatePreviewLineHeight(block);
                 double estWrappedOffset = EstimateWrappedLineOffset(block, targetPara);
                 double estCumHeight = EstimateCumulativeHeightBefore(block, targetPara, estLineHeight);
@@ -6318,11 +6365,12 @@ public sealed partial class MainWindow : Window
                     estLineCenter - PreviewScrollViewer.ViewportHeight / 2,
                     0, PreviewScrollViewer.ScrollableHeight);
 
-                if (Math.Abs(estimatedOffset - PreviewScrollViewer.VerticalOffset) > 1)
-                    PreviewScrollViewer.ChangeView(null, estimatedOffset, null, disableAnimation: true);
+                double beforeEstimatedVerticalOffset = PreviewScrollViewer.VerticalOffset;
+                bool requestedEstimated = Math.Abs(estimatedOffset - beforeEstimatedVerticalOffset) > 1;
+                bool acceptedEstimated = requestedEstimated && PreviewScrollViewer.ChangeView(null, estimatedOffset, null, disableAnimation: true);
 
                 if (LogService.Instance.IsVerboseEnabled)
-                    LogService.Instance.Verbose("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, mode=actual-run, forceCenter=True, fromY={PreviewScrollViewer.VerticalOffset:N1}, estimatedY={estimatedOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}");
+                    LogService.Instance.Verbose("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, mode=estimated-active, forceCenter=True, requested={requestedEstimated}, accepted={acceptedEstimated}, fromY={beforeEstimatedVerticalOffset:N1}, targetY={estimatedOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}");
 
                 ScrollMatchHorizontallyIntoView(block, targetPara);
                 QueueActiveMatchOverlayUpdate(block, targetPara, estimatedOffset);
@@ -6400,10 +6448,12 @@ public sealed partial class MainWindow : Window
         int navIndex = _currentMatchIndex;
         Run targetRun = activeRun;
         int requestId = ++_activeMatchOverlayUpdateRequestId;
+                int manualScrollVersion = _previewManualScrollVersion;
 
         bool IsRequestCurrent()
             => _activeMatchOverlayUpdateRequestId == requestId
                && _currentMatchIndex == navIndex
+                             && _previewManualScrollVersion == manualScrollVersion
                && _activeMatchHighlight is { para: var currentPara, run: var currentRun }
                && ReferenceEquals(currentPara, targetPara)
                && ReferenceEquals(currentRun, targetRun);
@@ -6448,6 +6498,60 @@ public sealed partial class MainWindow : Window
         }
 
         EnqueueUpdate(retriesRemaining: 12, delayMs: 16);
+    }
+
+    private bool TryGetActiveMatchTargetVerticalOffset(
+        RichTextBlock block,
+        Paragraph targetPara,
+        Run activeRun,
+        out double targetVerticalOffset,
+        out string source)
+    {
+        targetVerticalOffset = 0;
+        source = "unavailable";
+
+        double viewportHeight = PreviewScrollViewer.ViewportHeight;
+        if (viewportHeight <= 0)
+            viewportHeight = Math.Max(0, PreviewScrollViewer.ActualHeight - PreviewScrollViewer.Padding.Top - PreviewScrollViewer.Padding.Bottom);
+        if (viewportHeight <= 0)
+            return false;
+
+        var rect = activeRun.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+        if (!IsUsableTextRect(rect))
+            return false;
+
+        var point = TransformRunRectToOverlay(block, targetPara, rect);
+        double markerHeight = Math.Max(12, rect.Height);
+        source = "start";
+
+        if (ViewModel.PreviewWordWrap)
+        {
+            double charWidth = Math.Max(EstimatePreviewCharWidth(block), rect.Width > 0 ? rect.Width : 0);
+            double markerWidth = Math.Max(12, (activeRun.Text?.Length ?? 1) * charWidth);
+            var endRect = activeRun.ContentEnd.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Backward);
+            double rowTolerance = Math.Max(4, markerHeight * 0.6);
+            if (IsUsableTextRect(endRect) && Math.Abs(endRect.Y - rect.Y) > rowTolerance)
+            {
+                var endPoint = TransformRunRectToOverlay(block, targetPara, endRect);
+                point = new Windows.Foundation.Point(Math.Max(0, endPoint.X - markerWidth), endPoint.Y);
+                source = "end";
+            }
+            else if (_activeMatchHighlight is { para: var activePara, column: var activeColumn }
+                && ReferenceEquals(activePara, targetPara)
+                && TryGetEstimatedWrappedMatchPoint(block, targetPara, activeColumn, markerHeight, point, out var estimatedPoint, out var estimateDetails))
+            {
+                point = estimatedPoint;
+                source = $"wrapped-estimate {estimateDetails}";
+            }
+        }
+
+        double actualRunTop = PreviewScrollViewer.VerticalOffset + point.Y - PreviewScrollViewer.Padding.Top;
+        double candidate = actualRunTop + markerHeight / 2 - viewportHeight / 2;
+        if (double.IsNaN(candidate) || double.IsInfinity(candidate))
+            return false;
+
+        targetVerticalOffset = Math.Clamp(candidate, 0, PreviewScrollViewer.ScrollableHeight);
+        return true;
     }
 
     private bool TryUpdateActiveMatchOverlayFromActualRun(RichTextBlock block, Paragraph targetPara, Run targetRun, double? expectedVerticalOffset = null, bool retryIfCenterRejected = false)
@@ -7526,6 +7630,12 @@ public sealed partial class MainWindow : Window
     {
         if (_matchParagraphs.Count == 0 && _lazyMatchCount == 0) return;
 
+        var navSw = System.Diagnostics.Stopwatch.StartNew();
+        int startIndex = _currentMatchIndex;
+        int renderedBefore = _matchParagraphs.Count;
+        int expandedChunks = 0;
+        int materializedSections = 0;
+        bool expandedDuringBulk = false;
         int targetIndex = _currentMatchIndex + step;
 
         // Expand overflow / materialize lazy sections until we have enough matches.
@@ -7539,11 +7649,19 @@ public sealed partial class MainWindow : Window
                 var curBlock = _matchParagraphs[_currentMatchIndex].block;
                 if (_sectionOverflow.ContainsKey(curBlock))
                     expanded = ExpandSectionNextChunk(curBlock);
+                if (expanded)
+                    expandedChunks++;
             }
 
             // Then try materializing the next lazy section.
             if (!expanded && _lazyMatchCount > 0)
+            {
                 expanded = MaterializeNextLazySection(forward: true);
+                if (expanded)
+                    materializedSections++;
+            }
+
+            expandedDuringBulk |= expanded;
 
             if (!expanded) break;
         }
@@ -7560,8 +7678,9 @@ public sealed partial class MainWindow : Window
             SetSectionCurrentMatch(sn, para, matchInPara);
         ActivateSectionForBlock(block);
         BoxMatchRun(para, matchInPara);
-        UpdateSectionMatchNavPanels();
-        ScrollPreviewToLine(block, para, forceCenter: true);
+        ScrollAfterMatchNavigation(block, para, justMaterialized: expandedDuringBulk, sameParagraph: false);
+        navSw.Stop();
+        LogService.Instance.Info("MatchNav", $"BulkNextMatch: step={step}, from={startIndex}, landed={_currentMatchIndex}, renderedBefore={renderedBefore}, renderedAfter={_matchParagraphs.Count}, expandedChunks={expandedChunks}, materializedSections={materializedSections}, elapsed={navSw.ElapsedMilliseconds}ms");
     }
 
     /// <summary>
@@ -7573,6 +7692,8 @@ public sealed partial class MainWindow : Window
     {
         if (_matchParagraphs.Count == 0) return;
 
+        var navSw = System.Diagnostics.Stopwatch.StartNew();
+        int startIndex = _currentMatchIndex;
         int targetIndex = _currentMatchIndex - step;
         bool hitBoundary = targetIndex < 0;
         if (hitBoundary)
@@ -7590,8 +7711,9 @@ public sealed partial class MainWindow : Window
         else
             BoxMatchRun(para, matchInPara);
 
-        UpdateSectionMatchNavPanels();
         ScrollPreviewToLine(block, para, forceCenter: true);
+        navSw.Stop();
+        LogService.Instance.Info("MatchNav", $"BulkPrevMatch: step={step}, from={startIndex}, landed={_currentMatchIndex}, hitBoundary={hitBoundary}, rendered={_matchParagraphs.Count}, elapsed={navSw.ElapsedMilliseconds}ms");
     }
 
     private void OnNextMatch(object sender, RoutedEventArgs e)
