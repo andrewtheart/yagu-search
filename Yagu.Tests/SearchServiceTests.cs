@@ -31,11 +31,18 @@ public class SearchServiceTests : IDisposable
         Assert.Equal(expected, SearchService.ResolveNativeBatchSize(parallelism));
     }
 
-    private void Write(string rel, string content)
+    private string Write(string rel, string content)
     {
         var p = Path.Combine(_root, rel);
         Directory.CreateDirectory(Path.GetDirectoryName(p)!);
         File.WriteAllText(p, content, new UTF8Encoding(false));
+        return p;
+    }
+
+    private static void SetFileTimes(string path, DateTime created, DateTime modified)
+    {
+        File.SetCreationTime(path, created);
+        File.SetLastWriteTime(path, modified);
     }
 
     [Fact]
@@ -109,6 +116,140 @@ public class SearchServiceTests : IDisposable
         Assert.NotNull(summary.SkipReasons);
         Assert.True(summary.SkipReasons!.EarlyFiltered >= 2);
         Assert.True(summary.SkipReasons.TooLarge >= 1);
+    }
+
+    [Fact]
+    public async Task CreatedDateRange_FiltersBeforeMatching()
+    {
+        var tooOld = Write("created-old.txt", "needle");
+        var inRange = Write("created-in-range.txt", "needle");
+        var tooNew = Write("created-new.txt", "needle");
+        SetFileTimes(tooOld, new DateTime(2023, 12, 31), new DateTime(2026, 1, 1));
+        SetFileTimes(inRange, new DateTime(2024, 6, 15), new DateTime(2026, 1, 1));
+        SetFileTimes(tooNew, new DateTime(2025, 1, 1), new DateTime(2026, 1, 1));
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            CreatedAfterDate = new DateTimeOffset(new DateTime(2024, 1, 1)),
+            CreatedBeforeDate = new DateTimeOffset(new DateTime(2024, 12, 31)),
+            MaxResults = 0,
+        };
+
+        var results = new List<SearchResult>();
+        SearchSummary? summary = null;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Match match) results.Add(match.Result);
+            else if (evt is SearchEvent.MatchBatch batch) results.AddRange(batch.Results);
+            else if (evt is SearchEvent.Completed c) summary = c.Summary;
+        }
+
+        Assert.Single(results);
+        Assert.EndsWith("created-in-range.txt", results[0].FilePath);
+        Assert.NotNull(summary);
+        Assert.True(summary!.SkipReasons?.EarlyFiltered >= 2);
+    }
+
+    [Fact]
+    public async Task ModifiedDateRange_FiltersBeforeMatching()
+    {
+        var tooOld = Write("modified-old.txt", "needle");
+        var inRange = Write("modified-in-range.txt", "needle");
+        var tooNew = Write("modified-new.txt", "needle");
+        SetFileTimes(tooOld, new DateTime(2020, 1, 1), new DateTime(2023, 12, 31));
+        SetFileTimes(inRange, new DateTime(2020, 1, 1), new DateTime(2024, 6, 15));
+        SetFileTimes(tooNew, new DateTime(2020, 1, 1), new DateTime(2025, 1, 1));
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            ModifiedAfterDate = new DateTimeOffset(new DateTime(2024, 1, 1)),
+            ModifiedBeforeDate = new DateTimeOffset(new DateTime(2024, 12, 31)),
+            MaxResults = 0,
+        };
+
+        var results = new List<SearchResult>();
+        SearchSummary? summary = null;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Match match) results.Add(match.Result);
+            else if (evt is SearchEvent.MatchBatch batch) results.AddRange(batch.Results);
+            else if (evt is SearchEvent.Completed c) summary = c.Summary;
+        }
+
+        Assert.Single(results);
+        Assert.EndsWith("modified-in-range.txt", results[0].FilePath);
+        Assert.NotNull(summary);
+        Assert.True(summary!.SkipReasons?.EarlyFiltered >= 2);
+    }
+
+    [Fact]
+    public async Task QuotedLiteral_SearchesExactPhrase()
+    {
+        Write("phrase.txt", "the value is test 123 here");
+        Write("split.txt", "the value has test then later 123");
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "\"test 123\"",
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        var results = new List<SearchResult>();
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Match match) results.Add(match.Result);
+            else if (evt is SearchEvent.MatchBatch batch) results.AddRange(batch.Results);
+        }
+
+        Assert.Single(results);
+        Assert.EndsWith("phrase.txt", results[0].FilePath);
+        Assert.Equal("test 123", results[0].MatchLine.Substring(results[0].MatchStartColumn, results[0].MatchLength));
+    }
+
+    [Fact]
+    public async Task UnquotedLiteralTerms_SearchesEachTermIndependently()
+    {
+        Write("word.txt", "contains test only");
+        Write("number.txt", "contains 123 only");
+        Write("quiet.txt", "contains neither value");
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "test 123",
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int matches = 0;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Match match)
+            {
+                files.Add(Path.GetFileName(match.Result.FilePath));
+                matches++;
+            }
+            else if (evt is SearchEvent.MatchBatch batch)
+            {
+                foreach (var result in batch.Results)
+                    files.Add(Path.GetFileName(result.FilePath));
+                matches += batch.Results.Count;
+            }
+        }
+
+        Assert.Equal(2, matches);
+        Assert.Equal(new[] { "number.txt", "word.txt" }, files.OrderBy(file => file, StringComparer.OrdinalIgnoreCase));
     }
 
     [Fact]

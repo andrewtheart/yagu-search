@@ -301,11 +301,17 @@
                         <!-- Size row -->
                         <Grid ColumnSpacing="8">
                             <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <Grid>
+                            <CheckBox Content="Limit size"
+                                      IsChecked="{x:Bind ViewModel.IsFileSizeFilterEnabled, Mode=TwoWay}"
+                                      VerticalAlignment="Center"
+                                      ToolTipService.ToolTip="When off, search includes files of any size." />
+                            <Grid Grid.Column="1">
                                 <NumberBox Value="{x:Bind ViewModel.MinFileSizeMB, Mode=TwoWay}"
+                                           IsEnabled="{x:Bind ViewModel.IsFileSizeFilterEnabled, Mode=OneWay}"
                                            Minimum="0" SmallChange="1" LargeChange="10"
                                            SpinButtonPlacementMode="Compact"
                                            PlaceholderText="0"
@@ -318,8 +324,9 @@
                                                FontWeight="SemiBold" />
                                 </Border>
                             </Grid>
-                            <Grid Grid.Column="1">
+                            <Grid Grid.Column="2">
                                 <NumberBox Value="{x:Bind ViewModel.MaxFileSizeMB, Mode=TwoWay}"
+                                           IsEnabled="{x:Bind ViewModel.IsFileSizeFilterEnabled, Mode=OneWay}"
                                            Minimum="0" SmallChange="1" LargeChange="10"
                                            SpinButtonPlacementMode="Compact"
                                            PlaceholderText="0"
@@ -332,6 +339,45 @@
                                                FontWeight="SemiBold" />
                                 </Border>
                             </Grid>
+                        </Grid>
+
+                        <!-- Date rows -->
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="Created after" FontSize="11" Opacity="0.75" />
+                                <CalendarDatePicker Date="{x:Bind ViewModel.CreatedAfterDate, Mode=TwoWay}"
+                                                    PlaceholderText="Any"
+                                                    ToolTipService.ToolTip="Only include files created on or after this date." />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Spacing="2">
+                                <TextBlock Text="Created before" FontSize="11" Opacity="0.75" />
+                                <CalendarDatePicker Date="{x:Bind ViewModel.CreatedBeforeDate, Mode=TwoWay}"
+                                                    PlaceholderText="Any"
+                                                    ToolTipService.ToolTip="Only include files created on or before this date." />
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="Modified after" FontSize="11" Opacity="0.75" />
+                                <CalendarDatePicker Date="{x:Bind ViewModel.ModifiedAfterDate, Mode=TwoWay}"
+                                                    PlaceholderText="Any"
+                                                    ToolTipService.ToolTip="Only include files modified on or after this date." />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Spacing="2">
+                                <TextBlock Text="Modified before" FontSize="11" Opacity="0.75" />
+                                <CalendarDatePicker Date="{x:Bind ViewModel.ModifiedBeforeDate, Mode=TwoWay}"
+                                                    PlaceholderText="Any"
+                                                    ToolTipService.ToolTip="Only include files modified on or before this date." />
+                            </StackPanel>
                         </Grid>
                     </StackPanel>
                 </Expander>
@@ -799,14 +845,14 @@
                                             Style="{StaticResource AccentButtonStyle}"
                                             Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
                                             CornerRadius="4"
-                                            ToolTipService.ToolTip="Previous match (↑) · Ctrl+Click to jump multiple">
+                                            ToolTipService.ToolTip="Previous match (Shift+Enter) · Ctrl+Click to jump multiple">
                                         <FontIcon Glyph="&#xE70E;" FontSize="12" />
                                     </Button>
                                     <Button x:Name="NextMatchButton" Click="OnNextMatch"
                                             Style="{StaticResource AccentButtonStyle}"
                                             Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
                                             CornerRadius="4"
-                                            ToolTipService.ToolTip="Next match (↓) · Ctrl+Click to jump multiple">
+                                            ToolTipService.ToolTip="Next match (Enter) · Ctrl+Click to jump multiple">
                                         <FontIcon Glyph="&#xE70D;" FontSize="12" />
                                     </Button>
                                 </StackPanel>
@@ -1062,24 +1108,5 @@
                        IsTextSelectionEnabled="True" />
         </Border>
 
-        <Button x:Name="ScreenshotButton"
-                Grid.RowSpan="6"
-                HorizontalAlignment="Right"
-                VerticalAlignment="Bottom"
-                Width="44"
-                Height="44"
-                MinWidth="0"
-                MinHeight="0"
-                Margin="0,0,24,24"
-                Padding="0"
-                CornerRadius="22"
-                Style="{StaticResource AccentButtonStyle}"
-                Click="OnCopyWindowScreenshotClick"
-                ToolTipService.ToolTip="Copy window screenshot to clipboard"
-                AutomationProperties.Name="Copy window screenshot to clipboard"
-                Canvas.ZIndex="200"
-                Translation="0,0,48">
-            <FontIcon Glyph="&#xE722;" FontSize="18" />
-        </Button>
     </Grid>
 </Window>

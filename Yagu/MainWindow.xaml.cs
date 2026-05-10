@@ -14,7 +14,6 @@ using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Media.Imaging;
 using System.Net.Http;
 using System.Security.Principal;
 using Microsoft.Win32;
@@ -62,10 +61,16 @@ public sealed partial class MainWindow : Window
     private bool _hotkeyHookInstalled;
     private bool _suppressHotkeySettingChange;
     private Helpers.TrayIcon? _trayIcon;
+    private bool _screenshotCaptureInFlight;
 
     private static readonly UIntPtr HotkeySubclassId = new(0x5147484Bu);
     private const int SW_RESTORE = 9;
     private const int SW_HIDE = 0;
+    private const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+    private const uint BI_RGB = 0;
+    private const uint DIB_RGB_COLORS = 0;
+    private const uint SRCCOPY = 0x00CC0020;
+    private const uint CAPTUREBLT = 0x40000000;
 
     private delegate IntPtr SubclassProc(IntPtr hWnd, uint message, UIntPtr wParam, IntPtr lParam, UIntPtr subclassId, UIntPtr refData);
 
@@ -85,10 +90,77 @@ public sealed partial class MainWindow : Window
     private static extern bool SetForegroundWindow(IntPtr hWnd);
 
     [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr GetDC(IntPtr hWnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+    [DllImport("dwmapi.dll", SetLastError = true)]
+    private static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern bool DeleteDC(IntPtr hdc);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern IntPtr SelectObject(IntPtr hdc, IntPtr h);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern bool DeleteObject(IntPtr ho);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFO pbmi, uint usage, out IntPtr ppvBits, IntPtr hSection, uint offset);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern bool BitBlt(IntPtr hdcDest, int xDest, int yDest, int width, int height, IntPtr hdcSrc, int xSrc, int ySrc, uint rop);
+
+    [DllImport("user32.dll")]
     private static extern int GetDpiForWindow(IntPtr hWnd);
 
     [DllImport("user32.dll")]
     private static extern int GetSystemMetricsForDpi(int nIndex, uint dpi);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BITMAPINFOHEADER
+    {
+        public uint biSize;
+        public int biWidth;
+        public int biHeight;
+        public ushort biPlanes;
+        public ushort biBitCount;
+        public uint biCompression;
+        public uint biSizeImage;
+        public int biXPelsPerMeter;
+        public int biYPelsPerMeter;
+        public uint biClrUsed;
+        public uint biClrImportant;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BITMAPINFO
+    {
+        public BITMAPINFOHEADER bmiHeader;
+        public uint bmiColors;
+    }
+
+    private sealed record WindowPixelCapture(int Width, int Height, uint Dpi, byte[] Pixels);
 
     private bool _autoSearchOnLoad;
     private bool _launcherMode;
@@ -457,6 +529,12 @@ public sealed partial class MainWindow : Window
     {
         if (message == HotkeyService.WM_HOTKEY)
         {
+            if (_hotkeyService.RegisteredKey == 'S' && GetForegroundWindow() == _hwnd)
+            {
+                _ = CopyWindowScreenshotToClipboardAsync();
+                return IntPtr.Zero;
+            }
+
             _hotkeyService.OnWmHotkey((int)wParam);
             return IntPtr.Zero;
         }
@@ -859,29 +937,19 @@ public sealed partial class MainWindow : Window
         });
     }
 
-    private async void OnCopyWindowScreenshotClick(object sender, RoutedEventArgs e)
+    private async Task CopyWindowScreenshotToClipboardAsync()
     {
-        ScreenshotButton.IsEnabled = false;
-        var previousVisibility = ScreenshotButton.Visibility;
+        if (_screenshotCaptureInFlight)
+            return;
+
+        _screenshotCaptureInFlight = true;
 
         try
         {
-            ScreenshotButton.Visibility = Visibility.Collapsed;
             RootGrid.UpdateLayout();
             await YieldLowAsync();
 
-            var renderTarget = new RenderTargetBitmap();
-            await renderTarget.RenderAsync(RootGrid);
-
-            if (renderTarget.PixelWidth <= 0 || renderTarget.PixelHeight <= 0)
-                throw new InvalidOperationException("Window content was not ready to capture.");
-
-            var pixelBuffer = await renderTarget.GetPixelsAsync();
-            var pixels = new byte[(int)pixelBuffer.Length];
-            using (var reader = Windows.Storage.Streams.DataReader.FromBuffer(pixelBuffer))
-            {
-                reader.ReadBytes(pixels);
-            }
+            var capture = CaptureWindowPixels();
 
             var stream = new Windows.Storage.Streams.InMemoryRandomAccessStream();
             var encoder = await Windows.Graphics.Imaging.BitmapEncoder.CreateAsync(
@@ -889,12 +957,12 @@ public sealed partial class MainWindow : Window
                 stream);
             encoder.SetPixelData(
                 Windows.Graphics.Imaging.BitmapPixelFormat.Bgra8,
-                Windows.Graphics.Imaging.BitmapAlphaMode.Premultiplied,
-                (uint)renderTarget.PixelWidth,
-                (uint)renderTarget.PixelHeight,
-                96,
-                96,
-                pixels);
+                Windows.Graphics.Imaging.BitmapAlphaMode.Ignore,
+                (uint)capture.Width,
+                (uint)capture.Height,
+                capture.Dpi,
+                capture.Dpi,
+                capture.Pixels);
             await encoder.FlushAsync();
             stream.Seek(0);
 
@@ -903,7 +971,7 @@ public sealed partial class MainWindow : Window
             Clipboard.SetContent(package);
             Clipboard.Flush();
 
-            ViewModel.StatusText = $"Screenshot copied to clipboard ({renderTarget.PixelWidth:N0}x{renderTarget.PixelHeight:N0}).";
+            ViewModel.StatusText = $"Screenshot copied to clipboard ({capture.Width:N0}x{capture.Height:N0}).";
         }
         catch (Exception ex)
         {
@@ -912,9 +980,91 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
-            ScreenshotButton.Visibility = previousVisibility;
-            ScreenshotButton.IsEnabled = true;
+            _screenshotCaptureInFlight = false;
         }
+    }
+
+    private WindowPixelCapture CaptureWindowPixels()
+    {
+        if (_hwnd == IntPtr.Zero)
+            throw new InvalidOperationException("Window handle was not initialized.");
+
+        if (!TryGetVisibleWindowRect(_hwnd, out var rect))
+            throw new InvalidOperationException("Window bounds were not available.");
+
+        int width = rect.Right - rect.Left;
+        int height = rect.Bottom - rect.Top;
+        if (width <= 0 || height <= 0)
+            throw new InvalidOperationException("Window bounds were empty.");
+
+        uint dpi = (uint)Math.Max(96, GetDpiForWindow(_hwnd));
+        int stride = checked(width * 4);
+        int byteCount = checked(stride * height);
+
+        IntPtr screenDc = IntPtr.Zero;
+        IntPtr memoryDc = IntPtr.Zero;
+        IntPtr bitmap = IntPtr.Zero;
+        IntPtr oldObject = IntPtr.Zero;
+
+        try
+        {
+            screenDc = GetDC(IntPtr.Zero);
+            if (screenDc == IntPtr.Zero)
+                throw new InvalidOperationException("Screen device context was not available.");
+
+            memoryDc = CreateCompatibleDC(screenDc);
+            if (memoryDc == IntPtr.Zero)
+                throw new InvalidOperationException("Compatible device context could not be created.");
+
+            var bitmapInfo = new BITMAPINFO
+            {
+                bmiHeader = new BITMAPINFOHEADER
+                {
+                    biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(),
+                    biWidth = width,
+                    biHeight = -height,
+                    biPlanes = 1,
+                    biBitCount = 32,
+                    biCompression = BI_RGB,
+                    biSizeImage = (uint)byteCount,
+                },
+            };
+
+            bitmap = CreateDIBSection(screenDc, ref bitmapInfo, DIB_RGB_COLORS, out var bits, IntPtr.Zero, 0);
+            if (bitmap == IntPtr.Zero || bits == IntPtr.Zero)
+                throw new InvalidOperationException("Capture bitmap could not be created.");
+
+            oldObject = SelectObject(memoryDc, bitmap);
+            if (oldObject == IntPtr.Zero)
+                throw new InvalidOperationException("Capture bitmap could not be selected.");
+
+            if (!BitBlt(memoryDc, 0, 0, width, height, screenDc, rect.Left, rect.Top, SRCCOPY | CAPTUREBLT))
+                throw new InvalidOperationException("Window pixels could not be copied.");
+
+            var pixels = new byte[byteCount];
+            Marshal.Copy(bits, pixels, 0, pixels.Length);
+
+            return new WindowPixelCapture(width, height, dpi, pixels);
+        }
+        finally
+        {
+            if (oldObject != IntPtr.Zero && memoryDc != IntPtr.Zero)
+                SelectObject(memoryDc, oldObject);
+            if (bitmap != IntPtr.Zero)
+                DeleteObject(bitmap);
+            if (memoryDc != IntPtr.Zero)
+                DeleteDC(memoryDc);
+            if (screenDc != IntPtr.Zero)
+                ReleaseDC(IntPtr.Zero, screenDc);
+        }
+    }
+
+    private static bool TryGetVisibleWindowRect(IntPtr hwnd, out RECT rect)
+    {
+        if (DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, out rect, Marshal.SizeOf<RECT>()) == 0)
+            return true;
+
+        return GetWindowRect(hwnd, out rect);
     }
 
     private void RestoreQuerySuggestions(AutoSuggestBox? box = null)
@@ -1298,11 +1448,113 @@ public sealed partial class MainWindow : Window
             g.Children.Add(max);
             g.Children.Add(new TextBlock { Text = "Stops the search after this many matches. Set to 0 for no limit (memory pressure will still protect against runaway usage).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-            g.Children.Add(NextSearchLabel("Max file size to search (MB, 0 = no limit):"));
-            var size = new NumberBox { Value = ViewModel.MaxFileSizeBytes / (1024d * 1024d), Minimum = 0 };
-            size.ValueChanged += (_, args) => ViewModel.MaxFileSizeBytes = (long)(args.NewValue * 1024 * 1024);
-            g.Children.Add(size);
-            g.Children.Add(new TextBlock { Text = "Files larger than this are skipped during search. Also used by the Everything SDK to pre-filter results.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            g.Children.Add(NextSearchLabel("Default file size filter (MB):"));
+            var sizeDefaults = new Grid { ColumnSpacing = 8 };
+            sizeDefaults.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            sizeDefaults.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            var minSizePanel = new StackPanel { Spacing = 4 };
+            minSizePanel.Children.Add(new TextBlock { Text = "Minimum MB", FontSize = 12, Opacity = 0.75 });
+            var minSize = new NumberBox { Value = ViewModel.DefaultMinFileSizeMB, Minimum = 0, PlaceholderText = "0" };
+            minSize.ValueChanged += (_, args) =>
+            {
+                ViewModel.DefaultMinFileSizeMB = args.NewValue;
+                ViewModel.MinFileSizeMB = ViewModel.DefaultMinFileSizeMB;
+                ViewModel.IsFileSizeFilterEnabled = ViewModel.MinFileSizeBytes > 0 || ViewModel.MaxFileSizeBytes > 0;
+            };
+            minSizePanel.Children.Add(minSize);
+
+            var maxSizePanel = new StackPanel { Spacing = 4 };
+            maxSizePanel.Children.Add(new TextBlock { Text = "Maximum MB", FontSize = 12, Opacity = 0.75 });
+            var maxSize = new NumberBox { Value = ViewModel.DefaultMaxFileSizeMB, Minimum = 0, PlaceholderText = "0" };
+            maxSize.ValueChanged += (_, args) =>
+            {
+                ViewModel.DefaultMaxFileSizeMB = args.NewValue;
+                ViewModel.MaxFileSizeMB = ViewModel.DefaultMaxFileSizeMB;
+                ViewModel.IsFileSizeFilterEnabled = ViewModel.MinFileSizeBytes > 0 || ViewModel.MaxFileSizeBytes > 0;
+            };
+            maxSizePanel.Children.Add(maxSize);
+
+            Grid.SetColumn(minSizePanel, 0);
+            Grid.SetColumn(maxSizePanel, 1);
+            sizeDefaults.Children.Add(minSizePanel);
+            sizeDefaults.Children.Add(maxSizePanel);
+            g.Children.Add(sizeDefaults);
+            g.Children.Add(new TextBlock { Text = "Both 0 = any size. These defaults fill the Advanced Options size filter when Yagu starts; changes in Advanced Options remain temporary.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            g.Children.Add(NextSearchLabel("Default created date filter:"));
+            var createdDefaults = new Grid { ColumnSpacing = 8 };
+            createdDefaults.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            createdDefaults.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var createdAfterPanel = new StackPanel { Spacing = 4 };
+            createdAfterPanel.Children.Add(new TextBlock { Text = "Created after", FontSize = 12, Opacity = 0.75 });
+            var createdAfter = new CalendarDatePicker { Date = ViewModel.DefaultCreatedAfterDate, PlaceholderText = "Any" };
+            createdAfter.DateChanged += (_, args) =>
+            {
+                ViewModel.DefaultCreatedAfterDate = args.NewDate;
+                ViewModel.CreatedAfterDate = args.NewDate;
+            };
+            createdAfterPanel.Children.Add(createdAfter);
+            var createdBeforePanel = new StackPanel { Spacing = 4 };
+            createdBeforePanel.Children.Add(new TextBlock { Text = "Created before", FontSize = 12, Opacity = 0.75 });
+            var createdBefore = new CalendarDatePicker { Date = ViewModel.DefaultCreatedBeforeDate, PlaceholderText = "Any" };
+            createdBefore.DateChanged += (_, args) =>
+            {
+                ViewModel.DefaultCreatedBeforeDate = args.NewDate;
+                ViewModel.CreatedBeforeDate = args.NewDate;
+            };
+            createdBeforePanel.Children.Add(createdBefore);
+            Grid.SetColumn(createdAfterPanel, 0);
+            Grid.SetColumn(createdBeforePanel, 1);
+            createdDefaults.Children.Add(createdAfterPanel);
+            createdDefaults.Children.Add(createdBeforePanel);
+            g.Children.Add(createdDefaults);
+
+            g.Children.Add(NextSearchLabel("Default modified date filter:"));
+            var modifiedDefaults = new Grid { ColumnSpacing = 8 };
+            modifiedDefaults.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            modifiedDefaults.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var modifiedAfterPanel = new StackPanel { Spacing = 4 };
+            modifiedAfterPanel.Children.Add(new TextBlock { Text = "Modified after", FontSize = 12, Opacity = 0.75 });
+            var modifiedAfter = new CalendarDatePicker { Date = ViewModel.DefaultModifiedAfterDate, PlaceholderText = "Any" };
+            modifiedAfter.DateChanged += (_, args) =>
+            {
+                ViewModel.DefaultModifiedAfterDate = args.NewDate;
+                ViewModel.ModifiedAfterDate = args.NewDate;
+            };
+            modifiedAfterPanel.Children.Add(modifiedAfter);
+            var modifiedBeforePanel = new StackPanel { Spacing = 4 };
+            modifiedBeforePanel.Children.Add(new TextBlock { Text = "Modified before", FontSize = 12, Opacity = 0.75 });
+            var modifiedBefore = new CalendarDatePicker { Date = ViewModel.DefaultModifiedBeforeDate, PlaceholderText = "Any" };
+            modifiedBefore.DateChanged += (_, args) =>
+            {
+                ViewModel.DefaultModifiedBeforeDate = args.NewDate;
+                ViewModel.ModifiedBeforeDate = args.NewDate;
+            };
+            modifiedBeforePanel.Children.Add(modifiedBefore);
+            Grid.SetColumn(modifiedAfterPanel, 0);
+            Grid.SetColumn(modifiedBeforePanel, 1);
+            modifiedDefaults.Children.Add(modifiedAfterPanel);
+            modifiedDefaults.Children.Add(modifiedBeforePanel);
+            g.Children.Add(modifiedDefaults);
+            g.Children.Add(new TextBlock { Text = "Blank = any date. These defaults fill the Advanced Options date filters when Yagu starts; changes in Advanced Options remain temporary.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            var clearDateDefaults = new Button { Content = "Clear date defaults", HorizontalAlignment = HorizontalAlignment.Left };
+            clearDateDefaults.Click += (_, _) =>
+            {
+                createdAfter.Date = null;
+                createdBefore.Date = null;
+                modifiedAfter.Date = null;
+                modifiedBefore.Date = null;
+                ViewModel.DefaultCreatedAfterDate = null;
+                ViewModel.DefaultCreatedBeforeDate = null;
+                ViewModel.DefaultModifiedAfterDate = null;
+                ViewModel.DefaultModifiedBeforeDate = null;
+                ViewModel.CreatedAfterDate = null;
+                ViewModel.CreatedBeforeDate = null;
+                ViewModel.ModifiedAfterDate = null;
+                ViewModel.ModifiedBeforeDate = null;
+            };
+            g.Children.Add(clearDateDefaults);
 
             var skipBinary = new CheckBox { Content = NextSearchLabel("Skip binary files"), IsChecked = ViewModel.SkipBinary };
             skipBinary.Checked += (_, _) => ViewModel.SkipBinary = true;
@@ -2047,7 +2299,7 @@ public sealed partial class MainWindow : Window
             if (PreviewSectionsPanel.Visibility != Visibility.Visible
                 || PreviewSectionsPanel.Children.Count == 0)
             {
-                StickyFileHeader.Visibility = Visibility.Collapsed;
+                HideStickyFileHeader();
                 return;
             }
 
@@ -2056,7 +2308,7 @@ public sealed partial class MainWindow : Window
             double vpBottom = sv.ViewportHeight;
             if (vpBottom <= 0)
             {
-                StickyFileHeader.Visibility = Visibility.Collapsed;
+                HideStickyFileHeader();
                 return;
             }
 
@@ -2091,9 +2343,7 @@ public sealed partial class MainWindow : Window
             if (!anyHeaderAboveViewport || topMostInView is null
                 || !_expanderFilePaths.TryGetValue(topMostInView, out var path))
             {
-                StickyFileHeader.Visibility = Visibility.Collapsed;
-                StickyFileHeader.Child = null;
-                _stickyHeaderExpander = null;
+                HideStickyFileHeader();
                 return;
             }
 
@@ -2120,6 +2370,13 @@ public sealed partial class MainWindow : Window
             LogService.Instance.Warning("Preview",
                 $"UpdateStickyFileHeader threw: {ex.GetType().Name}: {ex.Message}");
         }
+    }
+
+    private void HideStickyFileHeader()
+    {
+        _stickyHeaderExpander = null;
+        StickyFileHeader.Child = null;
+        StickyFileHeader.Visibility = Visibility.Collapsed;
     }
 
     /// <summary>
@@ -8478,16 +8735,98 @@ public sealed partial class MainWindow : Window
 
     private void OnRootGridPreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
-        if (e.Key == Windows.System.VirtualKey.F && Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down))
+        bool ctrl = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        bool shift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+
+        if (e.Key == Windows.System.VirtualKey.S && ctrl && shift)
+        {
+            e.Handled = true;
+            _ = CopyWindowScreenshotToClipboardAsync();
+        }
+        else if (e.Key == Windows.System.VirtualKey.F && ctrl)
         {
             e.Handled = true;
             OpenFindBar(showReplace: false);
         }
-        else if (e.Key == Windows.System.VirtualKey.H && Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down))
+        else if (e.Key == Windows.System.VirtualKey.H && ctrl)
         {
             e.Handled = true;
             OpenFindBar(showReplace: true);
         }
+        else if (e.Key == Windows.System.VirtualKey.Enter
+            && !ctrl
+            && TryHandlePreviewMatchEnter(e.OriginalSource as DependencyObject, shift))
+        {
+            e.Handled = true;
+        }
+    }
+
+    private bool TryHandlePreviewMatchEnter(DependencyObject? source, bool shift)
+    {
+        if (source is null)
+            return false;
+        if (!HasNavigablePreviewMatchSurface())
+            return false;
+        if (!IsElementWithin(source, PreviewScrollViewer))
+            return false;
+        if (IsPreviewEnterReservedByFocusedControl(source))
+            return false;
+
+        if (shift)
+            OnPrevMatch(PrevMatchButton, new RoutedEventArgs());
+        else
+            OnNextMatch(NextMatchButton, new RoutedEventArgs());
+        return true;
+    }
+
+    private bool HasNavigablePreviewMatchSurface()
+    {
+        if (PreviewPanelBorder.Visibility != Visibility.Visible)
+            return false;
+        if (PreviewScrollViewer.Visibility != Visibility.Visible)
+            return false;
+        if (MatchNavPanel.Visibility != Visibility.Visible)
+            return false;
+        if (_matchParagraphs.Count + _lazyMatchCount <= 0)
+            return false;
+
+        if (PreviewSectionsPanel.Visibility == Visibility.Visible)
+            return PreviewSectionsPanel.Children.OfType<Expander>().Any(expander => expander.IsExpanded);
+
+        return PreviewBlock.Visibility == Visibility.Visible && PreviewBlock.Blocks.Count > 0;
+    }
+
+    private static bool IsElementWithin(DependencyObject source, DependencyObject ancestor)
+    {
+        for (DependencyObject? current = source; current is not null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (ReferenceEquals(current, ancestor))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsPreviewEnterReservedByFocusedControl(DependencyObject source)
+    {
+        for (DependencyObject? current = source; current is not null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (current is TextBox
+                or PasswordBox
+                or RichEditBox
+                or AutoSuggestBox
+                or NumberBox
+                or ComboBox
+                or CalendarDatePicker
+                or DatePicker
+                or TimePicker
+                or ButtonBase)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void OnOpenFindReplaceBar(object sender, RoutedEventArgs e)

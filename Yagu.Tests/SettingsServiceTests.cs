@@ -11,6 +11,14 @@ public class SettingsServiceTests
         try
         {
             var svc = new SettingsService(temp);
+            var currentCreatedAfter = new DateTimeOffset(2023, 1, 2, 0, 0, 0, TimeSpan.Zero);
+            var currentCreatedBefore = new DateTimeOffset(2023, 2, 3, 0, 0, 0, TimeSpan.Zero);
+            var currentModifiedAfter = new DateTimeOffset(2023, 3, 4, 0, 0, 0, TimeSpan.Zero);
+            var currentModifiedBefore = new DateTimeOffset(2023, 4, 5, 0, 0, 0, TimeSpan.Zero);
+            var defaultCreatedAfter = new DateTimeOffset(2024, 1, 2, 0, 0, 0, TimeSpan.Zero);
+            var defaultCreatedBefore = new DateTimeOffset(2024, 2, 3, 0, 0, 0, TimeSpan.Zero);
+            var defaultModifiedAfter = new DateTimeOffset(2024, 3, 4, 0, 0, 0, TimeSpan.Zero);
+            var defaultModifiedBefore = new DateTimeOffset(2024, 4, 5, 0, 0, 0, TimeSpan.Zero);
             var s = new AppSettings
             {
                 LastDirectory = @"D:\proj",
@@ -18,6 +26,18 @@ public class SettingsServiceTests
                 UseRegex = true,
                 ContextLines = 7,
                 EditorCommand = "code --goto \"{file}:{line}\"",
+                MinFileSizeBytes = 10,
+                MaxFileSizeBytes = 20,
+                DefaultMinFileSizeBytes = 30,
+                DefaultMaxFileSizeBytes = 40,
+                CreatedAfterDate = currentCreatedAfter,
+                CreatedBeforeDate = currentCreatedBefore,
+                ModifiedAfterDate = currentModifiedAfter,
+                ModifiedBeforeDate = currentModifiedBefore,
+                DefaultCreatedAfterDate = defaultCreatedAfter,
+                DefaultCreatedBeforeDate = defaultCreatedBefore,
+                DefaultModifiedAfterDate = defaultModifiedAfter,
+                DefaultModifiedBeforeDate = defaultModifiedBefore,
             };
             s.RecentDirectories.Add(@"D:\a");
             s.SearchHistory.Add("foo");
@@ -30,6 +50,30 @@ public class SettingsServiceTests
             Assert.False(loaded.UseRegex);
             Assert.DoesNotContain("CaseSensitive", json);
             Assert.DoesNotContain("UseRegex", json);
+            Assert.DoesNotContain("\"MinFileSizeBytes\"", json);
+            Assert.DoesNotContain("\"MaxFileSizeBytes\"", json);
+            Assert.DoesNotContain("\"CreatedAfterDate\"", json);
+            Assert.DoesNotContain("\"CreatedBeforeDate\"", json);
+            Assert.DoesNotContain("\"ModifiedAfterDate\"", json);
+            Assert.DoesNotContain("\"ModifiedBeforeDate\"", json);
+            Assert.Contains("DefaultMinFileSizeBytes", json);
+            Assert.Contains("DefaultMaxFileSizeBytes", json);
+            Assert.Contains("DefaultCreatedAfterDate", json);
+            Assert.Contains("DefaultCreatedBeforeDate", json);
+            Assert.Contains("DefaultModifiedAfterDate", json);
+            Assert.Contains("DefaultModifiedBeforeDate", json);
+            Assert.Equal(0, loaded.MinFileSizeBytes);
+            Assert.Equal(0, loaded.MaxFileSizeBytes);
+            Assert.Equal(30, loaded.DefaultMinFileSizeBytes);
+            Assert.Equal(40, loaded.DefaultMaxFileSizeBytes);
+            Assert.Null(loaded.CreatedAfterDate);
+            Assert.Null(loaded.CreatedBeforeDate);
+            Assert.Null(loaded.ModifiedAfterDate);
+            Assert.Null(loaded.ModifiedBeforeDate);
+            Assert.Equal(defaultCreatedAfter, loaded.DefaultCreatedAfterDate);
+            Assert.Equal(defaultCreatedBefore, loaded.DefaultCreatedBeforeDate);
+            Assert.Equal(defaultModifiedAfter, loaded.DefaultModifiedAfterDate);
+            Assert.Equal(defaultModifiedBefore, loaded.DefaultModifiedBeforeDate);
             Assert.Equal(7, loaded.ContextLines);
             Assert.Single(loaded.RecentDirectories);
             Assert.Single(loaded.SearchHistory);
@@ -271,6 +315,32 @@ public class SettingsServiceNewFieldTests
     {
         var s = new AppSettings();
         Assert.Equal(0, s.MaxResults);
+    }
+
+    [Fact]
+    public void Defaults_FileAndDateFilters_AreUnrestricted()
+    {
+        var settings = new AppSettings();
+        var options = new Yagu.Models.SearchOptions { Directory = ".", Query = "needle" };
+
+        Assert.Equal(0, settings.MinFileSizeBytes);
+        Assert.Equal(0, settings.MaxFileSizeBytes);
+        Assert.Equal(0, settings.DefaultMinFileSizeBytes);
+        Assert.Equal(0, settings.DefaultMaxFileSizeBytes);
+        Assert.Null(settings.CreatedAfterDate);
+        Assert.Null(settings.CreatedBeforeDate);
+        Assert.Null(settings.ModifiedAfterDate);
+        Assert.Null(settings.ModifiedBeforeDate);
+        Assert.Null(settings.DefaultCreatedAfterDate);
+        Assert.Null(settings.DefaultCreatedBeforeDate);
+        Assert.Null(settings.DefaultModifiedAfterDate);
+        Assert.Null(settings.DefaultModifiedBeforeDate);
+        Assert.Equal(0, options.MinFileSizeBytes);
+        Assert.Equal(0, options.MaxFileSizeBytes);
+        Assert.Null(options.CreatedAfterDate);
+        Assert.Null(options.CreatedBeforeDate);
+        Assert.Null(options.ModifiedAfterDate);
+        Assert.Null(options.ModifiedBeforeDate);
     }
 
     [Fact]

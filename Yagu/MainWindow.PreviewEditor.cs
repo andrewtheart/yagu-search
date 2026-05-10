@@ -153,18 +153,21 @@ public sealed partial class MainWindow
                 try
                 {
                     var fileInfo = new FileInfo(result.FilePath);
-                    if (fileInfo.Exists && fileInfo.Length > PreviewEditorMaxByteLength)
+                    if (fileInfo.Exists)
                     {
-                        var message = BuildPreviewEditorLimitMessage(
-                            result.FilePath,
-                            $"it is {FormatBytes(fileInfo.Length)}; the built-in editor limit is {FormatBytes(PreviewEditorMaxByteLength)}");
-                        LogService.Instance.Warning("Preview",
-                            $"ShowFullFileEditorAsync: blocked oversized file before load, bytes={fileInfo.Length:N0}, limit={PreviewEditorMaxByteLength:N0}, file='{result.FilePath}'");
-                        RestorePreviewSurfaceAfterEditor();
-                        ViewModel.StatusText = message;
-                        return;
+                        var preflightReason = await TryGetPreviewEditorPreflightLimitReasonAsync(fileInfo, cts.Token).ConfigureAwait(true);
+                        if (preflightReason is not null)
+                        {
+                            var message = BuildPreviewEditorLimitMessage(result.FilePath, preflightReason);
+                            LogService.Instance.Warning("Preview",
+                                $"ShowFullFileEditorAsync: blocked editor load before full read, bytes={fileInfo.Length:N0}, reason='{preflightReason}', file='{result.FilePath}'");
+                            RestorePreviewSurfaceAfterEditor();
+                            ViewModel.StatusText = message;
+                            return;
+                        }
                     }
                 }
+                catch (PreviewLoadException) { throw; }
                 catch (Exception ex)
                 {
                     LogService.Instance.Warning("Preview",
@@ -279,6 +282,71 @@ public sealed partial class MainWindow
             FullFileButton.IsEnabled = _previewResult is not null;
             UpdatePreviewEditorButtons();
         }
+    }
+
+    private async Task<string?> TryGetPreviewEditorPreflightLimitReasonAsync(FileInfo fileInfo, CancellationToken cancellationToken)
+    {
+        if (fileInfo.Length > PreviewEditorMaxByteLength)
+            return $"it is {FormatBytes(fileInfo.Length)}; the built-in editor limit is {FormatBytes(PreviewEditorMaxByteLength)}";
+
+        int maxLineLength = PreviewEditorMaxLineLength;
+        if (maxLineLength <= 0 || fileInfo.Length <= maxLineLength)
+            return null;
+
+        int? overLimitLineLength = await FindLineLengthOverLimitAsync(fileInfo.FullName, maxLineLength, cancellationToken).ConfigureAwait(false);
+        if (overLimitLineLength.HasValue)
+            return $"its longest line exceeds {maxLineLength:N0} characters; the built-in editor limit is {maxLineLength:N0}";
+
+        return null;
+    }
+
+    private static async Task<int?> FindLineLengthOverLimitAsync(string filePath, int maxLineLength, CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            bufferSize: 128 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+        int probeSize = (int)Math.Min(BinaryDetector.SampleBytes, Math.Max(0, stream.Length));
+        if (probeSize > 0)
+        {
+            var probe = new byte[probeSize];
+            int read = await stream.ReadAsync(probe.AsMemory(0, probeSize), cancellationToken).ConfigureAwait(false);
+            if (BinaryDetector.IsBinary(probe.AsSpan(0, read)))
+                throw new PreviewLoadException("Full-file editing is only available for non-binary text files.");
+        }
+
+        stream.Position = 0;
+        var encoding = EncodingDetector.DetectEncoding(stream);
+        if (encoding is UTF8Encoding)
+            encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
+        stream.Position = 0;
+
+        using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true, bufferSize: 128 * 1024, leaveOpen: false);
+        var buffer = new char[64 * 1024];
+        int currentLineLength = 0;
+        int readChars;
+        while ((readChars = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken).ConfigureAwait(false)) > 0)
+        {
+            for (int i = 0; i < readChars; i++)
+            {
+                char c = buffer[i];
+                if (c is '\r' or '\n')
+                {
+                    currentLineLength = 0;
+                    continue;
+                }
+
+                currentLineLength++;
+                if (currentLineLength > maxLineLength)
+                    return currentLineLength;
+            }
+        }
+
+        return null;
     }
 
     private bool TryGetPreviewEditorLimitReason(PreviewTextDocument document, out string reason)
@@ -616,6 +684,13 @@ public sealed partial class MainWindow
 
         if (visible)
         {
+            HideStickyFileHeader();
+            HideActiveMatchOverlay();
+            SectionNavOverlay.Visibility = Visibility.Collapsed;
+        }
+
+        if (visible)
+        {
             PreviewEditorPathText.Text = _previewEditorPath ?? string.Empty;
             ToolTipService.SetToolTip(PreviewEditorPathBar, _previewEditorPath ?? string.Empty);
         }
@@ -670,6 +745,7 @@ public sealed partial class MainWindow
 
             HighlightActiveExpander();
             UpdateSectionNavOverlay();
+            UpdateStickyFileHeader();
             return;
         }
 
@@ -683,6 +759,7 @@ public sealed partial class MainWindow
             PreviewScrollViewer.HorizontalScrollBarVisibility = ViewModel.PreviewWordWrap
                 ? ScrollBarVisibility.Disabled
                 : ScrollBarVisibility.Auto;
+            HideStickyFileHeader();
             return;
         }
 

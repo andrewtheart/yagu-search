@@ -70,8 +70,19 @@ public sealed partial class MainViewModel : ObservableObject
         PreviewContextLines = _settings.PreviewContextLines;
         IncludeGlobs = _settings.IncludeGlobs;
         ExcludeGlobs = _settings.ExcludeGlobs;
-        MinFileSizeBytes = _settings.MinFileSizeBytes;
-        MaxFileSizeBytes = _settings.MaxFileSizeBytes;
+        DefaultMinFileSizeBytes = _settings.DefaultMinFileSizeBytes;
+        DefaultMaxFileSizeBytes = _settings.DefaultMaxFileSizeBytes;
+        MinFileSizeBytes = DefaultMinFileSizeBytes;
+        MaxFileSizeBytes = DefaultMaxFileSizeBytes;
+        IsFileSizeFilterEnabled = MinFileSizeBytes > 0 || MaxFileSizeBytes > 0;
+        DefaultCreatedAfterDate = _settings.DefaultCreatedAfterDate;
+        DefaultCreatedBeforeDate = _settings.DefaultCreatedBeforeDate;
+        DefaultModifiedAfterDate = _settings.DefaultModifiedAfterDate;
+        DefaultModifiedBeforeDate = _settings.DefaultModifiedBeforeDate;
+        CreatedAfterDate = DefaultCreatedAfterDate;
+        CreatedBeforeDate = DefaultCreatedBeforeDate;
+        ModifiedAfterDate = DefaultModifiedAfterDate;
+        ModifiedBeforeDate = DefaultModifiedBeforeDate;
         MaxResults = _settings.MaxResults <= 0 ? 0 : Math.Min(_settings.MaxResults, SearchOptions.MaxResultsCeiling);
         EditorCommand = _settings.EditorCommand;
         PreviewModeIndex = _settings.PreviewModeIndex;
@@ -124,7 +135,18 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial string IncludeGlobs { get; set; } = string.Empty;
     [ObservableProperty] public partial string ExcludeGlobs { get; set; } = "node_modules;bin;obj;.git";
     [ObservableProperty] public partial long MinFileSizeBytes { get; set; }
-    [ObservableProperty] public partial long MaxFileSizeBytes { get; set; } = 100L * 1024 * 1024;
+    [ObservableProperty] public partial long MaxFileSizeBytes { get; set; }
+    [ObservableProperty] public partial long DefaultMinFileSizeBytes { get; set; }
+    [ObservableProperty] public partial long DefaultMaxFileSizeBytes { get; set; }
+    [ObservableProperty] public partial bool IsFileSizeFilterEnabled { get; set; }
+    [ObservableProperty] public partial DateTimeOffset? CreatedAfterDate { get; set; }
+    [ObservableProperty] public partial DateTimeOffset? CreatedBeforeDate { get; set; }
+    [ObservableProperty] public partial DateTimeOffset? ModifiedAfterDate { get; set; }
+    [ObservableProperty] public partial DateTimeOffset? ModifiedBeforeDate { get; set; }
+    [ObservableProperty] public partial DateTimeOffset? DefaultCreatedAfterDate { get; set; }
+    [ObservableProperty] public partial DateTimeOffset? DefaultCreatedBeforeDate { get; set; }
+    [ObservableProperty] public partial DateTimeOffset? DefaultModifiedAfterDate { get; set; }
+    [ObservableProperty] public partial DateTimeOffset? DefaultModifiedBeforeDate { get; set; }
     [ObservableProperty] public partial int MaxResults { get; set; }
     [ObservableProperty] public partial string EditorCommand { get; set; } = EditorLauncher.DefaultCommand;
     [ObservableProperty] public partial string FileNameFilter { get; set; } = string.Empty;
@@ -213,6 +235,28 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
+    public double DefaultMinFileSizeMB
+    {
+        get => DefaultMinFileSizeBytes / (1024d * 1024d);
+        set
+        {
+            long bytes = MegabytesToBytes(value);
+            if (DefaultMinFileSizeBytes != bytes)
+                DefaultMinFileSizeBytes = bytes;
+        }
+    }
+
+    public double DefaultMaxFileSizeMB
+    {
+        get => DefaultMaxFileSizeBytes / (1024d * 1024d);
+        set
+        {
+            long bytes = MegabytesToBytes(value);
+            if (DefaultMaxFileSizeBytes != bytes)
+                DefaultMaxFileSizeBytes = bytes;
+        }
+    }
+
     private static long MegabytesToBytes(double value)
     {
         if (double.IsNaN(value) || double.IsInfinity(value) || value <= 0)
@@ -224,6 +268,9 @@ public sealed partial class MainViewModel : ObservableObject
 
         return (long)Math.Round(bytes);
     }
+
+    private static bool IsDateRangeInvalid(DateTimeOffset? after, DateTimeOffset? before)
+        => after.HasValue && before.HasValue && after.Value.LocalDateTime.Date > before.Value.LocalDateTime.Date;
 
     private bool _suppressAdminWarning;
     public bool SuppressAdminWarning
@@ -571,8 +618,28 @@ public sealed partial class MainViewModel : ObservableObject
     }
     partial void OnIncludeGlobsChanged(string value) => ApplySortAndFilter();
     partial void OnExcludeGlobsChanged(string value) => ApplySortAndFilter();
-    partial void OnMinFileSizeBytesChanged(long value) => OnPropertyChanged(nameof(MinFileSizeMB));
-    partial void OnMaxFileSizeBytesChanged(long value) => OnPropertyChanged(nameof(MaxFileSizeMB));
+    partial void OnMinFileSizeBytesChanged(long value)
+    {
+        OnPropertyChanged(nameof(MinFileSizeMB));
+        if (value > 0 && !IsFileSizeFilterEnabled)
+            IsFileSizeFilterEnabled = true;
+    }
+    partial void OnMaxFileSizeBytesChanged(long value)
+    {
+        OnPropertyChanged(nameof(MaxFileSizeMB));
+        if (value > 0 && !IsFileSizeFilterEnabled)
+            IsFileSizeFilterEnabled = true;
+    }
+    partial void OnDefaultMinFileSizeBytesChanged(long value) => OnPropertyChanged(nameof(DefaultMinFileSizeMB));
+    partial void OnDefaultMaxFileSizeBytesChanged(long value) => OnPropertyChanged(nameof(DefaultMaxFileSizeMB));
+    partial void OnIsFileSizeFilterEnabledChanged(bool value)
+    {
+        if (!value)
+        {
+            MinFileSizeBytes = 0;
+            MaxFileSizeBytes = 0;
+        }
+    }
     partial void OnFileLogLevelIndexChanged(int value)
     {
         LogService.Instance.FileLevel = (LogLevel)value;
@@ -624,9 +691,23 @@ public sealed partial class MainViewModel : ObservableObject
             }
         }
 
-        if (MinFileSizeBytes > 0 && MaxFileSizeBytes > 0 && MinFileSizeBytes > MaxFileSizeBytes)
+        long effectiveMinFileSizeBytes = IsFileSizeFilterEnabled ? MinFileSizeBytes : 0;
+        long effectiveMaxFileSizeBytes = IsFileSizeFilterEnabled ? MaxFileSizeBytes : 0;
+        if (effectiveMinFileSizeBytes > 0 && effectiveMaxFileSizeBytes > 0 && effectiveMinFileSizeBytes > effectiveMaxFileSizeBytes)
         {
             ErrorText = "Minimum file size cannot be larger than maximum file size.";
+            return;
+        }
+
+        if (IsDateRangeInvalid(CreatedAfterDate, CreatedBeforeDate))
+        {
+            ErrorText = "Created after date cannot be later than created before date.";
+            return;
+        }
+
+        if (IsDateRangeInvalid(ModifiedAfterDate, ModifiedBeforeDate))
+        {
+            ErrorText = "Modified after date cannot be later than modified before date.";
             return;
         }
 
@@ -658,8 +739,12 @@ public sealed partial class MainViewModel : ObservableObject
                 SearchMode = (SearchMode)SearchModeIndex,
                 IncludeGlobs = SplitCsv(IncludeGlobs),
                 ExcludeGlobs = SplitCsv(ExcludeGlobs),
-                MinFileSizeBytes = MinFileSizeBytes,
-                MaxFileSizeBytes = MaxFileSizeBytes,
+                MinFileSizeBytes = effectiveMinFileSizeBytes,
+                MaxFileSizeBytes = effectiveMaxFileSizeBytes,
+                CreatedAfterDate = CreatedAfterDate,
+                CreatedBeforeDate = CreatedBeforeDate,
+                ModifiedAfterDate = ModifiedAfterDate,
+                ModifiedBeforeDate = ModifiedBeforeDate,
                 MaxResults = MaxResults,
                 SkipBinary = SkipBinary,
                 SkipExtensions = ParseExtensionSet(SkipExtensions),
@@ -1341,6 +1426,16 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.ExcludeGlobs = ExcludeGlobs;
         _settings.MinFileSizeBytes = MinFileSizeBytes;
         _settings.MaxFileSizeBytes = MaxFileSizeBytes;
+        _settings.CreatedAfterDate = CreatedAfterDate;
+        _settings.CreatedBeforeDate = CreatedBeforeDate;
+        _settings.ModifiedAfterDate = ModifiedAfterDate;
+        _settings.ModifiedBeforeDate = ModifiedBeforeDate;
+        _settings.DefaultMinFileSizeBytes = DefaultMinFileSizeBytes;
+        _settings.DefaultMaxFileSizeBytes = DefaultMaxFileSizeBytes;
+        _settings.DefaultCreatedAfterDate = DefaultCreatedAfterDate;
+        _settings.DefaultCreatedBeforeDate = DefaultCreatedBeforeDate;
+        _settings.DefaultModifiedAfterDate = DefaultModifiedAfterDate;
+        _settings.DefaultModifiedBeforeDate = DefaultModifiedBeforeDate;
         _settings.MaxResults = MaxResults;
         _settings.EditorCommand = EditorCommand;
         _settings.PreviewModeIndex = PreviewModeIndex;

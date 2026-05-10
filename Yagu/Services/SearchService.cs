@@ -47,31 +47,7 @@ public sealed class SearchService
         // Only clamp positive values that exceed the suggested ceiling.
         if (options.MaxResults > SearchOptions.MaxResultsCeiling)
         {
-            options = new SearchOptions
-            {
-                Directory = options.Directory,
-                Query = options.Query,
-                CaseSensitive = options.CaseSensitive,
-                UseRegex = options.UseRegex,
-                ContextLines = options.ContextLines,
-                SearchMode = options.SearchMode,
-                IncludeGlobs = options.IncludeGlobs,
-                ExcludeGlobs = options.ExcludeGlobs,
-                MinFileSizeBytes = options.MinFileSizeBytes,
-                MaxFileSizeBytes = options.MaxFileSizeBytes,
-                MaxResults = SearchOptions.MaxResultsCeiling,
-                MaxMatchesPerFile = options.MaxMatchesPerFile,
-                SkipBinary = options.SkipBinary,
-                MaxDegreeOfParallelism = options.MaxDegreeOfParallelism,
-                MaxProcessMemoryBytes = options.MaxProcessMemoryBytes,
-                MemoryPressurePercent = options.MemoryPressurePercent,
-                SkipExtensions = options.SkipExtensions,
-                SearchInsideArchives = options.SearchInsideArchives,
-                ArchiveExtensions = options.ArchiveExtensions,
-                SdkChannelBufferSize = options.SdkChannelBufferSize,
-                ExcludeAdminProtectedPaths = options.ExcludeAdminProtectedPaths,
-                AdminProtectedPathSegments = options.AdminProtectedPathSegments,
-            };
+            options = CopyOptions(options, maxResults: SearchOptions.MaxResultsCeiling);
         }
 
         var sw = Stopwatch.StartNew();
@@ -79,6 +55,8 @@ public sealed class SearchService
 
         // Validate regex up front so the UI gets a clear error.
         Regex? regex = null;
+        string? literal = null;
+        SearchOptions patternOptions = options;
         string? regexError = null;
         if (options.UseRegex)
         {
@@ -87,13 +65,35 @@ public sealed class SearchService
             try { regex = new Regex(options.Query, regexOpts); }
             catch (ArgumentException ex) { regexError = $"Invalid regex: {ex.Message}"; LogService.Instance.Warning("SearchService", regexError); }
         }
+        else
+        {
+            var literalTerms = SearchQueryParser.ParseLiteralTerms(options.Query);
+            if (literalTerms.Count == 0)
+            {
+                yield return new SearchEvent.Completed(new SearchSummary(0, 0, 0, 0, 0, 0, TimeSpan.Zero, false, false, false, null));
+                yield break;
+            }
+
+            if (literalTerms.Count > 1)
+            {
+                string alternation = SearchQueryParser.BuildLiteralAlternation(literalTerms);
+                RegexOptions regexOpts = RegexOptions.Compiled | RegexOptions.CultureInvariant;
+                if (!options.CaseSensitive) regexOpts |= RegexOptions.IgnoreCase;
+                regex = new Regex(alternation, regexOpts);
+                patternOptions = CopyOptions(options, query: alternation, useRegex: true);
+            }
+            else
+            {
+                literal = literalTerms[0];
+                patternOptions = CopyOptions(options, query: literal);
+            }
+        }
         if (regexError is not null)
         {
             yield return new SearchEvent.Error(regexError);
             yield return new SearchEvent.Completed(new SearchSummary(0, 0, 0, 0, 0, 0, sw.Elapsed, false, false, false, null));
             yield break;
         }
-        var literal = options.UseRegex ? null : options.Query;
         var cmp = options.CaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
         // Pipelined design:
@@ -114,6 +114,10 @@ public sealed class SearchService
         {
             concreteLister.EarlyMinFileSizeBytes = options.MinFileSizeBytes;
             concreteLister.EarlyMaxFileSizeBytes = options.MaxFileSizeBytes;
+            concreteLister.EarlyCreatedAfterDate = options.CreatedAfterDate;
+            concreteLister.EarlyCreatedBeforeDate = options.CreatedBeforeDate;
+            concreteLister.EarlyModifiedAfterDate = options.ModifiedAfterDate;
+            concreteLister.EarlyModifiedBeforeDate = options.ModifiedBeforeDate;
 
             // When archive search is enabled, don't let the file lister skip
             // zip-like extensions — they need to reach ContentSearcher so it
@@ -285,7 +289,7 @@ public sealed class SearchService
                     }
 
                     if (_fileLister is not FileLister
-                        && ShouldSkipByFileSize(path, options, out bool tooLarge))
+                        && ShouldSkipByFileMetadata(path, options, out bool tooLarge))
                     {
                         Interlocked.Increment(ref filesScanned);
                         Interlocked.Increment(ref filesSkipped);
@@ -393,28 +397,9 @@ public sealed class SearchService
 
                     // Pre-compute the degraded options once so we don't allocate a new
                     // SearchOptions per file inside the hot loop.
-                    var degradedOptions = options.ContextLines > 0
-                        ? new SearchOptions
-                        {
-                            Directory = options.Directory,
-                            Query = options.Query,
-                            CaseSensitive = options.CaseSensitive,
-                            UseRegex = options.UseRegex,
-                            ContextLines = 0,
-                            SearchMode = options.SearchMode,
-                            IncludeGlobs = options.IncludeGlobs,
-                            ExcludeGlobs = options.ExcludeGlobs,
-                            MaxFileSizeBytes = options.MaxFileSizeBytes,
-                            MaxResults = options.MaxResults,
-                            MaxMatchesPerFile = options.MaxMatchesPerFile,
-                            SkipBinary = options.SkipBinary,
-                            MaxDegreeOfParallelism = options.MaxDegreeOfParallelism,
-                            MaxProcessMemoryBytes = options.MaxProcessMemoryBytes,
-                            MemoryPressurePercent = options.MemoryPressurePercent,
-                            SkipExtensions = options.SkipExtensions,
-                            SearchInsideArchives = options.SearchInsideArchives,
-                        }
-                        : options;
+                    var degradedOptions = patternOptions.ContextLines > 0
+                        ? CopyOptions(patternOptions, contextLines: 0)
+                        : patternOptions;
 
                     // Local function that captures the enclosing method's locals directly
                     // (avoids the C# restriction on capturing ref params in lambdas).
@@ -491,9 +476,9 @@ public sealed class SearchService
                         Native.NativeSession? degradedSession = null;
                         try
                         {
-                            batchSession = Native.NativeSearcher.CreateSession(options.Query, options);
-                            if (options.ContextLines > 0)
-                                degradedSession = Native.NativeSearcher.CreateSession(options.Query, degradedOptions);
+                            batchSession = Native.NativeSearcher.CreateSession(patternOptions.Query, patternOptions);
+                            if (patternOptions.ContextLines > 0)
+                                degradedSession = Native.NativeSearcher.CreateSession(patternOptions.Query, degradedOptions);
 
                             if (batchSession == null)
                             {
@@ -521,7 +506,7 @@ public sealed class SearchService
                                 // Rust scanner (which would treat them as binary and skip them).
                                 async Task ScanZipViaManagedAsync(string zipFile)
                                 {
-                                    var effectiveOptions = Volatile.Read(ref degraded) != 0 ? degradedOptions : options;
+                                    var effectiveOptions = Volatile.Read(ref degraded) != 0 ? degradedOptions : patternOptions;
                                     try
                                     {
                                         var outcome = await _searcher.SearchFileWithStatsAsync(
@@ -572,7 +557,7 @@ public sealed class SearchService
                                     int batchFileCount = batch.Count;
                                     batchFlushSw.Restart();
                                     ProcessNativeBatch(batch, batchSession, degradedSession, parallelism, cancelPtr,
-                                        options, contentResults.Writer,
+                                        patternOptions, contentResults.Writer,
                                         ref filesScanned, ref filesSkipped, ref filesWithMatches, ref totalMatches,
                                         ref bytesScanned, ref truncated, ref degraded, ref contentChannelDrops,
                                         ref skipBinary, ref skipAccessDenied, ref skipIOError,
@@ -673,7 +658,7 @@ public sealed class SearchService
                         if (Native.NativeSearcher.IsAvailable)
                         {
                             sessionPool = new ThreadLocal<Native.NativeSession?>(
-                                () => Native.NativeSearcher.CreateSession(options.Query, options),
+                                () => Native.NativeSearcher.CreateSession(patternOptions.Query, patternOptions),
                                 trackAllValues: true);
                         }
                         try
@@ -685,7 +670,7 @@ public sealed class SearchService
                         }, async (file, ct) =>
                         {
                             if (Volatile.Read(ref truncated) != 0) return;
-                            var effectiveOptions = Volatile.Read(ref degraded) != 0 ? degradedOptions : options;
+                            var effectiveOptions = Volatile.Read(ref degraded) != 0 ? degradedOptions : patternOptions;
                             FileSearchOutcome outcome;
                             int produced;
                             try
@@ -919,18 +904,22 @@ public sealed class SearchService
             SkipReasons: skipReasons));
     }
 
-    private static bool ShouldSkipByFileSize(string path, SearchOptions options, out bool tooLarge)
+    private static bool ShouldSkipByFileMetadata(string path, SearchOptions options, out bool tooLarge)
     {
         tooLarge = false;
         long minBytes = Math.Max(0, options.MinFileSizeBytes);
         long maxBytes = Math.Max(0, options.MaxFileSizeBytes);
-        if (minBytes == 0 && maxBytes == 0)
+        bool hasDateFilter = options.CreatedAfterDate.HasValue
+            || options.CreatedBeforeDate.HasValue
+            || options.ModifiedAfterDate.HasValue
+            || options.ModifiedBeforeDate.HasValue;
+        if (minBytes == 0 && maxBytes == 0 && !hasDateFilter)
             return false;
 
-        long length;
+        FileMetadata metadata;
         if (FileMetadataCache.TryGet(path, out var cached))
         {
-            length = cached.Length;
+            metadata = cached;
         }
         else
         {
@@ -944,21 +933,63 @@ public sealed class SearchService
             if (!fileInfo.Exists)
                 return false;
 
-            length = fileInfo.Length;
-            FileMetadataCache.Set(path, new FileMetadata(length, fileInfo.LastWriteTime, fileInfo.CreationTime));
+            metadata = new FileMetadata(fileInfo.Length, fileInfo.LastWriteTime, fileInfo.CreationTime);
+            FileMetadataCache.Set(path, metadata);
         }
 
-        if (minBytes > 0 && length < minBytes)
+        if (minBytes > 0 && metadata.Length < minBytes)
             return true;
 
-        if (maxBytes > 0 && length > maxBytes)
+        if (maxBytes > 0 && metadata.Length > maxBytes)
         {
             tooLarge = true;
             return true;
         }
 
+        if (FileLister.IsOutsideDateRange(metadata.Created, options.CreatedAfterDate, options.CreatedBeforeDate))
+            return true;
+
+        if (FileLister.IsOutsideDateRange(metadata.LastModified, options.ModifiedAfterDate, options.ModifiedBeforeDate))
+            return true;
+
         return false;
     }
+
+    private static SearchOptions CopyOptions(
+        SearchOptions options,
+        string? query = null,
+        bool? useRegex = null,
+        int? contextLines = null,
+        int? maxResults = null)
+        => new()
+        {
+            Directory = options.Directory,
+            Query = query ?? options.Query,
+            CaseSensitive = options.CaseSensitive,
+            UseRegex = useRegex ?? options.UseRegex,
+            ContextLines = contextLines ?? options.ContextLines,
+            SearchMode = options.SearchMode,
+            IncludeGlobs = options.IncludeGlobs,
+            ExcludeGlobs = options.ExcludeGlobs,
+            MinFileSizeBytes = options.MinFileSizeBytes,
+            MaxFileSizeBytes = options.MaxFileSizeBytes,
+            CreatedAfterDate = options.CreatedAfterDate,
+            CreatedBeforeDate = options.CreatedBeforeDate,
+            ModifiedAfterDate = options.ModifiedAfterDate,
+            ModifiedBeforeDate = options.ModifiedBeforeDate,
+            MaxResults = maxResults ?? options.MaxResults,
+            MaxMatchesPerFile = options.MaxMatchesPerFile,
+            SkipBinary = options.SkipBinary,
+            MaxDegreeOfParallelism = options.MaxDegreeOfParallelism,
+            MaxProcessMemoryBytes = options.MaxProcessMemoryBytes,
+            MemoryPressurePercent = options.MemoryPressurePercent,
+            SkipExtensions = options.SkipExtensions,
+            SearchInsideArchives = options.SearchInsideArchives,
+            ArchiveExtensions = options.ArchiveExtensions,
+            SdkChannelBufferSize = options.SdkChannelBufferSize,
+            ExcludeAdminProtectedPaths = options.ExcludeAdminProtectedPaths,
+            AdminProtectedPathSegments = options.AdminProtectedPathSegments,
+        };
 
     internal static List<string> ExtractExtensions(IReadOnlyList<string> includeGlobs)
     {

@@ -96,6 +96,18 @@ public sealed class FileLister : IFileLister
     /// <summary>Files larger than this are skipped during listing. 0 disables.</summary>
     public long EarlyMaxFileSizeBytes { get; set; }
 
+    /// <summary>Files created before this date are skipped during listing. Null disables.</summary>
+    public DateTimeOffset? EarlyCreatedAfterDate { get; set; }
+
+    /// <summary>Files created after this date are skipped during listing. Null disables.</summary>
+    public DateTimeOffset? EarlyCreatedBeforeDate { get; set; }
+
+    /// <summary>Files modified before this date are skipped during listing. Null disables.</summary>
+    public DateTimeOffset? EarlyModifiedAfterDate { get; set; }
+
+    /// <summary>Files modified after this date are skipped during listing. Null disables.</summary>
+    public DateTimeOffset? EarlyModifiedBeforeDate { get; set; }
+
     /// <summary>Extensions (without dots, case-insensitive) to skip during listing (SDK path only).</summary>
     public IReadOnlySet<string> EarlySkipExtensions { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -395,6 +407,8 @@ public sealed class FileLister : IFileLister
         }
         foreach (var sizeTerm in BuildEverythingSizeFilterTerms(EarlyMinFileSizeBytes, EarlyMaxFileSizeBytes))
             query += $" {sizeTerm}";
+        foreach (var dateTerm in BuildEverythingDateFilterTerms(EarlyCreatedAfterDate, EarlyCreatedBeforeDate, EarlyModifiedAfterDate, EarlyModifiedBeforeDate))
+            query += $" {dateTerm}";
 
         // Translate exclude globs into Everything search syntax.
         // Extension globs ("*.log") → !ext:log   (already handled above for SkipExtensions)
@@ -853,6 +867,8 @@ public sealed class FileLister : IFileLister
         }
         foreach (var sizeTerm in BuildEverythingSizeFilterTerms(EarlyMinFileSizeBytes, EarlyMaxFileSizeBytes))
             args.Add(sizeTerm);
+        foreach (var dateTerm in BuildEverythingDateFilterTerms(EarlyCreatedAfterDate, EarlyCreatedBeforeDate, EarlyModifiedAfterDate, EarlyModifiedBeforeDate))
+            args.Add(dateTerm);
         if (maxFiles > 0) { args.Add("-n"); args.Add(maxFiles.ToString()); }
 
         int resultCount = await TryGetEverythingResultCountAsync(esPath, args, cancellationToken).ConfigureAwait(false);
@@ -969,6 +985,25 @@ public sealed class FileLister : IFileLister
             yield return $"size:<={maxBytes}";
     }
 
+    private static IEnumerable<string> BuildEverythingDateFilterTerms(
+        DateTimeOffset? createdAfter,
+        DateTimeOffset? createdBefore,
+        DateTimeOffset? modifiedAfter,
+        DateTimeOffset? modifiedBefore)
+    {
+        if (createdAfter.HasValue)
+            yield return $"dc:>={FormatEverythingDate(createdAfter.Value)}";
+        if (createdBefore.HasValue)
+            yield return $"dc:<={FormatEverythingDate(createdBefore.Value)}";
+        if (modifiedAfter.HasValue)
+            yield return $"dm:>={FormatEverythingDate(modifiedAfter.Value)}";
+        if (modifiedBefore.HasValue)
+            yield return $"dm:<={FormatEverythingDate(modifiedBefore.Value)}";
+    }
+
+    private static string FormatEverythingDate(DateTimeOffset date)
+        => date.LocalDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
     private static bool IsOutsideEarlyFileSizeRange(long fileSize, long minBytes, long maxBytes, out bool tooLarge)
     {
         minBytes = Math.Max(0, minBytes);
@@ -982,6 +1017,34 @@ public sealed class FileLister : IFileLister
             tooLarge = true;
             return true;
         }
+
+        return false;
+    }
+
+    private static bool IsOutsideEarlyDateRange(
+        DateTime created,
+        DateTime modified,
+        DateTimeOffset? createdAfter,
+        DateTimeOffset? createdBefore,
+        DateTimeOffset? modifiedAfter,
+        DateTimeOffset? modifiedBefore)
+    {
+        return IsOutsideDateRange(created, createdAfter, createdBefore)
+            || IsOutsideDateRange(modified, modifiedAfter, modifiedBefore);
+    }
+
+    internal static bool IsOutsideDateRange(DateTime value, DateTimeOffset? after, DateTimeOffset? before)
+    {
+        if (!after.HasValue && !before.HasValue)
+            return false;
+        if (value == default)
+            return true;
+
+        DateTime date = value.Date;
+        if (after.HasValue && date < after.Value.LocalDateTime.Date)
+            return true;
+        if (before.HasValue && date > before.Value.LocalDateTime.Date)
+            return true;
 
         return false;
     }
@@ -1124,6 +1187,11 @@ public sealed class FileLister : IFileLister
                                 Interlocked.Increment(ref _earlySkippedFiles);
                                 if (tooLarge)
                                     Interlocked.Increment(ref _earlySkippedTooLargeFiles);
+                                continue;
+                            }
+                            if (IsOutsideEarlyDateRange(fileInfo.CreationTime, fileInfo.LastWriteTime, EarlyCreatedAfterDate, EarlyCreatedBeforeDate, EarlyModifiedAfterDate, EarlyModifiedBeforeDate))
+                            {
+                                Interlocked.Increment(ref _earlySkippedFiles);
                                 continue;
                             }
                         }

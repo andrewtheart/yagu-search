@@ -20,7 +20,17 @@ public sealed class AppSettings
     [JsonIgnore] public string IncludeGlobs { get; set; } = string.Empty;
     [JsonIgnore] public string ExcludeGlobs { get; set; } = "node_modules;bin;obj;.git";
     [JsonIgnore] public long MinFileSizeBytes { get; set; }
-    [JsonIgnore] public long MaxFileSizeBytes { get; set; } = 100L * 1024 * 1024;
+    [JsonIgnore] public long MaxFileSizeBytes { get; set; }
+    [JsonIgnore] public DateTimeOffset? CreatedAfterDate { get; set; }
+    [JsonIgnore] public DateTimeOffset? CreatedBeforeDate { get; set; }
+    [JsonIgnore] public DateTimeOffset? ModifiedAfterDate { get; set; }
+    [JsonIgnore] public DateTimeOffset? ModifiedBeforeDate { get; set; }
+    public long DefaultMinFileSizeBytes { get; set; }
+    public long DefaultMaxFileSizeBytes { get; set; }
+    public DateTimeOffset? DefaultCreatedAfterDate { get; set; }
+    public DateTimeOffset? DefaultCreatedBeforeDate { get; set; }
+    public DateTimeOffset? DefaultModifiedAfterDate { get; set; }
+    public DateTimeOffset? DefaultModifiedBeforeDate { get; set; }
     public int MaxResults { get; set; } = 0;
     public string EditorCommand { get; set; } = EditorLauncher.DefaultCommand;
     public double SplitPanePosition { get; set; } = 0.5;

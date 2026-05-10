@@ -50,6 +50,7 @@
     <Compile Include="..\Yagu\Services\ContentSearcher.cs" Link="Source\Services\ContentSearcher.cs" />
     <Compile Include="..\Yagu\Services\FileMetadataCache.cs" Link="Source\Services\FileMetadataCache.cs" />
     <Compile Include="..\Yagu\Services\SearchService.cs" Link="Source\Services\SearchService.cs" />
+    <Compile Include="..\Yagu\Services\SearchQueryParser.cs" Link="Source\Services\SearchQueryParser.cs" />
     <Compile Include="..\Yagu\Services\SettingsService.cs" Link="Source\Services\SettingsService.cs" />
     <Compile Include="..\Yagu\Services\HotkeyService.cs" Link="Source\Services\HotkeyService.cs" />
     <Compile Include="..\Yagu\Services\EditorLauncher.cs" Link="Source\Services\EditorLauncher.cs" />

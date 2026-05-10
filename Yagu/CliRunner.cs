@@ -410,7 +410,8 @@ internal static class CliRunner
         bool caseSensitive  = args.CaseSensitive ?? s.CaseSensitive;
         bool useRegex       = args.UseRegex       ?? s.UseRegex;
         int  contextLines   = args.ContextLines   ?? s.ContextLines;
-        long maxFileSize    = args.MaxFileSizeBytes ?? s.MaxFileSizeBytes;
+        long minFileSize    = args.MinFileSizeBytes ?? s.DefaultMinFileSizeBytes;
+        long maxFileSize    = args.MaxFileSizeBytes ?? s.DefaultMaxFileSizeBytes;
         bool skipBinary     = args.SkipBinary     ?? s.SkipBinary;
         int  parallelism    = args.Parallelism    ?? SearchOptions.ResolveContentSearchParallelism(s.ParallelismIndex, Environment.ProcessorCount);
         long memoryBytes    = args.MemoryLimitMB.HasValue
@@ -446,7 +447,12 @@ internal static class CliRunner
             SearchMode            = args.SearchMode ?? SearchMode.Both,
             IncludeGlobs          = includeGlobs,
             ExcludeGlobs          = excludeGlobs,
+            MinFileSizeBytes      = minFileSize,
             MaxFileSizeBytes      = maxFileSize,
+            CreatedAfterDate      = s.DefaultCreatedAfterDate,
+            CreatedBeforeDate     = s.DefaultCreatedBeforeDate,
+            ModifiedAfterDate     = s.DefaultModifiedAfterDate,
+            ModifiedBeforeDate    = s.DefaultModifiedBeforeDate,
             MaxResults            = Math.Min(maxResults, SearchOptions.MaxResultsCeiling),
             MaxMatchesPerFile     = 0,
             SkipBinary            = skipBinary,
@@ -629,6 +635,7 @@ internal static class CliRunner
             FILE FILTERING:
               -g, --glob <glob>           Include files matching GLOB (repeatable).
                   --exclude-glob <glob>   Exclude files/dirs matching GLOB (repeatable).
+                  --min-filesize <size>   Skip files smaller than SIZE (e.g. 1M, 10K, 1G).
                   --max-filesize <size>   Skip files larger than SIZE (e.g. 50M, 10K, 1G).
                   --binary                Include binary files in search.
                   --no-binary             Skip binary files (default).
@@ -898,6 +905,7 @@ internal sealed class CliArgs
     public int?             ContextLines { get; private set; }
     public List<string>     IncludeGlobs { get; } = [];
     public List<string>     ExcludeGlobs { get; } = [];
+    public long?            MinFileSizeBytes { get; private set; }
     public long?            MaxFileSizeBytes { get; private set; }
     public int?             MaxResults   { get; private set; }
     public bool?            SkipBinary   { get; private set; }
@@ -964,6 +972,8 @@ internal sealed class CliArgs
                     a.SkipExtensions.Add(ext.TrimStart('.'));
                 continue;
             }
+            if (TryGetVal(raw, ref i, out v, "--min-filesize"))
+                { a.MinFileSizeBytes = ParseFileSize(v); continue; }
             if (TryGetVal(raw, ref i, out v, "--max-filesize"))
                 { a.MaxFileSizeBytes = ParseFileSize(v); continue; }
             if (TryGetVal(raw, ref i, out v, "--search-mode"))
@@ -1052,12 +1062,12 @@ internal sealed class CliArgs
     private static long ParseFileSize(string s)
     {
         s = s.Trim();
-        if (string.IsNullOrEmpty(s)) return 50L * 1024 * 1024;
+        if (string.IsNullOrEmpty(s)) return 0;
         long mul = 1;
         if      (s.EndsWith("G", StringComparison.OrdinalIgnoreCase)) { mul = 1024L * 1024 * 1024; s = s[..^1]; }
         else if (s.EndsWith("M", StringComparison.OrdinalIgnoreCase)) { mul = 1024L * 1024;         s = s[..^1]; }
         else if (s.EndsWith("K", StringComparison.OrdinalIgnoreCase)) { mul = 1024L;                s = s[..^1]; }
         else if (s.EndsWith("B", StringComparison.OrdinalIgnoreCase)) {                             s = s[..^1]; }
-        return long.TryParse(s, out var n) ? n * mul : 50L * 1024 * 1024;
+        return long.TryParse(s, out var n) ? n * mul : 0;
     }
 }

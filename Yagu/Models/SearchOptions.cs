@@ -31,7 +31,19 @@ public sealed class SearchOptions
     public long MinFileSizeBytes { get; init; }
 
     /// <summary>Files larger than this are skipped. 0 disables the upper bound.</summary>
-    public long MaxFileSizeBytes { get; init; } = 50L * 1024 * 1024;
+    public long MaxFileSizeBytes { get; init; }
+
+    /// <summary>Files created before this date are skipped. Null disables the lower bound.</summary>
+    public DateTimeOffset? CreatedAfterDate { get; init; }
+
+    /// <summary>Files created after this date are skipped. Null disables the upper bound.</summary>
+    public DateTimeOffset? CreatedBeforeDate { get; init; }
+
+    /// <summary>Files modified before this date are skipped. Null disables the lower bound.</summary>
+    public DateTimeOffset? ModifiedAfterDate { get; init; }
+
+    /// <summary>Files modified after this date are skipped. Null disables the upper bound.</summary>
+    public DateTimeOffset? ModifiedBeforeDate { get; init; }
 
     /// <summary>Stop streaming after this many matches. 0 disables.</summary>
     public int MaxResults { get; init; } = 50_000;
