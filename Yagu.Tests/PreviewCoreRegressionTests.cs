@@ -12,6 +12,8 @@ public sealed class PreviewCoreRegressionTests
     private static readonly string RepoRoot = FindRepoRoot();
     private static readonly string MainWindowSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "MainWindow.xaml.cs"));
+    private static readonly string PreviewEditorSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "MainWindow.PreviewEditor.cs"));
     private static readonly string MainWindowXaml = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "MainWindow.xaml"));
 
@@ -63,7 +65,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("_pendingPreviewFilePaths = new(StringComparer.OrdinalIgnoreCase)", MainWindowSource);
 
         string exists = ExtractMethodWindow(MainWindowSource, "PreviewSectionExists");
-        Assert.Contains("ToolTipService.GetToolTip(child)", exists);
+        Assert.Contains("_expanderFilePaths.TryGetValue(child, out var path)", exists);
         Assert.Contains("StringComparison.OrdinalIgnoreCase", exists);
 
         string prepend = ExtractMethodWindow(MainWindowSource, "PrependPreviewSectionsForFilesAsync");
@@ -87,9 +89,10 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("await YieldLowAsync();", prepend);
         Assert.Contains("PreviewSectionsPanel.Children.Insert", prepend);
 
-        string highlight = ExtractMethodWindow(MainWindowSource, "BuildHighlightSection");
+        string highlight = ExtractMethodWindow(MainWindowSource, "BuildHighlightSectionAsync");
         Assert.Contains("MaxMatchesPerSection", highlight);
         Assert.Contains("cappedResults", highlight);
+        Assert.Contains("await DispatchIdleAsync();", highlight);
         Assert.Contains("AppendHighlightMatchWindows", highlight);
         Assert.Contains("RegisterSectionOverflow", highlight);
         Assert.Contains("remaining = results.Skip(renderedCount).ToList()", highlight);
@@ -140,13 +143,16 @@ public sealed class PreviewCoreRegressionTests
     public void ActiveMatchOverlay_UsesActualOverlayCoordinatesAndWaitsForSettledScroll()
     {
         string updateOverlay = ExtractMethodWindow(MainWindowSource, "TryUpdateActiveMatchOverlayFromActualRun");
-        Assert.Contains("TransformToVisual(ActiveMatchOverlay)", updateOverlay);
+        string transform = ExtractMethodWindow(MainWindowSource, "TransformRunRectToOverlay");
+        Assert.Contains("TransformToVisual(ActiveMatchOverlay)", transform);
         Assert.Contains("TransformRunRectToOverlay(block, targetPara, rect)", updateOverlay);
         Assert.Contains("IsPreviewSectionBodySettledForActiveOverlay(block, out var layoutReason)", updateOverlay);
         Assert.Contains("targetRun.ContentEnd.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Backward)", updateOverlay);
         Assert.Contains("usedEndRect", updateOverlay);
         Assert.Contains("TryGetEstimatedWrappedMatchPoint", updateOverlay);
         Assert.Contains("bool actualPointInViewport = point.X >= 0", updateOverlay);
+        Assert.Contains("&& point.X + markerWidth <= viewportWidth", updateOverlay);
+        Assert.Contains("ClampOverlayMarkerLeft", updateOverlay);
         AssertContainsInOrder(updateOverlay,
             "bool actualPointInViewport = point.X >= 0",
             "else if (!actualPointInViewport",
@@ -158,7 +164,7 @@ public sealed class PreviewCoreRegressionTests
             "if (!actualCenterNeeded)");
         Assert.Contains("Canvas.SetTop(ActiveMatchWordMarker, overlayTop);", updateOverlay);
         Assert.Contains("Canvas.SetLeft(ActiveMatchWordMarker, markerLeft);", updateOverlay);
-        Assert.Contains("if (overlayTop < 0 || overlayTop + markerHeight > viewportHeight)", updateOverlay);
+        Assert.Contains("if (overlayTop < viewportTop || overlayTop + markerHeight > viewportBottom)", updateOverlay);
 
         Assert.Contains("<Canvas x:Name=\"ActiveMatchOverlay\"", MainWindowXaml);
         Assert.Contains("HorizontalAlignment=\"Stretch\" VerticalAlignment=\"Stretch\"", MainWindowXaml);
@@ -173,9 +179,9 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(updateOverlay,
             "var point = TransformRunRectToOverlay(block, targetPara, rect);",
             "bool actualPointInViewport = point.X >= 0",
-            "&& point.X <= viewportWidth",
-            "&& point.Y >= 0",
-            "&& point.Y + markerHeight <= viewportHeight",
+            "&& point.X + markerWidth <= viewportWidth",
+            "&& point.Y >= viewportTop",
+            "&& point.Y + markerHeight <= viewportBottom",
             "else if (!actualPointInViewport",
             "&& TryGetEstimatedWrappedMatchPoint",
             "point = estimatedPoint;");
@@ -199,19 +205,13 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void OverlayRunCoordinates_IncludeParagraphOffsetForLaterPreviewLines()
+    public void OverlayRunCoordinates_UseTextPointerBlockRelativeCoordinates()
     {
         string transform = ExtractMethodWindow(MainWindowSource, "TransformRunRectToOverlay");
         AssertContainsInOrder(transform,
-            "double paragraphOffset = GetParagraphOverlayOffset(block, targetPara);",
-            "rect.Y + paragraphOffset");
-
-        string offset = ExtractMethodWindow(MainWindowSource, "GetParagraphOverlayOffset");
-        AssertContainsInOrder(offset,
-            "int paragraphIndex = GetParagraphIndex(block, targetPara);",
-            "if (paragraphIndex <= 0)",
-            "return 0;",
-            "return GetCumulativeHeightBefore(block, paragraphIndex, lineHeight);");
+            "var transform = block.TransformToVisual(ActiveMatchOverlay);",
+            "return transform.TransformPoint(new Windows.Foundation.Point(rect.X, rect.Y));");
+        Assert.DoesNotContain("paragraphOffset", transform);
     }
 
     [Fact]
@@ -222,11 +222,59 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("int wrappedLineIndex = column / charsPerWrappedLine;", estimate);
         Assert.Contains("double expectedTop = firstPoint.Y + wrappedLineIndex * lineHeight;", estimate);
         Assert.Contains("TransformRunRectToOverlay(block, targetPara, firstRect)", estimate);
-        Assert.Contains("Math.Abs(actualPoint.Y - expectedTop) <= rowTolerance", estimate);
+        Assert.Contains("bool actualRowMatchesEstimate = Math.Abs(actualPoint.Y - expectedTop) <= rowTolerance;", estimate);
+        Assert.Contains("bool actualMarkerHorizontallyVisible = actualPoint.X >= 0", estimate);
+        Assert.Contains("if (actualRowMatchesEstimate && actualMarkerHorizontallyVisible)", estimate);
         Assert.Contains("double expectedLeft = firstPoint.X + (column % charsPerWrappedLine) * charWidth;", estimate);
-        Assert.Contains("expectedTop < actualPoint.Y - rowTolerance", estimate);
-        Assert.Contains("? actualPoint.Y", estimate);
-        Assert.Contains("estimatedPoint = new Windows.Foundation.Point", estimate);
+        Assert.Contains("double correctedLeft = ClampOverlayMarkerLeft(expectedLeft, markerWidth, viewportWidth);", estimate);
+        Assert.Contains("estimatedPoint = new Windows.Foundation.Point(correctedLeft, correctedTop);", estimate);
+    }
+
+    [Fact]
+    public void WrappedPreviewOverlay_EstimatesWhenMeasuredXIsOffscreenEvenIfRowMatches()
+    {
+        string estimate = ExtractMethodWindow(MainWindowSource, "TryGetEstimatedWrappedMatchPoint");
+
+        AssertContainsInOrder(estimate,
+            "bool actualRowMatchesEstimate = Math.Abs(actualPoint.Y - expectedTop) <= rowTolerance;",
+            "bool actualMarkerHorizontallyVisible = actualPoint.X >= 0",
+            "if (actualRowMatchesEstimate && actualMarkerHorizontallyVisible)",
+            "return false;",
+            "double expectedLeft = firstPoint.X + (column % charsPerWrappedLine) * charWidth;",
+            "double correctedTop = actualRowMatchesEstimate",
+            "double correctedLeft = ClampOverlayMarkerLeft(expectedLeft, markerWidth, viewportWidth);",
+            "estimatedPoint = new Windows.Foundation.Point(correctedLeft, correctedTop);");
+    }
+
+    [Fact]
+    public void NoWrapHorizontalMatchScroll_PrefersMeasuredRunRectOverColumnEstimate()
+    {
+        string scroll = ExtractMethodWindow(MainWindowSource, "ScrollMatchHorizontallyIntoView");
+
+        AssertContainsInOrder(scroll,
+            "double estimatedMatchStart = 8 + column * charWidth;",
+            "double matchStart = estimatedMatchStart;",
+            "string source = \"estimated\";",
+            "var rect = activeRun.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);",
+            "var measuredPoint = block.TransformToVisual(scroller)",
+            "matchStart = measuredPoint.X + scroller.HorizontalOffset;",
+            "source = \"measured\";");
+        Assert.Contains("source={source}, matchStart={matchStart:N1}, estimateStart={estimatedMatchStart:N1}", scroll);
+    }
+
+    [Fact]
+    public void NoWrapOverlay_RetriesInsteadOfClampingHorizontallyOffscreenMarker()
+    {
+        string updateOverlay = ExtractMethodWindow(MainWindowSource, "TryUpdateActiveMatchOverlayFromActualRun");
+
+        AssertContainsInOrder(updateOverlay,
+            "bool markerHorizontallyOutside = point.X < 0 || point.X + markerWidth > viewportWidth;",
+            "if (!ViewModel.PreviewWordWrap && markerHorizontallyOutside)",
+            "if (retryIfCenterRejected)",
+            "ScrollMatchHorizontallyIntoView(block, targetPara);",
+            "rejecting horizontally offscreen marker",
+            "return false;",
+            "double markerLeft = ClampOverlayMarkerLeft(point.X, markerWidth, viewportWidth);");
     }
 
     [Fact]
@@ -237,10 +285,11 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(estimate,
             "double expectedTop = firstPoint.Y + wrappedLineIndex * lineHeight;",
             "double rowTolerance = Math.Max(4, lineHeight * 0.6);",
-            "double correctedTop = expectedTop < actualPoint.Y - rowTolerance",
+            "double correctedTop = actualRowMatchesEstimate",
             "? actualPoint.Y",
-            ": expectedTop;",
-            "estimatedPoint = new Windows.Foundation.Point(Math.Max(0, expectedLeft), correctedTop);");
+            ": (expectedTop < actualPoint.Y - rowTolerance ? actualPoint.Y : expectedTop);",
+            "double correctedLeft = ClampOverlayMarkerLeft(expectedLeft, markerWidth, viewportWidth);",
+            "estimatedPoint = new Windows.Foundation.Point(correctedLeft, correctedTop);");
     }
 
     [Fact]
@@ -280,6 +329,76 @@ public sealed class PreviewCoreRegressionTests
             "_currentMatchIndex = -1;",
             "_initialMatchScrolled = false;",
             "UpdateMatchNavPanel();");
+    }
+
+    [Fact]
+    public void LargeChunkedPreviewEditor_AutoAppendsOnScrollWithoutPromptMitigation()
+    {
+        Assert.Contains("private const long PreviewEditorChunkByteLength = 10L * 1024 * 1024;", PreviewEditorSource);
+
+        string showChunked = ExtractMethodWindow(PreviewEditorSource, "ShowChunkedPreviewEditorAsync");
+        AssertContainsInOrder(showChunked,
+            "_previewEditorForcedWrap = false;",
+            "ApplyPreviewEditorWordWrap(ViewModel.PreviewWordWrap);");
+        Assert.DoesNotContain("wrapSuppressed", showChunked);
+
+        string scroll = ExtractMethodWindow(PreviewEditorSource, "OnPreviewEditorScrollViewChanged");
+        Assert.Contains("_ = LoadMorePreviewEditorChunkAsync();", scroll);
+
+        string loadMore = ExtractMethodWindow(PreviewEditorSource, "LoadMorePreviewEditorChunkAsync");
+        Assert.DoesNotContain("auto-load skipped during scroll", loadMore);
+        Assert.DoesNotContain("Use Load More", loadMore);
+        Assert.Contains("_previewEditorChunkLoadInFlight = true;", loadMore);
+    }
+
+    [Fact]
+    public void LongLinePreviewEditor_LeavesWordWrapAsUserConfigured()
+    {
+        Assert.DoesNotContain("_previewEditorWrapSuppressed", PreviewEditorSource);
+        Assert.DoesNotContain("PreviewEditorWrapDisableLineLength", PreviewEditorSource);
+
+        string showFullEditor = ExtractMethodWindow(PreviewEditorSource, "ShowFullFileEditorAsync");
+        AssertContainsInOrder(showFullEditor,
+            "_previewEditorForcedWrap = false;",
+            "ApplyPreviewEditorWordWrap(ViewModel.PreviewWordWrap);",
+            "long line loaded with user word-wrap setting");
+
+        string applyEditorWrap = ExtractMethodWindow(PreviewEditorSource, "ApplyPreviewEditorWordWrap");
+        Assert.Contains("PreviewEditor.WordWrap = wrap;", applyEditorWrap);
+
+        string applyWrap = ExtractMethodWindow(MainWindowSource, "ApplyWordWrap");
+        Assert.Contains("ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || wrap);", applyWrap);
+    }
+
+    [Fact]
+    public void TextControlBox_LongWrappedLinesUseVirtualizedRendering()
+    {
+        string textRenderer = ReadTextControlBoxSource("Core", "Renderer", "TextRenderer.cs");
+        string lineNumberRenderer = ReadTextControlBoxSource("Core", "Renderer", "LineNumberRenderer.cs");
+
+        Assert.Contains("LongWrappedLineVirtualizationThreshold", textRenderer);
+        Assert.Contains("BuildVirtualizedWrappedLineRenderData", textRenderer);
+        Assert.Contains("GetRenderedCharacterIndexForDocumentCharacter", textRenderer);
+
+        string measure = ExtractMethodWindow(textRenderer, "MeasureWrappedRowCount");
+        AssertContainsInOrder(measure,
+            "lineText.Length >= LongWrappedLineVirtualizationThreshold",
+            "return EstimateWrappedRowCount(canvasText, lineText.Length);");
+
+        string draw = ExtractMethodWindow(textRenderer, "Draw", window: 18000);
+        AssertContainsInOrder(draw,
+            "ResetVirtualizedWrappedLineState();",
+            "BuildVirtualizedWrappedLineRenderData(canvasText, NumberOfStartLine)",
+            "RenderedText = renderTextData.Text;",
+            "DrawTextOffsetY = IsVirtualizedWrappedLine",
+            "DrawnTextLayout = textLayoutManager.CreateTextResource");
+
+        string lineNumbers = ExtractMethodWindow(lineNumberRenderer, "GenerateLineNumberText");
+        AssertContainsInOrder(lineNumbers,
+            "if (textRenderer.IsVirtualizedWrappedLine)",
+            "textRenderer.WrappedStartRowOffset == 0",
+            "textRenderer.VirtualizedWrappedRowsToRender",
+            "return;");
     }
 
     private static SearchResult CreateResult(string filePath, int lineNumber) =>
@@ -327,6 +446,14 @@ public sealed class PreviewCoreRegressionTests
             Assert.True(index >= 0, $"Expected to find '{value}' after offset {cursor}.");
             cursor = index + value.Length;
         }
+    }
+
+    private static string ReadTextControlBoxSource(params string[] pathParts)
+    {
+        string textControlBoxRoot = Path.GetFullPath(Path.Combine(RepoRoot, "..", "src", "TextControlBox-WinUI", "TextControlBox"));
+        string path = Path.Combine(new[] { textControlBoxRoot }.Concat(pathParts).ToArray());
+        Assert.True(File.Exists(path), $"Expected TextControlBox source file at {path}");
+        return File.ReadAllText(path);
     }
 
     private static string FindRepoRoot()
