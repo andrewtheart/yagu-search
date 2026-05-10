@@ -54,7 +54,7 @@ public sealed partial class MainWindow
         await Task.CompletedTask;
     }
 
-    private void OnPreviewEditorTextChanged(object sender, TextChangedEventArgs e)
+    private void OnPreviewEditorTextChanged(TextControlBoxNS.TextControlBox sender)
     {
         if (_suppressPreviewEditorTextChanged) return;
         if (PreviewEditor.Visibility != Visibility.Visible) return;
@@ -204,23 +204,23 @@ public sealed partial class MainWindow
             PreviewEditor.IsReadOnly = isArchive;
 
             var text = document.Text;
-            _previewEditorForcedWrap = document.MaxLineLength >= PreviewEditorForceWrapLineLength;
-            ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || ViewModel.PreviewWordWrap);
-            if (_previewEditorForcedWrap)
+            _previewEditorForcedWrap = false;
+            ApplyPreviewEditorWordWrap(ViewModel.PreviewWordWrap);
+            if (document.MaxLineLength >= PreviewEditorForceWrapLineLength)
             {
                 LogService.Instance.Info("Preview",
-                    $"ShowFullFileEditorAsync: forcing editor word wrap for long line maxLen={document.MaxLineLength:N0}");
+                    $"ShowFullFileEditorAsync: long line loaded without soft wrap because TextControlBox does not support wrapping, maxLen={document.MaxLineLength:N0}");
             }
 
-            // Assign while collapsed so TextBox does one document load instead of
+            // Assign while collapsed so the editor does one document load instead of
             // repeatedly re-laying out an ever-growing text buffer.
             var textSetSw = System.Diagnostics.Stopwatch.StartNew();
             _suppressPreviewEditorTextChanged = true;
-            PreviewEditor.Text = text;
-            _previewEditorOriginalText = PreviewEditor.Text;
+            LoadPreviewEditorText(text);
+            _previewEditorOriginalText = GetPreviewEditorText();
             _suppressPreviewEditorTextChanged = false;
             textSetSw.Stop();
-            LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: assigned TextBox text, textLen={text.Length:N0}, elapsed={textSetSw.ElapsedMilliseconds}ms");
+            LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: assigned editor text, textLen={text.Length:N0}, elapsed={textSetSw.ElapsedMilliseconds}ms");
 
             _previewEditorDirty = false;
             UpdateEditorDirtyIndicator();
@@ -238,7 +238,7 @@ public sealed partial class MainWindow
             scrollSw.Stop();
             LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: scrolled to match line={result.LineNumber}, elapsed={scrollSw.ElapsedMilliseconds}ms");
 
-            // WinUI 3 TextBox may fire deferred TextChanged after a bulk text
+            // The editor may fire deferred TextChanged after a bulk text
             // load (line-ending normalisation, layout pass, etc.).  If that
             // sets _previewEditorDirty even though the text is unchanged,
             // clear it again so the indicator doesn't show a false positive.
@@ -247,7 +247,7 @@ public sealed partial class MainWindow
                 if (_previewEditorOriginalText is not null
                     && PreviewEditor.Visibility == Visibility.Visible
                     && _previewEditorDirty
-                    && PreviewEditor.Text == _previewEditorOriginalText)
+                    && GetPreviewEditorText() == _previewEditorOriginalText)
                 {
                     _previewEditorDirty = false;
                     UpdatePreviewEditorButtons();
@@ -319,11 +319,11 @@ public sealed partial class MainWindow
         _previewEditorTotalByteLength = chunk.TotalByteLength;
 
         PreviewEditor.IsReadOnly = false;
-        _previewEditorForcedWrap = chunk.MaxLineLength >= PreviewEditorForceWrapLineLength;
-        ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || ViewModel.PreviewWordWrap);
+        _previewEditorForcedWrap = false;
+        ApplyPreviewEditorWordWrap(ViewModel.PreviewWordWrap);
 
         _suppressPreviewEditorTextChanged = true;
-        PreviewEditor.Text = chunk.Text;
+        LoadPreviewEditorText(chunk.Text);
         _previewEditorOriginalText = null;
         _suppressPreviewEditorTextChanged = false;
         _previewEditorDirty = false;
@@ -372,7 +372,7 @@ public sealed partial class MainWindow
 
             long previousBytes = _previewEditorLoadedByteLength;
             _suppressPreviewEditorTextChanged = true;
-            PreviewEditor.Text += chunk.Text;
+            LoadPreviewEditorText(GetPreviewEditorText() + chunk.Text);
             _previewEditorOriginalText = null;
             _suppressPreviewEditorTextChanged = false;
             _previewEditorDirty = false;
@@ -536,8 +536,8 @@ public sealed partial class MainWindow
             }
         }
 
-        // TextBox uses \r\n → each line adds 2 chars. But TextBox.Text already has \r\n,
-        // so charOffset calculated above is correct. Select the matched portion.
+        // charOffset is calculated against the text we loaded into the editor.
+        // Select the matched portion.
         int selectStart = charOffset + result.MatchStartColumn;
         int selectLength = result.MatchLength;
 
@@ -545,66 +545,25 @@ public sealed partial class MainWindow
         if (selectStart > text.Length) selectStart = charOffset;
         if (selectStart + selectLength > text.Length) selectLength = 0;
 
-        // PERF: TextBox.Select() forces the text formatter to lay out the entire
-        // document up to the selection. On large files (~2 MB) this can freeze
-        // the UI thread for tens of seconds when called BEFORE any scroll has
-        // forced layout. For large texts we first scroll the TextBox's inner
-        // ScrollViewer programmatically (cheap), then apply the selection from
-        // a deferred dispatcher tick — by then layout is already settled near
-        // the target line, so Select() only has incremental work to do.
         const int LargeTextThreshold = 256 * 1024;
         if (text.Length > LargeTextThreshold)
         {
-            int targetLine = Math.Max(1, result.LineNumber);
+            int targetLineIndex = Math.Max(0, result.LineNumber - 1);
             int capturedStart = selectStart;
             int capturedLength = Math.Max(0, selectLength);
-            // Defer scrolling so the editor has a chance to render its template first
-            // (the inner ScrollViewer is created during template application).
             DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
             {
                 try
                 {
-                    var sv = EditorScrollHelper.FindFirstScrollViewerInTree(PreviewEditor);
-                    if (sv is null) return;
-                    double lineHeight = PreviewEditor.FontSize * 1.4;
-                    if (lineHeight < 1) lineHeight = 19;
-                    double targetY = (targetLine - 1) * lineHeight;
-                    double viewport = sv.ViewportHeight > 0 ? sv.ViewportHeight : 0;
-                    double centered = Math.Max(0, targetY - viewport / 2);
-                    sv.ChangeView(null, centered, null, disableAnimation: true);
-
-                    // After the scroll has forced layout near the target line,
-                    // apply the selection so the matched text is highlighted.
-                    // Run this on a subsequent dispatcher tick so ChangeView's
-                    // layout pass has time to complete; otherwise Select() may
-                    // re-trigger a snap-scroll that fights our centering.
+                    if (PreviewEditor.Visibility != Visibility.Visible) return;
+                    PreviewEditor.ScrollLineToCenter(targetLineIndex);
                     if (capturedLength > 0 && capturedStart >= 0)
                     {
-                        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
-                        {
-                            try
-                            {
-                                if (PreviewEditor.Visibility != Visibility.Visible) return;
-                                int len = PreviewEditor.Text?.Length ?? 0;
-                                int s = Math.Min(capturedStart, len);
-                                int l = Math.Min(capturedLength, Math.Max(0, len - s));
-                                PreviewEditor.Select(s, l);
-
-                                // Select() snaps the scroll so the selection is just
-                                // barely on-screen (typically near the bottom edge).
-                                // Wait for that scroll to settle, then nudge up by
-                                // (viewport/2 - lineHeight) so the match moves from
-                                // the bottom edge to the middle of the viewport.
-                                // Using a relative offset avoids depending on a
-                                // line-height estimate that doesn't match the
-                                // TextBox's actual font metrics.
-                                CenterEditorOnSelectionAfterScroll();
-                            }
-                            catch (Exception ex)
-                            {
-                                LogService.Instance.Warning("Preview", $"ScrollEditorToMatch deferred select failed: {ex.GetType().Name}: {ex.Message}");
-                            }
-                        });
+                        int len = GetPreviewEditorTextLength();
+                        int s = Math.Min(capturedStart, len);
+                        int l = Math.Min(capturedLength, Math.Max(0, len - s));
+                        SelectPreviewEditorText(s, l);
+                        PreviewEditor.ScrollLineToCenter(targetLineIndex);
                     }
                 }
                 catch (Exception ex)
@@ -615,66 +574,8 @@ public sealed partial class MainWindow
             return;
         }
 
-        // Select the match — this auto-scrolls the TextBox so the selection is
-        // just barely visible (typically at the bottom edge). Re-center after
-        // Select's auto-scroll settles.
-        PreviewEditor.Select(selectStart, Math.Max(selectLength, 0));
-        CenterEditorOnSelectionAfterScroll();
-    }
-
-    /// <summary>
-    /// After <c>TextBox.Select()</c> has snapped the selection just barely on-screen
-    /// (typically near the bottom edge), wait for the inner ScrollViewer's auto-scroll
-    /// to finish, then nudge the offset up so the selected line lands in the middle
-    /// of the viewport. Uses a relative shift (current offset − (viewport/2 − lineHeight))
-    /// rather than an absolute computed offset so we don't depend on a line-height
-    /// estimate matching the TextBox's actual font metrics.
-    /// </summary>
-    private void CenterEditorOnSelectionAfterScroll()
-    {
-        var sv = EditorScrollHelper.FindFirstScrollViewerInTree(PreviewEditor);
-        if (sv is null) return;
-
-        double lineHeight = EditorScrollHelper.EstimateLineHeight(PreviewEditor.FontSize);
-
-        void Center()
-        {
-            try
-            {
-                double newOffset = EditorScrollHelper.ComputeCenterOffset(
-                    sv.VerticalOffset, sv.ViewportHeight, sv.ScrollableHeight, lineHeight);
-                sv.ChangeView(null, newOffset, null, disableAnimation: true);
-            }
-            catch { }
-        }
-
-        // Wait for Select()'s auto-scroll to land before we re-center, otherwise
-        // our ChangeView gets clobbered by Select's pending scroll.
-        EventHandler<ScrollViewerViewChangedEventArgs>? handler = null;
-        bool centered = false;
-        handler = (_, ev) =>
-        {
-            if (ev.IsIntermediate) return;
-            sv.ViewChanged -= handler;
-            if (centered) return;
-            centered = true;
-            Center();
-        };
-        sv.ViewChanged += handler;
-
-        // Safety net: if Select didn't actually move the viewport (selection was
-        // already on-screen), ViewChanged won't fire. Run a deferred Center as a
-        // fallback after a couple of dispatcher ticks.
-        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
-        {
-            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
-            {
-                if (centered) return;
-                centered = true;
-                sv.ViewChanged -= handler;
-                Center();
-            });
-        });
+        SelectPreviewEditorText(selectStart, Math.Max(selectLength, 0));
+        PreviewEditor.ScrollLineToCenter(Math.Max(0, result.LineNumber - 1));
     }
 
     private async Task<bool> SavePreviewEditAsync()
@@ -700,7 +601,7 @@ public sealed partial class MainWindow
                 }
             }
 
-            var textToSave = PreviewEditor.Text;
+            var textToSave = GetPreviewEditorText();
             if (TextHasUnencodableCharacters(textToSave, _previewEditorEncoding))
             {
                 if (_previewEditorChunked && _previewEditorLoadedByteLength < _previewEditorTotalByteLength)
@@ -731,7 +632,7 @@ public sealed partial class MainWindow
             if (!_previewEditorChunked || _previewEditorLoadedByteLength >= _previewEditorTotalByteLength)
             {
                 // Re-validate search results for this file against the saved content.
-                bool fileStillHasMatches = ViewModel.RevalidateFileResults(_previewEditorPath, PreviewEditor.Text);
+                bool fileStillHasMatches = ViewModel.RevalidateFileResults(_previewEditorPath, GetPreviewEditorText());
                 if (!fileStillHasMatches && _previewResult?.FilePath is not null &&
                     string.Equals(_previewResult.FilePath, _previewEditorPath, StringComparison.OrdinalIgnoreCase))
                 {
@@ -872,7 +773,7 @@ public sealed partial class MainWindow
         if (clearText)
         {
             _suppressPreviewEditorTextChanged = true;
-            PreviewEditor.Text = string.Empty;
+            LoadPreviewEditorText(string.Empty);
             _suppressPreviewEditorTextChanged = false;
         }
 
@@ -905,6 +806,7 @@ public sealed partial class MainWindow
 
         // Hide view/action buttons while editing
         FullFileButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+        WordWrapToggle.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
         OpenInDefaultAppButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
         OpenInEditorButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
         ShowInExplorerButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
@@ -918,11 +820,8 @@ public sealed partial class MainWindow
 
     private void ApplyPreviewEditorWordWrap(bool wrap)
     {
-        var wrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
-        var horizontalBar = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
-        if (PreviewEditor.TextWrapping != wrapping)
-            PreviewEditor.TextWrapping = wrapping;
-        ScrollViewer.SetHorizontalScrollBarVisibility(PreviewEditor, horizontalBar);
+        // TextControlBox does not support soft wrapping. Keep this method so
+        // existing editor-mode visibility code can call it without special cases.
     }
 
     private void UpdatePreviewEditorChunkUi()
@@ -1048,12 +947,30 @@ public sealed partial class MainWindow
     /// <summary>
     /// Returns true only if the editor text actually differs from the
     /// originally-loaded content.  This avoids false positives caused by
-    /// WinUI 3 TextBox raising deferred TextChanged events after a bulk load.
+    /// the editor raising deferred TextChanged events after a bulk load.
     /// </summary>
     private bool HasRealEditorChanges() =>
         _previewEditorDirty
         && (_previewEditorChunked
-            || (_previewEditorOriginalText is not null && PreviewEditor.Text != _previewEditorOriginalText));
+            || (_previewEditorOriginalText is not null && GetPreviewEditorText() != _previewEditorOriginalText));
+
+    private string GetPreviewEditorText() => PreviewEditor.GetText();
+
+    private int GetPreviewEditorTextLength() => (int)Math.Min(int.MaxValue, PreviewEditor.CharacterCount());
+
+    private void LoadPreviewEditorText(string text)
+    {
+        PreviewEditor.LoadText(text, autodetectTabsSpaces: false);
+        PreviewEditor.ClearUndoRedoHistory();
+    }
+
+    private void SelectPreviewEditorText(int start, int length)
+    {
+        int textLength = GetPreviewEditorTextLength();
+        int clampedStart = Math.Clamp(start, 0, textLength);
+        int clampedLength = Math.Clamp(length, 0, Math.Max(0, textLength - clampedStart));
+        PreviewEditor.SetSelection(clampedStart, clampedLength);
+    }
 
     private void UpdatePreviewEditorButtons()
     {

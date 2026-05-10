@@ -47,6 +47,7 @@
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.*" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.*" />
     <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.*" />
+    <PackageReference Include="TextControlBox.WinUI.JuliusKirsch" Version="1.6.0" />
   </ItemGroup>
 
   <ItemGroup>

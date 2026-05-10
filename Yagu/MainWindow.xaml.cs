@@ -5626,7 +5626,7 @@ public sealed partial class MainWindow : Window
     }
 
     // EnterPreviewEditorAtPointAsync, ResolveLineNumberAtPointer, ShowFullFileEditorAsync,
-    // ScrollEditorToMatch, CenterEditorOnSelectionAfterScroll moved to MainWindow.PreviewEditor.cs.
+    // and ScrollEditorToMatch moved to MainWindow.PreviewEditor.cs.
 
     private static async Task<PreviewTextDocument> LoadPreviewDocumentAsync(string filePath, CancellationToken cancellationToken, bool enforceLimit = true)
     {
@@ -8733,7 +8733,7 @@ public sealed partial class MainWindow : Window
 
     // ── Find / Replace bar ─────────────────────────────────────────────
 
-    private int _findIndex = -1; // last match start index in PreviewEditor.Text
+    private int _findIndex = -1; // last match start index in the editor text
 
     private void OnRootGridPreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
@@ -8924,7 +8924,7 @@ public sealed partial class MainWindow : Window
     private StringComparison FindComparison =>
         FindMatchCaseCheckBox.IsChecked == true ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
-    private string FindTarget => PreviewEditor.Visibility == Visibility.Visible ? PreviewEditor.Text : GetPreviewBlockText();
+    private string FindTarget => PreviewEditor.Visibility == Visibility.Visible ? GetPreviewEditorText() : GetPreviewBlockText();
 
     private string GetPreviewBlockText()
     {
@@ -9010,7 +9010,7 @@ public sealed partial class MainWindow : Window
         if (PreviewEditor.Visibility == Visibility.Visible)
         {
             PreviewEditor.Focus(FocusState.Programmatic);
-            PreviewEditor.Select(index, length);
+            SelectPreviewEditorText(index, length);
         }
     }
 
@@ -9035,13 +9035,29 @@ public sealed partial class MainWindow : Window
         var needle = FindTextBox.Text;
         if (string.IsNullOrEmpty(needle)) return;
 
-        // If the current selection matches the needle, replace it; otherwise find next first
-        if (PreviewEditor.SelectedText.Equals(needle, FindComparison))
+        var text = GetPreviewEditorText();
+        int replaceAt = _findIndex;
+        if (replaceAt < 0
+            || replaceAt + needle.Length > text.Length
+            || !text.AsSpan(replaceAt, needle.Length).Equals(needle.AsSpan(), FindComparison))
         {
-            int selStart = PreviewEditor.SelectionStart;
-            PreviewEditor.SelectedText = ReplaceTextBox.Text;
-            _findIndex = selStart;
+            replaceAt = text.IndexOf(needle, FindComparison);
+            if (replaceAt < 0)
+            {
+                FindStatusText.Text = "No matches";
+                return;
+            }
         }
+
+        var replacement = ReplaceTextBox.Text;
+        var updated = text.Remove(replaceAt, needle.Length).Insert(replaceAt, replacement);
+        _suppressPreviewEditorTextChanged = true;
+        LoadPreviewEditorText(updated);
+        _suppressPreviewEditorTextChanged = false;
+        _previewEditorDirty = true;
+        _findIndex = replaceAt;
+        SelectFindMatch(replaceAt, replacement.Length);
+        UpdatePreviewEditorButtons();
         FindNext();
     }
 
@@ -9052,7 +9068,7 @@ public sealed partial class MainWindow : Window
         if (string.IsNullOrEmpty(needle)) return;
 
         var replacement = ReplaceTextBox.Text;
-        var text = PreviewEditor.Text;
+        var text = GetPreviewEditorText();
         var sb = new StringBuilder(text.Length);
         int count = 0;
         int pos = 0;
@@ -9069,7 +9085,7 @@ public sealed partial class MainWindow : Window
         if (count > 0)
         {
             _suppressPreviewEditorTextChanged = true;
-            PreviewEditor.Text = sb.ToString();
+            LoadPreviewEditorText(sb.ToString());
             _suppressPreviewEditorTextChanged = false;
             _previewEditorDirty = true;
             UpdatePreviewEditorButtons();
