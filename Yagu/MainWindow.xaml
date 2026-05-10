@@ -1036,6 +1036,7 @@
                         <Grid x:Name="PreviewEditorContainer" Grid.Row="1" Visibility="Collapsed">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
                             <Border x:Name="PreviewEditorPathBar" Grid.Row="0"
@@ -1049,7 +1050,28 @@
                                                TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                                 </StackPanel>
                             </Border>
-                            <TextBox x:Name="PreviewEditor" Grid.Row="1" Visibility="Collapsed" FontFamily="Consolas, Cascadia Mono, Segoe UI, Segoe UI Symbol, Segoe UI Emoji"
+                            <Border x:Name="PreviewEditorChunkPanel" Grid.Row="1" Visibility="Collapsed"
+                                    Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="0,0,0,1"
+                                    Padding="12,6">
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="PreviewEditorChunkStatusText" FontSize="12" Opacity="0.75"
+                                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                    <Button x:Name="LoadMorePreviewEditorChunkButton" Grid.Column="1"
+                                            Click="OnLoadMorePreviewEditorChunk" FontSize="12" Padding="8,4">
+                                        <StackPanel Orientation="Horizontal" Spacing="4">
+                                            <FontIcon Glyph="&#xE70D;" FontSize="12" />
+                                            <TextBlock Text="Load More" />
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
+                            </Border>
+                            <TextBox x:Name="PreviewEditor" Grid.Row="2" Visibility="Collapsed" FontFamily="Consolas, Cascadia Mono, Segoe UI, Segoe UI Symbol, Segoe UI Emoji"
                                      AcceptsReturn="True" TextWrapping="NoWrap"
                                      ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto"
                                      Padding="16,12" IsSpellCheckEnabled="False" IsTextPredictionEnabled="False"

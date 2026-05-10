@@ -5773,6 +5773,8 @@ public sealed partial class MainWindow : Window
 
     private sealed record PreviewTextDocument(string Text, Encoding Encoding, long ByteLength, int MaxLineLength);
 
+    private sealed record PreviewEditorChunk(string Text, Encoding Encoding, long TotalByteLength, long NextByteOffset, int MaxLineLength);
+
     private sealed record FullFilePreviewTarget(string FilePath, List<SearchResult> Matches);
 
     private sealed class PreviewLoadException(string message) : Exception(message);

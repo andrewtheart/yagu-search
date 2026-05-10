@@ -24,14 +24,26 @@ namespace Yagu;
 public sealed partial class MainWindow
 {
     private const int PreviewEditorForceWrapLineLength = 50_000;
+    private const long PreviewEditorChunkByteLength = 10L * 1024 * 1024;
     private long PreviewEditorMaxByteLength => (long)ViewModel.PreviewEditorMaxSizeMB * 1024 * 1024;
     private int PreviewEditorMaxTextLength => ViewModel.PreviewEditorMaxTextLength;
     private int PreviewEditorMaxLineLength => ViewModel.PreviewEditorMaxLineLength;
     private bool _previewEditorForcedWrap;
+    private bool _previewEditorChunked;
+    private bool _previewEditorChunkLoadInFlight;
+    private long _previewEditorLoadedByteLength;
+    private long _previewEditorTotalByteLength;
+    private Encoding? _previewEditorChunkEncoding;
+    private ScrollViewer? _previewEditorScrollViewer;
 
     private async void OnSavePreviewEdit(object sender, RoutedEventArgs e)
     {
         await SavePreviewEditAsync();
+    }
+
+    private async void OnLoadMorePreviewEditorChunk(object sender, RoutedEventArgs e)
+    {
+        await LoadMorePreviewEditorChunkAsync(force: true);
     }
 
     private async void OnClosePreviewEdit(object sender, RoutedEventArgs e)
@@ -155,14 +167,9 @@ public sealed partial class MainWindow
                     var fileInfo = new FileInfo(result.FilePath);
                     if (fileInfo.Exists)
                     {
-                        var preflightReason = await TryGetPreviewEditorPreflightLimitReasonAsync(fileInfo, cts.Token).ConfigureAwait(true);
-                        if (preflightReason is not null)
+                        if (ShouldUseChunkedPreviewEditor(fileInfo))
                         {
-                            var message = BuildPreviewEditorLimitMessage(result.FilePath, preflightReason);
-                            LogService.Instance.Warning("Preview",
-                                $"ShowFullFileEditorAsync: blocked editor load before full read, bytes={fileInfo.Length:N0}, reason='{preflightReason}', file='{result.FilePath}'");
-                            RestorePreviewSurfaceAfterEditor();
-                            ViewModel.StatusText = message;
+                            await ShowChunkedPreviewEditorAsync(result, fileInfo, cts.Token).ConfigureAwait(true);
                             return;
                         }
                     }
@@ -171,7 +178,7 @@ public sealed partial class MainWindow
                 catch (Exception ex)
                 {
                     LogService.Instance.Warning("Preview",
-                        $"ShowFullFileEditorAsync: could not preflight editor file size: {ex.GetType().Name}: {ex.Message}");
+                        $"ShowFullFileEditorAsync: could not preflight editor file: {ex.GetType().Name}: {ex.Message}");
                 }
             }
 
@@ -190,6 +197,7 @@ public sealed partial class MainWindow
 
             _previewEditorPath = result.FilePath;
             _previewEditorEncoding = document.Encoding;
+            ResetPreviewEditorChunkState(clearUi: false);
 
             // Archive entries are read-only (cannot save back into zip)
             bool isArchive = ZipArchiveSearcher.IsArchivePath(result.FilePath);
@@ -284,23 +292,121 @@ public sealed partial class MainWindow
         }
     }
 
-    private async Task<string?> TryGetPreviewEditorPreflightLimitReasonAsync(FileInfo fileInfo, CancellationToken cancellationToken)
+    private bool ShouldUseChunkedPreviewEditor(FileInfo fileInfo)
+        => fileInfo.Length > PreviewEditorChunkByteLength
+            || fileInfo.Length > PreviewEditorMaxByteLength
+            || fileInfo.Length > PreviewEditorMaxTextLength
+            || (PreviewEditorMaxLineLength > 0 && fileInfo.Length > PreviewEditorMaxLineLength);
+
+    private async Task ShowChunkedPreviewEditorAsync(SearchResult result, FileInfo fileInfo, CancellationToken cancellationToken)
     {
-        if (fileInfo.Length > PreviewEditorMaxByteLength)
-            return $"it is {FormatBytes(fileInfo.Length)}; the built-in editor limit is {FormatBytes(PreviewEditorMaxByteLength)}";
+        var chunkSw = System.Diagnostics.Stopwatch.StartNew();
+        var chunk = await LoadPreviewEditorChunkAsync(
+            result.FilePath,
+            offset: 0,
+            maxBytes: PreviewEditorChunkByteLength,
+            encoding: null,
+            cancellationToken).ConfigureAwait(true);
 
-        int maxLineLength = PreviewEditorMaxLineLength;
-        if (maxLineLength <= 0 || fileInfo.Length <= maxLineLength)
-            return null;
+        if (cancellationToken.IsCancellationRequested)
+            return;
 
-        int? overLimitLineLength = await FindLineLengthOverLimitAsync(fileInfo.FullName, maxLineLength, cancellationToken).ConfigureAwait(false);
-        if (overLimitLineLength.HasValue)
-            return $"its longest line exceeds {maxLineLength:N0} characters; the built-in editor limit is {maxLineLength:N0}";
+        _previewEditorPath = result.FilePath;
+        _previewEditorEncoding = chunk.Encoding;
+        _previewEditorChunkEncoding = chunk.Encoding;
+        _previewEditorChunked = true;
+        _previewEditorLoadedByteLength = chunk.NextByteOffset;
+        _previewEditorTotalByteLength = chunk.TotalByteLength;
 
-        return null;
+        PreviewEditor.IsReadOnly = false;
+        _previewEditorForcedWrap = chunk.MaxLineLength >= PreviewEditorForceWrapLineLength;
+        ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || ViewModel.PreviewWordWrap);
+
+        _suppressPreviewEditorTextChanged = true;
+        PreviewEditor.Text = chunk.Text;
+        _previewEditorOriginalText = null;
+        _suppressPreviewEditorTextChanged = false;
+        _previewEditorDirty = false;
+        UpdateEditorDirtyIndicator();
+
+        SetPreviewEditorVisible(true);
+        PreviewEditor.Focus(FocusState.Programmatic);
+        ScrollEditorToMatch(chunk.Text, result);
+        UpdatePreviewEditorChunkUi();
+        HookPreviewEditorChunkScroll();
+
+        chunkSw.Stop();
+        LogService.Instance.Info("Preview",
+            $"ShowChunkedPreviewEditorAsync: loaded first chunk file='{fileInfo.Name}', totalBytes={fileInfo.Length:N0}, loadedBytes={_previewEditorLoadedByteLength:N0}, textLen={chunk.Text.Length:N0}, elapsed={chunkSw.ElapsedMilliseconds}ms");
+        ViewModel.StatusText = $"Loaded {FormatBytes(_previewEditorLoadedByteLength)} of {FormatBytes(_previewEditorTotalByteLength)} for editing.";
     }
 
-    private static async Task<int?> FindLineLengthOverLimitAsync(string filePath, int maxLineLength, CancellationToken cancellationToken)
+    private async Task LoadMorePreviewEditorChunkAsync(bool force = false)
+    {
+        if (!_previewEditorChunked || _previewEditorPath is null || _previewEditorEncoding is null)
+            return;
+        if (_previewEditorChunkLoadInFlight || _previewEditorLoadedByteLength >= _previewEditorTotalByteLength)
+            return;
+        if (_previewEditorDirty)
+        {
+            ViewModel.StatusText = "Save or close current edits before loading more of this file.";
+            return;
+        }
+
+        _previewEditorChunkLoadInFlight = true;
+        UpdatePreviewEditorChunkUi();
+        var cts = new CancellationTokenSource();
+        _previewLoadCts = cts;
+
+        try
+        {
+            var chunk = await LoadPreviewEditorChunkAsync(
+                _previewEditorPath,
+                _previewEditorLoadedByteLength,
+                PreviewEditorChunkByteLength,
+                _previewEditorChunkEncoding ?? _previewEditorEncoding,
+                cts.Token).ConfigureAwait(true);
+
+            if (cts.IsCancellationRequested || chunk.Text.Length == 0)
+                return;
+
+            long previousBytes = _previewEditorLoadedByteLength;
+            _suppressPreviewEditorTextChanged = true;
+            PreviewEditor.Text += chunk.Text;
+            _previewEditorOriginalText = null;
+            _suppressPreviewEditorTextChanged = false;
+            _previewEditorDirty = false;
+            _previewEditorLoadedByteLength = chunk.NextByteOffset;
+            _previewEditorTotalByteLength = chunk.TotalByteLength;
+            _previewEditorChunkEncoding = chunk.Encoding;
+
+            LogService.Instance.Info("Preview",
+                $"LoadMorePreviewEditorChunkAsync: appended chunk file='{Path.GetFileName(_previewEditorPath)}', fromBytes={previousBytes:N0}, toBytes={_previewEditorLoadedByteLength:N0}, textLen={chunk.Text.Length:N0}");
+            ViewModel.StatusText = $"Loaded {FormatBytes(_previewEditorLoadedByteLength)} of {FormatBytes(_previewEditorTotalByteLength)} for editing.";
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("Preview", "Could not load more editor text", ex);
+            ViewModel.StatusText = $"Could not load more editor text: {ex.Message}";
+        }
+        finally
+        {
+            if (ReferenceEquals(_previewLoadCts, cts))
+                _previewLoadCts = null;
+            cts.Dispose();
+            _previewEditorChunkLoadInFlight = false;
+            UpdatePreviewEditorChunkUi();
+            UpdatePreviewEditorButtons();
+        }
+    }
+
+    private static async Task<PreviewEditorChunk> LoadPreviewEditorChunkAsync(
+        string filePath,
+        long offset,
+        long maxBytes,
+        Encoding? encoding,
+        CancellationToken cancellationToken)
     {
         await using var stream = new FileStream(
             filePath,
@@ -310,43 +416,75 @@ public sealed partial class MainWindow
             bufferSize: 128 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
 
-        int probeSize = (int)Math.Min(BinaryDetector.SampleBytes, Math.Max(0, stream.Length));
-        if (probeSize > 0)
-        {
-            var probe = new byte[probeSize];
-            int read = await stream.ReadAsync(probe.AsMemory(0, probeSize), cancellationToken).ConfigureAwait(false);
-            if (BinaryDetector.IsBinary(probe.AsSpan(0, read)))
-                throw new PreviewLoadException("Full-file editing is only available for non-binary text files.");
-        }
+        long totalBytes = stream.Length;
+        if (offset < 0 || offset > totalBytes)
+            throw new PreviewLoadException("Could not load editor chunk: the saved file changed on disk.");
 
-        stream.Position = 0;
-        var encoding = EncodingDetector.DetectEncoding(stream);
-        if (encoding is UTF8Encoding)
-            encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
-        stream.Position = 0;
-
-        using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true, bufferSize: 128 * 1024, leaveOpen: false);
-        var buffer = new char[64 * 1024];
-        int currentLineLength = 0;
-        int readChars;
-        while ((readChars = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken).ConfigureAwait(false)) > 0)
+        if (offset == 0)
         {
-            for (int i = 0; i < readChars; i++)
+            int probeSize = (int)Math.Min(BinaryDetector.SampleBytes, Math.Max(0, totalBytes));
+            if (probeSize > 0)
             {
-                char c = buffer[i];
-                if (c is '\r' or '\n')
-                {
-                    currentLineLength = 0;
-                    continue;
-                }
+                var probe = new byte[probeSize];
+                int probeRead = await stream.ReadAsync(probe.AsMemory(0, probeSize), cancellationToken).ConfigureAwait(false);
+                if (BinaryDetector.IsBinary(probe.AsSpan(0, probeRead)))
+                    throw new PreviewLoadException("Full-file editing is only available for non-binary text files.");
 
-                currentLineLength++;
-                if (currentLineLength > maxLineLength)
-                    return currentLineLength;
+                encoding ??= NormalizePreviewEncoding(EncodingDetector.DetectEncoding(probe.AsSpan(0, probeRead)));
+                offset = GetBomLength(probe.AsSpan(0, probeRead));
             }
         }
 
-        return null;
+        encoding ??= NormalizePreviewEncoding(Encoding.UTF8);
+        stream.Position = offset;
+
+        int bytesToRead = (int)Math.Min(Math.Max(0, totalBytes - offset), maxBytes + 8);
+        if (bytesToRead == 0)
+            return new PreviewEditorChunk(string.Empty, encoding, totalBytes, offset, 0);
+
+        var bytes = new byte[bytesToRead];
+        int bytesRead = 0;
+        while (bytesRead < bytes.Length)
+        {
+            int read = await stream.ReadAsync(bytes.AsMemory(bytesRead, bytes.Length - bytesRead), cancellationToken).ConfigureAwait(false);
+            if (read == 0) break;
+            bytesRead += read;
+        }
+
+        var decoder = encoding.GetDecoder();
+        var chars = new char[encoding.GetMaxCharCount(bytesRead)];
+        decoder.Convert(
+            bytes,
+            0,
+            bytesRead,
+            chars,
+            0,
+            chars.Length,
+            flush: offset + bytesRead >= totalBytes,
+            out int bytesUsed,
+            out int charsUsed,
+            out _);
+
+        if (bytesUsed == 0 && bytesRead > 0)
+            throw new PreviewLoadException("Could not decode the next editor chunk.");
+
+        string text = new(chars, 0, charsUsed);
+        return new PreviewEditorChunk(text, encoding, totalBytes, offset + bytesUsed, GetMaxLineLength(text));
+    }
+
+    private static Encoding NormalizePreviewEncoding(Encoding encoding)
+        => encoding is UTF8Encoding
+            ? new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false)
+            : encoding;
+
+    private static int GetBomLength(ReadOnlySpan<byte> header)
+    {
+        if (header.Length >= 3 && header[0] == 0xEF && header[1] == 0xBB && header[2] == 0xBF) return 3;
+        if (header.Length >= 4 && header[0] == 0xFF && header[1] == 0xFE && header[2] == 0 && header[3] == 0) return 4;
+        if (header.Length >= 4 && header[0] == 0 && header[1] == 0 && header[2] == 0xFE && header[3] == 0xFF) return 4;
+        if (header.Length >= 2 && header[0] == 0xFF && header[1] == 0xFE) return 2;
+        if (header.Length >= 2 && header[0] == 0xFE && header[1] == 0xFF) return 2;
+        return 0;
     }
 
     private bool TryGetPreviewEditorLimitReason(PreviewTextDocument document, out string reason)
@@ -565,6 +703,12 @@ public sealed partial class MainWindow
             var textToSave = PreviewEditor.Text;
             if (TextHasUnencodableCharacters(textToSave, _previewEditorEncoding))
             {
+                if (_previewEditorChunked && _previewEditorLoadedByteLength < _previewEditorTotalByteLength)
+                {
+                    ViewModel.StatusText = "Could not save: loaded edits contain characters that cannot be written with the original encoding.";
+                    return false;
+                }
+
                 var encDialog = new ContentDialog
                 {
                     XamlRoot = ((FrameworkElement)Content).XamlRoot,
@@ -579,17 +723,20 @@ public sealed partial class MainWindow
                 _previewEditorEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
             }
 
-            await File.WriteAllTextAsync(_previewEditorPath, textToSave, _previewEditorEncoding).ConfigureAwait(true);
-            _previewEditorOriginalText = textToSave;
+            await SavePreviewEditorTextToDiskAsync(textToSave).ConfigureAwait(true);
+            _previewEditorOriginalText = _previewEditorChunked ? null : textToSave;
             _previewEditorDirty = false;
             UpdatePreviewEditorButtons();
 
-            // Re-validate search results for this file against the saved content.
-            bool fileStillHasMatches = ViewModel.RevalidateFileResults(_previewEditorPath, PreviewEditor.Text);
-            if (!fileStillHasMatches && _previewResult?.FilePath is not null &&
-                string.Equals(_previewResult.FilePath, _previewEditorPath, StringComparison.OrdinalIgnoreCase))
+            if (!_previewEditorChunked || _previewEditorLoadedByteLength >= _previewEditorTotalByteLength)
             {
-                _previewResult = null;
+                // Re-validate search results for this file against the saved content.
+                bool fileStillHasMatches = ViewModel.RevalidateFileResults(_previewEditorPath, PreviewEditor.Text);
+                if (!fileStillHasMatches && _previewResult?.FilePath is not null &&
+                    string.Equals(_previewResult.FilePath, _previewEditorPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    _previewResult = null;
+                }
             }
 
             ViewModel.StatusText = $"Saved {_previewEditorPath}.";
@@ -605,6 +752,61 @@ public sealed partial class MainWindow
         finally
         {
             UpdatePreviewEditorButtons();
+        }
+    }
+
+    private async Task SavePreviewEditorTextToDiskAsync(string textToSave)
+    {
+        if (_previewEditorPath is null || _previewEditorEncoding is null)
+            return;
+
+        if (!_previewEditorChunked)
+        {
+            await File.WriteAllTextAsync(_previewEditorPath, textToSave, _previewEditorEncoding).ConfigureAwait(true);
+            return;
+        }
+
+        var tempPath = _previewEditorPath + $".yagutmp-{Guid.NewGuid():N}";
+        long encodedLoadedBytes = 0;
+        try
+        {
+            await using (var output = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                await using (var writer = new StreamWriter(output, _previewEditorEncoding, bufferSize: 128 * 1024, leaveOpen: true))
+                {
+                    await writer.WriteAsync(textToSave).ConfigureAwait(false);
+                    await writer.FlushAsync().ConfigureAwait(false);
+                }
+
+                encodedLoadedBytes = output.Position;
+
+                if (_previewEditorLoadedByteLength < _previewEditorTotalByteLength)
+                {
+                    await using var input = new FileStream(
+                        _previewEditorPath,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete,
+                        bufferSize: 128 * 1024,
+                        FileOptions.Asynchronous | FileOptions.SequentialScan);
+                    input.Position = _previewEditorLoadedByteLength;
+                    await input.CopyToAsync(output).ConfigureAwait(false);
+                }
+            }
+
+            File.Move(tempPath, _previewEditorPath, overwrite: true);
+            _previewEditorLoadedByteLength = encodedLoadedBytes;
+            _previewEditorTotalByteLength = new FileInfo(_previewEditorPath).Length;
+            UpdatePreviewEditorChunkUi();
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempPath))
+                    File.Delete(tempPath);
+            }
+            catch { }
         }
     }
 
@@ -665,6 +867,7 @@ public sealed partial class MainWindow
         _previewEditorDirty = false;
         _previewEditorOriginalText = null;
         _previewEditorForcedWrap = false;
+        ResetPreviewEditorChunkState();
 
         if (clearText)
         {
@@ -710,6 +913,7 @@ public sealed partial class MainWindow
         if (visible)
             PreviewToolbarContent.Visibility = Visibility.Visible;
         ApplyWordWrap(ViewModel.PreviewWordWrap);
+        UpdatePreviewEditorChunkUi();
     }
 
     private void ApplyPreviewEditorWordWrap(bool wrap)
@@ -719,6 +923,81 @@ public sealed partial class MainWindow
         if (PreviewEditor.TextWrapping != wrapping)
             PreviewEditor.TextWrapping = wrapping;
         ScrollViewer.SetHorizontalScrollBarVisibility(PreviewEditor, horizontalBar);
+    }
+
+    private void UpdatePreviewEditorChunkUi()
+    {
+        if (!_previewEditorChunked || _previewEditorTotalByteLength <= 0)
+        {
+            PreviewEditorChunkPanel.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        bool fullyLoaded = _previewEditorLoadedByteLength >= _previewEditorTotalByteLength;
+        PreviewEditorChunkPanel.Visibility = Visibility.Visible;
+        PreviewEditorChunkStatusText.Text = fullyLoaded
+            ? $"Loaded {FormatBytes(_previewEditorTotalByteLength)}"
+            : $"Loaded {FormatBytes(_previewEditorLoadedByteLength)} of {FormatBytes(_previewEditorTotalByteLength)}";
+        LoadMorePreviewEditorChunkButton.IsEnabled = !fullyLoaded && !_previewEditorChunkLoadInFlight && !_previewEditorDirty;
+        LoadMorePreviewEditorChunkButton.Visibility = fullyLoaded ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void HookPreviewEditorChunkScroll()
+    {
+        if (!_previewEditorChunked)
+            return;
+
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            var scrollViewer = EditorScrollHelper.FindFirstScrollViewerInTree(PreviewEditor);
+            if (scrollViewer is null || ReferenceEquals(scrollViewer, _previewEditorScrollViewer))
+                return;
+
+            if (_previewEditorScrollViewer is not null)
+                _previewEditorScrollViewer.ViewChanged -= OnPreviewEditorScrollViewChanged;
+
+            _previewEditorScrollViewer = scrollViewer;
+            _previewEditorScrollViewer.ViewChanged += OnPreviewEditorScrollViewChanged;
+        });
+    }
+
+    private void OnPreviewEditorScrollViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
+    {
+        if (e.IsIntermediate || sender is not ScrollViewer scrollViewer)
+            return;
+        if (!_previewEditorChunked || _previewEditorChunkLoadInFlight || _previewEditorDirty)
+            return;
+        if (_previewEditorLoadedByteLength >= _previewEditorTotalByteLength)
+            return;
+        if (scrollViewer.ScrollableHeight <= 0)
+            return;
+
+        double remaining = scrollViewer.ScrollableHeight - scrollViewer.VerticalOffset;
+        double threshold = Math.Max(200, scrollViewer.ViewportHeight * 0.75);
+        if (remaining <= threshold)
+            _ = LoadMorePreviewEditorChunkAsync();
+    }
+
+    private void ResetPreviewEditorChunkState(bool clearUi = true)
+    {
+        _previewEditorChunked = false;
+        _previewEditorChunkLoadInFlight = false;
+        _previewEditorLoadedByteLength = 0;
+        _previewEditorTotalByteLength = 0;
+        _previewEditorChunkEncoding = null;
+        if (_previewEditorScrollViewer is not null)
+        {
+            _previewEditorScrollViewer.ViewChanged -= OnPreviewEditorScrollViewChanged;
+            _previewEditorScrollViewer = null;
+        }
+
+        if (clearUi)
+        {
+            PreviewEditorChunkStatusText.Text = string.Empty;
+            PreviewEditorChunkPanel.Visibility = Visibility.Collapsed;
+            LoadMorePreviewEditorChunkButton.IsEnabled = true;
+            LoadMorePreviewEditorChunkButton.Visibility = Visibility.Visible;
+        }
     }
 
     private void RestorePreviewSurfaceAfterEditor()
@@ -773,12 +1052,13 @@ public sealed partial class MainWindow
     /// </summary>
     private bool HasRealEditorChanges() =>
         _previewEditorDirty
-        && _previewEditorOriginalText is not null
-        && PreviewEditor.Text != _previewEditorOriginalText;
+        && (_previewEditorChunked
+            || (_previewEditorOriginalText is not null && PreviewEditor.Text != _previewEditorOriginalText));
 
     private void UpdatePreviewEditorButtons()
     {
         SavePreviewEditButton.IsEnabled = PreviewEditor.Visibility == Visibility.Visible && _previewEditorDirty && _previewEditorPath is not null;
+        UpdatePreviewEditorChunkUi();
         UpdateEditorDirtyIndicator();
     }
 
