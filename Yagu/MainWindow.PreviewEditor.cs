@@ -821,8 +821,7 @@ public sealed partial class MainWindow
 
     private void ApplyPreviewEditorWordWrap(bool wrap)
     {
-        // TextControlBox does not support soft wrapping. Keep this method so
-        // existing editor-mode visibility code can call it without special cases.
+        PreviewEditor.WordWrap = wrap;
     }
 
     private void UpdatePreviewEditorChunkUi()
