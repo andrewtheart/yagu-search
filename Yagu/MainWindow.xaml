@@ -299,10 +299,14 @@
                             </Grid>
                         </Grid>
 
-                        <!-- Size row -->
-                        <Grid ColumnSpacing="8">
+                        <!-- Size + date filters row -->
+                        <Grid ColumnSpacing="6">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
@@ -310,73 +314,46 @@
                                       IsChecked="{x:Bind ViewModel.IsFileSizeFilterEnabled, Mode=TwoWay}"
                                       VerticalAlignment="Center"
                                       ToolTipService.ToolTip="When off, search includes files of any size." />
-                            <Grid Grid.Column="1">
+                            <StackPanel Grid.Column="1" Spacing="2" Width="100">
+                                <TextBlock Text="Min MB" FontSize="11" Opacity="0.75" />
                                 <NumberBox Value="{x:Bind ViewModel.MinFileSizeMB, Mode=TwoWay}"
                                            IsEnabled="{x:Bind ViewModel.IsFileSizeFilterEnabled, Mode=OneWay}"
-                                           Minimum="0" SmallChange="1" LargeChange="10"
-                                           SpinButtonPlacementMode="Compact"
+                                           Minimum="0"
+                                           SpinButtonPlacementMode="Hidden"
                                            PlaceholderText="0"
-                                           Padding="72,4,8,4"
                                            ToolTipService.ToolTip="Minimum file size in MB. 0 includes files of any smaller size." />
-                                <Border Background="#0078D4" CornerRadius="8" Padding="8,2"
-                                        VerticalAlignment="Center" HorizontalAlignment="Left"
-                                        Margin="6,0,0,0" IsHitTestVisible="False">
-                                    <TextBlock Text="Min MB" FontSize="11" Foreground="White"
-                                               FontWeight="SemiBold" />
-                                </Border>
-                            </Grid>
-                            <Grid Grid.Column="2">
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Spacing="2" Width="100">
+                                <TextBlock Text="Max MB" FontSize="11" Opacity="0.75" />
                                 <NumberBox Value="{x:Bind ViewModel.MaxFileSizeMB, Mode=TwoWay}"
                                            IsEnabled="{x:Bind ViewModel.IsFileSizeFilterEnabled, Mode=OneWay}"
-                                           Minimum="0" SmallChange="1" LargeChange="10"
-                                           SpinButtonPlacementMode="Compact"
+                                           Minimum="0"
+                                           SpinButtonPlacementMode="Hidden"
                                            PlaceholderText="0"
-                                           Padding="72,4,8,4"
                                            ToolTipService.ToolTip="Maximum file size in MB. 0 disables the upper size limit." />
-                                <Border Background="#0078D4" CornerRadius="8" Padding="8,2"
-                                        VerticalAlignment="Center" HorizontalAlignment="Left"
-                                        Margin="6,0,0,0" IsHitTestVisible="False">
-                                    <TextBlock Text="Max MB" FontSize="11" Foreground="White"
-                                               FontWeight="SemiBold" />
-                                </Border>
-                            </Grid>
-                        </Grid>
-
-                        <!-- Date rows -->
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Spacing="2">
+                            </StackPanel>
+                            <StackPanel Grid.Column="3" Spacing="2">
                                 <TextBlock Text="Created after" FontSize="11" Opacity="0.75" />
                                 <CalendarDatePicker Date="{x:Bind ViewModel.CreatedAfterDate, Mode=TwoWay}"
-                                                    PlaceholderText="Any"
+                                                    PlaceholderText="Any" HorizontalAlignment="Stretch"
                                                     ToolTipService.ToolTip="Only include files created on or after this date." />
                             </StackPanel>
-                            <StackPanel Grid.Column="1" Spacing="2">
+                            <StackPanel Grid.Column="4" Spacing="2">
                                 <TextBlock Text="Created before" FontSize="11" Opacity="0.75" />
                                 <CalendarDatePicker Date="{x:Bind ViewModel.CreatedBeforeDate, Mode=TwoWay}"
-                                                    PlaceholderText="Any"
+                                                    PlaceholderText="Any" HorizontalAlignment="Stretch"
                                                     ToolTipService.ToolTip="Only include files created on or before this date." />
                             </StackPanel>
-                        </Grid>
-
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Spacing="2">
+                            <StackPanel Grid.Column="5" Spacing="2">
                                 <TextBlock Text="Modified after" FontSize="11" Opacity="0.75" />
                                 <CalendarDatePicker Date="{x:Bind ViewModel.ModifiedAfterDate, Mode=TwoWay}"
-                                                    PlaceholderText="Any"
+                                                    PlaceholderText="Any" HorizontalAlignment="Stretch"
                                                     ToolTipService.ToolTip="Only include files modified on or after this date." />
                             </StackPanel>
-                            <StackPanel Grid.Column="1" Spacing="2">
+                            <StackPanel Grid.Column="6" Spacing="2">
                                 <TextBlock Text="Modified before" FontSize="11" Opacity="0.75" />
                                 <CalendarDatePicker Date="{x:Bind ViewModel.ModifiedBeforeDate, Mode=TwoWay}"
-                                                    PlaceholderText="Any"
+                                                    PlaceholderText="Any" HorizontalAlignment="Stretch"
                                                     ToolTipService.ToolTip="Only include files modified on or before this date." />
                             </StackPanel>
                         </Grid>

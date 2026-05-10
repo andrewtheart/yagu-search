@@ -43,6 +43,12 @@ internal static class SearchQueryParser
             .Select(Regex.Escape));
     }
 
+    public static string? BuildLiteralRegexPattern(string query)
+    {
+        var terms = ParseLiteralTerms(query);
+        return terms.Count == 0 ? null : BuildLiteralAlternation(terms);
+    }
+
     private static void AddCurrentTerm(List<string> terms, StringBuilder current)
     {
         if (current.Length == 0)

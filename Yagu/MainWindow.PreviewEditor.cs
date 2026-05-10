@@ -806,11 +806,12 @@ public sealed partial class MainWindow
 
         // Hide view/action buttons while editing
         FullFileButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
-        WordWrapToggle.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
         OpenInDefaultAppButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
         OpenInEditorButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
         ShowInExplorerButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+        ClearPreviewButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
         PreviewContextPanel.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+        LayoutDropDown.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
 
         if (visible)
             PreviewToolbarContent.Visibility = Visibility.Visible;

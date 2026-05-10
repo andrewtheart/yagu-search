@@ -2661,7 +2661,7 @@ public sealed partial class MainWindow : Window
             if (expanded)
             {
                 if (isHighlight)
-                    BuildHighlightSection(section, results, allLines, previewLines, rx);
+                    await BuildHighlightSectionAsync(section, results, allLines, previewLines, rx);
                 else
                     BuildConcatenatedSection(section, results, allLines, previewLines, rx);
             }
@@ -4396,7 +4396,7 @@ public sealed partial class MainWindow : Window
                 {
                     // Eagerly build content for expanded sections.
                     if (isHighlight)
-                        BuildHighlightSection(section, results, allLines, previewLines, rx);
+                        await BuildHighlightSectionAsync(section, results, allLines, previewLines, rx);
                     else
                         BuildConcatenatedSection(section, results, allLines, previewLines, rx);
                 }
@@ -4533,12 +4533,19 @@ public sealed partial class MainWindow : Window
         LogService.Instance.Info("Preview", $"BuildConcatenatedSection: results={results.Count}, rendered={cap}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, elapsed={buildSw.ElapsedMilliseconds}ms");
     }
 
-    private void BuildHighlightSection(
+    // Yield to the UI dispatcher after this many paragraphs have been added during
+    // a section build, so the window stays responsive while large highlight sections
+    // (e.g. minified/blob files producing 1000+ paragraphs) are constructed.
+    private const int BuildHighlightYieldEvery = 200;
+
+    private async Task BuildHighlightSectionAsync(
         RichTextBlock section, List<SearchResult> results,
         string[]? allLines, int previewLines, Regex? rx)
     {
         var buildSw = System.Diagnostics.Stopwatch.StartNew();
         int parasBuilt = 0;
+        int parasSinceYield = 0;
+        int yieldCount = 0;
         int sectionMatchStart = _matchParagraphs.Count;
         bool initiallyCapped = results.Count > MaxMatchesPerSection;
         var cappedResults = initiallyCapped ? results.GetRange(0, MaxMatchesPerSection) : results;
@@ -4582,6 +4589,13 @@ public sealed partial class MainWindow : Window
                     _sectionMatchNavs.TryGetValue(section, out var sn);
                     AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatchLine, matchResult, rx, truncate: true, _matchParagraphs, sn, out int addedParagraphs);
                     parasBuilt += addedParagraphs;
+                    parasSinceYield += addedParagraphs;
+                    if (parasSinceYield >= BuildHighlightYieldEvery)
+                    {
+                        parasSinceYield = 0;
+                        yieldCount++;
+                        await DispatchIdleAsync();
+                    }
                 }
             }
             if (merged.Count > 0)
@@ -4598,6 +4612,13 @@ public sealed partial class MainWindow : Window
                     _sectionMatchNavs.TryGetValue(section, out var sn);
                     AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true, _matchParagraphs, sn, out int addedParagraphs);
                     parasBuilt += addedParagraphs;
+                    parasSinceYield += addedParagraphs;
+                    if (parasSinceYield >= BuildHighlightYieldEvery)
+                    {
+                        parasSinceYield = 0;
+                        yieldCount++;
+                        await DispatchIdleAsync();
+                    }
                 }
             }
         }
@@ -4645,7 +4666,7 @@ public sealed partial class MainWindow : Window
         }
 
         buildSw.Stop();
-        LogService.Instance.Info("Preview", $"BuildHighlightSection: results={results.Count}, rendered={cappedResults.Count}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, hasAllLines={allLines != null}, elapsed={buildSw.ElapsedMilliseconds}ms");
+        LogService.Instance.Info("Preview", $"BuildHighlightSection: results={results.Count}, rendered={cappedResults.Count}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, hasAllLines={allLines != null}, yields={yieldCount}, elapsed={buildSw.ElapsedMilliseconds}ms");
     }
 
     /// <summary>
@@ -4692,7 +4713,7 @@ public sealed partial class MainWindow : Window
     /// Materializes a lazy section: builds paragraphs, adds match entries, and removes it from the lazy dictionary.
     /// Returns true if the section was lazy and has been materialized.
     /// </summary>
-    private bool MaterializeLazySection(RichTextBlock section)
+    private async Task<bool> MaterializeLazySectionAsync(RichTextBlock section)
     {
         if (!_lazySections.Remove(section, out var lazy))
             return false;
@@ -4716,7 +4737,7 @@ public sealed partial class MainWindow : Window
 
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
         if (lazy.IsHighlight)
-            BuildHighlightSection(section, lazy.Results, allLines, lazy.PreviewLines, rx);
+            await BuildHighlightSectionAsync(section, lazy.Results, allLines, lazy.PreviewLines, rx);
         else
             BuildConcatenatedSection(section, lazy.Results, allLines, lazy.PreviewLines, rx);
 
@@ -4747,7 +4768,7 @@ public sealed partial class MainWindow : Window
             {
                 try
                 {
-                    MaterializeLazySection(block);
+                    await MaterializeLazySectionAsync(block);
                 }
                 catch (Exception ex)
                 {
@@ -5203,7 +5224,7 @@ public sealed partial class MainWindow : Window
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             Tag = block,
         };
-        expander.Expanding += (s, _) =>
+        expander.Expanding += async (s, _) =>
         {
             InvalidateScrollPositionCache();
             if (_suppressExpandingHandler) return;
@@ -5212,7 +5233,7 @@ public sealed partial class MainWindow : Window
                 if (s is Expander exp && exp.Tag is RichTextBlock b)
                 {
                     UpdateExpandAllButtonVisibility();
-                    if (MaterializeLazySection(b) && MatchNavPanel.Visibility == Visibility.Visible)
+                    if (await MaterializeLazySectionAsync(b) && MatchNavPanel.Visibility == Visibility.Visible)
                         MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
                     // Re-apply the current wrap state in case the user toggled wrap while
                     // this section was collapsed (we skip collapsed sections in
@@ -5813,9 +5834,10 @@ public sealed partial class MainWindow : Window
         if (string.IsNullOrEmpty(query)) return null;
         try
         {
-            var options = RegexOptions.Compiled;
+            var options = RegexOptions.Compiled | RegexOptions.CultureInvariant;
             if (!caseSensitive) options |= RegexOptions.IgnoreCase;
-            string pattern = useRegex ? query : Regex.Escape(query);
+            string? pattern = useRegex ? query : SearchQueryParser.BuildLiteralRegexPattern(query);
+            if (string.IsNullOrEmpty(pattern)) return null;
             return new Regex(pattern, options);
         }
         catch (Exception ex)
@@ -7885,7 +7907,7 @@ public sealed partial class MainWindow : Window
     /// sections and overflow chunks are materialized until enough matches are
     /// available or no more remain.
     /// </summary>
-    private void BulkNextMatch(int step)
+    private async void BulkNextMatch(int step)
     {
         if (_matchParagraphs.Count == 0 && _lazyMatchCount == 0) return;
 
@@ -7915,7 +7937,7 @@ public sealed partial class MainWindow : Window
             // Then try materializing the next lazy section.
             if (!expanded && _lazyMatchCount > 0)
             {
-                expanded = MaterializeNextLazySection(forward: true);
+                expanded = await MaterializeNextLazySectionAsync(forward: true);
                 if (expanded)
                     materializedSections++;
             }
@@ -7975,7 +7997,7 @@ public sealed partial class MainWindow : Window
         LogService.Instance.Info("MatchNav", $"BulkPrevMatch: step={step}, from={startIndex}, landed={_currentMatchIndex}, hitBoundary={hitBoundary}, rendered={_matchParagraphs.Count}, elapsed={navSw.ElapsedMilliseconds}ms");
     }
 
-    private void OnNextMatch(object sender, RoutedEventArgs e)
+    private async void OnNextMatch(object sender, RoutedEventArgs e)
     {
         // Ctrl+Click: bulk navigation
         bool isCtrl = Microsoft.UI.Input.InputKeyboardSource
@@ -8018,7 +8040,7 @@ public sealed partial class MainWindow : Window
         if (_matchParagraphs.Count == 0 || _currentMatchIndex >= _matchParagraphs.Count - 1)
         {
             // Past the last rendered match — try to materialize the next lazy section.
-            if (_lazyMatchCount > 0 && MaterializeNextLazySection(forward: true))
+            if (_lazyMatchCount > 0 && await MaterializeNextLazySectionAsync(forward: true))
             {
                 // Land on the first match of the newly materialized section.
                 _currentMatchIndex = _matchParagraphs.Count - _lazySectionJustAdded;
@@ -8052,7 +8074,7 @@ public sealed partial class MainWindow : Window
             LogService.Instance.Verbose("Preview", $"OnNextMatch: index={_currentMatchIndex}, elapsed={navSw.ElapsedMilliseconds}ms");
     }
 
-    private void OnPrevMatch(object sender, RoutedEventArgs e)
+    private async void OnPrevMatch(object sender, RoutedEventArgs e)
     {
         // Ctrl+Click: bulk navigation
         bool isCtrl = Microsoft.UI.Input.InputKeyboardSource
@@ -8079,7 +8101,7 @@ public sealed partial class MainWindow : Window
         if (_matchParagraphs.Count == 0 || _currentMatchIndex <= 0)
         {
             // Before the first rendered match — try to materialize the last lazy section.
-            if (_lazyMatchCount > 0 && MaterializeNextLazySection(forward: false))
+            if (_lazyMatchCount > 0 && await MaterializeNextLazySectionAsync(forward: false))
             {
                 // Land on the last match of the newly materialized section.
                 _currentMatchIndex = _matchParagraphs.Count - 1;
@@ -8121,7 +8143,7 @@ public sealed partial class MainWindow : Window
     /// Skips sections that produce zero match entries. Also expands the Expander.
     /// Returns true if at least one materialized section produced match entries.
     /// </summary>
-    private bool MaterializeNextLazySection(bool forward)
+    private async Task<bool> MaterializeNextLazySectionAsync(bool forward)
     {
         _lazySectionJustAdded = 0;
 
@@ -8139,7 +8161,7 @@ public sealed partial class MainWindow : Window
                 && _lazySections.ContainsKey(b))
             {
                 int beforeCount = _matchParagraphs.Count;
-                MaterializeLazySection(b);
+                await MaterializeLazySectionAsync(b);
                 int added = _matchParagraphs.Count - beforeCount;
                 exp.IsExpanded = true;
                 if (added > 0)
