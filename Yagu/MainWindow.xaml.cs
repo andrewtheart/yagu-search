@@ -1601,6 +1601,12 @@ public sealed partial class MainWindow : Window
     // Match navigation state for multi-highlight mode
     private readonly List<(RichTextBlock block, Paragraph para, int matchInPara)> _matchParagraphs = new();
     private int _currentMatchIndex = -1;
+    // Bulk match navigation: step size for Ctrl+Click on Next/Prev.
+    // 0 = not configured yet (show flyout on Ctrl+Click).
+    private int _bulkMatchStep;
+    // When true the flyout won't be shown again this session; Ctrl+Click
+    // jumps _bulkMatchStep immediately.
+    private bool _bulkMatchStepLocked;
     // Set to true once we've auto-scrolled to the first match for the current
     // preview load; reset by HideMatchNavPanel / preview-clear paths so a fresh
     // preview re-triggers the auto-scroll-to-first-match.
@@ -5831,7 +5837,7 @@ public sealed partial class MainWindow : Window
         return LineTruncator.Truncate(line);
     }
 
-    private void BoxMatchRun(Paragraph para, int matchInPara)
+    private void BoxMatchRun(Paragraph para, int matchInPara, bool boundaryFlash = false)
     {
         UnboxCurrentMatch();
         var matches = GetMatchRunsForParagraph(para);
@@ -5846,13 +5852,44 @@ public sealed partial class MainWindow : Window
         var (run, column) = matches[matchInPara];
         _activeMatchHighlight = (para, run, column, matchInPara);
         ResetActiveOverlayLayoutStability();
+
+        if (boundaryFlash)
+            FlashActiveMatchOverlayRed();
+
         if (LogService.Instance.IsVerboseEnabled)
         {
             int paragraphIndex = _matchParagraphs.Count > 0
                 ? GetParagraphIndex(_matchParagraphs[Math.Clamp(_currentMatchIndex, 0, _matchParagraphs.Count - 1)].block, para)
                 : -1;
-            LogService.Instance.Verbose("MatchNav", $"BoxMatchRun: idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}/{matches.Count}, col={column}, runText='{run.Text}'");
+            LogService.Instance.Verbose("MatchNav", $"BoxMatchRun: idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}/{matches.Count}, col={column}, runText='{run.Text}', boundaryFlash={boundaryFlash}");
         }
+    }
+
+    /// <summary>
+    /// Briefly flashes the active match overlay band red to signal the user
+    /// has hit the boundary (first or last match).
+    /// </summary>
+    private void FlashActiveMatchOverlayRed()
+    {
+        var flashBrush = new SolidColorBrush(Microsoft.UI.Colors.Red) { Opacity = 0.45 };
+        var normalBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(0x2A, 0xFF, 0x6A, 0x00));
+        ActiveMatchBand.Background = flashBrush;
+        ActiveMatchWordMarker.Background = new SolidColorBrush(Microsoft.UI.Colors.Red) { Opacity = 0.55 };
+        ActiveMatchBand.BorderBrush = new SolidColorBrush(Microsoft.UI.Colors.Red);
+        ActiveMatchWordMarker.BorderBrush = new SolidColorBrush(Microsoft.UI.Colors.Red);
+
+        var timer = DispatcherQueue.CreateTimer();
+        timer.Interval = TimeSpan.FromMilliseconds(600);
+        timer.IsRepeating = false;
+        timer.Tick += (_, _) =>
+        {
+            ActiveMatchBand.Background = normalBrush;
+            ActiveMatchWordMarker.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x66, 0xFF, 0x45, 0x00));
+            ActiveMatchBand.BorderBrush = new SolidColorBrush(Microsoft.UI.Colors.OrangeRed);
+            ActiveMatchWordMarker.BorderBrush = new SolidColorBrush(Microsoft.UI.Colors.OrangeRed);
+            timer.Stop();
+        };
+        timer.Start();
     }
 
     private void ResetActiveOverlayLayoutStability()
@@ -6246,11 +6283,28 @@ public sealed partial class MainWindow : Window
                 && _activeMatchHighlight is { para: var activePara }
                 && ReferenceEquals(activePara, targetPara))
             {
+                // Pre-scroll to an estimated position that accounts for wrapped
+                // line offset within the paragraph. Without this, files with
+                // extremely long lines (thousands of characters) leave the match
+                // outside the viewport because the scroll targets the paragraph
+                // top rather than the wrapped row where the match lives.
+                double estLineHeight = EstimatePreviewLineHeight(block);
+                double estWrappedOffset = EstimateWrappedLineOffset(block, targetPara);
+                double estCumHeight = EstimateCumulativeHeightBefore(block, targetPara, estLineHeight);
+                double estBlockTop = GetBlockAbsoluteTop(block);
+                double estLineCenter = estBlockTop + estCumHeight + estWrappedOffset * estLineHeight + estLineHeight / 2;
+                double estimatedOffset = Math.Clamp(
+                    estLineCenter - PreviewScrollViewer.ViewportHeight / 2,
+                    0, PreviewScrollViewer.ScrollableHeight);
+
+                if (Math.Abs(estimatedOffset - PreviewScrollViewer.VerticalOffset) > 1)
+                    PreviewScrollViewer.ChangeView(null, estimatedOffset, null, disableAnimation: true);
+
                 if (LogService.Instance.IsVerboseEnabled)
-                    LogService.Instance.Verbose("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, mode=actual-run, forceCenter=True, fromY={PreviewScrollViewer.VerticalOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}");
+                    LogService.Instance.Verbose("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, mode=actual-run, forceCenter=True, fromY={PreviewScrollViewer.VerticalOffset:N1}, estimatedY={estimatedOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}");
 
                 ScrollMatchHorizontallyIntoView(block, targetPara);
-                QueueActiveMatchOverlayUpdate(block, targetPara, PreviewScrollViewer.VerticalOffset);
+                QueueActiveMatchOverlayUpdate(block, targetPara, estimatedOffset);
                 return true;
             }
 
@@ -6340,23 +6394,34 @@ public sealed partial class MainWindow : Window
                 if (!IsRequestCurrent())
                     return;
 
-                if (!TryUpdateActiveMatchOverlayFromActualRun(block, targetPara, targetRun, expectedVerticalOffset, retryIfCenterRejected: retriesRemaining > 0) && retriesRemaining > 0)
+                if (!TryUpdateActiveMatchOverlayFromActualRun(block, targetPara, targetRun, expectedVerticalOffset, retryIfCenterRejected: retriesRemaining > 0))
                 {
-                    var retryTimer = new Microsoft.UI.Xaml.DispatcherTimer
+                    if (retriesRemaining > 0)
                     {
-                        Interval = TimeSpan.FromMilliseconds(delayMs)
-                    };
-                    EventHandler<object>? handler = null;
-                    handler = (_, __) =>
+                        var retryTimer = new Microsoft.UI.Xaml.DispatcherTimer
+                        {
+                            Interval = TimeSpan.FromMilliseconds(delayMs)
+                        };
+                        EventHandler<object>? handler = null;
+                        handler = (_, __) =>
+                        {
+                            retryTimer.Stop();
+                            if (handler is not null)
+                                retryTimer.Tick -= handler;
+                            if (IsRequestCurrent())
+                                EnqueueUpdate(retriesRemaining - 1, Math.Min(delayMs * 2, 250));
+                        };
+                        retryTimer.Tick += handler;
+                        retryTimer.Start();
+                    }
+                    else if (IsRequestCurrent())
                     {
-                        retryTimer.Stop();
-                        if (handler is not null)
-                            retryTimer.Tick -= handler;
-                        if (IsRequestCurrent())
-                            EnqueueUpdate(retriesRemaining - 1, Math.Min(delayMs * 2, 250));
-                    };
-                    retryTimer.Tick += handler;
-                    retryTimer.Start();
+                        // All retries exhausted — force-scroll the run into
+                        // view and do one last overlay attempt.
+                        targetRun.ElementStart?.GetCharacterRect(
+                            Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+                        ScrollPreviewToLine(block, targetPara, forceCenter: true);
+                    }
                 }
             });
         }
@@ -6468,8 +6533,34 @@ public sealed partial class MainWindow : Window
                 overlayTop = actualRunTop - effectiveVerticalOffset;
             }
 
+            double viewportGuard = Math.Min(40, Math.Max(8, markerHeight * 0.75));
+            bool markerOutsideViewport = overlayTop < 0 || overlayTop + markerHeight > viewportHeight;
+            bool markerTooCloseToEdge = overlayTop < viewportGuard || overlayTop + markerHeight > viewportHeight - viewportGuard;
+            if ((markerOutsideViewport || (expectedVerticalOffset.HasValue && markerTooCloseToEdge)) && retryIfCenterRejected)
+            {
+                double correctiveTarget = actualRunTop + markerHeight / 2 - viewportHeight / 2;
+                correctiveTarget = Math.Clamp(correctiveTarget, 0, PreviewScrollViewer.ScrollableHeight);
+                if (Math.Abs(correctiveTarget - currentVerticalOffset) > 1)
+                {
+                    bool accepted = PreviewScrollViewer.ChangeView(null, correctiveTarget, null, disableAnimation: true);
+                    if (LogService.Instance.IsVerboseEnabled)
+                    {
+                        int paragraphIndex = GetParagraphIndex(block, targetPara);
+                        LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: edge correction idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, markerTop={overlayTop:N1}, markerH={markerHeight:N1}, viewportH={viewportHeight:N1}, fromY={currentVerticalOffset:N1}, toY={correctiveTarget:N1}, accepted={accepted}");
+                    }
+                    return false;
+                }
+            }
+
             if (overlayTop < 0 || overlayTop + markerHeight > viewportHeight)
+            {
+                if (LogService.Instance.IsVerboseEnabled)
+                {
+                    int paragraphIndex = GetParagraphIndex(block, targetPara);
+                    LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: rejecting offscreen marker idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, markerTop={overlayTop:N1}, markerH={markerHeight:N1}, viewportH={viewportHeight:N1}, scrollY={currentVerticalOffset:N1}");
+                }
                 return false;
+            }
 
             double markerLeft = point.X;
 
@@ -7332,8 +7423,168 @@ public sealed partial class MainWindow : Window
         ScrollPreviewToLine(block, para, forceCenter: true);
     }
 
+    /// <summary>
+    /// Shows a flyout on <paramref name="anchor"/> asking the user to pick a
+    /// bulk match-navigation step size.  Once chosen, invokes
+    /// <paramref name="navigate"/> with the step.
+    /// </summary>
+    private void ShowBulkMatchStepFlyout(FrameworkElement anchor, Action<int> navigate)
+    {
+        var sp = new StackPanel { Spacing = 6, MinWidth = 220 };
+
+        sp.Children.Add(new TextBlock
+        {
+            Text = "Jump how many matches at a time?",
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        var radioPanel = new StackPanel { Spacing = 2 };
+        RadioButton? selected = null;
+        foreach (int v in new[] { 10, 50, 100, 1000 })
+        {
+            var rb = new RadioButton { Content = v.ToString(), Tag = v, GroupName = "BulkStep" };
+            if (v == 10) { rb.IsChecked = true; selected = rb; }
+            rb.Checked += (s, _) => selected = s as RadioButton;
+            radioPanel.Children.Add(rb);
+        }
+
+        var customPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        var customRadio = new RadioButton { Content = "Other:", GroupName = "BulkStep" };
+        var customBox = new NumberBox { Minimum = 2, Maximum = 100_000, Value = 25, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact, Width = 100 };
+        customRadio.Checked += (s, _) => { selected = s as RadioButton; customBox.Focus(FocusState.Programmatic); };
+        customPanel.Children.Add(customRadio);
+        customPanel.Children.Add(customBox);
+        radioPanel.Children.Add(customPanel);
+        sp.Children.Add(radioPanel);
+
+        var saveCheck = new CheckBox { Content = "Remember for this session (skip this dialog on future Ctrl+clicks)" };
+        sp.Children.Add(saveCheck);
+
+        var okBtn = new Button
+        {
+            Content = "OK",
+            Style = (Style)Application.Current.Resources["AccentButtonStyle"],
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 4, 0, 0),
+        };
+
+        var flyout = new Flyout { Content = sp };
+        okBtn.Click += (_, _) =>
+        {
+            int step;
+            if (selected is not null && selected.Tag is int tagVal)
+                step = tagVal;
+            else
+                step = double.IsNaN(customBox.Value) ? 10 : (int)customBox.Value;
+            step = Math.Max(2, step);
+
+            _bulkMatchStep = step;
+            _bulkMatchStepLocked = saveCheck.IsChecked == true;
+
+            flyout.Hide();
+            navigate(step);
+        };
+        sp.Children.Add(okBtn);
+
+        flyout.ShowAt(anchor);
+    }
+
+    /// <summary>
+    /// Navigate forward by <paramref name="step"/> matches from the current
+    /// position.  If the target index exceeds the rendered match count, lazy
+    /// sections and overflow chunks are materialized until enough matches are
+    /// available or no more remain.
+    /// </summary>
+    private void BulkNextMatch(int step)
+    {
+        if (_matchParagraphs.Count == 0 && _lazyMatchCount == 0) return;
+
+        int targetIndex = _currentMatchIndex + step;
+
+        // Expand overflow / materialize lazy sections until we have enough matches.
+        while (targetIndex >= _matchParagraphs.Count && (_lazyMatchCount > 0 || _sectionOverflow.Count > 0))
+        {
+            bool expanded = false;
+
+            // First try expanding overflow in the current section.
+            if (_currentMatchIndex >= 0 && _currentMatchIndex < _matchParagraphs.Count)
+            {
+                var curBlock = _matchParagraphs[_currentMatchIndex].block;
+                if (_sectionOverflow.ContainsKey(curBlock))
+                    expanded = ExpandSectionNextChunk(curBlock);
+            }
+
+            // Then try materializing the next lazy section.
+            if (!expanded && _lazyMatchCount > 0)
+                expanded = MaterializeNextLazySection(forward: true);
+
+            if (!expanded) break;
+        }
+
+        if (targetIndex >= _matchParagraphs.Count)
+            targetIndex = _matchParagraphs.Count - 1;
+
+        if (targetIndex < 0 || _matchParagraphs.Count == 0) return;
+
+        _currentMatchIndex = targetIndex;
+        var (block, para, matchInPara) = _matchParagraphs[_currentMatchIndex];
+        MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
+        if (_sectionMatchNavs.TryGetValue(block, out var sn))
+            SetSectionCurrentMatch(sn, para, matchInPara);
+        ActivateSectionForBlock(block);
+        BoxMatchRun(para, matchInPara);
+        UpdateSectionMatchNavPanels();
+        ScrollPreviewToLine(block, para, forceCenter: true);
+    }
+
+    /// <summary>
+    /// Navigate backward by <paramref name="step"/> matches.  If fewer than
+    /// <paramref name="step"/> matches exist before the current position,
+    /// jump to match 0 and box it with a red highlight to signal the boundary.
+    /// </summary>
+    private void BulkPrevMatch(int step)
+    {
+        if (_matchParagraphs.Count == 0) return;
+
+        int targetIndex = _currentMatchIndex - step;
+        bool hitBoundary = targetIndex < 0;
+        if (hitBoundary)
+            targetIndex = 0;
+
+        _currentMatchIndex = targetIndex;
+        var (block, para, matchInPara) = _matchParagraphs[_currentMatchIndex];
+        MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
+        if (_sectionMatchNavs.TryGetValue(block, out var sn))
+            SetSectionCurrentMatch(sn, para, matchInPara);
+        ActivateSectionForBlock(block);
+
+        if (hitBoundary)
+            BoxMatchRun(para, matchInPara, boundaryFlash: true);
+        else
+            BoxMatchRun(para, matchInPara);
+
+        UpdateSectionMatchNavPanels();
+        ScrollPreviewToLine(block, para, forceCenter: true);
+    }
+
     private void OnNextMatch(object sender, RoutedEventArgs e)
     {
+        // Ctrl+Click: bulk navigation
+        bool isCtrl = Microsoft.UI.Input.InputKeyboardSource
+            .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        if (isCtrl)
+        {
+            if (_bulkMatchStepLocked && _bulkMatchStep >= 2)
+            {
+                BulkNextMatch(_bulkMatchStep);
+                return;
+            }
+            ShowBulkMatchStepFlyout(NextMatchButton, BulkNextMatch);
+            return;
+        }
+
         var navSw = System.Diagnostics.Stopwatch.StartNew();
         int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
         if (totalMatches == 0) return;
@@ -7396,6 +7647,21 @@ public sealed partial class MainWindow : Window
 
     private void OnPrevMatch(object sender, RoutedEventArgs e)
     {
+        // Ctrl+Click: bulk navigation
+        bool isCtrl = Microsoft.UI.Input.InputKeyboardSource
+            .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        if (isCtrl)
+        {
+            if (_bulkMatchStepLocked && _bulkMatchStep >= 2)
+            {
+                BulkPrevMatch(_bulkMatchStep);
+                return;
+            }
+            ShowBulkMatchStepFlyout(PrevMatchButton, BulkPrevMatch);
+            return;
+        }
+
         var navSw = System.Diagnostics.Stopwatch.StartNew();
         int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
         if (totalMatches == 0) return;

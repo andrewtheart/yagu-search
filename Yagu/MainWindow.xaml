@@ -763,14 +763,14 @@
                                             Style="{StaticResource AccentButtonStyle}"
                                             Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
                                             CornerRadius="4"
-                                            ToolTipService.ToolTip="Previous match (↑)">
+                                            ToolTipService.ToolTip="Previous match (↑) · Ctrl+Click to jump multiple">
                                         <FontIcon Glyph="&#xE70E;" FontSize="12" />
                                     </Button>
                                     <Button x:Name="NextMatchButton" Click="OnNextMatch"
                                             Style="{StaticResource AccentButtonStyle}"
                                             Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
                                             CornerRadius="4"
-                                            ToolTipService.ToolTip="Next match (↓)">
+                                            ToolTipService.ToolTip="Next match (↓) · Ctrl+Click to jump multiple">
                                         <FontIcon Glyph="&#xE70D;" FontSize="12" />
                                     </Button>
                                 </StackPanel>
