@@ -204,12 +204,12 @@ public sealed partial class MainWindow
             PreviewEditor.IsReadOnly = isArchive;
 
             var text = document.Text;
-            _previewEditorForcedWrap = false;
+                    _previewEditorForcedWrap = false;
             ApplyPreviewEditorWordWrap(ViewModel.PreviewWordWrap);
-            if (document.MaxLineLength >= PreviewEditorForceWrapLineLength)
+                    if (document.MaxLineLength >= PreviewEditorForceWrapLineLength)
             {
                 LogService.Instance.Info("Preview",
-                    $"ShowFullFileEditorAsync: long line loaded without soft wrap because TextControlBox does not support wrapping, maxLen={document.MaxLineLength:N0}");
+                        $"ShowFullFileEditorAsync: long line loaded with user word-wrap setting, maxLen={document.MaxLineLength:N0}");
             }
 
             // Assign while collapsed so the editor does one document load instead of
@@ -337,7 +337,7 @@ public sealed partial class MainWindow
 
         chunkSw.Stop();
         LogService.Instance.Info("Preview",
-            $"ShowChunkedPreviewEditorAsync: loaded first chunk file='{fileInfo.Name}', totalBytes={fileInfo.Length:N0}, loadedBytes={_previewEditorLoadedByteLength:N0}, textLen={chunk.Text.Length:N0}, elapsed={chunkSw.ElapsedMilliseconds}ms");
+            $"ShowChunkedPreviewEditorAsync: loaded first chunk file='{fileInfo.Name}', totalBytes={fileInfo.Length:N0}, loadedBytes={_previewEditorLoadedByteLength:N0}, textLen={chunk.Text.Length:N0}, maxLineLen={chunk.MaxLineLength:N0}, elapsed={chunkSw.ElapsedMilliseconds}ms");
         ViewModel.StatusText = $"Loaded {FormatBytes(_previewEditorLoadedByteLength)} of {FormatBytes(_previewEditorTotalByteLength)} for editing.";
     }
 
@@ -357,6 +357,7 @@ public sealed partial class MainWindow
         UpdatePreviewEditorChunkUi();
         var cts = new CancellationTokenSource();
         _previewLoadCts = cts;
+        var loadMoreSw = System.Diagnostics.Stopwatch.StartNew();
 
         try
         {
@@ -380,8 +381,9 @@ public sealed partial class MainWindow
             _previewEditorTotalByteLength = chunk.TotalByteLength;
             _previewEditorChunkEncoding = chunk.Encoding;
 
+            loadMoreSw.Stop();
             LogService.Instance.Info("Preview",
-                $"LoadMorePreviewEditorChunkAsync: appended chunk file='{Path.GetFileName(_previewEditorPath)}', fromBytes={previousBytes:N0}, toBytes={_previewEditorLoadedByteLength:N0}, textLen={chunk.Text.Length:N0}");
+                $"LoadMorePreviewEditorChunkAsync: appended chunk file='{Path.GetFileName(_previewEditorPath)}', fromBytes={previousBytes:N0}, toBytes={_previewEditorLoadedByteLength:N0}, textLen={chunk.Text.Length:N0}, maxLineLen={chunk.MaxLineLength:N0}, elapsed={loadMoreSw.ElapsedMilliseconds}ms");
             ViewModel.StatusText = $"Loaded {FormatBytes(_previewEditorLoadedByteLength)} of {FormatBytes(_previewEditorTotalByteLength)} for editing.";
         }
         catch (OperationCanceledException) { }

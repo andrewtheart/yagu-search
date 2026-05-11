@@ -50,7 +50,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\TextControlBox-WinUI-master\TextControlBox\TextControlBox.csproj" />
+    <ProjectReference Include="..\..\src\TextControlBox-WinUI\TextControlBox\TextControlBox.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -35,28 +35,28 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void FileHeaderClick_SelectsAllAndDelegatesCollapsedPreviewAddToExpandingHandler()
+    public void FileHeaderClick_SelectsAllAndAddsPreview()
     {
         string headerTap = ExtractMethodWindow(MainWindowSource, "OnFileGroupHeaderTapped");
         Assert.Contains("SelectFileGroupMatches(g);", headerTap);
         Assert.Contains("_initialMatchScrolled = false;", headerTap);
-        AssertContainsInOrder(headerTap,
-            "if (!g.IsExpanded)",
-            "return;",
-            "var results = g.Where(r => r.IsSelected).ToList();");
+        Assert.DoesNotContain("if (!g.IsExpanded)", headerTap);
+        Assert.Contains("var results = g.Where(r => r.IsSelected).ToList();", headerTap);
         AssertContainsInOrder(headerTap,
             "if (TryScrollToPreviewSection(g.FilePath))",
             "return;",
             "await PrependPreviewSectionsForFilesAsync(newFiles, g.FilePath);");
+    }
 
-        string expanding = ExtractMethodWindow(MainWindowSource, "OnFileGroupExpanding");
-        Assert.Contains("_suppressPreviewUpdate = true;", expanding);
-        Assert.Contains("_initialMatchScrolled = false;", expanding);
-        Assert.Contains("g.SelectAll();", expanding);
-        AssertContainsInOrder(expanding,
-            "if (TryScrollToPreviewSection(g.FilePath))",
-            "return;",
-            "await PrependPreviewSectionsForFilesAsync(newFiles, g.FilePath);");
+    [Fact]
+    public void FileGroupChevronExpand_DoesNotSelectOrAddPreview()
+    {
+        string expanding = ExtractMethodWindow(MainWindowSource, "OnFileGroupExpanding", window: 900);
+        Assert.Contains("expand only", expanding);
+        Assert.DoesNotContain("g.SelectAll();", expanding);
+        Assert.DoesNotContain("SelectFileGroupMatches", expanding);
+        Assert.DoesNotContain("TryScrollToPreviewSection", expanding);
+        Assert.DoesNotContain("PrependPreviewSectionsForFilesAsync", expanding);
     }
 
     [Fact]
@@ -91,16 +91,47 @@ public sealed class PreviewCoreRegressionTests
 
         string highlight = ExtractMethodWindow(MainWindowSource, "BuildHighlightSectionAsync");
         Assert.Contains("MaxMatchesPerSection", highlight);
+        Assert.Contains("MaxPreviewBlocksPerSection", highlight);
         Assert.Contains("cappedResults", highlight);
         Assert.Contains("await DispatchIdleAsync();", highlight);
         Assert.Contains("AppendHighlightMatchWindows", highlight);
+        Assert.Contains("remainingBlockBudget", highlight);
         Assert.Contains("RegisterSectionOverflow", highlight);
         Assert.Contains("remaining = results.Skip(renderedCount).ToList()", highlight);
 
         string concatenated = ExtractMethodWindow(MainWindowSource, "BuildConcatenatedSection");
         Assert.Contains("cap = Math.Min(results.Count, MaxMatchesPerSection)", concatenated);
-        Assert.Contains("if (matchIndex >= cap) break;", concatenated);
+        Assert.Contains("section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection", concatenated);
+        Assert.Contains("remainingResults: results.GetRange(renderedResults, results.Count - renderedResults)", concatenated);
         Assert.Contains("RegisterSectionOverflow", concatenated);
+
+        string appendWindows = ExtractMethodWindow(MainWindowSource, "AppendHighlightMatchWindows");
+        Assert.Contains("int maxAdditionalBlocks", appendWindows);
+        Assert.Contains("paragraphsAdded < maxAdditionalBlocks", appendWindows);
+
+        string expandChunk = ExtractMethodWindow(MainWindowSource, "ExpandSectionNextChunk");
+        Assert.Contains("MaxPreviewBlocksPerExpandChunk", expandChunk);
+    }
+
+    [Fact]
+    public void LargeLineMatchWindows_ResolveDisplayColumnsBackToSourceColumns()
+    {
+        string truncateAroundResult = ExtractMethodWindow(MainWindowSource, "TruncatePreviewLineAroundResult");
+        Assert.Contains("ResolveSourceMatchStart(line, result, rx)", truncateAroundResult);
+
+        string resolver = ExtractMethodWindow(MainWindowSource, "ResolveSourceMatchStart", window: 2400);
+        Assert.Contains("result.MatchLine", resolver);
+        Assert.Contains("displayLine.StartsWith(LineTruncator.Ellipsis, StringComparison.Ordinal)", resolver);
+        Assert.Contains("displayLine.EndsWith(LineTruncator.Ellipsis, StringComparison.Ordinal)", resolver);
+        AssertContainsInOrder(resolver,
+            "line.IndexOf(core, StringComparison.Ordinal)",
+            "int resolved = coreIndex + offsetInCore;",
+            "IsSourceMatchAt(line, resolved, result.MatchLength, rx)",
+            "return resolved;");
+
+        string matchAt = ExtractMethodWindow(MainWindowSource, "IsSourceMatchAt");
+        Assert.Contains("rx.Match(line, start)", matchAt);
+        Assert.Contains("match.Success && match.Index == start", matchAt);
     }
 
     [Fact]
@@ -116,6 +147,32 @@ public sealed class PreviewCoreRegressionTests
         string addParagraphs = ExtractMethodWindow(MainWindowSource, "AddPreviewLineParagraphs");
         Assert.Contains("if (!isMatchLine || matchParagraphs is null)", addParagraphs);
         Assert.Contains("AddMatchEntries(", addParagraphs);
+    }
+
+    [Fact]
+    public void LineCheckboxClick_UpdatesPreviewAndSelectionSummary()
+    {
+        Assert.Contains("Click=\"OnMatchLineCheckBoxClicked\"", MainWindowXaml);
+
+        string tapped = ExtractMethodWindow(MainWindowSource, "OnMatchLineTapped");
+        Assert.Contains("UpdatePreviewForMatchLineAsync(r, nameof(OnMatchLineTapped), previewClickedLineWhenNotMulti: true)", tapped);
+
+        string checkboxClicked = ExtractMethodWindow(MainWindowSource, "OnMatchLineCheckBoxClicked");
+        Assert.Contains("r.IsSelected = isChecked;", checkboxClicked);
+        Assert.Contains("UpdatePreviewForMatchLineAsync(r, nameof(OnMatchLineCheckBoxClicked), previewClickedLineWhenNotMulti: false)", checkboxClicked);
+
+        string previewForLine = ExtractMethodWindow(MainWindowSource, "UpdatePreviewForMatchLineAsync", window: 1800);
+        Assert.Contains("FindParentGroup(r)?.NotifySelectionChanged();", previewForLine);
+        Assert.Contains("ViewModel.GetAllSelectedResults();", previewForLine);
+        AssertContainsInOrder(previewForLine,
+            "if (selected.Count >= 2)",
+            "await UpdateMultiSelectPreviewAsync(scrollTarget: r.IsSelected ? r : null);",
+            "else if (selected.Count == 1)",
+            "await UpdatePreviewAsync(previewClickedLineWhenNotMulti ? r : selected[0]);",
+            "else if (previewClickedLineWhenNotMulti)",
+            "await UpdatePreviewAsync(r);",
+            "else",
+            "await UpdateMultiSelectPreviewAsync();");
     }
 
     [Fact]

@@ -2778,48 +2778,18 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void OnFileGroupExpanding(Expander sender, ExpanderExpandingEventArgs args)
+    private void OnFileGroupExpanding(Expander sender, ExpanderExpandingEventArgs args)
     {
         if (sender.DataContext is FileGroup g)
         {
-            LogService.Instance.Info("Preview", $"OnFileGroupExpanding: file='{g.FilePath}', matchCount={g.Count}, setting _suppressPreviewUpdate=true");
-            _suppressPreviewUpdate = true;
-            _initialMatchScrolled = false;
-            g.SelectAll();
-
             try
             {
-                // If this file is already on the right panel, scroll to it.
-                if (TryScrollToPreviewSection(g.FilePath))
-                {
-                    LogService.Instance.Info("Preview", $"OnFileGroupExpanding: already on panel, scrolled to '{g.FilePath}'");
-                    return;
-                }
-
-                // Not present — prepend it.
-                var results = g.Where(r => r.IsSelected).ToList();
-                LogService.Instance.Info("Preview", $"OnFileGroupExpanding: not on panel, prepending {results.Count} results for '{g.FilePath}'");
-                if (results.Count > 0)
-                {
-                    var newFiles = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase)
-                    {
-                        [g.FilePath] = results
-                    };
-                    await PrependPreviewSectionsForFilesAsync(newFiles, g.FilePath);
-                }
+                LogService.Instance.Info("Preview", $"OnFileGroupExpanding: expand only file='{g.FilePath}', matchCount={g.Count}");
             }
-            finally
+            catch (Exception ex)
             {
-                // Defer turning off suppression to the next low-priority frame so
-                // CheckBox.Checked events from the newly-realized expander content
-                // (template loading) are still suppressed.
-                DispatcherQueue.TryEnqueue(
-                    Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
-                    () =>
-                    {
-                        LogService.Instance.Info("Preview", "OnFileGroupExpanding: deferred _suppressPreviewUpdate=false");
-                        _suppressPreviewUpdate = false;
-                    });
+                LogService.Instance.Warning("Preview",
+                    $"OnFileGroupExpanding threw: {ex.GetType().Name}: {ex.Message}");
             }
         }
     }
@@ -2836,11 +2806,6 @@ public sealed partial class MainWindow : Window
 
         SelectFileGroupMatches(g);
         _initialMatchScrolled = false;
-
-        // Only add to preview panel if the expander is already open.
-        // When it's collapsed, OnFileGroupExpanding handles the preview add.
-        if (!g.IsExpanded)
-            return;
 
         var results = g.Where(r => r.IsSelected).ToList();
         if (results.Count > 0)
@@ -2902,12 +2867,42 @@ public sealed partial class MainWindow : Window
 
         if (sender is FrameworkElement fe && fe.DataContext is SearchResult r)
         {
-            var selected = ViewModel.GetAllSelectedResults();
-            LogService.Instance.Info("Preview", $"OnMatchLineTapped: file='{r.FilePath}', line={r.LineNumber}, totalSelected={selected.Count}");
-            if (selected.Count >= 2)
-                await UpdateMultiSelectPreviewAsync(scrollTarget: r);
-            else
-                await UpdatePreviewAsync(r);
+            await UpdatePreviewForMatchLineAsync(r, nameof(OnMatchLineTapped), previewClickedLineWhenNotMulti: true);
+        }
+    }
+
+    private async void OnMatchLineCheckBoxClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is CheckBox { DataContext: SearchResult r } checkBox)
+        {
+            if (checkBox.IsChecked is bool isChecked && r.IsSelected != isChecked)
+                r.IsSelected = isChecked;
+
+            await UpdatePreviewForMatchLineAsync(r, nameof(OnMatchLineCheckBoxClicked), previewClickedLineWhenNotMulti: false);
+        }
+    }
+
+    private async Task UpdatePreviewForMatchLineAsync(SearchResult r, string caller, bool previewClickedLineWhenNotMulti)
+    {
+        FindParentGroup(r)?.NotifySelectionChanged();
+
+        var selected = ViewModel.GetAllSelectedResults();
+        LogService.Instance.Info("Preview", $"{caller}: file='{r.FilePath}', line={r.LineNumber}, isSelected={r.IsSelected}, totalSelected={selected.Count}");
+        if (selected.Count >= 2)
+        {
+            await UpdateMultiSelectPreviewAsync(scrollTarget: r.IsSelected ? r : null);
+        }
+        else if (selected.Count == 1)
+        {
+            await UpdatePreviewAsync(previewClickedLineWhenNotMulti ? r : selected[0]);
+        }
+        else if (previewClickedLineWhenNotMulti)
+        {
+            await UpdatePreviewAsync(r);
+        }
+        else
+        {
+            await UpdateMultiSelectPreviewAsync();
         }
     }
 
@@ -3868,12 +3863,13 @@ public sealed partial class MainWindow : Window
             fileContents.TryGetValue(filePath, out string[]? allLines);
             int parasInFile = 0;
 
-            int matchIndex = 0;
+            int renderedResults = 0;
+            int startingBlocks = section.Blocks.Count;
             int cap = Math.Min(results.Count, MaxMatchesPerSection);
             foreach (var r in results)
             {
-                if (matchIndex >= cap) break;
-                matchIndex++;
+                if (renderedResults >= cap || section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
+                    break;
 
                 // Separator between matches in same file
                 var sep = new Paragraph();
@@ -3890,6 +3886,9 @@ public sealed partial class MainWindow : Window
                 var lines = GetPreviewLines(r, allLines, previewLines, fullFile: false);
                 foreach (var (line, lineNum) in lines)
                 {
+                    if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
+                        break;
+
                     bool isMatchLine = lineNum == r.LineNumber;
                     _sectionMatchNavs.TryGetValue(section, out var sn);
                     var firstPara = AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true, _matchParagraphs, sn, out int addedParagraphs);
@@ -3903,19 +3902,21 @@ public sealed partial class MainWindow : Window
                         scrollPara = firstPara;
                     }
                 }
+
+                renderedResults++;
             }
 
-            if (results.Count > cap)
+            if (results.Count > renderedResults)
             {
-                var notice = AppendTruncationNotice(section, results.Count, cap);
+                var notice = AppendTruncationNotice(section, results.Count, renderedResults);
                 RegisterSectionOverflow(section,
                     filePath: filePath,
-                    remainingResults: results.GetRange(cap, results.Count - cap),
+                    remainingResults: results.GetRange(renderedResults, results.Count - renderedResults),
                     allLines: allLines,
                     previewLines: previewLines,
                     rx: rx,
                     originalTotal: results.Count,
-                    renderedSoFar: cap,
+                    renderedSoFar: renderedResults,
                     noticePara: notice);
             }
 
@@ -3987,6 +3988,7 @@ public sealed partial class MainWindow : Window
             var fileSw = System.Diagnostics.Stopwatch.StartNew();
             var (section, _) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
             int sectionMatchStart = _matchParagraphs.Count;
+            int startingBlocks = section.Blocks.Count;
 
             fileContents.TryGetValue(filePath, out string[]? allLines);
 
@@ -4020,6 +4022,9 @@ public sealed partial class MainWindow : Window
                 bool firstRange = true;
                 foreach (var (start, end) in merged)
                 {
+                    if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
+                        break;
+
                     if (!firstRange)
                     {
                         var gap = new Paragraph();
@@ -4032,6 +4037,9 @@ public sealed partial class MainWindow : Window
 
                     for (int i = start; i <= end; i++)
                     {
+                        if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
+                            break;
+
                         int lineNum = i + 1;
                         bool isMatchLine = matchLines.Contains(lineNum);
                         // Use first matching result for this line (for column-based highlighting)
@@ -4056,9 +4064,15 @@ public sealed partial class MainWindow : Window
                 int fallbackIndex = 0;
                 foreach (var r in cappedResults)
                 {
+                    if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
+                        break;
+
                     var lines = GetPreviewLines(r, null, ViewModel.PreviewContextLines, fullFile: false);
                     foreach (var (line, lineNum) in lines)
                     {
+                        if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
+                            break;
+
                         bool isMatchLine = lineNum == r.LineNumber;
                         _sectionMatchNavs.TryGetValue(section, out var sn);
                         var firstPara = AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true, _matchParagraphs, sn, out _);
@@ -4076,7 +4090,8 @@ public sealed partial class MainWindow : Window
             }
 
             int renderedCount = Math.Min(results.Count, _matchParagraphs.Count - sectionMatchStart);
-            if (allLines != null && renderedCount < Math.Min(MaxMatchesPerSection, results.Count))
+            int remainingBlockBudget = Math.Max(0, MaxPreviewBlocksPerSection - (section.Blocks.Count - startingBlocks));
+            if (allLines != null && remainingBlockBudget > 0 && renderedCount < Math.Min(MaxMatchesPerSection, results.Count))
             {
                 _sectionMatchNavs.TryGetValue(section, out var sn);
                 var pending = results.Skip(renderedCount).ToList();
@@ -4088,6 +4103,7 @@ public sealed partial class MainWindow : Window
                     sn,
                     MaxMatchesPerSection - renderedCount,
                     MaxMatchesPerSection - renderedCount,
+                    MaxPreviewBlocksPerSection,
                     out int consumed,
                     out _,
                     lastRenderedLine1);
@@ -4193,6 +4209,14 @@ public sealed partial class MainWindow : Window
     private const int MaxMatchesPerSection = 500;
 
     /// <summary>
+    /// Maximum RichTextBlock blocks to build for an expanded preview section
+    /// before registering overflow. WinUI lays these blocks out only after the
+    /// section enters the visual tree, so a match cap alone is not enough for
+    /// dense hits on a few very long lines.
+    /// </summary>
+    private const int MaxPreviewBlocksPerSection = 450;
+
+    /// <summary>
     /// Number of additional results to materialize per "Next match" click
     /// once a section's overflow has been registered. Smaller than the
     /// initial cap because expanded chunks are appended on the UI thread,
@@ -4200,6 +4224,8 @@ public sealed partial class MainWindow : Window
     /// multiple paragraphs, multi-occurrence regex matches, etc.).
     /// </summary>
     private const int MaxMatchesPerExpandChunk = 500;
+
+    private const int MaxPreviewBlocksPerExpandChunk = 300;
 
     /// <summary>
     /// Hard cap on match entries (paragraphs added to <c>_matchParagraphs</c>)
@@ -4490,12 +4516,13 @@ public sealed partial class MainWindow : Window
     {
         var buildSw = System.Diagnostics.Stopwatch.StartNew();
         int parasBuilt = 0;
-        int matchIndex = 0;
+        int renderedResults = 0;
+        int startingBlocks = section.Blocks.Count;
         int cap = Math.Min(results.Count, MaxMatchesPerSection);
         foreach (var r in results)
         {
-            if (matchIndex >= cap) break;
-            matchIndex++;
+            if (renderedResults >= cap || section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
+                break;
 
             var sep = new Paragraph();
             var label = $"\u00A0Line\u00A0{r.LineNumber}\u00A0";
@@ -4508,29 +4535,34 @@ public sealed partial class MainWindow : Window
             var lines = GetPreviewLines(r, allLines, previewLines, fullFile: false);
             foreach (var (line, lineNum) in lines)
             {
+                if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
+                    break;
+
                 bool isMatchLine = lineNum == r.LineNumber;
                 _sectionMatchNavs.TryGetValue(section, out var sn);
                 AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true, _matchParagraphs, sn, out int addedParagraphs);
                 parasBuilt += addedParagraphs;
             }
+
+            renderedResults++;
         }
 
-        if (results.Count > cap)
+        if (results.Count > renderedResults)
         {
-            var notice = AppendTruncationNotice(section, results.Count, cap);
+            var notice = AppendTruncationNotice(section, results.Count, renderedResults);
             RegisterSectionOverflow(section,
                 filePath: null,
-                remainingResults: results.GetRange(cap, results.Count - cap),
+                remainingResults: results.GetRange(renderedResults, results.Count - renderedResults),
                 allLines: allLines,
                 previewLines: previewLines,
                 rx: rx,
                 originalTotal: results.Count,
-                renderedSoFar: cap,
+                renderedSoFar: renderedResults,
                 noticePara: notice);
         }
 
         buildSw.Stop();
-        LogService.Instance.Info("Preview", $"BuildConcatenatedSection: results={results.Count}, rendered={cap}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, elapsed={buildSw.ElapsedMilliseconds}ms");
+        LogService.Instance.Info("Preview", $"BuildConcatenatedSection: results={results.Count}, rendered={renderedResults}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, elapsed={buildSw.ElapsedMilliseconds}ms");
     }
 
     // Yield to the UI dispatcher after this many paragraphs have been added during
@@ -4547,6 +4579,7 @@ public sealed partial class MainWindow : Window
         int parasSinceYield = 0;
         int yieldCount = 0;
         int sectionMatchStart = _matchParagraphs.Count;
+        int startingBlocks = section.Blocks.Count;
         bool initiallyCapped = results.Count > MaxMatchesPerSection;
         var cappedResults = initiallyCapped ? results.GetRange(0, MaxMatchesPerSection) : results;
         var matchLines = new HashSet<int>(cappedResults.Select(r => r.LineNumber));
@@ -4572,6 +4605,9 @@ public sealed partial class MainWindow : Window
             bool firstRange = true;
             foreach (var (start, end) in merged)
             {
+                if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
+                    break;
+
                 if (!firstRange)
                 {
                     var gap = new Paragraph();
@@ -4583,6 +4619,9 @@ public sealed partial class MainWindow : Window
                 firstRange = false;
                 for (int i = start; i <= end; i++)
                 {
+                    if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
+                        break;
+
                     int lineNum = i + 1;
                     bool isMatchLine = matchLines.Contains(lineNum);
                     var matchResult = cappedResults.FirstOrDefault(r => r.LineNumber == lineNum) ?? cappedResults[0];
@@ -4605,9 +4644,15 @@ public sealed partial class MainWindow : Window
         {
             foreach (var r in cappedResults)
             {
+                if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
+                    break;
+
                 var lines = GetPreviewLines(r, null, previewLines, fullFile: false);
                 foreach (var (line, lineNum) in lines)
                 {
+                    if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
+                        break;
+
                     bool isMatchLine = lineNum == r.LineNumber;
                     _sectionMatchNavs.TryGetValue(section, out var sn);
                     AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true, _matchParagraphs, sn, out int addedParagraphs);
@@ -4624,7 +4669,8 @@ public sealed partial class MainWindow : Window
         }
 
         int renderedCount = Math.Min(results.Count, _matchParagraphs.Count - sectionMatchStart);
-        if (allLines != null && renderedCount < Math.Min(MaxMatchesPerSection, results.Count))
+        int remainingBlockBudget = Math.Max(0, MaxPreviewBlocksPerSection - (section.Blocks.Count - startingBlocks));
+        if (allLines != null && remainingBlockBudget > 0 && renderedCount < Math.Min(MaxMatchesPerSection, results.Count))
         {
             _sectionMatchNavs.TryGetValue(section, out var sn);
             var pending = results.Skip(renderedCount).ToList();
@@ -4636,6 +4682,7 @@ public sealed partial class MainWindow : Window
                 sn,
                 MaxMatchesPerSection - renderedCount,
                 MaxMatchesPerSection - renderedCount,
+                remainingBlockBudget,
                 out int consumed,
                 out int addedParagraphs,
                 lastRenderedLine1);
@@ -4643,7 +4690,7 @@ public sealed partial class MainWindow : Window
             parasBuilt += addedParagraphs;
             _ = addedEntries;
         }
-        else if (allLines == null)
+        else if (allLines == null && renderedCount == 0)
         {
             renderedCount = Math.Min(MaxMatchesPerSection, results.Count);
         }
@@ -5938,7 +5985,7 @@ public sealed partial class MainWindow : Window
     private static PreviewLineWindow TruncatePreviewLineAroundResult(string? line, SearchResult result, Regex? rx)
     {
         line ??= string.Empty;
-        int matchStart = result.MatchStartColumn;
+        int matchStart = ResolveSourceMatchStart(line, result, rx);
         int matchLength = result.MatchLength;
         if (matchStart < 0 || matchLength <= 0 || matchStart >= line.Length)
         {
@@ -5966,6 +6013,53 @@ public sealed partial class MainWindow : Window
         string suffix = end < line.Length ? LineTruncator.Ellipsis : string.Empty;
         string text = string.Concat(prefix, line.AsSpan(start, end - start), suffix);
         return new PreviewLineWindow(text, start, end);
+    }
+
+    private static int ResolveSourceMatchStart(string line, SearchResult result, Regex? rx)
+    {
+        int candidate = result.MatchStartColumn;
+        if (IsSourceMatchAt(line, candidate, result.MatchLength, rx))
+            return candidate;
+
+        string displayLine = result.MatchLine ?? string.Empty;
+        if (displayLine.Length > 0)
+        {
+            bool hasPrefix = displayLine.StartsWith(LineTruncator.Ellipsis, StringComparison.Ordinal);
+            bool hasSuffix = displayLine.EndsWith(LineTruncator.Ellipsis, StringComparison.Ordinal);
+            int prefixLength = hasPrefix ? LineTruncator.Ellipsis.Length : 0;
+            int suffixLength = hasSuffix ? LineTruncator.Ellipsis.Length : 0;
+            int coreLength = displayLine.Length - prefixLength - suffixLength;
+            if (coreLength > 0)
+            {
+                string core = displayLine.Substring(prefixLength, coreLength);
+                int coreIndex = line.IndexOf(core, StringComparison.Ordinal);
+                if (coreIndex >= 0)
+                {
+                    int offsetInCore = Math.Clamp(candidate - prefixLength, 0, coreLength);
+                    int resolved = coreIndex + offsetInCore;
+                    if (IsSourceMatchAt(line, resolved, result.MatchLength, rx))
+                        return resolved;
+                }
+            }
+        }
+
+        var match = rx?.Match(line);
+        if (match is { Success: true, Length: > 0 })
+            return match.Index;
+
+        return candidate;
+    }
+
+    private static bool IsSourceMatchAt(string line, int start, int length, Regex? rx)
+    {
+        if (start < 0 || start >= line.Length || length <= 0)
+            return false;
+
+        if (rx is null)
+            return start + length <= line.Length;
+
+        var match = rx.Match(line, start);
+        return match.Success && match.Index == start;
     }
 
     private static Paragraph AddPreviewLineParagraphsAroundResult(
@@ -6031,6 +6125,7 @@ public sealed partial class MainWindow : Window
         SectionMatchNav? sectionNav,
         int maxAdditionalMatchEntries,
         int maxResultsToConsume,
+        int maxAdditionalBlocks,
         out int consumedResults,
         out int paragraphsAdded,
         int previouslyRenderedLine = 0)
@@ -6042,7 +6137,8 @@ public sealed partial class MainWindow : Window
 
         while (consumedResults < pendingResults.Count
                && consumedResults < maxResultsToConsume
-               && addedMatchEntries < maxAdditionalMatchEntries)
+             && addedMatchEntries < maxAdditionalMatchEntries
+             && paragraphsAdded < maxAdditionalBlocks)
         {
             var result = pendingResults[consumedResults];
             int lineIndex = result.LineNumber - 1;
@@ -6054,12 +6150,20 @@ public sealed partial class MainWindow : Window
 
             if (previousLine > 0 && result.LineNumber > previousLine + 1)
             {
+                if (paragraphsAdded >= maxAdditionalBlocks)
+                    break;
+
                 var gap = new Paragraph();
                 var gapRun = new Run { Text = "  \u22EE" };
                 gapRun.Foreground = new SolidColorBrush(Microsoft.UI.Colors.DimGray);
                 gap.Inlines.Add(gapRun);
                 section.Blocks.Add(gap);
+                paragraphsAdded++;
             }
+
+            if (paragraphsAdded >= maxAdditionalBlocks)
+                break;
+
             bool continuationGutter = result.LineNumber <= previouslyRenderedLine || result.LineNumber == previousLine;
             previousLine = result.LineNumber;
             AddPreviewLineParagraphsAroundResult(
@@ -6792,8 +6896,13 @@ public sealed partial class MainWindow : Window
         source = "unavailable";
 
         double viewportHeight = PreviewScrollViewer.ViewportHeight;
+        double viewportWidth = PreviewScrollViewer.ActualWidth;
         if (viewportHeight <= 0)
             viewportHeight = Math.Max(0, PreviewScrollViewer.ActualHeight - PreviewScrollViewer.Padding.Top - PreviewScrollViewer.Padding.Bottom);
+        if (viewportWidth <= 0)
+            viewportWidth = PreviewScrollViewer.ViewportWidth;
+        if (viewportWidth <= 0)
+            viewportWidth = Math.Max(0, PreviewScrollViewer.ActualWidth - PreviewScrollViewer.Padding.Left - PreviewScrollViewer.Padding.Right);
         if (viewportHeight <= 0)
             return false;
 
@@ -6814,12 +6923,12 @@ public sealed partial class MainWindow : Window
             if (IsUsableTextRect(endRect) && Math.Abs(endRect.Y - rect.Y) > rowTolerance)
             {
                 var endPoint = TransformRunRectToOverlay(block, targetPara, endRect);
-                point = new Windows.Foundation.Point(Math.Max(0, endPoint.X - markerWidth), endPoint.Y);
+                point = new Windows.Foundation.Point(ClampOverlayMarkerLeft(endPoint.X - markerWidth, markerWidth, viewportWidth), endPoint.Y);
                 source = "end";
             }
             else if (_activeMatchHighlight is { para: var activePara, column: var activeColumn }
                 && ReferenceEquals(activePara, targetPara)
-                && TryGetEstimatedWrappedMatchPoint(block, targetPara, activeColumn, markerHeight, point, out var estimatedPoint, out var estimateDetails))
+                && TryGetEstimatedWrappedMatchPoint(block, targetPara, activeColumn, markerHeight, viewportWidth, markerWidth, point, out var estimatedPoint, out var estimateDetails))
             {
                 point = estimatedPoint;
                 source = $"wrapped-estimate {estimateDetails}";
@@ -6844,11 +6953,15 @@ public sealed partial class MainWindow : Window
                 || !ReferenceEquals(activeRun, targetRun))
                 return false;
 
-            double viewportWidth = PreviewScrollViewer.ActualWidth;
             double viewportTop = PreviewScrollViewer.Padding.Top;
             double viewportHeight = PreviewScrollViewer.ViewportHeight;
+            double viewportWidth = PreviewScrollViewer.ActualWidth;
             if (viewportHeight <= 0)
                 viewportHeight = Math.Max(0, PreviewScrollViewer.ActualHeight - PreviewScrollViewer.Padding.Top - PreviewScrollViewer.Padding.Bottom);
+            if (viewportWidth <= 0)
+                viewportWidth = PreviewScrollViewer.ViewportWidth;
+            if (viewportWidth <= 0)
+                viewportWidth = Math.Max(0, PreviewScrollViewer.ActualWidth - PreviewScrollViewer.Padding.Left - PreviewScrollViewer.Padding.Right);
             double viewportBottom = viewportTop + viewportHeight;
             if (viewportWidth <= 0 || viewportHeight <= 0)
                 return false;
@@ -6878,17 +6991,17 @@ public sealed partial class MainWindow : Window
             {
                 double rowTolerance = Math.Max(4, markerHeight * 0.6);
                 bool actualPointInViewport = point.X >= 0
-                    && point.X <= viewportWidth
+                    && point.X + markerWidth <= viewportWidth
                     && point.Y >= viewportTop
                     && point.Y + markerHeight <= viewportBottom;
                 if (IsUsableTextRect(endRect) && Math.Abs(endRect.Y - rect.Y) > rowTolerance)
                 {
                     var endPoint = TransformRunRectToOverlay(block, targetPara, endRect);
-                    point = new Windows.Foundation.Point(Math.Max(0, endPoint.X - markerWidth), endPoint.Y);
+                    point = new Windows.Foundation.Point(ClampOverlayMarkerLeft(endPoint.X - markerWidth, markerWidth, viewportWidth), endPoint.Y);
                     usedEndRect = true;
                 }
                 else if (!actualPointInViewport
-                    && TryGetEstimatedWrappedMatchPoint(block, targetPara, activeColumn, markerHeight, point, out var estimatedPoint, out var estimateDetails))
+                    && TryGetEstimatedWrappedMatchPoint(block, targetPara, activeColumn, markerHeight, viewportWidth, markerWidth, point, out var estimatedPoint, out var estimateDetails))
                 {
                     point = estimatedPoint;
                     usedWrappedEstimate = true;
@@ -6972,7 +7085,22 @@ public sealed partial class MainWindow : Window
                 return false;
             }
 
-            double markerLeft = point.X;
+            bool markerHorizontallyOutside = point.X < 0 || point.X + markerWidth > viewportWidth;
+            if (!ViewModel.PreviewWordWrap && markerHorizontallyOutside)
+            {
+                if (retryIfCenterRejected)
+                    ScrollMatchHorizontallyIntoView(block, targetPara);
+
+                if (LogService.Instance.IsVerboseEnabled)
+                {
+                    int paragraphIndex = GetParagraphIndex(block, targetPara);
+                    LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: rejecting horizontally offscreen marker idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, pointX={point.X:N1}, markerW={markerWidth:N1}, viewportW={viewportWidth:N1}, retry={retryIfCenterRejected}");
+                }
+                return false;
+            }
+
+            double markerLeft = ClampOverlayMarkerLeft(point.X, markerWidth, viewportWidth);
+            double visibleMarkerWidth = Math.Min(markerWidth, Math.Max(12, viewportWidth - markerLeft));
 
             ActiveMatchBand.Height = markerHeight;
             ActiveMatchBand.Width = viewportWidth;
@@ -6980,7 +7108,7 @@ public sealed partial class MainWindow : Window
             Canvas.SetLeft(ActiveMatchBand, 0);
 
             ActiveMatchWordMarker.Height = markerHeight;
-            ActiveMatchWordMarker.Width = markerWidth;
+            ActiveMatchWordMarker.Width = visibleMarkerWidth;
             Canvas.SetTop(ActiveMatchWordMarker, overlayTop);
             Canvas.SetLeft(ActiveMatchWordMarker, markerLeft);
 
@@ -6989,7 +7117,7 @@ public sealed partial class MainWindow : Window
             {
                 int paragraphIndex = GetParagraphIndex(block, targetPara);
                 string expectedScroll = expectedVerticalOffset.HasValue ? expectedVerticalOffset.Value.ToString("N1") : "actual";
-                LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, rect=({rect.X:N1},{rect.Y:N1},{rect.Width:N1},{rect.Height:N1}), endRect=({endRect.X:N1},{endRect.Y:N1},{endRect.Width:N1},{endRect.Height:N1}), point=({point.X:N1},{point.Y:N1}), scrollY={currentVerticalOffset:N1}, expectedScrollY={expectedScroll}, effectiveScrollY={effectiveVerticalOffset:N1}, centeredActual={centeredFromActualRun}, centerAccepted={actualCenterAccepted}, endRectUsed={usedEndRect}, wrapEstimateUsed={usedWrappedEstimate}, marker=({markerLeft:N1},{overlayTop:N1},{markerWidth:N1},{markerHeight:N1}), text='{targetRun.Text}'");
+                LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, rect=({rect.X:N1},{rect.Y:N1},{rect.Width:N1},{rect.Height:N1}), endRect=({endRect.X:N1},{endRect.Y:N1},{endRect.Width:N1},{endRect.Height:N1}), point=({point.X:N1},{point.Y:N1}), scrollY={currentVerticalOffset:N1}, expectedScrollY={expectedScroll}, effectiveScrollY={effectiveVerticalOffset:N1}, centeredActual={centeredFromActualRun}, centerAccepted={actualCenterAccepted}, endRectUsed={usedEndRect}, wrapEstimateUsed={usedWrappedEstimate}, marker=({markerLeft:N1},{overlayTop:N1},{visibleMarkerWidth:N1},{markerHeight:N1}), unclampedMarkerW={markerWidth:N1}, text='{targetRun.Text}'");
             }
             return true;
         }
@@ -7089,6 +7217,8 @@ public sealed partial class MainWindow : Window
         Paragraph targetPara,
         int column,
         double markerHeight,
+        double viewportWidth,
+        double markerWidth,
         Windows.Foundation.Point actualPoint,
         out Windows.Foundation.Point estimatedPoint,
         out string details)
@@ -7117,16 +7247,29 @@ public sealed partial class MainWindow : Window
         double lineHeight = Math.Max(markerHeight, firstRect.Height);
         double expectedTop = firstPoint.Y + wrappedLineIndex * lineHeight;
         double rowTolerance = Math.Max(4, lineHeight * 0.6);
-        if (Math.Abs(actualPoint.Y - expectedTop) <= rowTolerance)
+        bool actualRowMatchesEstimate = Math.Abs(actualPoint.Y - expectedTop) <= rowTolerance;
+        bool actualMarkerHorizontallyVisible = actualPoint.X >= 0
+            && actualPoint.X + markerWidth <= viewportWidth;
+        if (actualRowMatchesEstimate && actualMarkerHorizontallyVisible)
             return false;
 
         double expectedLeft = firstPoint.X + (column % charsPerWrappedLine) * charWidth;
-        double correctedTop = expectedTop < actualPoint.Y - rowTolerance
+        double correctedTop = actualRowMatchesEstimate
             ? actualPoint.Y
-            : expectedTop;
-        estimatedPoint = new Windows.Foundation.Point(Math.Max(0, expectedLeft), correctedTop);
-        details = $"column={column}, charsPerLine={charsPerWrappedLine}, wrapRow={wrappedLineIndex}, actual=({actualPoint.X:N1},{actualPoint.Y:N1}), estimated=({estimatedPoint.X:N1},{estimatedPoint.Y:N1})";
+            : (expectedTop < actualPoint.Y - rowTolerance ? actualPoint.Y : expectedTop);
+        double correctedLeft = ClampOverlayMarkerLeft(expectedLeft, markerWidth, viewportWidth);
+        estimatedPoint = new Windows.Foundation.Point(correctedLeft, correctedTop);
+        details = $"column={column}, charsPerLine={charsPerWrappedLine}, wrapRow={wrappedLineIndex}, actual=({actualPoint.X:N1},{actualPoint.Y:N1}), actualXVisible={actualMarkerHorizontallyVisible}, estimated=({estimatedPoint.X:N1},{estimatedPoint.Y:N1})";
         return true;
+    }
+
+    private static double ClampOverlayMarkerLeft(double left, double markerWidth, double viewportWidth)
+    {
+        if (double.IsNaN(left) || double.IsInfinity(left))
+            return 0;
+
+        double maxLeft = Math.Max(0, viewportWidth - Math.Max(1, markerWidth));
+        return Math.Clamp(left, 0, maxLeft);
     }
 
     private void HideActiveMatchOverlay()
@@ -7439,7 +7582,24 @@ public sealed partial class MainWindow : Window
         }
 
         double charWidth = EstimatePreviewCharWidth(block);
-        double matchStart = 8 + column * charWidth;
+        double estimatedMatchStart = 8 + column * charWidth;
+        double matchStart = estimatedMatchStart;
+        string source = "estimated";
+        var rect = activeRun.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+        if (IsUsableTextRect(rect))
+        {
+            try
+            {
+                var measuredPoint = block.TransformToVisual(scroller)
+                    .TransformPoint(new Windows.Foundation.Point(rect.X, rect.Y));
+                if (!double.IsNaN(measuredPoint.X) && !double.IsInfinity(measuredPoint.X))
+                {
+                    matchStart = measuredPoint.X + scroller.HorizontalOffset;
+                    source = "measured";
+                }
+            }
+            catch { }
+        }
         double matchWidth = Math.Max(charWidth, (activeRun.Text?.Length ?? 0) * charWidth);
         double matchEnd = matchStart + matchWidth;
         double viewportLeft = scroller.HorizontalOffset;
@@ -7461,7 +7621,7 @@ public sealed partial class MainWindow : Window
 
         bool horizontalAccepted = scroller.ChangeView(targetHorizontalOffset, null, null, disableAnimation: true);
         if (LogService.Instance.IsVerboseEnabled)
-            LogService.Instance.Verbose("Preview", $"ScrollMatchHorizontallyIntoView: idx={_currentMatchIndex}, column={column}, runLen={activeRun.Text?.Length ?? 0}, charW={charWidth:N1}, beforeX={beforeHorizontalOffset:N1}, targetX={targetHorizontalOffset:N1}, viewportW={scroller.ViewportWidth:N1}, scrollableW={scroller.ScrollableWidth:N1}, accepted={horizontalAccepted}, sectionScroller={_sectionMatchNavs.ContainsKey(block)}");
+            LogService.Instance.Verbose("Preview", $"ScrollMatchHorizontallyIntoView: idx={_currentMatchIndex}, column={column}, runLen={activeRun.Text?.Length ?? 0}, source={source}, matchStart={matchStart:N1}, estimateStart={estimatedMatchStart:N1}, charW={charWidth:N1}, beforeX={beforeHorizontalOffset:N1}, targetX={targetHorizontalOffset:N1}, viewportW={scroller.ViewportWidth:N1}, scrollableW={scroller.ScrollableWidth:N1}, accepted={horizontalAccepted}, sectionScroller={_sectionMatchNavs.ContainsKey(block)}");
     }
 
     private int MatchNavFileCount => _sectionMatchNavs.Count > 0
@@ -8225,6 +8385,7 @@ public sealed partial class MainWindow : Window
                 sn,
                 MaxMatchEntriesPerExpandChunk,
                 chunkSize,
+                MaxPreviewBlocksPerExpandChunk,
                 out consumed,
                 out _,
                 ov.LastRenderedLine);
@@ -8233,8 +8394,12 @@ public sealed partial class MainWindow : Window
         }
         else
         {
+            int blocksAdded = 0;
             for (int ri = 0; ri < chunkSize; ri++)
             {
+                if (blocksAdded >= MaxPreviewBlocksPerExpandChunk)
+                    break;
+
                 var r = ov.RemainingResults[ri];
                 var sep = new Paragraph { Margin = new Thickness(0, 8, 0, 4) };
                 var label = $"\u00A0Line\u00A0{r.LineNumber}\u00A0";
@@ -8242,12 +8407,17 @@ public sealed partial class MainWindow : Window
                 sepRun.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 60, 140, 60));
                 sep.Inlines.Add(sepRun);
                 section.Blocks.Add(sep);
+                blocksAdded++;
 
                 var lines = GetPreviewLines(r, ov.AllLines, ov.PreviewLines, fullFile: false);
                 foreach (var (line, lineNum) in lines)
                 {
+                    if (blocksAdded >= MaxPreviewBlocksPerExpandChunk)
+                        break;
+
                     bool isMatchLine = lineNum == r.LineNumber;
-                    AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, ov.Rx, truncate: true, _matchParagraphs, sn, out _);
+                    AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, ov.Rx, truncate: true, _matchParagraphs, sn, out int addedParagraphs);
+                    blocksAdded += addedParagraphs;
                 }
                 consumed++;
                 if (_matchParagraphs.Count - beforeCount >= MaxMatchEntriesPerExpandChunk)
