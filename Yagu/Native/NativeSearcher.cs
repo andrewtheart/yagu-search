@@ -149,7 +149,7 @@ internal static partial class NativeSearcher
     private static bool TryLoad()
     {
         // Resolve relative to this assembly's directory so unpackaged xcopy works.
-        var dir = Path.GetDirectoryName(typeof(NativeSearcher).Assembly.Location);
+        var dir = AppContext.BaseDirectory;
         if (!string.IsNullOrEmpty(dir))
         {
             NativeLibrary.SetDllImportResolver(typeof(NativeSearcher).Assembly, (name, asm, _) =>

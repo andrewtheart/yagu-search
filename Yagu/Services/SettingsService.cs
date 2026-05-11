@@ -4,6 +4,10 @@ using Yagu.Models;
 
 namespace Yagu.Services;
 
+[JsonSerializable(typeof(AppSettings))]
+[JsonSourceGenerationOptions(WriteIndented = true)]
+internal partial class AppSettingsJsonContext : JsonSerializerContext { }
+
 public sealed class AppSettings
 {
     public const string LegacyDefaultSkipExtensions = "exe;dll;pdb;obj;lib;so;dylib;zip;gz;tar;7z;rar;bz2;xz;iso;cab;msi;nupkg;whl;png;jpg;jpeg;gif;bmp;ico;tif;tiff;webp;svg;mp3;mp4;avi;mov;wmv;flv;mkv;wav;ogg;flac;woff;woff2;ttf;eot;otf;pdf;doc;docx;xls;xlsx;ppt;pptx";
@@ -105,7 +109,7 @@ public sealed class AppSettings
 public sealed class SettingsService
 {
     private readonly string _path;
-    private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOpts = AppSettingsJsonContext.Default.Options;
 
     public SettingsService() : this(DefaultPath()) { }
 
@@ -120,7 +124,7 @@ public sealed class SettingsService
         {
             if (!File.Exists(_path)) return new AppSettings();
             using var fs = File.OpenRead(_path);
-            var settings = JsonSerializer.Deserialize<AppSettings>(fs) ?? new AppSettings();
+            var settings = JsonSerializer.Deserialize(fs, AppSettingsJsonContext.Default.AppSettings) ?? new AppSettings();
             // Migrate: old default was int.MaxValue which caused unbounded memory growth.
             if (settings.MaxResults > SearchOptions.MaxResultsCeiling)
                 settings.MaxResults = SearchOptions.MaxResultsCeiling;
@@ -137,7 +141,7 @@ public sealed class SettingsService
         {
             if (!File.Exists(_path)) return new AppSettings();
             await using var fs = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 4096, FileOptions.Asynchronous);
-            var settings = await JsonSerializer.DeserializeAsync<AppSettings>(fs, cancellationToken: cancellationToken).ConfigureAwait(false) ?? new AppSettings();
+            var settings = await JsonSerializer.DeserializeAsync(fs, AppSettingsJsonContext.Default.AppSettings, cancellationToken).ConfigureAwait(false) ?? new AppSettings();
             if (settings.MaxResults > SearchOptions.MaxResultsCeiling)
                 settings.MaxResults = SearchOptions.MaxResultsCeiling;
             if (IsLegacyDefaultSkipExtensions(settings.SkipExtensions))
@@ -157,7 +161,7 @@ public sealed class SettingsService
             var dir = Path.GetDirectoryName(_path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             using var fs = File.Create(_path);
-            JsonSerializer.Serialize(fs, settings, JsonOpts);
+            JsonSerializer.Serialize(fs, settings, AppSettingsJsonContext.Default.AppSettings);
         }
         catch (Exception ex) { LogService.Instance.Warning("Settings", $"Failed to save settings to {_path}", ex); }
     }
@@ -169,7 +173,7 @@ public sealed class SettingsService
             var dir = Path.GetDirectoryName(_path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             await using var fs = new FileStream(_path, FileMode.Create, FileAccess.Write, FileShare.Read, 4096, FileOptions.Asynchronous);
-            await JsonSerializer.SerializeAsync(fs, settings, JsonOpts, cancellationToken).ConfigureAwait(false);
+            await JsonSerializer.SerializeAsync(fs, settings, AppSettingsJsonContext.Default.AppSettings, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) { LogService.Instance.Warning("Settings", $"Failed to save settings to {_path}", ex); }
     }

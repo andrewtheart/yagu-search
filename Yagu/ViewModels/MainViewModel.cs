@@ -1007,19 +1007,16 @@ public sealed partial class MainViewModel : ObservableObject
         _resultStore?.Dispose();
         _resultStore = new ResultStore();
 
-        // Force a full blocking collection so the previous search's result graph
-        // (potentially gigabytes of SearchResult strings) is reclaimed before
-        // the new search starts allocating.  Follow with WaitForPendingFinalizers
-        // to release any weak-referenced finalizable objects, then a second pass
-        // to collect objects freed by finalizers.  Request a one-shot LOH
-        // compaction so the many large arrays from the previous search
-        // (per-match context lists, pooled buffers, big strings) don't leave
-        // the heap fragmented for the next run.
-        System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
-            System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
-        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
-        GC.WaitForPendingFinalizers();
-        GC.Collect(0, GCCollectionMode.Forced, blocking: true);
+        // Reclaim the previous search's result graph on the threadpool so the
+        // UI thread isn't blocked by a full compacting GC.
+        _ = Task.Run(() =>
+        {
+            System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(0, GCCollectionMode.Forced, blocking: true);
+        });
 
         ErrorText = null;
         FallbackReason = null;
@@ -1246,6 +1243,52 @@ public sealed partial class MainViewModel : ObservableObject
         // GC is now triggered by the worker threads after the eviction signal,
         // keeping the UI thread responsive.
         return evicted;
+    }
+
+    /// <summary>
+    /// Clear all search results, dispose the disk-backed temp store,
+    /// and perform a compacting GC.
+    /// </summary>
+    public async Task ClearResultsAsync()
+    {
+        if (IsSearching)
+            await CancelAsync();
+
+        _resultCollection.Clear();
+        FileMetadataCache.Clear();
+
+        var oldStore = _resultStore;
+        _resultStore = null;
+
+        MatchesFound = 0;
+        FilesScanned = 0;
+        TotalFiles = 0;
+        FilesSkipped = 0;
+        AccessDeniedCount = 0;
+        ErrorText = null;
+        FallbackReason = null;
+        Truncated = false;
+        Degraded = false;
+        DegradedNoticeText = string.Empty;
+        FilesPerSecondText = string.Empty;
+        StatusText = string.Empty;
+        ThroughputSamples.Clear();
+
+        OnPropertyChanged(nameof(HasResults));
+        OnPropertyChanged(nameof(ShowEmptyState));
+
+        // Dispose the old store (deletes temp file) and GC on the threadpool
+        // so the UI stays responsive.
+        await Task.Run(() =>
+        {
+            oldStore?.Dispose();
+
+            System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+        }).ConfigureAwait(true);
     }
 
     /// <summary>Hydrate an evicted result from disk so its full data is available.</summary>

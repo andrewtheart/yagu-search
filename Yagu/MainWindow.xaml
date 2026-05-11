@@ -18,7 +18,7 @@
             <RowDefinition x:Name="TitleBarRow" Height="Auto" />  <!-- Custom title bar -->
             <RowDefinition Height="Auto" />  <!-- Admin banner -->
             <RowDefinition Height="Auto" />  <!-- Search card -->
-            <RowDefinition Height="Auto" />  <!-- Status / progress -->
+            <RowDefinition x:Name="ProgressRow" Height="Auto" />  <!-- Status / progress -->
             <RowDefinition x:Name="SplitPaneRow" Height="*" />     <!-- Split pane -->
             <RowDefinition x:Name="StatusBarRow" Height="Auto" />  <!-- Status bar -->
         </Grid.RowDefinitions>
@@ -460,6 +460,11 @@
                             <TextBlock Text="Context:" VerticalAlignment="Center" FontSize="12" Opacity="0.7" />
                             <NumberBox Value="{x:Bind ViewModel.ContextLines, Mode=TwoWay}" Minimum="0" Maximum="20"
                                        SpinButtonPlacementMode="Compact" MinWidth="64" Width="64" FontSize="12" />
+                            <Button Click="OnClearResults" Background="Transparent" BorderThickness="0"
+                                    Padding="6,4" VerticalAlignment="Center"
+                                    ToolTipService.ToolTip="Clear all results (Ctrl+Shift+Delete)">
+                                <FontIcon Glyph="&#xE74D;" FontSize="12" />
+                            </Button>
                         </StackPanel>
                         </StackPanel>
                         <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.DegradedNoticeText, Mode=OneWay}"
@@ -1075,6 +1080,7 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Text="{x:Bind ViewModel.FilesPerSecondText, Mode=OneWay}" Opacity="0.6" FontSize="12" FontFamily="Consolas" />
             <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Opacity="0.8" FontSize="12" />
@@ -1089,6 +1095,13 @@
             <TextBlock Grid.Column="4" Foreground="DarkOrange" FontSize="12"
                        Visibility="{x:Bind ViewModel.Truncated, Mode=OneWay}"
                        Text="Results truncated — refine your query" />
+            <Button x:Name="CollapseChevron" Grid.Column="5" Click="OnToggleResultsPane"
+                    Background="Transparent" BorderThickness="0" Padding="6,2"
+                    VerticalAlignment="Center"
+                    ToolTipService.ToolTip="Collapse/expand results pane">
+                <FontIcon x:Name="CollapseChevronIcon" FontFamily="{StaticResource SymbolThemeFontFamily}"
+                          Glyph="&#xE70D;" FontSize="12" />
+            </Button>
         </Grid>
 
         <!-- Skip breakdown overlay — floats above status bar, toggled by skip-count click -->

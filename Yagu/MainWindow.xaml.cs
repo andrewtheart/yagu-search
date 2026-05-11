@@ -333,6 +333,7 @@ public sealed partial class MainWindow : Window
 
         TitleBarRow.Height = new GridLength(0);
         SplitPaneRow.Height = new GridLength(0);
+        ProgressRow.Height = new GridLength(0);
         StatusBarRow.Height = new GridLength(0);
         AppTitleBar.Visibility = Visibility.Collapsed;
         SplitPaneGrid.Visibility = Visibility.Collapsed;
@@ -452,8 +453,11 @@ public sealed partial class MainWindow : Window
         _launcherMode = false;
 
         SplitPaneRow.Height = new GridLength(1, GridUnitType.Star);
+        ProgressRow.Height = GridLength.Auto;
         StatusBarRow.Height = GridLength.Auto;
         SplitPaneGrid.Visibility = Visibility.Visible;
+        _resultsPaneCollapsed = false;
+        CollapseChevronIcon.Glyph = "\uE70D";
 
         // Grow the borderless window downward in place so the results panel
         // has room. Keep the current X/Y/width — do NOT recenter.
@@ -621,8 +625,11 @@ public sealed partial class MainWindow : Window
 
         // Show results pane and status bar
         SplitPaneRow.Height = new GridLength(1, GridUnitType.Star);
+        ProgressRow.Height = GridLength.Auto;
         StatusBarRow.Height = GridLength.Auto;
         SplitPaneGrid.Visibility = Visibility.Visible;
+        _resultsPaneCollapsed = false;
+        CollapseChevronIcon.Glyph = "\uE70D";
 
         try { ExtendsContentIntoTitleBar = true; } catch { }
         try
@@ -667,6 +674,7 @@ public sealed partial class MainWindow : Window
         TitleBarRow.Height = new GridLength(0);
         AppTitleBar.Visibility = Visibility.Collapsed;
         SplitPaneRow.Height = new GridLength(0);
+        ProgressRow.Height = new GridLength(0);
         StatusBarRow.Height = new GridLength(0);
         SplitPaneGrid.Visibility = Visibility.Collapsed;
 
@@ -3352,6 +3360,26 @@ public sealed partial class MainWindow : Window
         GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
     }
 
+    private async void OnClearResults(object sender, RoutedEventArgs e)
+    {
+        // Clear preview pane
+        _previewResult = null;
+        SetPreviewFileLabel(string.Empty);
+        ClosePreviewEditor();
+        ShowPreviewBlockSurface();
+        PreviewBlock.Blocks.Clear();
+        PreviewSectionsPanel.Children.Clear();
+        FullFileButton.IsEnabled = true;
+        PreviewToolbarContent.Visibility = Visibility.Collapsed;
+        _matchParagraphs.Clear();
+        InvalidateParagraphIndexCache();
+        _currentMatchIndex = -1;
+        HideMatchNavPanel();
+
+        // Clear results, dispose temp store, and GC
+        await ViewModel.ClearResultsAsync();
+    }
+
     private void OnShowInExplorer(object sender, RoutedEventArgs e)
     {
         if (_previewResult is null) return;
@@ -4011,7 +4039,7 @@ public sealed partial class MainWindow : Window
 
     private async Task UpdateMultiSelectPreviewAsync(SearchResult? scrollTarget = null, bool scrollToTop = false)
     {
-        LogService.Instance.Info("Preview", $"UpdateMultiSelectPreviewAsync: scrollTarget='{scrollTarget?.FilePath}', scrollToTop={scrollToTop}, caller={new System.Diagnostics.StackTrace().GetFrame(1)?.GetMethod()?.Name}");
+        LogService.Instance.Info("Preview", $"UpdateMultiSelectPreviewAsync: scrollTarget='{scrollTarget?.FilePath}', scrollToTop={scrollToTop}");
         int gen = ++_previewUpdateGen;
 
         if (!TryLeavePreviewEditorForPreviewChange()) return;
@@ -9141,6 +9169,28 @@ public sealed partial class MainWindow : Window
     }
 
     // ── Skip-count breakdown overlay ─────────────────────────────
+    private bool _resultsPaneCollapsed;
+
+    private void OnToggleResultsPane(object sender, RoutedEventArgs e)
+    {
+        _resultsPaneCollapsed = !_resultsPaneCollapsed;
+
+        if (_resultsPaneCollapsed)
+        {
+            SplitPaneRow.Height = new GridLength(0);
+            ProgressRow.Height = new GridLength(0);
+            SplitPaneGrid.Visibility = Visibility.Collapsed;
+            CollapseChevronIcon.Glyph = "\uE70E"; // ChevronUp
+        }
+        else
+        {
+            SplitPaneRow.Height = new GridLength(1, GridUnitType.Star);
+            ProgressRow.Height = GridLength.Auto;
+            SplitPaneGrid.Visibility = Visibility.Visible;
+            CollapseChevronIcon.Glyph = "\uE70D"; // ChevronDown
+        }
+    }
+
     private void OnSkipCountTapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
     {
         SkipBreakdownOverlay.Visibility =

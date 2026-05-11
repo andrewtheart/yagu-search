@@ -17,6 +17,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PublishAot>true</PublishAot>
     <PublishReadyToRun>true</PublishReadyToRun>
     <InternalsVisibleTo>Yagu.Tests</InternalsVisibleTo>
     <DisableXamlGeneratedMain>true</DisableXamlGeneratedMain>
