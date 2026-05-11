@@ -1281,16 +1281,27 @@ public class SearchSummaryCoverageTests
 public class ComputeAutoProcessMemoryCapTests
 {
     [Fact]
-    public void SixteenGB_ReturnsHalf()
+    public void SixteenGB_ReturnsOneThird()
     {
         long result = SearchService.ComputeAutoProcessMemoryCap(16UL * 1024 * 1024 * 1024);
-        Assert.Equal(8L * 1024 * 1024 * 1024, result);
+        // 16 GB / 3 ≈ 5.33 GB
+        long expected = (long)(16UL * 1024 * 1024 * 1024 / 3);
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void SixtyFourGB_ReturnsOneThird()
+    {
+        long result = SearchService.ComputeAutoProcessMemoryCap(64UL * 1024 * 1024 * 1024);
+        long expected = (long)(64UL * 1024 * 1024 * 1024 / 3);
+        Assert.Equal(expected, result);
     }
 
     [Fact]
     public void FourGB_ReturnsFloor()
     {
         long result = SearchService.ComputeAutoProcessMemoryCap(4UL * 1024 * 1024 * 1024);
+        // 4 GB / 3 ≈ 1.33 GB → clamped to 2 GB floor
         Assert.Equal(2L * 1024 * 1024 * 1024, result);
     }
 

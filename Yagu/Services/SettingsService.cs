@@ -50,6 +50,8 @@ public sealed class AppSettings
     public int MemoryPressurePercent { get; set; } = 80;
     /// <summary>Bounded channel buffer size for the Everything SDK streaming path. Higher values use more memory but can improve throughput.</summary>
     public int SdkChannelBufferSize { get; set; } = 4096;
+    /// <summary>Optional hard cap on stored matches per file. 0 = unlimited (default). Useful for capping pathological files (massive logs, generated dumps) that would otherwise dominate the heap.</summary>
+    public int MaxMatchesPerFile { get; set; }
     /// <summary>Whether to skip binary files during content search. Default true.</summary>
     [JsonIgnore] public bool SkipBinary { get; set; } = true;
     /// <summary>When true, detect ZIP archives by file header and search text files inside them. Default true.</summary>

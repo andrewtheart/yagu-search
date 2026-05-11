@@ -1027,10 +1027,8 @@ public sealed class SearchService
 
         try
         {
-            LogService.Instance.Info("SearchService", "Running coordinated GC for memory pressure relief");
-            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: false);
-            GC.WaitForPendingFinalizers();
-            GC.Collect(2, GCCollectionMode.Optimized, blocking: true, compacting: false);
+            LogService.Instance.Info("SearchService", "Requesting non-blocking GC for memory pressure relief");
+            GC.Collect(2, GCCollectionMode.Optimized, blocking: false, compacting: false);
             Volatile.Write(ref s_lastMemoryPressureGcTicks, Stopwatch.GetTimestamp());
         }
         finally
@@ -1163,12 +1161,15 @@ public sealed class SearchService
         return false;
     }
 
-    // When the user has not set an explicit process cap (0), rely solely on the
-    // pressure-percent threshold.  The old auto-cap (25%/50% of RAM) fired
-    // independently of pressure-percent and triggered memory-saving mode long
-    // before the user's configured system-pressure threshold was reached.
+    // When the user has not set an explicit process cap (0), fall back to the
+    // auto-cap (~33% of physical RAM, 2 GB floor). Previously this returned
+    // long.MaxValue, leaving the process uncapped — only the system-wide
+    // pressure% threshold fired, and only after Yagu had already grown to
+    // 40+ GB on a 64 GB host. Enforcing the auto-cap triggers eviction much
+    // sooner and prevents the working set from ballooning past a sane fraction
+    // of physical memory.
     private static long EffectiveProcessMemoryCap(long maxProcessBytes) =>
-        maxProcessBytes > 0 ? maxProcessBytes : long.MaxValue;
+        maxProcessBytes > 0 ? maxProcessBytes : AutoProcessMemoryCap();
 
     /// <summary>Returns a human-readable snapshot of current memory usage for diagnostics.</summary>
 
@@ -1190,7 +1191,7 @@ public sealed class SearchService
         catch { return "unknown"; }
     }
 
-    /// <summary>Auto-calculates a process memory cap: 25% of total physical RAM, minimum 2 GB.</summary>
+    /// <summary>Auto-calculates a process memory cap: ~33% of total physical RAM, minimum 2 GB.</summary>
 
     internal static long AutoProcessMemoryCap()
     {
@@ -1207,8 +1208,10 @@ public sealed class SearchService
     internal static long ComputeAutoProcessMemoryCap(ulong totalPhysicalBytes)
     {
         const long minCap = 2L * 1024 * 1024 * 1024; // 2 GB floor
-        long half = (long)(totalPhysicalBytes / 2);
-        return Math.Max(half, minCap);
+        // ~33% of physical RAM. Lower than the previous 50% so eviction fires
+        // before the host system starts swapping or stealing pages from other apps.
+        long third = (long)(totalPhysicalBytes / 3);
+        return Math.Max(third, minCap);
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]

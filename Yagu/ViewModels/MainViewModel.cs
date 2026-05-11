@@ -100,6 +100,8 @@ public sealed partial class MainViewModel : ObservableObject
         MemoryLimitMB = _settings.MemoryLimitMB;
         MemoryPressurePercent = _settings.MemoryPressurePercent;
         SdkChannelBufferSize = _settings.SdkChannelBufferSize;
+        MaxMatchesPerFile = _settings.MaxMatchesPerFile;
+        ApplyMaxMatchesPerFile(MaxMatchesPerFile);
         SkipBinary = _settings.SkipBinary;
         SearchInsideArchives = _settings.SearchInsideArchives;
         ArchiveExtensions = _settings.ArchiveExtensions;
@@ -205,6 +207,14 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial int MemoryLimitMB { get; set; }
     [ObservableProperty] public partial int MemoryPressurePercent { get; set; } = 80;
     [ObservableProperty] public partial int SdkChannelBufferSize { get; set; } = 4096;
+    [ObservableProperty] public partial int MaxMatchesPerFile { get; set; }
+
+    partial void OnMaxMatchesPerFileChanged(int value) => ApplyMaxMatchesPerFile(value);
+
+    private static void ApplyMaxMatchesPerFile(int value)
+    {
+        Yagu.Models.FileGroup.MaxMatchesPerGroup = value > 0 ? value : int.MaxValue;
+    }
     [ObservableProperty] public partial bool SkipBinary { get; set; } = true;
     [ObservableProperty] public partial string SkipExtensions { get; set; } = AppSettings.DefaultSkipExtensions;
     [ObservableProperty] public partial bool SearchInsideArchives { get; set; }
@@ -852,15 +862,48 @@ public sealed partial class MainViewModel : ObservableObject
                     case SearchEvent.MemoryPressure mp:
                         DegradedNoticeText = "Memory pressure — paging results to disk";
                         Degraded = true;
-                        LogService.Instance.Warning("ViewModel", $"Memory pressure event received — starting eviction ({_resultCollection.AllGroups.Count:N0} groups, {MatchesFound:N0} matches)");
-                        // Run the expensive disk I/O off the UI thread to avoid freezing.
+                        LogService.Instance.Warning("ViewModel", $"Memory pressure event received — starting async eviction ({_resultCollection.AllGroups.Count:N0} groups, {MatchesFound:N0} matches)");
+                        // Fire-and-forget: the eviction must NOT block this UI event loop,
+                        // otherwise Progress/Match events back up while paging is in flight
+                        // and the search appears frozen. EvictAll only enqueues into the
+                        // ResultStore's background drain channel and returns immediately;
+                        // the actual disk writes and post-eviction compacting GC happen
+                        // on the threadpool below.
                         _ = Task.Run(() =>
                         {
                             var evictSw = System.Diagnostics.Stopwatch.StartNew();
-                            int evictedCount = EvictAllResults();
+                            int enqueued = EvictAllResults();
                             evictSw.Stop();
-                            LogService.Instance.Warning("ViewModel", $"Eviction complete in {evictSw.ElapsedMilliseconds}ms (freed {evictedCount:N0})");
-                            mp.AcknowledgeEviction(evictedCount);
+                            LogService.Instance.Warning("ViewModel", $"Eviction enqueued {enqueued:N0} results in {evictSw.ElapsedMilliseconds}ms (drain continues in background)");
+
+                            // Acknowledge immediately so SearchService leaves eviction-in-flight
+                            // state and can fire the next pressure cycle if memory is still high.
+                            try { mp.AcknowledgeEviction(enqueued); }
+                            catch (Exception ex) { LogService.Instance.Warning("ViewModel", "AcknowledgeEviction threw", ex); }
+
+                            // Wait for the background drain to flush bytes to disk before
+                            // triggering the compacting GC — otherwise we'd compact while
+                            // the match-line/context strings are still rooted by the channel.
+                            try { _resultStore?.Drain(); }
+                            catch (Exception ex) { LogService.Instance.Warning("ViewModel", "ResultStore drain failed", ex); }
+
+                            // Force a blocking compacting Gen2 GC so the working set
+                            // actually shrinks after eviction. Without this, the
+                            // non-blocking optimized GC requested by SearchService
+                            // rarely reclaims LOH-resident match strings/context
+                            // arrays. Runs on the threadpool, not the UI thread.
+                            try
+                            {
+                                System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                                    System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+                                GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+                                GC.WaitForPendingFinalizers();
+                                GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+                            }
+                            catch (Exception ex)
+                            {
+                                LogService.Instance.Warning("ViewModel", "Post-eviction compacting GC failed", ex);
+                            }
                         });
                         break;
                     case SearchEvent.MemoryPressureRelieved relieved:
@@ -1112,16 +1155,10 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void AddMatch(SearchResult result)
     {
-        bool resultAvailabilityChanged;
+        bool resultAvailabilityChanged = AddMatchCore(result, evictedResultWriter: null);
+
         if (Degraded && _resultStore is not null)
-        {
-            resultAvailabilityChanged = false;
-            _resultStore.WriteBatch(writeOne => resultAvailabilityChanged = AddMatchCore(result, writeOne));
-        }
-        else
-        {
-            resultAvailabilityChanged = AddMatchCore(result, evictedResultWriter: null);
-        }
+            _resultStore.EnqueueEvict(result);
 
         if (resultAvailabilityChanged)
             NotifyResultAvailabilityChanged();
@@ -1453,6 +1490,7 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.MemoryLimitMB = MemoryLimitMB;
         _settings.MemoryPressurePercent = MemoryPressurePercent;
         _settings.SdkChannelBufferSize = SdkChannelBufferSize;
+        _settings.MaxMatchesPerFile = MaxMatchesPerFile;
         _settings.SkipBinary = SkipBinary;
         _settings.SearchInsideArchives = SearchInsideArchives;
         _settings.ArchiveExtensions = ArchiveExtensions;

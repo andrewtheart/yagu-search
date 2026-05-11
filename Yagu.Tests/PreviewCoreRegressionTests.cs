@@ -35,17 +35,105 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void FileHeaderClick_SelectsAllAndAddsPreview()
+    public void FileHeaderControlClickAndDoubleClick_AreHeaderPreviewAddGestures()
     {
+        Assert.Contains("AutomationProperties.AutomationId=\"FileGroupCheckBox\"", MainWindowXaml);
+
+        string headerCheckbox = ExtractXamlWindow("AutomationProperties.AutomationId=\"FileGroupCheckBox\"", 500);
+        Assert.Contains("IsChecked=\"{x:Bind AllSelected, Mode=OneWay}\"", headerCheckbox);
+        Assert.Contains("Click=\"OnFileGroupCheckBoxClicked\"", headerCheckbox);
+        Assert.DoesNotContain("IsHitTestVisible=\"False\"", headerCheckbox);
+        Assert.DoesNotContain("Checked=\"OnSelectAllChecked\"", headerCheckbox);
+        Assert.DoesNotContain("Unchecked=\"OnSelectAllUnchecked\"", headerCheckbox);
+
+        string headerGrid = ExtractXamlWindow("PointerPressed=\"OnFileGroupHeaderPointerPressed\"", 260);
+        Assert.Contains("PointerReleased=\"OnFileGroupHeaderPointerReleased\"", headerGrid);
+        Assert.Contains("Tapped=\"OnFileGroupHeaderTapped\"", headerGrid);
+        Assert.Contains("DoubleTapped=\"OnFileGroupHeaderDoubleTapped\"", headerGrid);
+
+        string pointerPressed = ExtractMethodWindow(MainWindowSource, "OnFileGroupHeaderPointerPressed", window: 1800);
+        Assert.Contains("_ctrlFileHeaderGestureWasExpanded = group.IsExpanded;", pointerPressed);
+        Assert.Contains("e.Handled = true;", pointerPressed);
+
+        string pointerReleased = ExtractMethodWindow(MainWindowSource, "OnFileGroupHeaderPointerReleased", window: 2200);
+        AssertContainsInOrder(pointerReleased,
+            "bool wasExpanded = _ctrlFileHeaderGestureWasExpanded;",
+            "ClearCtrlFileHeaderGesture();",
+            "await SelectFileGroupMatchesAndPreviewAsync(group, \"ctrl click\", preserveExpansionState: wasExpanded);");
+
         string headerTap = ExtractMethodWindow(MainWindowSource, "OnFileGroupHeaderTapped");
-        Assert.Contains("SelectFileGroupMatches(g);", headerTap);
-        Assert.Contains("_initialMatchScrolled = false;", headerTap);
-        Assert.DoesNotContain("if (!g.IsExpanded)", headerTap);
-        Assert.Contains("var results = g.Where(r => r.IsSelected).ToList();", headerTap);
         AssertContainsInOrder(headerTap,
-            "if (TryScrollToPreviewSection(g.FilePath))",
+            "if (IsInsideHeaderCommand(e.OriginalSource as DependencyObject, header))",
             "return;",
-            "await PrependPreviewSectionsForFilesAsync(newFiles, g.FilePath);");
+            "if (IsControlKeyDown())",
+            "e.Handled = true;",
+            "if (WasCtrlFileHeaderPreviewJustHandled(g))",
+            "return;",
+            "await SelectFileGroupMatchesAndPreviewAsync(g, \"ctrl click\", preserveExpansionState: wasExpanded);",
+            "if (g.IsExpanded)",
+            "collapse only",
+            "return;",
+            "expand only");
+        Assert.DoesNotContain("SelectFileGroupMatchesAndPreviewAsync(g, \"single click\")", headerTap);
+
+        string doubleTap = ExtractMethodWindow(MainWindowSource, "OnFileGroupHeaderDoubleTapped");
+        AssertContainsInOrder(doubleTap,
+            "if (IsInsideHeaderCommand(e.OriginalSource as DependencyObject, header))",
+            "return;",
+            "e.Handled = true;",
+            "await SelectFileGroupMatchesAndPreviewAsync(g, \"double click\");");
+
+        string selectAndPreview = ExtractMethodWindow(MainWindowSource, "SelectFileGroupMatchesAndPreviewAsync");
+        Assert.Contains("SelectFileGroupMatches(group);", selectAndPreview);
+        Assert.Contains("_initialMatchScrolled = false;", selectAndPreview);
+        Assert.Contains("var results = group.Where(r => r.IsSelected).ToList();", selectAndPreview);
+        Assert.Contains("RecordCtrlFileHeaderPreview(group.FilePath);", selectAndPreview);
+        Assert.Contains("group.IsExpanded = targetState;", selectAndPreview);
+        Assert.Contains("DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low", selectAndPreview);
+        AssertContainsInOrder(selectAndPreview,
+            "if (TryScrollToPreviewSection(group.FilePath))",
+            "return;",
+            "await PrependPreviewSectionsForFilesAsync(newFiles, group.FilePath);");
+
+        string selectMatches = ExtractMethodWindow(MainWindowSource, "SelectFileGroupMatches");
+        Assert.Contains("group.AllSelected && group.SelectedCount == group.Count", selectMatches);
+    }
+
+    [Fact]
+    public void SelectionOnlyClicks_DoNotAddFilesToPreviewPanel()
+    {
+        string itemClick = ExtractMethodWindow(MainWindowSource, "OnResultItemClick", window: 450);
+        Assert.Contains("OnResultItemClick: no preview change", itemClick);
+        Assert.DoesNotContain("UpdatePreviewAsync(g[0])", itemClick);
+        Assert.DoesNotContain("TryScrollToPreviewSection(g[0].FilePath)", itemClick);
+
+        string headerTap = ExtractMethodWindow(MainWindowSource, "OnFileGroupHeaderTapped");
+        Assert.DoesNotContain("SelectFileGroupMatchesAndPreviewAsync(g, \"single click\")", headerTap);
+
+        string tapped = ExtractMethodWindow(MainWindowSource, "OnMatchLineTapped", window: 900);
+        Assert.Contains("OnMatchLineTapped: no preview change", tapped);
+        Assert.DoesNotContain("UpdatePreviewAsync", tapped);
+        Assert.DoesNotContain("UpdateMultiSelectPreviewAsync", tapped);
+        Assert.DoesNotContain("PrependPreviewSectionsForFilesAsync", tapped);
+    }
+
+    [Fact]
+    public void FileHeaderCheckbox_ClickSelectsOrDeselectsAllChildMatches()
+    {
+        string checkboxClicked = ExtractMethodWindow(MainWindowSource, "OnFileGroupCheckBoxClicked");
+        Assert.Contains("sender is not CheckBox checkBox || checkBox.DataContext is not FileGroup group", checkboxClicked);
+        Assert.Contains("bool shouldSelect = checkBox.IsChecked == true;", checkboxClicked);
+        Assert.Contains("_suppressPreviewUpdate = true;", checkboxClicked);
+        AssertContainsInOrder(checkboxClicked,
+            "if (isShift && currentIndex >= 0)",
+            "if (shouldSelect)",
+            "ViewModel.ResultGroups[i].SelectAll();",
+            "else",
+            "ViewModel.ResultGroups[i].DeselectAll();",
+            "else if (shouldSelect)",
+            "group.SelectAll();",
+            "else",
+            "group.DeselectAll();");
     }
 
     [Fact]
@@ -150,29 +238,52 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void LineCheckboxClick_UpdatesPreviewAndSelectionSummary()
+    public void LineCheckboxClick_UpdatesSelectionOnly()
     {
         Assert.Contains("Click=\"OnMatchLineCheckBoxClicked\"", MainWindowXaml);
 
         string tapped = ExtractMethodWindow(MainWindowSource, "OnMatchLineTapped");
-        Assert.Contains("UpdatePreviewForMatchLineAsync(r, nameof(OnMatchLineTapped), previewClickedLineWhenNotMulti: true)", tapped);
+        Assert.Contains("e.OriginalSource is DependencyObject source && IsInsideButton(source)", tapped);
+        Assert.Contains("OnMatchLineTapped: no preview change", tapped);
 
-        string checkboxClicked = ExtractMethodWindow(MainWindowSource, "OnMatchLineCheckBoxClicked");
-        Assert.Contains("r.IsSelected = isChecked;", checkboxClicked);
-        Assert.Contains("UpdatePreviewForMatchLineAsync(r, nameof(OnMatchLineCheckBoxClicked), previewClickedLineWhenNotMulti: false)", checkboxClicked);
+        string checkboxClicked = ExtractMethodWindow(MainWindowSource, "OnMatchLineCheckBoxClicked", window: 1000);
+        Assert.Contains("result.IsSelected = isChecked;", checkboxClicked);
+        Assert.Contains("UpdateSelectionForMatchLine(result, nameof(OnMatchLineCheckBoxClicked));", checkboxClicked);
+        Assert.DoesNotContain("UpdatePreviewAsync", checkboxClicked);
+        Assert.DoesNotContain("UpdateMultiSelectPreviewAsync", checkboxClicked);
 
-        string previewForLine = ExtractMethodWindow(MainWindowSource, "UpdatePreviewForMatchLineAsync", window: 1800);
-        Assert.Contains("FindParentGroup(r)?.NotifySelectionChanged();", previewForLine);
-        Assert.Contains("ViewModel.GetAllSelectedResults();", previewForLine);
-        AssertContainsInOrder(previewForLine,
-            "if (selected.Count >= 2)",
-            "await UpdateMultiSelectPreviewAsync(scrollTarget: r.IsSelected ? r : null);",
-            "else if (selected.Count == 1)",
-            "await UpdatePreviewAsync(previewClickedLineWhenNotMulti ? r : selected[0]);",
-            "else if (previewClickedLineWhenNotMulti)",
-            "await UpdatePreviewAsync(r);",
-            "else",
-            "await UpdateMultiSelectPreviewAsync();");
+        string selectionForLine = ExtractMethodWindow(MainWindowSource, "UpdateSelectionForMatchLine", window: 900);
+        Assert.Contains("FindParentGroup(result)?.NotifySelectionChanged();", selectionForLine);
+        Assert.Contains("ViewModel.GetAllSelectedResults();", selectionForLine);
+        Assert.Contains("selection only", selectionForLine);
+        Assert.DoesNotContain("UpdatePreviewAsync", selectionForLine);
+        Assert.DoesNotContain("UpdateMultiSelectPreviewAsync", selectionForLine);
+    }
+
+    [Fact]
+    public void PreviewContextChange_PreservesScrollAndAllowsUnboundedInput()
+    {
+        Assert.Contains("Value=\"{x:Bind ViewModel.PreviewContextLines, Mode=TwoWay}\" Minimum=\"0\"", MainWindowXaml);
+        Assert.DoesNotContain("ViewModel.PreviewContextLines, Mode=TwoWay}\" Minimum=\"0\" Maximum", MainWindowXaml);
+        Assert.Contains("var prevCtx = new NumberBox { Value = ViewModel.PreviewContextLines, Minimum = 0 };", MainWindowSource);
+        Assert.Contains("RefreshCurrentPreview(preserveScroll: true);", MainWindowSource);
+
+        string refresh = ExtractMethodWindow(MainWindowSource, "RefreshCurrentPreview", window: 4500);
+        AssertContainsInOrder(refresh,
+            "double restoreHorizontalOffset = PreviewScrollViewer.HorizontalOffset;",
+            "double restoreVerticalOffset = PreviewScrollViewer.VerticalOffset;",
+            "int restoreMatchIndex = preserveScroll ? _currentMatchIndex : -1;",
+            "_suppressInitialMatchAutoScroll = true;",
+            "await UpdateMultiSelectPreviewAsync();",
+            "RestorePreviewScrollOffset(restoreHorizontalOffset, restoreVerticalOffset);",
+            "RestoreActiveMatchAfterPreviewRefresh(restoreMatchIndex);");
+
+        string restore = ExtractMethodWindow(MainWindowSource, "RestorePreviewScrollOffset", window: 2400);
+        Assert.Contains("PreviewScrollViewer.ChangeView(targetX, targetY, null, disableAnimation: true);", restore);
+        Assert.Contains("DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, ApplyRestore);", restore);
+
+        string updateMatchNav = ExtractMethodWindow(MainWindowSource, "UpdateMatchNavPanel");
+        Assert.Contains("&& !_suppressInitialMatchAutoScroll", updateMatchNav);
     }
 
     [Fact]
@@ -188,10 +299,18 @@ public sealed class PreviewCoreRegressionTests
             "DispatcherQueue.TryEnqueue",
             "ScrollPreviewToLine(_matchParagraphs[0].block, _matchParagraphs[0].para);",
             "_currentMatchIndex = -1;",
-            "OnNextMatch(this, new RoutedEventArgs());");
+            "_ = GoToNextMatchAsync();");
+        Assert.DoesNotContain("OnNextMatch(this, new RoutedEventArgs())", updateMatchNav);
 
         string nextMatch = ExtractMethodWindow(MainWindowSource, "OnNextMatch");
+        Assert.Contains("ShowBulkMatchStepFlyout(NextMatchButton, BulkNextMatch);", nextMatch);
+        Assert.Contains("await GoToNextMatchAsync();", nextMatch);
+
+        string goToNext = ExtractMethodWindow(MainWindowSource, "GoToNextMatchAsync", window: 3200);
+        Assert.DoesNotContain("ShowBulkMatchStepFlyout", goToNext);
         AssertContainsInOrder(nextMatch,
+            "await GoToNextMatchAsync();");
+        AssertContainsInOrder(goToNext,
             "BoxMatchRun(para, matchInPara);",
             "ScrollAfterMatchNavigation(block, para");
     }
@@ -226,6 +345,11 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("<Canvas x:Name=\"ActiveMatchOverlay\"", MainWindowXaml);
         Assert.Contains("HorizontalAlignment=\"Stretch\" VerticalAlignment=\"Stretch\"", MainWindowXaml);
         Assert.Contains("Canvas.ZIndex=\"20\"", MainWindowXaml);
+        Assert.Contains("Background=\"#1AFF4500\"", MainWindowXaml);
+        Assert.Contains("BorderBrush=\"#FFFF4500\"", MainWindowXaml);
+        Assert.Contains("BorderThickness=\"0,0,0,2\"", MainWindowXaml);
+        Assert.DoesNotContain("#CCFF4500", MainWindowXaml);
+        Assert.DoesNotContain("#FFFFFFFF", MainWindowXaml);
     }
 
     [Fact]
@@ -466,6 +590,14 @@ public sealed class PreviewCoreRegressionTests
         int index = FindMethodDefinition(source, methodName);
         int end = Math.Min(source.Length, index + window);
         return source[index..end];
+    }
+
+    private static string ExtractXamlWindow(string marker, int window)
+    {
+        int index = MainWindowXaml.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(index >= 0, $"XAML marker '{marker}' not found.");
+        int end = Math.Min(MainWindowXaml.Length, index + window);
+        return MainWindowXaml[index..end];
     }
 
     private static int FindMethodDefinition(string source, string methodName)

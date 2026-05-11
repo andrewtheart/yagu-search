@@ -28,8 +28,12 @@ public sealed record SearchResult(
     /// <summary>Short preview kept in memory even when evicted (first ~120 chars).</summary>
     public string ShortPreview { get; } = MatchLine.Length <= 120 ? MatchLine : MatchLine[..120] + "…";
 
+    private const long InMemoryOffset = -1;
+    private const long EvictingOffset = -2;
+    private long _diskOffset = InMemoryOffset;
+
     /// <summary>Byte offset in the <see cref="ResultStore"/> temp file, or -1 if in memory.</summary>
-    public long DiskOffset { get; private set; } = -1;
+    public long DiskOffset => Volatile.Read(ref _diskOffset);
 
     /// <summary>True when heavy data has been evicted to disk.</summary>
     public bool IsEvicted => DiskOffset >= 0;
@@ -37,35 +41,45 @@ public sealed record SearchResult(
     /// <summary>Evict heavy payload (match line + context) to disk, keeping only ShortPreview.</summary>
     public void Evict(ResultStore store)
     {
-        if (IsEvicted) return;
-        DiskOffset = store.Write(MatchLine, ContextBefore, ContextAfter);
-        MatchLine = ShortPreview;
-        ContextBefore = Array.Empty<string>();
-        ContextAfter = Array.Empty<string>();
+        EvictWith(store.Write);
     }
 
     /// <summary>
     /// Evict using a pre-acquired batch writer so the caller can amortize the
     /// <see cref="ResultStore"/> lock + flush across many results.
     /// </summary>
-    internal void EvictWith(Func<string, IReadOnlyList<string>, IReadOnlyList<string>, long> writer)
+    internal bool EvictWith(Func<string, IReadOnlyList<string>, IReadOnlyList<string>, long> writer)
     {
-        if (IsEvicted) return;
-        DiskOffset = writer(MatchLine, ContextBefore, ContextAfter);
-        MatchLine = ShortPreview;
-        ContextBefore = Array.Empty<string>();
-        ContextAfter = Array.Empty<string>();
+        if (Interlocked.CompareExchange(ref _diskOffset, EvictingOffset, InMemoryOffset) != InMemoryOffset)
+            return false;
+
+        try
+        {
+            long offset = writer(MatchLine, ContextBefore, ContextAfter);
+            MatchLine = ShortPreview;
+            ContextBefore = Array.Empty<string>();
+            ContextAfter = Array.Empty<string>();
+            Volatile.Write(ref _diskOffset, offset);
+            return true;
+        }
+        catch
+        {
+            Volatile.Write(ref _diskOffset, InMemoryOffset);
+            throw;
+        }
     }
 
     /// <summary>Restore full payload from disk.</summary>
     public void Hydrate(ResultStore store)
     {
-        if (!IsEvicted) return;
-        var (ml, cb, ca) = store.Read(DiskOffset);
+        long offset = DiskOffset;
+        if (offset < 0) return;
+
+        var (ml, cb, ca) = store.Read(offset);
         MatchLine = ml;
         ContextBefore = cb;
         ContextAfter = ca;
-        DiskOffset = -1;
+        Volatile.Write(ref _diskOffset, InMemoryOffset);
     }
 
     private bool _isSelected;

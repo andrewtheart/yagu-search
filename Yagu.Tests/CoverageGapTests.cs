@@ -617,6 +617,7 @@ public class SearchResultCollectionGapTests
         coll.Add(MakeResult(@"C:\x.txt", "line2"));
         using var store = new ResultStore();
         int evicted = coll.EvictAll(store);
+        store.Drain();
         Assert.Equal(2, evicted);
         Assert.Equal(2, store.EvictedCount);
     }
@@ -846,6 +847,9 @@ public class SearchResultCollectionGapTests
             MakeResult(@"C:\a.txt", "line2"),
         };
         coll.AddRange(results, evictNewResults: true, resultStore: store);
+        // Eviction is asynchronous (single drain task on the ResultStore);
+        // block until queued writes have completed before asserting.
+        store.Drain();
         Assert.Equal(2, store.EvictedCount);
     }
 

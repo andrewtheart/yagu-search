@@ -563,7 +563,7 @@
                                     </TextBlock>
                                     <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}" Expanding="OnFileGroupExpanding">
                                     <Expander.Header>
-                                        <Grid Tapped="OnFileGroupHeaderTapped">
+                                        <Grid PointerPressed="OnFileGroupHeaderPointerPressed" PointerReleased="OnFileGroupHeaderPointerReleased" Tapped="OnFileGroupHeaderTapped" DoubleTapped="OnFileGroupHeaderDoubleTapped">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="Auto" />
@@ -572,8 +572,8 @@
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
                                         <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
-                                                  IsChecked="{x:Bind AllSelected, Mode=TwoWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
-                                                  Checked="OnSelectAllChecked" Unchecked="OnSelectAllUnchecked" />
+                                                  IsChecked="{x:Bind AllSelected, Mode=OneWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
+                                                  Click="OnFileGroupCheckBoxClicked" />
                                         <!-- Match count badge -->
                                         <Border Grid.Column="1" Background="#1A6B5A" CornerRadius="4" Padding="8,2" VerticalAlignment="Center" Margin="0,0,10,0" MinWidth="50">
                                             <TextBlock VerticalAlignment="Center" HorizontalTextAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#B0E0D0">
@@ -791,7 +791,7 @@
                             </Button>
                             <StackPanel x:Name="PreviewContextPanel" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                                 <TextBlock Text="Preview Context:" VerticalAlignment="Center" FontSize="12" Opacity="0.7" />
-                                <NumberBox Value="{x:Bind ViewModel.PreviewContextLines, Mode=TwoWay}" Minimum="0" Maximum="50"
+                                <NumberBox Value="{x:Bind ViewModel.PreviewContextLines, Mode=TwoWay}" Minimum="0"
                                            SpinButtonPlacementMode="Compact" MinWidth="64" Width="64" FontSize="12" />
                             </StackPanel>
 
@@ -948,17 +948,19 @@
                             Canvas.ZIndex="20"
                             IsHitTestVisible="False" Visibility="Collapsed">
                             <Border x:Name="ActiveMatchBand"
+                                Canvas.ZIndex="20"
                                 Height="18"
-                                Background="#2AFF6A00"
-                                BorderBrush="OrangeRed"
-                                BorderThickness="3,0,0,0"
+                                Background="#22FF6A00"
+                                BorderBrush="#FFFF4500"
+                                BorderThickness="4,0,0,0"
                                 CornerRadius="3" />
                             <Border x:Name="ActiveMatchWordMarker"
+                                Canvas.ZIndex="21"
                                 Height="18"
                                 MinWidth="12"
-                                Background="#66FF4500"
-                                BorderBrush="OrangeRed"
-                                BorderThickness="1"
+                                Background="#1AFF4500"
+                                BorderBrush="#FFFF4500"
+                                BorderThickness="0,0,0,2"
                                 CornerRadius="2" />
                         </Canvas>
 

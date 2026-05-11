@@ -10,6 +10,8 @@ namespace Yagu.Models;
 /// </summary>
 public sealed class SearchResultCollection
 {
+    internal const int EvictionBatchSize = 2048;
+
     private readonly List<FileGroup> _allGroups = [];
     private readonly Dictionary<string, FileGroup> _index = new(StringComparer.OrdinalIgnoreCase);
     private GlobMatcher? _globMatcher;
@@ -104,27 +106,15 @@ public sealed class SearchResultCollection
         }
 
         // Always add results to the collection without holding the ResultStore lock.
-        // This prevents the UI thread from blocking when a concurrent EvictAll is
-        // writing hundreds of thousands of results under the same lock.
+        // This keeps the UI dispatcher out of paging-file writes while degraded.
         for (int i = 0; i < results.Count; i++)
             AddCore(results[i]);
 
-        // Evict newly-added results on a worker thread so the UI thread never
-        // contends with a concurrent EvictAll that may hold the ResultStore lock
-        // for seconds while flushing hundreds of thousands of results.
+        // Hand off eviction to the ResultStore's single drain task. This eliminates
+        // per-batch Task.Run + WriteBatch lock contention with bulk EvictAll calls
+        // (previously the cause of 12-second WriteBatch lock-hold spikes).
         if (evictNewResults && resultStore is not null)
-        {
-            // Snapshot the results to evict — the list is owned by us.
-            var toEvict = results;
-            _ = System.Threading.Tasks.Task.Run(() =>
-            {
-                resultStore.WriteBatch(writeOne =>
-                {
-                    for (int i = 0; i < toEvict.Count; i++)
-                        EvictNewResultIfNeeded(toEvict[i], true, writeOne);
-                });
-            });
-        }
+            resultStore.EnqueueEvictMany(results);
 
         // Flush new groups to VisibleGroups in one batch notification.
         if (newVisibleGroups is not null)
@@ -133,6 +123,14 @@ public sealed class SearchResultCollection
         return wasEmpty && _allGroups.Count > 0;
     }
 
+    /// <summary>
+    /// Enqueues every in-memory result for asynchronous eviction by the
+    /// <see cref="ResultStore"/>'s background drain task. Returns immediately
+    /// without waiting for disk writes to complete. Callers that need to know
+    /// when bytes have actually hit disk should call
+    /// <see cref="ResultStore.Drain"/> themselves (off the UI thread).
+    /// </summary>
+    /// <returns>The number of results that were newly enqueued for eviction.</returns>
     public int EvictAll(ResultStore? resultStore)
     {
         if (resultStore is null) return 0;
@@ -140,29 +138,31 @@ public sealed class SearchResultCollection
         // Snapshot the group list so we can safely iterate off the UI thread
         // while new groups may still be appended by the dispatcher.
         var groupsSnapshot = _allGroups.ToArray();
+        int enqueued = 0;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        int evicted = 0;
-        resultStore.WriteBatch(writeOne =>
+        foreach (var group in groupsSnapshot)
         {
-            foreach (var group in groupsSnapshot)
+            // Use index-based iteration: the UI thread may append to the
+            // group concurrently, but existing indices remain stable and
+            // EvictWith is idempotent (no-op if already evicted).
+            int count = group.Count;
+            for (int i = 0; i < count; i++)
             {
-                // Use index-based iteration: the UI thread may append to the
-                // group concurrently, but existing indices remain stable and
-                // EvictWith is idempotent (no-op if already evicted).
-                int count = group.Count;
-                for (int i = 0; i < count; i++)
-                {
-                    var result = group[i];
-                    if (!result.IsEvicted)
-                    {
-                        result.EvictWith(writeOne);
-                        evicted++;
-                    }
-                }
-            }
-        });
+                var result = group[i];
+                if (result.IsEvicted)
+                    continue;
 
-        return evicted;
+                if (resultStore.EnqueueEvict(result))
+                    enqueued++;
+            }
+        }
+
+        sw.Stop();
+        LogService.Instance.Info("SearchResultCollection",
+            $"EvictAll enqueued {enqueued:N0} results for async paging in {sw.ElapsedMilliseconds}ms (drain runs on background thread)");
+
+        return enqueued;
     }
 
     public void ApplySortAndFilter()

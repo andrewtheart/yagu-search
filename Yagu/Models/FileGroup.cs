@@ -14,7 +14,20 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     public const int PageSize = 200;
     private const int HiddenNotificationInterval = PageSize;
 
+    /// <summary>
+    /// Optional per-file hard cap on stored matches. Default <see cref="int.MaxValue"/>
+    /// (effectively unlimited). When set to a finite value, matches beyond the cap are
+    /// dropped and counted in <see cref="HiddenMatchCount"/>. Bound from
+    /// <c>AppSettings.MaxMatchesPerFile</c> at app startup and on settings change
+    /// (0 in settings = unlimited / <see cref="int.MaxValue"/> here).
+    /// </summary>
+    public static int MaxMatchesPerGroup { get; set; } = int.MaxValue;
+
     public string FilePath { get; }
+
+    /// <summary>Number of matches that were dropped due to <see cref="MaxMatchesPerGroup"/>.</summary>
+    public int HiddenMatchCount { get; private set; }
+    public bool HasHiddenMatches => HiddenMatchCount > 0;
 
     /// <summary>True when this group represents a file inside a ZIP archive.</summary>
     public bool IsArchiveEntry => ZipArchiveSearcher.IsArchivePath(FilePath);
@@ -69,6 +82,26 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     {
         FilePath = filePath;
         CollectionChanged += OnSelfChanged;
+    }
+
+    /// <summary>
+    /// Enforces <see cref="MaxMatchesPerGroup"/>. Once the cap is reached, additional
+    /// inserts increment <see cref="HiddenMatchCount"/> and the SearchResult reference
+    /// is dropped immediately, so its heavy MatchLine/Context strings become eligible
+    /// for GC without ever being retained by this group.
+    /// </summary>
+    protected override void InsertItem(int index, SearchResult item)
+    {
+        if (Count >= MaxMatchesPerGroup)
+        {
+            HiddenMatchCount++;
+            if (HiddenMatchCount == 1)
+                OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(HasHiddenMatches)));
+            if ((HiddenMatchCount & 0xFF) == 0)
+                OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(HiddenMatchCount)));
+            return;
+        }
+        base.InsertItem(index, item);
     }
 
     /// <summary>

@@ -1,6 +1,8 @@
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Text;
+using System.Threading.Channels;
+using Yagu.Models;
 
 namespace Yagu.Services;
 
@@ -9,10 +11,18 @@ namespace Yagu.Services;
 /// Full match-line and context data are appended to a temp file; each write
 /// returns a byte offset that can later be used to hydrate the result.
 /// Thread-safe via locking on the underlying stream.
+/// 
+/// A single background drain task owns all eviction writes routed through
+/// <see cref="EnqueueEvict"/>. This removes lock contention between bulk
+/// eviction (<see cref="Models.SearchResultCollection.EvictAll"/>) and the
+/// per-match degraded-mode eviction path that previously each spawned their
+/// own Task.Run and fought over the same writer lock (observed multi-second
+/// WriteBatch lock-hold spikes on large evictions).
 /// </summary>
 public sealed class ResultStore : IDisposable
 {
     private const string TempFileSearchPattern = "yagu-results-*.tmp";
+    private const int DrainBatchCap = 512;
 
     private readonly string _path;
     private readonly FileStream _stream;
@@ -20,6 +30,13 @@ public sealed class ResultStore : IDisposable
     private readonly object _lock = new();
     private bool _disposed;
     private int _evictedCount;
+
+    private readonly Channel<SearchResult> _evictionChannel;
+    private readonly Task _drainTask;
+    private readonly CancellationTokenSource _drainCts = new();
+    private readonly object _drainCompletionLock = new();
+    private long _enqueuedCount;
+    private long _processedCount;
 
     public int EvictedCount => Volatile.Read(ref _evictedCount);
     public string TempFilePath => _path;
@@ -29,6 +46,106 @@ public sealed class ResultStore : IDisposable
         _path = Path.Combine(Path.GetTempPath(), $"yagu-results-{Guid.NewGuid():N}.tmp");
         _stream = new FileStream(_path, FileMode.Create, FileAccess.ReadWrite, FileShare.Read, 64 * 1024);
         _writer = new BinaryWriter(_stream, Encoding.UTF8, leaveOpen: true);
+
+        _evictionChannel = Channel.CreateUnbounded<SearchResult>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            AllowSynchronousContinuations = false,
+        });
+        _drainTask = Task.Run(DrainLoopAsync);
+    }
+
+    /// <summary>
+    /// Enqueue a result for asynchronous eviction by the single drain task. Returns
+    /// true if the item was queued. Already-evicted items are skipped. Callers do
+    /// not block — use <see cref="Drain"/> to wait for completion.
+    /// </summary>
+    public bool EnqueueEvict(SearchResult result)
+    {
+        if (_disposed || result is null || result.IsEvicted)
+            return false;
+        Interlocked.Increment(ref _enqueuedCount);
+        if (_evictionChannel.Writer.TryWrite(result))
+            return true;
+        // Failure path (channel closed): re-balance the counter so Drain() can complete.
+        Interlocked.Decrement(ref _enqueuedCount);
+        return false;
+    }
+
+    /// <summary>Enqueue many results for asynchronous eviction.</summary>
+    public int EnqueueEvictMany(IReadOnlyList<SearchResult> results)
+    {
+        if (results is null || results.Count == 0) return 0;
+        int queued = 0;
+        for (int i = 0; i < results.Count; i++)
+            if (EnqueueEvict(results[i])) queued++;
+        return queued;
+    }
+
+    /// <summary>
+    /// Synchronously wait until everything currently enqueued has been written
+    /// to disk. Safe to call from any thread (but never from the drain task).
+    /// </summary>
+    public void Drain()
+    {
+        long target = Interlocked.Read(ref _enqueuedCount);
+        lock (_drainCompletionLock)
+        {
+            while (!_disposed && Interlocked.Read(ref _processedCount) < target)
+                Monitor.Wait(_drainCompletionLock, TimeSpan.FromMilliseconds(250));
+        }
+    }
+
+    private async Task DrainLoopAsync()
+    {
+        var batch = new List<SearchResult>(DrainBatchCap);
+        var reader = _evictionChannel.Reader;
+        try
+        {
+            while (await reader.WaitToReadAsync(_drainCts.Token).ConfigureAwait(false))
+            {
+                batch.Clear();
+                while (batch.Count < DrainBatchCap && reader.TryRead(out var item))
+                    batch.Add(item);
+                if (batch.Count == 0) continue;
+
+                try
+                {
+                    WriteBatch(writeOne =>
+                    {
+                        for (int i = 0; i < batch.Count; i++)
+                        {
+                            try { batch[i].EvictWith(writeOne); }
+                            catch { /* skip and continue draining */ }
+                        }
+                    });
+                }
+                catch (ObjectDisposedException) { break; }
+                catch (Exception ex)
+                {
+                    LogService.Instance.Warning("ResultStore", "Eviction drain batch failed", ex);
+                }
+                finally
+                {
+                    lock (_drainCompletionLock)
+                    {
+                        Interlocked.Add(ref _processedCount, batch.Count);
+                        Monitor.PulseAll(_drainCompletionLock);
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) { /* normal shutdown */ }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("ResultStore", "Eviction drain loop terminated unexpectedly", ex);
+        }
+        finally
+        {
+            // Wake any waiters so they don't hang.
+            lock (_drainCompletionLock) { Monitor.PulseAll(_drainCompletionLock); }
+        }
     }
 
     public static Task CleanupOrphanedTempFilesAsync()
@@ -85,7 +202,6 @@ public sealed class ResultStore : IDisposable
             _writer.Write(matchLine ?? string.Empty);
             WriteStringList(_writer, contextBefore);
             WriteStringList(_writer, contextAfter);
-            _writer.Flush();
             Interlocked.Increment(ref _evictedCount);
             return offset;
         }
@@ -123,6 +239,8 @@ public sealed class ResultStore : IDisposable
         lock (_lock)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            // Ensure buffered writes are committed before switching the shared stream to read mode.
+            _writer.Flush();
             if (offset < 0 || offset >= _stream.Length)
                 throw new InvalidOperationException($"ResultStore offset {offset} is out of range (stream length {_stream.Length}).");
 
@@ -139,6 +257,12 @@ public sealed class ResultStore : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        try { _evictionChannel.Writer.TryComplete(); } catch { }
+        try { _drainCts.Cancel(); } catch { }
+        try { _drainTask.Wait(TimeSpan.FromSeconds(5)); } catch { }
+        // Wake any pending Drain() callers so they don't hang on a disposed store.
+        lock (_drainCompletionLock) { Monitor.PulseAll(_drainCompletionLock); }
+        _drainCts.Dispose();
         _writer.Dispose();
         _stream.Dispose();
         try { File.Delete(_path); } catch { /* best-effort cleanup */ }

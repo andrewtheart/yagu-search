@@ -288,9 +288,48 @@ public class SearchResultCollectionCoverageTests
         col.Add(MakeResult(@"C:\a.txt", "line1"));
         col.Add(MakeResult(@"C:\b.txt", "line2"));
         int evicted = col.EvictAll(store);
+        store.Drain();
         Assert.Equal(2, evicted);
         // Already evicted, second call evicts nothing
         Assert.Equal(0, col.EvictAll(store));
+    }
+
+    [Fact]
+    public void EvictAll_LargerThanEvictionBatch_EvictsAllResults()
+    {
+        using var store = new ResultStore();
+        var col = new SearchResultCollection();
+        int resultCount = SearchResultCollection.EvictionBatchSize + 3;
+
+        for (int i = 0; i < resultCount; i++)
+            col.Add(MakeResult($@"C:\batch\file-{i:D5}.txt", $"line{i}"));
+
+        int evicted = col.EvictAll(store);
+        store.Drain();
+
+        Assert.Equal(resultCount, evicted);
+        Assert.Equal(resultCount, store.EvictedCount);
+        Assert.All(col.AllGroups, group => Assert.All(group, result => Assert.True(result.IsEvicted)));
+    }
+
+    [Fact]
+    public void SearchResult_EvictWith_ConcurrentCallsOnlyWritesOnce()
+    {
+        var result = MakeResult(@"C:\a.txt", "line1");
+        int writes = 0;
+
+        long Writer(string matchLine, IReadOnlyList<string> before, IReadOnlyList<string> after)
+        {
+            Interlocked.Increment(ref writes);
+            Thread.Sleep(10);
+            return 123;
+        }
+
+        Parallel.For(0, 32, _ => result.EvictWith(Writer));
+
+        Assert.Equal(1, Volatile.Read(ref writes));
+        Assert.True(result.IsEvicted);
+        Assert.Equal(123, result.DiskOffset);
     }
 
     [Fact]
@@ -305,6 +344,7 @@ public class SearchResultCollectionCoverageTests
         Assert.Equal(3, col.AllGroups[0].Count);
 
         int evicted = col.EvictAll(store);
+        store.Drain();
         Assert.Equal(3, evicted);
         Assert.True(col.AllGroups[0][0].IsEvicted);
         Assert.True(col.AllGroups[0][1].IsEvicted);
@@ -320,6 +360,7 @@ public class SearchResultCollectionCoverageTests
 
         // Evict existing — this tests that snapshot captures the current state
         int evicted = col.EvictAll(store);
+        store.Drain();
         Assert.Equal(1, evicted);
 
         // Add a new result after eviction
@@ -329,6 +370,7 @@ public class SearchResultCollectionCoverageTests
 
         // Second evict picks up the new result
         int evicted2 = col.EvictAll(store);
+        store.Drain();
         Assert.Equal(1, evicted2);
         Assert.True(col.AllGroups[1][0].IsEvicted);
     }
@@ -343,6 +385,7 @@ public class SearchResultCollectionCoverageTests
 
         // Evict once
         int evicted1 = col.EvictAll(store);
+        store.Drain();
         Assert.Equal(2, evicted1);
 
         // Add another result to same group
@@ -350,6 +393,7 @@ public class SearchResultCollectionCoverageTests
 
         // Second evict only evicts the new one
         int evicted2 = col.EvictAll(store);
+        store.Drain();
         Assert.Equal(1, evicted2);
     }
 
@@ -366,9 +410,41 @@ public class SearchResultCollectionCoverageTests
         bool changed = col.AddRange(results, evictNewResults: true, resultStore: store);
         Assert.True(changed);
         Assert.Equal(2, col.AllGroups.Count);
+
+        store.Drain();
+
         // Results should be evicted
         Assert.True(col.AllGroups[0][0].IsEvicted);
         Assert.True(col.AllGroups[1][0].IsEvicted);
+    }
+
+    [Fact]
+    public void PagingSource_QueuesSingleMatchEvictionAndChunksBulkEviction()
+    {
+        string repoRoot = FindRepoRoot();
+        string viewModelSource = File.ReadAllText(Path.Combine(repoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
+        string collectionSource = File.ReadAllText(Path.Combine(repoRoot, "Yagu", "Models", "SearchResultCollection.cs"));
+        string storeSource = File.ReadAllText(Path.Combine(repoRoot, "Yagu", "Services", "ResultStore.cs"));
+
+        // Degraded-mode single-match eviction is routed through the ResultStore's
+        // single drain task instead of a per-match Task.Run + WriteBatch lock.
+        string addMatch = ExtractMethodWindow(viewModelSource, "AddMatch", window: 900);
+        Assert.Contains("_resultStore.EnqueueEvict(result)", addMatch);
+        Assert.DoesNotContain("Task.Run", addMatch);
+        Assert.DoesNotContain("WriteBatch", addMatch);
+
+        // The ResultStore exposes EnqueueEvict + Drain backed by a Channel and a
+        // single background drain task — this is what eliminates the writer-lock
+        // contention between bulk EvictAll and degraded-mode AddMatch writes.
+        Assert.Contains("EnqueueEvict", storeSource);
+        Assert.Contains("Channel.CreateUnbounded<SearchResult>", storeSource);
+        Assert.Contains("DrainLoopAsync", storeSource);
+
+        // Bulk eviction enqueues into the same queue and returns immediately —
+        // no synchronous Drain() inside EvictAll so it never blocks the caller.
+        string evictAll = ExtractMethodWindow(collectionSource, "EvictAll", window: 1800);
+        Assert.Contains("EnqueueEvict", evictAll);
+        Assert.DoesNotContain("resultStore.Drain()", evictAll);
     }
 
     [Fact]
@@ -407,6 +483,47 @@ public class SearchResultCollectionCoverageTests
         var col = new SearchResultCollection();
         col.Add(MakeResult(@"C:\a.txt"));
         Assert.Empty(col.GetAllSelectedResults());
+    }
+
+    private static string ExtractMethodWindow(string source, string methodName, int window)
+    {
+        int index = FindMethodDefinition(source, methodName);
+        int end = Math.Min(source.Length, index + window);
+        return source[index..end];
+    }
+
+    private static int FindMethodDefinition(string source, string methodName)
+    {
+        string needle = methodName + "(";
+        int search = 0;
+        while (true)
+        {
+            int index = source.IndexOf(needle, search, StringComparison.Ordinal);
+            Assert.True(index >= 0, $"Method '{methodName}' not found.");
+
+            int lineStart = source.LastIndexOf('\n', index);
+            lineStart = lineStart < 0 ? 0 : lineStart + 1;
+            int lineEnd = source.IndexOf('\n', index);
+            lineEnd = lineEnd < 0 ? source.Length : lineEnd;
+            string line = source[lineStart..lineEnd];
+            if (line.Contains("private ", StringComparison.Ordinal)
+                || line.Contains("public ", StringComparison.Ordinal)
+                || line.Contains("internal ", StringComparison.Ordinal)
+                || line.Contains("protected ", StringComparison.Ordinal))
+            {
+                return lineStart;
+            }
+
+            search = index + needle.Length;
+        }
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+            dir = dir.Parent;
+        return dir?.FullName ?? throw new InvalidOperationException("Cannot find repo root (Yagu.sln)");
     }
 }
 
