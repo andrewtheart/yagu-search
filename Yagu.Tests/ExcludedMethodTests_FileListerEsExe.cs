@@ -92,6 +92,14 @@ public sealed class ExcludedMethodTests_FileListerEsExe : IDisposable
         Assert.Contains("could not start", lister.FallbackReason);
     }
 
+    [Fact]
+    public void BuildEverythingFileNameFilter_QuotesLiteralTermsAsOrGroup()
+    {
+        Assert.Equal("\"target\"", FileLister.BuildEverythingFileNameFilter(["target"]));
+        Assert.Equal("<\"alpha\"|\"beta\">", FileLister.BuildEverythingFileNameFilter(["alpha", "beta"]));
+        Assert.Null(FileLister.BuildEverythingFileNameFilter(["bad\"term"]));
+    }
+
     private sealed class FakeProcess : FileLister.IProcess
     {
         private readonly string[] _lines;

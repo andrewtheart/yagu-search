@@ -16,11 +16,11 @@ The [PLANS](PLANS/) directory contains design notes, performance investigations,
 
 - Fast recursive text search across a directory and all subdirectories.
 - Literal and regex search, with optional case-sensitive matching.
-- Search modes for content plus file names, content only, or file names only.
+- Search modes for content plus file names, content only, file names only, or file-name-gated content search.
 - Streaming results: matches appear while the scan is still running.
 - voidtools Everything support for file discovery, with automatic fallback to built-in .NET enumeration.
 - Optional Rust native scanner for fast per-file matching, with managed C# fallback when the DLL is unavailable.
-- Include and exclude globs, skip-extension lists, binary-file skipping, and max-file-size limits.
+- Include and exclude filters with glob/path or regex modes, skip-extension lists, binary-file skipping, and max-file-size limits.
 - Configurable result cap, per-file match cap, content-search parallelism, and memory limits.
 - Memory-pressure mode that pages result payloads to disk and keeps searching instead of exhausting RAM.
 - Grouped result list with optional no-sort mode plus sorting by match count, modified date, file size, or file name.

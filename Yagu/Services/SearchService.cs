@@ -56,6 +56,7 @@ public sealed class SearchService
         // Validate regex up front so the UI gets a clear error.
         Regex? regex = null;
         string? literal = null;
+        IReadOnlyList<string> literalTerms = Array.Empty<string>();
         SearchOptions patternOptions = options;
         string? regexError = null;
         if (options.UseRegex)
@@ -67,7 +68,7 @@ public sealed class SearchService
         }
         else
         {
-            var literalTerms = SearchQueryParser.ParseLiteralTerms(options.Query);
+            literalTerms = SearchQueryParser.ParseLiteralTerms(options.Query);
             if (literalTerms.Count == 0)
             {
                 yield return new SearchEvent.Completed(new SearchSummary(0, 0, 0, 0, 0, 0, TimeSpan.Zero, false, false, false, null));
@@ -105,8 +106,14 @@ public sealed class SearchService
         //     the unified event channel that this method yields from.
         // This overlaps I/O-bound discovery with CPU-bound content scanning, instead of
         // draining the full file list before scanning starts.
-        var includeExts = ExtractExtensions(options.IncludeGlobs);
-        var globMatcher = new GlobMatcher(options.IncludeGlobs, options.ExcludeGlobs);
+        IReadOnlyList<string> includeExts = options.IncludeFilterMode == FilterPatternMode.GlobPath
+            ? ExtractExtensions(options.IncludeGlobs)
+            : Array.Empty<string>();
+        var globMatcher = new GlobMatcher(
+            options.IncludeGlobs,
+            options.ExcludeGlobs,
+            options.IncludeFilterMode,
+            options.ExcludeFilterMode);
 
         // Push skip settings to the lister so the Everything SDK path can
         // pre-filter by size/extension without per-file FileInfo calls.
@@ -133,14 +140,23 @@ public sealed class SearchService
             }
             concreteLister.EarlySkipExtensions = skipExts;
 
-            concreteLister.EarlyExcludeGlobs = options.ExcludeGlobs;
+            concreteLister.EarlyExcludeGlobs = options.ExcludeFilterMode == FilterPatternMode.GlobPath
+                ? options.ExcludeGlobs
+                : Array.Empty<string>();
+            concreteLister.EarlyFileNameLiteralTerms = options.SearchMode == SearchMode.FileNameThenContent
+                && !options.UseRegex
+                && !options.CaseSensitive
+                ? literalTerms
+                : [];
             concreteLister.SdkChannelBufferSize = options.SdkChannelBufferSize;
             concreteLister.ExcludeAdminProtectedPaths = options.ExcludeAdminProtectedPaths;
             concreteLister.AdminProtectedPathSegmentsOverride = options.AdminProtectedPathSegments;
         }
 
         bool searchContent = options.SearchMode != SearchMode.FileNames;
-        bool searchFileNames = options.SearchMode != SearchMode.Content;
+        bool evaluateFileName = options.SearchMode != SearchMode.Content;
+        bool emitFileNameMatches = options.SearchMode is SearchMode.Both or SearchMode.FileNames;
+        bool requireFileNameMatchForContent = options.SearchMode == SearchMode.FileNameThenContent;
 
         // Push the configurable archive-extension set to the searcher so it
         // can bypass extension-based skip for ZIP-like containers.
@@ -299,11 +315,12 @@ public sealed class SearchService
                         continue;
                     }
 
-                    if (searchFileNames)
+                    bool fileNameMatched = false;
+                    int fnMatchStart = -1;
+                    int fnMatchLen = 0;
+                    if (evaluateFileName)
                     {
                         var fileName = Path.GetFileName(path);
-                        int fnMatchStart = -1;
-                        int fnMatchLen = 0;
                         if (regex is not null)
                         {
                             var m = regex.Match(fileName);
@@ -324,24 +341,31 @@ public sealed class SearchService
                         }
                         if (fnMatchStart >= 0)
                         {
-                            (filenameBatch ??= new List<SearchResult>(FilenameBatchSize)).Add(new SearchResult(
-                                FilePath: path, LineNumber: 0, MatchLine: fileName,
-                                MatchStartColumn: fnMatchStart, MatchLength: fnMatchLen,
-                                ContextBefore: [], ContextAfter: []));
-                            if (filenameBatch.Count >= FilenameBatchSize)
-                                await FlushFilenameBatchAsync().ConfigureAwait(false);
-                            if (!searchContent)
+                            fileNameMatched = true;
+                            if (emitFileNameMatches)
                             {
-                                Interlocked.Increment(ref filesWithMatches);
-                                int n = Interlocked.Increment(ref totalMatches);
-                                if (options.MaxResults > 0 && n >= options.MaxResults) Volatile.Write(ref truncated, 1);
+                                (filenameBatch ??= new List<SearchResult>(FilenameBatchSize)).Add(new SearchResult(
+                                    FilePath: path, LineNumber: 0, MatchLine: fileName,
+                                    MatchStartColumn: fnMatchStart, MatchLength: fnMatchLen,
+                                    ContextBefore: [], ContextAfter: []));
+                                if (filenameBatch.Count >= FilenameBatchSize)
+                                    await FlushFilenameBatchAsync().ConfigureAwait(false);
+                                if (!searchContent)
+                                {
+                                    Interlocked.Increment(ref filesWithMatches);
+                                    int n = Interlocked.Increment(ref totalMatches);
+                                    if (options.MaxResults > 0 && n >= options.MaxResults) Volatile.Write(ref truncated, 1);
+                                }
                             }
                         }
                     }
 
                     if (searchContent)
                     {
-                        await WritePendingFileAsync(path).ConfigureAwait(false);
+                        if (!requireFileNameMatchForContent || fileNameMatched)
+                            await WritePendingFileAsync(path).ConfigureAwait(false);
+                        else
+                            Interlocked.Increment(ref filesScanned);
                     }
                     else
                     {
@@ -971,6 +995,8 @@ public sealed class SearchService
             SearchMode = options.SearchMode,
             IncludeGlobs = options.IncludeGlobs,
             ExcludeGlobs = options.ExcludeGlobs,
+            IncludeFilterMode = options.IncludeFilterMode,
+            ExcludeFilterMode = options.ExcludeFilterMode,
             MinFileSizeBytes = options.MinFileSizeBytes,
             MaxFileSizeBytes = options.MaxFileSizeBytes,
             CreatedAfterDate = options.CreatedAfterDate,

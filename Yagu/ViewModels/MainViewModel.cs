@@ -40,6 +40,7 @@ public sealed partial class MainViewModel : ObservableObject
     private ResultStore? _resultStore;
     private CancellationTokenSource _metadataCts = new();
     private bool _metadataSortFilterRefreshQueued;
+    private bool _clearedDefaultExcludeForRegexMode;
     private System.Diagnostics.Stopwatch? _searchTimer;
     private long _bytesScanned;
     private long _prevBytesScanned;
@@ -73,6 +74,8 @@ public sealed partial class MainViewModel : ObservableObject
         PreviewContextLines = _settings.PreviewContextLines;
         IncludeGlobs = _settings.IncludeGlobs;
         ExcludeGlobs = _settings.ExcludeGlobs;
+        IncludeFilterModeIndex = _settings.IncludeFilterModeIndex;
+        ExcludeFilterModeIndex = _settings.ExcludeFilterModeIndex;
         DefaultMinFileSizeBytes = _settings.DefaultMinFileSizeBytes;
         DefaultMaxFileSizeBytes = _settings.DefaultMaxFileSizeBytes;
         MinFileSizeBytes = DefaultMinFileSizeBytes;
@@ -138,7 +141,9 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial int ContextLines { get; set; } = 3;
     [ObservableProperty] public partial int PreviewContextLines { get; set; } = 20;
     [ObservableProperty] public partial string IncludeGlobs { get; set; } = string.Empty;
-    [ObservableProperty] public partial string ExcludeGlobs { get; set; } = "node_modules;bin;obj;.git";
+    [ObservableProperty] public partial string ExcludeGlobs { get; set; } = AppSettings.DefaultExcludeGlobs;
+    [ObservableProperty] public partial int IncludeFilterModeIndex { get; set; }
+    [ObservableProperty] public partial int ExcludeFilterModeIndex { get; set; }
     [ObservableProperty] public partial long MinFileSizeBytes { get; set; }
     [ObservableProperty] public partial long MaxFileSizeBytes { get; set; }
     [ObservableProperty] public partial long DefaultMinFileSizeBytes { get; set; }
@@ -163,6 +168,14 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial int DateRangeFilterIndex { get; set; }
 
     public GroupMode GroupMode => (GroupMode)GroupModeIndex;
+    public FilterPatternMode IncludeFilterMode => IncludeFilterModeIndex == 1 ? FilterPatternMode.Regex : FilterPatternMode.GlobPath;
+    public FilterPatternMode ExcludeFilterMode => ExcludeFilterModeIndex == 1 ? FilterPatternMode.Regex : FilterPatternMode.GlobPath;
+    public string IncludeFilterPlaceholder => IncludeFilterMode == FilterPatternMode.Regex
+        ? @"e.g. \.(cs|xaml)$"
+        : "e.g. ts,js,py or *.cs";
+    public string ExcludeFilterPlaceholder => ExcludeFilterMode == FilterPatternMode.Regex
+        ? @"e.g. (^|/)node_modules/|\.min\.js$"
+        : "e.g. node_modules;bin;obj";
     public string GroupModeLabel => GroupMode switch
     {
         GroupMode.None => "None",
@@ -427,6 +440,10 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
+    public Microsoft.UI.Xaml.Visibility ArchiveExtensionsVisibility => SearchInsideArchives
+        ? Microsoft.UI.Xaml.Visibility.Visible
+        : Microsoft.UI.Xaml.Visibility.Collapsed;
+
     private static readonly Dictionary<string, string> ArchiveExtensionCategories = new(StringComparer.OrdinalIgnoreCase)
     {
         ["zip"] = "Archives", ["jar"] = "Java", ["war"] = "Java", ["ear"] = "Java",
@@ -629,8 +646,38 @@ public sealed partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(DateRangeFilterLabel));
         ApplySortAndFilter();
     }
+    partial void OnSearchInsideArchivesChanged(bool value) => OnPropertyChanged(nameof(ArchiveExtensionsVisibility));
     partial void OnIncludeGlobsChanged(string value) => ApplySortAndFilter();
-    partial void OnExcludeGlobsChanged(string value) => ApplySortAndFilter();
+    partial void OnExcludeGlobsChanged(string value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+            _clearedDefaultExcludeForRegexMode = false;
+        ApplySortAndFilter();
+    }
+    partial void OnIncludeFilterModeIndexChanged(int value)
+    {
+        OnPropertyChanged(nameof(IncludeFilterMode));
+        OnPropertyChanged(nameof(IncludeFilterPlaceholder));
+        ApplySortAndFilter();
+    }
+    partial void OnExcludeFilterModeIndexChanged(int value)
+    {
+        if (ExcludeFilterMode == FilterPatternMode.Regex && IsDefaultExcludeGlobs(ExcludeGlobs))
+        {
+            _clearedDefaultExcludeForRegexMode = true;
+            ExcludeGlobs = string.Empty;
+        }
+        else if (ExcludeFilterMode == FilterPatternMode.GlobPath
+            && _clearedDefaultExcludeForRegexMode
+            && string.IsNullOrWhiteSpace(ExcludeGlobs))
+        {
+            ExcludeGlobs = AppSettings.DefaultExcludeGlobs;
+        }
+
+        OnPropertyChanged(nameof(ExcludeFilterMode));
+        OnPropertyChanged(nameof(ExcludeFilterPlaceholder));
+        ApplySortAndFilter();
+    }
     partial void OnMinFileSizeBytesChanged(long value)
     {
         OnPropertyChanged(nameof(MinFileSizeMB));
@@ -750,8 +797,10 @@ public sealed partial class MainViewModel : ObservableObject
                 UseRegex = UseRegex,
                 ContextLines = ContextLines,
                 SearchMode = (SearchMode)SearchModeIndex,
-                IncludeGlobs = SplitCsv(IncludeGlobs),
-                ExcludeGlobs = SplitCsv(ExcludeGlobs),
+                IncludeGlobs = SplitFilterPatterns(IncludeGlobs, IncludeFilterMode),
+                ExcludeGlobs = SplitFilterPatterns(ExcludeGlobs, ExcludeFilterMode),
+                IncludeFilterMode = IncludeFilterMode,
+                ExcludeFilterMode = ExcludeFilterMode,
                 MinFileSizeBytes = effectiveMinFileSizeBytes,
                 MaxFileSizeBytes = effectiveMaxFileSizeBytes,
                 CreatedAfterDate = CreatedAfterDate,
@@ -1506,6 +1555,8 @@ public sealed partial class MainViewModel : ObservableObject
         _resultCollection.FileNameFilter = FileNameFilter;
         _resultCollection.IncludeGlobs = IncludeGlobs;
         _resultCollection.ExcludeGlobs = ExcludeGlobs;
+        _resultCollection.IncludeFilterMode = IncludeFilterMode;
+        _resultCollection.ExcludeFilterMode = ExcludeFilterMode;
         _resultCollection.SortModeIndex = SortModeIndex;
         _resultCollection.SortDirectionIndex = SortDirectionIndex;
         _resultCollection.GroupMode = GroupMode;
@@ -1534,6 +1585,8 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.PreviewContextLines = PreviewContextLines;
         _settings.IncludeGlobs = IncludeGlobs;
         _settings.ExcludeGlobs = ExcludeGlobs;
+        _settings.IncludeFilterModeIndex = IncludeFilterModeIndex;
+        _settings.ExcludeFilterModeIndex = ExcludeFilterModeIndex;
         _settings.MinFileSizeBytes = MinFileSizeBytes;
         _settings.MaxFileSizeBytes = MaxFileSizeBytes;
         _settings.CreatedAfterDate = CreatedAfterDate;
@@ -1605,6 +1658,16 @@ public sealed partial class MainViewModel : ObservableObject
         string.IsNullOrWhiteSpace(s)
             ? []
             : [.. s.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
+
+    private static IReadOnlyList<string> SplitFilterPatterns(string s, FilterPatternMode mode) =>
+        string.IsNullOrWhiteSpace(s)
+            ? []
+            : mode == FilterPatternMode.Regex
+                ? [s.Trim()]
+                : SplitCsv(s);
+
+    private static bool IsDefaultExcludeGlobs(string value) =>
+        string.Equals(value?.Trim(), AppSettings.DefaultExcludeGlobs, StringComparison.OrdinalIgnoreCase);
 
     private static HashSet<string> ParseExtensionSet(string s) =>
         string.IsNullOrWhiteSpace(s)

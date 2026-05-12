@@ -43,6 +43,7 @@ Use the search mode dropdown to decide what the query matches:
 | Content + Names | File contents and file names. | General investigation when either the path or the text may contain the clue. |
 | Content only | File contents only. | Code, logs, config files, text dumps. |
 | File names only | File names only. | Finding files by name without reading file contents. |
+| File name, then content | File contents, but only for files whose names match the query first. | Narrowing content search to files with relevant names. |
 
 ## Query Options
 
@@ -62,8 +63,8 @@ Use filters to reduce the number of files Yagu has to inspect.
 
 | Field | Examples | Notes |
 | --- | --- | --- |
-| Include | `cs`, `ts,js,py`, `*.json;*.yaml` | Limits the candidate set to matching extensions or globs. |
-| Exclude | `node_modules;bin;obj;.git`, `*.min.js` | Removes folders/files from the candidate set. |
+| Include | Glob: `cs`, `ts,js,py`, `*.json;*.yaml`; Regex: `\.(cs|xaml)$` | Limits the candidate set to matching files. Glob mode accepts comma- or semicolon-separated extensions, globs, and path segments. Regex mode matches the normalized full path. |
+| Exclude | Glob: `node_modules;bin;obj;.git`, `*.min.js`; Regex: `(^|/)node_modules/|\.min\.js$` | Removes matching files from the candidate set. Glob mode accepts comma- or semicolon-separated extensions, globs, and path segments. Regex mode matches the normalized full path. |
 | Filter results | `Program.cs`, `error`, `Services\` | Filters already-found results without rerunning the search. |
 | Filter files | `MainWindow`, `.cs`, `ViewModels` | Filters visible result groups by file name/path. |
 
@@ -170,7 +171,7 @@ Do not compare files/sec across unrelated directories. A tree of tiny source fil
 
 ### Fast Code Search
 
-- Use Content only unless file-name matches matter.
+- Use Content only unless file-name matches matter; use File name, then content when both must match.
 - Prefer a literal query over regex.
 - Include only source extensions, such as `cs;ts;js;py;rs`.
 - Exclude generated folders, such as `bin;obj;node_modules;.git;target`.
@@ -254,7 +255,7 @@ Use Info logging for normal troubleshooting. Use Verbose only when you need deta
 ### No results appear
 
 - Confirm the directory exists and is readable.
-- Check whether Content only, File names only, or Content + Names is selected.
+- Check whether Content only, File names only, File name, then content, or Content + Names is selected.
 - Clear Include, Exclude, Filter results, and Filter files to rule out filters.
 - Turn off Regex if the query should be literal text.
 - Check the status area for invalid regex or fallback messages.

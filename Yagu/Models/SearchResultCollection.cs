@@ -22,6 +22,8 @@ public sealed class SearchResultCollection
     public string FileNameFilter { get; set; } = string.Empty;
     public string IncludeGlobs { get; set; } = string.Empty;
     public string ExcludeGlobs { get; set; } = string.Empty;
+    public FilterPatternMode IncludeFilterMode { get; set; } = FilterPatternMode.GlobPath;
+    public FilterPatternMode ExcludeFilterMode { get; set; } = FilterPatternMode.GlobPath;
     public int SortModeIndex { get; set; }
     public int SortDirectionIndex { get; set; }
     public GroupMode GroupMode { get; set; }
@@ -168,7 +170,11 @@ public sealed class SearchResultCollection
     public void ApplySortAndFilter()
     {
         _globMatcher = (!string.IsNullOrWhiteSpace(IncludeGlobs) || !string.IsNullOrWhiteSpace(ExcludeGlobs))
-            ? new GlobMatcher(SplitGlobs(IncludeGlobs), SplitGlobs(ExcludeGlobs))
+            ? new GlobMatcher(
+                SplitFilterPatterns(IncludeGlobs, IncludeFilterMode),
+                SplitFilterPatterns(ExcludeGlobs, ExcludeFilterMode),
+                IncludeFilterMode,
+                ExcludeFilterMode)
             : null;
 
         var filtered = _allGroups.Where(MatchesFilter).ToList();
@@ -353,10 +359,15 @@ public sealed class SearchResultCollection
         result.EvictWith(evictedResultWriter);
     }
 
-    private static string[] SplitGlobs(string s) =>
-        string.IsNullOrWhiteSpace(s)
-            ? []
+    private static string[] SplitFilterPatterns(string s, FilterPatternMode mode)
+    {
+        if (string.IsNullOrWhiteSpace(s))
+            return [];
+
+        return mode == FilterPatternMode.Regex
+            ? [s.Trim()]
             : s.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
 
     private IEnumerable<FileGroup> ApplySecondarySort(IEnumerable<FileGroup> groups, bool ascending) => SortModeIndex switch
     {

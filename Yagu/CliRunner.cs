@@ -630,7 +630,7 @@ internal static class CliRunner
               -s, --case-sensitive        Case-sensitive match.
               -i, --ignore-case           Case-insensitive match (default).
               -C, --context <n>           Context lines around each match (default: 3).
-                  --search-mode <mode>    both | content | filenames  (default: both)
+                  --search-mode <mode>    both | content | filenames | filename-then-content  (default: both)
 
             FILE FILTERING:
               -g, --glob <glob>           Include files matching GLOB (repeatable).
@@ -982,6 +982,8 @@ internal sealed class CliArgs
                 {
                     "content"                        => Models.SearchMode.Content,
                     "filenames" or "filename" or "files" => Models.SearchMode.FileNames,
+                    "filename-then-content" or "filenames-then-content" or "file-name-then-content" or "names-then-content"
+                                                     => Models.SearchMode.FileNameThenContent,
                     _                                => Models.SearchMode.Both,
                 };
                 continue;

@@ -820,6 +820,18 @@ public class SearchResultCollectionGapTests
         Assert.Single(coll.VisibleGroups);
     }
 
+    [Fact]
+    public void ApplySortAndFilter_RegexFilter()
+    {
+        var coll = new SearchResultCollection();
+        coll.Add(MakeResult(@"C:\src\main.cs", "match"));
+        coll.Add(MakeResult(@"C:\docs\readme.md", "match"));
+        coll.IncludeGlobs = @"\.cs$";
+        coll.IncludeFilterMode = FilterPatternMode.Regex;
+        coll.ApplySortAndFilter();
+        Assert.Single(coll.VisibleGroups);
+    }
+
     // ── GetAllSelectedResults ──
     [Fact]
     public void GetAllSelectedResults_ReturnsOnlySelected()

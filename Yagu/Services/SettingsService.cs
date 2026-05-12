@@ -13,6 +13,7 @@ public sealed class AppSettings
     public const string LegacyDefaultSkipExtensions = "exe;dll;pdb;obj;lib;so;dylib;zip;gz;tar;7z;rar;bz2;xz;iso;cab;msi;nupkg;whl;png;jpg;jpeg;gif;bmp;ico;tif;tiff;webp;svg;mp3;mp4;avi;mov;wmv;flv;mkv;wav;ogg;flac;woff;woff2;ttf;eot;otf;pdf;doc;docx;xls;xlsx;ppt;pptx";
     public const string DefaultSkipExtensions = "exe;dll;pdb;obj;lib;so;dylib;png;jpg;jpeg;gif;bmp;ico;tif;tiff;webp;svg;mp3;mp4;avi;mov;wmv;flv;mkv;wav;ogg;flac;woff;woff2;ttf;eot;otf;pdf;doc;xls;ppt;com;scr;sys;drv;ocx;cpl;mui;winmd;pri;cat;res;resources;o;a;lo;la;ilk;iobj;ipdb;exp;pyc;pyo;class;dex;wasm;bin;dat;db;db3;sqlite;sqlite3;edb;mdb;accdb;ldb;sdf;cache;tmp;bak;etl;evtx;dmp;mdmp;hdmp;hprof;vhd;vhdx;vmdk;pak;usm;bundle;assets;m4a;webm;heic;heif;avif";
     public const string DefaultArchiveExtensions = "zip;jar;war;ear;nupkg;vsix;apk;aab;aar;appx;msix;appxbundle;msixbundle;docx;xlsx;pptx;odt;ods;odp;epub;whl;gz;tar;7z;rar;bz2;xz;iso;cab;msi;tgz;tbz2;txz;zst;zstd;br;lz4;lzma";
+    public const string DefaultExcludeGlobs = "node_modules;bin;obj;.git";
 
     public string? LastDirectory { get; set; }
     public List<string> RecentDirectories { get; set; } = [];
@@ -22,7 +23,9 @@ public sealed class AppSettings
     public int ContextLines { get; set; } = 3;
     public int PreviewContextLines { get; set; } = 20;
     [JsonIgnore] public string IncludeGlobs { get; set; } = string.Empty;
-    [JsonIgnore] public string ExcludeGlobs { get; set; } = "node_modules;bin;obj;.git";
+    [JsonIgnore] public string ExcludeGlobs { get; set; } = DefaultExcludeGlobs;
+    [JsonIgnore] public int IncludeFilterModeIndex { get; set; }
+    [JsonIgnore] public int ExcludeFilterModeIndex { get; set; }
     [JsonIgnore] public long MinFileSizeBytes { get; set; }
     [JsonIgnore] public long MaxFileSizeBytes { get; set; }
     [JsonIgnore] public DateTimeOffset? CreatedAfterDate { get; set; }

@@ -52,6 +52,13 @@
                     ToolTipService.ToolTip="Settings">
                 <FontIcon Glyph="&#xE713;" FontSize="14" Foreground="White" />
             </Button>
+                <Button x:Name="CloseWindowButton" Click="OnCloseWindowClick" VerticalAlignment="Center"
+                    Visibility="Collapsed"
+                    Width="36" Height="32" MinWidth="0" Padding="0"
+                    Background="Transparent" BorderThickness="0" Foreground="White"
+                    ToolTipService.ToolTip="Close Yagu">
+                <FontIcon Glyph="&#xE711;" FontSize="12" Foreground="White" />
+            </Button>
         </StackPanel>
 
         <!-- Admin elevation banner (hidden when running elevated) -->
@@ -181,6 +188,7 @@
                                       VerticalAlignment="Center" MinWidth="0"
                                       ToolTipService.ToolTip="Searches inside ZIP archives for text matches. This has a performance penalty — only enable if you expect results inside ZIP files." />
                             <DropDownButton Content="{x:Bind ViewModel.ArchiveExtensionsSummary, Mode=OneWay}"
+                                            Visibility="{x:Bind ViewModel.ArchiveExtensionsVisibility, Mode=OneWay}"
                                             VerticalAlignment="Center" FontSize="12"
                                             ToolTipService.ToolTip="ZIP-like extensions to bypass from skip list when archive search is on">
                                 <DropDownButton.Flyout>
@@ -224,6 +232,7 @@
                                 <x:String>Content + Names</x:String>
                                 <x:String>Content only</x:String>
                                 <x:String>File names only</x:String>
+                                <x:String>File name, then content</x:String>
                             </ComboBox>
                             <DropDownButton Content="{x:Bind ViewModel.SkipExtensionsSummary, Mode=OneWay}"
                                             VerticalAlignment="Center" FontSize="12"
@@ -277,30 +286,46 @@
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
                             <Grid>
-                                <TextBox PlaceholderText="e.g. ts,js,py or *.cs"
+                                <TextBox PlaceholderText="{x:Bind ViewModel.IncludeFilterPlaceholder, Mode=OneWay}"
                                          Text="{x:Bind ViewModel.IncludeGlobs, Mode=TwoWay}"
-                                         Padding="72,4,8,4" FontStyle="Italic"
+                                         Padding="72,4,112,4" FontStyle="Italic"
                                          TextChanged="OnFilterBoxTextChanged" />
                                 <Border Background="#0078D4" CornerRadius="8" Padding="8,2"
                                         VerticalAlignment="Center" HorizontalAlignment="Left"
                                         Margin="6,0,0,0" IsHitTestVisible="True"
-                                        ToolTipService.ToolTip="Extensions or file path / folder path substrings to include. Absence of a value in the field implies everything will be included.">
+                                        ToolTipService.ToolTip="Files to include. In Glob mode, use extensions, globs, or path segments. In Regex mode, match the normalized full path.">
                                     <TextBlock Text="Include" FontSize="11" Foreground="White"
                                                FontWeight="SemiBold" />
                                 </Border>
+                                <ComboBox SelectedIndex="{x:Bind ViewModel.IncludeFilterModeIndex, Mode=TwoWay}"
+                                          Width="104" Height="30" MinWidth="0" Padding="8,0"
+                                          FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                          Margin="0,0,4,0"
+                                          ToolTipService.ToolTip="Include filter mode">
+                                    <x:String>Glob</x:String>
+                                    <x:String>Regex</x:String>
+                                </ComboBox>
                             </Grid>
                             <Grid Grid.Column="1">
-                                <TextBox PlaceholderText="e.g. node_modules;bin;obj"
+                                <TextBox PlaceholderText="{x:Bind ViewModel.ExcludeFilterPlaceholder, Mode=OneWay}"
                                          Text="{x:Bind ViewModel.ExcludeGlobs, Mode=TwoWay}"
-                                         Padding="72,4,8,4" FontStyle="Italic"
+                                         Padding="72,4,112,4" FontStyle="Italic"
                                          TextChanged="OnFilterBoxTextChanged" />
                                 <Border Background="#0078D4" CornerRadius="8" Padding="8,2"
                                         VerticalAlignment="Center" HorizontalAlignment="Left"
                                         Margin="6,0,0,0" IsHitTestVisible="True"
-                                        ToolTipService.ToolTip="Extensions or file path / folder path substrings to exclude. Absence of a value in the field implies nothing will be excluded.">
+                                        ToolTipService.ToolTip="Files to exclude. In Glob mode, use extensions, globs, or path segments. In Regex mode, match the normalized full path.">
                                     <TextBlock Text="Exclude" FontSize="11" Foreground="White"
                                                FontWeight="SemiBold" />
                                 </Border>
+                                <ComboBox SelectedIndex="{x:Bind ViewModel.ExcludeFilterModeIndex, Mode=TwoWay}"
+                                          Width="104" Height="30" MinWidth="0" Padding="8,0"
+                                          FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                          Margin="0,0,4,0"
+                                          ToolTipService.ToolTip="Exclude filter mode">
+                                    <x:String>Glob</x:String>
+                                    <x:String>Regex</x:String>
+                                </ComboBox>
                             </Grid>
                         </Grid>
 

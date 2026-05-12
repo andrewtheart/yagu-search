@@ -9,6 +9,17 @@ public enum SearchMode
     Content = 1,
     /// <summary>Search file names only.</summary>
     FileNames = 2,
+    /// <summary>Search file contents only in files whose names match the query.</summary>
+    FileNameThenContent = 3,
+}
+
+/// <summary>How include/exclude file filters are interpreted.</summary>
+public enum FilterPatternMode
+{
+    /// <summary>Extensions, path segments, and glob wildcards.</summary>
+    GlobPath = 0,
+    /// <summary>A regular expression matched against the normalized full path.</summary>
+    Regex = 1,
 }
 
 /// <summary>
@@ -26,6 +37,8 @@ public sealed class SearchOptions
     /// <summary>Comma-separated extensions or globs (e.g. "ts,js" or "*.ts,*.js").</summary>
     public IReadOnlyList<string> IncludeGlobs { get; init; } = [];
     public IReadOnlyList<string> ExcludeGlobs { get; init; } = [];
+    public FilterPatternMode IncludeFilterMode { get; init; } = FilterPatternMode.GlobPath;
+    public FilterPatternMode ExcludeFilterMode { get; init; } = FilterPatternMode.GlobPath;
 
     /// <summary>Files smaller than this are skipped. 0 disables the lower bound.</summary>
     public long MinFileSizeBytes { get; init; }

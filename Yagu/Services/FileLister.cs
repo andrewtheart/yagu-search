@@ -114,6 +114,9 @@ public sealed class FileLister : IFileLister
     /// <summary>Exclude glob patterns to push into the Everything SDK query (SDK path only).</summary>
     public IReadOnlyList<string> EarlyExcludeGlobs { get; set; } = [];
 
+    /// <summary>Literal file-name terms to apply during listing when the search mode first gates by file name.</summary>
+    public IReadOnlyList<string> EarlyFileNameLiteralTerms { get; set; } = [];
+
     /// <summary>
     /// When true and the current process is NOT elevated, skip directories that
     /// typically require administrator rights (e.g. <c>C:\Windows\System32\config</c>,
@@ -409,6 +412,10 @@ public sealed class FileLister : IFileLister
             query += $" {sizeTerm}";
         foreach (var dateTerm in BuildEverythingDateFilterTerms(EarlyCreatedAfterDate, EarlyCreatedBeforeDate, EarlyModifiedAfterDate, EarlyModifiedBeforeDate))
             query += $" {dateTerm}";
+
+        var fileNameFilter = BuildEverythingFileNameFilter(EarlyFileNameLiteralTerms);
+        if (fileNameFilter is not null)
+            query += $" {fileNameFilter}";
 
         // Translate exclude globs into Everything search syntax.
         // Extension globs ("*.log") → !ext:log   (already handled above for SkipExtensions)
@@ -869,6 +876,9 @@ public sealed class FileLister : IFileLister
             args.Add(sizeTerm);
         foreach (var dateTerm in BuildEverythingDateFilterTerms(EarlyCreatedAfterDate, EarlyCreatedBeforeDate, EarlyModifiedAfterDate, EarlyModifiedBeforeDate))
             args.Add(dateTerm);
+        var fileNameFilter = BuildEverythingFileNameFilter(EarlyFileNameLiteralTerms);
+        if (fileNameFilter is not null)
+            args.Add(fileNameFilter);
         if (maxFiles > 0) { args.Add("-n"); args.Add(maxFiles.ToString()); }
 
         int resultCount = await TryGetEverythingResultCountAsync(esPath, args, cancellationToken).ConfigureAwait(false);
@@ -1003,6 +1013,43 @@ public sealed class FileLister : IFileLister
 
     private static string FormatEverythingDate(DateTimeOffset date)
         => date.LocalDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    internal static string? BuildEverythingFileNameFilter(IReadOnlyList<string> literalTerms)
+    {
+        if (literalTerms.Count == 0)
+            return null;
+
+        var quotedTerms = new List<string>(literalTerms.Count);
+        foreach (var term in literalTerms)
+        {
+            if (string.IsNullOrWhiteSpace(term) || term.Contains('"'))
+                return null;
+
+            quotedTerms.Add($"\"{term}\"");
+        }
+
+        return quotedTerms.Count switch
+        {
+            0 => null,
+            1 => quotedTerms[0],
+            _ => $"<{string.Join('|', quotedTerms)}>"
+        };
+    }
+
+    private static bool FileNameMatchesLiteralTerms(string path, IReadOnlyList<string> literalTerms)
+    {
+        if (literalTerms.Count == 0)
+            return true;
+
+        var fileName = Path.GetFileName(path);
+        foreach (var term in literalTerms)
+        {
+            if (fileName.Contains(term, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
 
     private static bool IsOutsideEarlyFileSizeRange(long fileSize, long minBytes, long maxBytes, out bool tooLarge)
     {
@@ -1177,6 +1224,8 @@ public sealed class FileLister : IFileLister
                             var ext = Path.GetExtension(entry);
                             if (ext.Length == 0 || !extSet.Contains(ext)) continue;
                         }
+                        if (!FileNameMatchesLiteralTerms(entry, EarlyFileNameLiteralTerms))
+                            continue;
                         // Cache file metadata from the enumeration data — avoids a
                         // second stat call in ContentSearcher.
                         if (fsi is FileInfo fileInfo)

@@ -319,6 +319,61 @@ public class SearchServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task IncludeRegex_FiltersFiles()
+    {
+        Write("a.cs", "needle");
+        Write("a.xaml", "needle");
+        Write("a.txt", "needle");
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            IncludeGlobs = [@"\.(cs|xaml)$"],
+            IncludeFilterMode = FilterPatternMode.Regex,
+            MaxFileSizeBytes = 0,
+        };
+
+        int matches = 0;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Match) matches++;
+            else if (evt is SearchEvent.MatchBatch mb) matches += mb.Results.Count;
+        }
+
+        Assert.Equal(2, matches);
+    }
+
+    [Fact]
+    public async Task ExcludeRegex_FiltersFiles()
+    {
+        Write("keep.js", "needle");
+        Write("app.min.js", "needle");
+        Directory.CreateDirectory(Path.Combine(_root, "node_modules"));
+        File.WriteAllText(Path.Combine(_root, "node_modules", "skip.js"), "needle");
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            ExcludeGlobs = [@"(^|/)node_modules/|\.min\.js$"],
+            ExcludeFilterMode = FilterPatternMode.Regex,
+            MaxFileSizeBytes = 0,
+        };
+
+        int matches = 0;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Match) matches++;
+            else if (evt is SearchEvent.MatchBatch mb) matches += mb.Results.Count;
+        }
+
+        Assert.Equal(1, matches);
+    }
+
+    [Fact]
     public async Task Progress_EmitsWhileDiscoveryIsStillRunningWithoutMatches()
     {
         Write("a.txt", "quiet file");
@@ -780,6 +835,41 @@ public class SearchServiceExtraTests : IDisposable
         Assert.Equal(1, matches);
         Assert.NotNull(summary);
         Assert.Equal(1, summary!.FilesWithMatches);
+    }
+
+    [Fact]
+    public async Task FileNameThenContentSearch_OnlyReturnsContentMatchesFromMatchingFileNames()
+    {
+        Write("target-with-content.txt", "before target after");
+        Write("target-without-content.txt", "quiet content");
+        Write("other.txt", "target appears here but the file name does not match");
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "target",
+            SearchMode = SearchMode.FileNameThenContent,
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        var results = new List<SearchResult>();
+        SearchSummary? summary = null;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Match match) results.Add(match.Result);
+            if (evt is SearchEvent.MatchBatch batch) results.AddRange(batch.Results);
+            if (evt is SearchEvent.Completed c) summary = c.Summary;
+        }
+
+        var result = Assert.Single(results);
+        Assert.EndsWith("target-with-content.txt", result.FilePath);
+        Assert.NotEqual(0, result.LineNumber);
+        Assert.DoesNotContain(results, r => Path.GetFileName(r.FilePath) == "other.txt");
+        Assert.NotNull(summary);
+        Assert.Equal(1, summary!.TotalMatches);
+        Assert.Equal(1, summary.FilesWithMatches);
     }
 
     [Fact]

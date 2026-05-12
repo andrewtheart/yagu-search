@@ -1,5 +1,6 @@
 using System.Text;
 using Yagu.Helpers;
+using Yagu.Models;
 
 namespace Yagu.Tests;
 
@@ -173,6 +174,36 @@ public class GlobMatcherTests
         var m = new GlobMatcher(Array.Empty<string>(), new[] { "*.tmp" });
         Assert.True(m.Matches(@"C:\a.cs"));
         Assert.False(m.Matches(@"C:\a.tmp"));
+    }
+
+    [Fact]
+    public void RegexInclude_MatchesNormalizedPath()
+    {
+        var m = new GlobMatcher([@"\.(cs|xaml)$"], [], FilterPatternMode.Regex);
+
+        Assert.True(m.Matches(@"C:\proj\MainWindow.xaml"));
+        Assert.True(m.Matches(@"C:\proj\Program.cs"));
+        Assert.False(m.Matches(@"C:\proj\README.md"));
+    }
+
+    [Fact]
+    public void RegexExclude_Wins()
+    {
+        var m = new GlobMatcher([], [@"(^|/)node_modules/|\.min\.js$"], excludeMode: FilterPatternMode.Regex);
+
+        Assert.False(m.Matches(@"C:\proj\node_modules\pkg\index.js"));
+        Assert.False(m.Matches(@"C:\proj\src\app.min.js"));
+        Assert.True(m.Matches(@"C:\proj\src\app.js"));
+    }
+
+    [Fact]
+    public void InvalidRegex_DoesNotThrow()
+    {
+        var include = new GlobMatcher(["["], [], FilterPatternMode.Regex);
+        var exclude = new GlobMatcher([], ["["], excludeMode: FilterPatternMode.Regex);
+
+        Assert.False(include.Matches(@"C:\proj\Program.cs"));
+        Assert.True(exclude.Matches(@"C:\proj\Program.cs"));
     }
 }
 

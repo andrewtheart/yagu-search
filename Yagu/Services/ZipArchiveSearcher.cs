@@ -210,7 +210,7 @@ public static class ZipArchiveSearcher
 
         // Hoist GlobMatcher outside the loop — one allocation per archive instead of per entry.
         GlobMatcher? globMatcher = (options.IncludeGlobs.Count > 0 || options.ExcludeGlobs.Count > 0)
-            ? new GlobMatcher(options.IncludeGlobs, options.ExcludeGlobs)
+            ? new GlobMatcher(options.IncludeGlobs, options.ExcludeGlobs, options.IncludeFilterMode, options.ExcludeFilterMode)
             : null;
 
         using (archive)

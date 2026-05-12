@@ -492,6 +492,48 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void WrappedLongActiveMatchOverlay_UsesMultipleWordMarkers()
+    {
+        Assert.Contains("private readonly List<Border> _activeMatchExtraWordMarkers = new();", MainWindowSource);
+
+        string updateOverlay = ExtractMethodWindow(MainWindowSource, "TryUpdateActiveMatchOverlayFromActualRun", window: 18000);
+        AssertContainsInOrder(updateOverlay,
+            "TryBuildMeasuredWrappedActiveMatchMarkerRects(",
+            "wrappedMarkerRects = measuredMarkerRects;",
+            "else if (TryBuildWrappedActiveMatchMarkerRects(",
+            "wrappedMarkerRects = estimatedMarkerRects;",
+            "double markerTopDelta = overlayTop - point.Y;",
+            "effectiveWrappedMarkerRects.Add(new Windows.Foundation.Rect(",
+            "if (effectiveWrappedMarkerRects is { Count: > 1 })",
+            "ApplyActiveMatchMarkerRect(ActiveMatchWordMarker, effectiveWrappedMarkerRects[0]);",
+            "var marker = CreateActiveMatchWordMarker();",
+            "_activeMatchExtraWordMarkers.Add(marker);",
+            "ActiveMatchOverlay.Children.Add(marker);");
+
+        string measuredRects = ExtractMethodWindow(MainWindowSource, "TryBuildMeasuredWrappedActiveMatchMarkerRects", window: 3600);
+        AssertContainsInOrder(measuredRects,
+            "var endPoint = TransformRunRectToOverlay(block, targetPara, endRect);",
+            "double rowDistance = endPoint.Y - startPoint.Y;",
+            "var firstRun = targetPara.Inlines.OfType<Run>().FirstOrDefault();",
+            "int rowSpan = Math.Max(1, (int)Math.Round(rowDistance / lineHeight, MidpointRounding.AwayFromZero));",
+            "double top = rowIndex == rowSpan ? endPoint.Y : startPoint.Y + rowIndex * rowStep;",
+            "markerRects.Add(new Windows.Foundation.Rect(left, top, width, markerHeight));",
+            "return markerRects.Count > 1;");
+
+        string buildRects = ExtractMethodWindow(MainWindowSource, "TryBuildWrappedActiveMatchMarkerRects", window: 3600);
+        AssertContainsInOrder(buildRects,
+            "int charsPerWrappedLine = Math.Max(1, (int)Math.Floor(availableWidth / charWidth));",
+            "int startRow = column / charsPerWrappedLine;",
+            "int endRow = (Math.Max(column, endExclusive - 1)) / charsPerWrappedLine;",
+            "for (int row = startRow; row <= endRow; row++)",
+            "markerRects.Add(new Windows.Foundation.Rect(left, top, width, markerHeight));",
+            "return markerRects.Count > 1;");
+
+        string hide = ExtractMethodWindow(MainWindowSource, "HideActiveMatchOverlay", window: 500);
+        Assert.Contains("ClearActiveMatchExtraWordMarkers();", hide);
+    }
+
+    [Fact]
     public void NoWrapHorizontalMatchScroll_PrefersMeasuredRunRectOverColumnEstimate()
     {
         string scroll = ExtractMethodWindow(MainWindowSource, "ScrollMatchHorizontallyIntoView");
