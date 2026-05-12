@@ -18,7 +18,6 @@
     <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PublishAot>true</PublishAot>
-    <PublishReadyToRun>true</PublishReadyToRun>
     <InternalsVisibleTo>Yagu.Tests</InternalsVisibleTo>
     <DisableXamlGeneratedMain>true</DisableXamlGeneratedMain>
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
@@ -62,6 +61,26 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
+
+  <!--
+    Native AOT publish workaround: the WindowsAppSDK publish targets do not
+    copy the compiled XAML binary files (*.xbf) or the PRI resource index
+    into the publish output. Without these the app crashes on launch with
+    XamlParseException or "Cannot locate resource from ms-appx:///...".
+    This target copies them from the build output into the publish folder.
+  -->
+  <Target Name="CopyXbfAndPriToPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <_YaguXbfFiles Include="$(OutDir)**\*.xbf" />
+      <_YaguPriFiles Include="$(OutDir)*.pri" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_YaguXbfFiles)"
+          DestinationFiles="@(_YaguXbfFiles->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_YaguPriFiles)"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
 
   <!--
     yagu-core (Rust) build integration.

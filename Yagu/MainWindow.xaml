@@ -35,19 +35,24 @@
                 <TextBlock x:Name="AppTitleText" Text="Yagu - Yet Another Grep Utility" Style="{ThemeResource CaptionTextBlockStyle}"
                            FontWeight="SemiBold" VerticalAlignment="Center" />
             </StackPanel>
-            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                <Button Click="OnOpenCredits" VerticalAlignment="Center"
-                        Background="Transparent" BorderThickness="0"
-                        ToolTipService.ToolTip="About Yagu" Padding="8,4">
-                    <FontIcon Glyph="&#xE897;" FontSize="14" />
-                </Button>
-                <Button Click="OnOpenSettings" VerticalAlignment="Center"
-                        Background="Transparent" BorderThickness="0"
-                        ToolTipService.ToolTip="Settings" Padding="8,4">
-                    <FontIcon Glyph="&#xE713;" FontSize="14" />
-                </Button>
-            </StackPanel>
         </Grid>
+
+        <StackPanel x:Name="TitleBarActions" Grid.Row="0" Orientation="Horizontal" Spacing="4"
+                    VerticalAlignment="Center" HorizontalAlignment="Right"
+                    Margin="0,0,156,0" Canvas.ZIndex="100">
+            <Button Click="OnOpenCredits" VerticalAlignment="Center"
+                    Width="36" Height="32" MinWidth="0" Padding="0"
+                    Background="Transparent" BorderThickness="0" Foreground="White"
+                    ToolTipService.ToolTip="About Yagu">
+                <FontIcon Glyph="&#xE897;" FontSize="14" Foreground="White" />
+            </Button>
+            <Button Click="OnOpenSettings" VerticalAlignment="Center"
+                    Width="36" Height="32" MinWidth="0" Padding="0"
+                    Background="Transparent" BorderThickness="0" Foreground="White"
+                    ToolTipService.ToolTip="Settings">
+                <FontIcon Glyph="&#xE713;" FontSize="14" Foreground="White" />
+            </Button>
+        </StackPanel>
 
         <!-- Admin elevation banner (hidden when running elevated) -->
         <Border x:Name="AdminBanner" Grid.Row="1" Visibility="Collapsed"
@@ -532,6 +537,8 @@
                         ItemClick="OnResultItemClick"
                         DoubleTapped="OnResultDoubleTapped"
                         KeyDown="OnResultsListKeyDown"
+                        PointerPressed="OnResultsListPointerPressed"
+                        RightTapped="OnResultsListRightTapped"
                         ItemsSource="{x:Bind ViewModel.ResultGroups, Mode=OneWay}"
                         Padding="4,0">
                         <ListView.ContextFlyout>
@@ -568,27 +575,10 @@
                                     </TextBlock>
                                     <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}" Expanding="OnFileGroupExpanding">
                                     <Expander.Header>
-                                        <Grid PointerPressed="OnFileGroupHeaderPointerPressed" PointerReleased="OnFileGroupHeaderPointerReleased" Tapped="OnFileGroupHeaderTapped" DoubleTapped="OnFileGroupHeaderDoubleTapped">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto" />
-                                                <ColumnDefinition Width="Auto" />
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="650" />
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-                                        <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
-                                                  IsChecked="{x:Bind AllSelected, Mode=OneWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
-                                                  Click="OnFileGroupCheckBoxClicked" />
-                                        <!-- Match count badge -->
-                                        <Border Grid.Column="1" Background="#1A6B5A" CornerRadius="4" Padding="8,2" VerticalAlignment="Center" Margin="0,0,10,0" MinWidth="50">
-                                            <TextBlock VerticalAlignment="Center" HorizontalTextAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#B0E0D0">
-                                                <Run Text="{x:Bind MatchCount}" /><Run Text=" matches" />
-                                            </TextBlock>
-                                        </Border>
-                                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
-                                            <StackPanel.ContextFlyout>
+                                        <Grid PointerPressed="OnFileGroupHeaderPointerPressed" PointerReleased="OnFileGroupHeaderPointerReleased" Tapped="OnFileGroupHeaderTapped" DoubleTapped="OnFileGroupHeaderDoubleTapped" Tag="{x:Bind FilePath}" Background="Transparent">
+                                            <Grid.ContextFlyout>
                                                 <MenuFlyout Opening="OnFileHeaderContextMenuOpening">
-                                                    <MenuFlyoutItem Text="Preview selected" Click="OnPreviewSelectedFiles">
+                                                    <MenuFlyoutItem Text="Preview selected" Click="OnPreviewSelectedFiles" Tag="{x:Bind FilePath}">
                                                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8A1;" /></MenuFlyoutItem.Icon>
                                                     </MenuFlyoutItem>
                                                     <MenuFlyoutSeparator />
@@ -610,7 +600,24 @@
                                                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
                                                     </MenuFlyoutItem>
                                                 </MenuFlyout>
-                                            </StackPanel.ContextFlyout>
+                                            </Grid.ContextFlyout>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="650" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                        <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
+                                                  IsChecked="{x:Bind AllSelected, Mode=OneWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
+                                                  Click="OnFileGroupCheckBoxClicked" />
+                                        <!-- Match count badge -->
+                                        <Border Grid.Column="1" Background="#1A6B5A" CornerRadius="4" Padding="8,2" VerticalAlignment="Center" Margin="0,0,10,0" MinWidth="50">
+                                            <TextBlock VerticalAlignment="Center" HorizontalTextAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#B0E0D0">
+                                                <Run Text="{x:Bind MatchCount}" /><Run Text=" matches" />
+                                            </TextBlock>
+                                        </Border>
+                                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
                                             <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis" />
                                             <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,2,0,0">
                                                 <TextBlock Opacity="0.45" FontSize="11">

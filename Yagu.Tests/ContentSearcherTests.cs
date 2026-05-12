@@ -599,6 +599,8 @@ public class SearchResultCoverageTests
     private static SearchResult MakeResult(
         string matchLine = "hello world",
         int lineNumber = 10,
+        int matchStartColumn = 0,
+        int matchLength = 5,
         IReadOnlyList<string>? before = null,
         IReadOnlyList<string>? after = null)
     {
@@ -606,8 +608,8 @@ public class SearchResultCoverageTests
             FilePath: @"C:\test\file.txt",
             LineNumber: lineNumber,
             MatchLine: matchLine,
-            MatchStartColumn: 0,
-            MatchLength: 5,
+            MatchStartColumn: matchStartColumn,
+            MatchLength: matchLength,
             ContextBefore: before ?? Array.Empty<string>(),
             ContextAfter: after ?? Array.Empty<string>());
     }
@@ -617,6 +619,7 @@ public class SearchResultCoverageTests
     {
         var r = MakeResult("short line");
         Assert.Equal("short line", r.ShortPreview);
+        Assert.Equal(0, r.ShortPreviewMatchStart);
     }
 
     [Fact]
@@ -626,6 +629,19 @@ public class SearchResultCoverageTests
         var r = MakeResult(longLine);
         Assert.Equal(longLine[..120] + "…", r.ShortPreview);
         Assert.Equal(121, r.ShortPreview.Length);
+        Assert.Equal(0, r.ShortPreviewMatchStart);
+    }
+
+    [Fact]
+    public void ShortPreview_LongLine_CentersLaterMatch()
+    {
+        var longLine = new string('A', 200) + "NEEDLE" + new string('B', 200);
+        var r = MakeResult(longLine, matchStartColumn: 200, matchLength: 6);
+
+        Assert.Contains("NEEDLE", r.ShortPreview);
+        Assert.Equal(r.ShortPreview.IndexOf("NEEDLE", StringComparison.Ordinal), r.ShortPreviewMatchStart);
+        Assert.StartsWith("…", r.ShortPreview);
+        Assert.EndsWith("…", r.ShortPreview);
     }
 
     [Fact]
@@ -664,6 +680,21 @@ public class SearchResultCoverageTests
         Assert.Equal("before1", r.ContextBefore[0]);
         Assert.Single(r.ContextAfter);
         Assert.Equal("after1", r.ContextAfter[0]);
+    }
+
+    [Fact]
+    public void Evict_KeepsShortPreviewMatchVisible()
+    {
+        using var store = new ResultStore();
+        var longLine = new string('A', 200) + "NEEDLE" + new string('B', 200);
+        var r = MakeResult(longLine, matchStartColumn: 200, matchLength: 6);
+
+        r.Evict(store);
+
+        Assert.True(r.IsEvicted);
+        Assert.Equal(r.ShortPreview, r.MatchLine);
+        Assert.Contains("NEEDLE", r.MatchLine);
+        Assert.Equal(r.MatchLine.IndexOf("NEEDLE", StringComparison.Ordinal), r.ShortPreviewMatchStart);
     }
 
     [Fact]

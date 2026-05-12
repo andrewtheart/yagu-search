@@ -137,6 +137,66 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void FileHeaderContextMenu_PreviewsRightClickedGroupWhenNothingIsChecked()
+    {
+        string headerFlyout = ExtractXamlWindow("<MenuFlyout Opening=\"OnFileHeaderContextMenuOpening\"", 500);
+        string fileHeaderGrid = ExtractXamlWindow("PointerPressed=\"OnFileGroupHeaderPointerPressed\"", 1400);
+        string resultsList = ExtractXamlWindow("x:Name=\"ResultsList\"", 1200);
+        Assert.Contains("PointerPressed=\"OnResultsListPointerPressed\"", resultsList);
+        Assert.Contains("RightTapped=\"OnResultsListRightTapped\"", resultsList);
+        Assert.Contains("Tag=\"{x:Bind FilePath}\"", fileHeaderGrid);
+        Assert.Contains("Background=\"Transparent\"", fileHeaderGrid);
+        Assert.Contains("<Grid.ContextFlyout>", fileHeaderGrid);
+        Assert.Contains("Text=\"Preview selected\"", headerFlyout);
+        Assert.Contains("Click=\"OnPreviewSelectedFiles\"", headerFlyout);
+        Assert.Contains("Tag=\"{x:Bind FilePath}\"", headerFlyout);
+
+        string opening = ExtractMethodWindow(MainWindowSource, "OnFileHeaderContextMenuOpening", window: 1800);
+        AssertContainsInOrder(opening,
+            "var contextGroup = GetFileHeaderContextGroup(flyout)",
+            "flyout.Items.OfType<MenuFlyoutItem>()",
+            "int checkedCount = GetCheckedFileGroups().Count;",
+            "int count = checkedCount > 0 ? checkedCount : contextGroup is null ? 0 : 1;",
+            "previewItem.Text = $\"Preview selected ({count})\";",
+            "previewItem.Tag = contextGroup;");
+
+        string contextGroup = ExtractMethodWindow(MainWindowSource, "GetFileHeaderContextGroup", window: 1400);
+        Assert.Contains("if (sender is MenuFlyout { Target: FrameworkElement target })", contextGroup);
+        Assert.Contains("var taggedTargetGroup = GetFileHeaderContextGroup(target);", contextGroup);
+
+        string resultsOpening = ExtractMethodWindow(MainWindowSource, "OnResultsContextMenuOpening", window: 1400);
+        AssertContainsInOrder(resultsOpening,
+            "var checkedGroups = GetCheckedFileGroups();",
+            "var contextGroup = checkedGroups.Count == 0 ? GetRecentResultsContextMenuGroup() : null;",
+            "int count = checkedGroups.Count > 0 ? checkedGroups.Count : contextGroup is null ? 0 : 1;",
+            "CtxPreviewSelected.Text = $\"Preview selected ({count})\";",
+            "CtxPreviewSelected.Tag = contextGroup;");
+
+        string capture = ExtractMethodWindow(MainWindowSource, "CaptureResultsContextMenuGroup", window: 900);
+        Assert.Contains("_lastResultsContextMenuGroup = FindContextFileGroup(source);", capture);
+        Assert.Contains("_lastResultsContextMenuTick = Environment.TickCount64;", capture);
+
+        string findContext = ExtractMethodWindow(MainWindowSource, "FindContextFileGroup", window: 1800);
+        Assert.Contains("element.DataContext is FileGroup dataContextGroup", findContext);
+        Assert.Contains("element.DataContext is SearchResult result", findContext);
+
+        string previewSelected = ExtractMethodWindow(MainWindowSource, "OnPreviewSelectedFiles", window: 5000);
+        AssertContainsInOrder(previewSelected,
+            "var selectedGroups = GetPreviewFileGroups(sender);",
+            "foreach (var g in selectedGroups)",
+            "g.SelectAll();",
+            "await PrependPreviewSectionsForFilesAsync(newFiles, scrollTo);");
+
+        string previewGroups = ExtractMethodWindow(MainWindowSource, "GetPreviewFileGroups", window: 1200);
+        AssertContainsInOrder(previewGroups,
+            "var checkedGroups = GetCheckedFileGroups();",
+            "if (checkedGroups.Count > 0)",
+            "return checkedGroups;",
+            "var contextGroup = GetFileHeaderContextGroup(sender);",
+            "return contextGroup is null ? checkedGroups : [contextGroup];");
+    }
+
+    [Fact]
     public void FileGroupChevronExpand_DoesNotSelectOrAddPreview()
     {
         string expanding = ExtractMethodWindow(MainWindowSource, "OnFileGroupExpanding", window: 900);
@@ -225,6 +285,10 @@ public sealed class PreviewCoreRegressionTests
     [Fact]
     public void VisibleRegexMatches_AreYellowEvenOnContextLines()
     {
+        string matchLineLoaded = ExtractMethodWindow(MainWindowSource, "OnMatchLineLoaded", window: 900);
+        Assert.Contains("int matchStart = r.IsEvicted ? r.ShortPreviewMatchStart : r.MatchStartColumn;", matchLineLoaded);
+        Assert.Contains("HighlightInline(para, r.MatchLine, matchStart, r.MatchLength);", matchLineLoaded);
+
         string makeParagraph = ExtractMethodWindow(MainWindowSource, "MakePreviewParagraph");
         Assert.Contains("if (rx != null)", makeParagraph);
         Assert.DoesNotContain("if (rx != null && isMatchLine)", makeParagraph);

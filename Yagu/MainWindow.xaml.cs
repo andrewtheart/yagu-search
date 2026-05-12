@@ -36,6 +36,8 @@ public sealed partial class MainWindow : Window
     private FileGroup? _ctrlFileHeaderGestureGroup;
     private bool _ctrlFileHeaderGestureWasExpanded;
     private uint _ctrlFileHeaderGesturePointerId;
+    private FileGroup? _lastResultsContextMenuGroup;
+    private long _lastResultsContextMenuTick;
     private string? _lastCtrlFileHeaderPreviewPath;
     private long _lastCtrlFileHeaderPreviewTick;
     private bool _autoScrollEnabled = false;
@@ -198,6 +200,8 @@ public sealed partial class MainWindow : Window
         SetTitleBar(AppTitleBar);
         AppTitleText.Text = AppInfo.WindowTitle;
 
+        ApplyTitleBarButtonTheme();
+
         // Reserve room on the right for system caption buttons (min/max/close)
         // so the gear icon doesn't overlap with them.
         UpdateTitleBarInsets();
@@ -252,7 +256,8 @@ public sealed partial class MainWindow : Window
                 SearchCancelIcon.Glyph = "\uE711";   // Cancel X
                 SearchCancelLabel.Text = "Cancel";
                 ToolTipService.SetToolTip(SearchCancelButton, "Cancel search (F5)");
-                SearchCancelButton.Style = (Style)Application.Current.Resources["DefaultButtonStyle"];
+                if (TryGetApplicationStyle("DefaultButtonStyle") is { } defaultButtonStyle)
+                    SearchCancelButton.Style = defaultButtonStyle;
                 SearchCancelButton.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 255, 220, 220));
                 SearchCancelButton.BorderBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 216, 80, 80));
                 SearchCancelButton.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 120, 24, 24));
@@ -268,7 +273,8 @@ public sealed partial class MainWindow : Window
                 SearchCancelIcon.Glyph = "\uE721";   // Search magnifier
                 SearchCancelLabel.Text = "Search";
                 ToolTipService.SetToolTip(SearchCancelButton, "Search (F5)");
-                SearchCancelButton.Style = (Style)Application.Current.Resources["AccentButtonStyle"];
+                if (TryGetApplicationStyle("AccentButtonStyle") is { } accentButtonStyle)
+                    SearchCancelButton.Style = accentButtonStyle;
                 SearchCancelButton.ClearValue(Control.BackgroundProperty);
                 SearchCancelButton.ClearValue(Control.BorderBrushProperty);
                 SearchCancelButton.ClearValue(Control.ForegroundProperty);
@@ -322,8 +328,46 @@ public sealed partial class MainWindow : Window
         catch { /* AppWindow not always available; ignore */ }
     }
 
+    private static Style? TryGetApplicationStyle(string key)
+    {
+        try
+        {
+            return Application.Current.Resources.TryGetValue(key, out var value) && value is Style style
+                ? style
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void ApplyTitleBarButtonTheme()
+    {
+        try
+        {
+            var titleBar = AppWindow?.TitleBar;
+            if (titleBar is null) return;
+
+            var darkTitleBar = Microsoft.UI.ColorHelper.FromArgb(0xFF, 0x20, 0x20, 0x20);
+            titleBar.BackgroundColor = darkTitleBar;
+            titleBar.InactiveBackgroundColor = darkTitleBar;
+            titleBar.ForegroundColor = Microsoft.UI.Colors.White;
+            titleBar.InactiveForegroundColor = Microsoft.UI.ColorHelper.FromArgb(0x99, 0xFF, 0xFF, 0xFF);
+            titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
+            titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
+            titleBar.ButtonForegroundColor = Microsoft.UI.Colors.White;
+            titleBar.ButtonInactiveForegroundColor = Microsoft.UI.ColorHelper.FromArgb(0x99, 0xFF, 0xFF, 0xFF);
+            titleBar.ButtonHoverBackgroundColor = Microsoft.UI.ColorHelper.FromArgb(0x33, 0xFF, 0xFF, 0xFF);
+            titleBar.ButtonHoverForegroundColor = Microsoft.UI.Colors.White;
+            titleBar.ButtonPressedBackgroundColor = Microsoft.UI.ColorHelper.FromArgb(0x20, 0xFF, 0xFF, 0xFF);
+            titleBar.ButtonPressedForegroundColor = Microsoft.UI.Colors.White;
+        }
+        catch { }
+    }
+
     /// <summary>
-    /// Compact "launcher" mode: hides the title bar, results panel, and status bar,
+    /// Compact "launcher" mode: hides the results panel and status bar,
     /// switches to a borderless small window centered at the top of the screen.
     /// </summary>
     private void EnterLauncherMode()
@@ -331,14 +375,19 @@ public sealed partial class MainWindow : Window
         if (_launcherMode) return;
         _launcherMode = true;
 
-        TitleBarRow.Height = new GridLength(0);
+        TitleBarRow.Height = GridLength.Auto;
         SplitPaneRow.Height = new GridLength(0);
         ProgressRow.Height = new GridLength(0);
         StatusBarRow.Height = new GridLength(0);
-        AppTitleBar.Visibility = Visibility.Collapsed;
+        AppTitleBar.Visibility = Visibility.Visible;
         SplitPaneGrid.Visibility = Visibility.Collapsed;
 
-        try { ExtendsContentIntoTitleBar = false; } catch { }
+        try
+        {
+            ExtendsContentIntoTitleBar = true;
+            SetTitleBar(AppTitleBar);
+        }
+        catch { }
 
         try
         {
@@ -348,6 +397,7 @@ public sealed partial class MainWindow : Window
                 op.IsResizable = true;
                 op.IsMaximizable = false;
                 op.IsMinimizable = false;
+                ApplyTitleBarButtonTheme();
             }
         }
         catch { }
@@ -379,7 +429,7 @@ public sealed partial class MainWindow : Window
             RootGrid.UpdateLayout();
             RootGrid.Measure(new Windows.Foundation.Size(1400, double.PositiveInfinity));
             double desiredHeightDip = RootGrid.DesiredSize.Height;
-            if (desiredHeightDip < 60) desiredHeightDip = 170;
+            if (desiredHeightDip < 225) desiredHeightDip = 225;
 
             // Non-client chrome (border/resize grip) eats into the outer rect.
             // AppWindow.Size vs ClientSize may not be updated synchronously after
@@ -397,7 +447,7 @@ public sealed partial class MainWindow : Window
             LogService.Instance.Info("Launcher", $"PositionLauncherWindow: desiredH={desiredHeightDip:F1} dip, scale={scale:F2}, chromeH={chromeHeight}px, outer={AppWindow.Size.Height}, client={AppWindow.ClientSize.Height}");
 
             int width = (int)(1400 * scale);
-            int height = (int)(desiredHeightDip * scale) + chromeHeight;
+            int height = (int)((desiredHeightDip + 2) * scale) + chromeHeight;
             int x = wa.X + Math.Max(0, (wa.Width - width) / 2);
             int y = wa.Y + (int)(4 * scale);
             AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(x, y, width, height));
@@ -425,8 +475,8 @@ public sealed partial class MainWindow : Window
                     RootGrid.UpdateLayout();
                     RootGrid.Measure(new Windows.Foundation.Size(1400, double.PositiveInfinity));
                     double h = RootGrid.DesiredSize.Height;
-                    if (h < 60) return;
-                    int newHeight = (int)(h * deferredScale) + chrome;
+                    if (h < 225) h = 225;
+                    int newHeight = (int)((h + 2) * deferredScale) + chrome;
                     // Compare against current actual window height, not the
                     // captured value (which may have been set with wrong scale).
                     if (Math.Abs(newHeight - AppWindow.Size.Height) < 4) return;
@@ -631,7 +681,12 @@ public sealed partial class MainWindow : Window
         _resultsPaneCollapsed = false;
         CollapseChevronIcon.Glyph = "\uE70D";
 
-        try { ExtendsContentIntoTitleBar = true; } catch { }
+        try
+        {
+            ExtendsContentIntoTitleBar = true;
+            SetTitleBar(AppTitleBar);
+        }
+        catch { }
         try
         {
             if (AppWindow?.Presenter is Microsoft.UI.Windowing.OverlappedPresenter op)
@@ -640,6 +695,7 @@ public sealed partial class MainWindow : Window
                 op.IsResizable = true;
                 op.IsMaximizable = true;
                 op.IsMinimizable = true;
+                ApplyTitleBarButtonTheme();
             }
         }
         catch { }
@@ -665,20 +721,24 @@ public sealed partial class MainWindow : Window
         catch { }
     }
 
-    /// <summary>Restore compact launcher chrome (borderless, no title bar) when leaving FullWindow state.</summary>
+    /// <summary>Restore compact launcher chrome when leaving FullWindow state.</summary>
     private void RestoreToLauncherChrome()
     {
         _launcherMode = true;
 
-        // If coming back from full window, hide the title bar and extra rows again
-        TitleBarRow.Height = new GridLength(0);
-        AppTitleBar.Visibility = Visibility.Collapsed;
+        TitleBarRow.Height = GridLength.Auto;
+        AppTitleBar.Visibility = Visibility.Visible;
         SplitPaneRow.Height = new GridLength(0);
         ProgressRow.Height = new GridLength(0);
         StatusBarRow.Height = new GridLength(0);
         SplitPaneGrid.Visibility = Visibility.Collapsed;
 
-        try { ExtendsContentIntoTitleBar = false; } catch { }
+        try
+        {
+            ExtendsContentIntoTitleBar = true;
+            SetTitleBar(AppTitleBar);
+        }
+        catch { }
         try
         {
             if (AppWindow?.Presenter is Microsoft.UI.Windowing.OverlappedPresenter op)
@@ -687,6 +747,7 @@ public sealed partial class MainWindow : Window
                 op.IsResizable = true;
                 op.IsMaximizable = false;
                 op.IsMinimizable = false;
+                ApplyTitleBarButtonTheme();
             }
         }
         catch { }
@@ -3436,7 +3497,8 @@ public sealed partial class MainWindow : Window
 
         rtb.Blocks.Clear();
         var para = new Paragraph();
-        HighlightInline(para, r.MatchLine, r.MatchStartColumn, r.MatchLength);
+        int matchStart = r.IsEvicted ? r.ShortPreviewMatchStart : r.MatchStartColumn;
+        HighlightInline(para, r.MatchLine, matchStart, r.MatchLength);
         rtb.Blocks.Add(para);
     }
 
@@ -3628,37 +3690,73 @@ public sealed partial class MainWindow : Window
     {
         if (sender is MenuFlyout flyout)
         {
-            int count = GetCheckedFileGroups().Count;
             if (flyout.Items.Count > 0 && flyout.Items[0] is MenuFlyoutItem previewItem)
+            {
+                var contextGroup = GetFileHeaderContextGroup(flyout)
+                    ?? flyout.Items.OfType<MenuFlyoutItem>()
+                        .Select(GetFileHeaderContextGroup)
+                        .FirstOrDefault(g => g is not null);
+                int checkedCount = GetCheckedFileGroups().Count;
+                int count = checkedCount > 0 ? checkedCount : contextGroup is null ? 0 : 1;
                 previewItem.Text = $"Preview selected ({count})";
+                previewItem.Tag = contextGroup;
+            }
         }
     }
 
     private void OnResultsContextMenuOpening(object sender, object e)
     {
-        int count = GetCheckedFileGroups().Count;
+        var checkedGroups = GetCheckedFileGroups();
+        var contextGroup = checkedGroups.Count == 0 ? GetRecentResultsContextMenuGroup() : null;
+        int count = checkedGroups.Count > 0 ? checkedGroups.Count : contextGroup is null ? 0 : 1;
         bool plural = count > 1;
         CtxPreviewSelected.Text = $"Preview selected ({count})";
+        CtxPreviewSelected.Tag = contextGroup;
         CtxCopyPaths.Text = plural ? "Copy File Paths" : "Copy File Path";
         CtxCopyWithContent.Text = plural ? "Copy Files With Content" : "Copy File With Content";
         CtxSavePaths.Text = plural ? "Save File Paths\u2026" : "Save File Path\u2026";
         CtxSaveWithContent.Text = plural ? "Save Files With Content\u2026" : "Save File With Content\u2026";
     }
 
+    private void OnResultsListPointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        var point = e.GetCurrentPoint(ResultsList);
+        if (!point.Properties.IsRightButtonPressed)
+            return;
+
+        CaptureResultsContextMenuGroup(e.OriginalSource as DependencyObject);
+    }
+
+    private void OnResultsListRightTapped(object sender, RightTappedRoutedEventArgs e)
+    {
+        CaptureResultsContextMenuGroup(e.OriginalSource as DependencyObject);
+    }
+
+    private void CaptureResultsContextMenuGroup(DependencyObject? source)
+    {
+        _lastResultsContextMenuGroup = FindContextFileGroup(source);
+        _lastResultsContextMenuTick = Environment.TickCount64;
+    }
+
+    private FileGroup? GetRecentResultsContextMenuGroup()
+    {
+        long elapsed = Environment.TickCount64 - _lastResultsContextMenuTick;
+        return elapsed is >= 0 and < 2000 ? _lastResultsContextMenuGroup : null;
+    }
+
     private async void OnPreviewSelectedFiles(object sender, RoutedEventArgs e)
     {
-        var checkedGroups = GetCheckedFileGroups();
-        var groupNames = checkedGroups.Select(g => g.FilePath).ToList();
+        var selectedGroups = GetPreviewFileGroups(sender);
+        var groupNames = selectedGroups.Select(g => g.FilePath).ToList();
         LogService.Instance.Info("Preview", $"OnPreviewSelectedFiles: {groupNames.Count} groups selected: [{string.Join(", ", groupNames.Select(System.IO.Path.GetFileName))}]");
         _suppressPreviewUpdate = true;
         try
         {
             // Select all match results within each checked FileGroup.
-            foreach (var g in checkedGroups)
+            foreach (var g in selectedGroups)
                 g.SelectAll();
 
             // Gather results only from the checked groups.
-            var selectedGroups = checkedGroups;
             var byFile = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
             foreach (var g in selectedGroups)
             {
@@ -3711,6 +3809,83 @@ public sealed partial class MainWindow : Window
             // Multi-file with all already present — nothing to do.
         }
         finally { _suppressPreviewUpdate = false; }
+    }
+
+    private List<FileGroup> GetPreviewFileGroups(object sender)
+    {
+        var checkedGroups = GetCheckedFileGroups();
+        if (checkedGroups.Count > 0)
+            return checkedGroups;
+
+        var contextGroup = GetFileHeaderContextGroup(sender);
+        return contextGroup is null ? checkedGroups : [contextGroup];
+    }
+
+    private FileGroup? GetFileHeaderContextGroup(object? sender)
+    {
+        if (sender is MenuFlyout { Target: FrameworkElement target })
+        {
+            if (target.DataContext is FileGroup targetGroup)
+                return targetGroup;
+
+            var taggedTargetGroup = GetFileHeaderContextGroup(target);
+            if (taggedTargetGroup is not null)
+                return taggedTargetGroup;
+        }
+
+        if (sender is FrameworkElement element)
+        {
+            if (element.Tag is FileGroup taggedGroup)
+                return taggedGroup;
+
+            if (element.Tag is string filePath)
+                return FindFileGroup(filePath);
+
+            if (element.DataContext is FileGroup dataContextGroup)
+                return dataContextGroup;
+        }
+
+        return null;
+    }
+
+    private FileGroup? FindContextFileGroup(DependencyObject? source)
+    {
+        for (var current = source; current is not null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (current is not FrameworkElement element)
+                continue;
+
+            if (element.Tag is FileGroup taggedGroup)
+                return taggedGroup;
+
+            if (element.Tag is string filePath)
+            {
+                var taggedPathGroup = FindFileGroup(filePath);
+                if (taggedPathGroup is not null)
+                    return taggedPathGroup;
+            }
+
+            if (element.DataContext is FileGroup dataContextGroup)
+                return dataContextGroup;
+
+            if (element.DataContext is SearchResult result)
+            {
+                var parentGroup = FindParentGroup(result);
+                if (parentGroup is not null)
+                    return parentGroup;
+            }
+        }
+
+        return null;
+    }
+
+    private FileGroup? FindFileGroup(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+            return null;
+
+        return ViewModel.ResultGroups.FirstOrDefault(g =>
+            string.Equals(g.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
     }
 
     private void OnCopySelectedFilePaths(object sender, RoutedEventArgs e)
@@ -8296,10 +8471,11 @@ public sealed partial class MainWindow : Window
         var okBtn = new Button
         {
             Content = "OK",
-            Style = (Style)Application.Current.Resources["AccentButtonStyle"],
             HorizontalAlignment = HorizontalAlignment.Right,
             Margin = new Thickness(0, 4, 0, 0),
         };
+        if (TryGetApplicationStyle("AccentButtonStyle") is { } okButtonStyle)
+            okBtn.Style = okButtonStyle;
 
         var flyout = new Flyout { Content = sp };
         okBtn.Click += (_, _) =>

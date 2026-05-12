@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Yagu.Helpers;
 using Yagu.Services;
 
 namespace Yagu.Models;
@@ -25,8 +26,14 @@ public sealed record SearchResult(
     public IReadOnlyList<string> ContextBefore { get; internal set; } = ContextBefore;
     public IReadOnlyList<string> ContextAfter { get; internal set; } = ContextAfter;
 
-    /// <summary>Short preview kept in memory even when evicted (first ~120 chars).</summary>
-    public string ShortPreview { get; } = MatchLine.Length <= 120 ? MatchLine : MatchLine[..120] + "…";
+    private const int ShortPreviewLength = 120;
+    private readonly ShortPreviewInfo _shortPreview = CreateShortPreview(MatchLine, MatchStartColumn, MatchLength);
+
+    /// <summary>Short preview kept in memory even when evicted, centered around the match when possible.</summary>
+    public string ShortPreview => _shortPreview.Text;
+
+    /// <summary>Match start adjusted for <see cref="ShortPreview" />.</summary>
+    public int ShortPreviewMatchStart => _shortPreview.MatchStart;
 
     private const long InMemoryOffset = -1;
     private const long EvictingOffset = -2;
@@ -97,6 +104,36 @@ public sealed record SearchResult(
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
+
+    private static ShortPreviewInfo CreateShortPreview(string? line, int matchStart, int matchLength)
+    {
+        line ??= string.Empty;
+        if (line.Length <= ShortPreviewLength)
+            return new ShortPreviewInfo(line, matchStart);
+
+        if (matchStart < 0 || matchLength <= 0 || matchStart >= line.Length)
+            return new ShortPreviewInfo(line[..ShortPreviewLength] + LineTruncator.Ellipsis, matchStart);
+
+        int safeMatchLength = Math.Min(matchLength, line.Length - matchStart);
+        int visibleMatchLength = Math.Min(safeMatchLength, ShortPreviewLength);
+        int contextChars = Math.Max(0, (ShortPreviewLength - visibleMatchLength) / 2);
+
+        int start = Math.Max(0, matchStart - contextChars);
+        int end = Math.Min(line.Length, start + ShortPreviewLength);
+        if (end - start < ShortPreviewLength)
+            start = Math.Max(0, end - ShortPreviewLength);
+
+        bool hasPrefix = start > 0;
+        bool hasSuffix = end < line.Length;
+        string prefix = hasPrefix ? LineTruncator.Ellipsis : string.Empty;
+        string suffix = hasSuffix ? LineTruncator.Ellipsis : string.Empty;
+        string text = string.Concat(prefix, line.AsSpan(start, end - start), suffix);
+        int displayMatchStart = matchStart - start + prefix.Length;
+
+        return new ShortPreviewInfo(text, displayMatchStart);
+    }
+
+    private readonly record struct ShortPreviewInfo(string Text, int MatchStart);
 
     public IReadOnlyList<ContextLine> NumberedBefore
     {

@@ -48,6 +48,9 @@ public sealed partial class MainViewModel : ObservableObject
     internal readonly List<(double filesPerSec, double mbPerSec)> ThroughputSamples = new();
     private readonly DirectoryAutoCompleteService _dirAutoComplete = new();
     private CancellationTokenSource? _dirAutoCompleteCts;
+    private static int s_postEvictionCompactingGcInFlight;
+    private static long s_lastPostEvictionCompactingGcTicks;
+    private static readonly TimeSpan PostEvictionCompactingGcCooldown = TimeSpan.FromSeconds(15);
 
     public MainViewModel() : this(new SearchService(), new SettingsService(), new EditorLauncher(),
                                    DispatcherQueue.GetForCurrentThread())
@@ -887,23 +890,10 @@ public sealed partial class MainViewModel : ObservableObject
                             try { _resultStore?.Drain(); }
                             catch (Exception ex) { LogService.Instance.Warning("ViewModel", "ResultStore drain failed", ex); }
 
-                            // Force a blocking compacting Gen2 GC so the working set
-                            // actually shrinks after eviction. Without this, the
-                            // non-blocking optimized GC requested by SearchService
-                            // rarely reclaims LOH-resident match strings/context
-                            // arrays. Runs on the threadpool, not the UI thread.
-                            try
-                            {
-                                System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
-                                    System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
-                                GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
-                                GC.WaitForPendingFinalizers();
-                                GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
-                            }
-                            catch (Exception ex)
-                            {
-                                LogService.Instance.Warning("ViewModel", "Post-eviction compacting GC failed", ex);
-                            }
+                            if (IsSearching)
+                                SearchService.CollectForMemoryPressureIfDue(TimeSpan.FromSeconds(3));
+                            else
+                                CollectPostEvictionIfDue();
                         });
                         break;
                     case SearchEvent.MemoryPressureRelieved relieved:
@@ -1243,6 +1233,46 @@ public sealed partial class MainViewModel : ObservableObject
         // GC is now triggered by the worker threads after the eviction signal,
         // keeping the UI thread responsive.
         return evicted;
+    }
+
+    private static void CollectPostEvictionIfDue()
+    {
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        long last = Volatile.Read(ref s_lastPostEvictionCompactingGcTicks);
+        if (last != 0)
+        {
+            double secondsSinceLast = (double)(now - last) / System.Diagnostics.Stopwatch.Frequency;
+            if (secondsSinceLast < PostEvictionCompactingGcCooldown.TotalSeconds)
+                return;
+        }
+
+        if (Interlocked.CompareExchange(ref s_postEvictionCompactingGcInFlight, 1, 0) != 0)
+            return;
+
+        var gcStopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("ViewModel", "Post-eviction compacting GC failed", ex);
+        }
+        finally
+        {
+            gcStopwatch.Stop();
+            Volatile.Write(ref s_lastPostEvictionCompactingGcTicks, System.Diagnostics.Stopwatch.GetTimestamp());
+            Volatile.Write(ref s_postEvictionCompactingGcInFlight, 0);
+
+            if (gcStopwatch.ElapsedMilliseconds >= 500)
+                LogService.Instance.Warning("ViewModel", $"Post-eviction compacting GC took {gcStopwatch.ElapsedMilliseconds:N0}ms");
+            else
+                LogService.Instance.Info("ViewModel", $"Post-eviction compacting GC took {gcStopwatch.ElapsedMilliseconds:N0}ms");
+        }
     }
 
     /// <summary>
