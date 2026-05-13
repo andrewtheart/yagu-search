@@ -144,7 +144,7 @@ public sealed class ContentSearcher
             try
             {
                 using var archiveFs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan | FileOptions.Asynchronous);
-                var headerBuf = new byte[6];
+                var headerBuf = new byte[4];
                 int headerRead = 0;
                 while (headerRead < headerBuf.Length)
                 {
@@ -158,14 +158,6 @@ public sealed class ContentSearcher
                     var archiveResult = await ZipArchiveSearcher.SearchArchiveStreamAsync(
                         archiveFs, filePath, regex, literal, literalComparison, options, writer, cancellationToken, 0).ConfigureAwait(false);
                     if (watched) FileWatchDiagnostics.Checkpoint(filePath, "EXIT-ZIP", totalSw!.ElapsedMilliseconds, $"produced={archiveResult.MatchCount} entries={archiveResult.EntriesScanned}");
-                    return new FileSearchOutcome(archiveResult.MatchCount, archiveResult.MatchCount >= 0 ? fileLength : 0, archiveResult.EntriesScanned);
-                }
-                if (headerRead >= 6 && BinaryDetector.IsSevenZipMagic(headerBuf[..headerRead]))
-                {
-                    archiveFs.Position = 0;
-                    var archiveResult = await ZipArchiveSearcher.SearchSevenZipArchiveStreamAsync(
-                        archiveFs, filePath, regex, literal, literalComparison, options, writer, cancellationToken, 0).ConfigureAwait(false);
-                    if (watched) FileWatchDiagnostics.Checkpoint(filePath, "EXIT-7Z", totalSw!.ElapsedMilliseconds, $"produced={archiveResult.MatchCount} entries={archiveResult.EntriesScanned}");
                     return new FileSearchOutcome(archiveResult.MatchCount, archiveResult.MatchCount >= 0 ? fileLength : 0, archiveResult.EntriesScanned);
                 }
                 // Not a supported archive — if the extension was skippable, skip now.

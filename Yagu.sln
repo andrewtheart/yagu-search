@@ -13,10 +13,6 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "TextControlBox-WinUI", "Tex
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TextControlBox", "vendor\TextControlBox-WinUI\TextControlBox\TextControlBox.csproj", "{6AD39B7E-1E34-4A5F-9093-EB4F9A243626}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "SharpSevenZip", "SharpSevenZip", "{5BEA7D07-666D-76A1-60CB-03D43B49609C}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharpSevenZip", "vendor\SharpSevenZip\SharpSevenZip\SharpSevenZip\SharpSevenZip.csproj", "{A36711D1-BF6B-4B29-8D25-4A04F927EA72}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -75,18 +71,6 @@ Global
 		{6AD39B7E-1E34-4A5F-9093-EB4F9A243626}.Release|Any CPU.Build.0 = Release|Any CPU
 		{6AD39B7E-1E34-4A5F-9093-EB4F9A243626}.Release|x86.ActiveCfg = Release|Any CPU
 		{6AD39B7E-1E34-4A5F-9093-EB4F9A243626}.Release|x86.Build.0 = Release|Any CPU
-		{A36711D1-BF6B-4B29-8D25-4A04F927EA72}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{A36711D1-BF6B-4B29-8D25-4A04F927EA72}.Debug|x64.Build.0 = Debug|Any CPU
-		{A36711D1-BF6B-4B29-8D25-4A04F927EA72}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{A36711D1-BF6B-4B29-8D25-4A04F927EA72}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{A36711D1-BF6B-4B29-8D25-4A04F927EA72}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{A36711D1-BF6B-4B29-8D25-4A04F927EA72}.Debug|x86.Build.0 = Debug|Any CPU
-		{A36711D1-BF6B-4B29-8D25-4A04F927EA72}.Release|x64.ActiveCfg = Release|Any CPU
-		{A36711D1-BF6B-4B29-8D25-4A04F927EA72}.Release|x64.Build.0 = Release|Any CPU
-		{A36711D1-BF6B-4B29-8D25-4A04F927EA72}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{A36711D1-BF6B-4B29-8D25-4A04F927EA72}.Release|Any CPU.Build.0 = Release|Any CPU
-		{A36711D1-BF6B-4B29-8D25-4A04F927EA72}.Release|x86.ActiveCfg = Release|Any CPU
-		{A36711D1-BF6B-4B29-8D25-4A04F927EA72}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -94,7 +78,5 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{511CFB75-7906-B9F5-247E-2E7F96E8721B} = {3EFB08DA-2EA9-FE77-18DF-C4D4293AFD9C}
 		{6AD39B7E-1E34-4A5F-9093-EB4F9A243626} = {511CFB75-7906-B9F5-247E-2E7F96E8721B}
-		{5BEA7D07-666D-76A1-60CB-03D43B49609C} = {3EFB08DA-2EA9-FE77-18DF-C4D4293AFD9C}
-		{A36711D1-BF6B-4B29-8D25-4A04F927EA72} = {5BEA7D07-666D-76A1-60CB-03D43B49609C}
 	EndGlobalSection
 EndGlobal
