@@ -605,20 +605,20 @@ public sealed class SearchService
                                     }
                                 }
 
-                                // Track in-flight ZIP tasks so they don't block native batching.
+                                // Track in-flight archive tasks so they don't block native batching.
                                 var zipTasks = new List<Task>();
 
                                 while (Volatile.Read(ref truncated) == 0)
                                 {
                                     while (batch.Count < nativeBatchSize && pending.Reader.TryRead(out var bufferedFile))
                                     {
-                                        // Route ZIP archives to the managed searcher.
+                                        // Route configured archive extensions to the managed searcher.
                                         // Use extension-based check (no I/O) instead of opening
                                         // every file for a 4-byte header peek — the old IsZipByHeader
                                         // approach consumed 24% of CPU and doubled file opens.
-                                        // ContentSearcher still validates the ZIP header when it
+                                        // ContentSearcher still validates the archive header when it
                                         // opens the file, so false positives are harmless.
-                                        if (options.SearchInsideArchives && ZipArchiveSearcher.HasZipExtension(bufferedFile, options.ArchiveExtensions))
+                                        if (options.SearchInsideArchives && ZipArchiveSearcher.HasArchiveExtension(bufferedFile, options.ArchiveExtensions))
                                         {
                                             zipTasks.Add(ScanZipViaManagedAsync(bufferedFile));
                                         }

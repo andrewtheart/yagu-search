@@ -75,6 +75,17 @@ public static class BinaryDetector
         return s[0] == 0x50 && s[1] == 0x4B && (s[2] == 0x03 || s[2] == 0x05 || s[2] == 0x07);
     }
 
+    public static bool IsSevenZipMagic(ReadOnlySpan<byte> s)
+    {
+        return s.Length >= 6
+            && s[0] == 0x37
+            && s[1] == 0x7A
+            && s[2] == 0xBC
+            && s[3] == 0xAF
+            && s[4] == 0x27
+            && s[5] == 0x1C;
+    }
+
     private static bool HasBinaryMagic(ReadOnlySpan<byte> s)
     {
         if (s.Length < 4) return false;
@@ -94,7 +105,7 @@ public static class BinaryDetector
         // PE/DOS "MZ"
         if (s[0] == 0x4D && s[1] == 0x5A) return true;
         // 7z
-        if (s.Length >= 6 && s[0] == 0x37 && s[1] == 0x7A && s[2] == 0xBC && s[3] == 0xAF && s[4] == 0x27 && s[5] == 0x1C) return true;
+        if (IsSevenZipMagic(s)) return true;
         // Zstandard
         if (s[0] == 0x28 && s[1] == 0xB5 && s[2] == 0x2F && s[3] == 0xFD) return true;
         // Mach-O 32-bit LE

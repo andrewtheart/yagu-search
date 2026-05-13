@@ -16,6 +16,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\vendor\SharpSevenZip\SharpSevenZip\SharpSevenZip\SharpSevenZip.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Include="..\Yagu\Models\SearchResult.cs" Link="Source\Models\SearchResult.cs" />
     <Compile Include="..\Yagu\Models\SearchOptions.cs" Link="Source\Models\SearchOptions.cs" />
     <Compile Include="..\Yagu\Models\SearchProgress.cs" Link="Source\Models\SearchProgress.cs" />
@@ -39,6 +43,15 @@
     <Compile Include="..\Yagu\Services\LogService.cs" Link="Source\Services\LogService.cs" />
     <Compile Include="..\Yagu\Native\NativeSearcher.cs" Link="Source\Native\NativeSearcher.cs" />
     <Compile Include="..\Yagu\Native\EverythingSdk.cs" Link="Source\Native\EverythingSdk.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\vendor\SharpSevenZip\SharpSevenZip\SharpSevenZip\x64\7z.dll" Link="x64\7z.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\vendor\SharpSevenZip\SharpSevenZip\SharpSevenZip\x86\7z.dll" Link="x86\7z.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)..\yagu-core\target\release\yagu_core.dll')">

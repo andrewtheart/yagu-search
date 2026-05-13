@@ -29,7 +29,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     public int HiddenMatchCount { get; private set; }
     public bool HasHiddenMatches => HiddenMatchCount > 0;
 
-    /// <summary>True when this group represents a file inside a ZIP archive.</summary>
+    /// <summary>True when this group represents a file inside an archive.</summary>
     public bool IsArchiveEntry => ZipArchiveSearcher.IsArchivePath(FilePath);
 
     /// <summary>

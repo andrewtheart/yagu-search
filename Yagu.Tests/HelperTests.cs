@@ -270,6 +270,13 @@ public class BinaryDetectorPathTests
     }
 
     [Fact]
+    public void SevenZipMagic_IsDetected()
+    {
+        Assert.True(BinaryDetector.IsSevenZipMagic(new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C }));
+        Assert.False(BinaryDetector.IsSevenZipMagic(new byte[] { 0x37, 0x7A, 0x00, 0x00 }));
+    }
+
+    [Fact]
     public void ZstdMagic_IsBinary()
     {
         using var ms = new MemoryStream(new byte[] { 0x28, 0xB5, 0x2F, 0xFD, 0x00 });

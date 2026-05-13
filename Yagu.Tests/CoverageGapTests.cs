@@ -58,6 +58,31 @@ public sealed class ZipArchiveSearcherCoverageTests : IDisposable
         return outerPath;
     }
 
+    private string CreateSevenZip(string name, params (string entry, string content)[] entries)
+    {
+        var sourceDir = Path.Combine(_root, Path.GetFileNameWithoutExtension(name) + "-src");
+        Directory.CreateDirectory(sourceDir);
+
+        var files = new List<string>(entries.Length);
+        foreach (var (entryName, content) in entries)
+        {
+            var fullPath = Path.Combine(sourceDir, entryName.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            File.WriteAllText(fullPath, content, Encoding.UTF8);
+            files.Add(fullPath);
+        }
+
+        var archivePath = Path.Combine(_root, name);
+        var compressor = new SharpSevenZip.SharpSevenZipCompressor
+        {
+            ArchiveFormat = SharpSevenZip.OutArchiveFormat.SevenZip,
+            CompressionLevel = SharpSevenZip.CompressionLevel.Fast,
+            DirectoryStructure = true,
+        };
+        compressor.CompressFiles(archivePath, sourceDir.Length + 1, files.ToArray());
+        return archivePath;
+    }
+
     // ── WarmUp ──
     [Fact]
     public void WarmUp_DoesNotThrow()
@@ -119,6 +144,14 @@ public sealed class ZipArchiveSearcherCoverageTests : IDisposable
         var exts = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "zip", "jar" };
         Assert.True(ZipArchiveSearcher.HasZipExtension("test.zip", exts));
         Assert.True(ZipArchiveSearcher.HasZipExtension("test.jar", exts));
+    }
+
+    [Fact]
+    public void HasArchiveExtension_DottedExtension_ReturnsTrue()
+    {
+        var exts = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".zip", ".7z" };
+        Assert.True(ZipArchiveSearcher.HasArchiveExtension("test.zip", exts));
+        Assert.True(ZipArchiveSearcher.HasArchiveExtension("test.7z", exts));
     }
 
     [Fact]
@@ -202,6 +235,31 @@ public sealed class ZipArchiveSearcherCoverageTests : IDisposable
         await foreach (var r in ch.Reader.ReadAllAsync()) results.Add(r);
         Assert.Single(results);
         Assert.Contains("?/", results[0].FilePath);
+    }
+
+    [Fact]
+    public async Task SearchArchiveAsync_SevenZip_FindsMatches()
+    {
+        var path = CreateSevenZip("search.7z",
+            ("a.txt", "needle in haystack"),
+            ("b.txt", "no match here"));
+        var ch = Channel.CreateUnbounded<SearchResult>();
+        var opts = new SearchOptions
+        {
+            Directory = ".", Query = "needle",
+            ContextLines = 0, MaxFileSizeBytes = 0, MaxResults = 0,
+            SkipBinary = true,
+            SearchInsideArchives = true,
+        };
+        var (matches, entries) = await ZipArchiveSearcher.SearchArchiveAsync(
+            path, null, "needle", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, CancellationToken.None);
+        ch.Writer.Complete();
+        Assert.Equal(1, matches);
+        Assert.True(entries >= 2);
+        var results = new List<SearchResult>();
+        await foreach (var r in ch.Reader.ReadAllAsync()) results.Add(r);
+        Assert.Single(results);
+        Assert.Contains(".7z?/", results[0].FilePath);
     }
 
     [Fact]
@@ -391,6 +449,41 @@ public sealed class ZipArchiveSearcherCoverageTests : IDisposable
         using var ms = await ZipArchiveSearcher.ExtractToMemoryAsync(archivePath);
         using var reader = new StreamReader(ms);
         Assert.Equal("memory content", reader.ReadToEnd());
+    }
+
+    [Fact]
+    public async Task ExtractToMemoryAsync_SevenZip_ReturnsStream()
+    {
+        var path = CreateSevenZip("mem.7z", ("data.txt", "memory content"));
+        var archivePath = $"{path}?/data.txt";
+        using var ms = await ZipArchiveSearcher.ExtractToMemoryAsync(archivePath);
+        using var reader = new StreamReader(ms);
+        Assert.Equal("memory content", reader.ReadToEnd());
+    }
+
+    [Fact]
+    public async Task ContentSearcher_SearchFileWithStatsAsync_SevenZip_FindsMatches()
+    {
+        var path = CreateSevenZip("content-search.7z", ("folder/readme.txt", "hello needle"));
+        var ch = Channel.CreateUnbounded<SearchResult>();
+        var opts = new SearchOptions
+        {
+            Directory = ".", Query = "needle",
+            ContextLines = 0, MaxFileSizeBytes = 0, MaxResults = 0,
+            SkipBinary = true,
+            SearchInsideArchives = true,
+        };
+
+        var outcome = await new ContentSearcher().SearchFileWithStatsAsync(
+            path, null, "needle", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, CancellationToken.None, session: null);
+        ch.Writer.Complete();
+
+        Assert.Equal(1, outcome.MatchCount);
+        Assert.True(outcome.EntriesScanned >= 1);
+        var results = new List<SearchResult>();
+        await foreach (var result in ch.Reader.ReadAllAsync()) results.Add(result);
+        Assert.Single(results);
+        Assert.Contains("content-search.7z?/folder/readme.txt", results[0].FilePath.Replace('\\', '/'));
     }
 
     [Fact]

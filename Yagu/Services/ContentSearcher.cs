@@ -136,7 +136,7 @@ public sealed class ContentSearcher
             }
         }
 
-        // ZIP archive search: open the file once and reuse the stream for
+        // Archive search: open the file once and reuse the stream for
         // both the header check and the archive searcher, eliminating the
         // 2–3 redundant CreateFile round-trips the old code path incurred.
         if (options.SearchInsideArchives)
@@ -144,9 +144,9 @@ public sealed class ContentSearcher
             try
             {
                 using var archiveFs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan | FileOptions.Asynchronous);
-                var headerBuf = new byte[4];
+                var headerBuf = new byte[6];
                 int headerRead = 0;
-                while (headerRead < 4)
+                while (headerRead < headerBuf.Length)
                 {
                     int n = await archiveFs.ReadAsync(headerBuf.AsMemory(headerRead), cancellationToken).ConfigureAwait(false);
                     if (n <= 0) break;
@@ -160,13 +160,21 @@ public sealed class ContentSearcher
                     if (watched) FileWatchDiagnostics.Checkpoint(filePath, "EXIT-ZIP", totalSw!.ElapsedMilliseconds, $"produced={archiveResult.MatchCount} entries={archiveResult.EntriesScanned}");
                     return new FileSearchOutcome(archiveResult.MatchCount, archiveResult.MatchCount >= 0 ? fileLength : 0, archiveResult.EntriesScanned);
                 }
-                // Not a ZIP — if the extension was skippable, skip now.
+                if (headerRead >= 6 && BinaryDetector.IsSevenZipMagic(headerBuf[..headerRead]))
+                {
+                    archiveFs.Position = 0;
+                    var archiveResult = await ZipArchiveSearcher.SearchSevenZipArchiveStreamAsync(
+                        archiveFs, filePath, regex, literal, literalComparison, options, writer, cancellationToken, 0).ConfigureAwait(false);
+                    if (watched) FileWatchDiagnostics.Checkpoint(filePath, "EXIT-7Z", totalSw!.ElapsedMilliseconds, $"produced={archiveResult.MatchCount} entries={archiveResult.EntriesScanned}");
+                    return new FileSearchOutcome(archiveResult.MatchCount, archiveResult.MatchCount >= 0 ? fileLength : 0, archiveResult.EntriesScanned);
+                }
+                // Not a supported archive — if the extension was skippable, skip now.
                 if (hasSkippableExtension)
                     return new FileSearchOutcome(SkipByExtension, 0);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                LogService.Instance.Verbose("ContentSearcher", $"ZIP header check failed for {filePath}, falling through to normal scan", ex);
+                LogService.Instance.Verbose("ContentSearcher", $"Archive header check failed for {filePath}, falling through to normal scan", ex);
             }
         }
 
