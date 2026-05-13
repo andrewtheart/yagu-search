@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Yagu.SettingsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Yagu — Settings">
+
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+
+    <Grid x:Name="RootGrid" RowSpacing="0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="48" />  <!-- Title bar -->
+            <RowDefinition Height="*" />   <!-- Content -->
+            <RowDefinition Height="Auto" /> <!-- Button bar -->
+        </Grid.RowDefinitions>
+
+        <!-- Custom title bar -->
+        <Grid x:Name="AppTitleBar" Grid.Row="0" Height="48" Padding="16,0,16,0">
+            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                <FontIcon Glyph="&#xE713;" FontSize="16" />
+                <TextBlock Text="Settings" Style="{ThemeResource CaptionTextBlockStyle}"
+                           FontWeight="SemiBold" VerticalAlignment="Center" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Two-column layout: vertical tabs + content -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="200" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Vertical tab list -->
+            <ListView x:Name="TabList" Grid.Column="0"
+                      Padding="8,8,0,8"
+                      SelectionMode="Single"
+                      SelectionChanged="OnTabSelectionChanged">
+                <ListView.ItemContainerStyle>
+                    <Style TargetType="ListViewItem">
+                        <Setter Property="Padding" Value="12,8,12,8" />
+                        <Setter Property="Margin" Value="0,1,0,1" />
+                        <Setter Property="CornerRadius" Value="6" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                    </Style>
+                </ListView.ItemContainerStyle>
+            </ListView>
+
+            <!-- Separator line -->
+            <Border Grid.Column="1"
+                    HorizontalAlignment="Left"
+                    Width="1"
+                    Background="{ThemeResource CardStrokeColorDefaultBrush}" />
+
+            <!-- Scrollable content pane -->
+            <ScrollViewer Grid.Column="1"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Padding="0">
+                <StackPanel x:Name="SettingsContent" Spacing="10" Padding="20,12,20,16" />
+            </ScrollViewer>
+        </Grid>
+
+        <!-- Button bar -->
+        <Border Grid.Row="2"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="0,1,0,0"
+                Padding="24,12,24,12">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                <Button x:Name="SaveButton" Content="Save" Style="{ThemeResource AccentButtonStyle}"
+                        Click="OnSaveClick" />
+                <Button Content="Cancel" Click="OnCancelClick" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

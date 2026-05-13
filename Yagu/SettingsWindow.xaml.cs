@@ -1,0 +1,571 @@
+using System;
+using System.Collections.Generic;
+using Microsoft.UI;
+using Microsoft.UI.Windowing;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Windows.Graphics;
+using Yagu.Services;
+using Yagu.ViewModels;
+
+namespace Yagu;
+
+public sealed partial class SettingsWindow : Window
+{
+    private readonly MainViewModel _viewModel;
+    private readonly HotkeyService _hotkeyService;
+    private readonly IntPtr _mainHwnd;
+    private readonly Action<bool>? _applyWordWrap;
+    private readonly List<UIElement> _tabPages = new();
+
+    public SettingsWindow(MainViewModel viewModel, HotkeyService hotkeyService, IntPtr mainHwnd, Action<bool>? applyWordWrap)
+    {
+        _viewModel = viewModel;
+        _hotkeyService = hotkeyService;
+        _mainHwnd = mainHwnd;
+        _applyWordWrap = applyWordWrap;
+        InitializeComponent();
+
+        // Set up custom title bar
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(AppTitleBar);
+
+        // Size and center over the owner window
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
+        var appWindow = AppWindow.GetFromWindowId(windowId);
+        const int w = 860, h = 820;
+        appWindow.Resize(new SizeInt32(w, h));
+        CenterOverOwner(appWindow, mainHwnd, w, h);
+
+        BuildSettingsContent();
+        TabList.SelectedIndex = 0;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+    }
+
+    private static void CenterOverOwner(AppWindow appWindow, IntPtr ownerHwnd, int w, int h)
+    {
+        if (ownerHwnd == IntPtr.Zero) return;
+        if (!GetWindowRect(ownerHwnd, out var rc)) return;
+        int ownerCx = (rc.Left + rc.Right) / 2;
+        int ownerCy = (rc.Top + rc.Bottom) / 2;
+        int x = ownerCx - w / 2;
+        int y = ownerCy - h / 2;
+
+        // Clamp to the work area of the owner's monitor
+        const uint MONITOR_DEFAULTTONEAREST = 2;
+        var hMon = MonitorFromWindow(ownerHwnd, MONITOR_DEFAULTTONEAREST);
+        var mi = new MONITORINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<MONITORINFO>() };
+        if (GetMonitorInfo(hMon, ref mi))
+        {
+            var work = mi.rcWork;
+            if (x < work.Left) x = work.Left;
+            if (y < work.Top) y = work.Top;
+            if (x + w > work.Right) x = work.Right - w;
+            if (y + h > work.Bottom) y = work.Bottom - h;
+        }
+
+        appWindow.Move(new PointInt32(x, y));
+    }
+
+    private void OnSaveClick(object sender, RoutedEventArgs e)
+    {
+        _ = _viewModel.PersistSettingsAsync();
+        Close();
+    }
+
+    private void OnCancelClick(object sender, RoutedEventArgs e)
+    {
+        Close();
+    }
+
+    private void OnTabSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        int idx = TabList.SelectedIndex;
+        SettingsContent.Children.Clear();
+        if (idx >= 0 && idx < _tabPages.Count)
+            SettingsContent.Children.Add(_tabPages[idx]);
+    }
+
+    private StackPanel AddTab(string header)
+    {
+        var page = new StackPanel { Spacing = 8 };
+        _tabPages.Add(page);
+
+        var item = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+        item.Children.Add(new FontIcon
+        {
+            Glyph = SettingsGroupIcon(header),
+            FontSize = 15,
+        });
+        item.Children.Add(new TextBlock
+        {
+            Text = header,
+            FontSize = 13,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        TabList.Items.Add(item);
+        return page;
+    }
+
+    private static StackPanel NextSearchLabel(string text)
+    {
+        var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        panel.Children.Add(new TextBlock { Text = text });
+        var icon = new FontIcon { Glyph = "\uE72C", FontSize = 11, Opacity = 0.5, VerticalAlignment = VerticalAlignment.Center };
+        ToolTipService.SetToolTip(icon, "Takes effect on the next search");
+        panel.Children.Add(icon);
+        return panel;
+    }
+
+    private static string SettingsGroupIcon(string header) => header switch
+    {
+        "Search Defaults" => "\uE721",
+        "Search Limits" => "\uE74C",
+        "Performance" => "\uE9F5",
+        "Display" => "\uE7B5",
+        "Editor" => "\uE70F",
+        "Window" => "\uE737",
+        "General" => "\uE713",
+        _ => "\uE7FC",
+    };
+
+    private void BuildSettingsContent()
+    {
+        // ── Search Defaults ──
+        {
+            var g = AddTab("Search Defaults");
+
+            g.Children.Add(NextSearchLabel("Context lines (lines shown before & after each match in results):"));
+            var ctx = new NumberBox { Value = _viewModel.ContextLines, Minimum = 0, Maximum = 50 };
+            ctx.ValueChanged += (_, args) => _viewModel.ContextLines = (int)args.NewValue;
+            g.Children.Add(ctx);
+
+            g.Children.Add(new TextBlock { Text = "Preview context lines (lines shown around each match in the preview panel):" });
+            var prevCtx = new NumberBox { Value = _viewModel.PreviewContextLines, Minimum = 0 };
+            prevCtx.ValueChanged += (_, args) => _viewModel.PreviewContextLines = (int)args.NewValue;
+            g.Children.Add(prevCtx);
+
+            g.Children.Add(NextSearchLabel("Default include globs (comma/semicolon-separated):"));
+            var incGlobs = new TextBox { Text = _viewModel.IncludeGlobs, PlaceholderText = "e.g. *.cs;*.ts" };
+            incGlobs.TextChanged += (_, _) => _viewModel.IncludeGlobs = incGlobs.Text;
+            g.Children.Add(incGlobs);
+
+            g.Children.Add(NextSearchLabel("Default exclude globs (comma/semicolon-separated):"));
+            var excGlobs = new TextBox { Text = _viewModel.ExcludeGlobs, PlaceholderText = "e.g. node_modules;bin;obj;.git" };
+            excGlobs.TextChanged += (_, _) => _viewModel.ExcludeGlobs = excGlobs.Text;
+            g.Children.Add(excGlobs);
+        }
+
+        // ── Search Limits ──
+        {
+            var g = AddTab("Search Limits");
+
+            g.Children.Add(NextSearchLabel("Max results (0 = unlimited, non-zero values capped at 50,000):"));
+            var max = new NumberBox { Value = _viewModel.MaxResults, Minimum = 0 };
+            max.ValueChanged += (_, args) => _viewModel.MaxResults = (int)args.NewValue;
+            g.Children.Add(max);
+            g.Children.Add(new TextBlock { Text = "Stops the search after this many matches. Set to 0 for no limit (memory pressure will still protect against runaway usage).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            g.Children.Add(NextSearchLabel("Default file size filter (MB):"));
+            var sizeDefaults = new Grid { ColumnSpacing = 8 };
+            sizeDefaults.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            sizeDefaults.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            var minSizePanel = new StackPanel { Spacing = 4 };
+            minSizePanel.Children.Add(new TextBlock { Text = "Minimum MB", FontSize = 12, Opacity = 0.75 });
+            var minSize = new NumberBox { Value = _viewModel.DefaultMinFileSizeMB, Minimum = 0, PlaceholderText = "0" };
+            minSize.ValueChanged += (_, args) =>
+            {
+                _viewModel.DefaultMinFileSizeMB = args.NewValue;
+                _viewModel.MinFileSizeMB = _viewModel.DefaultMinFileSizeMB;
+                _viewModel.IsFileSizeFilterEnabled = _viewModel.MinFileSizeBytes > 0 || _viewModel.MaxFileSizeBytes > 0;
+            };
+            minSizePanel.Children.Add(minSize);
+
+            var maxSizePanel = new StackPanel { Spacing = 4 };
+            maxSizePanel.Children.Add(new TextBlock { Text = "Maximum MB", FontSize = 12, Opacity = 0.75 });
+            var maxSize = new NumberBox { Value = _viewModel.DefaultMaxFileSizeMB, Minimum = 0, PlaceholderText = "0" };
+            maxSize.ValueChanged += (_, args) =>
+            {
+                _viewModel.DefaultMaxFileSizeMB = args.NewValue;
+                _viewModel.MaxFileSizeMB = _viewModel.DefaultMaxFileSizeMB;
+                _viewModel.IsFileSizeFilterEnabled = _viewModel.MinFileSizeBytes > 0 || _viewModel.MaxFileSizeBytes > 0;
+            };
+            maxSizePanel.Children.Add(maxSize);
+
+            Grid.SetColumn(minSizePanel, 0);
+            Grid.SetColumn(maxSizePanel, 1);
+            sizeDefaults.Children.Add(minSizePanel);
+            sizeDefaults.Children.Add(maxSizePanel);
+            g.Children.Add(sizeDefaults);
+            g.Children.Add(new TextBlock { Text = "Both 0 = any size. These defaults fill the Advanced Options size filter when Yagu starts; changes in Advanced Options remain temporary.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            g.Children.Add(NextSearchLabel("Default created date filter:"));
+            var createdDefaults = new Grid { ColumnSpacing = 8 };
+            createdDefaults.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            createdDefaults.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var createdAfterPanel = new StackPanel { Spacing = 4 };
+            createdAfterPanel.Children.Add(new TextBlock { Text = "Created after", FontSize = 12, Opacity = 0.75 });
+            var createdAfter = new CalendarDatePicker { Date = _viewModel.DefaultCreatedAfterDate, PlaceholderText = "Any" };
+            createdAfter.DateChanged += (_, args) =>
+            {
+                _viewModel.DefaultCreatedAfterDate = args.NewDate;
+                _viewModel.CreatedAfterDate = args.NewDate;
+            };
+            createdAfterPanel.Children.Add(createdAfter);
+            var createdBeforePanel = new StackPanel { Spacing = 4 };
+            createdBeforePanel.Children.Add(new TextBlock { Text = "Created before", FontSize = 12, Opacity = 0.75 });
+            var createdBefore = new CalendarDatePicker { Date = _viewModel.DefaultCreatedBeforeDate, PlaceholderText = "Any" };
+            createdBefore.DateChanged += (_, args) =>
+            {
+                _viewModel.DefaultCreatedBeforeDate = args.NewDate;
+                _viewModel.CreatedBeforeDate = args.NewDate;
+            };
+            createdBeforePanel.Children.Add(createdBefore);
+            Grid.SetColumn(createdAfterPanel, 0);
+            Grid.SetColumn(createdBeforePanel, 1);
+            createdDefaults.Children.Add(createdAfterPanel);
+            createdDefaults.Children.Add(createdBeforePanel);
+            g.Children.Add(createdDefaults);
+
+            g.Children.Add(NextSearchLabel("Default modified date filter:"));
+            var modifiedDefaults = new Grid { ColumnSpacing = 8 };
+            modifiedDefaults.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            modifiedDefaults.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var modifiedAfterPanel = new StackPanel { Spacing = 4 };
+            modifiedAfterPanel.Children.Add(new TextBlock { Text = "Modified after", FontSize = 12, Opacity = 0.75 });
+            var modifiedAfter = new CalendarDatePicker { Date = _viewModel.DefaultModifiedAfterDate, PlaceholderText = "Any" };
+            modifiedAfter.DateChanged += (_, args) =>
+            {
+                _viewModel.DefaultModifiedAfterDate = args.NewDate;
+                _viewModel.ModifiedAfterDate = args.NewDate;
+            };
+            modifiedAfterPanel.Children.Add(modifiedAfter);
+            var modifiedBeforePanel = new StackPanel { Spacing = 4 };
+            modifiedBeforePanel.Children.Add(new TextBlock { Text = "Modified before", FontSize = 12, Opacity = 0.75 });
+            var modifiedBefore = new CalendarDatePicker { Date = _viewModel.DefaultModifiedBeforeDate, PlaceholderText = "Any" };
+            modifiedBefore.DateChanged += (_, args) =>
+            {
+                _viewModel.DefaultModifiedBeforeDate = args.NewDate;
+                _viewModel.ModifiedBeforeDate = args.NewDate;
+            };
+            modifiedBeforePanel.Children.Add(modifiedBefore);
+            Grid.SetColumn(modifiedAfterPanel, 0);
+            Grid.SetColumn(modifiedBeforePanel, 1);
+            modifiedDefaults.Children.Add(modifiedAfterPanel);
+            modifiedDefaults.Children.Add(modifiedBeforePanel);
+            g.Children.Add(modifiedDefaults);
+            g.Children.Add(new TextBlock { Text = "Blank = any date. These defaults fill the Advanced Options date filters when Yagu starts; changes in Advanced Options remain temporary.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            var clearDateDefaults = new Button { Content = "Clear date defaults", HorizontalAlignment = HorizontalAlignment.Left };
+            clearDateDefaults.Click += (_, _) =>
+            {
+                createdAfter.Date = null;
+                createdBefore.Date = null;
+                modifiedAfter.Date = null;
+                modifiedBefore.Date = null;
+                _viewModel.DefaultCreatedAfterDate = null;
+                _viewModel.DefaultCreatedBeforeDate = null;
+                _viewModel.DefaultModifiedAfterDate = null;
+                _viewModel.DefaultModifiedBeforeDate = null;
+                _viewModel.CreatedAfterDate = null;
+                _viewModel.CreatedBeforeDate = null;
+                _viewModel.ModifiedAfterDate = null;
+                _viewModel.ModifiedBeforeDate = null;
+            };
+            g.Children.Add(clearDateDefaults);
+
+            var skipBinary = new CheckBox { Content = NextSearchLabel("Skip binary files"), IsChecked = _viewModel.SkipBinary };
+            skipBinary.Checked += (_, _) => _viewModel.SkipBinary = true;
+            skipBinary.Unchecked += (_, _) => _viewModel.SkipBinary = false;
+            g.Children.Add(skipBinary);
+            g.Children.Add(new TextBlock { Text = "When enabled, files detected as binary (null bytes, magic bytes) are skipped during content search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            var skipAdmin = new CheckBox { Content = NextSearchLabel("Skip admin-protected paths when not elevated"), IsChecked = _viewModel.ExcludeAdminProtectedPaths };
+            skipAdmin.Checked += (_, _) => _viewModel.ExcludeAdminProtectedPaths = true;
+            skipAdmin.Unchecked += (_, _) => _viewModel.ExcludeAdminProtectedPaths = false;
+            g.Children.Add(skipAdmin);
+            g.Children.Add(new TextBlock { Text = "When the process is not elevated, exclude directories that always require admin (System Volume Information, $Recycle.Bin, Windows\\System32\\config, Windows\\Installer, etc.). Speeds up search by skipping guaranteed access-denied trees. No effect when running as administrator.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            var adminSegLabel = NextSearchLabel("Admin-protected path segments (one per line or semicolon-separated):");
+            adminSegLabel.Margin = new Thickness(0, 4, 0, 0);
+            g.Children.Add(adminSegLabel);
+            var adminSeg = new TextBox
+            {
+                Text = _viewModel.AdminProtectedPathSegments,
+                PlaceholderText = @"\Windows\System32\config;\System Volume Information",
+                TextWrapping = TextWrapping.Wrap,
+                AcceptsReturn = true,
+                Height = 100,
+            };
+            adminSeg.TextChanged += (_, _) => _viewModel.AdminProtectedPathSegments = adminSeg.Text;
+            g.Children.Add(adminSeg);
+            var resetAdminSeg = new Button { Content = "Reset to defaults", Margin = new Thickness(0, 4, 0, 0) };
+            resetAdminSeg.Click += (_, _) =>
+            {
+                adminSeg.Text = AppSettings.DefaultAdminProtectedPathSegments;
+                _viewModel.AdminProtectedPathSegments = adminSeg.Text;
+            };
+            g.Children.Add(resetAdminSeg);
+            g.Children.Add(new TextBlock { Text = "Each entry is a path substring like \\Windows\\System32\\config. Anchored with backslashes so it matches the folder anywhere in the tree. Only applied when the process is not elevated.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            var skipExtLabel = NextSearchLabel("Skip extensions (semicolon-separated, no dots):");
+            skipExtLabel.Margin = new Thickness(0, 4, 0, 0);
+            g.Children.Add(skipExtLabel);
+            var skipExt = new TextBox { Text = _viewModel.SkipExtensions, PlaceholderText = "e.g. exe;dll;zip;png;pdf", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false };
+            skipExt.TextChanged += (_, _) => _viewModel.SkipExtensions = skipExt.Text;
+            g.Children.Add(skipExt);
+            g.Children.Add(new TextBlock { Text = "Files with these extensions are skipped entirely — no binary check, no content read.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            var archiveExtLabel = NextSearchLabel("Archive extensions (semicolon-separated, no dots):");
+            archiveExtLabel.Margin = new Thickness(0, 4, 0, 0);
+            g.Children.Add(archiveExtLabel);
+            var archiveExt = new TextBox { Text = _viewModel.ArchiveExtensions, PlaceholderText = "e.g. zip;jar;docx;xlsx;pptx;epub", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false };
+            archiveExt.TextChanged += (_, _) => _viewModel.ArchiveExtensions = archiveExt.Text;
+            g.Children.Add(archiveExt);
+            g.Children.Add(new TextBlock { Text = "Extensions that are ZIP-like containers. When 'Search archives' is on, these are removed from the skip list so they reach the content searcher. Detection still uses file-header magic bytes.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+        }
+
+        // ── Performance ──
+        {
+            var g = AddTab("Performance");
+
+            g.Children.Add(NextSearchLabel("Content-search parallelism (concurrent file scan threads):"));
+            var parallelism = new ComboBox();
+            parallelism.Items.Add($"Auto (safe cap · up to {Math.Min(16, Environment.ProcessorCount)})");
+            parallelism.Items.Add("1 thread (sequential, HDD safe)");
+            parallelism.Items.Add($"Half cores ({Math.Max(1, Environment.ProcessorCount / 2)})");
+            parallelism.Items.Add($"2× cores ({Environment.ProcessorCount * 2}, I/O heavy)");
+            parallelism.Items.Add($"All cores ({Math.Max(1, Environment.ProcessorCount)})");
+            parallelism.SelectedIndex = _viewModel.ParallelismIndex;
+            parallelism.SelectionChanged += (_, _) => _viewModel.ParallelismIndex = parallelism.SelectedIndex;
+            g.Children.Add(parallelism);
+
+            g.Children.Add(new TextBlock { Text = "File-listing backend (how files are discovered before searching):" });
+            var backend = new ComboBox();
+            backend.Items.Add("Auto (SDK → es.exe → .NET)");
+            backend.Items.Add("Everything SDK only (in-process, fastest)");
+            backend.Items.Add("es.exe only (process spawn)");
+            backend.Items.Add(".NET enumeration only (no Everything dependency)");
+            backend.SelectedIndex = _viewModel.FileListerBackendIndex;
+            backend.SelectionChanged += (_, _) => _viewModel.FileListerBackendIndex = backend.SelectedIndex;
+            g.Children.Add(backend);
+            g.Children.Add(new TextBlock { Text = "Auto tries the Everything SDK first, then es.exe, then .NET recursive enumeration. Requires voidtools Everything to be running for SDK/es.exe.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            g.Children.Add(new TextBlock { Text = "Memory saving mode", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 8, 0, 0) });
+            g.Children.Add(new TextBlock { Text = "These two settings control when Yagu enters memory-saving mode. Use one or the other — if the hard cap is set (> 0), it takes precedence over the pressure percentage. Changes apply to the next search.", FontSize = 11, Opacity = 0.7, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
+
+            g.Children.Add(NextSearchLabel("System memory pressure limit (%, 0 = disabled):"));
+            var memPressure = new NumberBox { Value = _viewModel.MemoryPressurePercent, Minimum = 0, Maximum = 100 };
+            memPressure.ValueChanged += (_, args) => _viewModel.MemoryPressurePercent = (int)args.NewValue;
+            g.Children.Add(memPressure);
+            g.Children.Add(new TextBlock { Text = "Yagu enters memory-saving mode when total machine RAM usage exceeds this %. Recommended for most users.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            g.Children.Add(NextSearchLabel("Process memory hard cap (MB, 0 = use pressure % above):"));
+            var memLimit = new NumberBox { Value = _viewModel.MemoryLimitMB, Minimum = 0, Maximum = 65536 };
+            memLimit.ValueChanged += (_, args) => _viewModel.MemoryLimitMB = (int)args.NewValue;
+            g.Children.Add(memLimit);
+            g.Children.Add(new TextBlock { Text = "When set above 0, memory-saving mode activates when the Yagu process exceeds this working-set size regardless of system memory pressure. Leave at 0 to use the pressure % instead.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            g.Children.Add(NextSearchLabel("SDK channel buffer size:"));
+            var sdkBuf = new NumberBox { Value = _viewModel.SdkChannelBufferSize, Minimum = 16, Maximum = 1000000 };
+            sdkBuf.ValueChanged += (_, args) => _viewModel.SdkChannelBufferSize = (int)args.NewValue;
+            g.Children.Add(sdkBuf);
+            g.Children.Add(new TextBlock { Text = "Number of file paths buffered between the Everything SDK producer thread and the consumer. Higher values may improve throughput on large directories but use more memory. Only applies when using the Everything SDK backend.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            g.Children.Add(NextSearchLabel("Max matches per file (0 = unlimited):"));
+            var maxPerFile = new NumberBox { Value = _viewModel.MaxMatchesPerFile, Minimum = 0, Maximum = int.MaxValue };
+            maxPerFile.ValueChanged += (_, args) => _viewModel.MaxMatchesPerFile = double.IsNaN(args.NewValue) ? 0 : (int)args.NewValue;
+            g.Children.Add(maxPerFile);
+            g.Children.Add(new TextBlock { Text = "Optional cap on stored matches per file. Useful for taming pathological files (massive logs, generated dumps) that would otherwise dominate memory. Leave at 0 for unlimited matches. Applies to subsequent searches.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+        }
+
+        // ── Display ──
+        {
+            var g = AddTab("Display");
+
+            g.Children.Add(new TextBlock { Text = "Line truncation length (characters):" });
+            var trunc = new NumberBox { Value = _viewModel.LineTruncationLength, Minimum = 0, Maximum = 10000 };
+            trunc.ValueChanged += (_, args) => _viewModel.LineTruncationLength = (int)args.NewValue;
+            g.Children.Add(trunc);
+            g.Children.Add(new TextBlock { Text = "Lines longer than this are truncated in the results list to prevent UI slowdowns from extremely long lines. Set to 0 to disable truncation.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            g.Children.Add(new TextBlock { Text = "Preview layout:" });
+            var previewMode = new ComboBox();
+            previewMode.Items.Add("Concatenated (separate match snippets)");
+            previewMode.Items.Add("Multi-highlight (unified file view)");
+            previewMode.SelectedIndex = _viewModel.PreviewModeIndex;
+            previewMode.SelectionChanged += (_, _) => _viewModel.PreviewModeIndex = previewMode.SelectedIndex;
+            g.Children.Add(previewMode);
+
+            var wordWrap = new CheckBox { Content = "Word wrap in preview panel", IsChecked = _viewModel.PreviewWordWrap };
+            wordWrap.Checked += (_, _) => { _viewModel.PreviewWordWrap = true; _applyWordWrap?.Invoke(true); };
+            wordWrap.Unchecked += (_, _) => { _viewModel.PreviewWordWrap = false; _applyWordWrap?.Invoke(false); };
+            g.Children.Add(wordWrap);
+        }
+
+        // ── Editor ──
+        {
+            var g = AddTab("Editor");
+
+            g.Children.Add(new TextBlock { Text = "Editor command ({file} = full file path, {line} = line number):" });
+            var editor = new TextBox { Text = _viewModel.EditorCommand };
+            editor.TextChanged += (_, _) => _viewModel.EditorCommand = editor.Text;
+            g.Children.Add(editor);
+
+            var backup = new CheckBox { Content = "Backup file before saving", IsChecked = _viewModel.BackupBeforeSave };
+            backup.Checked += (_, _) => _viewModel.BackupBeforeSave = true;
+            backup.Unchecked += (_, _) => _viewModel.BackupBeforeSave = false;
+            g.Children.Add(backup);
+            g.Children.Add(new TextBlock { Text = "When enabled, the original file is copied to <filename>.yagubak before saving changes from the built-in editor. If a .yagubak already exists, uses .yagubak-2, .yagubak-3, etc.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            g.Children.Add(new TextBlock { Text = "Built-in editor limits", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 8, 0, 0) });
+            g.Children.Add(new TextBlock { Text = "Files exceeding any of these limits will not open in the built-in editor. Use the external editor or Show in Explorer for very large files.", FontSize = 11, Opacity = 0.7, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
+
+            g.Children.Add(new TextBlock { Text = "Max file size (MB):" });
+            var edMaxSize = new NumberBox { Value = _viewModel.PreviewEditorMaxSizeMB, Minimum = 1, Maximum = 1024 };
+            edMaxSize.ValueChanged += (_, args) => _viewModel.PreviewEditorMaxSizeMB = (int)args.NewValue;
+            g.Children.Add(edMaxSize);
+
+            g.Children.Add(new TextBlock { Text = "Max total characters:" });
+            var edMaxText = new NumberBox { Value = _viewModel.PreviewEditorMaxTextLength, Minimum = 100_000, Maximum = 200_000_000 };
+            edMaxText.ValueChanged += (_, args) => _viewModel.PreviewEditorMaxTextLength = (int)args.NewValue;
+            g.Children.Add(edMaxText);
+
+            g.Children.Add(new TextBlock { Text = "Max single-line length (characters):" });
+            var edMaxLine = new NumberBox { Value = _viewModel.PreviewEditorMaxLineLength, Minimum = 10_000, Maximum = 100_000_000 };
+            edMaxLine.ValueChanged += (_, args) => _viewModel.PreviewEditorMaxLineLength = (int)args.NewValue;
+            g.Children.Add(edMaxLine);
+        }
+
+        // ── Window ──
+        {
+            var g = AddTab("Window");
+
+            g.Children.Add(new TextBlock { Text = "Default window focus behavior (launcher mode):" });
+            var focusBehavior = new ComboBox();
+            focusBehavior.Items.Add("Minimize to system tray (default)");
+            focusBehavior.Items.Add("Stay open (don't minimize on focus loss)");
+            focusBehavior.Items.Add("Always on top (stay above all windows)");
+            focusBehavior.Items.Add("Traditional window (full window with title bar)");
+            focusBehavior.SelectedIndex = _viewModel.WindowFocusBehavior;
+            focusBehavior.SelectionChanged += (_, _) => _viewModel.WindowFocusBehavior = focusBehavior.SelectedIndex;
+            g.Children.Add(focusBehavior);
+            g.Children.Add(new TextBlock { Text = "Controls what happens when the launcher window loses focus. This sets the default; you can override per-session using the pin button next to Browse.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+        }
+
+        // ── General ──
+        {
+            var g = AddTab("General");
+
+            var availableHotkeyKeys = _hotkeyService.GetAvailableCtrlShiftLetterKeys(_mainHwnd);
+            var selectedHotkeyKey = HotkeyService.ChooseAvailableKey(availableHotkeyKeys, _viewModel.GlobalHotkeyKey);
+            if (selectedHotkeyKey is char selectedKey && !string.Equals(_viewModel.GlobalHotkeyKey, selectedKey.ToString(), StringComparison.OrdinalIgnoreCase))
+                _viewModel.GlobalHotkeyKey = selectedKey.ToString();
+
+            var hotkey = new CheckBox { Content = "Enable global hotkey", IsChecked = _viewModel.GlobalHotkeyEnabled, IsEnabled = availableHotkeyKeys.Count > 0 };
+            hotkey.Checked += (_, _) => _viewModel.GlobalHotkeyEnabled = true;
+            hotkey.Unchecked += (_, _) => _viewModel.GlobalHotkeyEnabled = false;
+            g.Children.Add(hotkey);
+
+            g.Children.Add(new TextBlock { Text = "Global hotkey:" });
+            var hotkeyCombo = new ComboBox { IsEnabled = availableHotkeyKeys.Count > 0 };
+            foreach (var key in availableHotkeyKeys)
+            {
+                hotkeyCombo.Items.Add(new ComboBoxItem
+                {
+                    Content = HotkeyService.FormatCtrlShift(key),
+                    Tag = key.ToString(),
+                });
+            }
+
+            if (selectedHotkeyKey is char hotkeyKey)
+            {
+                for (int itemIndex = 0; itemIndex < hotkeyCombo.Items.Count; itemIndex++)
+                {
+                    if (hotkeyCombo.Items[itemIndex] is ComboBoxItem item &&
+                        string.Equals(item.Tag as string, hotkeyKey.ToString(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        hotkeyCombo.SelectedIndex = itemIndex;
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                hotkeyCombo.Items.Add("No Ctrl+Shift+letter combinations available");
+                hotkeyCombo.SelectedIndex = 0;
+            }
+
+            hotkeyCombo.SelectionChanged += (_, _) =>
+            {
+                if (hotkeyCombo.SelectedItem is ComboBoxItem item && item.Tag is string key)
+                    _viewModel.GlobalHotkeyKey = key;
+            };
+            g.Children.Add(hotkeyCombo);
+
+            g.Children.Add(new TextBlock { Text = "Max recent directories / queries to remember:" });
+            var recent = new NumberBox { Value = _viewModel.MaxRecentItems, Minimum = 1, Maximum = 100 };
+            recent.ValueChanged += (_, args) => _viewModel.MaxRecentItems = (int)args.NewValue;
+            g.Children.Add(recent);
+
+            g.Children.Add(new TextBlock { Text = "File log level:" });
+            var fileLogLevel = new ComboBox();
+            fileLogLevel.Items.Add("None (logging disabled)");
+            fileLogLevel.Items.Add("Critical (errors only)");
+            fileLogLevel.Items.Add("Warning (errors + warnings)");
+            fileLogLevel.Items.Add("Info (general activity)");
+            fileLogLevel.Items.Add("Verbose (all details, may slow performance)");
+            fileLogLevel.SelectedIndex = _viewModel.FileLogLevelIndex + 1;
+            fileLogLevel.SelectionChanged += (_, _) => _viewModel.FileLogLevelIndex = fileLogLevel.SelectedIndex - 1;
+            g.Children.Add(fileLogLevel);
+
+            g.Children.Add(new TextBlock { Text = "Console log level:" });
+            var consoleLogLevel = new ComboBox();
+            consoleLogLevel.Items.Add("None (logging disabled)");
+            consoleLogLevel.Items.Add("Critical (errors only)");
+            consoleLogLevel.Items.Add("Warning (errors + warnings)");
+            consoleLogLevel.Items.Add("Info (general activity)");
+            consoleLogLevel.Items.Add("Verbose (all details, may slow performance)");
+            consoleLogLevel.SelectedIndex = _viewModel.ConsoleLogLevelIndex + 1;
+            consoleLogLevel.SelectionChanged += (_, _) => _viewModel.ConsoleLogLevelIndex = consoleLogLevel.SelectedIndex - 1;
+            g.Children.Add(consoleLogLevel);
+
+            g.Children.Add(new TextBlock { Text = $"Log file: {LogService.DefaultLogPath()}", FontSize = 11, Opacity = 0.6 });
+
+            // Reset admin warning
+            if (_viewModel.SuppressAdminWarning)
+            {
+                var resetAdmin = new Button { Content = "Re-enable admin privilege warning", FontSize = 12, Padding = new Thickness(8, 4, 8, 4), Margin = new Thickness(0, 4, 0, 0) };
+                resetAdmin.Click += (_, _) =>
+                {
+                    _viewModel.SuppressAdminWarning = false;
+                    resetAdmin.Content = "Admin warning re-enabled ✓";
+                    resetAdmin.IsEnabled = false;
+                };
+                g.Children.Add(resetAdmin);
+                g.Children.Add(new TextBlock { Text = "The non-administrator warning was previously dismissed. Click to show it again on next launch.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            }
+        }
+    }
+}

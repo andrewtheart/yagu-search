@@ -71,8 +71,18 @@ namespace TextControlBoxNS.Core.Renderer
 
             int lineEndingLength = textManager.NewLineCharacter.Length;
 
-            if (endLine > textManager.totalLines.Count)
+            if (textManager.totalLines.Count == 0)
+                return;
+
+            if (startLine >= textManager.totalLines.Count)
+                startLine = textManager.totalLines.Count - 1;
+            if (startLine < 0)
+                startLine = 0;
+
+            if (endLine >= textManager.totalLines.Count)
                 endLine = textManager.totalLines.Count - 1;
+            if (endLine < 0)
+                endLine = 0;
 
             if (characterPosStart > textManager.totalLines.Span[startLine].Length)
                 characterPosStart = textManager.totalLines.Span[startLine].Length;
@@ -94,7 +104,12 @@ namespace TextControlBoxNS.Core.Renderer
             }
 
             // If start is beyond visible area, clamp it to the end of the visible region
-            int lastRenderedLine = unrenderedLinesToRenderStart + numberOfRenderedLines - 1;
+            int lastRenderedLine = Math.Min(
+                unrenderedLinesToRenderStart + numberOfRenderedLines - 1,
+                textManager.totalLines.Count - 1);
+            if (lastRenderedLine < 0)
+                return;
+
             if (startLine > lastRenderedLine)
             {
                 startLine = lastRenderedLine;
