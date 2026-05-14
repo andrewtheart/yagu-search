@@ -472,6 +472,12 @@ public sealed partial class SettingsWindow : Window
             focusBehavior.SelectionChanged += (_, _) => _viewModel.WindowFocusBehavior = focusBehavior.SelectedIndex;
             g.Children.Add(focusBehavior);
             g.Children.Add(new TextBlock { Text = "Controls what happens when the launcher window loses focus. This sets the default; you can override per-session using the pin button next to Browse.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            var closeToTray = new CheckBox { Content = "Dock to system tray when closed (instead of exiting)", IsChecked = _viewModel.CloseToTray };
+            closeToTray.Checked += (_, _) => _viewModel.CloseToTray = true;
+            closeToTray.Unchecked += (_, _) => _viewModel.CloseToTray = false;
+            g.Children.Add(closeToTray);
+            g.Children.Add(new TextBlock { Text = "When enabled, closing the window hides Yagu to the system tray. Right-click the tray icon to reopen or exit.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
         }
 
         // ── General ──

@@ -120,6 +120,7 @@ public sealed partial class MainViewModel : ObservableObject
         HasCompletedFirstRun = _settings.HasCompletedFirstRun;
         BackupBeforeSave = _settings.BackupBeforeSave;
         WindowFocusBehavior = _settings.WindowFocusBehavior;
+        CloseToTray = _settings.CloseToTray;
         PreviewEditorMaxSizeMB = _settings.PreviewEditorMaxSizeMB;
         PreviewEditorMaxTextLength = _settings.PreviewEditorMaxTextLength;
         PreviewEditorMaxLineLength = _settings.PreviewEditorMaxLineLength;
@@ -311,6 +312,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial bool HasCompletedFirstRun { get; set; }
     [ObservableProperty] public partial bool BackupBeforeSave { get; set; } = true;
     [ObservableProperty] public partial int WindowFocusBehavior { get; set; } // 0 = MinimizeToTray, 1 = StayOpen, 2 = AlwaysOnTop, 3 = FullWindow
+    [ObservableProperty] public partial bool CloseToTray { get; set; } = true;
 
     /// <summary>Observable collection of skip-extension items for the multi-select dropdown.</summary>
     public ObservableCollection<SkipExtensionItem> SkipExtensionItems { get; } = [];
@@ -1627,6 +1629,7 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.HasCompletedFirstRun = HasCompletedFirstRun;
         _settings.BackupBeforeSave = BackupBeforeSave;
         _settings.WindowFocusBehavior = WindowFocusBehavior;
+        _settings.CloseToTray = CloseToTray;
         _settings.PreviewEditorMaxSizeMB = PreviewEditorMaxSizeMB;
         _settings.PreviewEditorMaxTextLength = PreviewEditorMaxTextLength;
         _settings.PreviewEditorMaxLineLength = PreviewEditorMaxLineLength;

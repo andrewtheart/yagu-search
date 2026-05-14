@@ -69,6 +69,7 @@ public sealed partial class MainWindow : Window
     private bool _suppressHotkeySettingChange;
     private Helpers.TrayIcon? _trayIcon;
     private bool _screenshotCaptureInFlight;
+    private bool _forceClose;
 
     private static readonly UIntPtr HotkeySubclassId = new(0x5147484Bu);
     private const int SW_RESTORE = 9;
@@ -295,7 +296,10 @@ public sealed partial class MainWindow : Window
         // Hide to system tray when the window loses focus.
         this.Activated += OnWindowActivated;
 
-        // Flush logs when the window closes so no diagnostic entries are lost.
+        // Intercept window close: dock to tray instead of exiting (when enabled).
+        AppWindow.Closing += OnAppWindowClosing;
+
+        // Flush logs when the window actually closes.
         this.Closed += (_, _) =>
         {
             _trayIcon?.Dispose();
@@ -791,11 +795,21 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void HideToTray()
+    private void OnAppWindowClosing(Microsoft.UI.Windowing.AppWindow sender, Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
+    {
+        if (_forceClose || !ViewModel.CloseToTray) return;
+
+        // Cancel the close and dock to tray instead.
+        args.Cancel = true;
+        HideToTray(isCloseToTray: true);
+    }
+
+    private void HideToTray(bool isCloseToTray = false)
     {
         if (_hwnd == IntPtr.Zero) return;
 
         bool firstDock = false;
+        bool firstCloseToTray = false;
 
         // Lazily create the tray icon on first hide.
         if (_trayIcon is null)
@@ -812,14 +826,33 @@ public sealed partial class MainWindow : Window
             };
             _trayIcon.CloseRequested += () =>
             {
+                _forceClose = true;
                 DispatcherQueue.TryEnqueue(() => Close());
             };
             firstDock = !HasShownTrayNotification();
         }
 
+        if (isCloseToTray)
+        {
+            var settings = new SettingsService().Load();
+            firstCloseToTray = !settings.HasShownCloseToTrayNotification;
+        }
+
         ShowWindow(_hwnd, SW_HIDE);
 
-        if (firstDock)
+        if (firstCloseToTray)
+        {
+            var msg = "Yagu docked to the system tray instead of closing. You can change this in Settings \u2192 Window.";
+            if (ViewModel.GlobalHotkeyEnabled && _hotkeyService.IsRegistered)
+                msg += $" Press {HotkeyService.FormatCtrlShift(ViewModel.GlobalHotkeyKey[0])} to restore.";
+            _trayIcon!.ShowBalloon("Yagu is still running", msg);
+
+            var svc = new SettingsService();
+            var s = svc.Load();
+            s.HasShownCloseToTrayNotification = true;
+            _ = svc.SaveAsync(s);
+        }
+        else if (firstDock)
         {
             var msg = "Yagu is still running in the system tray. Right-click the tray icon to reopen or close it.";
             if (ViewModel.GlobalHotkeyEnabled && _hotkeyService.IsRegistered)
@@ -1408,6 +1441,11 @@ public sealed partial class MainWindow : Window
 
     private void OnCloseWindowClick(object sender, RoutedEventArgs e)
     {
+        if (!_forceClose && ViewModel.CloseToTray)
+        {
+            HideToTray(isCloseToTray: true);
+            return;
+        }
         Close();
     }
 

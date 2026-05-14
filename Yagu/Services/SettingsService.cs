@@ -99,6 +99,10 @@ public sealed class AppSettings
     public bool BackupBeforeSave { get; set; } = true;
     /// <summary>Default window focus behavior in launcher mode. 0 = Minimize to tray, 1 = Stay open, 2 = Always on top, 3 = Traditional window.</summary>
     public int WindowFocusBehavior { get; set; } // 0 = MinimizeToTray (default)
+    /// <summary>When true (default), closing the window docks to system tray instead of exiting.</summary>
+    public bool CloseToTray { get; set; } = true;
+    /// <summary>Whether the user has been informed that closing docks to the system tray.</summary>
+    public bool HasShownCloseToTrayNotification { get; set; }
     /// <summary>Built-in editor: maximum file size in MB. Files larger than this are blocked from opening.</summary>
     public int PreviewEditorMaxSizeMB { get; set; } = 32;
     /// <summary>Built-in editor: maximum total character count. Files with more characters are blocked.</summary>
