@@ -322,7 +322,10 @@ internal class TextRenderer
         float singleLineHeight = Math.Max(1, SingleLineHeight);
         float layoutHeight = Math.Max(singleLineHeight, (lineText.Length + 1) * singleLineHeight);
         using CanvasTextLayout lineLayout = textLayoutManager.CreateTextLayout(canvasText, TextFormat, lineText, cachedWrapWidth, layoutHeight);
-        return Math.Max(1, lineLayout.LineMetrics.Length);
+        // Avoid lineLayout.LineMetrics — CanvasLineMetrics is non-blittable and throws
+        // NotSupportedException on newer .NET. Use layout height / line height instead.
+        int rowCount = (int)Math.Ceiling(lineLayout.LayoutBounds.Height / singleLineHeight);
+        return Math.Max(1, rowCount);
     }
 
     private CanvasTextLayout CreateWrappedLineTextLayout(CanvasControl canvasText, int lineIndex, bool includeCaretMarker = false)

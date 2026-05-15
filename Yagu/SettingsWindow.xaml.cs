@@ -199,7 +199,6 @@ public sealed partial class SettingsWindow : Window
             {
                 _viewModel.DefaultMinFileSizeMB = args.NewValue;
                 _viewModel.MinFileSizeMB = _viewModel.DefaultMinFileSizeMB;
-                _viewModel.IsFileSizeFilterEnabled = _viewModel.MinFileSizeBytes > 0 || _viewModel.MaxFileSizeBytes > 0;
             };
             minSizePanel.Children.Add(minSize);
 
@@ -210,7 +209,6 @@ public sealed partial class SettingsWindow : Window
             {
                 _viewModel.DefaultMaxFileSizeMB = args.NewValue;
                 _viewModel.MaxFileSizeMB = _viewModel.DefaultMaxFileSizeMB;
-                _viewModel.IsFileSizeFilterEnabled = _viewModel.MinFileSizeBytes > 0 || _viewModel.MaxFileSizeBytes > 0;
             };
             maxSizePanel.Children.Add(maxSize);
 

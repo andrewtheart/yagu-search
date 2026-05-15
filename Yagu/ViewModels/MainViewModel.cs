@@ -80,7 +80,6 @@ public sealed partial class MainViewModel : ObservableObject
         DefaultMaxFileSizeBytes = _settings.DefaultMaxFileSizeBytes;
         MinFileSizeBytes = DefaultMinFileSizeBytes;
         MaxFileSizeBytes = DefaultMaxFileSizeBytes;
-        IsFileSizeFilterEnabled = MinFileSizeBytes > 0 || MaxFileSizeBytes > 0;
         DefaultCreatedAfterDate = _settings.DefaultCreatedAfterDate;
         DefaultCreatedBeforeDate = _settings.DefaultCreatedBeforeDate;
         DefaultModifiedAfterDate = _settings.DefaultModifiedAfterDate;
@@ -149,7 +148,6 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial long MaxFileSizeBytes { get; set; }
     [ObservableProperty] public partial long DefaultMinFileSizeBytes { get; set; }
     [ObservableProperty] public partial long DefaultMaxFileSizeBytes { get; set; }
-    [ObservableProperty] public partial bool IsFileSizeFilterEnabled { get; set; }
     [ObservableProperty] public partial DateTimeOffset? CreatedAfterDate { get; set; }
     [ObservableProperty] public partial DateTimeOffset? CreatedBeforeDate { get; set; }
     [ObservableProperty] public partial DateTimeOffset? ModifiedAfterDate { get; set; }
@@ -242,7 +240,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     public double MinFileSizeMB
     {
-        get => MinFileSizeBytes / (1024d * 1024d);
+        get => MinFileSizeBytes == 0 ? double.NaN : MinFileSizeBytes / (1024d * 1024d);
         set
         {
             long bytes = MegabytesToBytes(value);
@@ -253,7 +251,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     public double MaxFileSizeMB
     {
-        get => MaxFileSizeBytes / (1024d * 1024d);
+        get => MaxFileSizeBytes == 0 ? double.NaN : MaxFileSizeBytes / (1024d * 1024d);
         set
         {
             long bytes = MegabytesToBytes(value);
@@ -360,8 +358,8 @@ public sealed partial class MainViewModel : ObservableObject
         // Fonts
         ["woff"] = "Fonts", ["woff2"] = "Fonts", ["ttf"] = "Fonts", ["eot"] = "Fonts", ["otf"] = "Fonts",
         // Documents
-        ["pdf"] = "Documents", ["doc"] = "Documents", ["docx"] = "Documents",
-        ["xls"] = "Documents", ["xlsx"] = "Documents", ["ppt"] = "Documents", ["pptx"] = "Documents",
+        ["pdf"] = "Documents", ["doc"] = "Documents",
+        ["xls"] = "Documents", ["ppt"] = "Documents",
     };
 
     private static string CategorizeExtension(string ext) =>
@@ -683,25 +681,13 @@ public sealed partial class MainViewModel : ObservableObject
     partial void OnMinFileSizeBytesChanged(long value)
     {
         OnPropertyChanged(nameof(MinFileSizeMB));
-        if (value > 0 && !IsFileSizeFilterEnabled)
-            IsFileSizeFilterEnabled = true;
     }
     partial void OnMaxFileSizeBytesChanged(long value)
     {
         OnPropertyChanged(nameof(MaxFileSizeMB));
-        if (value > 0 && !IsFileSizeFilterEnabled)
-            IsFileSizeFilterEnabled = true;
     }
     partial void OnDefaultMinFileSizeBytesChanged(long value) => OnPropertyChanged(nameof(DefaultMinFileSizeMB));
     partial void OnDefaultMaxFileSizeBytesChanged(long value) => OnPropertyChanged(nameof(DefaultMaxFileSizeMB));
-    partial void OnIsFileSizeFilterEnabledChanged(bool value)
-    {
-        if (!value)
-        {
-            MinFileSizeBytes = 0;
-            MaxFileSizeBytes = 0;
-        }
-    }
     partial void OnFileLogLevelIndexChanged(int value)
     {
         LogService.Instance.FileLevel = (LogLevel)value;
@@ -753,8 +739,8 @@ public sealed partial class MainViewModel : ObservableObject
             }
         }
 
-        long effectiveMinFileSizeBytes = IsFileSizeFilterEnabled ? MinFileSizeBytes : 0;
-        long effectiveMaxFileSizeBytes = IsFileSizeFilterEnabled ? MaxFileSizeBytes : 0;
+        long effectiveMinFileSizeBytes = MinFileSizeBytes;
+        long effectiveMaxFileSizeBytes = MaxFileSizeBytes;
         if (effectiveMinFileSizeBytes > 0 && effectiveMaxFileSizeBytes > 0 && effectiveMinFileSizeBytes > effectiveMaxFileSizeBytes)
         {
             ErrorText = "Minimum file size cannot be larger than maximum file size.";
