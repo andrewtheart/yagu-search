@@ -68,7 +68,7 @@ public sealed class SearchService
         }
         else
         {
-            literalTerms = SearchQueryParser.ParseLiteralTerms(options.Query);
+            literalTerms = SearchQueryParser.ParseLiteralTerms(options.Query, options.ExactMatch);
             if (literalTerms.Count == 0)
             {
                 yield return new SearchEvent.Completed(new SearchSummary(0, 0, 0, 0, 0, 0, TimeSpan.Zero, false, false, false, null));
@@ -151,6 +151,37 @@ public sealed class SearchService
             concreteLister.SdkChannelBufferSize = options.SdkChannelBufferSize;
             concreteLister.ExcludeAdminProtectedPaths = options.ExcludeAdminProtectedPaths;
             concreteLister.AdminProtectedPathSegmentsOverride = options.AdminProtectedPathSegments;
+
+            // Gitignore exclusions: scan once, push results to the lister.
+            if (options.ObeyGitignore)
+            {
+                var rules = GitignoreService.Scan(options.Directory);
+                var gitFolders = rules.ExcludedFolders;
+                var gitExtensions = rules.ExcludedExtensions;
+                var gitFullPaths = rules.ExcludedFullPaths;
+
+                // When the user chose "include filters take precedence", remove
+                // any gitignore exclusions that conflict with explicit includes.
+                if (!options.GitignoreTakesPrecedence && includeExts.Count > 0)
+                {
+                    var includeExtSet = new HashSet<string>(
+                        includeExts.Select(e => e.TrimStart('.')),
+                        StringComparer.OrdinalIgnoreCase);
+                    var filtered = new HashSet<string>(gitExtensions, StringComparer.OrdinalIgnoreCase);
+                    filtered.ExceptWith(includeExtSet);
+                    gitExtensions = filtered;
+                }
+
+                concreteLister.GitignoreExcludedFolders = gitFolders;
+                concreteLister.GitignoreExcludedExtensions = gitExtensions;
+                concreteLister.GitignoreExcludedFullPaths = gitFullPaths;
+            }
+            else
+            {
+                concreteLister.GitignoreExcludedFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                concreteLister.GitignoreExcludedExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                concreteLister.GitignoreExcludedFullPaths = [];
+            }
         }
 
         bool searchContent = options.SearchMode != SearchMode.FileNames;
@@ -215,16 +246,15 @@ public sealed class SearchService
         int CurrentEarlySkips() => _fileLister.EarlySkippedFiles;
         int CurrentEarlyTooLargeSkips() => _fileLister.EarlySkippedTooLargeFiles;
         int CurrentFilesSkipped() => Volatile.Read(ref filesSkipped) + CurrentDirectorySkips() + CurrentEarlySkips();
+        // Total files processed (content-scanned + early-filtered + discovery-filtered)
+        // so the progress bar increments for every file that has been "dealt with".
+        int CurrentFilesProcessed() => Volatile.Read(ref filesScanned) + CurrentEarlySkips() + Volatile.Read(ref skipSizeFiltered);
         int CurrentTotalFiles()
         {
             int knownTotal = _fileLister.KnownTotalFiles;
-            int earlySkips = CurrentEarlySkips();
-            // Subtract early-skipped files so progress reflects only files that
-            // actually enter the content pipeline.
-            int effectiveKnown = Math.Max(0, knownTotal - earlySkips);
-            int discoveredTotal = Volatile.Read(ref totalDiscovered);
-            int completedTotal = Volatile.Read(ref filesScanned);
-            return Math.Max(effectiveKnown, Math.Max(discoveredTotal, completedTotal));
+            int discoveredTotal = Volatile.Read(ref totalDiscovered) + CurrentEarlySkips();
+            int completedTotal = CurrentFilesProcessed();
+            return Math.Max(knownTotal, Math.Max(discoveredTotal, completedTotal));
         }
 
         SearchProgress CreateProgressSnapshot()
@@ -243,9 +273,10 @@ public sealed class SearchService
                 Volatile.Read(ref skipByExtension),
                 nonAccessDeniedDirSkips,
                 CurrentEarlySkips() + Volatile.Read(ref skipSizeFiltered),
-                Volatile.Read(ref skipGlobExcluded));
+                Volatile.Read(ref skipGlobExcluded),
+                _fileLister.GitignoreSkipped);
             return new(
-                Volatile.Read(ref filesScanned),
+                CurrentFilesProcessed(),
                 CurrentTotalFiles(),
                 Volatile.Read(ref totalMatches),
                 Volatile.Read(ref filesWithMatches),
@@ -910,12 +941,12 @@ public sealed class SearchService
         int accessDeniedSkips = CurrentAccessDeniedSkips();
         int totalSkipped = Volatile.Read(ref filesSkipped) + directorySkips + earlySkips;
         int nonAccessDeniedDirectorySkips = Math.Max(0, directorySkips - _fileLister.AccessDeniedDirectories);
-        var skipReasons = new SkipBreakdown(skipBinary, accessDeniedSkips, skipIOError, skipTooLarge + earlyTooLargeSkips, skipNotFound, skipEncoding, skipOther, skipByExtension, nonAccessDeniedDirectorySkips, earlySkips + discoverySizeSkips, skipGlobExcluded);
+        var skipReasons = new SkipBreakdown(skipBinary, accessDeniedSkips, skipIOError, skipTooLarge + earlyTooLargeSkips, skipNotFound, skipEncoding, skipOther, skipByExtension, nonAccessDeniedDirectorySkips, earlySkips + discoverySizeSkips, skipGlobExcluded, _fileLister.GitignoreSkipped);
         LogService.Instance.Warning("SearchService", $"Search complete: {totalMatches} matches in {filesWithMatches} files, {filesScanned} scanned, {totalSkipped} skipped ({skipReasons}), earlyFiltered={earlySkips + discoverySizeSkips}, degraded={wasDegraded}, truncated={wasTruncated}, " +
             $"batches={Volatile.Read(ref nativeBatchesProcessed)}, pressureCycles={pressureCycles}, forwarderItems={Volatile.Read(ref forwarderItemsForwarded):N0}, forwarderStallMs={Volatile.Read(ref forwarderWriteStallMs)}, channelDrops={Volatile.Read(ref contentChannelDrops)}, {sw.Elapsed.TotalSeconds:F2}s");
         yield return new SearchEvent.Completed(new SearchSummary(
             TotalFiles: totalFiles,
-            FilesScanned: filesScanned,
+            FilesScanned: CurrentFilesProcessed(),
             FilesSkipped: totalSkipped,
             FilesWithMatches: filesWithMatches,
             TotalMatches: totalMatches,
@@ -991,6 +1022,7 @@ public sealed class SearchService
             Query = query ?? options.Query,
             CaseSensitive = options.CaseSensitive,
             UseRegex = useRegex ?? options.UseRegex,
+            ExactMatch = options.ExactMatch,
             ContextLines = contextLines ?? options.ContextLines,
             SearchMode = options.SearchMode,
             IncludeGlobs = options.IncludeGlobs,
@@ -1006,6 +1038,8 @@ public sealed class SearchService
             MaxResults = maxResults ?? options.MaxResults,
             MaxMatchesPerFile = options.MaxMatchesPerFile,
             SkipBinary = options.SkipBinary,
+            ObeyGitignore = options.ObeyGitignore,
+            GitignoreTakesPrecedence = options.GitignoreTakesPrecedence,
             MaxDegreeOfParallelism = options.MaxDegreeOfParallelism,
             MaxProcessMemoryBytes = options.MaxProcessMemoryBytes,
             MemoryPressurePercent = options.MemoryPressurePercent,
@@ -1283,7 +1317,9 @@ public sealed class SearchService
             ? degradedSession
             : batchSession;
 
-        using var sink = new BatchScanSink(batch, contentWriter, options.MaxResults, Volatile.Read(ref totalMatches), cancelPtr);
+        fixed (int* filesScannedPtr = &filesScanned)
+        {
+        using var sink = new BatchScanSink(batch, contentWriter, options.MaxResults, Volatile.Read(ref totalMatches), cancelPtr, filesScannedPtr);
 
         Native.NativeSearcher.ScanPathsParallel(
             session, batch, parallelism, (int*)cancelPtr, sink);
@@ -1301,13 +1337,11 @@ public sealed class SearchService
                 $"Scanner stopped for this batch. Total drops={Volatile.Read(ref contentChannelDrops)}");
         }
 
-        // Post-batch: reconcile per-file stats.
+        // Post-batch: reconcile per-file stats (filesScanned already incremented in OnFileDone).
         for (int i = 0; i < batch.Count; i++)
         {
             int status = sink.GetStatus(i);
             int emitted = sink.GetEmitted(i);
-
-            Interlocked.Increment(ref filesScanned);
 
             if (status != Native.NativeSearcher.StatusOk)
             {
@@ -1327,6 +1361,7 @@ public sealed class SearchService
                 Interlocked.Add(ref bytesScanned, sink.GetFileLength(i));
             }
         }
+        } // fixed (filesScannedPtr)
     }
 
     /// <summary>
@@ -1352,6 +1387,7 @@ public sealed class SearchService
         // The buffer array is pooled because this object is created for every batch.
         private readonly List<SearchResult>?[] _buffers;
         private readonly unsafe int* _cancelPtr; // Rust cancel flag — checked during backpressure waits
+        private readonly unsafe int* _filesScannedPtr; // incremented per file for live progress
         private int _runningTotal; // starts from outer totalMatches at batch start
         private bool _stopped;
 
@@ -1366,7 +1402,8 @@ public sealed class SearchService
             ChannelWriter<SearchResult> writer,
             int maxResults,
             int currentTotalMatches,
-            IntPtr cancelPtr)
+            IntPtr cancelPtr,
+            int* filesScannedPtr)
         {
             _paths = paths;
             _writer = writer;
@@ -1374,6 +1411,7 @@ public sealed class SearchService
             _count = paths.Count;
             _runningTotal = currentTotalMatches;
             _cancelPtr = (int*)cancelPtr;
+            _filesScannedPtr = filesScannedPtr;
             _emitted = ArrayPool<int>.Shared.Rent(paths.Count);
             _statuses = ArrayPool<int>.Shared.Rent(paths.Count);
             _fileLength = ArrayPool<long>.Shared.Rent(paths.Count);
@@ -1453,6 +1491,14 @@ public sealed class SearchService
             int idx = (int)fileIndex;
             _statuses[idx] = status;
             _fileLength[idx] = fileLength > long.MaxValue ? long.MaxValue : (long)fileLength;
+
+            // Increment filesScanned immediately so the progress bar updates per-file
+            // rather than waiting until the entire batch completes.
+            unsafe
+            {
+                if (_filesScannedPtr != null)
+                    Interlocked.Increment(ref *_filesScannedPtr);
+            }
 
             // Pre-populate the metadata cache so FileGroup.BeginLoadMetadata
             // gets a synchronous hit and skips the secondary FileInfo syscall.

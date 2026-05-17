@@ -79,6 +79,25 @@ internal sealed class TrayIcon : IDisposable
         Shell_NotifyIconW(NIM_MODIFY, ref nid);
     }
 
+    /// <summary>
+    /// Updates the tooltip text shown when hovering over the tray icon.
+    /// </summary>
+    public void SetTooltip(string tooltip)
+    {
+        if (!_added || _hwnd == IntPtr.Zero) return;
+
+        var nid = new NOTIFYICONDATAW
+        {
+            cbSize = (uint)Marshal.SizeOf<NOTIFYICONDATAW>(),
+            hWnd = _hwnd,
+            uID = 1,
+            uFlags = NIF_TIP,
+            szTip = tooltip.Length > 127 ? tooltip[..127] : tooltip,
+        };
+
+        Shell_NotifyIconW(NIM_MODIFY, ref nid);
+    }
+
     public void Dispose()
     {
         if (_disposed) return;

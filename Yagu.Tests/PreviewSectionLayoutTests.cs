@@ -28,6 +28,20 @@ public class PreviewSectionLayoutTests
         Assert.Contains("HorizontalAlignment = HorizontalAlignment.Stretch", expanderBlock);
     }
 
+    [Fact]
+    public void BottomStatusBar_ShowsOnlyWhenBothBottomPanelsAreVisible()
+    {
+        var visibilityMethod = ExtractMethodBody(MainWindowSource, "UpdateBottomStatusBarVisibility");
+
+        Assert.Contains("_splitLayoutMode == SplitLayoutMode.Split", visibilityMethod);
+        Assert.Contains("ResultsPanelBorder.Visibility == Visibility.Visible", visibilityMethod);
+        Assert.Contains("PreviewPanelBorder.Visibility == Visibility.Visible", visibilityMethod);
+        Assert.Contains("StatusBarRow.Height = showStatusBar ? GridLength.Auto : new GridLength(0);", visibilityMethod);
+
+        string sourceWithoutHelper = MainWindowSource.Replace(visibilityMethod, string.Empty, StringComparison.Ordinal);
+        Assert.DoesNotContain("StatusBarRow.Height = GridLength.Auto;", sourceWithoutHelper);
+    }
+
     private static string ExtractMethodBody(string source, string methodName)
     {
         // Find the method definition (not a call site) by looking for the return type prefix

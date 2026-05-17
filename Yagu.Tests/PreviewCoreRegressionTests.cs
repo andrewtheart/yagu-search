@@ -100,7 +100,7 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void SelectionOnlyClicks_DoNotAddFilesToPreviewPanel()
+    public void PlainResultClicks_DoNotAddFilesToPreviewPanel()
     {
         string itemClick = ExtractMethodWindow(MainWindowSource, "OnResultItemClick", window: 450);
         Assert.Contains("OnResultItemClick: no preview change", itemClick);
@@ -115,6 +115,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.DoesNotContain("UpdatePreviewAsync", tapped);
         Assert.DoesNotContain("UpdateMultiSelectPreviewAsync", tapped);
         Assert.DoesNotContain("PrependPreviewSectionsForFilesAsync", tapped);
+        Assert.DoesNotContain("EnsureCheckedMatchInPreviewAsync", tapped);
     }
 
     [Fact]
@@ -128,12 +129,19 @@ public sealed class PreviewCoreRegressionTests
             "if (isShift && currentIndex >= 0)",
             "if (shouldSelect)",
             "ViewModel.ResultGroups[i].SelectAll();",
+            "groupsToPreview.Add(ViewModel.ResultGroups[i]);",
             "else",
             "ViewModel.ResultGroups[i].DeselectAll();",
             "else if (shouldSelect)",
             "group.SelectAll();",
+            "groupsToPreview.Add(group);",
             "else",
             "group.DeselectAll();");
+        Assert.Contains("await EnsureFileGroupsInPreviewAsync(groupsToPreview, group.FilePath);", checkboxClicked);
+
+        string ensureGroups = ExtractMethodWindow(MainWindowSource, "EnsureFileGroupsInPreviewAsync");
+        Assert.Contains("var selectedResults = fileGroup.Where(result => result.IsSelected).ToList();", ensureGroups);
+        Assert.Contains("await PrependPreviewSectionsForFilesAsync(newFiles, scrollToFile);", ensureGroups);
     }
 
     [Fact]
@@ -256,6 +264,9 @@ public sealed class PreviewCoreRegressionTests
         string appendWindows = ExtractMethodWindow(MainWindowSource, "AppendHighlightMatchWindows");
         Assert.Contains("int maxAdditionalBlocks", appendWindows);
         Assert.Contains("paragraphsAdded < maxAdditionalBlocks", appendWindows);
+        Assert.Contains("BuildMatchByLineForRanges", appendWindows);
+        Assert.Contains("CountPrefixResultsThroughLine", appendWindows);
+        Assert.DoesNotContain("AddPreviewLineParagraphsAroundResult", appendWindows);
 
         string expandChunk = ExtractMethodWindow(MainWindowSource, "ExpandSectionNextChunk");
         Assert.Contains("MaxPreviewBlocksPerExpandChunk", expandChunk);
@@ -302,7 +313,7 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void LineCheckboxClick_UpdatesSelectionOnly()
+    public void LineCheckboxClick_AddsCheckedMatchContextToPreview()
     {
         Assert.Contains("Click=\"OnMatchLineCheckBoxClicked\"", MainWindowXaml);
 
@@ -313,6 +324,8 @@ public sealed class PreviewCoreRegressionTests
         string checkboxClicked = ExtractMethodWindow(MainWindowSource, "OnMatchLineCheckBoxClicked", window: 1000);
         Assert.Contains("result.IsSelected = isChecked;", checkboxClicked);
         Assert.Contains("UpdateSelectionForMatchLine(result, nameof(OnMatchLineCheckBoxClicked));", checkboxClicked);
+        Assert.Contains("if (result.IsSelected)", checkboxClicked);
+        Assert.Contains("await EnsureCheckedMatchInPreviewAsync(result);", checkboxClicked);
         Assert.DoesNotContain("UpdatePreviewAsync", checkboxClicked);
         Assert.DoesNotContain("UpdateMultiSelectPreviewAsync", checkboxClicked);
 
@@ -322,6 +335,28 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("selection only", selectionForLine);
         Assert.DoesNotContain("UpdatePreviewAsync", selectionForLine);
         Assert.DoesNotContain("UpdateMultiSelectPreviewAsync", selectionForLine);
+
+        string ensureChecked = ExtractMethodWindow(MainWindowSource, "EnsureCheckedMatchInPreviewAsync", window: 5000);
+        Assert.Contains("ViewModel.HydrateResult(result);", ensureChecked);
+        AssertContainsInOrder(ensureChecked,
+            "if (!TryFindPreviewSection(result.FilePath, out var expander, out var section))",
+            "[result.FilePath] = [result]",
+            "await PrependPreviewSectionsForFilesAsync(newFiles, result.FilePath);",
+            "return;");
+        AssertContainsInOrder(ensureChecked,
+            "await MaterializeLazySectionAsync(section);",
+            "if (!TryFindPreviewMatchParagraph(section, result, out var paragraph, out var matchInPara))",
+            "await AppendCheckedMatchContextAsync(section, result);",
+            "ReorderMatchParagraphsToPreviewSectionOrder();");
+        Assert.Contains("SetCurrentMatchToMatch(section, paragraph, matchInPara);", ensureChecked);
+        Assert.Contains("ScrollPreviewToLine(section, paragraph);", ensureChecked);
+
+        string appendContext = ExtractMethodWindow(MainWindowSource, "AppendCheckedMatchContextAsync", window: 5000);
+        Assert.Contains("int previewLines = ViewModel.PreviewContextLines;", appendContext);
+        Assert.Contains("ReadAllLinesWithEncodingSync(result.FilePath)", appendContext);
+        Assert.Contains("var lines = GetPreviewLines(result, allLines, previewLines, fullFile: false);", appendContext);
+        Assert.Contains("bool isMatchLine = lineNum == result.LineNumber;", appendContext);
+        Assert.Contains("AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, result, rx, truncate: true, _matchParagraphs, sectionNav, out _);", appendContext);
     }
 
     [Fact]

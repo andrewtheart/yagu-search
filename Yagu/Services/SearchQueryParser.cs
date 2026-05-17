@@ -5,24 +5,22 @@ namespace Yagu.Services;
 
 internal static class SearchQueryParser
 {
-    public static IReadOnlyList<string> ParseLiteralTerms(string query)
+    public static IReadOnlyList<string> ParseLiteralTerms(string query, bool exactMatch = true)
     {
         if (string.IsNullOrWhiteSpace(query))
             return Array.Empty<string>();
 
+        // Exact match: the entire query is one term (trimmed).
+        if (exactMatch)
+            return [query.Trim()];
+
+        // Multi-term: split on whitespace.
         var terms = new List<string>();
         var current = new StringBuilder(query.Length);
-        bool inQuotes = false;
 
         foreach (char ch in query)
         {
-            if (ch == '"')
-            {
-                inQuotes = !inQuotes;
-                continue;
-            }
-
-            if (char.IsWhiteSpace(ch) && !inQuotes)
+            if (char.IsWhiteSpace(ch))
             {
                 AddCurrentTerm(terms, current);
                 continue;
@@ -43,9 +41,9 @@ internal static class SearchQueryParser
             .Select(Regex.Escape));
     }
 
-    public static string? BuildLiteralRegexPattern(string query)
+    public static string? BuildLiteralRegexPattern(string query, bool exactMatch = true)
     {
-        var terms = ParseLiteralTerms(query);
+        var terms = ParseLiteralTerms(query, exactMatch);
         return terms.Count == 0 ? null : BuildLiteralAlternation(terms);
     }
 

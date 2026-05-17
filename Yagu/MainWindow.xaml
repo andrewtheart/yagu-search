@@ -140,15 +140,48 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <FontIcon Glyph="&#xE721;" FontSize="16" VerticalAlignment="Center" Opacity="0.7" />
-                    <AutoSuggestBox
-                        x:Name="QueryBox" Grid.Column="1"
-                        PlaceholderText="Search query (Enter to run)"
-                        Text="{x:Bind ViewModel.Query, Mode=TwoWay}"
-                        ItemsSource="{x:Bind ViewModel.SearchHistory, Mode=OneWay}"
-                        QuerySubmitted="OnQuerySubmitted"
-                        TextChanged="OnQueryTextChanged"
-                        LostFocus="OnQueryLostFocus"
-                        KeyDown="OnQueryKeyDown" />
+                    <Grid Grid.Column="1">
+                        <AutoSuggestBox
+                            x:Name="QueryBox"
+                            PlaceholderText="Search query (Enter to run)"
+                            Text="{x:Bind ViewModel.Query, Mode=TwoWay}"
+                            ItemsSource="{x:Bind ViewModel.SearchHistory, Mode=OneWay}"
+                            QuerySubmitted="OnQuerySubmitted"
+                            TextChanged="OnQueryTextChanged"
+                            LostFocus="OnQueryLostFocus"
+                            KeyDown="OnQueryKeyDown" />
+                        <!-- Inline toggle buttons for search options (visible when query has text) -->
+                        <StackPanel x:Name="InlineSearchToggles"
+                                    Orientation="Horizontal" Spacing="2"
+                                    HorizontalAlignment="Right" VerticalAlignment="Center"
+                                    Margin="0,0,32,0"
+                                    Visibility="{x:Bind ViewModel.HasQueryText, Mode=OneWay}">
+                            <ToggleButton x:Name="CaseSensitiveToggle"
+                                          IsChecked="{x:Bind ViewModel.CaseSensitive, Mode=TwoWay}"
+                                          ToolTipService.ToolTip="Match Case (Alt+C)"
+                                          Padding="4,2" MinWidth="0" MinHeight="0"
+                                          Width="28" Height="24" FontSize="12"
+                                          VerticalAlignment="Center">
+                                <TextBlock Text="Aa" FontSize="12" FontWeight="SemiBold" />
+                            </ToggleButton>
+                            <ToggleButton x:Name="RegexToggle"
+                                          IsChecked="{x:Bind ViewModel.UseRegex, Mode=TwoWay}"
+                                          ToolTipService.ToolTip="Use Regular Expression (Alt+R)"
+                                          Padding="4,2" MinWidth="0" MinHeight="0"
+                                          Width="28" Height="24" FontSize="12"
+                                          VerticalAlignment="Center">
+                                <TextBlock Text=".*" FontSize="12" FontFamily="Consolas" />
+                            </ToggleButton>
+                            <ToggleButton x:Name="ExactMatchToggle"
+                                          IsChecked="{x:Bind ViewModel.ExactMatch, Mode=TwoWay}"
+                                          ToolTipService.ToolTip="Exact Match — treat entire query as one term (Alt+E)"
+                                          Padding="4,2" MinWidth="0" MinHeight="0"
+                                          Width="28" Height="24" FontSize="12"
+                                          VerticalAlignment="Center">
+                                <TextBlock Text="&quot;&quot;" FontSize="12" FontFamily="Consolas" />
+                            </ToggleButton>
+                        </StackPanel>
+                    </Grid>
                     <Button x:Name="SearchCancelButton" Grid.Column="2" Click="OnSearchCancelClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,6"
                             ToolTipService.ToolTip="Search (F5)">
                         <Button.KeyboardAccelerators>
@@ -179,107 +212,30 @@
                             <TextBlock Text="Advanced Options" VerticalAlignment="Center" />
                         </StackPanel>
                     </Expander.Header>
-                    <StackPanel Spacing="10" Padding="24,16,12,16">
-                        <!-- Options row -->
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1" CornerRadius="4" Padding="24,16,12,16">
+                    <StackPanel Spacing="10">
+                        <!-- Search behavior -->
                         <StackPanel Orientation="Horizontal" Spacing="16">
-                            <CheckBox Content="Case sensitive" IsChecked="{x:Bind ViewModel.CaseSensitive, Mode=TwoWay}" MinWidth="0" />
-                            <CheckBox Content="Regex" IsChecked="{x:Bind ViewModel.UseRegex, Mode=TwoWay}" MinWidth="0" />
-                            <CheckBox Content="Search archives" IsChecked="{x:Bind ViewModel.SearchInsideArchives, Mode=TwoWay}"
-                                      VerticalAlignment="Center" MinWidth="0"
-                                      ToolTipService.ToolTip="Searches inside ZIP archives for text matches. This has a performance penalty — only enable if you expect results inside ZIP files." />
-                            <DropDownButton Content="{x:Bind ViewModel.ArchiveExtensionsSummary, Mode=OneWay}"
-                                            Visibility="{x:Bind ViewModel.ArchiveExtensionsVisibility, Mode=OneWay}"
-                                            VerticalAlignment="Center" FontSize="12"
-                                            ToolTipService.ToolTip="ZIP-like extensions to bypass from skip list when archive search is on">
-                                <DropDownButton.Flyout>
-                                    <Flyout Placement="BottomEdgeAlignedLeft">
-                                        <StackPanel Width="320" Spacing="2">
-                                            <Grid Margin="0,0,0,6">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Text="Archive Extensions" FontWeight="SemiBold" VerticalAlignment="Center" />
-                                                <HyperlinkButton Grid.Column="1" Content="All" Click="OnArchiveExtSelectAll" Padding="4,2" />
-                                                <HyperlinkButton Grid.Column="2" Content="None" Click="OnArchiveExtSelectNone" Padding="4,2" />
-                                            </Grid>
-                                            <ScrollViewer MaxHeight="380" VerticalScrollBarVisibility="Auto">
-                                                <ItemsRepeater x:Name="ArchiveExtRepeater"
-                                                               ItemsSource="{x:Bind ViewModel.ArchiveExtensionItems, Mode=OneWay}">
-                                                    <ItemsRepeater.Layout>
-                                                        <StackLayout Spacing="0" />
-                                                    </ItemsRepeater.Layout>
-                                                    <ItemsRepeater.ItemTemplate>
-                                                        <DataTemplate x:DataType="vm:SkipExtensionItem">
-                                                            <CheckBox IsChecked="{x:Bind IsEnabled, Mode=TwoWay}"
-                                                                      MinWidth="0" MinHeight="0" Padding="6,2"
-                                                                      Checked="OnArchiveExtToggled" Unchecked="OnArchiveExtToggled">
-                                                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                                                    <TextBlock Text="{x:Bind Extension}" FontFamily="Consolas" Width="80" />
-                                                                    <TextBlock Text="{x:Bind Category}" Opacity="0.5" FontSize="11" />
-                                                                </StackPanel>
-                                                            </CheckBox>
-                                                        </DataTemplate>
-                                                    </ItemsRepeater.ItemTemplate>
-                                                </ItemsRepeater>
-                                            </ScrollViewer>
-                                        </StackPanel>
-                                    </Flyout>
-                                </DropDownButton.Flyout>
-                            </DropDownButton>
+                            <TextBlock Text="Search mode" VerticalAlignment="Center" Opacity="0.7" />
                             <ComboBox SelectedIndex="{x:Bind ViewModel.SearchModeIndex, Mode=TwoWay}" VerticalAlignment="Center">
-                                <x:String>Content + Names</x:String>
-                                <x:String>Content only</x:String>
-                                <x:String>File names only</x:String>
-                                <x:String>File name, then content</x:String>
+                                <ComboBoxItem Content="Content + Names"
+                                              ToolTipService.ToolTip="Search file contents and match file names against the query" />
+                                <ComboBoxItem Content="Content only"
+                                              ToolTipService.ToolTip="Search inside file contents only; ignore file names" />
+                                <ComboBoxItem Content="File names only"
+                                              ToolTipService.ToolTip="Match file names against the query without reading file contents" />
+                                <ComboBoxItem Content="File name, then content"
+                                              ToolTipService.ToolTip="First filter by file name, then search contents of matching files" />
                             </ComboBox>
-                            <DropDownButton Content="{x:Bind ViewModel.SkipExtensionsSummary, Mode=OneWay}"
-                                            VerticalAlignment="Center" FontSize="12"
-                                            ToolTipService.ToolTip="Extensions to skip during search">
-                                <DropDownButton.Flyout>
-                                    <Flyout Placement="BottomEdgeAlignedLeft">
-                                        <StackPanel Width="320" Spacing="2">
-                                            <Grid Margin="0,0,0,6">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Text="Skip Extensions" FontWeight="SemiBold" VerticalAlignment="Center" />
-                                                <HyperlinkButton Grid.Column="1" Content="All" Click="OnSkipExtSelectAll" Padding="4,2" />
-                                                <HyperlinkButton Grid.Column="2" Content="None" Click="OnSkipExtSelectNone" Padding="4,2" />
-                                            </Grid>
-                                            <ScrollViewer MaxHeight="380" VerticalScrollBarVisibility="Auto">
-                                                <ItemsRepeater x:Name="SkipExtRepeater"
-                                                               ItemsSource="{x:Bind ViewModel.SkipExtensionItems, Mode=OneWay}">
-                                                    <ItemsRepeater.Layout>
-                                                        <StackLayout Spacing="0" />
-                                                    </ItemsRepeater.Layout>
-                                                    <ItemsRepeater.ItemTemplate>
-                                                        <DataTemplate x:DataType="vm:SkipExtensionItem">
-                                                            <CheckBox IsChecked="{x:Bind IsEnabled, Mode=TwoWay}"
-                                                                      MinWidth="0" MinHeight="0" Padding="6,2"
-                                                                      Checked="OnSkipExtToggled" Unchecked="OnSkipExtToggled">
-                                                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                                                    <TextBlock Text="{x:Bind Extension}" FontFamily="Consolas" Width="50" />
-                                                                    <TextBlock Text="{x:Bind Category}" Opacity="0.5" FontSize="11" />
-                                                                </StackPanel>
-                                                            </CheckBox>
-                                                        </DataTemplate>
-                                                    </ItemsRepeater.ItemTemplate>
-                                                </ItemsRepeater>
-                                            </ScrollViewer>
-                                        </StackPanel>
-                                    </Flyout>
-                                </DropDownButton.Flyout>
-                            </DropDownButton>
-                            <CheckBox Content="Skip binary" IsChecked="{x:Bind ViewModel.SkipBinary, Mode=TwoWay}"
-                                      VerticalAlignment="Center" MinWidth="0"
-                                      ToolTipService.ToolTip="Skip files detected as binary during content search" />
+                            <CheckBox x:Name="ObeyGitignoreCheckBox" Content="Obey .gitignore"
+                                      IsChecked="{x:Bind ViewModel.ObeyGitignore, Mode=TwoWay}" MinWidth="0"
+                                      ToolTipService.ToolTip="Exclude files and folders listed in .gitignore files (recursively)"
+                                      Checked="OnObeyGitignoreChecked" />
                         </StackPanel>
 
-                        <!-- Filter row -->
+                        <!-- Path filters -->
                         <Grid ColumnSpacing="8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
@@ -329,13 +285,106 @@
                             </Grid>
                         </Grid>
 
-                        <!-- Size + date filters row -->
+                        <!-- File type filters -->
+                        <StackPanel Orientation="Horizontal" Spacing="16">
+                            <DropDownButton Content="{x:Bind ViewModel.SkipExtensionsSummary, Mode=OneWay}"
+                                            VerticalAlignment="Center" FontSize="12"
+                                            ToolTipService.ToolTip="Extensions to skip during search">
+                                <DropDownButton.Flyout>
+                                    <Flyout Placement="BottomEdgeAlignedLeft">
+                                        <StackPanel Width="320" Spacing="2">
+                                            <Grid Margin="0,0,0,6">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="Skip Extensions" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                                <HyperlinkButton Grid.Column="1" Content="All" Click="OnSkipExtSelectAll" Padding="4,2" />
+                                                <HyperlinkButton Grid.Column="2" Content="None" Click="OnSkipExtSelectNone" Padding="4,2" />
+                                            </Grid>
+                                            <ScrollViewer MaxHeight="380" VerticalScrollBarVisibility="Auto">
+                                                <ItemsRepeater x:Name="SkipExtRepeater"
+                                                               ItemsSource="{x:Bind ViewModel.SkipExtensionItems, Mode=OneWay}">
+                                                    <ItemsRepeater.Layout>
+                                                        <StackLayout Spacing="0" />
+                                                    </ItemsRepeater.Layout>
+                                                    <ItemsRepeater.ItemTemplate>
+                                                        <DataTemplate x:DataType="vm:SkipExtensionItem">
+                                                            <CheckBox IsChecked="{x:Bind IsEnabled, Mode=TwoWay}"
+                                                                      MinWidth="0" MinHeight="0" Padding="6,2"
+                                                                      Checked="OnSkipExtToggled" Unchecked="OnSkipExtToggled">
+                                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                                    <TextBlock Text="{x:Bind Extension}" FontFamily="Consolas" Width="50" />
+                                                                    <TextBlock Text="{x:Bind Category}" Opacity="0.5" FontSize="11" />
+                                                                </StackPanel>
+                                                            </CheckBox>
+                                                        </DataTemplate>
+                                                    </ItemsRepeater.ItemTemplate>
+                                                </ItemsRepeater>
+                                            </ScrollViewer>
+                                        </StackPanel>
+                                    </Flyout>
+                                </DropDownButton.Flyout>
+                            </DropDownButton>
+                            <CheckBox Content="Skip binary" IsChecked="{x:Bind ViewModel.SkipBinary, Mode=TwoWay}"
+                                      VerticalAlignment="Center" MinWidth="0"
+                                      ToolTipService.ToolTip="Skip files detected as binary during content search" />
+                            <CheckBox Content="Search archives" IsChecked="{x:Bind ViewModel.SearchInsideArchives, Mode=TwoWay}"
+                                      VerticalAlignment="Center" MinWidth="0"
+                                      ToolTipService.ToolTip="Searches inside ZIP archives for text matches. This has a performance penalty — only enable if you expect results inside ZIP files." />
+                            <DropDownButton Content="{x:Bind ViewModel.ArchiveExtensionsSummary, Mode=OneWay}"
+                                            Visibility="{x:Bind ViewModel.ArchiveExtensionsVisibility, Mode=OneWay}"
+                                            VerticalAlignment="Center" FontSize="12"
+                                            ToolTipService.ToolTip="ZIP-like extensions to bypass from skip list when archive search is on">
+                                <DropDownButton.Flyout>
+                                    <Flyout Placement="BottomEdgeAlignedLeft">
+                                        <StackPanel Width="320" Spacing="2">
+                                            <Grid Margin="0,0,0,6">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="Archive Extensions" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                                <HyperlinkButton Grid.Column="1" Content="All" Click="OnArchiveExtSelectAll" Padding="4,2" />
+                                                <HyperlinkButton Grid.Column="2" Content="None" Click="OnArchiveExtSelectNone" Padding="4,2" />
+                                            </Grid>
+                                            <ScrollViewer MaxHeight="380" VerticalScrollBarVisibility="Auto">
+                                                <ItemsRepeater x:Name="ArchiveExtRepeater"
+                                                               ItemsSource="{x:Bind ViewModel.ArchiveExtensionItems, Mode=OneWay}">
+                                                    <ItemsRepeater.Layout>
+                                                        <StackLayout Spacing="0" />
+                                                    </ItemsRepeater.Layout>
+                                                    <ItemsRepeater.ItemTemplate>
+                                                        <DataTemplate x:DataType="vm:SkipExtensionItem">
+                                                            <CheckBox IsChecked="{x:Bind IsEnabled, Mode=TwoWay}"
+                                                                      MinWidth="0" MinHeight="0" Padding="6,2"
+                                                                      Checked="OnArchiveExtToggled" Unchecked="OnArchiveExtToggled">
+                                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                                    <TextBlock Text="{x:Bind Extension}" FontFamily="Consolas" Width="80" />
+                                                                    <TextBlock Text="{x:Bind Category}" Opacity="0.5" FontSize="11" />
+                                                                </StackPanel>
+                                                            </CheckBox>
+                                                        </DataTemplate>
+                                                    </ItemsRepeater.ItemTemplate>
+                                                </ItemsRepeater>
+                                            </ScrollViewer>
+                                        </StackPanel>
+                                    </Flyout>
+                                </DropDownButton.Flyout>
+                            </DropDownButton>
+                        </StackPanel>
+
+                        <!-- Size & date constraints -->
                         <Grid ColumnSpacing="6">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
@@ -353,32 +402,37 @@
                                            SpinButtonPlacementMode="Hidden"
                                            ToolTipService.ToolTip="Maximum file size in MB. Leave blank for no upper limit." />
                             </StackPanel>
-                            <StackPanel Grid.Column="2" Spacing="2">
-                                <TextBlock Text="Created after" FontSize="11" Opacity="0.75" />
+                            <Border Grid.Column="2" Width="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                    VerticalAlignment="Stretch" Margin="4,-2,4,-2" />
+                            <StackPanel Grid.Column="3" Spacing="2">
+                                <TextBlock Text="Created Date" FontSize="11" Opacity="0.75" />
                                 <CalendarDatePicker Date="{x:Bind ViewModel.CreatedAfterDate, Mode=TwoWay}"
-                                                    PlaceholderText="Any" HorizontalAlignment="Stretch"
+                                                    PlaceholderText="From" HorizontalAlignment="Stretch"
                                                     ToolTipService.ToolTip="Only include files created on or after this date." />
                             </StackPanel>
-                            <StackPanel Grid.Column="3" Spacing="2">
-                                <TextBlock Text="Created before" FontSize="11" Opacity="0.75" />
+                            <StackPanel Grid.Column="4" Spacing="2">
+                                <TextBlock Text="" FontSize="11" Opacity="0.75" />
                                 <CalendarDatePicker Date="{x:Bind ViewModel.CreatedBeforeDate, Mode=TwoWay}"
-                                                    PlaceholderText="Any" HorizontalAlignment="Stretch"
+                                                    PlaceholderText="To" HorizontalAlignment="Stretch"
                                                     ToolTipService.ToolTip="Only include files created on or before this date." />
                             </StackPanel>
-                            <StackPanel Grid.Column="4" Spacing="2">
-                                <TextBlock Text="Modified after" FontSize="11" Opacity="0.75" />
+                            <Border Grid.Column="5" Width="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                    VerticalAlignment="Stretch" Margin="4,-2,4,-2" />
+                            <StackPanel Grid.Column="6" Spacing="2">
+                                <TextBlock Text="Modified Date" FontSize="11" Opacity="0.75" />
                                 <CalendarDatePicker Date="{x:Bind ViewModel.ModifiedAfterDate, Mode=TwoWay}"
-                                                    PlaceholderText="Any" HorizontalAlignment="Stretch"
+                                                    PlaceholderText="From" HorizontalAlignment="Stretch"
                                                     ToolTipService.ToolTip="Only include files modified on or after this date." />
                             </StackPanel>
-                            <StackPanel Grid.Column="5" Spacing="2">
-                                <TextBlock Text="Modified before" FontSize="11" Opacity="0.75" />
+                            <StackPanel Grid.Column="7" Spacing="2">
+                                <TextBlock Text="" FontSize="11" Opacity="0.75" />
                                 <CalendarDatePicker Date="{x:Bind ViewModel.ModifiedBeforeDate, Mode=TwoWay}"
-                                                    PlaceholderText="Any" HorizontalAlignment="Stretch"
+                                                    PlaceholderText="To" HorizontalAlignment="Stretch"
                                                     ToolTipService.ToolTip="Only include files modified on or before this date." />
                             </StackPanel>
                         </Grid>
                     </StackPanel>
+                    </Border>
                 </Expander>
             </StackPanel>
         </Border>
@@ -426,43 +480,65 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                        <FontIcon Glyph="&#xE8CB;" FontSize="12" VerticalAlignment="Center" Opacity="0.6" />
-                        <TextBlock Text="Sort:" VerticalAlignment="Center" FontSize="12" Opacity="0.7" />
-                        <ComboBox SelectedIndex="{x:Bind ViewModel.SortModeIndex, Mode=TwoWay}" VerticalAlignment="Center" FontSize="12">
-                            <x:String>None</x:String>
-                            <x:String># Matches</x:String>
-                            <x:String>Date Modified</x:String>
-                            <x:String>File Size</x:String>
-                            <x:String>File Name</x:String>
-                        </ComboBox>
-                        <ComboBox SelectedIndex="{x:Bind ViewModel.SortDirectionIndex, Mode=TwoWay}" VerticalAlignment="Center" FontSize="12">
-                            <x:String>Desc</x:String>
-                            <x:String>Asc</x:String>
-                        </ComboBox>
-                        <FontIcon Glyph="&#xE8FD;" FontSize="12" VerticalAlignment="Center" Opacity="0.6" />
-                        <TextBlock Text="Group:" VerticalAlignment="Center" FontSize="12" Opacity="0.7" />
-                        <DropDownButton Content="{x:Bind ViewModel.GroupModeLabel, Mode=OneWay}" VerticalAlignment="Center" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Group results by…">
+                        <DropDownButton Height="30" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Sort results">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <FontIcon Glyph="&#xE8CB;" FontSize="12" />
+                                <TextBlock Text="Sort" />
+                            </StackPanel>
                             <DropDownButton.Flyout>
-                                <MenuFlyout>
-                                    <MenuFlyoutItem Text="None" Click="OnGroupModeNone" />
-                                    <MenuFlyoutItem Text="Folder" Click="OnGroupModeFolder" />
-                                    <MenuFlyoutSubItem Text="Date range...">
-                                        <MenuFlyoutItem Text="Date range (Modified)" Click="OnGroupModeDateRangeModified" />
-                                        <MenuFlyoutItem Text="Date range (Created)" Click="OnGroupModeDateRangeCreated" />
-                                        <MenuFlyoutItem Text="Date range (Modified + Created)" Click="OnGroupModeDateRangeModifiedCreated" />
+                                <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                                    <MenuFlyoutItem Text="None" Click="OnSortNone" />
+                                    <MenuFlyoutSubItem Text="# Matches">
+                                        <MenuFlyoutItem Text="Desc" Click="OnSortMatchesDesc" />
+                                        <MenuFlyoutItem Text="Asc" Click="OnSortMatchesAsc" />
                                     </MenuFlyoutSubItem>
-                                    <MenuFlyoutItem Text="Extension" Click="OnGroupModeExtension" />
-                                    <MenuFlyoutItem Text="File size" Click="OnGroupModeFileSize" />
+                                    <MenuFlyoutSubItem Text="Date Modified">
+                                        <MenuFlyoutItem Text="Desc" Click="OnSortDateModifiedDesc" />
+                                        <MenuFlyoutItem Text="Asc" Click="OnSortDateModifiedAsc" />
+                                    </MenuFlyoutSubItem>
+                                    <MenuFlyoutSubItem Text="File Size">
+                                        <MenuFlyoutItem Text="Desc" Click="OnSortFileSizeDesc" />
+                                        <MenuFlyoutItem Text="Asc" Click="OnSortFileSizeAsc" />
+                                    </MenuFlyoutSubItem>
+                                    <MenuFlyoutSubItem Text="File Name">
+                                        <MenuFlyoutItem Text="Desc" Click="OnSortFileNameDesc" />
+                                        <MenuFlyoutItem Text="Asc" Click="OnSortFileNameAsc" />
+                                    </MenuFlyoutSubItem>
                                 </MenuFlyout>
                             </DropDownButton.Flyout>
                         </DropDownButton>
-                        <DropDownButton Content="{x:Bind ViewModel.GroupSortDirectionLabel, Mode=OneWay}"
-                                        VerticalAlignment="Center" FontSize="12" Padding="8,4"
-                                        ToolTipService.ToolTip="Sort group headers">
+                        <DropDownButton Height="30" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Group results by…">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <FontIcon Glyph="&#xE8FD;" FontSize="12" />
+                                <TextBlock Text="Group" />
+                            </StackPanel>
                             <DropDownButton.Flyout>
-                                <MenuFlyout>
-                                    <MenuFlyoutItem Text="Ascending" Click="OnGroupSortAscending" />
-                                    <MenuFlyoutItem Text="Descending" Click="OnGroupSortDescending" />
+                                <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                                    <MenuFlyoutItem Text="None" Click="OnGroupModeNone" />
+                                    <MenuFlyoutSubItem Text="Folder">
+                                        <MenuFlyoutItem Text="A-Z" Click="OnGroupFolderAZ" />
+                                        <MenuFlyoutItem Text="Z-A" Click="OnGroupFolderZA" />
+                                    </MenuFlyoutSubItem>
+                                    <MenuFlyoutSubItem Text="Date range (Modified)">
+                                        <MenuFlyoutItem Text="Recent first" Click="OnGroupDateModifiedRecent" />
+                                        <MenuFlyoutItem Text="Older first" Click="OnGroupDateModifiedOlder" />
+                                    </MenuFlyoutSubItem>
+                                    <MenuFlyoutSubItem Text="Date range (Created)">
+                                        <MenuFlyoutItem Text="Recent first" Click="OnGroupDateCreatedRecent" />
+                                        <MenuFlyoutItem Text="Older first" Click="OnGroupDateCreatedOlder" />
+                                    </MenuFlyoutSubItem>
+                                    <MenuFlyoutSubItem Text="Date range (Modified + Created)">
+                                        <MenuFlyoutItem Text="Recent first" Click="OnGroupDateModCreatedRecent" />
+                                        <MenuFlyoutItem Text="Older first" Click="OnGroupDateModCreatedOlder" />
+                                    </MenuFlyoutSubItem>
+                                    <MenuFlyoutSubItem Text="Extension">
+                                        <MenuFlyoutItem Text="A-Z" Click="OnGroupExtensionAZ" />
+                                        <MenuFlyoutItem Text="Z-A" Click="OnGroupExtensionZA" />
+                                    </MenuFlyoutSubItem>
+                                    <MenuFlyoutSubItem Text="File size">
+                                        <MenuFlyoutItem Text="Small to large" Click="OnGroupFileSizeSmallLarge" />
+                                        <MenuFlyoutItem Text="Large to small" Click="OnGroupFileSizeLargeSmall" />
+                                    </MenuFlyoutSubItem>
                                 </MenuFlyout>
                             </DropDownButton.Flyout>
                         </DropDownButton>
@@ -746,24 +822,45 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel x:Name="PreviewToolbarContent" Orientation="Horizontal" Spacing="6" Visibility="Collapsed">
-                            <!-- File identity -->
-                            <FontIcon Glyph="&#xE7B3;" FontSize="12" VerticalAlignment="Center" Opacity="0.6" />
+                        <StackPanel x:Name="PreviewToolbarContent" Orientation="Horizontal" Spacing="4" Visibility="Collapsed">
+                            <!-- File identity (icon + label hidden) -->
+                            <FontIcon Glyph="&#xE7B3;" FontSize="12" VerticalAlignment="Center" Opacity="0.6" Visibility="Collapsed" />
                             <TextBlock x:Name="PreviewFileLabel" VerticalAlignment="Center" FontSize="12" Opacity="0.7"
-                                       TextTrimming="CharacterEllipsis" MaxWidth="300" />
+                                       TextTrimming="CharacterEllipsis" MaxWidth="300" Visibility="Collapsed" />
+
+                            <!-- Primary actions (icon-only compact buttons) -->
+                            <Button x:Name="FullFileButton" Click="OnShowFullFile" Width="28" Height="28" MinWidth="0" MinHeight="0"
+                                    Padding="0" ToolTipService.ToolTip="Show full file content">
+                                <FontIcon Glyph="&#xE8A5;" FontSize="12" />
+                            </Button>
                             <Button x:Name="CopyPreviewFilePathButton" Click="OnCopyPreviewFilePath" Width="28" Height="28" MinWidth="0" MinHeight="0"
                                     Padding="0" ToolTipService.ToolTip="Copy full file path">
                                 <FontIcon Glyph="&#xE8C8;" FontSize="12" />
                             </Button>
+                            <Button x:Name="OpenInDefaultAppButton" Click="OnOpenInDefaultApp" Width="28" Height="28" MinWidth="0" MinHeight="0"
+                                    Padding="0" ToolTipService.ToolTip="Open with default Windows application">
+                                <FontIcon Glyph="&#xE8A7;" FontSize="12" />
+                            </Button>
+                            <Button x:Name="OpenInEditorButton" Click="OnOpenInEditor" Width="28" Height="28" MinWidth="0" MinHeight="0"
+                                    Padding="0" ToolTipService.ToolTip="Edit file in built-in editor">
+                                <FontIcon Glyph="&#xE70F;" FontSize="12" />
+                            </Button>
+                            <Button x:Name="ShowInExplorerButton" Click="OnShowInExplorer" Width="28" Height="28" MinWidth="0" MinHeight="0"
+                                    Padding="0" ToolTipService.ToolTip="Open containing folder in Explorer">
+                                <FontIcon Glyph="&#xED25;" FontSize="12" />
+                            </Button>
+                            <Button x:Name="ExpandAllSectionsButton" Click="OnExpandAllSections" Width="28" Height="28" MinWidth="0" MinHeight="0"
+                                    Padding="0" ToolTipService.ToolTip="Expand and render all collapsed sections" Visibility="Collapsed">
+                                <FontIcon Glyph="&#xE740;" FontSize="12" />
+                            </Button>
+                            <Button x:Name="ClearPreviewButton" Click="OnClearPreview" Width="28" Height="28" MinWidth="0" MinHeight="0"
+                                    Padding="0" ToolTipService.ToolTip="Clear all files from preview">
+                                <FontIcon Glyph="&#xE894;" FontSize="12" />
+                            </Button>
+
                             <AppBarSeparator x:Name="PreviewToolbarSeparator" />
 
-                            <!-- View group -->
-                            <Button x:Name="FullFileButton" Click="OnShowFullFile" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Show full file content">
-                                <StackPanel Orientation="Horizontal" Spacing="4">
-                                    <FontIcon Glyph="&#xE8A5;" FontSize="12" />
-                                    <TextBlock Text="Full File" />
-                                </StackPanel>
-                            </Button>
+                            <!-- View options -->
                             <DropDownButton x:Name="LayoutDropDown" Content="Layout" VerticalAlignment="Center" FontSize="12"
                                              ToolTipService.ToolTip="Multi-select preview layout">
                                 <DropDownButton.Flyout>
@@ -773,46 +870,12 @@
                                     </MenuFlyout>
                                 </DropDownButton.Flyout>
                             </DropDownButton>
-                            <ToggleButton x:Name="WordWrapToggle" FontSize="12" Padding="8,4"
-                                          ToolTipService.ToolTip="Toggle word wrap in preview"
+                            <ToggleButton x:Name="WordWrapToggle" Width="28" Height="28" MinWidth="0" MinHeight="0"
+                                          Padding="0" ToolTipService.ToolTip="Toggle word wrap in preview"
                                           IsChecked="{x:Bind ViewModel.PreviewWordWrap, Mode=TwoWay}"
                                           Click="OnWordWrapToggled">
-                                <StackPanel Orientation="Horizontal" Spacing="4">
-                                    <FontIcon Glyph="&#xE8B3;" FontSize="12" />
-                                    <TextBlock Text="Wrap" />
-                                </StackPanel>
+                                <FontIcon Glyph="&#xE8B3;" FontSize="12" />
                             </ToggleButton>
-                            <AppBarSeparator />
-
-                            <!-- Action group -->
-                            <Button x:Name="OpenInDefaultAppButton" Click="OnOpenInDefaultApp" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Open with default Windows application">
-                                <StackPanel Orientation="Horizontal" Spacing="4">
-                                    <FontIcon Glyph="&#xE8A7;" FontSize="12" />
-                                    <TextBlock Text="Open" />
-                                </StackPanel>
-                            </Button>
-                            <Button x:Name="OpenInEditorButton" Click="OnOpenInEditor" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Edit file in built-in editor">
-                                <StackPanel Orientation="Horizontal" Spacing="4">
-                                    <FontIcon Glyph="&#xE70F;" FontSize="12" />
-                                    <TextBlock Text="Edit" />
-                                </StackPanel>
-                            </Button>
-                            <Button x:Name="ShowInExplorerButton" Click="OnShowInExplorer" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Open containing folder in Explorer">
-                                <FontIcon Glyph="&#xED25;" FontSize="12" />
-                            </Button>
-                            <Button x:Name="ExpandAllSectionsButton" Click="OnExpandAllSections" FontSize="12" Padding="8,4"
-                                    ToolTipService.ToolTip="Expand and render all collapsed sections" Visibility="Collapsed">
-                                <StackPanel Orientation="Horizontal" Spacing="4">
-                                    <FontIcon Glyph="&#xE740;" FontSize="12" />
-                                    <TextBlock Text="Expand All" />
-                                </StackPanel>
-                            </Button>
-                            <Button x:Name="ClearPreviewButton" Click="OnClearPreview" FontSize="12" Padding="8,4" ToolTipService.ToolTip="Clear all files from preview">
-                                <StackPanel Orientation="Horizontal" Spacing="4">
-                                    <FontIcon Glyph="&#xE894;" FontSize="12" />
-                                    <TextBlock Text="Clear" />
-                                </StackPanel>
-                            </Button>
                             <Button x:Name="FindReplaceButton" Click="OnOpenFindReplaceBar" Width="28" Height="28" MinWidth="0" MinHeight="0"
                                     Padding="0" ToolTipService.ToolTip="Find &amp; Replace (Ctrl+H)">
                                 <FontIcon Glyph="&#xE721;" FontSize="12" />
@@ -823,17 +886,19 @@
                                            SpinButtonPlacementMode="Compact" MinWidth="64" Width="64" FontSize="12" />
                             </StackPanel>
 
-                            <!-- Editor-mode group (visible only when editing) -->
-                            <AppBarSeparator x:Name="EditorSeparator" Visibility="Collapsed" />
+                        </StackPanel>
+                        <!-- Editor-mode group (visible only when editing, right-aligned next to expand button) -->
+                        <StackPanel x:Name="EditorButtonsPanel" Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                                    VerticalAlignment="Center" Visibility="Collapsed">
                             <Button x:Name="SavePreviewEditButton" Click="OnSavePreviewEdit" FontSize="12" Padding="8,4"
-                                    ToolTipService.ToolTip="Save changes to file" Visibility="Collapsed" IsEnabled="False">
+                                    ToolTipService.ToolTip="Save changes to file" IsEnabled="False">
                                 <StackPanel Orientation="Horizontal" Spacing="4">
                                     <FontIcon Glyph="&#xE74E;" FontSize="12" />
                                     <TextBlock Text="Save" />
                                 </StackPanel>
                             </Button>
                             <Button x:Name="ClosePreviewEditButton" Click="OnClosePreviewEdit" FontSize="12" Padding="8,4"
-                                    ToolTipService.ToolTip="Close editor and return to preview" Visibility="Collapsed">
+                                    ToolTipService.ToolTip="Close editor and return to preview">
                                 <StackPanel Orientation="Horizontal" Spacing="4">
                                     <FontIcon Glyph="&#xE72B;" FontSize="12" />
                                     <TextBlock Text="Back" />

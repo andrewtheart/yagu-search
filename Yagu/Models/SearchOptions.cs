@@ -31,6 +31,7 @@ public sealed class SearchOptions
     public required string Query { get; init; }
     public bool CaseSensitive { get; init; }
     public bool UseRegex { get; init; }
+    public bool ExactMatch { get; init; } = true;
     public int ContextLines { get; init; } = 3;
     public SearchMode SearchMode { get; init; } = SearchMode.Both;
 
@@ -65,6 +66,12 @@ public sealed class SearchOptions
     public int MaxMatchesPerFile { get; init; } = 0;
 
     public bool SkipBinary { get; init; } = true;
+
+    /// <summary>When true, recursively read .gitignore files and exclude matching paths from listing.</summary>
+    public bool ObeyGitignore { get; init; }
+
+    /// <summary>When true, .gitignore exclusions override explicit include filters. When false, include filters take precedence.</summary>
+    public bool GitignoreTakesPrecedence { get; init; } = true;
 
     /// <summary>Absolute ceiling for <see cref="MaxResults"/> regardless of user settings.</summary>
     public const int MaxResultsCeiling = 50_000;

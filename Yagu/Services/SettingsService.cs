@@ -20,6 +20,9 @@ public sealed class AppSettings
     public List<string> SearchHistory { get; set; } = [];
     [JsonIgnore] public bool CaseSensitive { get; set; }
     [JsonIgnore] public bool UseRegex { get; set; }
+    [JsonIgnore] public bool ExactMatch { get; set; } = true;
+    public bool ObeyGitignore { get; set; }
+    public bool GitignoreTakesPrecedence { get; set; } = true;
     public int ContextLines { get; set; } = 3;
     public int PreviewContextLines { get; set; } = 20;
     [JsonIgnore] public string IncludeGlobs { get; set; } = string.Empty;
@@ -103,6 +106,8 @@ public sealed class AppSettings
     public bool CloseToTray { get; set; } = true;
     /// <summary>Whether the user has been informed that closing docks to the system tray.</summary>
     public bool HasShownCloseToTrayNotification { get; set; }
+    /// <summary>Number of matches to auto-load when user scrolls to the end of a truncated section. 0 = disabled.</summary>
+    public int PreviewAutoLoadMatches { get; set; } = 50;
     /// <summary>Built-in editor: maximum file size in MB. Files larger than this are blocked from opening.</summary>
     public int PreviewEditorMaxSizeMB { get; set; } = 32;
     /// <summary>Built-in editor: maximum total character count. Files with more characters are blocked.</summary>

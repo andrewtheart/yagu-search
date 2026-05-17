@@ -89,12 +89,42 @@ public sealed partial class MainWindow
                 .FirstOrDefault(g => string.Equals(g.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
             SearchResult? existing = fileGroup?.FirstOrDefault(r => r.LineNumber == lineNum)
                 ?? fileGroup?.FirstOrDefault();
-            SearchResult target = existing is not null && existing.LineNumber == lineNum
-                ? existing
-                : existing is not null
-                    ? existing with { LineNumber = lineNum, MatchStartColumn = 0, MatchLength = 0 }
-                    : new SearchResult(filePath, lineNum, string.Empty, 0, 0,
+            SearchResult target;
+            if (existing is not null && existing.LineNumber == lineNum)
+            {
+                target = existing;
+            }
+            else
+            {
+                // No exact SearchResult for this line (e.g. a context line with
+                // yellow-highlighted regex hits).  Use the search regex to find
+                // the first match on that line so the editor can highlight it.
+                int col = 0, len = 0;
+                string matchLine = string.Empty;
+                var rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
+                if (rx is not null)
+                {
+                    // Resolve the line text from the paragraph content (skip gutter inlines 0-2).
+                    var paraText = new System.Text.StringBuilder();
+                    var clickedPara = FindParagraphAtOffset(block, tp!.Offset);
+                    if (clickedPara is not null)
+                    {
+                        for (int pi = 3; pi < clickedPara.Inlines.Count; pi++)
+                            if (clickedPara.Inlines[pi] is Run pr) paraText.Append(pr.Text);
+                    }
+                    matchLine = paraText.ToString();
+                    var rxMatch = rx.Match(matchLine);
+                    if (rxMatch.Success)
+                    {
+                        col = rxMatch.Index;
+                        len = rxMatch.Length;
+                    }
+                }
+                target = existing is not null
+                    ? existing with { LineNumber = lineNum, MatchStartColumn = col, MatchLength = len, MatchLine = matchLine }
+                    : new SearchResult(filePath, lineNum, matchLine, col, len,
                         Array.Empty<string>(), Array.Empty<string>());
+            }
 
             e.Handled = true;
             await ShowFullFileEditorAsync(target);
@@ -122,20 +152,34 @@ public sealed partial class MainWindow
             int end = para.ContentEnd.Offset;
             if (tpOff < start || tpOff > end) continue;
 
-            // The gutter run created by MakePreviewParagraph has text "{lineNum,5} ".
+            // The gutter run created by MakePreviewParagraph has text "{lineNum,5} "
+            // or "{lineNum,5} (cont) " for continuation lines.
             // Indicator is index 0, gutter is index 1, separator is index 2.
             for (int i = 0; i < Math.Min(3, para.Inlines.Count); i++)
             {
-                if (para.Inlines[i] is Run r
-                    && int.TryParse(r.Text.AsSpan().Trim(), out int n)
-                    && n > 0)
-                {
+                if (para.Inlines[i] is not Run r) continue;
+                var trimmed = r.Text.AsSpan().Trim();
+                if (trimmed.IsEmpty) continue;
+                // Extract leading digits only — handles both "42" and "42 (cont)".
+                int digits = 0;
+                while (digits < trimmed.Length && char.IsDigit(trimmed[digits])) digits++;
+                if (digits > 0 && int.TryParse(trimmed[..digits], out int n) && n > 0)
                     return n;
-                }
             }
             return -1;
         }
         return -1;
+    }
+
+    private static Paragraph? FindParagraphAtOffset(RichTextBlock block, int offset)
+    {
+        foreach (var b in block.Blocks)
+        {
+            if (b is not Paragraph para) continue;
+            if (offset >= para.ContentStart.Offset && offset <= para.ContentEnd.Offset)
+                return para;
+        }
+        return null;
     }
 
     private async Task ShowFullFileEditorAsync(SearchResult result)
@@ -520,22 +564,31 @@ public sealed partial class MainWindow
 
     private void ScrollEditorToMatch(string text, SearchResult result)
     {
-        // Find the character offset of the target line (1-based LineNumber).
+        // The editor's SetSelection counts each line break as exactly 1 character
+        // regardless of the actual line ending (CRLF/LF/CR).  Compute the offset
+        // using that same convention: add lineLength+1 per line traversed.
         int charOffset = 0;
         int currentLine = 1;
-        for (int i = 0; i < text.Length && currentLine < result.LineNumber; i++)
+        int i = 0;
+        while (i < text.Length && currentLine < result.LineNumber)
         {
             if (text[i] == '\r' && i + 1 < text.Length && text[i + 1] == '\n')
             {
-                currentLine++;
-                charOffset = i + 2;
-                i++; // skip \n
+                i += 2; // skip \r\n in the source
             }
-            else if (text[i] == '\n')
+            else if (text[i] == '\n' || text[i] == '\r')
             {
-                currentLine++;
-                charOffset = i + 1;
+                i++;
             }
+            else
+            {
+                charOffset++;
+                i++;
+                continue;
+            }
+            // Each newline counts as 1 in the editor's position model.
+            charOffset++;
+            currentLine++;
         }
 
         // charOffset is calculated against the text we loaded into the editor.
@@ -547,37 +600,32 @@ public sealed partial class MainWindow
         if (selectStart > text.Length) selectStart = charOffset;
         if (selectStart + selectLength > text.Length) selectLength = 0;
 
-        const int LargeTextThreshold = 256 * 1024;
-        if (text.Length > LargeTextThreshold)
+        // Defer the scroll+select to a Low-priority callback so the editor
+        // control has completed its layout pass and knows its line positions.
+        // Without this, ScrollLineToCenter is a no-op on freshly-loaded text.
+        int targetLineIndex = Math.Max(0, result.LineNumber - 1);
+        int capturedStart = selectStart;
+        int capturedLength = Math.Max(0, selectLength);
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
-            int targetLineIndex = Math.Max(0, result.LineNumber - 1);
-            int capturedStart = selectStart;
-            int capturedLength = Math.Max(0, selectLength);
-            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            try
             {
-                try
+                if (PreviewEditor.Visibility != Visibility.Visible) return;
+                PreviewEditor.ScrollLineToCenter(targetLineIndex);
+                if (capturedLength > 0 && capturedStart >= 0)
                 {
-                    if (PreviewEditor.Visibility != Visibility.Visible) return;
+                    int len = GetPreviewEditorTextLength();
+                    int s = Math.Min(capturedStart, len);
+                    int l = Math.Min(capturedLength, Math.Max(0, len - s));
+                    SelectPreviewEditorText(s, l);
                     PreviewEditor.ScrollLineToCenter(targetLineIndex);
-                    if (capturedLength > 0 && capturedStart >= 0)
-                    {
-                        int len = GetPreviewEditorTextLength();
-                        int s = Math.Min(capturedStart, len);
-                        int l = Math.Min(capturedLength, Math.Max(0, len - s));
-                        SelectPreviewEditorText(s, l);
-                        PreviewEditor.ScrollLineToCenter(targetLineIndex);
-                    }
                 }
-                catch (Exception ex)
-                {
-                    LogService.Instance.Warning("Preview", $"ScrollEditorToMatch deferred scroll failed: {ex.GetType().Name}: {ex.Message}");
-                }
-            });
-            return;
-        }
-
-        SelectPreviewEditorText(selectStart, Math.Max(selectLength, 0));
-        PreviewEditor.ScrollLineToCenter(Math.Max(0, result.LineNumber - 1));
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Warning("Preview", $"ScrollEditorToMatch deferred scroll failed: {ex.GetType().Name}: {ex.Message}");
+            }
+        });
     }
 
     private async Task<bool> SavePreviewEditAsync()
@@ -793,6 +841,11 @@ public sealed partial class MainWindow
             HideStickyFileHeader();
             HideActiveMatchOverlay();
             SectionNavOverlay.Visibility = Visibility.Collapsed;
+            MatchNavPanel.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            UpdateMatchNavPanel();
         }
 
         if (visible)
@@ -801,10 +854,8 @@ public sealed partial class MainWindow
             ToolTipService.SetToolTip(PreviewEditorPathBar, _previewEditorPath ?? string.Empty);
         }
 
-        // Editor-mode group
-        EditorSeparator.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
-        SavePreviewEditButton.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
-        ClosePreviewEditButton.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        // Editor-mode group (now in its own Grid.Column="1" panel)
+        EditorButtonsPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
 
         // Hide view/action buttons while editing
         FullFileButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;

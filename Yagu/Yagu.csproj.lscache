@@ -70,6 +70,7 @@ Helpers/
  GlobMatcher.cs
  LineTruncator.cs
  SyntaxHighlighter.cs
+ TaskbarProgress.cs
  TrayIcon.cs
 MainWindow.PreviewEditor.cs
 MainWindow.xaml.cs
@@ -98,6 +99,7 @@ Services/
  FileLister.cs
  FileMetadataCache.cs
  FileWatchDiagnostics.cs
+ GitignoreService.cs
  HotkeyService.cs
  LogService.cs
  ResultStore.cs
@@ -344,5 +346,6 @@ ViewModels/MainViewModel.cs
 <NUGET>/microsoft.windows.sdk.net.ref/10.0.19041.57/analyzers/dotnet/cs/WinRT.SourceGenerator.dll
 
 [analyzerConfigFiles]
+../.editorconfig
 <DOTNET>/sdk/10.0.300/Sdks/Microsoft.NET.Sdk/analyzers/build/config/analysislevel_10_default.globalconfig
 obj/Debug/net10.0-windows10.0.19041.0/Yagu.GeneratedMSBuildEditorConfig.editorconfig

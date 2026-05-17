@@ -17,7 +17,11 @@ internal class CursorHelper
             return textRenderer.GetDocumentLineFromVisualRow(textRenderer.GetVisualRowFromPointY(point.Y));
 
         //Calculate the relative linenumber, where the pointer was pressed at
-        double adjustedY = point.Y;
+        // Subtract the same top inset used by the word-wrap path so the
+        // click-to-line mapping aligns with where text is actually rendered.
+        const int DefaultVerticalScrollSensitivity = 4;
+        double topInset = textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+        double adjustedY = Math.Max(0, point.Y - topInset);
         int relativeLine = (int)Math.Floor(adjustedY / textRenderer.SingleLineHeight);
 
         return Math.Max(0, relativeLine + textRenderer.NumberOfStartLine);
@@ -47,7 +51,6 @@ internal class CursorHelper
         //Apply an offset to the cursorposition to make selection easier
         point.X += textRenderer.SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity;
         textRenderer.UpdateRenderedLineRange(canvasText);
-        
 
         cursorPos.LineNumber = GetCursorLineFromPoint(textRenderer, point);
         cursorPos.LineNumber = Math.Clamp(cursorPos.LineNumber, 0, textRenderer.NumberOfStartLine + textRenderer.NumberOfRenderedLines - 1); //Clamp to visible? or total? GetCursorLineFromPoint handles relative logic, but we need to clamp to document bounds.

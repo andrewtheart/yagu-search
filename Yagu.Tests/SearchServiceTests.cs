@@ -198,7 +198,8 @@ public class SearchServiceTests : IDisposable
         var opts = new SearchOptions
         {
             Directory = _root,
-            Query = "\"test 123\"",
+            Query = "test 123",
+            ExactMatch = true,
             MaxFileSizeBytes = 0,
             MaxResults = 0,
         };
@@ -227,6 +228,7 @@ public class SearchServiceTests : IDisposable
         {
             Directory = _root,
             Query = "test 123",
+            ExactMatch = false,
             MaxFileSizeBytes = 0,
             MaxResults = 0,
         };
@@ -568,6 +570,205 @@ public class SearchServiceTests : IDisposable
         Assert.Equal(1, summary.SkipReasons?.Directories);
     }
 
+    [Fact]
+    public async Task ObeyGitignore_ExcludesMatchingFiles()
+    {
+        // Create a .gitignore that excludes *.log files
+        File.WriteAllText(Path.Combine(_root, ".gitignore"), "*.log\n");
+        Write("keep.txt", "needle");
+        Write("skip.log", "needle");
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            ObeyGitignore = true,
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        var matchFiles = new List<string>();
+        SearchSummary? summary = null;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Match m) matchFiles.Add(Path.GetFileName(m.Result.FilePath));
+            else if (evt is SearchEvent.MatchBatch mb) matchFiles.AddRange(mb.Results.Select(r => Path.GetFileName(r.FilePath)));
+            else if (evt is SearchEvent.Completed c) summary = c.Summary;
+        }
+
+        Assert.Single(matchFiles);
+        Assert.Equal("keep.txt", matchFiles[0]);
+        Assert.NotNull(summary);
+    }
+
+    [Fact]
+    public async Task ObeyGitignore_ExcludesFolders()
+    {
+        File.WriteAllText(Path.Combine(_root, ".gitignore"), "excluded_dir\n");
+        Directory.CreateDirectory(Path.Combine(_root, "excluded_dir"));
+        Write("excluded_dir/hidden.txt", "needle");
+        Write("visible.txt", "needle");
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            ObeyGitignore = true,
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        var matchFiles = new List<string>();
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Match m) matchFiles.Add(Path.GetFileName(m.Result.FilePath));
+            else if (evt is SearchEvent.MatchBatch mb) matchFiles.AddRange(mb.Results.Select(r => Path.GetFileName(r.FilePath)));
+        }
+
+        Assert.Single(matchFiles);
+        Assert.Equal("visible.txt", matchFiles[0]);
+    }
+
+    [Fact]
+    public async Task ObeyGitignore_DisabledDoesNotExclude()
+    {
+        File.WriteAllText(Path.Combine(_root, ".gitignore"), "*.log\n");
+        Write("keep.txt", "needle");
+        Write("also-keep.log", "needle");
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            ObeyGitignore = false,
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        int matches = 0;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Match) matches++;
+            else if (evt is SearchEvent.MatchBatch mb) matches += mb.Results.Count;
+        }
+
+        Assert.Equal(2, matches);
+    }
+
+    [Fact]
+    public async Task ObeyGitignore_IncludeFilterTakesPrecedence()
+    {
+        File.WriteAllText(Path.Combine(_root, ".gitignore"), "*.log\n");
+        Write("data.log", "needle");
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            ObeyGitignore = true,
+            GitignoreTakesPrecedence = false,
+            IncludeGlobs = new[] { "log" },
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        int matches = 0;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Match) matches++;
+            else if (evt is SearchEvent.MatchBatch mb) matches += mb.Results.Count;
+        }
+
+        Assert.Equal(1, matches);
+    }
+
+    [Fact]
+    public async Task ExactMatch_True_SearchesWholePhrase()
+    {
+        Write("phrase.txt", "the value is test 123 here");
+        Write("split.txt", "the value has test then later 123");
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "test 123",
+            ExactMatch = true,
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        var matchFiles = new List<string>();
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Match m) matchFiles.Add(Path.GetFileName(m.Result.FilePath));
+            else if (evt is SearchEvent.MatchBatch mb) matchFiles.AddRange(mb.Results.Select(r => Path.GetFileName(r.FilePath)));
+        }
+
+        Assert.Single(matchFiles);
+        Assert.Equal("phrase.txt", matchFiles[0]);
+    }
+
+    [Fact]
+    public async Task ExactMatch_False_SearchesEachTermSeparately()
+    {
+        Write("word.txt", "contains test only");
+        Write("number.txt", "contains 123 only");
+        Write("quiet.txt", "contains neither value");
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "test 123",
+            ExactMatch = false,
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        var matchFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Match m) matchFiles.Add(Path.GetFileName(m.Result.FilePath));
+            else if (evt is SearchEvent.MatchBatch mb) foreach (var r in mb.Results) matchFiles.Add(Path.GetFileName(r.FilePath));
+        }
+
+        Assert.Equal(2, matchFiles.Count);
+        Assert.Contains("word.txt", matchFiles);
+        Assert.Contains("number.txt", matchFiles);
+    }
+
+    [Fact]
+    public async Task ObeyGitignore_Summary_CountsGitignoreSkipped()
+    {
+        File.WriteAllText(Path.Combine(_root, ".gitignore"), "*.log\n");
+        Write("keep.txt", "needle");
+        Write("skip.log", "needle");
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            ObeyGitignore = true,
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        SearchSummary? summary = null;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Completed c) summary = c.Summary;
+        }
+
+        Assert.NotNull(summary);
+        Assert.True(summary!.SkipReasons?.GitignoreExcluded >= 1);
+    }
+
     [Theory]
     [InlineData(51, 62, true)]
     [InlineData(57, 62, true)]
@@ -607,6 +808,7 @@ public class SearchServiceTests : IDisposable
         public int EarlySkippedFiles => 0;
         public int EarlySkippedTooLargeFiles => 0;
         public int EarlyExcludedByExtensionFiles => 0;
+        public int GitignoreSkipped => 0;
 
         public async IAsyncEnumerable<string> ListFilesAsync(
             string directory,
@@ -635,6 +837,7 @@ public class SearchServiceTests : IDisposable
         public int EarlySkippedFiles => 0;
         public int EarlySkippedTooLargeFiles => 0;
         public int EarlyExcludedByExtensionFiles => 0;
+        public int GitignoreSkipped => 0;
 
         public async IAsyncEnumerable<string> ListFilesAsync(
             string directory,
@@ -1273,7 +1476,7 @@ public class SearchSummaryCoverageTests
     [Fact]
     public void AllProperties_Accessible()
     {
-        var skip = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+        var skip = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
         var ss = new SearchSummary(
             TotalFiles: 100,
             FilesScanned: 80,
@@ -1311,6 +1514,7 @@ public class SearchSummaryCoverageTests
         Assert.Equal(9, ss.SkipReasons.Directories);
         Assert.Equal(10, ss.SkipReasons.EarlyFiltered);
         Assert.Equal(11, ss.SkipReasons.GlobExcluded);
+        Assert.Equal(12, ss.SkipReasons.GitignoreExcluded);
     }
 
     [Fact]
@@ -1329,12 +1533,13 @@ public class SearchSummaryCoverageTests
         Assert.Equal(0, sb.Directories);
         Assert.Equal(0, sb.EarlyFiltered);
         Assert.Equal(0, sb.GlobExcluded);
+        Assert.Equal(0, sb.GitignoreExcluded);
     }
 
     [Fact]
     public void SkipBreakdown_ToString_ContainsAllFields()
     {
-        var sb = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+        var sb = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
         var str = sb.ToString();
         Assert.Contains("binary=1", str);
         Assert.Contains("accessDenied=2", str);
@@ -1347,13 +1552,14 @@ public class SearchSummaryCoverageTests
         Assert.Contains("directories=9", str);
         Assert.Contains("earlyFiltered=10", str);
         Assert.Contains("globExcluded=11", str);
+        Assert.Contains("gitignoreExcluded=12", str);
     }
 
     [Fact]
     public void SkipBreakdown_RecordEquality()
     {
-        var a = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
-        var b = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+        var a = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+        var b = new SkipBreakdown(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
         Assert.Equal(a, b);
     }
 
@@ -1669,8 +1875,8 @@ public class SearchServiceEarlySkipTests : IDisposable
         }
 
         Assert.NotNull(summary);
-        // TotalFiles = max(effectiveKnown=90, discovered=1, scanned=1) = 90
-        Assert.Equal(90, summary!.TotalFiles);
+        // TotalFiles = max(knownTotal=100, discoveredTotal+earlySkips=11, completedTotal) = 100
+        Assert.Equal(100, summary!.TotalFiles);
     }
 
     [Fact]
@@ -1720,6 +1926,7 @@ public class SearchServiceEarlySkipTests : IDisposable
         public int EarlySkippedFiles { get; } = earlySkippedFiles;
         public int EarlySkippedTooLargeFiles { get; } = earlySkippedFiles;
         public int EarlyExcludedByExtensionFiles => 0;
+        public int GitignoreSkipped => 0;
 
         public async IAsyncEnumerable<string> ListFilesAsync(
             string directory,

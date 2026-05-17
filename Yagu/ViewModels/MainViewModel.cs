@@ -70,8 +70,11 @@ public sealed partial class MainViewModel : ObservableObject
         Directory = _settings.LastDirectory ?? string.Empty;
         CaseSensitive = _settings.CaseSensitive;
         UseRegex = _settings.UseRegex;
+        ExactMatch = _settings.ExactMatch;
         ContextLines = _settings.ContextLines;
         PreviewContextLines = _settings.PreviewContextLines;
+        ObeyGitignore = _settings.ObeyGitignore;
+        GitignoreTakesPrecedence = _settings.GitignoreTakesPrecedence;
         IncludeGlobs = _settings.IncludeGlobs;
         ExcludeGlobs = _settings.ExcludeGlobs;
         IncludeFilterModeIndex = _settings.IncludeFilterModeIndex;
@@ -92,6 +95,7 @@ public sealed partial class MainViewModel : ObservableObject
         EditorCommand = _settings.EditorCommand;
         PreviewModeIndex = _settings.PreviewModeIndex;
         PreviewWordWrap = _settings.PreviewWordWrap;
+        PreviewAutoLoadMatches = _settings.PreviewAutoLoadMatches;
         FileLogLevelIndex = _settings.LogLevelIndex;
         ConsoleLogLevelIndex = _settings.ConsoleLogLevelIndex;
         FileListerBackendIndex = _settings.FileListerBackendIndex;
@@ -138,8 +142,17 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial string Query { get; set; } = string.Empty;
     [ObservableProperty] public partial bool CaseSensitive { get; set; }
     [ObservableProperty] public partial bool UseRegex { get; set; }
+    [ObservableProperty] public partial bool ExactMatch { get; set; } = true;
+
+    public Microsoft.UI.Xaml.Visibility HasQueryText =>
+        string.IsNullOrEmpty(Query) ? Microsoft.UI.Xaml.Visibility.Collapsed : Microsoft.UI.Xaml.Visibility.Visible;
+
+    partial void OnQueryChanged(string value) => OnPropertyChanged(nameof(HasQueryText));
+
     [ObservableProperty] public partial int ContextLines { get; set; } = 3;
     [ObservableProperty] public partial int PreviewContextLines { get; set; } = 20;
+    [ObservableProperty] public partial bool ObeyGitignore { get; set; }
+    [ObservableProperty] public partial bool GitignoreTakesPrecedence { get; set; } = true;
     [ObservableProperty] public partial string IncludeGlobs { get; set; } = string.Empty;
     [ObservableProperty] public partial string ExcludeGlobs { get; set; } = AppSettings.DefaultExcludeGlobs;
     [ObservableProperty] public partial int IncludeFilterModeIndex { get; set; }
@@ -212,6 +225,7 @@ public sealed partial class MainViewModel : ObservableObject
     };
     [ObservableProperty] public partial int PreviewModeIndex { get; set; } = 1; // 0 = Concatenated, 1 = Multi-highlight
     [ObservableProperty] public partial bool PreviewWordWrap { get; set; }
+    [ObservableProperty] public partial int PreviewAutoLoadMatches { get; set; } = 50;
     [ObservableProperty] public partial int FileLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] public partial int ConsoleLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] public partial int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
@@ -602,6 +616,7 @@ public sealed partial class MainViewModel : ObservableObject
             lines.AppendLine(ExtensionExclusionSkipNote);
             lines.AppendLine();
             if (b.GlobExcluded > 0)   lines.AppendLine($"  🚫  Glob exclusions       {b.GlobExcluded,8:N0}");
+            if (b.GitignoreExcluded > 0) lines.AppendLine($"  🙈  .gitignore excluded   {b.GitignoreExcluded,8:N0}");
             if (b.Binary > 0)         lines.AppendLine($"  🔒  Binary files          {b.Binary,8:N0}");
             if (b.ByExtension > 0)    lines.AppendLine($"  📄  Scanner extension skips {b.ByExtension,8:N0}");
             if (b.TooLarge > 0)       lines.AppendLine($"  📏  Too large             {b.TooLarge,8:N0}");
@@ -783,6 +798,7 @@ public sealed partial class MainViewModel : ObservableObject
                 Query = Query,
                 CaseSensitive = CaseSensitive,
                 UseRegex = UseRegex,
+                ExactMatch = ExactMatch,
                 ContextLines = ContextLines,
                 SearchMode = (SearchMode)SearchModeIndex,
                 IncludeGlobs = SplitFilterPatterns(IncludeGlobs, IncludeFilterMode),
@@ -797,6 +813,8 @@ public sealed partial class MainViewModel : ObservableObject
                 ModifiedBeforeDate = ModifiedBeforeDate,
                 MaxResults = MaxResults,
                 SkipBinary = SkipBinary,
+                ObeyGitignore = ObeyGitignore,
+                GitignoreTakesPrecedence = GitignoreTakesPrecedence,
                 SkipExtensions = ParseExtensionSet(SkipExtensions),
                 SearchInsideArchives = SearchInsideArchives,
                 ArchiveExtensions = ParseDottedExtensionSet(ArchiveExtensions),
@@ -1118,7 +1136,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     private string BuildCancelledStatus(TimeSpan elapsed)
     {
-        var time = $"{elapsed.TotalSeconds:F2}s";
+        var time = FormatElapsed(elapsed);
         var rate = FormatThroughput(FilesScanned, _bytesScanned, elapsed);
         return $"Cancelled — {MatchesFound:N0} matches, {FilesScanned:N0} files processed ({time}, {rate})";
     }
@@ -1469,7 +1487,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     private static string BuildCompletionStatus(SearchSummary s, TimeSpan elapsed)
     {
-        var time = $"{elapsed.TotalSeconds:F2}s";
+        var time = FormatElapsed(elapsed);
         var rate = FormatThroughput(s.FilesScanned, s.BytesScanned, elapsed);
         if (s.Cancelled)
             return $"Cancelled — {s.TotalMatches:N0} matches in {s.FilesWithMatches:N0} files ({time}, {rate})";
@@ -1479,6 +1497,9 @@ public sealed partial class MainViewModel : ObservableObject
             return $"{s.TotalMatches:N0} matches in {s.FilesWithMatches:N0} files — some results paged to disk ({time}, {rate})";
         return $"{s.TotalMatches:N0} matches in {s.FilesWithMatches:N0} files ({time}, {rate})";
     }
+
+    private static string FormatElapsed(TimeSpan elapsed) =>
+        $"{(int)elapsed.TotalHours:D2}:{elapsed.Minutes:D2}:{elapsed.Seconds:D2} elapsed";
 
     private static string FormatThroughput(int filesProcessed, long bytesScanned, TimeSpan elapsed)
     {
@@ -1515,7 +1536,7 @@ public sealed partial class MainViewModel : ObservableObject
             _prevDisplayTime = seconds;
         }
 
-        StatusText = $"{MatchesFound:N0} matches in {filesWithMatches:N0} files ({seconds:F2}s, {_instantFilesPerSec:N1} files/sec, {_instantMbPerSec:N0} MB/s)";
+        StatusText = $"{MatchesFound:N0} matches in {filesWithMatches:N0} files ({FormatElapsed(_searchTimer.Elapsed)}, {_instantFilesPerSec:N1} files/sec, {_instantMbPerSec:N0} MB/s)";
 
         // Collect incremental sample for sparkline (~0.15s window, rolling 30s)
         double dt = seconds - _prevSampleTime;
@@ -1569,8 +1590,11 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.LastDirectory = Directory;
         _settings.CaseSensitive = CaseSensitive;
         _settings.UseRegex = UseRegex;
+        _settings.ExactMatch = ExactMatch;
         _settings.ContextLines = ContextLines;
         _settings.PreviewContextLines = PreviewContextLines;
+        _settings.ObeyGitignore = ObeyGitignore;
+        _settings.GitignoreTakesPrecedence = GitignoreTakesPrecedence;
         _settings.IncludeGlobs = IncludeGlobs;
         _settings.ExcludeGlobs = ExcludeGlobs;
         _settings.IncludeFilterModeIndex = IncludeFilterModeIndex;
@@ -1591,6 +1615,7 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.EditorCommand = EditorCommand;
         _settings.PreviewModeIndex = PreviewModeIndex;
         _settings.PreviewWordWrap = PreviewWordWrap;
+        _settings.PreviewAutoLoadMatches = PreviewAutoLoadMatches;
         _settings.LogLevelIndex = FileLogLevelIndex;
         _settings.ConsoleLogLevelIndex = ConsoleLogLevelIndex;
         _settings.FileListerBackendIndex = FileListerBackendIndex;

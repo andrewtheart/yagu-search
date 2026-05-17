@@ -98,6 +98,8 @@ TemporaryDependencyNodeTargetIdentifier=net10.0-windows
   @folderNames=Source,Services
  FileWatchDiagnostics.cs
   @folderNames=Source,Services
+ GitignoreService.cs
+  @folderNames=Source,Services
  HotkeyService.cs
   @folderNames=Source,Services
  LogService.cs
@@ -359,5 +361,6 @@ UiResultPerformanceTests.cs
  xunit.analyzers.fixes.dll
 
 [analyzerConfigFiles]
+../.editorconfig
 <DOTNET>/sdk/10.0.300/Sdks/Microsoft.NET.Sdk/analyzers/build/config/analysislevel_10_default.globalconfig
 obj/Debug/net10.0-windows/Yagu.Tests.GeneratedMSBuildEditorConfig.editorconfig

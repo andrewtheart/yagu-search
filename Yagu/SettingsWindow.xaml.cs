@@ -420,6 +420,11 @@ public sealed partial class SettingsWindow : Window
             wordWrap.Checked += (_, _) => { _viewModel.PreviewWordWrap = true; _applyWordWrap?.Invoke(true); };
             wordWrap.Unchecked += (_, _) => { _viewModel.PreviewWordWrap = false; _applyWordWrap?.Invoke(false); };
             g.Children.Add(wordWrap);
+
+            g.Children.Add(new TextBlock { Text = "Auto-load matches on scroll (matches to load when reaching end of truncated section, 0 = disabled):" });
+            var autoLoad = new NumberBox { Value = _viewModel.PreviewAutoLoadMatches, Minimum = 0, Maximum = 5000, SpinButtonPlacementMode = Microsoft.UI.Xaml.Controls.NumberBoxSpinButtonPlacementMode.Compact };
+            autoLoad.ValueChanged += (_, args) => _viewModel.PreviewAutoLoadMatches = (int)args.NewValue;
+            g.Children.Add(autoLoad);
         }
 
         // ── Editor ──

@@ -58,6 +58,7 @@
     <Compile Include="..\Yagu\Services\SelectedFileExportService.cs" Link="Source\Services\SelectedFileExportService.cs" />
     <Compile Include="..\Yagu\Services\LogService.cs" Link="Source\Services\LogService.cs" />
     <Compile Include="..\Yagu\Services\DirectoryAutoCompleteService.cs" Link="Source\Services\DirectoryAutoCompleteService.cs" />
+    <Compile Include="..\Yagu\Services\GitignoreService.cs" Link="Source\Services\GitignoreService.cs" />
     <Compile Include="..\Yagu\Services\ResultStore.cs" Link="Source\Services\ResultStore.cs" />
     <Compile Include="..\Yagu\Services\FileWatchDiagnostics.cs" Link="Source\Services\FileWatchDiagnostics.cs" />
     <Compile Include="..\Yagu\Native\NativeSearcher.cs" Link="Source\Native\NativeSearcher.cs" />

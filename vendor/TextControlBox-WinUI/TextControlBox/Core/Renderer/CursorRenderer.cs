@@ -76,11 +76,13 @@ internal class CursorRenderer
             cursorManager.CharacterPosition = currentLineLength;
         }
 
+        float textTopPadding = textRenderer.SingleLineHeight;
+        float topInset = textRenderer.SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity;
         float renderPosY = textRenderer.IsWordWrapEnabled
             ? (textRenderer.IsVirtualizedWrappedLine && cursorManager.LineNumber == textRenderer.NumberOfStartLine
-                ? textRenderer.DrawTextOffsetY
-                : textRenderer.GetLineTopY(cursorManager.LineNumber) + textRenderer.SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity)
-            : (float)((cursorManager.LineNumber - textRenderer.NumberOfStartLine) * textRenderer.SingleLineHeight) + textRenderer.SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity;
+                ? textTopPadding + topInset
+                : textRenderer.GetLineTopY(cursorManager.LineNumber) + textTopPadding + topInset)
+            : (float)((cursorManager.LineNumber - textRenderer.NumberOfStartLine) * textRenderer.SingleLineHeight) + textTopPadding + topInset;
         if (renderPosY > canvasCursor.ActualHeight || renderPosY + textRenderer.SingleLineHeight < 0)
             return;
 

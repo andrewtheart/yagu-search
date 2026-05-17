@@ -968,14 +968,14 @@ internal sealed partial class CoreTextControlBox : UserControl
             var caretPosition = textRenderer.CurrentLineTextLayout?.GetCaretPosition(CursorPosition.CharacterPosition < 0 ? 0 : CursorPosition.CharacterPosition, false) ?? default;
             return new Point
             {
-                Y = textRenderer.GetLineTopY(CursorPosition.LineNumber) + caretPosition.Y + textRenderer.SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity,
+                Y = textRenderer.GetLineTopY(CursorPosition.LineNumber) + caretPosition.Y + textRenderer.SingleLineHeight + textRenderer.SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity,
                 X = caretPosition.X
             };
         }
 
         return new Point
         {
-            Y = (float)((CursorPosition.LineNumber - textRenderer.NumberOfStartLine) * textRenderer.SingleLineHeight) + textRenderer.SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity,
+            Y = (float)((CursorPosition.LineNumber - textRenderer.NumberOfStartLine) * textRenderer.SingleLineHeight) + textRenderer.SingleLineHeight + textRenderer.SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity,
             X = CursorHelper.GetCursorPositionInLine(textRenderer.CurrentLineTextLayout, CursorPosition, 0)
         };
     }

@@ -40,6 +40,9 @@ public interface IFileLister
 
     /// <summary>Files excluded early by extension; these are deliberately not included in skip counts.</summary>
     int EarlyExcludedByExtensionFiles { get; }
+
+    /// <summary>Files or directories skipped because they matched .gitignore rules.</summary>
+    int GitignoreSkipped { get; }
 }
 
 /// <summary>Selects which file-listing backend to use.</summary>
@@ -82,6 +85,7 @@ public sealed class FileLister : IFileLister
     private int _earlySkippedFiles;
     private int _earlySkippedTooLargeFiles;
     private int _earlyExcludedByExtensionFiles;
+    private int _gitignoreSkipped;
     public string? FallbackReason { get; private set; }
     public int SkippedDirectories => Volatile.Read(ref _skippedDirectories);
     public int AccessDeniedDirectories => Volatile.Read(ref _accessDeniedDirectories);
@@ -89,6 +93,7 @@ public sealed class FileLister : IFileLister
     public int EarlySkippedFiles => Volatile.Read(ref _earlySkippedFiles);
     public int EarlySkippedTooLargeFiles => Volatile.Read(ref _earlySkippedTooLargeFiles);
     public int EarlyExcludedByExtensionFiles => Volatile.Read(ref _earlyExcludedByExtensionFiles);
+    public int GitignoreSkipped => Volatile.Read(ref _gitignoreSkipped);
 
     /// <summary>Files smaller than this are skipped during listing. 0 disables.</summary>
     public long EarlyMinFileSizeBytes { get; set; }
@@ -113,6 +118,15 @@ public sealed class FileLister : IFileLister
 
     /// <summary>Exclude glob patterns to push into the Everything SDK query (SDK path only).</summary>
     public IReadOnlyList<string> EarlyExcludeGlobs { get; set; } = [];
+
+    /// <summary>Folder-name segments to exclude from gitignore (e.g. "node_modules", ".git").</summary>
+    public IReadOnlySet<string> GitignoreExcludedFolders { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Extensions to exclude from gitignore (without dot, e.g. "log").</summary>
+    public IReadOnlySet<string> GitignoreExcludedExtensions { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Full directory paths to exclude from gitignore.</summary>
+    public IReadOnlyList<string> GitignoreExcludedFullPaths { get; set; } = [];
 
     /// <summary>Literal file-name terms to apply during listing when the search mode first gates by file name.</summary>
     public IReadOnlyList<string> EarlyFileNameLiteralTerms { get; set; } = [];
@@ -272,6 +286,7 @@ public sealed class FileLister : IFileLister
         Volatile.Write(ref _earlySkippedFiles, 0);
         Volatile.Write(ref _earlySkippedTooLargeFiles, 0);
         Volatile.Write(ref _earlyExcludedByExtensionFiles, 0);
+        Volatile.Write(ref _gitignoreSkipped, 0);
         if (string.IsNullOrWhiteSpace(directory)) yield break;
 
         // Normalize drive-letter-only paths ("C:" → "C:\"). On Windows,
@@ -455,6 +470,24 @@ public sealed class FileLister : IFileLister
                 // matches user intent: skip protected trees.
                 query += $" !\"{s}\\\"";
             }
+        }
+
+        // Gitignore exclusions: folder segments, extensions, and full paths.
+        foreach (var folder in GitignoreExcludedFolders)
+        {
+            if (string.IsNullOrWhiteSpace(folder)) continue;
+            query += $" !\"\\{folder}\\\"";
+        }
+        if (GitignoreExcludedExtensions.Count > 0)
+        {
+            var gitExts = string.Join(';', GitignoreExcludedExtensions);
+            query += $" !ext:{gitExts}";
+        }
+        foreach (var fullPath in GitignoreExcludedFullPaths)
+        {
+            if (string.IsNullOrWhiteSpace(fullPath)) continue;
+            var normalized = fullPath.TrimEnd('\\');
+            query += $" !\"{normalized}\\\"";
         }
 
         LogService.Instance.Warning("FileLister", $"Everything SDK query: {query}");
@@ -1215,10 +1248,45 @@ public sealed class FileLister : IFileLister
                             // access-denied for non-elevated processes.
                             continue;
                         }
+                        // Skip gitignore-excluded folders.
+                        var dirName = Path.GetFileName(entry);
+                        if (GitignoreExcludedFolders.Contains(dirName))
+                        {
+                            Interlocked.Increment(ref _gitignoreSkipped);
+                            continue;
+                        }
+                        if (GitignoreExcludedFullPaths.Count > 0)
+                        {
+                            bool excluded = false;
+                            foreach (var ep in GitignoreExcludedFullPaths)
+                            {
+                                if (entry.Equals(ep, StringComparison.OrdinalIgnoreCase) ||
+                                    entry.StartsWith(ep + "\\", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    excluded = true;
+                                    break;
+                                }
+                            }
+                            if (excluded)
+                            {
+                                Interlocked.Increment(ref _gitignoreSkipped);
+                                continue;
+                            }
+                        }
                         stack.Push(entry);
                     }
                     else
                     {
+                        // Skip files with gitignore-excluded extensions.
+                        if (GitignoreExcludedExtensions.Count > 0)
+                        {
+                            var rawExt = Path.GetExtension(entry);
+                            if (rawExt.Length > 1 && GitignoreExcludedExtensions.Contains(rawExt.Substring(1)))
+                            {
+                                Interlocked.Increment(ref _gitignoreSkipped);
+                                continue;
+                            }
+                        }
                         if (extSet is not null)
                         {
                             var ext = Path.GetExtension(entry);

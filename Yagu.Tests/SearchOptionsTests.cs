@@ -16,4 +16,39 @@ public class SearchOptionsTests
     {
         Assert.Equal(expectedParallelism, SearchOptions.ResolveContentSearchParallelism(index, processorCount));
     }
+
+    [Fact]
+    public void ExactMatch_DefaultsToTrue()
+    {
+        var opts = new SearchOptions { Directory = ".", Query = "x" };
+        Assert.True(opts.ExactMatch);
+    }
+
+    [Fact]
+    public void ObeyGitignore_DefaultsToFalse()
+    {
+        var opts = new SearchOptions { Directory = ".", Query = "x" };
+        Assert.False(opts.ObeyGitignore);
+    }
+
+    [Fact]
+    public void GitignoreTakesPrecedence_DefaultsToTrue()
+    {
+        var opts = new SearchOptions { Directory = ".", Query = "x" };
+        Assert.True(opts.GitignoreTakesPrecedence);
+    }
+
+    [Fact]
+    public void ExactMatch_CanBeSetToFalse()
+    {
+        var opts = new SearchOptions { Directory = ".", Query = "x", ExactMatch = false };
+        Assert.False(opts.ExactMatch);
+    }
+
+    [Fact]
+    public void ObeyGitignore_CanBeSetToTrue()
+    {
+        var opts = new SearchOptions { Directory = ".", Query = "x", ObeyGitignore = true };
+        Assert.True(opts.ObeyGitignore);
+    }
 }
