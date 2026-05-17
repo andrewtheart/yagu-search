@@ -1546,27 +1546,24 @@ public sealed partial class MainWindow : Window
         // Force parallelism to 1 (sequential)
         ViewModel.ParallelismIndex = 1;
 
-        var contentPanel = new StackPanel { Spacing = 8 };
+        var contentPanel = new StackPanel { Spacing = 8, MinWidth = 360 };
         contentPanel.Children.Add(new TextBlock
         {
             Text = "The selected search directory is on a rotational hard disk (HDD). " +
                    "Parallelism has been set to 1 thread to avoid excessive disk thrashing.",
             TextWrapping = TextWrapping.Wrap,
         });
-        contentPanel.Children.Add(new TextBlock
+
+        var secondBlock = new TextBlock
         {
-            Text = "You can increase parallelism in Settings → Performance at your own risk. " +
-                   "You can also disable this warning permanently in Settings → Performance.",
             TextWrapping = TextWrapping.Wrap,
             FontSize = 12,
             Opacity = 0.8,
-        });
-        var linkBtn = new HyperlinkButton
-        {
-            Content = "Open Settings (Performance)",
-            Margin = new Thickness(0, 4, 0, 0),
         };
-        linkBtn.Click += (_, _) =>
+        secondBlock.Inlines.Add(new Run { Text = "You can increase parallelism or disable this warning in " });
+        var settingsLink = new Hyperlink();
+        settingsLink.Inlines.Add(new Run { Text = "Settings \u2192 Performance" });
+        settingsLink.Click += (_, _) =>
         {
             if (_settingsWindow is not null)
             {
@@ -1576,10 +1573,11 @@ public sealed partial class MainWindow : Window
             _settingsWindow = new SettingsWindow(ViewModel, _hotkeyService, _hwnd, ApplyWordWrap);
             _settingsWindow.Closed += (_, _) => _settingsWindow = null;
             _settingsWindow.Activate();
-            // Navigate to Performance tab (index 2)
             _settingsWindow.SelectTab(2);
         };
-        contentPanel.Children.Add(linkBtn);
+        secondBlock.Inlines.Add(settingsLink);
+        secondBlock.Inlines.Add(new Run { Text = "." });
+        contentPanel.Children.Add(secondBlock);
 
         var dialog = new ContentDialog
         {
@@ -1589,6 +1587,10 @@ public sealed partial class MainWindow : Window
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Primary,
             XamlRoot = this.Content.XamlRoot,
+            Resources =
+            {
+                ["ContentDialogMaxHeight"] = double.PositiveInfinity,
+            },
         };
 
         return await dialog.ShowAsync() == ContentDialogResult.Primary;

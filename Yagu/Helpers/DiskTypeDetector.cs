@@ -39,7 +39,7 @@ internal static class DiskTypeDetector
 
             var query = new STORAGE_PROPERTY_QUERY
             {
-                PropertyId = 8, // StorageDeviceSeekPenaltyProperty
+                PropertyId = 7, // StorageDeviceSeekPenaltyProperty
                 QueryType = 0,  // PropertyStandardQuery
             };
 
