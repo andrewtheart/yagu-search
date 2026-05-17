@@ -152,7 +152,7 @@ public sealed class ContentSearcher
                     if (n <= 0) break;
                     headerRead += n;
                 }
-                if (headerRead >= 4 && BinaryDetector.IsZipMagic(headerBuf[..headerRead]))
+                if (headerRead >= 4 && BinaryDetector.IsZipMagic(headerBuf.AsSpan(0, headerRead)))
                 {
                     archiveFs.Position = 0; // rewind — ZipArchive needs the full stream from the start
                     var archiveResult = await ZipArchiveSearcher.SearchArchiveStreamAsync(

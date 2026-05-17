@@ -151,6 +151,7 @@ public sealed class SearchService
             concreteLister.SdkChannelBufferSize = options.SdkChannelBufferSize;
             concreteLister.ExcludeAdminProtectedPaths = options.ExcludeAdminProtectedPaths;
             concreteLister.AdminProtectedPathSegmentsOverride = options.AdminProtectedPathSegments;
+            concreteLister.MaxSearchDepth = options.MaxSearchDepth;
 
             // Dynamic gitignore: create a matcher that loads .gitignore files
             // lazily as directories are encountered during the scan.
@@ -1048,8 +1049,8 @@ public sealed class SearchService
             {
                 // Try to extract an extension if the pattern is a simple "*.ext" or "ext".
                 var p = part;
-                if (p.StartsWith("*.")) p = p[2..];
-                if (p.StartsWith(".")) p = p[1..];
+                if (p.StartsWith("*.", StringComparison.Ordinal)) p = p[2..];
+                if (p.StartsWith('.')) p = p[1..];
                 if (p.Length > 0 && p.All(c => char.IsLetterOrDigit(c) || c == '_'))
                     exts.Add(p);
             }

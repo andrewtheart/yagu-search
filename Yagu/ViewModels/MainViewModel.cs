@@ -42,6 +42,8 @@ public sealed partial class MainViewModel : ObservableObject
     private bool _metadataSortFilterRefreshQueued;
     private bool _clearedDefaultExcludeForRegexMode;
     private System.Diagnostics.Stopwatch? _searchTimer;
+    private DateTime _searchStartedUtc;
+    private TimeSpan _lastSearchElapsed;
     private long _bytesScanned;
     private long _prevBytesScanned;
     private int _prevFilesScanned;
@@ -188,7 +190,7 @@ public sealed partial class MainViewModel : ObservableObject
         : "e.g. ts,js,py or *.cs";
     public string ExcludeFilterPlaceholder => ExcludeFilterMode == FilterPatternMode.Regex
         ? @"e.g. (^|/)node_modules/|\.min\.js$"
-        : "e.g. node_modules;bin;obj";
+        : $"e.g. {AppSettings.DefaultExcludeGlobs}";
     public string GroupModeLabel => GroupMode switch
     {
         GroupMode.None => "None",
@@ -235,9 +237,10 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial int MaxRecentItems { get; set; } = 20;
     [ObservableProperty] public partial bool GlobalHotkeyEnabled { get; set; }
     [ObservableProperty] public partial int MemoryLimitMB { get; set; }
-    [ObservableProperty] public partial int MemoryPressurePercent { get; set; } = 80;
+    [ObservableProperty] public partial int MemoryPressurePercent { get; set; } = 75;
     [ObservableProperty] public partial int SdkChannelBufferSize { get; set; } = 4096;
     [ObservableProperty] public partial int MaxMatchesPerFile { get; set; }
+    [ObservableProperty] public partial int MaxSearchDepth { get; set; }
 
     partial void OnMaxMatchesPerFileChanged(int value) => ApplyMaxMatchesPerFile(value);
 
@@ -600,6 +603,13 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial string DegradedNoticeText { get; set; } = string.Empty;
     [ObservableProperty] public partial string FilesPerSecondText { get; set; } = string.Empty;
 
+    /// <summary>UTC time when the last search started.</summary>
+    public DateTime SearchStartedUtc => _searchStartedUtc;
+    /// <summary>Duration of the last completed search.</summary>
+    public TimeSpan LastSearchElapsed => _lastSearchElapsed;
+    /// <summary>Total bytes scanned in the last/current search.</summary>
+    public long BytesScanned => _bytesScanned;
+
     /// <summary>Disk-backed store for evicted results. Null before first search.</summary>
     public ResultStore? ActiveResultStore => _resultStore;
 
@@ -838,7 +848,7 @@ public sealed partial class MainViewModel : ObservableObject
                 MemoryPressurePercent = MemoryPressurePercent,
                 SdkChannelBufferSize = SdkChannelBufferSize,
                 ExcludeAdminProtectedPaths = ExcludeAdminProtectedPaths,
-                AdminProtectedPathSegments = Yagu.Services.FileLister.ParseAdminProtectedSegments(AdminProtectedPathSegments),
+                MaxSearchDepth = MaxSearchDepth,
             };
 
             cts = new CancellationTokenSource();
@@ -1101,6 +1111,7 @@ public sealed partial class MainViewModel : ObservableObject
         _instantFilesPerSec = 0;
         _instantMbPerSec = 0;
         ThroughputSamples.Clear();
+        _searchStartedUtc = DateTime.UtcNow;
         _searchTimer = System.Diagnostics.Stopwatch.StartNew();
         StatusText = "Searching…";
 
@@ -1146,6 +1157,7 @@ public sealed partial class MainViewModel : ObservableObject
 
         timer.Stop();
         _searchTimer = null;
+        _lastSearchElapsed = timer.Elapsed;
         return timer.Elapsed;
     }
 
@@ -1645,6 +1657,7 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.MemoryPressurePercent = MemoryPressurePercent;
         _settings.SdkChannelBufferSize = SdkChannelBufferSize;
         _settings.MaxMatchesPerFile = MaxMatchesPerFile;
+        _settings.MaxSearchDepth = MaxSearchDepth;
         _settings.SkipBinary = SkipBinary;
         _settings.SearchInsideArchives = SearchInsideArchives;
         _settings.ArchiveExtensions = ArchiveExtensions;
@@ -1689,7 +1702,7 @@ public sealed partial class MainViewModel : ObservableObject
             ? []
             : [.. s.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
 
-    private static IReadOnlyList<string> SplitFilterPatterns(string s, FilterPatternMode mode) =>
+    private static List<string> SplitFilterPatterns(string s, FilterPatternMode mode) =>
         string.IsNullOrWhiteSpace(s)
             ? []
             : mode == FilterPatternMode.Regex

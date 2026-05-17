@@ -40,7 +40,7 @@ public sealed partial class MainWindow : Window
     private long _lastResultsContextMenuTick;
     private string? _lastCtrlFileHeaderPreviewPath;
     private long _lastCtrlFileHeaderPreviewTick;
-    private bool _autoScrollEnabled = false;
+    private bool _autoScrollEnabled;
     // Deferred-files state — for tail of newFiles past PreviewSectionPageSize.
     // The match-nav label includes deferred matches even though their sections
     // are not yet inserted in the visual tree.
@@ -198,6 +198,7 @@ public sealed partial class MainWindow : Window
         PreviewBlock.AddHandler(UIElement.DoubleTappedEvent,
             new Microsoft.UI.Xaml.Input.DoubleTappedEventHandler(OnPreviewBlockDoubleTapped),
             handledEventsToo: true);
+        AttachPreviewBlockContextFlyout(PreviewBlock);
         PreviewScrollViewer.SizeChanged += OnPreviewViewportSizeChanged;
 
         // Extend content into the title bar for a modern Windows 11 look
@@ -1057,8 +1058,12 @@ public sealed partial class MainWindow : Window
 
     private void OnFilterBoxGotFocus(object sender, RoutedEventArgs e)
     {
-        if (sender is TextBox tb)
-            tb.PlaceholderText = string.Empty;
+        if (sender is not TextBox tb) return;
+
+        if (IsFilterExampleText(tb))
+            tb.Text = string.Empty;
+
+        tb.PlaceholderText = string.Empty;
     }
 
     private void OnFilterBoxLostFocus(object sender, RoutedEventArgs e)
@@ -1066,15 +1071,23 @@ public sealed partial class MainWindow : Window
         if (sender is not TextBox tb) return;
         if (string.IsNullOrEmpty(tb.Text))
         {
-            // Determine which filter box lost focus by checking the binding
-            // The include box is in the first Grid child, exclude in the second
-            var parent = tb.Parent as Grid;
-            var grandparent = parent?.Parent as Grid;
-            if (grandparent is not null && grandparent.Children.IndexOf(parent) == 0)
+            if (ReferenceEquals(tb, IncludeFilterBox))
                 tb.PlaceholderText = ViewModel.IncludeFilterPlaceholder;
             else
                 tb.PlaceholderText = ViewModel.ExcludeFilterPlaceholder;
         }
+    }
+
+    private bool IsFilterExampleText(TextBox textBox)
+    {
+        string text = textBox.Text?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(text)) return false;
+
+        if (ReferenceEquals(textBox, IncludeFilterBox))
+            return string.Equals(text, ViewModel.IncludeFilterPlaceholder, StringComparison.OrdinalIgnoreCase);
+
+        return string.Equals(text, ViewModel.ExcludeFilterPlaceholder, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(text, AppSettings.DefaultExcludeGlobs, StringComparison.OrdinalIgnoreCase);
     }
 
     private async void OnSearchCancelClick(object sender, RoutedEventArgs e)
@@ -1606,29 +1619,23 @@ public sealed partial class MainWindow : Window
         Close();
     }
 
-    private void OnOpenCredits(object sender, RoutedEventArgs e)
-    {
-        var panel = new StackPanel { Spacing = 8, Width = 360 };
-        panel.Children.Add(new TextBlock
-        {
-            Text = AppInfo.WindowTitle,
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            TextWrapping = TextWrapping.Wrap,
-        });
-        panel.Children.Add(new TextBlock
-        {
-            Text = "Work by Andrew Stein, 2026.",
-            TextWrapping = TextWrapping.Wrap,
-        });
+    private HelpWindow? _helpWindow;
 
-        var dialog = new ContentDialog
+    private void OnOpenCredits(object sender, RoutedEventArgs e)
+        => OpenHelpWindow();
+
+    private void OpenHelpWindow()
+    {
+        if (_helpWindow is not null)
         {
-            XamlRoot = ((FrameworkElement)Content).XamlRoot,
-            Title = "About Yagu",
-            CloseButtonText = "Close",
-            Content = panel,
-        };
-        _ = dialog.ShowAsync();
+            try { _helpWindow.Activate(); return; }
+            catch { _helpWindow = null; }
+        }
+
+        var helpPath = Path.Combine(AppContext.BaseDirectory, "HELP.html");
+        _helpWindow = new HelpWindow(_hwnd, helpPath);
+        _helpWindow.Closed += (_, _) => _helpWindow = null;
+        _helpWindow.Activate();
     }
 
     private void OnDragOver(object sender, DragEventArgs e)
@@ -3327,7 +3334,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private Task DispatchIdleAsync()
+    private Task<object?> DispatchIdleAsync()
     {
         var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (!DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => tcs.TrySetResult(null)))
@@ -3844,14 +3851,30 @@ public sealed partial class MainWindow : Window
             }
 
             // Second item: "Preview all selected (x)" — hidden when ≤1 checked
+            int checkedCount = GetCheckedFileGroups().Count;
             if (flyout.Items.Count > 1 && flyout.Items[1] is MenuFlyoutItem previewAllItem)
             {
-                int checkedCount = GetCheckedFileGroups().Count;
                 previewAllItem.Text = $"Preview all selected ({checkedCount})";
                 previewAllItem.Tag = contextGroup;
                 previewAllItem.Visibility = checkedCount > 1
                     ? Microsoft.UI.Xaml.Visibility.Visible
                     : Microsoft.UI.Xaml.Visibility.Collapsed;
+            }
+
+            // Update copy/save items: plural only when >1 file checked
+            int count = checkedCount > 0 ? checkedCount : 1; // at least the right-clicked file
+            bool plural = count > 1;
+            // Items layout: [0]=Preview, [1]=PreviewAll, [2]=Sep, [3]=CopyPath, [4]=Sep, [5]=CopyPaths, [6]=CopyWithContent, [7]=Sep, [8]=SavePaths, [9]=SaveWithContent
+            foreach (var item in flyout.Items.OfType<MenuFlyoutItem>())
+            {
+                if (item.Text.StartsWith("Copy Selected File Path", StringComparison.Ordinal))
+                    item.Text = plural ? "Copy Selected File Paths" : "Copy Selected File Path";
+                else if (item.Text.StartsWith("Copy Selected File", StringComparison.Ordinal))
+                    item.Text = plural ? "Copy Selected Files With Content" : "Copy Selected File With Content";
+                else if (item.Text.StartsWith("Save Selected File Path", StringComparison.Ordinal))
+                    item.Text = plural ? "Save Selected File Paths\u2026" : "Save Selected File Path\u2026";
+                else if (item.Text.StartsWith("Save Selected File", StringComparison.Ordinal))
+                    item.Text = plural ? "Save Selected Files With Content\u2026" : "Save Selected File With Content\u2026";
             }
         }
     }
@@ -4392,6 +4415,299 @@ public sealed partial class MainWindow : Window
         await Windows.Storage.FileIO.WriteTextAsync(file, sb.ToString());
     }
 
+    private async void OnExportHtmlReport(object sender, RoutedEventArgs e)
+    {
+        var groups = ViewModel.ResultGroups.ToList();
+        if (groups.Count == 0) return;
+
+        var picker = new Windows.Storage.Pickers.FileSavePicker();
+        picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
+        picker.FileTypeChoices.Add("HTML File", new List<string> { ".html" });
+        picker.SuggestedFileName = "Yagu_Report";
+
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+
+        var file = await picker.PickSaveFileAsync();
+        if (file is null) return;
+
+        int totalMatches = groups.Sum(g => g.Count);
+        var queryText = System.Net.WebUtility.HtmlEncode(ViewModel.Query);
+
+        await using var stream = await file.OpenStreamForWriteAsync().ConfigureAwait(true);
+        stream.SetLength(0);
+        using var w = new StreamWriter(stream, new UTF8Encoding(false), bufferSize: 64 * 1024, leaveOpen: false);
+
+        await w.WriteLineAsync("<!DOCTYPE html>").ConfigureAwait(false);
+        await w.WriteLineAsync("<html><head><meta charset=\"utf-8\">").ConfigureAwait(false);
+        await w.WriteLineAsync($"<title>Yagu Report — {queryText}</title>").ConfigureAwait(false);
+        await w.WriteLineAsync("<style>").ConfigureAwait(false);
+        await w.WriteLineAsync("body { font-family: 'Segoe UI', Consolas, monospace; background: #1e1e1e; color: #d4d4d4; margin: 2em; }").ConfigureAwait(false);
+        await w.WriteLineAsync("h1 { color: #569cd6; font-size: 1.4em; }").ConfigureAwait(false);
+        await w.WriteLineAsync("h2 { color: #9cdcfe; font-size: 1.1em; margin-top: 2em; border-bottom: 1px solid #333; padding-bottom: 4px; }").ConfigureAwait(false);
+        await w.WriteLineAsync(".file-path { color: #808080; font-size: 0.85em; }").ConfigureAwait(false);
+        await w.WriteLineAsync("table { border-collapse: collapse; margin: 0.5em 0 1.5em 0; width: 100%; }").ConfigureAwait(false);
+        await w.WriteLineAsync("td { padding: 1px 8px; vertical-align: top; white-space: pre-wrap; word-break: break-all; font-family: Consolas, 'Courier New', monospace; font-size: 0.9em; }").ConfigureAwait(false);
+        await w.WriteLineAsync("td.ln { color: #858585; text-align: right; user-select: none; width: 1%; white-space: nowrap; padding-right: 12px; border-right: 1px solid #333; }").ConfigureAwait(false);
+        await w.WriteLineAsync("tr.match { background: #2a2d2e; }").ConfigureAwait(false);
+        await w.WriteLineAsync("tr.ctx { opacity: 0.7; }").ConfigureAwait(false);
+        await w.WriteLineAsync("mark { background: #b5890066; color: #ffd700; font-weight: bold; }").ConfigureAwait(false);
+        await w.WriteLineAsync(".summary { color: #6a9955; margin-bottom: 1em; }").ConfigureAwait(false);
+        await w.WriteLineAsync(".stats { color: #9cdcfe; font-size: 0.9em; margin-bottom: 1.5em; }").ConfigureAwait(false);
+        await w.WriteLineAsync(".stats td { padding: 2px 12px 2px 0; border: none; font-family: 'Segoe UI', sans-serif; }").ConfigureAwait(false);
+        await w.WriteLineAsync("</style></head><body>").ConfigureAwait(false);
+        await w.WriteLineAsync($"<h1>Search Report: <code>{queryText}</code></h1>").ConfigureAwait(false);
+        await w.WriteLineAsync($"<p class=\"summary\">{groups.Count:N0} file(s), {totalMatches:N0} match(es)</p>").ConfigureAwait(false);
+
+        // Search statistics
+        var startUtc = ViewModel.SearchStartedUtc;
+        var elapsed = ViewModel.LastSearchElapsed;
+        var endUtc = startUtc + elapsed;
+        double seconds = Math.Max(elapsed.TotalSeconds, 0.001);
+        double filesPerSec = ViewModel.FilesScanned / seconds;
+        double mbPerSec = ViewModel.BytesScanned / (1024.0 * 1024.0) / seconds;
+        await w.WriteLineAsync("<table class=\"stats\">").ConfigureAwait(false);
+        await w.WriteLineAsync($"<tr><td><b>Started:</b></td><td>{startUtc:yyyy-MM-dd HH:mm:ss} UTC</td></tr>").ConfigureAwait(false);
+        await w.WriteLineAsync($"<tr><td><b>Finished:</b></td><td>{endUtc:yyyy-MM-dd HH:mm:ss} UTC</td></tr>").ConfigureAwait(false);
+        await w.WriteLineAsync($"<tr><td><b>Duration:</b></td><td>{elapsed.Hours:D2}:{elapsed.Minutes:D2}:{elapsed.Seconds:D2}.{elapsed.Milliseconds:D3}</td></tr>").ConfigureAwait(false);
+        await w.WriteLineAsync($"<tr><td><b>Files scanned:</b></td><td>{ViewModel.FilesScanned:N0}</td></tr>").ConfigureAwait(false);
+        await w.WriteLineAsync($"<tr><td><b>Throughput:</b></td><td>{filesPerSec:N1} files/sec, {mbPerSec:N1} MB/s</td></tr>").ConfigureAwait(false);
+        await w.WriteLineAsync("</table>").ConfigureAwait(false);
+
+        foreach (var group in groups)
+        {
+            var escapedPath = System.Net.WebUtility.HtmlEncode(group.FilePath);
+            await w.WriteLineAsync($"<h2>{System.Net.WebUtility.HtmlEncode(group.FileName)}</h2>").ConfigureAwait(false);
+            await w.WriteLineAsync($"<div class=\"file-path\">{escapedPath}</div>").ConfigureAwait(false);
+            await w.WriteLineAsync("<table>").ConfigureAwait(false);
+
+            foreach (var result in group)
+            {
+                ViewModel.HydrateResult(result);
+
+                // Context before
+                int ctxBeforeStart = result.LineNumber - result.ContextBefore.Count;
+                for (int i = 0; i < result.ContextBefore.Count; i++)
+                {
+                    int ln = ctxBeforeStart + i;
+                    await w.WriteLineAsync($"<tr class=\"ctx\"><td class=\"ln\">{ln}</td><td>{System.Net.WebUtility.HtmlEncode(result.ContextBefore[i])}</td></tr>").ConfigureAwait(false);
+                }
+
+                // Match line with highlight
+                string matchHtml = BuildHighlightedMatchHtml(result.MatchLine, result.MatchStartColumn, result.MatchLength);
+                await w.WriteLineAsync($"<tr class=\"match\"><td class=\"ln\">{result.LineNumber}</td><td>{matchHtml}</td></tr>").ConfigureAwait(false);
+
+                // Context after
+                for (int i = 0; i < result.ContextAfter.Count; i++)
+                {
+                    int ln = result.LineNumber + 1 + i;
+                    await w.WriteLineAsync($"<tr class=\"ctx\"><td class=\"ln\">{ln}</td><td>{System.Net.WebUtility.HtmlEncode(result.ContextAfter[i])}</td></tr>").ConfigureAwait(false);
+                }
+            }
+
+            await w.WriteLineAsync("</table>").ConfigureAwait(false);
+        }
+
+        await w.WriteLineAsync("</body></html>").ConfigureAwait(false);
+        ViewModel.StatusText = $"Exported HTML report ({groups.Count:N0} files, {totalMatches:N0} matches) to {file.Path}";
+    }
+
+    private static string BuildHighlightedMatchHtml(string line, int matchStart, int matchLength)
+    {
+        if (matchStart < 0 || matchLength <= 0 || matchStart >= line.Length)
+            return System.Net.WebUtility.HtmlEncode(line);
+
+        int safeLen = Math.Min(matchLength, line.Length - matchStart);
+        var before = System.Net.WebUtility.HtmlEncode(line[..matchStart]);
+        var match = System.Net.WebUtility.HtmlEncode(line.Substring(matchStart, safeLen));
+        var after = System.Net.WebUtility.HtmlEncode(line[(matchStart + safeLen)..]);
+        return $"{before}<mark>{match}</mark>{after}";
+    }
+
+    private void AttachPreviewBlockContextFlyout(RichTextBlock block)
+    {
+        var flyout = new MenuFlyout();
+
+        var copyWithLines = new MenuFlyoutItem { Text = "Copy (with line numbers)", Icon = new SymbolIcon(Symbol.Copy) };
+        copyWithLines.Click += (_, _) => CopyPreviewSelection(block, withLineNumbers: true);
+        flyout.Items.Add(copyWithLines);
+
+        var copyWithout = new MenuFlyoutItem { Text = "Copy (without line numbers)", Icon = new SymbolIcon(Symbol.Copy), KeyboardAcceleratorTextOverride = "Ctrl+C" };
+        copyWithout.Click += (_, _) => CopyPreviewSelection(block, withLineNumbers: false);
+        flyout.Items.Add(copyWithout);
+
+        flyout.Items.Add(new MenuFlyoutSeparator());
+
+        var wrapItem = new ToggleMenuFlyoutItem { Text = "Wrap", Icon = new FontIcon { Glyph = "\uE8B3" } };
+        wrapItem.IsChecked = ViewModel.PreviewWordWrap;
+        wrapItem.Click += (_, _) =>
+        {
+            ViewModel.PreviewWordWrap = !ViewModel.PreviewWordWrap;
+            WordWrapToggle.IsChecked = ViewModel.PreviewWordWrap;
+            OnWordWrapToggled(WordWrapToggle, new RoutedEventArgs());
+        };
+        flyout.Items.Add(wrapItem);
+
+        flyout.Items.Add(new MenuFlyoutSeparator());
+
+        var exportFileItem = new MenuFlyoutItem { Text = "Export file as HTML report", Icon = new FontIcon { Glyph = "\uE9F9" } };
+        exportFileItem.Click += async (_, _) =>
+        {
+            var filePath = block.Tag as string;
+            if (string.IsNullOrEmpty(filePath)) return;
+            await ExportSingleFileHtmlReportAsync(filePath);
+        };
+        flyout.Items.Add(exportFileItem);
+
+        flyout.Opening += (_, _) =>
+        {
+            wrapItem.IsChecked = ViewModel.PreviewWordWrap;
+            bool hasSelection = !string.IsNullOrEmpty(block.SelectedText);
+            copyWithLines.IsEnabled = hasSelection;
+            copyWithout.IsEnabled = hasSelection;
+        };
+        block.ContextFlyout = flyout;
+    }
+
+    private static void CopyPreviewSelection(RichTextBlock block, bool withLineNumbers)
+    {
+        string selectedText = block.SelectedText;
+        if (string.IsNullOrEmpty(selectedText)) return;
+
+        string textToCopy;
+        if (withLineNumbers)
+        {
+            // The selected text already contains gutter line numbers from the paragraph Runs.
+            // Just copy it as-is.
+            textToCopy = selectedText;
+        }
+        else
+        {
+            // Strip the gutter prefix: pattern is  "│NN │ " or " NN (cont) │ " at start of each line.
+            // The gutter format is: indicator char + padded number + optional " (cont)" + " │ "
+            var lines = selectedText.Split('\n');
+            var sb = new StringBuilder();
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i].TrimEnd('\r');
+                // Find the gutter separator "│ " and strip everything up to and including it
+                int sepIdx = line.IndexOf("│ ", StringComparison.Ordinal);
+                if (sepIdx >= 0)
+                {
+                    // There may be two separators (indicator│ and gutter│), take the last one
+                    int secondSep = line.IndexOf("│ ", sepIdx + 2, StringComparison.Ordinal);
+                    if (secondSep >= 0)
+                        line = line[(secondSep + 2)..];
+                    else
+                        line = line[(sepIdx + 2)..];
+                }
+                if (i < lines.Length - 1)
+                    sb.AppendLine(line);
+                else
+                    sb.Append(line);
+            }
+            textToCopy = sb.ToString();
+        }
+
+        var dataPackage = new DataPackage();
+        dataPackage.SetText(textToCopy);
+        Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
+    }
+
+    private static int GetParagraphLineNumber(RichTextBlock block, Microsoft.UI.Xaml.Documents.TextPointer? pointer)
+    {
+        if (pointer is null) return 1;
+        // Walk paragraphs to find which one the selection starts in,
+        // using ConditionalWeakTable set during preview line construction.
+        var paragraphs = block.Blocks.OfType<Paragraph>().ToList();
+        int lastKnownLine = 1;
+        foreach (var para in paragraphs)
+        {
+            if (s_paragraphLineNumbers.TryGetValue(para, out var tag) && tag is int lineNum)
+                lastKnownLine = lineNum;
+            var paraStart = para.ContentStart;
+            var paraEnd = para.ContentEnd;
+            if (paraStart is not null && paraEnd is not null
+                && pointer.Offset >= paraStart.Offset && pointer.Offset <= paraEnd.Offset)
+                return lastKnownLine;
+        }
+        return lastKnownLine;
+    }
+
+    private async Task ExportSingleFileHtmlReportAsync(string filePath)
+    {
+        var group = ViewModel.ResultGroups.FirstOrDefault(g =>
+            string.Equals(g.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
+        if (group is null || group.Count == 0) return;
+
+        var picker = new Windows.Storage.Pickers.FileSavePicker();
+        picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
+        picker.FileTypeChoices.Add("HTML File", new List<string> { ".html" });
+        picker.SuggestedFileName = $"Yagu_Report_{Path.GetFileNameWithoutExtension(filePath)}";
+
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+
+        var file = await picker.PickSaveFileAsync();
+        if (file is null) return;
+
+        var queryText = System.Net.WebUtility.HtmlEncode(ViewModel.Query);
+        int totalMatches = group.Count;
+
+        await using var stream = await file.OpenStreamForWriteAsync().ConfigureAwait(true);
+        stream.SetLength(0);
+        using var w = new StreamWriter(stream, new UTF8Encoding(false), bufferSize: 64 * 1024, leaveOpen: false);
+
+        await w.WriteLineAsync("<!DOCTYPE html>").ConfigureAwait(false);
+        await w.WriteLineAsync("<html><head><meta charset=\"utf-8\">").ConfigureAwait(false);
+        await w.WriteLineAsync($"<title>Yagu Report — {System.Net.WebUtility.HtmlEncode(Path.GetFileName(filePath))}</title>").ConfigureAwait(false);
+        await w.WriteLineAsync("<style>").ConfigureAwait(false);
+        await w.WriteLineAsync("body { font-family: 'Segoe UI', Consolas, monospace; background: #1e1e1e; color: #d4d4d4; margin: 2em; }").ConfigureAwait(false);
+        await w.WriteLineAsync("h1 { color: #569cd6; font-size: 1.4em; }").ConfigureAwait(false);
+        await w.WriteLineAsync("h2 { color: #9cdcfe; font-size: 1.1em; margin-top: 2em; border-bottom: 1px solid #333; padding-bottom: 4px; }").ConfigureAwait(false);
+        await w.WriteLineAsync(".file-path { color: #808080; font-size: 0.85em; }").ConfigureAwait(false);
+        await w.WriteLineAsync("table { border-collapse: collapse; margin: 0.5em 0 1.5em 0; width: 100%; }").ConfigureAwait(false);
+        await w.WriteLineAsync("td { padding: 1px 8px; vertical-align: top; white-space: pre-wrap; word-break: break-all; font-family: Consolas, 'Courier New', monospace; font-size: 0.9em; }").ConfigureAwait(false);
+        await w.WriteLineAsync("td.ln { color: #858585; text-align: right; user-select: none; width: 1%; white-space: nowrap; padding-right: 12px; border-right: 1px solid #333; }").ConfigureAwait(false);
+        await w.WriteLineAsync("tr.match { background: #2a2d2e; }").ConfigureAwait(false);
+        await w.WriteLineAsync("tr.ctx { opacity: 0.7; }").ConfigureAwait(false);
+        await w.WriteLineAsync("mark { background: #b5890066; color: #ffd700; font-weight: bold; }").ConfigureAwait(false);
+        await w.WriteLineAsync(".summary { color: #6a9955; margin-bottom: 1em; }").ConfigureAwait(false);
+        await w.WriteLineAsync("</style></head><body>").ConfigureAwait(false);
+        await w.WriteLineAsync($"<h1>Report: <code>{queryText}</code></h1>").ConfigureAwait(false);
+        await w.WriteLineAsync($"<p class=\"summary\">{totalMatches:N0} match(es) in this file</p>").ConfigureAwait(false);
+
+        var escapedPath = System.Net.WebUtility.HtmlEncode(group.FilePath);
+        await w.WriteLineAsync($"<h2>{System.Net.WebUtility.HtmlEncode(group.FileName)}</h2>").ConfigureAwait(false);
+        await w.WriteLineAsync($"<div class=\"file-path\">{escapedPath}</div>").ConfigureAwait(false);
+        await w.WriteLineAsync("<table>").ConfigureAwait(false);
+
+        foreach (var result in group)
+        {
+            ViewModel.HydrateResult(result);
+
+            int ctxBeforeStart = result.LineNumber - result.ContextBefore.Count;
+            for (int i = 0; i < result.ContextBefore.Count; i++)
+            {
+                int ln = ctxBeforeStart + i;
+                await w.WriteLineAsync($"<tr class=\"ctx\"><td class=\"ln\">{ln}</td><td>{System.Net.WebUtility.HtmlEncode(result.ContextBefore[i])}</td></tr>").ConfigureAwait(false);
+            }
+
+            string matchHtml = BuildHighlightedMatchHtml(result.MatchLine, result.MatchStartColumn, result.MatchLength);
+            await w.WriteLineAsync($"<tr class=\"match\"><td class=\"ln\">{result.LineNumber}</td><td>{matchHtml}</td></tr>").ConfigureAwait(false);
+
+            for (int i = 0; i < result.ContextAfter.Count; i++)
+            {
+                int ln = result.LineNumber + 1 + i;
+                await w.WriteLineAsync($"<tr class=\"ctx\"><td class=\"ln\">{ln}</td><td>{System.Net.WebUtility.HtmlEncode(result.ContextAfter[i])}</td></tr>").ConfigureAwait(false);
+            }
+        }
+
+        await w.WriteLineAsync("</table>").ConfigureAwait(false);
+        await w.WriteLineAsync("</body></html>").ConfigureAwait(false);
+        ViewModel.StatusText = $"Exported HTML report ({totalMatches:N0} matches) for {Path.GetFileName(filePath)} to {file.Path}";
+    }
+
     private static void HighlightInline(Paragraph para, string line, int matchStart, int matchLength)
     {
         var displayLine = LineTruncator.TruncateAroundMatch(line, matchStart, matchLength);
@@ -4826,14 +5142,14 @@ public sealed partial class MainWindow : Window
     private static IEnumerable<KeyValuePair<string, List<SearchResult>>> OrderByFileFirst(
         Dictionary<string, List<SearchResult>> byFile, string? firstFilePath)
     {
-        if (firstFilePath is null || !byFile.ContainsKey(firstFilePath))
+        if (firstFilePath is null || !byFile.TryGetValue(firstFilePath, out var firstFileResults))
             return byFile;
 
         // Yield the target file first, then the rest in their original order.
         return Enumerate();
         IEnumerable<KeyValuePair<string, List<SearchResult>>> Enumerate()
         {
-            yield return new KeyValuePair<string, List<SearchResult>>(firstFilePath, byFile[firstFilePath]);
+            yield return new KeyValuePair<string, List<SearchResult>>(firstFilePath, firstFileResults);
             foreach (var kvp in byFile)
             {
                 if (!string.Equals(kvp.Key, firstFilePath, StringComparison.OrdinalIgnoreCase))
@@ -5771,6 +6087,7 @@ public sealed partial class MainWindow : Window
         LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync: file='{r.FilePath}', line={r.LineNumber}, fullFile={fullFile}");
         var singleSw = System.Diagnostics.Stopwatch.StartNew();
         ShowPreviewBlockSurface();
+        PreviewBlock.Tag = r.FilePath;
         PreviewBlock.Blocks.Clear();
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
 
@@ -5880,7 +6197,9 @@ public sealed partial class MainWindow : Window
         {
             FontFamily = new FontFamily("Consolas"),
             TextWrapping = ViewModel.PreviewWordWrap ? TextWrapping.Wrap : TextWrapping.NoWrap,
+            Tag = filePath,
         };
+        AttachPreviewBlockContextFlyout(block);
 
         var content = new Border
         {
@@ -5975,7 +6294,7 @@ public sealed partial class MainWindow : Window
         return (block, expander);
     }
 
-    private FrameworkElement BuildPreviewSectionHeader(string filePath, string? detail, RichTextBlock? sectionBlock = null, List<SearchResult>? sectionResults = null)
+    private Grid BuildPreviewSectionHeader(string filePath, string? detail, RichTextBlock? sectionBlock = null, List<SearchResult>? sectionResults = null)
     {
         var grid = new Grid
         {
@@ -6578,7 +6897,7 @@ public sealed partial class MainWindow : Window
     private static int CountRegexMatches(string? line, Regex? rx, bool minimumOne)
     {
         if (rx is null || string.IsNullOrEmpty(line)) return minimumOne ? 1 : 0;
-        int count = rx.Matches(line).Count;
+        int count = rx.Count(line);
         return count > 0 || !minimumOne ? count : 1;
     }
 
@@ -6601,6 +6920,7 @@ public sealed partial class MainWindow : Window
     private static readonly SolidColorBrush s_gutterSepBrush = new(Windows.UI.Color.FromArgb(255, 60, 60, 60));
     private static readonly SolidColorBrush s_contextTextBrush = new(Windows.UI.Color.FromArgb(255, 110, 110, 110));
     private static readonly SolidColorBrush s_matchAccentBrush = new(Windows.UI.Color.FromArgb(255, 70, 140, 70));
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphLineNumbers = new();
 
     private static Paragraph AddPreviewLineParagraphs(
         RichTextBlock section,
@@ -6789,8 +7109,8 @@ public sealed partial class MainWindow : Window
     }
 
     private static Dictionary<int, SearchResult> BuildMatchByLineForRanges(
-        IReadOnlyList<SearchResult> results,
-        IReadOnlyList<(int start, int end)> ranges)
+        List<SearchResult> results,
+        List<(int start, int end)> ranges)
     {
         var matchByLine = new Dictionary<int, SearchResult>();
         if (ranges.Count == 0)
@@ -6817,7 +7137,7 @@ public sealed partial class MainWindow : Window
     }
 
     private static int CountPrefixResultsThroughLine(
-        IReadOnlyList<SearchResult> results,
+        List<SearchResult> results,
         int lastRenderedLine,
         int totalLineCount)
     {
@@ -6967,6 +7287,7 @@ public sealed partial class MainWindow : Window
         if (truncate)
             line = TruncatePreviewLine(line, rx);
         var para = new Paragraph();
+        s_paragraphLineNumbers.AddOrUpdate(para, lineNum);
 
         // Match indicator + line number gutter.
         // Use a glyph that Consolas renders at full cell width so match lines
@@ -8323,7 +8644,7 @@ public sealed partial class MainWindow : Window
 
                 bool runOnScreen = !double.IsNaN(runY) && runY >= vpTop && (runY + (double.IsNaN(runH) ? 0 : runH)) <= vpBottom;
                 string runText = activeRun.Text ?? "";
-                if (runText.Length > 30) runText = runText.Substring(0, 30) + "…";
+                if (runText.Length > 30) runText = string.Concat(runText.AsSpan(0, 30), "…");
 
                 LogService.Instance.Info("MatchNav",
                     $"VerifyActiveMatch: idx={navIdx}, activeIdx={activeIdx}, paraMatches={paraMatches}, paraIdx={paragraphIndex}, " +
@@ -9979,7 +10300,12 @@ public sealed partial class MainWindow : Window
         bool ctrl = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
         bool shift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
 
-        if (e.Key == Windows.System.VirtualKey.S && ctrl && shift)
+        if (e.Key == Windows.System.VirtualKey.F1)
+        {
+            e.Handled = true;
+            OpenHelpWindow();
+        }
+        else if (e.Key == Windows.System.VirtualKey.S && ctrl && shift)
         {
             e.Handled = true;
             _ = CopyWindowScreenshotToClipboardAsync();

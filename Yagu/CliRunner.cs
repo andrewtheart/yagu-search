@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
@@ -429,6 +430,7 @@ internal static class CliRunner
         bool gitignorePrecedence = args.GitignoreTakesPrecedence ?? s.GitignoreTakesPrecedence;
         bool exactMatch = args.ExactMatch ?? s.ExactMatch;
         int maxMatchesPerFile = args.MaxMatchesPerFile ?? s.MaxMatchesPerFile;
+        int maxSearchDepth = args.MaxSearchDepth ?? s.MaxSearchDepth;
         var includeMode = (FilterPatternMode)(args.IncludeFilterModeIndex ?? s.IncludeFilterModeIndex);
         var excludeMode = (FilterPatternMode)(args.ExcludeFilterModeIndex ?? s.ExcludeFilterModeIndex);
 
@@ -465,6 +467,7 @@ internal static class CliRunner
             ModifiedBeforeDate    = args.ModifiedBefore ?? s.DefaultModifiedBeforeDate,
             MaxResults            = Math.Min(maxResults, SearchOptions.MaxResultsCeiling),
             MaxMatchesPerFile     = maxMatchesPerFile,
+            MaxSearchDepth        = maxSearchDepth,
             SkipBinary            = skipBinary,
             ObeyGitignore         = obeyGitignore,
             GitignoreTakesPrecedence = gitignorePrecedence,
@@ -480,13 +483,13 @@ internal static class CliRunner
         };
     }
 
-    private static IReadOnlyList<string> SplitSemi(string value)
+    private static string[] SplitSemi(string value)
     {
         if (string.IsNullOrWhiteSpace(value)) return [];
         return value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
-    private static IReadOnlySet<string> ParseSkipExtensions(string raw)
+    private static HashSet<string> ParseSkipExtensions(string raw)
     {
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (!string.IsNullOrWhiteSpace(raw))
@@ -587,13 +590,13 @@ internal static class CliRunner
     private static void WriteCompletionSummary(SearchSummary s, bool color)
     {
         var sb = new StringBuilder();
-        sb.Append($"\nSearched {s.FilesScanned} file(s)");
+        sb.Append(CultureInfo.InvariantCulture, $"\nSearched {s.FilesScanned} file(s)");
         if (s.TotalFiles > 0 && s.TotalFiles != s.FilesScanned)
-            sb.Append($" of {s.TotalFiles}");
+            sb.Append(CultureInfo.InvariantCulture, $" of {s.TotalFiles}");
         if (s.FilesSkipped > 0)
-            sb.Append($", {s.FilesSkipped} skipped");
-        sb.Append($" - {s.TotalMatches} match(es) in {s.FilesWithMatches} file(s)");
-        sb.Append($" [{s.Elapsed.TotalSeconds:F2}s]");
+            sb.Append(CultureInfo.InvariantCulture, $", {s.FilesSkipped} skipped");
+        sb.Append(CultureInfo.InvariantCulture, $" - {s.TotalMatches} match(es) in {s.FilesWithMatches} file(s)");
+        sb.Append(CultureInfo.InvariantCulture, $" [{s.Elapsed.TotalSeconds:F2}s]");
         if (s.Truncated)  sb.Append(" [truncated]");
         if (s.Cancelled)  sb.Append(" [cancelled]");
         WriteError(sb.ToString(), color);
@@ -676,6 +679,7 @@ internal static class CliRunner
                   --sdk-channel-buffer <n> Everything SDK channel buffer size.
                   --file-lister-backend <n> File lister: 0=Auto, 1=SDK, 2=es.exe, 3=Managed.
                   --max-matches-per-file <n> Cap matches per file (0 = unlimited).
+                  --max-depth <n>         Max directory recursion depth (0 = unlimited).
 
             ARCHIVE SEARCH:
                   --search-archives       Search inside ZIP-like archives.
@@ -928,6 +932,8 @@ internal sealed class RipgrepWriter
 /// <summary>Parsed command-line arguments for <c>--cli</c> mode.</summary>
 internal sealed class CliArgs
 {
+    private static readonly char[] s_extensionSeparators = [';', ','];
+
     public string?          Directory    { get; private set; }
     public string?          Pattern      { get; private set; }
     public bool?            CaseSensitive { get; private set; }
@@ -962,6 +968,7 @@ internal sealed class CliArgs
     public int?             IncludeFilterModeIndex { get; private set; }
     public int?             ExcludeFilterModeIndex { get; private set; }
     public int?             MaxMatchesPerFile { get; private set; }
+    public int?             MaxSearchDepth { get; private set; }
     public bool?            ExactMatch { get; private set; }
     public DateTimeOffset?  CreatedAfter { get; private set; }
     public DateTimeOffset?  CreatedBefore { get; private set; }
@@ -1017,7 +1024,7 @@ internal sealed class CliArgs
                 { a.ExcludeGlobs.Add(v); continue; }
             if (TryGetVal(raw, ref i, out v, "--skip-extensions"))
             {
-                foreach (var ext in v.Split(new[] { ';', ',' },
+                foreach (var ext in v.Split(s_extensionSeparators,
                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                     a.SkipExtensions.Add(ext.TrimStart('.'));
                 continue;
@@ -1052,6 +1059,7 @@ internal sealed class CliArgs
             if (TryGetInt(raw, ref i, out n, "--console-log-level"))     { a.ConsoleLogLevelIndex = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--file-lister-backend"))   { a.FileListerBackendIndex = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--max-matches-per-file"))  { a.MaxMatchesPerFile = n; continue; }
+            if (TryGetInt(raw, ref i, out n, "--max-depth"))             { a.MaxSearchDepth = n; continue; }
             if (TryGetVal(raw, ref i, out v, "--archive-extensions"))    { a.ArchiveExtensions = v; continue; }
             if (TryGetVal(raw, ref i, out v, "--editor-command"))        { a.EditorCommand = v; continue; }
             if (TryGetVal(raw, ref i, out v, "--admin-protected-paths")) { a.AdminProtectedPathSegments = v; continue; }

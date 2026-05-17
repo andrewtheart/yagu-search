@@ -42,9 +42,47 @@
     <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\scripts\increment-yagu-version.ps1&quot; -VersionFile &quot;$(YaguBuildVersionFile)&quot; -OutputFile &quot;$(YaguGeneratedVersionFile)&quot;" />
   </Target>
 
+  <!--
+    Convert HELP.md to HELP.html using pandoc on every build.
+    If pandoc is not installed, skip silently and use whatever HELP.html exists.
+  -->
+  <Target Name="ConvertHelpMdToHtml"
+          BeforeTargets="BeforeBuild"
+          Condition="'$(DesignTimeBuild)' != 'true'"
+          Inputs="$(MSBuildThisFileDirectory)..\HELP.md"
+          Outputs="$(MSBuildThisFileDirectory)HELP.html">
+    <Exec Command="pandoc &quot;$(MSBuildThisFileDirectory)..\HELP.md&quot; -s --metadata title=&quot;Yagu Help&quot; -o &quot;$(MSBuildThisFileDirectory)HELP.html&quot;"
+          IgnoreExitCode="true"
+          ContinueOnError="WarnAndContinue" />
+  </Target>
+
+  <Target Name="CopyHelpHtmlToOutput"
+          AfterTargets="Build"
+          Condition="Exists('$(MSBuildThisFileDirectory)HELP.html')">
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)HELP.html"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <PropertyGroup>
+    <YaguWebView2Rid Condition="'$(YaguWebView2Rid)' == '' And '$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</YaguWebView2Rid>
+    <YaguWebView2Rid Condition="'$(YaguWebView2Rid)' == '' And ('$(PlatformTarget)' == 'x86' Or '$(Platform)' == 'x86')">win-x86</YaguWebView2Rid>
+    <YaguWebView2Rid Condition="'$(YaguWebView2Rid)' == '' And ('$(PlatformTarget)' == 'arm64' Or '$(Platform)' == 'arm64')">win-arm64</YaguWebView2Rid>
+    <YaguWebView2Rid Condition="'$(YaguWebView2Rid)' == ''">win-x64</YaguWebView2Rid>
+  </PropertyGroup>
+
+  <Target Name="CopyWebView2LoaderToOutput"
+          AfterTargets="Build"
+          Condition="Exists('$(OutDir)runtimes\$(YaguWebView2Rid)\native\WebView2Loader.dll')">
+    <Copy SourceFiles="$(OutDir)runtimes\$(YaguWebView2Rid)\native\WebView2Loader.dll"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260101001" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.7463" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3179.45" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.*" />
     <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.*" />
   </ItemGroup>

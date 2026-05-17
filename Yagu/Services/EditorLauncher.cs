@@ -14,7 +14,7 @@ public sealed class EditorLauncher
     public string Command { get; set; } = DefaultCommand;
 
     /// <summary>Test seam: when set, replaces Process.Start calls.</summary>
-    internal static Action<ProcessStartInfo>? TestProcessLauncher = null;
+    internal static Action<ProcessStartInfo>? TestProcessLauncher;
 
 
     private static void LaunchProcess(ProcessStartInfo psi)

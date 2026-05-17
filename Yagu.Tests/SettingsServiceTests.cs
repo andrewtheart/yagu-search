@@ -289,6 +289,28 @@ public class SettingsServiceNewFieldTests
     }
 
     [Fact]
+    public void AdvancedOption_MaxSearchDepth_IsInstanceOnly()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-depth-" + Guid.NewGuid() + ".json");
+        try
+        {
+            File.WriteAllText(tmp, "{\"MaxSearchDepth\":7}");
+            var svc = new SettingsService(tmp);
+
+            var loaded = svc.Load();
+            Assert.Equal(0, loaded.MaxSearchDepth);
+
+            loaded.MaxSearchDepth = 4;
+            svc.Save(loaded);
+
+            var json = File.ReadAllText(tmp);
+            Assert.DoesNotContain("MaxSearchDepth", json);
+            Assert.Equal(0, svc.Load().MaxSearchDepth);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
     public void RoundTrip_SuppressAdminWarning()
     {
         var tmp = Path.Combine(Path.GetTempPath(), "qg-admin-warning-" + Guid.NewGuid() + ".json");

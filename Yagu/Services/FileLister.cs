@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
-using System.Text;
 using System.Threading.Channels;
 using Microsoft.Win32;
 using Yagu.Native;
@@ -27,7 +26,7 @@ internal interface IEverythingSdkOps
     uint GetNumResults();
     uint GetTotResults();
     bool GetResultSize(uint index, out long size);
-    uint GetResultFullPathName(uint index, StringBuilder buf, uint capacity);
+    uint GetResultFullPathName(uint index, char[] buffer, uint capacity);
 }
 
 /// <summary>Real implementation delegating to the static <see cref="EverythingSdk"/> P/Invoke class.</summary>
@@ -50,8 +49,8 @@ internal sealed class RealEverythingSdkOps : IEverythingSdkOps
     public uint GetNumResults() => EverythingSdk.GetNumResults();
     public uint GetTotResults() => EverythingSdk.GetTotResults();
     public bool GetResultSize(uint index, out long size) => EverythingSdk.GetResultSize(index, out size);
-    public uint GetResultFullPathName(uint index, StringBuilder buf, uint capacity)
-        => EverythingSdk.GetResultFullPathName(index, buf, capacity);
+    public uint GetResultFullPathName(uint index, char[] buffer, uint capacity)
+        => EverythingSdk.GetResultFullPathName(index, buffer, capacity);
 }
 
 public interface IFileLister
@@ -182,7 +181,7 @@ public sealed class FileLister : IFileLister
 
     // Lazily evaluated once per process. Process elevation cannot change at runtime.
 
-    internal static Func<bool>? ElevationOverride = null; // test seam
+    internal static Func<bool>? ElevationOverride; // test seam
     internal static bool SdkAvailable { get => _sdkAvailable; set => _sdkAvailable = value; } // test seam
     internal static Func<List<string>>? GetEverythingInstallDirsOverride; // test seam
     [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
@@ -256,7 +255,7 @@ public sealed class FileLister : IFileLister
             // Match either the segment as-is (path ends with the segment, e.g. "C:\Windows\Installer")
             // or the segment followed by a separator (path ends with the segment dir).
             if (path.EndsWith(seg, StringComparison.OrdinalIgnoreCase)) return true;
-            if (path.IndexOf(seg + "\\", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (path.Contains(seg + "\\", StringComparison.OrdinalIgnoreCase)) return true;
         }
         return false;
     }
@@ -295,6 +294,9 @@ public sealed class FileLister : IFileLister
 
     /// <summary>Bounded channel buffer capacity for the Everything SDK streaming path. Default 4096.</summary>
     public int SdkChannelBufferSize { get; set; } = 4096;
+
+    /// <summary>Maximum directory depth to recurse. 0 = unlimited (default).</summary>
+    public int MaxSearchDepth { get; set; }
 
     /// <summary>
     /// Forced backend selection. <c>Auto</c> tries SDK → es.exe → .NET in order.
@@ -356,6 +358,8 @@ public sealed class FileLister : IFileLister
 
         // ── Tier 1: Everything SDK (in-process, fastest) ──
         bool sdkYielded = false;
+        int maxDepth = MaxSearchDepth;
+        int rootSeparators = maxDepth > 0 ? CountSeparators(fullDir) : 0;
         if ((_processFactory is null || _sdkOps is not RealEverythingSdkOps) && (backend == FileListerBackend.Auto || backend == FileListerBackend.EverythingSdk)) // skip SDK in test mode unless mock SDK injected
         {
             var sdkResults = TryCreateSdkEnumerable(fullDir, includeExtensions, maxFiles, cancellationToken);
@@ -364,6 +368,8 @@ public sealed class FileLister : IFileLister
             {
                 await foreach (var p in sdkResults.WithCancellation(cancellationToken))
                 {
+                    if (maxDepth > 0 && GetRelativeDepth(p, rootSeparators) > maxDepth)
+                        continue;
                     sdkYielded = true;
                     yield return p;
                 }
@@ -389,6 +395,8 @@ public sealed class FileLister : IFileLister
                 {
                     await foreach (var p in esResults.WithCancellation(cancellationToken))
                     {
+                        if (maxDepth > 0 && GetRelativeDepth(p, rootSeparators) > maxDepth)
+                            continue;
                         esYielded = true;
                         yield return p;
                     }
@@ -475,7 +483,7 @@ public sealed class FileLister : IFileLister
             {
                 var p = part;
                 // "*.ext" → exclude extension
-                if (p.StartsWith("*.") && p[2..].All(c => char.IsLetterOrDigit(c) || c == '_'))
+                if (p.StartsWith("*.", StringComparison.Ordinal) && p[2..].All(c => char.IsLetterOrDigit(c) || c == '_'))
                 {
                     query += $" !ext:{p[2..]}";
                 }
@@ -569,7 +577,7 @@ public sealed class FileLister : IFileLister
                         uint total = _sdkOps.GetTotResults();
                         SetKnownTotalFiles(count);
                         LogService.Instance.Warning("FileLister", $"Everything SDK: {count} returned, {total} total matches, last error={_sdkOps.GetLastError()}");
-                        var buf = new System.Text.StringBuilder(1024);
+                        var buffer = new char[1024];
                         long earlyMinSize = EarlyMinFileSizeBytes;
                         long earlyMaxSize = EarlyMaxFileSizeBytes;
                         var earlySkipExts = EarlySkipExtensions;
@@ -600,20 +608,12 @@ public sealed class FileLister : IFileLister
                                 }
                             }
 
-                            buf.Clear();
-                            uint len = _sdkOps.GetResultFullPathName(i, buf, (uint)buf.Capacity);
-                            if (len == 0) continue;
-                            if (len >= buf.Capacity)
-                            {
-                                buf.Capacity = (int)len + 1;
-                                buf.Clear();
-                                _sdkOps.GetResultFullPathName(i, buf, (uint)buf.Capacity);
-                            }
+                            string path = ReadSdkFullPath(_sdkOps, i, ref buffer);
+                            if (path.Length == 0) continue;
 
                             // ── Early skip by extension blocklist ──
                             if (hasSkipExts)
                             {
-                                var path = buf.ToString();
                                 var ext = System.IO.Path.GetExtension(path.AsSpan());
                                 if (ext.Length > 1 && earlySkipExts.Contains(ext.Slice(1).ToString()))
                                 {
@@ -627,7 +627,7 @@ public sealed class FileLister : IFileLister
                             {
                                 // Write into the channel. TryWrite succeeds until the 4096
                                 // buffer is full; if full, use the async path with a sync wait.
-                                ChannelWrite(channel.Writer, buf.ToString(), cancellationToken);
+                                ChannelWrite(channel.Writer, path, cancellationToken);
                             }
                         }
 
@@ -861,20 +861,10 @@ public sealed class FileLister : IFileLister
                 }
 
                 var samples = new List<string>((int)Math.Min(returnedCount, 25));
-                var buffer = new System.Text.StringBuilder(1024);
+                var buffer = new char[1024];
                 for (uint i = 0; i < returnedCount && samples.Count < 25; i++)
                 {
-                    buffer.Clear();
-                    uint length = sdk.GetResultFullPathName(i, buffer, (uint)buffer.Capacity);
-                    if (length == 0) continue;
-                    if (length >= buffer.Capacity)
-                    {
-                        buffer.Capacity = (int)length + 1;
-                        buffer.Clear();
-                        sdk.GetResultFullPathName(i, buffer, (uint)buffer.Capacity);
-                    }
-
-                    var path = buffer.ToString();
+                    var path = ReadSdkFullPath(sdk, i, ref buffer);
                     if (!string.IsNullOrWhiteSpace(path))
                     {
                         samples.Add(path);
@@ -931,7 +921,7 @@ public sealed class FileLister : IFileLister
         var fileNameFilter = BuildEverythingFileNameFilter(EarlyFileNameLiteralTerms);
         if (fileNameFilter is not null)
             args.Add(fileNameFilter);
-        if (maxFiles > 0) { args.Add("-n"); args.Add(maxFiles.ToString()); }
+        if (maxFiles > 0) { args.Add("-n"); args.Add(maxFiles.ToString(CultureInfo.InvariantCulture)); }
 
         int resultCount = await TryGetEverythingResultCountAsync(esPath, args, cancellationToken).ConfigureAwait(false);
         if (resultCount > 0) SetKnownTotalFiles(resultCount);
@@ -948,6 +938,7 @@ public sealed class FileLister : IFileLister
         foreach (var a in args) psi.ArgumentList.Add(a);
 
         IProcess proc = _processFactory is not null ? _processFactory(esPath, psi) : new RealProcess(psi);
+        using var procDisposer = proc as IDisposable;
 
         try
         {
@@ -1004,6 +995,7 @@ public sealed class FileLister : IFileLister
         foreach (var argument in queryArgs) psi.ArgumentList.Add(argument);
 
         IProcess countProcess = _processFactory is not null ? _processFactory(esPath, psi) : new RealProcess(psi);
+        using var countProcessDisposer = countProcess as IDisposable;
         try
         {
             countProcess.Start();
@@ -1028,14 +1020,56 @@ public sealed class FileLister : IFileLister
     private void SetKnownTotalFiles(int count) =>
         Volatile.Write(ref _knownTotalFiles, Math.Max(0, count));
 
+    private static string ReadSdkFullPath(IEverythingSdkOps sdk, uint index, ref char[] buffer)
+    {
+        Array.Clear(buffer);
+        uint length = sdk.GetResultFullPathName(index, buffer, (uint)buffer.Length);
+        if (length == 0) return string.Empty;
+
+        if (length >= buffer.Length)
+        {
+            buffer = new char[(int)length + 1];
+            Array.Clear(buffer);
+            length = sdk.GetResultFullPathName(index, buffer, (uint)buffer.Length);
+            if (length == 0) return string.Empty;
+        }
+
+        int charCount = (int)Math.Min(length, (uint)buffer.Length);
+        if (charCount > 0 && buffer[charCount - 1] == '\0') charCount--;
+        return new string(buffer, 0, charCount);
+    }
+
     internal static string NormalizeExtension(string ext)
     {
         if (string.IsNullOrWhiteSpace(ext)) return string.Empty;
         var s = ext.Trim();
         // Strip leading "*." or "*" or "."
-        if (s.StartsWith("*.")) s = s[2..];
+        if (s.StartsWith("*.", StringComparison.Ordinal)) s = s[2..];
         else s = s.TrimStart('.', '*');
         return s;
+    }
+
+    /// <summary>Counts backslash separators in a path.</summary>
+    private static int CountSeparators(string path)
+    {
+        int count = 0;
+        foreach (var c in path)
+            if (c == '\\') count++;
+        return count;
+    }
+
+    /// <summary>
+    /// Returns how many directory levels deep <paramref name="filePath"/> is
+    /// relative to the root (whose separator count is <paramref name="rootSeparators"/>).
+    /// A file directly inside the root returns 1.
+    /// </summary>
+    private static int GetRelativeDepth(string filePath, int rootSeparators)
+    {
+        // Total separators minus root separators = depth.
+        // Example: root = "C:\src" (1 sep), file = "C:\src\a\b\file.txt" (4 seps) → depth 3
+        // But we want directory depth, not counting the filename segment.
+        // File in root dir: "C:\src\file.txt" → 2 seps → 2-1=1 depth = immediate child (depth 1 means 1 folder level)
+        return CountSeparators(filePath) - rootSeparators;
     }
 
     internal static IEnumerable<string> BuildEverythingSizeFilterTerms(long minBytes, long maxBytes)
@@ -1158,10 +1192,11 @@ public sealed class FileLister : IFileLister
     {
         // Pre-size visited to avoid repeated backing-array resize on large trees.
         var visited = new HashSet<string>(capacity: 4096, StringComparer.OrdinalIgnoreCase);
-        var stack = new Stack<string>();
-        stack.Push(directory);
+        var stack = new Stack<(string path, int depth)>();
+        stack.Push((directory, 0));
 
         bool excludeAdminPaths = ShouldExcludeAdminPaths;
+        int maxDepth = MaxSearchDepth;
 
         var extSet = includeExtensions is { Count: > 0 }
             ? new HashSet<string>(includeExtensions.Select(e => "." + NormalizeExtension(e)).Where(s => s.Length > 1), StringComparer.OrdinalIgnoreCase)
@@ -1172,7 +1207,7 @@ public sealed class FileLister : IFileLister
         while (stack.Count > 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var current = stack.Pop();
+            var (current, currentDepth) = stack.Pop();
 
             var canonical = TryResolvePath(current);
             if (canonical is null) continue;
@@ -1213,7 +1248,11 @@ public sealed class FileLister : IFileLister
                         {
                             continue;
                         }
-                        stack.Push(entry);
+                        if (maxDepth > 0 && currentDepth >= maxDepth)
+                        {
+                            continue;
+                        }
+                        stack.Push((entry, currentDepth + 1));
                     }
                     else
                     {
@@ -1283,7 +1322,7 @@ public sealed class FileLister : IFileLister
     private IAsyncEnumerable<string>? TryCreateSdkEnumerable(
         string fullDir, IReadOnlyList<string>? includeExtensions, int maxFiles, CancellationToken ct)
     {
-        try { return RunEverythingSdkAsync(fullDir, includeExtensions, maxFiles, ct); }
+        try { return RunEverythingSdkAsync(fullDir, includeExtensions ?? Array.Empty<string>(), maxFiles, ct); }
         catch (Exception ex)
         {
             LogService.Instance.Warning("FileLister", $"Everything SDK unavailable: {ex.Message}", ex);
@@ -1295,7 +1334,7 @@ public sealed class FileLister : IFileLister
     private IAsyncEnumerable<string>? TryCreateEsEnumerable(
         string esPath, string fullDir, IReadOnlyList<string>? includeExtensions, int maxFiles, CancellationToken ct)
     {
-        try { return RunEverythingAsync(esPath, fullDir, includeExtensions, maxFiles, ct); }
+        try { return RunEverythingAsync(esPath, fullDir, includeExtensions ?? Array.Empty<string>(), maxFiles, ct); }
         catch (Exception ex)
         {
             FallbackReason = $"es.exe failed: {ex.Message}";
@@ -1408,7 +1447,7 @@ public sealed class FileLister : IFileLister
 
 
     [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-    internal sealed class RealProcess : IProcess
+    internal sealed class RealProcess : IProcess, IDisposable
     {
         private readonly Process _p;
         public RealProcess(ProcessStartInfo psi)
@@ -1419,5 +1458,6 @@ public sealed class FileLister : IFileLister
         public void Start() => _p.Start();
         public Task<string?> ReadLineAsync(CancellationToken ct) => _p.StandardOutput.ReadLineAsync(ct).AsTask();
         public Task WaitForExitAsync(CancellationToken ct) => _p.WaitForExitAsync(ct);
+        public void Dispose() => _p.Dispose();
     }
 }

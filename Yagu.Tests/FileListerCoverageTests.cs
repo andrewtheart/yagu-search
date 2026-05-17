@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Text;
 using Yagu.Services;
 using static Yagu.Services.FileLister;
 
@@ -59,7 +58,7 @@ internal sealed class MockEverythingSdkOps : IEverythingSdkOps
         size = 0; return false;
     }
 
-    public uint GetResultFullPathName(uint index, StringBuilder buf, uint capacity)
+    public uint GetResultFullPathName(uint index, char[] buffer, uint capacity)
     {
         if (index >= Results.Count) return 0;
         var path = Results[(int)index].Path;
@@ -68,7 +67,7 @@ internal sealed class MockEverythingSdkOps : IEverythingSdkOps
             // Signal that the buffer is too small
             return (uint)path.Length;
         }
-        buf.Append(path);
+        path.AsSpan().CopyTo(buffer);
         return (uint)path.Length;
     }
 }
@@ -885,7 +884,7 @@ internal sealed class ThrowOnQuerySdkOps : IEverythingSdkOps
     public uint GetNumResults() => 0;
     public uint GetTotResults() => 0;
     public bool GetResultSize(uint index, out long size) { size = 0; return false; }
-    public uint GetResultFullPathName(uint index, StringBuilder buf, uint capacity) => 0;
+    public uint GetResultFullPathName(uint index, char[] buffer, uint capacity) => 0;
 }
 
 // ─── ProbeEverythingSdkReadiness via mock SDK ───────────────────────────
@@ -1050,7 +1049,7 @@ internal sealed class EmptyPathSdkOps : IEverythingSdkOps
     public uint GetNumResults() => 3; // claim 3 results
     public uint GetTotResults() => 3;
     public bool GetResultSize(uint index, out long size) { size = 100; return true; }
-    public uint GetResultFullPathName(uint index, StringBuilder buf, uint capacity) => 0; // empty
+    public uint GetResultFullPathName(uint index, char[] buffer, uint capacity) => 0; // empty
 }
 
 // ─── EnumerateFallbackAsync branch coverage ─────────────────────────────

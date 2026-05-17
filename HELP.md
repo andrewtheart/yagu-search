@@ -57,79 +57,308 @@ Use the search mode dropdown to decide what the query matches:
 
 Literal searches are usually faster than regex searches. Use regex when you need pattern matching, anchors, alternation, groups, or character classes.
 
-## Include And Exclude Filters
+## Advanced Options
 
-Use filters to reduce the number of files Yagu has to inspect.
+Click the **Advanced Options** expander below the search bar to reveal additional search controls. These settings are per-session and reset to defaults on the next launch (defaults can be configured in Settings).
 
-| Field | Examples | Notes |
-| --- | --- | --- |
-| Include | Glob: `cs`, `ts,js,py`, `*.json;*.yaml`; Regex: `\.(cs|xaml)$` | Limits the candidate set to matching files. Glob mode accepts comma- or semicolon-separated extensions, globs, and path segments. Regex mode matches the normalized full path. |
-| Exclude | Glob: `node_modules;bin;obj;.git`, `*.min.js`; Regex: `(^|/)node_modules/|\.min\.js$` | Removes matching files from the candidate set. Glob mode accepts comma- or semicolon-separated extensions, globs, and path segments. Regex mode matches the normalized full path. |
-| Filter results | `Program.cs`, `error`, `Services\` | Filters already-found results without rerunning the search. |
-| Filter files | `MainWindow`, `.cs`, `ViewModels` | Filters visible result groups by file name/path. |
+### Search Behavior
 
-For broad scans, start with the narrowest include filter that still answers your question. This usually improves performance more than changing CPU settings.
-
-## Results Pane
-
-Results are grouped by file. Each group shows the file name, match count, size, modified date, and directory. Expand a file group to see matching lines.
-
-Common actions:
-
-| Action | How To Use It |
+| Control | Effect |
 | --- | --- |
-| Preview a file or match | Click a file group or a match line. |
-| Open a match in your editor | Double-click a result group, or use the Editor button in the preview pane. |
-| Select match lines | Use checkboxes next to individual lines. |
-| Select all matches in a file | Use Select All inside the expanded file group. |
-| Copy selected lines | Right-click selected lines and choose Copy Selected Lines. |
-| Export selected lines | Right-click selected lines and choose Export Selected to File. |
-| Copy file paths | Right-click the result list or file group and choose Copy Selected File Paths. |
-| Export selected files with content | Right-click the result list or file group and choose Save Selected Files With Content. |
-| Disable result following | Clear Auto-scroll in the results toolbar, or scroll upward in the result list. |
+| Search mode | Chooses what the query matches: Content + Names, Content only, File names only, or File name then content. |
+| Obey .gitignore | When enabled, Yagu reads `.gitignore` files in the directory tree and excludes matching paths from the file listing. Has a performance cost on very large trees because each directory must be checked for gitignore rules. |
 
-Use the Sort control to leave results unsorted for fastest streaming, or sort by match count, date modified, file size, or file name. Enable Group by folder when you want large result sets organized by directory. Enable Auto-scroll when you want the list to follow newly arriving results during a search.
+### Path Filters
 
-## Preview Pane
+| Control | Effect |
+| --- | --- |
+| Include filter | Limits the search to files matching these patterns. Accepts comma- or semicolon-separated extensions, globs, and path segments. Switch the adjacent dropdown between Glob and Regex modes. |
+| Exclude filter | Removes files matching these patterns from the search. Same syntax options as Include. |
 
-The preview pane shows context around the selected match and highlights the matched text.
+### File Type Filters
+
+| Control | Effect |
+| --- | --- |
+| Skip Extensions | A dropdown list of file extensions to skip entirely. Files with these extensions are never opened or read. Use the All/None links to quickly toggle the whole list. |
+| Search binary | When enabled, files detected as binary (null bytes, magic headers) are included in content search. Off by default for speed. |
+| Search archives | When enabled, Yagu opens ZIP-format containers (ZIP, DOCX, XLSX, JAR, NUPKG, etc.) and searches text entries inside them. Has a performance cost. |
+| Archive Extensions | Visible when Search archives is on. Controls which extensions are treated as ZIP-format containers. |
+
+### Property Filters (Size and Date)
+
+| Control | Effect |
+| --- | --- |
+| Min MB | Only include files at least this many megabytes. 0 or blank means no lower limit. |
+| Max MB | Only include files at most this many megabytes. 0 or blank means no upper limit. |
+| Created Date From/To | Only include files created within this date range. Leave blank for no restriction. |
+| Modified Date From/To | Only include files modified within this date range. Leave blank for no restriction. |
+
+### Max Depth
+
+| Control | Effect |
+| --- | --- |
+| Max depth | Maximum number of subdirectory levels to recurse below the search root. 0 means unlimited (search the entire tree). For example, a value of 2 searches the root directory and up to two levels of child folders. |
+
+---
+
+## Results Pane (Left Panel)
+
+Results are grouped by file. Each group header shows the file name, match count, file size, modified date, and directory. Expand a file group to see individual matching lines with context.
+
+### Results Toolbar
 
 | Control | Purpose |
 | --- | --- |
-| Copy path icon | Copies the full file path. |
-| Full File | Shows full-file previews with highlighted matches for the selected file groups or checked match lines. |
-| Open | Opens the file with the default Windows application. |
-| Editor | Opens the file in the configured external editor command. |
-| Concatenated | Shows selected matches as separate snippets. |
-| Multi-highlight | Shows selected matches in a unified file-style view. |
-| Wrap | Toggles word wrap in the preview pane. |
+| Sort | Changes the order of result file groups. Options: None (arrival order, fastest), Match count (descending/ascending), Date modified, File size, File name. |
+| Group | Groups result files into collapsible sections. Options: None, Folder (A–Z / Z–A), Date range modified, Date range created, Extension, File size range. |
+| Auto-scroll | When checked, the result list scrolls to follow newly arriving results during a search. Uncheck or scroll upward to freeze the view. |
+| Context lines | Number of lines before and after each match stored with result rows. Higher values provide more context but use more memory. |
+| Clear results | Removes all results from the list (trash icon, or Ctrl+Shift+Delete). |
+| Expand/collapse | Toggles between an expanded result list and a split view with the preview panel. |
 
-Full-file preview follows the left panel: checked match lines preview each selected file and highlight those selected matches; selected file rows preview those whole files and highlight their known matches.
+### Filtering Results
+
+Below the toolbar, the results panel has a filter bar:
+
+| Control | Purpose |
+| --- | --- |
+| Select All checkbox | Checks or unchecks all file groups at once. |
+| Filter files textbox | Instantly filters visible file groups by file name or path substring. Does not re-run the search. |
+| Date range filter | Quickly narrows results by modification date: Last day, Last week, Last month, Last year, etc. |
+
+### Right-Click Context Menus
+
+**Right-click on a file group header:**
+
+| Option | Action |
+| --- | --- |
+| Preview | Opens a full-file preview of that file in the right panel. |
+| Preview all selected | Previews all checked/selected files. |
+| Copy Full Path | Copies the file's full path to clipboard. |
+| Copy Selected File Paths | Copies paths of all checked files. |
+| Copy Selected Files With Content | Copies file paths and their matched content. |
+| Save Selected File Paths… | Saves checked file paths to a text file. |
+| Save Selected Files With Content… | Saves checked files with matched content to a text file. |
+
+**Right-click on a match line:**
+
+| Option | Action |
+| --- | --- |
+| Copy Selected Lines | Copies all checked match lines to clipboard. |
+| Export Selected to File… | Saves checked match lines to a text file. |
+| Copy This Line | Copies just the right-clicked line. |
+
+### Previewing Files
+
+- **Single file:** Right-click a file group header and select **Preview**. Or simply click the file group header.
+- **Multiple files:** Check the files you want using the checkboxes in the left panel, then right-click any file and select **Preview all selected** (shows "Preview selected (N)").
+- **Match lines:** Click any match line to see a context preview in the right panel.
+- **Double-click a file header:** Selects all matches in that file and shows them in the preview.
+
+---
+
+## Preview Pane (Right Panel)
+
+The preview pane displays file content with highlighted matches and line numbers.
+
+### Preview Toolbar
+
+| Button | Icon | Purpose |
+| --- | --- | --- |
+| Full File | 📄 | Shows the complete file content with all matches highlighted. |
+| Copy Path | 📋 | Copies the previewed file's full path to clipboard. |
+| Open | 🔗 | Opens the file with the default Windows application. |
+| Edit | ✏️ | Opens the file in the built-in editor (editable mode with save). |
+| Show in Explorer | 📁 | Opens the containing folder in Windows Explorer. |
+| Expand All | ↕ | Expands and renders all collapsed sections (visible for multi-file previews). |
+| Clear | ✕ | Clears all files from the preview pane. |
+| Export Report | 📊 | Exports all current results as a styled HTML report with highlighted matches, line numbers, and context. |
+
+### View Options
+
+| Control | Purpose |
+| --- | --- |
+| Layout → Concatenated | When multiple files are previewed, shows each file as a separate section stacked vertically. |
+| Layout → Multi-highlight | Shows multiple selections merged into a unified view. |
+| Word Wrap | Toggles line wrapping in the preview. Long lines either wrap or scroll horizontally. |
+| Find & Replace | Opens the find/replace bar (Ctrl+H). Search within the previewed content. |
+| Preview Context | Number of context lines shown around each match in the preview. Adjust in real time. |
+
+### Match Navigation
+
+When viewing a file with multiple matches, use the match navigation controls at the bottom-right of the preview:
+
+| Control | Purpose |
+| --- | --- |
+| "N of M" label | Shows your position among the matches in the current file. |
+| Previous (◀) | Jumps to the previous match. Keyboard: Shift+Enter. |
+| Next (▶) | Jumps to the next match. Keyboard: Enter. |
+| Ctrl+Click | Jumps multiple matches at once. |
+
+### Per-File Section Headers
+
+When previewing multiple files, each file section has its own header bar with:
+
+| Control | Purpose |
+| --- | --- |
+| File path | Full path displayed in the section header. |
+| Section match nav | Previous/Next match navigation within that file section. |
+| Dismiss | Closes that file section from the preview. |
+
+### Double-Click to Edit
+
+**Double-click on a highlighted match** in the preview panel to open the built-in editor and jump directly to that line and word. This lets you quickly navigate from a search result to an editable view at the exact match location.
+
+### Built-in Editor
+
+Click the **Edit** (pencil) button in the preview toolbar to enter editor mode. The editor provides:
+
+- Full file editing with syntax-aware text display.
+- **Save** button to write changes back to disk.
+- **Back** button to return to preview mode.
+- **Backup on save:** When you save a file, Yagu automatically creates a backup named `{filename}.yagubak` in the same directory. If a backup already exists, it appends a number (`{filename}.yagubak-2`, `.yagubak-3`, etc.). This behavior is controlled by the "Backup before save" setting (on by default).
+- Large files (over ~10 MB) are loaded in chunks with a "Load More" button to avoid excessive memory use.
+
+### Find and Replace
+
+Open the find bar with **Ctrl+F** (find only) or **Ctrl+H** (find and replace).
+
+| Control | Purpose |
+| --- | --- |
+| Find textbox | Type text to search within the previewed file. |
+| Previous / Next | Navigate between find matches. |
+| Match case (Aa) | Toggles case-sensitive find. |
+| Replace textbox | Replacement text (visible when replace is toggled on). |
+| Replace | Replaces the current match. |
+| All | Replaces all matches in the current file. |
+| All Files | Replaces in all result files on disk (prompts for confirmation). |
+
+> **Note:** The "Replace in All Files" feature performs disk writes across multiple files. A confirmation dialog shows how many occurrences and files will be affected before proceeding.
 
 ## Settings
 
 Open Settings from the gear button in the title bar. Settings are saved to `%APPDATA%\Yagu\settings.json`.
 
-Important settings:
+Settings are organized into tabs:
+
+### Search Defaults Tab
 
 | Setting | What It Controls |
 | --- | --- |
-| Context lines | Match context saved in result rows. |
-| Preview context lines | Match context shown in the preview pane. |
-| Default include/exclude globs | Filters applied by default. |
-| Max results | Stops after this many matches. Non-zero values are capped at 50,000. Use 0 for unlimited. |
-| Max file size | Skips files larger than this size. Use 0 for no size limit. |
+| Case sensitive | Default state of case-sensitive matching. |
+| Regex | Default state of regex mode. |
+| Exact match | Default state of whole-word matching. |
+| Context lines | Match context lines saved in result rows. |
+| Preview context lines | Match context lines shown in the preview pane. |
+| Default include/exclude globs | Filters applied by default on app start. |
+
+### Search Limits Tab
+
+| Setting | What It Controls |
+| --- | --- |
+| Max results | Stops after this many matches. Non-zero values capped at 50,000. Use 0 for unlimited. |
+| Maximum search depth | How many subdirectory levels to recurse. 0 = unlimited. |
+| Default file size filter | Min/Max MB applied by default. Both 0 = any size. |
+| Default date filters | Created/Modified date ranges applied by default. |
 | Search binary files | Includes binary-looking files in the scan. Off by default. |
+| Skip admin-protected paths | Excludes Windows system directories that always deny access when not elevated. |
+| Admin-protected path segments | Custom list of path segments to skip (one per line or semicolon-separated). |
 | Skip extensions | Extensions skipped entirely before file contents are read. |
-| Content-search parallelism | Number of concurrent file scan workers. |
+| Archive extensions | Extensions treated as ZIP-format containers when archive search is on. |
+
+### Performance Tab
+
+| Setting | What It Controls |
+| --- | --- |
+| Content-search parallelism | Number of concurrent file scan workers: Auto, 1 thread, Half cores, 2× cores, All cores. |
 | File-listing backend | Auto, Everything SDK, `es.exe`, or .NET enumeration. |
-| Process memory hard cap | Working-set limit before memory-saving behavior activates. |
-| SDK channel buffer size | Path buffer between Everything SDK discovery and search workers. |
-| System memory pressure limit | Machine RAM usage threshold for memory-saving mode. |
-| Line truncation length | Result-list line length cap to keep the UI responsive. |
-| Editor command | Command used by the Editor button. Supports `{file}` and `{line}` tokens. |
-| Global hotkey | Optional `Ctrl+Shift+letter` shortcut to bring Yagu forward. |
+| Process memory hard cap (MB) | Working-set limit before memory-saving behavior activates. |
+| SDK channel buffer size | Path buffer capacity between Everything SDK discovery and search workers. |
+| System memory pressure limit | Machine RAM usage percentage threshold for memory-saving mode. |
+| Line truncation length | Result-list line length cap to keep the UI responsive with very long lines. |
+| Limit parallelism on HDD | Automatically reduces thread count when searching on a rotational drive. |
+
+### Editor Tab
+
+| Setting | What It Controls |
+| --- | --- |
+| Editor command | External command used by the Editor button. Supports `{file}` and `{line}` placeholder tokens. Example: `code -g {file}:{line}` for VS Code. |
+| Backup before save | When on (default), the built-in editor creates a `.yagubak` file before overwriting. |
+| Preview editor max size (MB) | Maximum file size the built-in editor will load. |
+
+### UI Tab
+
+| Setting | What It Controls |
+| --- | --- |
+| Global hotkey | Optional system-wide keyboard shortcut to bring Yagu to the foreground. |
+| Window focus behavior | Controls window mode: Minimize to tray, Stay open, Always on top, or Traditional window. |
+| Close to tray | When enabled, closing the window minimizes to the system tray instead of exiting. |
+| Max recent items | Number of recent directories and queries stored. |
 | Log verbosity | Amount of diagnostic logging. Verbose logging can reduce performance. |
+
+---
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| Enter (in search box) | Start search. |
+| Escape (in search box) | Cancel running search. |
+| F5 | Start search. |
+| Ctrl+F | Open Find bar in preview. |
+| Ctrl+H | Open Find & Replace bar in preview. |
+| Ctrl+Shift+Delete | Clear all results. |
+| Ctrl+Shift+S | Copy window screenshot to clipboard. |
+| Enter (in preview) | Jump to next match. |
+| Shift+Enter (in preview) | Jump to previous match. |
+| Alt+C | Toggle case sensitive. |
+| Alt+R | Toggle regex. |
+| Alt+E | Toggle exact match. |
+
+---
+
+## Window Modes
+
+The pin/window button in the title bar cycles through four modes:
+
+| Mode | Behavior |
+| --- | --- |
+| Minimize to tray | Window minimizes to the system tray when it loses focus. Click the tray icon to restore. |
+| Stay open | Normal window behavior. |
+| Always on top | Window stays above other windows. |
+| Traditional window | Full window with standard title bar and close button (default). |
+
+---
+
+## Drag and Drop
+
+Drag a folder from Windows Explorer onto the Yagu window to set it as the search directory.
+
+---
+
+## System Tray
+
+When tray mode is active, the system tray icon provides:
+
+- **Open (reset)** — Restores the window and clears the directory.
+- **Open (existing)** — Restores the window keeping the current directory.
+- **Close** — Exits the application.
+
+---
+
+## Skipped Files
+
+During a search, the status bar shows a "Skipped: N" count. Click it to see a breakdown of why files were skipped (access denied, too large, binary, extension, gitignore, admin-protected paths, etc.).
+
+---
+
+## Admin Elevation
+
+If Yagu detects it cannot access certain directories, a banner appears offering:
+
+- **Learn more…** — Explains the limitation.
+- **Restart as Admin** — Relaunches Yagu with administrator privileges.
+- **Don't show again** — Suppresses the banner for future sessions.
 
 ## Performance Overview
 

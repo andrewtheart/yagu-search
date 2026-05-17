@@ -6,7 +6,7 @@ namespace Yagu.Services;
 
 [JsonSerializable(typeof(AppSettings))]
 [JsonSourceGenerationOptions(WriteIndented = true)]
-internal partial class AppSettingsJsonContext : JsonSerializerContext { }
+internal sealed partial class AppSettingsJsonContext : JsonSerializerContext { }
 
 public sealed class AppSettings
 {
@@ -24,7 +24,7 @@ public sealed class AppSettings
     [JsonIgnore] public bool ObeyGitignore { get; set; }
     public bool GitignoreTakesPrecedence { get; set; } = true;
     public int ContextLines { get; set; } = 3;
-    public int PreviewContextLines { get; set; } = 20;
+    public int PreviewContextLines { get; set; } = 10;
     [JsonIgnore] public string IncludeGlobs { get; set; } = string.Empty;
     [JsonIgnore] public string ExcludeGlobs { get; set; } = DefaultExcludeGlobs;
     [JsonIgnore] public int IncludeFilterModeIndex { get; set; }
@@ -41,7 +41,7 @@ public sealed class AppSettings
     public DateTimeOffset? DefaultCreatedBeforeDate { get; set; }
     public DateTimeOffset? DefaultModifiedAfterDate { get; set; }
     public DateTimeOffset? DefaultModifiedBeforeDate { get; set; }
-    public int MaxResults { get; set; } = 0;
+    public int MaxResults { get; set; }
     public string EditorCommand { get; set; } = EditorLauncher.DefaultCommand;
     public double SplitPanePosition { get; set; } = 0.5;
     public bool GlobalHotkeyEnabled { get; set; }
@@ -57,9 +57,11 @@ public sealed class AppSettings
     /// <summary>Hard process memory cap in MB. 0 = auto cap based on physical RAM.</summary>
     public int MemoryLimitMB { get; set; }
     /// <summary>System-wide memory pressure threshold (0-100). Search evicts cached results and switches to memory-saving mode when total machine memory usage exceeds this %. 0 = disabled.</summary>
-    public int MemoryPressurePercent { get; set; } = 80;
+    public int MemoryPressurePercent { get; set; } = 75;
     /// <summary>Bounded channel buffer size for the Everything SDK streaming path. Higher values use more memory but can improve throughput.</summary>
     public int SdkChannelBufferSize { get; set; } = 4096;
+    /// <summary>Current directory recursion depth. 0 = unlimited. This is intentionally session-only.</summary>
+    [JsonIgnore] public int MaxSearchDepth { get; set; }
     /// <summary>Optional hard cap on stored matches per file. 0 = unlimited (default). Useful for capping pathological files (massive logs, generated dumps) that would otherwise dominate the heap.</summary>
     public int MaxMatchesPerFile { get; set; }
     /// <summary>Whether to skip binary files during content search. Default true.</summary>

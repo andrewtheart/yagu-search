@@ -861,7 +861,6 @@ public sealed partial class MainWindow
         FullFileButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
         OpenInDefaultAppButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
         OpenInEditorButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
-        ShowInExplorerButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
         ClearPreviewButton.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
         PreviewContextPanel.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
         LayoutDropDown.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;

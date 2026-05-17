@@ -1,6 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
-using System.Text;
 
 namespace Yagu.Native;
 
@@ -81,7 +80,7 @@ internal static class EverythingSdk
     internal static extern bool IsFileResult(uint nIndex);
 
     [DllImport(DllName, EntryPoint = "Everything_GetResultFullPathNameW", CharSet = CharSet.Unicode)]
-    internal static extern uint GetResultFullPathName(uint nIndex, StringBuilder lpString, uint nMaxCount);
+    internal static extern uint GetResultFullPathName(uint nIndex, [Out] char[] lpString, uint nMaxCount);
 
     [DllImport(DllName, EntryPoint = "Everything_GetResultSize")]
     internal static extern bool GetResultSize(uint nIndex, out long lpSize);

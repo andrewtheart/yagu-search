@@ -21,7 +21,7 @@ The [PLANS](PLANS/) directory contains design notes, performance investigations,
 - voidtools Everything support for file discovery, with automatic fallback to built-in .NET enumeration.
 - Optional Rust native scanner for fast per-file matching, with managed C# fallback when the DLL is unavailable.
 - Include and exclude filters with glob/path or regex modes, skip-extension lists, optional binary-file inclusion, and max-file-size limits.
-- Configurable result cap, per-file match cap, content-search parallelism, and memory limits.
+- Configurable result cap, per-file match cap, maximum search depth, content-search parallelism, and memory limits.
 - Memory-pressure mode that pages result payloads to disk and keeps searching instead of exhausting RAM.
 - Grouped result list with optional no-sort mode plus sorting by match count, modified date, file size, or file name.
 - Result filtering by file name/path and by match text without rerunning the search.
@@ -101,6 +101,8 @@ dotnet run -c Release --project Yagu -- --window-mode traditional
 ```
 
 `--window-mode` accepts the same four modes exposed in Settings: `minimize-to-tray`, `stay-open`, `always-on-top`, and `traditional`. Numeric values `0` through `3` are also accepted. `--windowing-mode` is available as an alias.
+
+`--max-depth <n>` limits how many levels of subdirectories are searched below the root directory. `0` (the default) means unlimited. For example, `--max-depth 2` searches the root and up to two levels of child folders.
 
 ### Run .NET Tests
 

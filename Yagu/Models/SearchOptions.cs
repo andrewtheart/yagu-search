@@ -63,9 +63,12 @@ public sealed class SearchOptions
     public int MaxResults { get; init; } = 50_000;
 
     /// <summary>Maximum matches per individual file before moving to the next. 0 disables.</summary>
-    public int MaxMatchesPerFile { get; init; } = 0;
+    public int MaxMatchesPerFile { get; init; }
 
     public bool SkipBinary { get; init; } = true;
+
+    /// <summary>Maximum directory depth to recurse into. 0 = unlimited.</summary>
+    public int MaxSearchDepth { get; init; }
 
     /// <summary>When true, recursively read .gitignore files and exclude matching paths from listing.</summary>
     public bool ObeyGitignore { get; init; }
@@ -79,7 +82,7 @@ public sealed class SearchOptions
     /// <summary>
     /// Number of concurrent file scans. 0 = auto safe cap chosen by <see cref="Services.SearchService"/>.
     /// </summary>
-    public int MaxDegreeOfParallelism { get; init; } = 0;
+    public int MaxDegreeOfParallelism { get; init; }
 
     public static int ResolveContentSearchParallelism(int index, int processorCount)
     {
@@ -98,7 +101,7 @@ public sealed class SearchOptions
     public long MaxProcessMemoryBytes { get; init; }
 
     /// <summary>System-wide memory pressure threshold (0-100). 0 = disabled.</summary>
-    public int MemoryPressurePercent { get; init; } = 80;
+    public int MemoryPressurePercent { get; init; } = 75;
 
     /// <summary>Set of file extensions (without dots, case-insensitive) to skip entirely — no binary check, no content read.</summary>
     public IReadOnlySet<string> SkipExtensions { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
