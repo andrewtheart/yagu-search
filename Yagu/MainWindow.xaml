@@ -229,10 +229,14 @@
                                 <ComboBoxItem Content="File name, then content"
                                               ToolTipService.ToolTip="First filter by file name, then search contents of matching files" />
                             </ComboBox>
-                            <CheckBox x:Name="ObeyGitignoreCheckBox" Content="Obey .gitignore"
-                                      IsChecked="{x:Bind ViewModel.ObeyGitignore, Mode=TwoWay}" MinWidth="0"
-                                      ToolTipService.ToolTip="Exclude files and folders listed in .gitignore files (recursively)"
-                                      Checked="OnObeyGitignoreChecked" />
+                            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                <ToggleSwitch x:Name="ObeyGitignoreCheckBox" OnContent="Obey .gitignore" OffContent="Obey .gitignore"
+                                              IsOn="{x:Bind ViewModel.ObeyGitignore, Mode=TwoWay}" MinWidth="0"
+                                              Toggled="OnObeyGitignoreToggled" />
+                                <FontIcon Glyph="&#xE7BA;" FontSize="12" VerticalAlignment="Center"
+                                          Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                                          ToolTipService.ToolTip="Enabling this decreases search performance due to extra .gitignore processing on every folder encountered during the scan." />
+                            </StackPanel>
                         </StackPanel>
 
                         <!-- Path filters -->
@@ -245,7 +249,9 @@
                                 <TextBox PlaceholderText="{x:Bind ViewModel.IncludeFilterPlaceholder, Mode=OneWay}"
                                          Text="{x:Bind ViewModel.IncludeGlobs, Mode=TwoWay}"
                                          Padding="72,4,112,4" FontStyle="Italic"
-                                         TextChanged="OnFilterBoxTextChanged" />
+                                         TextChanged="OnFilterBoxTextChanged"
+                                         GotFocus="OnFilterBoxGotFocus"
+                                         LostFocus="OnFilterBoxLostFocus" />
                                 <Border Background="#0078D4" CornerRadius="8" Padding="8,2"
                                         VerticalAlignment="Center" HorizontalAlignment="Left"
                                         Margin="6,0,0,0" IsHitTestVisible="True"
@@ -266,7 +272,9 @@
                                 <TextBox PlaceholderText="{x:Bind ViewModel.ExcludeFilterPlaceholder, Mode=OneWay}"
                                          Text="{x:Bind ViewModel.ExcludeGlobs, Mode=TwoWay}"
                                          Padding="72,4,112,4" FontStyle="Italic"
-                                         TextChanged="OnFilterBoxTextChanged" />
+                                         TextChanged="OnFilterBoxTextChanged"
+                                         GotFocus="OnFilterBoxGotFocus"
+                                         LostFocus="OnFilterBoxLostFocus" />
                                 <Border Background="#0078D4" CornerRadius="8" Padding="8,2"
                                         VerticalAlignment="Center" HorizontalAlignment="Left"
                                         Margin="6,0,0,0" IsHitTestVisible="True"
@@ -327,12 +335,17 @@
                                     </Flyout>
                                 </DropDownButton.Flyout>
                             </DropDownButton>
-                            <CheckBox Content="Skip binary" IsChecked="{x:Bind ViewModel.SkipBinary, Mode=TwoWay}"
-                                      VerticalAlignment="Center" MinWidth="0"
-                                      ToolTipService.ToolTip="Skip files detected as binary during content search" />
-                            <CheckBox Content="Search archives" IsChecked="{x:Bind ViewModel.SearchInsideArchives, Mode=TwoWay}"
-                                      VerticalAlignment="Center" MinWidth="0"
-                                      ToolTipService.ToolTip="Searches inside ZIP archives for text matches. This has a performance penalty — only enable if you expect results inside ZIP files." />
+                            <ToggleSwitch OnContent="Search binary" OffContent="Search binary"
+                                          IsOn="{x:Bind ViewModel.SearchBinary, Mode=TwoWay}"
+                                          VerticalAlignment="Center" MinWidth="0" />
+                            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                <ToggleSwitch OnContent="Search archives" OffContent="Search archives"
+                                              IsOn="{x:Bind ViewModel.SearchInsideArchives, Mode=TwoWay}"
+                                              MinWidth="0" />
+                                <FontIcon Glyph="&#xE7BA;" FontSize="12" VerticalAlignment="Center"
+                                          Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                                          ToolTipService.ToolTip="Enabling this decreases search performance — archives must be decompressed and scanned individually. Only enable if you expect results inside ZIP files." />
+                            </StackPanel>
                             <DropDownButton Content="{x:Bind ViewModel.ArchiveExtensionsSummary, Mode=OneWay}"
                                             Visibility="{x:Bind ViewModel.ArchiveExtensionsVisibility, Mode=OneWay}"
                                             VerticalAlignment="Center" FontSize="12"
@@ -584,6 +597,7 @@
                         </Grid.ColumnDefinitions>
                         <CheckBox x:Name="SelectAllFilesCheckBox"
                                   ToolTipService.ToolTip="Select / deselect all files"
+                                  IsThreeState="False"
                                   MinWidth="32" MinHeight="0" Padding="0"
                                   VerticalAlignment="Center"
                                   Checked="OnSelectAllFilesChecked"
@@ -635,7 +649,10 @@
                         Padding="4,0">
                         <ListView.ContextFlyout>
                             <MenuFlyout Opening="OnResultsContextMenuOpening">
-                                <MenuFlyoutItem x:Name="CtxPreviewSelected" Text="Preview selected" Click="OnPreviewSelectedFiles">
+                                <MenuFlyoutItem x:Name="CtxPreviewSingle" Text="Preview" Click="OnPreviewSingleFile">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8A1;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem x:Name="CtxPreviewSelected" Text="Preview all selected" Click="OnPreviewSelectedFiles">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8A1;" /></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
                                 <MenuFlyoutSeparator />
@@ -670,7 +687,10 @@
                                         <Grid PointerPressed="OnFileGroupHeaderPointerPressed" PointerReleased="OnFileGroupHeaderPointerReleased" Tapped="OnFileGroupHeaderTapped" DoubleTapped="OnFileGroupHeaderDoubleTapped" Tag="{x:Bind FilePath}" Background="Transparent">
                                             <Grid.ContextFlyout>
                                                 <MenuFlyout Opening="OnFileHeaderContextMenuOpening">
-                                                    <MenuFlyoutItem Text="Preview selected" Click="OnPreviewSelectedFiles" Tag="{x:Bind FilePath}">
+                                                    <MenuFlyoutItem Text="Preview" Click="OnPreviewSingleFile" Tag="{x:Bind FilePath}">
+                                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8A1;" /></MenuFlyoutItem.Icon>
+                                                    </MenuFlyoutItem>
+                                                    <MenuFlyoutItem Text="Preview all selected" Click="OnPreviewSelectedFiles" Tag="{x:Bind FilePath}">
                                                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8A1;" /></MenuFlyoutItem.Icon>
                                                     </MenuFlyoutItem>
                                                     <MenuFlyoutSeparator />
@@ -701,6 +721,7 @@
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
                                         <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
+                                                  IsThreeState="False"
                                                   IsChecked="{x:Bind AllSelected, Mode=OneWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
                                                   Click="OnFileGroupCheckBoxClicked" />
                                         <!-- Match count badge -->

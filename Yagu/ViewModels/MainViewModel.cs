@@ -121,6 +121,7 @@ public sealed partial class MainViewModel : ObservableObject
             ? AppSettings.DefaultAdminProtectedPathSegments
             : _settings.AdminProtectedPathSegments;
         HasCompletedFirstRun = _settings.HasCompletedFirstRun;
+        LimitParallelismOnHdd = _settings.LimitParallelismOnHdd;
         BackupBeforeSave = _settings.BackupBeforeSave;
         WindowFocusBehavior = _settings.WindowFocusBehavior;
         CloseToTray = _settings.CloseToTray;
@@ -245,6 +246,19 @@ public sealed partial class MainViewModel : ObservableObject
         Yagu.Models.FileGroup.MaxMatchesPerGroup = value > 0 ? value : int.MaxValue;
     }
     [ObservableProperty] public partial bool SkipBinary { get; set; } = true;
+
+    /// <summary>UI-facing inverse of <see cref="SkipBinary"/> for the "Search binary" toggle.</summary>
+    public bool SearchBinary
+    {
+        get => !SkipBinary;
+        set => SkipBinary = !value;
+    }
+
+    partial void OnSkipBinaryChanged(bool value)
+    {
+        OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(SearchBinary)));
+    }
+
     [ObservableProperty] public partial string SkipExtensions { get; set; } = AppSettings.DefaultSkipExtensions;
     [ObservableProperty] public partial bool SearchInsideArchives { get; set; }
     [ObservableProperty] public partial string ArchiveExtensions { get; set; } = AppSettings.DefaultArchiveExtensions;
@@ -322,6 +336,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial string AdminProtectedPathSegments { get; set; } = AppSettings.DefaultAdminProtectedPathSegments;
 
     [ObservableProperty] public partial bool HasCompletedFirstRun { get; set; }
+    [ObservableProperty] public partial bool LimitParallelismOnHdd { get; set; } = true;
     [ObservableProperty] public partial bool BackupBeforeSave { get; set; } = true;
     [ObservableProperty] public partial int WindowFocusBehavior { get; set; } // 0 = MinimizeToTray, 1 = StayOpen, 2 = AlwaysOnTop, 3 = FullWindow
     [ObservableProperty] public partial bool CloseToTray { get; set; } = true;
@@ -1638,6 +1653,7 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.ExcludeAdminProtectedPaths = ExcludeAdminProtectedPaths;
         _settings.AdminProtectedPathSegments = AdminProtectedPathSegments;
         _settings.HasCompletedFirstRun = HasCompletedFirstRun;
+        _settings.LimitParallelismOnHdd = LimitParallelismOnHdd;
         _settings.BackupBeforeSave = BackupBeforeSave;
         _settings.WindowFocusBehavior = WindowFocusBehavior;
         _settings.CloseToTray = CloseToTray;

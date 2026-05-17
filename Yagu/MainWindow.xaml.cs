@@ -1055,6 +1055,28 @@ public sealed partial class MainWindow : Window
                 : Windows.UI.Text.FontStyle.Normal;
     }
 
+    private void OnFilterBoxGotFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox tb)
+            tb.PlaceholderText = string.Empty;
+    }
+
+    private void OnFilterBoxLostFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is not TextBox tb) return;
+        if (string.IsNullOrEmpty(tb.Text))
+        {
+            // Determine which filter box lost focus by checking the binding
+            // The include box is in the first Grid child, exclude in the second
+            var parent = tb.Parent as Grid;
+            var grandparent = parent?.Parent as Grid;
+            if (grandparent is not null && grandparent.Children.IndexOf(parent) == 0)
+                tb.PlaceholderText = ViewModel.IncludeFilterPlaceholder;
+            else
+                tb.PlaceholderText = ViewModel.ExcludeFilterPlaceholder;
+        }
+    }
+
     private async void OnSearchCancelClick(object sender, RoutedEventArgs e)
     {
         if (ViewModel.IsSearching)
@@ -1065,6 +1087,7 @@ public sealed partial class MainWindow : Window
         {
             HideQuerySuggestions();
             if (!await ClearPreviewPanelForNewSearchAsync()) return;
+            if (!await CheckHddAndWarnAsync()) return;
             await ViewModel.StartSearchAsync();
         }
     }
@@ -1082,6 +1105,7 @@ public sealed partial class MainWindow : Window
 
         HideQuerySuggestions(sender);
         if (!await ClearPreviewPanelForNewSearchAsync()) return;
+        if (!await CheckHddAndWarnAsync()) return;
         await ViewModel.StartSearchAsync();
     }
 
@@ -1465,10 +1489,11 @@ public sealed partial class MainWindow : Window
         await dlg.ShowAsync();
     }
 
-    private async void OnObeyGitignoreChecked(object sender, RoutedEventArgs e)
+    private async void OnObeyGitignoreToggled(object sender, RoutedEventArgs e)
     {
-        // Only show the dialog when the checkbox is being checked (not during initial load).
+        // Only show the dialog when the toggle is being turned on (not during initial load).
         if (!_isLoaded) return;
+        if (sender is ToggleSwitch ts && !ts.IsOn) return;
 
         var dialog = new ContentDialog
         {
@@ -1506,6 +1531,67 @@ public sealed partial class MainWindow : Window
         _settingsWindow = new SettingsWindow(ViewModel, _hotkeyService, _hwnd, ApplyWordWrap);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Activate();
+    }
+
+    /// <summary>
+    /// Checks if the search directory is on a rotational HDD and, if LimitParallelismOnHdd is enabled,
+    /// forces parallelism to 1 and warns the user. Returns false if the user cancels.
+    /// </summary>
+    private async Task<bool> CheckHddAndWarnAsync()
+    {
+        if (!ViewModel.LimitParallelismOnHdd) return true;
+        if (string.IsNullOrWhiteSpace(ViewModel.Directory)) return true;
+        if (!Helpers.DiskTypeDetector.IsHardDisk(ViewModel.Directory)) return true;
+
+        // Force parallelism to 1 (sequential)
+        ViewModel.ParallelismIndex = 1;
+
+        var contentPanel = new StackPanel { Spacing = 8 };
+        contentPanel.Children.Add(new TextBlock
+        {
+            Text = "The selected search directory is on a rotational hard disk (HDD). " +
+                   "Parallelism has been set to 1 thread to avoid excessive disk thrashing.",
+            TextWrapping = TextWrapping.Wrap,
+        });
+        contentPanel.Children.Add(new TextBlock
+        {
+            Text = "You can increase parallelism in Settings → Performance at your own risk. " +
+                   "You can also disable this warning permanently in Settings → Performance.",
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 12,
+            Opacity = 0.8,
+        });
+        var linkBtn = new HyperlinkButton
+        {
+            Content = "Open Settings (Performance)",
+            Margin = new Thickness(0, 4, 0, 0),
+        };
+        linkBtn.Click += (_, _) =>
+        {
+            if (_settingsWindow is not null)
+            {
+                try { _settingsWindow.Activate(); return; }
+                catch { _settingsWindow = null; }
+            }
+            _settingsWindow = new SettingsWindow(ViewModel, _hotkeyService, _hwnd, ApplyWordWrap);
+            _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+            _settingsWindow.Activate();
+            // Navigate to Performance tab (index 2)
+            _settingsWindow.SelectTab(2);
+        };
+        contentPanel.Children.Add(linkBtn);
+
+        var dialog = new ContentDialog
+        {
+            Title = "HDD detected — parallelism limited",
+            Content = contentPanel,
+            PrimaryButtonText = "Continue search",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = this.Content.XamlRoot,
+        };
+
+        return await dialog.ShowAsync() == ContentDialogResult.Primary;
     }
 
     private void OnCloseWindowClick(object sender, RoutedEventArgs e)
@@ -3332,6 +3418,9 @@ public sealed partial class MainWindow : Window
         FullFileButton.IsEnabled = true;
         PreviewToolbarContent.Visibility = Visibility.Collapsed;
 
+        // Reset select-all checkbox for the new search.
+        SelectAllFilesCheckBox.IsChecked = false;
+
         // Collapse the preview panel so only the file list shows during search
         CollapsePreviewPanel();
 
@@ -3525,7 +3614,12 @@ public sealed partial class MainWindow : Window
     private async void OnFileGroupCheckBoxClicked(object sender, RoutedEventArgs e)
     {
         if (sender is not CheckBox checkBox || checkBox.DataContext is not FileGroup group)
+        {
+            // DataContext not set (e.g. during container recycling) — revert checkbox to unchecked.
+            if (sender is CheckBox orphan)
+                orphan.IsChecked = false;
             return;
+        }
 
         bool shouldSelect = checkBox.IsChecked == true;
         int currentIndex = ViewModel.ResultGroups.IndexOf(group);
@@ -3568,6 +3662,9 @@ public sealed partial class MainWindow : Window
         {
             _suppressPreviewUpdate = false;
         }
+
+        // Force-sync checkbox to model to prevent divergence from OneWay binding.
+        checkBox.IsChecked = group.AllSelected;
 
         _lastCheckedGroupIndex = currentIndex;
 
@@ -3731,16 +3828,28 @@ public sealed partial class MainWindow : Window
     {
         if (sender is MenuFlyout flyout)
         {
-            if (flyout.Items.Count > 0 && flyout.Items[0] is MenuFlyoutItem previewItem)
+            var contextGroup = GetFileHeaderContextGroup(flyout)
+                ?? flyout.Items.OfType<MenuFlyoutItem>()
+                    .Select(GetFileHeaderContextGroup)
+                    .FirstOrDefault(g => g is not null);
+
+            // First item: "Preview <filename>"
+            if (flyout.Items.Count > 0 && flyout.Items[0] is MenuFlyoutItem singleItem)
             {
-                var contextGroup = GetFileHeaderContextGroup(flyout)
-                    ?? flyout.Items.OfType<MenuFlyoutItem>()
-                        .Select(GetFileHeaderContextGroup)
-                        .FirstOrDefault(g => g is not null);
+                string fileName = contextGroup is not null ? System.IO.Path.GetFileName(contextGroup.FilePath) : "";
+                singleItem.Text = $"Preview {fileName}";
+                singleItem.Tag = contextGroup;
+            }
+
+            // Second item: "Preview all selected (x)" — hidden when ≤1 checked
+            if (flyout.Items.Count > 1 && flyout.Items[1] is MenuFlyoutItem previewAllItem)
+            {
                 int checkedCount = GetCheckedFileGroups().Count;
-                int count = checkedCount > 0 ? checkedCount : contextGroup is null ? 0 : 1;
-                previewItem.Text = $"Preview selected ({count})";
-                previewItem.Tag = contextGroup;
+                previewAllItem.Text = $"Preview all selected ({checkedCount})";
+                previewAllItem.Tag = contextGroup;
+                previewAllItem.Visibility = checkedCount > 1
+                    ? Microsoft.UI.Xaml.Visibility.Visible
+                    : Microsoft.UI.Xaml.Visibility.Collapsed;
             }
         }
     }
@@ -3749,10 +3858,29 @@ public sealed partial class MainWindow : Window
     {
         var checkedGroups = GetCheckedFileGroups();
         var contextGroup = checkedGroups.Count == 0 ? GetRecentResultsContextMenuGroup() : null;
-        int count = checkedGroups.Count > 0 ? checkedGroups.Count : contextGroup is null ? 0 : 1;
-        bool plural = count > 1;
-        CtxPreviewSelected.Text = $"Preview selected ({count})";
+        int checkedCount = checkedGroups.Count;
+
+        // "Preview <filename>" — always visible, shows right-clicked file name
+        string fileName = contextGroup is not null
+            ? System.IO.Path.GetFileName(contextGroup.FilePath)
+            : checkedCount == 1
+                ? System.IO.Path.GetFileName(checkedGroups[0].FilePath)
+                : "";
+        CtxPreviewSingle.Text = $"Preview {fileName}";
+        CtxPreviewSingle.Tag = contextGroup ?? (checkedCount == 1 ? checkedGroups[0] : null);
+        CtxPreviewSingle.Visibility = !string.IsNullOrEmpty(fileName)
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+        // "Preview all selected (x)" — only when >1 checked
+        CtxPreviewSelected.Text = $"Preview all selected ({checkedCount})";
         CtxPreviewSelected.Tag = contextGroup;
+        CtxPreviewSelected.Visibility = checkedCount > 1
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+        int count = checkedCount > 0 ? checkedCount : contextGroup is null ? 0 : 1;
+        bool plural = count > 1;
         CtxCopyPaths.Text = plural ? "Copy File Paths" : "Copy File Path";
         CtxCopyWithContent.Text = plural ? "Copy Files With Content" : "Copy File With Content";
         CtxSavePaths.Text = plural ? "Save File Paths\u2026" : "Save File Path\u2026";
@@ -3783,6 +3911,52 @@ public sealed partial class MainWindow : Window
     {
         long elapsed = Environment.TickCount64 - _lastResultsContextMenuTick;
         return elapsed is >= 0 and < 2000 ? _lastResultsContextMenuGroup : null;
+    }
+
+    private async void OnPreviewSingleFile(object sender, RoutedEventArgs e)
+    {
+        FileGroup? group = null;
+        if (sender is FrameworkElement fe && fe.Tag is FileGroup tagGroup)
+            group = tagGroup;
+        else if (sender is FrameworkElement fe2 && fe2.Tag is string filePath)
+            group = FindFileGroup(filePath);
+
+        if (group is null)
+        {
+            group = GetRecentResultsContextMenuGroup();
+        }
+
+        if (group is null) return;
+
+        LogService.Instance.Info("Preview", $"OnPreviewSingleFile: {System.IO.Path.GetFileName(group.FilePath)}");
+        _suppressPreviewUpdate = true;
+        try
+        {
+            group.SelectAll();
+            var byFile = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in group)
+            {
+                if (!r.IsSelected) continue;
+                if (!byFile.TryGetValue(r.FilePath, out var list))
+                {
+                    list = new List<SearchResult>();
+                    byFile[r.FilePath] = list;
+                }
+                list.Add(r);
+            }
+            if (byFile.Count == 0) return;
+
+            var existing = GetExistingPreviewFilePaths();
+            if (existing.Contains(group.FilePath))
+            {
+                TryScrollToPreviewSection(group.FilePath);
+            }
+            else
+            {
+                await PrependPreviewSectionsForFilesAsync(byFile, byFile.Keys.First());
+            }
+        }
+        finally { _suppressPreviewUpdate = false; }
     }
 
     private async void OnPreviewSelectedFiles(object sender, RoutedEventArgs e)
@@ -9426,7 +9600,8 @@ public sealed partial class MainWindow : Window
         if (_autoSearchOnLoad)
         {
             _autoSearchOnLoad = false;
-            await ViewModel.StartSearchAsync();
+            if (await CheckHddAndWarnAsync())
+                await ViewModel.StartSearchAsync();
         }
         else
         {

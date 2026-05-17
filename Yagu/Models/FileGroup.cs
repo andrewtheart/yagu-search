@@ -322,11 +322,10 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         get => _allSelected;
         set
         {
-            if (_allSelected != value)
-            {
-                _allSelected = value;
-                OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(AllSelected)));
-            }
+            _allSelected = value;
+            // Always raise PropertyChanged to re-sync the OneWay-bound CheckBox,
+            // which can diverge from the model after user clicks.
+            OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(AllSelected)));
         }
     }
 
@@ -349,7 +348,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
 
     public void NotifySelectionChanged()
     {
-        AllSelected = this.All(r => r.IsSelected);
+        AllSelected = Count > 0 && this.All(r => r.IsSelected);
         OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(SelectedCount)));
         OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(SelectedCountText)));
     }

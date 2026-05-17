@@ -152,35 +152,22 @@ public sealed class SearchService
             concreteLister.ExcludeAdminProtectedPaths = options.ExcludeAdminProtectedPaths;
             concreteLister.AdminProtectedPathSegmentsOverride = options.AdminProtectedPathSegments;
 
-            // Gitignore exclusions: scan once, push results to the lister.
+            // Dynamic gitignore: create a matcher that loads .gitignore files
+            // lazily as directories are encountered during the scan.
             if (options.ObeyGitignore)
             {
-                var rules = GitignoreService.Scan(options.Directory);
-                var gitFolders = rules.ExcludedFolders;
-                var gitExtensions = rules.ExcludedExtensions;
-                var gitFullPaths = rules.ExcludedFullPaths;
-
-                // When the user chose "include filters take precedence", remove
-                // any gitignore exclusions that conflict with explicit includes.
+                var matcher = new DynamicGitignoreMatcher(options.Directory);
                 if (!options.GitignoreTakesPrecedence && includeExts.Count > 0)
                 {
-                    var includeExtSet = new HashSet<string>(
+                    matcher.IncludeExtensionOverrides = new HashSet<string>(
                         includeExts.Select(e => e.TrimStart('.')),
                         StringComparer.OrdinalIgnoreCase);
-                    var filtered = new HashSet<string>(gitExtensions, StringComparer.OrdinalIgnoreCase);
-                    filtered.ExceptWith(includeExtSet);
-                    gitExtensions = filtered;
                 }
-
-                concreteLister.GitignoreExcludedFolders = gitFolders;
-                concreteLister.GitignoreExcludedExtensions = gitExtensions;
-                concreteLister.GitignoreExcludedFullPaths = gitFullPaths;
+                concreteLister.GitignoreMatcher = matcher;
             }
             else
             {
-                concreteLister.GitignoreExcludedFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                concreteLister.GitignoreExcludedExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                concreteLister.GitignoreExcludedFullPaths = [];
+                concreteLister.GitignoreMatcher = null;
             }
         }
 

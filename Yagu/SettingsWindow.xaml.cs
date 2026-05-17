@@ -42,6 +42,13 @@ public sealed partial class SettingsWindow : Window
         TabList.SelectedIndex = 0;
     }
 
+    /// <summary>Navigate to a specific tab by zero-based index.</summary>
+    public void SelectTab(int index)
+    {
+        if (index >= 0 && index < TabList.Items.Count)
+            TabList.SelectedIndex = index;
+    }
+
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
@@ -167,12 +174,12 @@ public sealed partial class SettingsWindow : Window
             g.Children.Add(prevCtx);
 
             g.Children.Add(NextSearchLabel("Default include globs (comma/semicolon-separated):"));
-            var incGlobs = new TextBox { Text = _viewModel.IncludeGlobs, PlaceholderText = "e.g. *.cs;*.ts" };
+            var incGlobs = new TextBox { Text = _viewModel.IncludeGlobs, PlaceholderText = "e.g. *.cs;*.ts", MaxWidth = 300, HorizontalAlignment = HorizontalAlignment.Left };
             incGlobs.TextChanged += (_, _) => _viewModel.IncludeGlobs = incGlobs.Text;
             g.Children.Add(incGlobs);
 
             g.Children.Add(NextSearchLabel("Default exclude globs (comma/semicolon-separated):"));
-            var excGlobs = new TextBox { Text = _viewModel.ExcludeGlobs, PlaceholderText = "e.g. node_modules;bin;obj;.git" };
+            var excGlobs = new TextBox { Text = _viewModel.ExcludeGlobs, PlaceholderText = "e.g. node_modules;bin;obj;.git", MaxWidth = 300, HorizontalAlignment = HorizontalAlignment.Left };
             excGlobs.TextChanged += (_, _) => _viewModel.ExcludeGlobs = excGlobs.Text;
             g.Children.Add(excGlobs);
         }
@@ -293,11 +300,10 @@ public sealed partial class SettingsWindow : Window
             };
             g.Children.Add(clearDateDefaults);
 
-            var skipBinary = new CheckBox { Content = NextSearchLabel("Skip binary files"), IsChecked = _viewModel.SkipBinary };
-            skipBinary.Checked += (_, _) => _viewModel.SkipBinary = true;
-            skipBinary.Unchecked += (_, _) => _viewModel.SkipBinary = false;
-            g.Children.Add(skipBinary);
-            g.Children.Add(new TextBlock { Text = "When enabled, files detected as binary (null bytes, magic bytes) are skipped during content search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            var searchBinary = new ToggleSwitch { OnContent = NextSearchLabel("Search binary files"), OffContent = NextSearchLabel("Search binary files"), IsOn = _viewModel.SearchBinary };
+            searchBinary.Toggled += (_, _) => _viewModel.SearchBinary = searchBinary.IsOn;
+            g.Children.Add(searchBinary);
+            g.Children.Add(new TextBlock { Text = "When enabled, files detected as binary (null bytes, magic bytes) are included in content search. Off by default for faster searching.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             var skipAdmin = new CheckBox { Content = NextSearchLabel("Skip admin-protected paths when not elevated"), IsChecked = _viewModel.ExcludeAdminProtectedPaths };
             skipAdmin.Checked += (_, _) => _viewModel.ExcludeAdminProtectedPaths = true;
@@ -315,6 +321,8 @@ public sealed partial class SettingsWindow : Window
                 TextWrapping = TextWrapping.Wrap,
                 AcceptsReturn = true,
                 Height = 100,
+                MaxWidth = 300,
+                HorizontalAlignment = HorizontalAlignment.Left,
             };
             adminSeg.TextChanged += (_, _) => _viewModel.AdminProtectedPathSegments = adminSeg.Text;
             g.Children.Add(adminSeg);
@@ -330,7 +338,7 @@ public sealed partial class SettingsWindow : Window
             var skipExtLabel = NextSearchLabel("Skip extensions (semicolon-separated, no dots):");
             skipExtLabel.Margin = new Thickness(0, 4, 0, 0);
             g.Children.Add(skipExtLabel);
-            var skipExt = new TextBox { Text = _viewModel.SkipExtensions, PlaceholderText = "e.g. exe;dll;zip;png;pdf", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false };
+            var skipExt = new TextBox { Text = _viewModel.SkipExtensions, PlaceholderText = "e.g. exe;dll;zip;png;pdf", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false, MaxWidth = 300, HorizontalAlignment = HorizontalAlignment.Left };
             skipExt.TextChanged += (_, _) => _viewModel.SkipExtensions = skipExt.Text;
             g.Children.Add(skipExt);
             g.Children.Add(new TextBlock { Text = "Files with these extensions are skipped entirely — no binary check, no content read.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
@@ -338,7 +346,7 @@ public sealed partial class SettingsWindow : Window
             var archiveExtLabel = NextSearchLabel("Archive extensions (semicolon-separated, no dots):");
             archiveExtLabel.Margin = new Thickness(0, 4, 0, 0);
             g.Children.Add(archiveExtLabel);
-            var archiveExt = new TextBox { Text = _viewModel.ArchiveExtensions, PlaceholderText = "e.g. zip;jar;docx;xlsx;pptx;epub", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false };
+            var archiveExt = new TextBox { Text = _viewModel.ArchiveExtensions, PlaceholderText = "e.g. zip;jar;docx;xlsx;pptx;epub", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false, MaxWidth = 300, HorizontalAlignment = HorizontalAlignment.Left };
             archiveExt.TextChanged += (_, _) => _viewModel.ArchiveExtensions = archiveExt.Text;
             g.Children.Add(archiveExt);
             g.Children.Add(new TextBlock { Text = "Extensions that are ZIP-like containers. When 'Search archives' is on, these are removed from the skip list so they reach the content searcher. Detection still uses file-header magic bytes.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
@@ -358,6 +366,17 @@ public sealed partial class SettingsWindow : Window
             parallelism.SelectedIndex = _viewModel.ParallelismIndex;
             parallelism.SelectionChanged += (_, _) => _viewModel.ParallelismIndex = parallelism.SelectedIndex;
             g.Children.Add(parallelism);
+
+            var hddToggle = new ToggleSwitch
+            {
+                IsOn = _viewModel.LimitParallelismOnHdd,
+                OnContent = "Limit parallelism on HDD (warn and set to 1 thread)",
+                OffContent = "Limit parallelism on HDD (warn and set to 1 thread)",
+                Margin = new Thickness(0, 4, 0, 0),
+            };
+            hddToggle.Toggled += (_, _) => _viewModel.LimitParallelismOnHdd = hddToggle.IsOn;
+            g.Children.Add(hddToggle);
+            g.Children.Add(new TextBlock { Text = "When enabled, if the search target is on a rotational hard disk, Yagu will automatically set parallelism to 1 and show a warning before searching. Disable to suppress the warning and allow any parallelism level on HDDs.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             g.Children.Add(new TextBlock { Text = "File-listing backend (how files are discovered before searching):" });
             var backend = new ComboBox();
@@ -432,7 +451,7 @@ public sealed partial class SettingsWindow : Window
             var g = AddTab("Editor");
 
             g.Children.Add(new TextBlock { Text = "Editor command ({file} = full file path, {line} = line number):" });
-            var editor = new TextBox { Text = _viewModel.EditorCommand };
+            var editor = new TextBox { Text = _viewModel.EditorCommand, MaxWidth = 300, HorizontalAlignment = HorizontalAlignment.Left };
             editor.TextChanged += (_, _) => _viewModel.EditorCommand = editor.Text;
             g.Children.Add(editor);
 

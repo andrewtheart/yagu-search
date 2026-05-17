@@ -53,7 +53,7 @@ Use the search mode dropdown to decide what the query matches:
 | Regex | Treats the query as a .NET regular expression. Invalid regexes are reported before scanning starts. |
 | Context | Number of lines before and after each match stored with each result row. |
 | Preview | Number of surrounding lines shown in the preview pane. |
-| Skip binary | Skips files detected as binary during content search. Keep this enabled for normal text searches. |
+| Search binary | Includes binary files in content search. Leave this off for normal text searches. |
 
 Literal searches are usually faster than regex searches. Use regex when you need pattern matching, anchors, alternation, groups, or character classes.
 
@@ -119,7 +119,7 @@ Important settings:
 | Default include/exclude globs | Filters applied by default. |
 | Max results | Stops after this many matches. Non-zero values are capped at 50,000. Use 0 for unlimited. |
 | Max file size | Skips files larger than this size. Use 0 for no size limit. |
-| Skip binary files | Avoids scanning binary-looking files. |
+| Search binary files | Includes binary-looking files in the scan. Off by default. |
 | Skip extensions | Extensions skipped entirely before file contents are read. |
 | Content-search parallelism | Number of concurrent file scan workers. |
 | File-listing backend | Auto, Everything SDK, `es.exe`, or .NET enumeration. |
@@ -148,7 +148,7 @@ The fastest path uses:
 - Release builds.
 - Literal search when regex is not required.
 - Tight include/exclude filters.
-- Skip binary enabled.
+- Keep Search binary off.
 - A practical max file size.
 - A practical max result count when you are exploring very broad result sets.
 
@@ -175,7 +175,7 @@ Do not compare files/sec across unrelated directories. A tree of tiny source fil
 - Prefer a literal query over regex.
 - Include only source extensions, such as `cs;ts;js;py;rs`.
 - Exclude generated folders, such as `bin;obj;node_modules;.git;target`.
-- Keep Skip binary enabled.
+- Keep Search binary off.
 - Use Auto file-listing backend.
 - Use Auto parallelism first. Try `2x cores` on fast SSDs if the CPU is underused.
 
@@ -266,7 +266,7 @@ Use Info logging for normal troubleshooting. Use Verbose only when you need deta
 - Keep File-listing backend on Auto.
 - Build/run Release rather than Debug.
 - Use include filters and skip extensions.
-- Keep Skip binary enabled.
+- Keep Search binary off.
 - Avoid broad regex searches when a literal query works.
 - Turn off Verbose logging.
 - Compare the final files/sec value after changing only one setting.
@@ -348,7 +348,7 @@ For most users, start with these defaults:
 
 - File-listing backend: Auto.
 - Content-search parallelism: Auto.
-- Skip binary files: enabled.
+- Search binary files: off (default).
 - Skip extensions: keep the default broad binary/archive/media/database list.
 - Max file size: keep a practical limit unless you know you need huge files.
 - Max results: 0 (unlimited) by default; set a bounded value while exploring very broad result sets.

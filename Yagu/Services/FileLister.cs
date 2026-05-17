@@ -1,12 +1,58 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Text;
 using System.Threading.Channels;
 using Microsoft.Win32;
 using Yagu.Native;
 using Yagu.Services;
 
 namespace Yagu.Services;
+
+/// <summary>Abstraction over the Everything SDK P/Invoke surface for testability.</summary>
+internal interface IEverythingSdkOps
+{
+    object SyncLock { get; }
+    bool IsDBLoaded();
+    void Reset();
+    void SetSearch(string searchString);
+    void SetMatchCase(bool matchCase);
+    void SetMatchPath(bool matchPath);
+    void SetOffset(uint offset);
+    void SetMax(uint max);
+    void SetRequestFlags(uint flags);
+    bool Query(bool bWait);
+    uint GetLastError();
+    string ErrorMessage(uint error);
+    uint GetNumResults();
+    uint GetTotResults();
+    bool GetResultSize(uint index, out long size);
+    uint GetResultFullPathName(uint index, StringBuilder buf, uint capacity);
+}
+
+/// <summary>Real implementation delegating to the static <see cref="EverythingSdk"/> P/Invoke class.</summary>
+[ExcludeFromCodeCoverage]
+internal sealed class RealEverythingSdkOps : IEverythingSdkOps
+{
+    internal static readonly RealEverythingSdkOps Instance = new();
+    public object SyncLock => EverythingSdk.Lock;
+    public bool IsDBLoaded() => EverythingSdk.IsDBLoaded();
+    public void Reset() => EverythingSdk.Reset();
+    public void SetSearch(string searchString) => EverythingSdk.SetSearch(searchString);
+    public void SetMatchCase(bool matchCase) => EverythingSdk.SetMatchCase(matchCase);
+    public void SetMatchPath(bool matchPath) => EverythingSdk.SetMatchPath(matchPath);
+    public void SetOffset(uint offset) => EverythingSdk.SetOffset(offset);
+    public void SetMax(uint max) => EverythingSdk.SetMax(max);
+    public void SetRequestFlags(uint flags) => EverythingSdk.SetRequestFlags(flags);
+    public bool Query(bool bWait) => EverythingSdk.Query(bWait);
+    public uint GetLastError() => EverythingSdk.GetLastError();
+    public string ErrorMessage(uint error) => EverythingSdk.ErrorMessage(error);
+    public uint GetNumResults() => EverythingSdk.GetNumResults();
+    public uint GetTotResults() => EverythingSdk.GetTotResults();
+    public bool GetResultSize(uint index, out long size) => EverythingSdk.GetResultSize(index, out size);
+    public uint GetResultFullPathName(uint index, StringBuilder buf, uint capacity)
+        => EverythingSdk.GetResultFullPathName(index, buf, capacity);
+}
 
 public interface IFileLister
 {
@@ -79,13 +125,13 @@ internal sealed record EverythingReadinessResult(
 public sealed class FileLister : IFileLister
 {
     private readonly Func<string, ProcessStartInfo, IProcess>? _processFactory;
+    private readonly IEverythingSdkOps _sdkOps;
     private int _skippedDirectories;
     private int _accessDeniedDirectories;
     private int _knownTotalFiles;
     private int _earlySkippedFiles;
     private int _earlySkippedTooLargeFiles;
     private int _earlyExcludedByExtensionFiles;
-    private int _gitignoreSkipped;
     public string? FallbackReason { get; private set; }
     public int SkippedDirectories => Volatile.Read(ref _skippedDirectories);
     public int AccessDeniedDirectories => Volatile.Read(ref _accessDeniedDirectories);
@@ -93,7 +139,7 @@ public sealed class FileLister : IFileLister
     public int EarlySkippedFiles => Volatile.Read(ref _earlySkippedFiles);
     public int EarlySkippedTooLargeFiles => Volatile.Read(ref _earlySkippedTooLargeFiles);
     public int EarlyExcludedByExtensionFiles => Volatile.Read(ref _earlyExcludedByExtensionFiles);
-    public int GitignoreSkipped => Volatile.Read(ref _gitignoreSkipped);
+    public int GitignoreSkipped => GitignoreMatcher?.Skipped ?? 0;
 
     /// <summary>Files smaller than this are skipped during listing. 0 disables.</summary>
     public long EarlyMinFileSizeBytes { get; set; }
@@ -119,14 +165,9 @@ public sealed class FileLister : IFileLister
     /// <summary>Exclude glob patterns to push into the Everything SDK query (SDK path only).</summary>
     public IReadOnlyList<string> EarlyExcludeGlobs { get; set; } = [];
 
-    /// <summary>Folder-name segments to exclude from gitignore (e.g. "node_modules", ".git").</summary>
-    public IReadOnlySet<string> GitignoreExcludedFolders { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>Extensions to exclude from gitignore (without dot, e.g. "log").</summary>
-    public IReadOnlySet<string> GitignoreExcludedExtensions { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>Full directory paths to exclude from gitignore.</summary>
-    public IReadOnlyList<string> GitignoreExcludedFullPaths { get; set; } = [];
+    /// <summary>Dynamic gitignore matcher — when set, directories and files are checked against
+    /// <c>.gitignore</c> rules loaded lazily during the scan.</summary>
+    internal DynamicGitignoreMatcher? GitignoreMatcher { get; set; }
 
     /// <summary>Literal file-name terms to apply during listing when the search mode first gates by file name.</summary>
     public IReadOnlyList<string> EarlyFileNameLiteralTerms { get; set; } = [];
@@ -142,6 +183,9 @@ public sealed class FileLister : IFileLister
     // Lazily evaluated once per process. Process elevation cannot change at runtime.
 
     internal static Func<bool>? ElevationOverride = null; // test seam
+    internal static bool SdkAvailable { get => _sdkAvailable; set => _sdkAvailable = value; } // test seam
+    internal static Func<List<string>>? GetEverythingInstallDirsOverride; // test seam
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
     internal static bool CheckIsElevated()
     {
         if (ElevationOverride is not null) return ElevationOverride();
@@ -268,9 +312,15 @@ public sealed class FileLister : IFileLister
         ReturnSpecialDirectories = false,
     };
 
-    public FileLister() { }
+    public FileLister() : this(null, null) { }
 
-    internal FileLister(Func<string, ProcessStartInfo, IProcess>? processFactory) => _processFactory = processFactory;
+    internal FileLister(Func<string, ProcessStartInfo, IProcess>? processFactory) : this(processFactory, null) { }
+
+    internal FileLister(Func<string, ProcessStartInfo, IProcess>? processFactory, IEverythingSdkOps? sdkOps)
+    {
+        _processFactory = processFactory;
+        _sdkOps = sdkOps ?? RealEverythingSdkOps.Instance;
+    }
 
 
     public async IAsyncEnumerable<string> ListFilesAsync(
@@ -286,7 +336,6 @@ public sealed class FileLister : IFileLister
         Volatile.Write(ref _earlySkippedFiles, 0);
         Volatile.Write(ref _earlySkippedTooLargeFiles, 0);
         Volatile.Write(ref _earlyExcludedByExtensionFiles, 0);
-        Volatile.Write(ref _gitignoreSkipped, 0);
         if (string.IsNullOrWhiteSpace(directory)) yield break;
 
         // Normalize drive-letter-only paths ("C:" → "C:\"). On Windows,
@@ -307,17 +356,9 @@ public sealed class FileLister : IFileLister
 
         // ── Tier 1: Everything SDK (in-process, fastest) ──
         bool sdkYielded = false;
-        if (_processFactory is null && (backend == FileListerBackend.Auto || backend == FileListerBackend.EverythingSdk)) // skip SDK in test mode
+        if ((_processFactory is null || _sdkOps is not RealEverythingSdkOps) && (backend == FileListerBackend.Auto || backend == FileListerBackend.EverythingSdk)) // skip SDK in test mode unless mock SDK injected
         {
-            IAsyncEnumerable<string>? sdkResults = null;
-            try
-            {
-                sdkResults = RunEverythingSdkAsync(fullDir, includeExtensions, maxFiles, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                LogService.Instance.Warning("FileLister", $"Everything SDK unavailable: {ex.Message}", ex);
-            }
+            var sdkResults = TryCreateSdkEnumerable(fullDir, includeExtensions, maxFiles, cancellationToken);
 
             if (sdkResults is not null)
             {
@@ -342,16 +383,7 @@ public sealed class FileLister : IFileLister
             bool esYielded = false;
             if (esPath is not null)
             {
-                IAsyncEnumerable<string>? esResults = null;
-                try
-                {
-                    esResults = RunEverythingAsync(esPath, fullDir, includeExtensions, maxFiles, cancellationToken);
-                }
-                catch (Exception ex)
-                {
-                    FallbackReason = $"es.exe failed: {ex.Message}";
-                    LogService.Instance.Warning("FileLister", FallbackReason, ex);
-                }
+                IAsyncEnumerable<string>? esResults = TryCreateEsEnumerable(esPath, fullDir, includeExtensions, maxFiles, cancellationToken);
 
                 if (esResults is not null)
                 {
@@ -472,23 +504,8 @@ public sealed class FileLister : IFileLister
             }
         }
 
-        // Gitignore exclusions: folder segments, extensions, and full paths.
-        foreach (var folder in GitignoreExcludedFolders)
-        {
-            if (string.IsNullOrWhiteSpace(folder)) continue;
-            query += $" !\"\\{folder}\\\"";
-        }
-        if (GitignoreExcludedExtensions.Count > 0)
-        {
-            var gitExts = string.Join(';', GitignoreExcludedExtensions);
-            query += $" !ext:{gitExts}";
-        }
-        foreach (var fullPath in GitignoreExcludedFullPaths)
-        {
-            if (string.IsNullOrWhiteSpace(fullPath)) continue;
-            var normalized = fullPath.TrimEnd('\\');
-            query += $" !\"{normalized}\\\"";
-        }
+        // Always exclude .git from the SDK query (unconditional).
+        query += " !\"\\.git\\\"";
 
         LogService.Instance.Warning("FileLister", $"Everything SDK query: {query}");
 
@@ -510,48 +527,48 @@ public sealed class FileLister : IFileLister
         {
             try
             {
-                lock (EverythingSdk.Lock)
+                lock (_sdkOps.SyncLock)
                 {
                     try
                     {
-                        if (!EverythingSdk.IsDBLoaded())
+                        if (!_sdkOps.IsDBLoaded())
                         {
                             error = "Everything database not loaded (is Everything running?)";
                             return;
                         }
 
-                        EverythingSdk.Reset();
-                        EverythingSdk.SetSearch(query);
-                        EverythingSdk.SetMatchCase(false);
+                        _sdkOps.Reset();
+                        _sdkOps.SetSearch(query);
+                        _sdkOps.SetMatchCase(false);
                         // Request size alongside paths so we can pre-filter by file size
                         // and extension without per-file FileInfo calls.
                         bool wantSize = EarlyMinFileSizeBytes > 0 || EarlyMaxFileSizeBytes > 0;
                         uint requestFlags = EverythingSdk.EVERYTHING_REQUEST_FULL_PATH_AND_FILE_NAME;
                         if (wantSize)
                             requestFlags |= EverythingSdk.EVERYTHING_REQUEST_SIZE;
-                        EverythingSdk.SetRequestFlags(requestFlags);
+                        _sdkOps.SetRequestFlags(requestFlags);
                         // Do NOT call SetSort: requesting an explicit sort (especially
                         // path-ascending) forces a slow non-indexed sort unless the user
                         // has enabled fast-sort in Everything. Letting the SDK return
                         // results in its native (unsorted) order is much faster.
                         if (maxFiles > 0)
-                            EverythingSdk.SetMax((uint)maxFiles);
+                            _sdkOps.SetMax((uint)maxFiles);
                         else
-                            EverythingSdk.SetMax(0xFFFFFFFF);
+                            _sdkOps.SetMax(0xFFFFFFFF);
 
-                        if (!EverythingSdk.Query(bWait: true))
+                        if (!_sdkOps.Query(bWait: true))
                         {
-                            var err = EverythingSdk.GetLastError();
+                            var err = _sdkOps.GetLastError();
                             error = err == EverythingSdk.EVERYTHING_ERROR_IPC
                                 ? "Everything is not running"
-                                : $"Everything SDK query failed: {EverythingSdk.ErrorMessage(err)}";
+                                : $"Everything SDK query failed: {_sdkOps.ErrorMessage(err)}";
                             return;
                         }
 
-                        uint count = EverythingSdk.GetNumResults();
-                        uint total = EverythingSdk.GetTotResults();
+                        uint count = _sdkOps.GetNumResults();
+                        uint total = _sdkOps.GetTotResults();
                         SetKnownTotalFiles(count);
-                        LogService.Instance.Warning("FileLister", $"Everything SDK: {count} returned, {total} total matches, last error={EverythingSdk.GetLastError()}");
+                        LogService.Instance.Warning("FileLister", $"Everything SDK: {count} returned, {total} total matches, last error={_sdkOps.GetLastError()}");
                         var buf = new System.Text.StringBuilder(1024);
                         long earlyMinSize = EarlyMinFileSizeBytes;
                         long earlyMaxSize = EarlyMaxFileSizeBytes;
@@ -569,7 +586,7 @@ public sealed class FileLister : IFileLister
                             // ── Early skip by file size ──
                             if (wantSize)
                             {
-                                if (EverythingSdk.GetResultSize(i, out long fileSize)
+                                if (_sdkOps.GetResultSize(i, out long fileSize)
                                     && IsOutsideEarlyFileSizeRange(fileSize, earlyMinSize, earlyMaxSize, out bool tooLarge))
                                 {
                                     skippedBySize++;
@@ -584,13 +601,13 @@ public sealed class FileLister : IFileLister
                             }
 
                             buf.Clear();
-                            uint len = EverythingSdk.GetResultFullPathName(i, buf, (uint)buf.Capacity);
+                            uint len = _sdkOps.GetResultFullPathName(i, buf, (uint)buf.Capacity);
                             if (len == 0) continue;
                             if (len >= buf.Capacity)
                             {
                                 buf.Capacity = (int)len + 1;
                                 buf.Clear();
-                                EverythingSdk.GetResultFullPathName(i, buf, (uint)buf.Capacity);
+                                _sdkOps.GetResultFullPathName(i, buf, (uint)buf.Capacity);
                             }
 
                             // ── Early skip by extension blocklist ──
@@ -604,21 +621,13 @@ public sealed class FileLister : IFileLister
                                     Volatile.Write(ref _earlyExcludedByExtensionFiles, excludedByExtension);
                                     continue;
                                 }
-                                if (!channel.Writer.TryWrite(path))
-                                {
-                                    channel.Writer.WriteAsync(path, cancellationToken)
-                                        .AsTask().GetAwaiter().GetResult();
-                                }
+                                ChannelWrite(channel.Writer, path, cancellationToken);
                             }
                             else
                             {
                                 // Write into the channel. TryWrite succeeds until the 4096
                                 // buffer is full; if full, use the async path with a sync wait.
-                                if (!channel.Writer.TryWrite(buf.ToString()))
-                                {
-                                    channel.Writer.WriteAsync(buf.ToString(), cancellationToken)
-                                        .AsTask().GetAwaiter().GetResult();
-                                }
+                                ChannelWrite(channel.Writer, buf.ToString(), cancellationToken);
                             }
                         }
 
@@ -627,7 +636,7 @@ public sealed class FileLister : IFileLister
                             LogService.Instance.Warning("FileLister", $"Everything SDK: {skippedTooSmall:N0} too-small files skipped, {skippedTooLarge:N0} too-large files skipped, {excludedByExtension:N0} files excluded by extension");
                         }
 
-                        EverythingSdk.Reset();
+                        _sdkOps.Reset();
                     }
                     catch (DllNotFoundException)
                     {
@@ -654,9 +663,11 @@ public sealed class FileLister : IFileLister
         }
 
         bool anyYielded = false;
+        var matcher = GitignoreMatcher;
         await foreach (var path in channel.Reader.ReadAllAsync(cancellationToken))
         {
             if (error is not null) break;
+            if (matcher is not null && matcher.ShouldSkipPath(path)) continue;
             anyYielded = true;
             yield return path;
         }
@@ -706,6 +717,13 @@ public sealed class FileLister : IFileLister
     }
 
     internal static List<string> GetEverythingInstallDirsFromRegistry()
+    {
+        if (GetEverythingInstallDirsOverride is not null) return GetEverythingInstallDirsOverride();
+        return GetEverythingInstallDirsFromRegistryCore();
+    }
+
+    [ExcludeFromCodeCoverage]
+    internal static List<string> GetEverythingInstallDirsFromRegistryCore()
     {
         var dirs = new List<string>();
         string[] registryPaths =
@@ -757,11 +775,12 @@ public sealed class FileLister : IFileLister
     }
 
 
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
     internal static Task<EverythingReadinessResult> WaitForEverythingSdkReadyAsync(
         TimeSpan timeout,
         TimeSpan pollInterval,
         CancellationToken cancellationToken) =>
-        WaitForEverythingSdkReadyAsync(ProbeEverythingSdkReadiness, timeout, pollInterval, cancellationToken);
+        WaitForEverythingSdkReadyAsync(() => ProbeEverythingSdkReadiness(RealEverythingSdkOps.Instance), timeout, pollInterval, cancellationToken);
 
     internal static async Task<EverythingReadinessResult> WaitForEverythingSdkReadyAsync(
         Func<EverythingReadinessResult> readinessProbe,
@@ -800,42 +819,42 @@ public sealed class FileLister : IFileLister
     }
 
 
-    internal static EverythingReadinessResult ProbeEverythingSdkReadiness()
+    internal static EverythingReadinessResult ProbeEverythingSdkReadiness(IEverythingSdkOps sdk)
     {
         if (!_sdkAvailable)
         {
             return EverythingReadinessResult.NotReady("Everything SDK not available");
         }
 
-        lock (EverythingSdk.Lock)
+        lock (sdk.SyncLock)
         {
             try
             {
-                if (!EverythingSdk.IsDBLoaded())
+                if (!sdk.IsDBLoaded())
                 {
                     return EverythingReadinessResult.NotReady("Everything database is still loading");
                 }
 
-                EverythingSdk.Reset();
-                EverythingSdk.SetSearch(string.Empty);
-                EverythingSdk.SetMatchPath(false);
-                EverythingSdk.SetMatchCase(false);
-                EverythingSdk.SetOffset(0);
-                EverythingSdk.SetMax(25);
-                EverythingSdk.SetRequestFlags(EverythingSdk.EVERYTHING_REQUEST_FULL_PATH_AND_FILE_NAME);
+                sdk.Reset();
+                sdk.SetSearch(string.Empty);
+                sdk.SetMatchPath(false);
+                sdk.SetMatchCase(false);
+                sdk.SetOffset(0);
+                sdk.SetMax(25);
+                sdk.SetRequestFlags(EverythingSdk.EVERYTHING_REQUEST_FULL_PATH_AND_FILE_NAME);
                 // Do NOT call SetSort — see note in the main query path; requesting an
                 // explicit sort can be slow when fast-sort is not enabled in Everything.
 
-                if (!EverythingSdk.Query(bWait: true))
+                if (!sdk.Query(bWait: true))
                 {
-                    var err = EverythingSdk.GetLastError();
+                    var err = sdk.GetLastError();
                     return EverythingReadinessResult.NotReady(err == EverythingSdk.EVERYTHING_ERROR_IPC
                         ? "Everything is not running"
-                        : $"Everything SDK query failed: {EverythingSdk.ErrorMessage(err)}");
+                        : $"Everything SDK query failed: {sdk.ErrorMessage(err)}");
                 }
 
-                uint returnedCount = EverythingSdk.GetNumResults();
-                uint totalCount = EverythingSdk.GetTotResults();
+                uint returnedCount = sdk.GetNumResults();
+                uint totalCount = sdk.GetTotResults();
                 if (returnedCount == 0)
                 {
                     return EverythingReadinessResult.NotReady("Everything returned no files or folders yet");
@@ -846,13 +865,13 @@ public sealed class FileLister : IFileLister
                 for (uint i = 0; i < returnedCount && samples.Count < 25; i++)
                 {
                     buffer.Clear();
-                    uint length = EverythingSdk.GetResultFullPathName(i, buffer, (uint)buffer.Capacity);
+                    uint length = sdk.GetResultFullPathName(i, buffer, (uint)buffer.Capacity);
                     if (length == 0) continue;
                     if (length >= buffer.Capacity)
                     {
                         buffer.Capacity = (int)length + 1;
                         buffer.Clear();
-                        EverythingSdk.GetResultFullPathName(i, buffer, (uint)buffer.Capacity);
+                        sdk.GetResultFullPathName(i, buffer, (uint)buffer.Capacity);
                     }
 
                     var path = buffer.ToString();
@@ -880,7 +899,7 @@ public sealed class FileLister : IFileLister
             }
             finally
             {
-                try { EverythingSdk.Reset(); } catch { }
+                try { sdk.Reset(); } catch { }
             }
         }
     }
@@ -943,10 +962,12 @@ public sealed class FileLister : IFileLister
 
         string? line;
         int yielded = 0;
+        var matcher = GitignoreMatcher;
         while ((line = await proc.ReadLineAsync(cancellationToken).ConfigureAwait(false)) is not null)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (line.Length == 0) continue;
+            if (matcher is not null && matcher.ShouldSkipPath(line)) continue;
             yield return line;
             yielded++;
         }
@@ -1017,7 +1038,7 @@ public sealed class FileLister : IFileLister
         return s;
     }
 
-    private static IEnumerable<string> BuildEverythingSizeFilterTerms(long minBytes, long maxBytes)
+    internal static IEnumerable<string> BuildEverythingSizeFilterTerms(long minBytes, long maxBytes)
     {
         minBytes = Math.Max(0, minBytes);
         maxBytes = Math.Max(0, maxBytes);
@@ -1028,7 +1049,7 @@ public sealed class FileLister : IFileLister
             yield return $"size:<={maxBytes}";
     }
 
-    private static IEnumerable<string> BuildEverythingDateFilterTerms(
+    internal static IEnumerable<string> BuildEverythingDateFilterTerms(
         DateTimeOffset? createdAfter,
         DateTimeOffset? createdBefore,
         DateTimeOffset? modifiedAfter,
@@ -1044,7 +1065,7 @@ public sealed class FileLister : IFileLister
             yield return $"dm:<={FormatEverythingDate(modifiedBefore.Value)}";
     }
 
-    private static string FormatEverythingDate(DateTimeOffset date)
+    internal static string FormatEverythingDate(DateTimeOffset date)
         => date.LocalDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
     internal static string? BuildEverythingFileNameFilter(IReadOnlyList<string> literalTerms)
@@ -1063,13 +1084,12 @@ public sealed class FileLister : IFileLister
 
         return quotedTerms.Count switch
         {
-            0 => null,
             1 => quotedTerms[0],
             _ => $"<{string.Join('|', quotedTerms)}>"
         };
     }
 
-    private static bool FileNameMatchesLiteralTerms(string path, IReadOnlyList<string> literalTerms)
+    internal static bool FileNameMatchesLiteralTerms(string path, IReadOnlyList<string> literalTerms)
     {
         if (literalTerms.Count == 0)
             return true;
@@ -1084,7 +1104,7 @@ public sealed class FileLister : IFileLister
         return false;
     }
 
-    private static bool IsOutsideEarlyFileSizeRange(long fileSize, long minBytes, long maxBytes, out bool tooLarge)
+    internal static bool IsOutsideEarlyFileSizeRange(long fileSize, long minBytes, long maxBytes, out bool tooLarge)
     {
         minBytes = Math.Max(0, minBytes);
         maxBytes = Math.Max(0, maxBytes);
@@ -1101,7 +1121,7 @@ public sealed class FileLister : IFileLister
         return false;
     }
 
-    private static bool IsOutsideEarlyDateRange(
+    internal static bool IsOutsideEarlyDateRange(
         DateTime created,
         DateTime modified,
         DateTimeOffset? createdAfter,
@@ -1154,42 +1174,12 @@ public sealed class FileLister : IFileLister
             cancellationToken.ThrowIfCancellationRequested();
             var current = stack.Pop();
 
-            string canonical;
-            try { canonical = Path.GetFullPath(current); }
-            catch (Exception ex)
-            {
-                Interlocked.Increment(ref _skippedDirectories);
-                LogService.Instance.Verbose("FileLister", $"Cannot resolve path: {current}", ex);
-                continue;
-            }
+            var canonical = TryResolvePath(current);
+            if (canonical is null) continue;
             if (!visited.Add(canonical)) continue;
 
-            IEnumerator<FileSystemInfo> entries;
-            try
-            {
-                // s_enumOpts has IgnoreInaccessible=true: access-denied entries are silently
-                // skipped by the OS enumerator rather than thrown as exceptions.
-                entries = new DirectoryInfo(canonical).EnumerateFileSystemInfos("*", s_enumOpts).GetEnumerator();
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                Interlocked.Increment(ref _skippedDirectories);
-                Interlocked.Increment(ref _accessDeniedDirectories);
-                LogService.Instance.Verbose("FileLister", $"Access denied: {canonical}", ex);
-                continue;
-            }
-            catch (DirectoryNotFoundException ex)
-            {
-                Interlocked.Increment(ref _skippedDirectories);
-                LogService.Instance.Verbose("FileLister", $"Dir not found: {canonical}", ex);
-                continue;
-            }
-            catch (IOException ex)
-            {
-                Interlocked.Increment(ref _skippedDirectories);
-                LogService.Instance.Verbose("FileLister", $"IO error enumerating: {canonical}", ex);
-                continue;
-            }
+            var entries = TryGetDirectoryEnumerator(canonical);
+            if (entries is null) continue;
 
             using (entries)
             {
@@ -1197,50 +1187,20 @@ public sealed class FileLister : IFileLister
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    string entry;
-                    FileSystemInfo fsi;
-                    try
-                    {
-                        if (!entries.MoveNext()) break;
-                        fsi = entries.Current;
-                        entry = fsi.FullName;
-                    }
-                    catch (UnauthorizedAccessException ex)
-                    {
-                        // Rare with IgnoreInaccessible=true; kept as a last-resort guard.
-                        Interlocked.Increment(ref _skippedDirectories);
-                        Interlocked.Increment(ref _accessDeniedDirectories);
-                        LogService.Instance.Verbose("FileLister", $"Access denied while enumerating: {canonical}", ex);
-                        break;
-                    }
-                    catch (DirectoryNotFoundException ex)
-                    {
-                        Interlocked.Increment(ref _skippedDirectories);
-                        LogService.Instance.Verbose("FileLister", $"Dir not found while enumerating: {canonical}", ex);
-                        break;
-                    }
-                    catch (IOException ex)
-                    {
-                        Interlocked.Increment(ref _skippedDirectories);
-                        LogService.Instance.Verbose("FileLister", $"IO error while enumerating: {canonical}", ex);
-                        break;
-                    }
+                    var fsiResult = TryMoveNextEntry(entries, canonical);
+                    if (fsiResult is null) break;
+                    var (fsi, entry) = fsiResult.Value;
 
-                    FileAttributes attrs;
-                    try { attrs = fsi.Attributes; }
-                    catch (Exception ex) { LogService.Instance.Verbose("FileLister", $"Cannot get attrs: {entry}", ex); continue; }
+                    var attrs = TryGetAttributes(fsi, entry);
+                    if (attrs is null) continue;
 
-                    if ((attrs & FileAttributes.Directory) != 0)
+                    if ((attrs.Value & FileAttributes.Directory) != 0)
                     {
                         // Skip reparse points we've already followed.
-                        if ((attrs & FileAttributes.ReparsePoint) != 0)
+                        if ((attrs.Value & FileAttributes.ReparsePoint) != 0
+                            && !TryResolveReparseTarget(entry, visited))
                         {
-                            try
-                            {
-                                var resolved = Path.GetFullPath(entry);
-                                if (visited.Contains(resolved)) continue;
-                            }
-                            catch (Exception ex) { LogService.Instance.Verbose("FileLister", $"Cannot resolve reparse: {entry}", ex); continue; }
+                            continue;
                         }
                         if (excludeAdminPaths && IsAdminProtectedPath(entry))
                         {
@@ -1248,44 +1208,19 @@ public sealed class FileLister : IFileLister
                             // access-denied for non-elevated processes.
                             continue;
                         }
-                        // Skip gitignore-excluded folders.
-                        var dirName = Path.GetFileName(entry);
-                        if (GitignoreExcludedFolders.Contains(dirName))
+                        // Dynamic gitignore: check this directory against ancestor rules.
+                        if (GitignoreMatcher is not null && GitignoreMatcher.ShouldSkipDirectory(entry))
                         {
-                            Interlocked.Increment(ref _gitignoreSkipped);
                             continue;
-                        }
-                        if (GitignoreExcludedFullPaths.Count > 0)
-                        {
-                            bool excluded = false;
-                            foreach (var ep in GitignoreExcludedFullPaths)
-                            {
-                                if (entry.Equals(ep, StringComparison.OrdinalIgnoreCase) ||
-                                    entry.StartsWith(ep + "\\", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    excluded = true;
-                                    break;
-                                }
-                            }
-                            if (excluded)
-                            {
-                                Interlocked.Increment(ref _gitignoreSkipped);
-                                continue;
-                            }
                         }
                         stack.Push(entry);
                     }
                     else
                     {
-                        // Skip files with gitignore-excluded extensions.
-                        if (GitignoreExcludedExtensions.Count > 0)
+                        // Dynamic gitignore: check file against ancestor extension rules.
+                        if (GitignoreMatcher is not null && GitignoreMatcher.ShouldSkipFile(entry))
                         {
-                            var rawExt = Path.GetExtension(entry);
-                            if (rawExt.Length > 1 && GitignoreExcludedExtensions.Contains(rawExt.Substring(1)))
-                            {
-                                Interlocked.Increment(ref _gitignoreSkipped);
-                                continue;
-                            }
+                            continue;
                         }
                         if (extSet is not null)
                         {
@@ -1335,6 +1270,144 @@ public sealed class FileLister : IFileLister
     }
 
 
+    // ---- Excluded JIT/construction exception helpers ----
+
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+    private static void ChannelWrite(System.Threading.Channels.ChannelWriter<string> writer, string value, CancellationToken ct)
+    {
+        if (!writer.TryWrite(value))
+            writer.WriteAsync(value, ct).AsTask().GetAwaiter().GetResult();
+    }
+
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+    private IAsyncEnumerable<string>? TryCreateSdkEnumerable(
+        string fullDir, IReadOnlyList<string>? includeExtensions, int maxFiles, CancellationToken ct)
+    {
+        try { return RunEverythingSdkAsync(fullDir, includeExtensions, maxFiles, ct); }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("FileLister", $"Everything SDK unavailable: {ex.Message}", ex);
+            return null;
+        }
+    }
+
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+    private IAsyncEnumerable<string>? TryCreateEsEnumerable(
+        string esPath, string fullDir, IReadOnlyList<string>? includeExtensions, int maxFiles, CancellationToken ct)
+    {
+        try { return RunEverythingAsync(esPath, fullDir, includeExtensions, maxFiles, ct); }
+        catch (Exception ex)
+        {
+            FallbackReason = $"es.exe failed: {ex.Message}";
+            LogService.Instance.Warning("FileLister", FallbackReason, ex);
+            return null;
+        }
+    }
+
+    // ---- Excluded OS exception helpers (untestable without filesystem injection) ----
+
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+    private static FileAttributes? TryGetAttributes(FileSystemInfo fsi, string entry)
+    {
+        try { return fsi.Attributes; }
+        catch (Exception ex) { LogService.Instance.Verbose("FileLister", $"Cannot get attrs: {entry}", ex); return null; }
+    }
+
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+    private string? TryResolvePath(string current)
+    {
+        try { return Path.GetFullPath(current); }
+        catch (Exception ex)
+        {
+            Interlocked.Increment(ref _skippedDirectories);
+            LogService.Instance.Verbose("FileLister", $"Cannot resolve path: {current}", ex);
+            return null;
+        }
+    }
+
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+    private IEnumerator<FileSystemInfo>? TryGetDirectoryEnumerator(string canonical)
+    {
+        try
+        {
+            // s_enumOpts has IgnoreInaccessible=true: access-denied entries are silently
+            // skipped by the OS enumerator rather than thrown as exceptions.
+            return new DirectoryInfo(canonical).EnumerateFileSystemInfos("*", s_enumOpts).GetEnumerator();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            Interlocked.Increment(ref _skippedDirectories);
+            Interlocked.Increment(ref _accessDeniedDirectories);
+            LogService.Instance.Verbose("FileLister", $"Access denied: {canonical}", ex);
+            return null;
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            Interlocked.Increment(ref _skippedDirectories);
+            LogService.Instance.Verbose("FileLister", $"Dir not found: {canonical}", ex);
+            return null;
+        }
+        catch (IOException ex)
+        {
+            Interlocked.Increment(ref _skippedDirectories);
+            LogService.Instance.Verbose("FileLister", $"IO error enumerating: {canonical}", ex);
+            return null;
+        }
+    }
+
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+    private (FileSystemInfo fsi, string entry)? TryMoveNextEntry(IEnumerator<FileSystemInfo> entries, string canonical)
+    {
+        try
+        {
+            if (!entries.MoveNext()) return null;
+            var fsi = entries.Current;
+            return (fsi, fsi.FullName);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            // Rare with IgnoreInaccessible=true; kept as a last-resort guard.
+            Interlocked.Increment(ref _skippedDirectories);
+            Interlocked.Increment(ref _accessDeniedDirectories);
+            LogService.Instance.Verbose("FileLister", $"Access denied while enumerating: {canonical}", ex);
+            return null;
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            Interlocked.Increment(ref _skippedDirectories);
+            LogService.Instance.Verbose("FileLister", $"Dir not found while enumerating: {canonical}", ex);
+            return null;
+        }
+        catch (IOException ex)
+        {
+            Interlocked.Increment(ref _skippedDirectories);
+            LogService.Instance.Verbose("FileLister", $"IO error while enumerating: {canonical}", ex);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Returns true if the reparse point at <paramref name="entry"/> resolves to
+    /// a target not yet in <paramref name="visited"/>; false if already visited
+    /// or resolution fails.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+    private static bool TryResolveReparseTarget(string entry, HashSet<string> visited)
+    {
+        try
+        {
+            var resolved = Path.GetFullPath(entry);
+            return !visited.Contains(resolved);
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Verbose("FileLister", $"Cannot resolve reparse: {entry}", ex);
+            return false;
+        }
+    }
+
+
+    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
     internal sealed class RealProcess : IProcess
     {
         private readonly Process _p;

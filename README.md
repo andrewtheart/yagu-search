@@ -20,7 +20,7 @@ The [PLANS](PLANS/) directory contains design notes, performance investigations,
 - Streaming results: matches appear while the scan is still running.
 - voidtools Everything support for file discovery, with automatic fallback to built-in .NET enumeration.
 - Optional Rust native scanner for fast per-file matching, with managed C# fallback when the DLL is unavailable.
-- Include and exclude filters with glob/path or regex modes, skip-extension lists, binary-file skipping, and max-file-size limits.
+- Include and exclude filters with glob/path or regex modes, skip-extension lists, optional binary-file inclusion, and max-file-size limits.
 - Configurable result cap, per-file match cap, content-search parallelism, and memory limits.
 - Memory-pressure mode that pages result payloads to disk and keeps searching instead of exhausting RAM.
 - Grouped result list with optional no-sort mode plus sorting by match count, modified date, file size, or file name.
@@ -311,7 +311,7 @@ The Rust crate exposes a C ABI and supports:
 - Literal and regex matching.
 - Case-sensitive and case-insensitive options.
 - Context-before/context-after capture.
-- Binary-file skipping.
+- Binary-file detection (skipped by default, opt-in via Search binary toggle).
 - Max file size and max result limits.
 - Cancellation polling.
 - Streaming callbacks so matches do not need to be buffered as one giant native result.

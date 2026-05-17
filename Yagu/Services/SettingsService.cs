@@ -21,7 +21,7 @@ public sealed class AppSettings
     [JsonIgnore] public bool CaseSensitive { get; set; }
     [JsonIgnore] public bool UseRegex { get; set; }
     [JsonIgnore] public bool ExactMatch { get; set; } = true;
-    public bool ObeyGitignore { get; set; }
+    [JsonIgnore] public bool ObeyGitignore { get; set; }
     public bool GitignoreTakesPrecedence { get; set; } = true;
     public int ContextLines { get; set; } = 3;
     public int PreviewContextLines { get; set; } = 20;
@@ -98,6 +98,8 @@ public sealed class AppSettings
     public bool HasCompletedFirstRun { get; set; }
     /// <summary>When true, do not show the "another instance is already running" dialog on startup.</summary>
     public bool SuppressMultiInstanceWarning { get; set; }
+    /// <summary>When true (default), automatically limit parallelism to 1 on HDD drives and warn the user. When false, no auto-limit or warning.</summary>
+    public bool LimitParallelismOnHdd { get; set; } = true;
     /// <summary>When true, back up the file to .yagubak before saving in the built-in editor. Default true.</summary>
     public bool BackupBeforeSave { get; set; } = true;
     /// <summary>Default window focus behavior in launcher mode. 0 = Minimize to tray, 1 = Stay open, 2 = Always on top, 3 = Traditional window.</summary>
