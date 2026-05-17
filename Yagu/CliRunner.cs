@@ -425,6 +425,13 @@ internal static class CliRunner
         bool searchArchives = args.SearchInsideArchives ?? s.SearchInsideArchives;
         string archiveExts = args.ArchiveExtensions ?? s.ArchiveExtensions;
 
+        bool obeyGitignore = args.ObeyGitignore ?? s.ObeyGitignore;
+        bool gitignorePrecedence = args.GitignoreTakesPrecedence ?? s.GitignoreTakesPrecedence;
+        bool exactMatch = args.ExactMatch ?? s.ExactMatch;
+        int maxMatchesPerFile = args.MaxMatchesPerFile ?? s.MaxMatchesPerFile;
+        var includeMode = (FilterPatternMode)(args.IncludeFilterModeIndex ?? s.IncludeFilterModeIndex);
+        var excludeMode = (FilterPatternMode)(args.ExcludeFilterModeIndex ?? s.ExcludeFilterModeIndex);
+
         var includeGlobs = args.IncludeGlobs.Count > 0
             ? (IReadOnlyList<string>)args.IncludeGlobs
             : SplitSemi(s.IncludeGlobs);
@@ -443,19 +450,24 @@ internal static class CliRunner
             Query                 = args.Pattern!,
             CaseSensitive         = caseSensitive,
             UseRegex              = useRegex,
+            ExactMatch            = exactMatch,
             ContextLines          = contextLines,
             SearchMode            = args.SearchMode ?? SearchMode.Both,
             IncludeGlobs          = includeGlobs,
             ExcludeGlobs          = excludeGlobs,
+            IncludeFilterMode     = includeMode,
+            ExcludeFilterMode     = excludeMode,
             MinFileSizeBytes      = minFileSize,
             MaxFileSizeBytes      = maxFileSize,
-            CreatedAfterDate      = s.DefaultCreatedAfterDate,
-            CreatedBeforeDate     = s.DefaultCreatedBeforeDate,
-            ModifiedAfterDate     = s.DefaultModifiedAfterDate,
-            ModifiedBeforeDate    = s.DefaultModifiedBeforeDate,
+            CreatedAfterDate      = args.CreatedAfter ?? s.DefaultCreatedAfterDate,
+            CreatedBeforeDate     = args.CreatedBefore ?? s.DefaultCreatedBeforeDate,
+            ModifiedAfterDate     = args.ModifiedAfter ?? s.DefaultModifiedAfterDate,
+            ModifiedBeforeDate    = args.ModifiedBefore ?? s.DefaultModifiedBeforeDate,
             MaxResults            = Math.Min(maxResults, SearchOptions.MaxResultsCeiling),
-            MaxMatchesPerFile     = 0,
+            MaxMatchesPerFile     = maxMatchesPerFile,
             SkipBinary            = skipBinary,
+            ObeyGitignore         = obeyGitignore,
+            GitignoreTakesPrecedence = gitignorePrecedence,
             MaxDegreeOfParallelism = parallelism,
             MaxProcessMemoryBytes = memoryBytes,
             MemoryPressurePercent = memoryPressure,
@@ -631,15 +643,31 @@ internal static class CliRunner
               -i, --ignore-case           Case-insensitive match (default).
               -C, --context <n>           Context lines around each match (default: 3).
                   --search-mode <mode>    both | content | filenames | filename-then-content  (default: both)
+                  --exact-match           Match whole words only (default).
+                  --no-exact-match        Allow substring matches.
 
             FILE FILTERING:
               -g, --glob <glob>           Include files matching GLOB (repeatable).
                   --exclude-glob <glob>   Exclude files/dirs matching GLOB (repeatable).
+                  --include-regex         Interpret include patterns as regex (default: glob).
+                  --include-glob          Interpret include patterns as glob (default).
+                  --exclude-regex         Interpret exclude patterns as regex (default: glob).
+                  --exclude-glob-mode     Interpret exclude patterns as glob (default).
                   --min-filesize <size>   Skip files smaller than SIZE (e.g. 1M, 10K, 1G).
                   --max-filesize <size>   Skip files larger than SIZE (e.g. 50M, 10K, 1G).
                   --binary                Include binary files in search.
                   --no-binary             Skip binary files (default).
                   --skip-extensions <e>   Semicolon-separated extensions to skip (e.g. exe;dll).
+                  --created-after <date>  Only include files created on/after this date (ISO 8601).
+                  --created-before <date> Only include files created on/before this date.
+                  --modified-after <date> Only include files modified on/after this date.
+                  --modified-before <date> Only include files modified on/before this date.
+
+            GITIGNORE:
+                  --obey-gitignore        Respect .gitignore exclusions.
+                  --no-obey-gitignore     Ignore .gitignore files (default).
+                  --gitignore-precedence  .gitignore wins over include filters (default when enabled).
+                  --no-gitignore-precedence  Include filters win over .gitignore.
 
             PERFORMANCE:
                   --threads <n>           Worker threads (0 = auto).
@@ -647,6 +675,7 @@ internal static class CliRunner
                   --memory-pressure <n>   System memory pressure threshold 0-100 (0 = disabled).
                   --sdk-channel-buffer <n> Everything SDK channel buffer size.
                   --file-lister-backend <n> File lister: 0=Auto, 1=SDK, 2=es.exe, 3=Managed.
+                  --max-matches-per-file <n> Cap matches per file (0 = unlimited).
 
             ARCHIVE SEARCH:
                   --search-archives       Search inside ZIP-like archives.
@@ -670,6 +699,7 @@ internal static class CliRunner
                   --console-log-level <n> Console log level (same scale as --log-level).
 
             MISC:
+                  --max-results <n>       Stop after N matches (default: 50000).
                   --line-truncation <n>   Truncate printed lines to N characters (0 = no limit).
                   --editor-command <cmd>  Editor launch command (e.g. "code -g {file}:{line}").
 
@@ -927,6 +957,16 @@ internal sealed class CliArgs
     public string?          EditorCommand { get; private set; }
     public bool?            ExcludeAdminProtectedPaths { get; private set; }
     public string?          AdminProtectedPathSegments { get; private set; }
+    public bool?            ObeyGitignore { get; private set; }
+    public bool?            GitignoreTakesPrecedence { get; private set; }
+    public int?             IncludeFilterModeIndex { get; private set; }
+    public int?             ExcludeFilterModeIndex { get; private set; }
+    public int?             MaxMatchesPerFile { get; private set; }
+    public bool?            ExactMatch { get; private set; }
+    public DateTimeOffset?  CreatedAfter { get; private set; }
+    public DateTimeOffset?  CreatedBefore { get; private set; }
+    public DateTimeOffset?  ModifiedAfter { get; private set; }
+    public DateTimeOffset?  ModifiedBefore { get; private set; }
     public bool             SuppressAdminWarning { get; private set; }
     public bool             ShowHelp     { get; private set; }
 
@@ -955,6 +995,16 @@ internal sealed class CliArgs
             if (Eq(tok, "--no-search-archives"))             { a.SearchInsideArchives = false; i++; continue; }
             if (Eq(tok, "--exclude-admin-paths"))            { a.ExcludeAdminProtectedPaths = true; i++; continue; }
             if (Eq(tok, "--no-exclude-admin-paths"))         { a.ExcludeAdminProtectedPaths = false; i++; continue; }
+            if (Eq(tok, "--obey-gitignore", "--gitignore"))  { a.ObeyGitignore = true; i++; continue; }
+            if (Eq(tok, "--no-obey-gitignore", "--no-gitignore")) { a.ObeyGitignore = false; i++; continue; }
+            if (Eq(tok, "--gitignore-precedence"))           { a.GitignoreTakesPrecedence = true; i++; continue; }
+            if (Eq(tok, "--no-gitignore-precedence"))        { a.GitignoreTakesPrecedence = false; i++; continue; }
+            if (Eq(tok, "--exact-match"))                    { a.ExactMatch = true; i++; continue; }
+            if (Eq(tok, "--no-exact-match", "--substring"))  { a.ExactMatch = false; i++; continue; }
+            if (Eq(tok, "--include-regex"))                  { a.IncludeFilterModeIndex = 1; i++; continue; }
+            if (Eq(tok, "--include-glob"))                   { a.IncludeFilterModeIndex = 0; i++; continue; }
+            if (Eq(tok, "--exclude-regex"))                  { a.ExcludeFilterModeIndex = 1; i++; continue; }
+            if (Eq(tok, "--exclude-glob-mode"))              { a.ExcludeFilterModeIndex = 0; i++; continue; }
 
             string? v;
             if (TryGetVal(raw, ref i, out v, "--directory", "--dir"))
@@ -1001,9 +1051,14 @@ internal sealed class CliArgs
             if (TryGetInt(raw, ref i, out n, "--log-level"))             { a.LogLevelIndex = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--console-log-level"))     { a.ConsoleLogLevelIndex = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--file-lister-backend"))   { a.FileListerBackendIndex = n; continue; }
+            if (TryGetInt(raw, ref i, out n, "--max-matches-per-file"))  { a.MaxMatchesPerFile = n; continue; }
             if (TryGetVal(raw, ref i, out v, "--archive-extensions"))    { a.ArchiveExtensions = v; continue; }
             if (TryGetVal(raw, ref i, out v, "--editor-command"))        { a.EditorCommand = v; continue; }
             if (TryGetVal(raw, ref i, out v, "--admin-protected-paths")) { a.AdminProtectedPathSegments = v; continue; }
+            if (TryGetVal(raw, ref i, out v, "--created-after"))         { if (DateTimeOffset.TryParse(v, out var d)) a.CreatedAfter = d; continue; }
+            if (TryGetVal(raw, ref i, out v, "--created-before"))        { if (DateTimeOffset.TryParse(v, out var d)) a.CreatedBefore = d; continue; }
+            if (TryGetVal(raw, ref i, out v, "--modified-after"))        { if (DateTimeOffset.TryParse(v, out var d)) a.ModifiedAfter = d; continue; }
+            if (TryGetVal(raw, ref i, out v, "--modified-before"))       { if (DateTimeOffset.TryParse(v, out var d)) a.ModifiedBefore = d; continue; }
 
             // Positional: first non-flag is the pattern
             if (!tok.StartsWith('-') && a.Pattern is null)
