@@ -103,7 +103,7 @@ public sealed class AppSettings
     /// <summary>When true, back up the file to .yagubak before saving in the built-in editor. Default true.</summary>
     public bool BackupBeforeSave { get; set; } = true;
     /// <summary>Default window focus behavior in launcher mode. 0 = Minimize to tray, 1 = Stay open, 2 = Always on top, 3 = Traditional window.</summary>
-    public int WindowFocusBehavior { get; set; } // 0 = MinimizeToTray (default)
+    public int WindowFocusBehavior { get; set; } = 3; // 3 = Traditional window (default)
     /// <summary>When true (default), closing the window docks to system tray instead of exiting.</summary>
     public bool CloseToTray { get; set; } = true;
     /// <summary>Whether the user has been informed that closing docks to the system tray.</summary>
