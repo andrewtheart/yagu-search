@@ -1336,7 +1336,10 @@ public sealed class SearchService
                 Interlocked.Increment(ref filesSkipped);
                 switch (status)
                 {
-                    case Native.NativeSearcher.StatusBinarySkipped: Interlocked.Increment(ref skipBinary); break;
+                    case Native.NativeSearcher.StatusBinarySkipped:
+                        Interlocked.Increment(ref skipBinary);
+                        LogService.Instance.Verbose("ContentSearcher", $"Binary detected (batch native): {batch[i]}");
+                        break;
                     case Native.NativeSearcher.StatusOpenFailed: Interlocked.Increment(ref skipAccessDenied); break;
                     case Native.NativeSearcher.StatusTooLarge: Interlocked.Increment(ref skipTooLarge); break;
                     case Native.NativeSearcher.StatusInvalidPath: Interlocked.Increment(ref skipNotFound); break;
