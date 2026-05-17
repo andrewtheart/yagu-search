@@ -6424,6 +6424,16 @@ public sealed partial class MainWindow : Window
         };
         buttonPanel.Children.Add(explorerBtn);
 
+        // Export single-file report
+        var reportBtn = new Button
+        {
+            Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
+            Content = new FontIcon { Glyph = "\uE9F9", FontSize = 12 },
+        };
+        ToolTipService.SetToolTip(reportBtn, "Export this file's matches as HTML report");
+        reportBtn.Click += async (_, _) => await ExportSingleFileHtmlReportAsync(path);
+        buttonPanel.Children.Add(reportBtn);
+
         // Dismiss button — remove this file section from the preview
         var dismissBtn = new Button
         {
