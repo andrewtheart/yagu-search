@@ -1864,6 +1864,58 @@ public sealed partial class MainWindow : Window
             ApplySplitLayout(SplitLayoutMode.PreviewMaximized);
     }
 
+    // ── Responsive results list: compact (stacked) vs wide (side-by-side) ───
+    private bool _resultsCompactMode;
+    private const double ResultsCompactThreshold = 550;
+
+    private void OnResultsListSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        bool compact = e.NewSize.Width < ResultsCompactThreshold;
+        if (compact == _resultsCompactMode) return;
+        _resultsCompactMode = compact;
+        // Update all currently materialized containers
+        for (int i = 0; i < ResultsList.Items.Count; i++)
+        {
+            if (ResultsList.ContainerFromIndex(i) is FrameworkElement container)
+                ApplyResultsCompactState(container, compact);
+        }
+    }
+
+    private void OnResultsListContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+    {
+        if (!args.InRecycleQueue)
+            ApplyResultsCompactState(args.ItemContainer, _resultsCompactMode);
+    }
+
+    private static void ApplyResultsCompactState(FrameworkElement container, bool compact)
+    {
+        // Find TextBlocks by Tag within the container's visual tree
+        ApplyCompactStateRecursive(container, compact);
+    }
+
+    private static void ApplyCompactStateRecursive(Microsoft.UI.Xaml.DependencyObject parent, bool compact)
+    {
+        int count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(parent);
+        for (int i = 0; i < count; i++)
+        {
+            var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(parent, i);
+            if (child is TextBlock tb)
+            {
+                if (tb.Tag is string tag)
+                {
+                    if (tag == "CompactDir")
+                        tb.Visibility = compact ? Visibility.Visible : Visibility.Collapsed;
+                    else if (tag == "WideDir")
+                        tb.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+                }
+            }
+            else if (child is Microsoft.UI.Xaml.DependencyObject dep)
+            {
+                ApplyCompactStateRecursive(dep, compact);
+            }
+        }
+    }
+
     private void OnResultItemClick(object sender, ItemClickEventArgs e)
     {
         if (e.ClickedItem is FileGroup g && g.Count > 0)

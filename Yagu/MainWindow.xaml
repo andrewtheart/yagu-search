@@ -667,6 +667,8 @@
                         PointerPressed="OnResultsListPointerPressed"
                         RightTapped="OnResultsListRightTapped"
                         ItemsSource="{x:Bind ViewModel.ResultGroups, Mode=OneWay}"
+                        SizeChanged="OnResultsListSizeChanged"
+                        ContainerContentChanging="OnResultsListContainerContentChanging"
                         Padding="4,0">
                         <ListView.ContextFlyout>
                             <MenuFlyout Opening="OnResultsContextMenuOpening">
@@ -738,7 +740,7 @@
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="650" />
+                                                <ColumnDefinition Width="*" MaxWidth="650" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
                                         <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
@@ -753,14 +755,19 @@
                                         </Border>
                                         <StackPanel Grid.Column="2" VerticalAlignment="Center">
                                             <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis" />
+                                            <!-- Directory shown stacked when panel is narrow -->
+                                            <TextBlock Text="{x:Bind DirectoryName}" Tag="CompactDir"
+                                                       ToolTipService.ToolTip="{x:Bind DirectoryName}"
+                                                       FontSize="13" Opacity="0.55" TextTrimming="CharacterEllipsis"
+                                                       Visibility="Collapsed" />
                                             <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,2,0,0">
                                                 <TextBlock Opacity="0.45" FontSize="11">
                                                     <Run Text="Modified:" /><Run Text=" " /><Run Text="{x:Bind FormattedDate}" /><Run Text=" | Size:" /><Run Text=" " /><Run Text="{x:Bind FormattedSize}" />
                                                 </TextBlock>
                                             </StackPanel>
                                         </StackPanel>
-                                        <!-- Directory path right-aligned -->
-                                        <TextBlock Grid.Column="3" Text="{x:Bind DirectoryName}"
+                                        <!-- Directory path right-aligned (hidden when panel is narrow) -->
+                                        <TextBlock Grid.Column="3" Text="{x:Bind DirectoryName}" Tag="WideDir"
                                                    ToolTipService.ToolTip="{x:Bind DirectoryName}"
                                                    Opacity="0.45" FontSize="11" VerticalAlignment="Center"
                                                    TextTrimming="CharacterEllipsis"
