@@ -53,6 +53,12 @@ public sealed class ContentSearcher
     public const int SkipOther       = -7;
     public const int SkipByExtension = -8;
 
+    private static int LogBinaryAndReturn(string filePath)
+    {
+        LogService.Instance.Verbose("ContentSearcher", $"Binary detected (native): {filePath}");
+        return SkipBinary;
+    }
+
     /// <summary>
     /// Search a single file and write matches to <paramref name="writer"/>.
     /// Returns the number of matches written, or a negative SkipXxx code if skipped.
@@ -253,7 +259,10 @@ public sealed class ContentSearcher
         }
 
         if (options.SkipBinary && peekRead > 0 && BinaryDetector.IsBinary(peek.AsSpan(0, peekRead)))
+        {
+            LogService.Instance.Verbose("ContentSearcher", $"Binary detected (content sniff): {filePath}");
             return SkipBinary;
+        }
 
         var encoding = EncodingDetector.DetectEncoding(peek.AsSpan(0, Math.Min(peekRead, 4)));
 
@@ -293,7 +302,10 @@ public sealed class ContentSearcher
             }
 
             if (options.SkipBinary && peekRead > 0 && BinaryDetector.IsBinary(peek[..peekRead]))
+            {
+                LogService.Instance.Verbose("ContentSearcher", $"Binary detected (content sniff, MMF): {filePath}");
                 return SkipBinary;
+            }
 
             var encoding = EncodingDetector.DetectEncoding(peek[..Math.Min(peekRead, 4)]);
             stream.Position = 0;
@@ -553,7 +565,7 @@ public sealed class ContentSearcher
                 return status switch
                 {
                     Native.NativeSearcher.StatusOk => sink.Emitted,
-                    Native.NativeSearcher.StatusBinarySkipped => SkipBinary,
+                    Native.NativeSearcher.StatusBinarySkipped => LogBinaryAndReturn(filePath),
                     Native.NativeSearcher.StatusTooLarge => SkipTooLarge,
                     Native.NativeSearcher.StatusOpenFailed => SkipAccessDenied,
                     Native.NativeSearcher.StatusCancelled => Cancel(cancellationToken, sink.Emitted),
