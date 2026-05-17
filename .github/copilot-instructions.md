@@ -4,7 +4,6 @@
 
 ## Build & Launch Rules
 
-- **Never use `dotnet publish`**. Only use `dotnet build`.
 - Always build **both** Debug and Release: `dotnet build Yagu/Yagu.csproj -c Debug` and `dotnet build Yagu/Yagu.csproj -c Release`.
 - When launching the app, always launch the **Debug** build: `Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe`.
 
