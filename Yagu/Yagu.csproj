@@ -102,6 +102,7 @@
       <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3179.45" GeneratePathProperty="true" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.*" />
     <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.*" />
+    <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="9.*" />
   </ItemGroup>
 
   <ItemGroup>

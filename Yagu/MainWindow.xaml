@@ -1221,9 +1221,17 @@
             </Grid.ColumnDefinitions>
             <TextBlock Text="{x:Bind ViewModel.FilesPerSecondText, Mode=OneWay}" Opacity="0.6" FontSize="12" FontFamily="Consolas" />
             <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Opacity="0.8" FontSize="12" />
-            <Polyline x:Name="ThroughputSparkline" Grid.Column="2" Stroke="CornflowerBlue" StrokeThickness="1.2"
-                      VerticalAlignment="Center" HorizontalAlignment="Stretch" Height="20" Opacity="0.7" />
+            <Grid Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Stretch" Height="20">
+                <!-- Background utilization gauge -->
+                <Rectangle x:Name="DiskGaugeBar" HorizontalAlignment="Left" VerticalAlignment="Stretch"
+                           Fill="CornflowerBlue" Opacity="0.18" Width="0" />
+                <Polyline x:Name="ThroughputSparkline" Stroke="CornflowerBlue" StrokeThickness="1.2"
+                          VerticalAlignment="Center" HorizontalAlignment="Stretch" Opacity="0.7" />
+                <TextBlock x:Name="DiskGaugeLabel" VerticalAlignment="Center" HorizontalAlignment="Right"
+                           FontFamily="Consolas" FontSize="11" Opacity="0.75" Margin="0,0,6,0" />
+            </Grid>
             <TextBlock Grid.Column="3" FontSize="12" Opacity="0.6" x:Name="SkipCountBlock"
+                       FontFamily="Consolas" Width="140" TextAlignment="Right"
                        Tapped="OnSkipCountTapped" PointerEntered="OnSkipCountPointerEntered"
                        PointerExited="OnSkipCountPointerExited">
                 <Run Text="Skipped: " />

@@ -57,6 +57,8 @@ public sealed partial class MainWindow : Window
     private long _suppressQuerySuggestionsUntilTick;
     private DispatcherTimer? _autoScrollTimer;
     private DispatcherTimer? _previewContextDebounceTimer;
+    private readonly Services.DiskUtilizationService _diskUtilService = new();
+    private DispatcherTimer? _diskSparklineTimer;
     private const long FullFilePreviewLimitBytes = 1L * 1024 * 1024 * 1024;
     private CancellationTokenSource? _previewLoadCts;
     private string? _previewEditorPath;
@@ -283,8 +285,8 @@ public sealed partial class MainWindow : Window
                 _autoScrollTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
                 _autoScrollTimer.Tick += OnAutoScrollTick;
                 _autoScrollTimer.Start();
-                ThroughputSparkline.Points.Clear();
-                ThroughputSparkline.Opacity = 0.7;
+                ThroughputSparkline.Opacity = 0.8;
+                DiskGaugeBar.Opacity = 0.5;
             }
             else
             {
@@ -297,15 +299,9 @@ public sealed partial class MainWindow : Window
                 SearchCancelButton.ClearValue(Control.BorderBrushProperty);
                 SearchCancelButton.ClearValue(Control.ForegroundProperty);
                 _autoScrollTimer?.Stop();
-                UpdateSparkline(); // final update
-                ThroughputSparkline.Opacity = 0.35;
+                ThroughputSparkline.Opacity = 0.45;
+                DiskGaugeBar.Opacity = 0.25;
             }
-        };
-
-        ViewModel.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName is nameof(ViewModel.FilesPerSecondText) or nameof(ViewModel.StatusText))
-                UpdateSparkline();
         };
 
         // Update tray tooltip and taskbar progress during search.
@@ -342,6 +338,8 @@ public sealed partial class MainWindow : Window
             _trayIcon?.Dispose();
             _trayIcon = null;
             _hotkeyService.Dispose();
+            _diskSparklineTimer?.Stop();
+            _diskUtilService.Dispose();
             RemoveGlobalHotkeyHook();
             LogService.Instance.Info("MainWindow", "Window closing — flushing logs");
             LogService.Instance.Flush();
@@ -358,6 +356,12 @@ public sealed partial class MainWindow : Window
         // (which fire asynchronously on the dispatcher AFTER the
         // constructor returns) are still treated as "initial load".
         ((FrameworkElement)this.Content).Loaded += (_, _) => _isLoaded = true;
+
+        // Start disk utilization polling (background thread) and a UI timer to redraw the sparkline
+        _diskUtilService.Start();
+        _diskSparklineTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _diskSparklineTimer.Tick += (_, _) => UpdateSparkline();
+        _diskSparklineTimer.Start();
     }
 
     private void UpdateTitleBarInsets()
@@ -1005,7 +1009,25 @@ public sealed partial class MainWindow : Window
 
     private void UpdateSparkline()
     {
-        var samples = ViewModel.ThroughputSamples;
+        var samples = _diskUtilService.GetSamples();
+
+        // Update gauge bar and label even with few samples
+        if (samples.Count > 0)
+        {
+            var latest = samples[^1];
+            double gaugeContainerWidth = DiskGaugeBar.Parent is FrameworkElement parent ? parent.ActualWidth : 0;
+            if (gaugeContainerWidth > 0)
+                DiskGaugeBar.Width = latest.UtilizationPct / 100.0 * gaugeContainerWidth;
+
+            DiskGaugeLabel.Text = $"{latest.MBPerSec:N0} MB/s \u00b7 {latest.UtilizationPct:N0}%";
+        }
+        else
+        {
+            DiskGaugeBar.Width = 0;
+            DiskGaugeLabel.Text = string.Empty;
+        }
+
+        // Sparkline needs at least 2 points
         if (samples.Count < 2)
         {
             ThroughputSparkline.Points.Clear();
@@ -1016,11 +1038,11 @@ public sealed partial class MainWindow : Window
         double height = ThroughputSparkline.ActualHeight;
         if (width <= 0 || height <= 0) return;
 
-        // Use MB/s for the sparkline (more visually interesting than files/s)
+        // Plot disk MB/s
         double max = 1;
         for (int i = 0; i < samples.Count; i++)
         {
-            if (samples[i].mbPerSec > max) max = samples[i].mbPerSec;
+            if (samples[i].MBPerSec > max) max = samples[i].MBPerSec;
         }
 
         var pts = ThroughputSparkline.Points;
@@ -1029,7 +1051,7 @@ public sealed partial class MainWindow : Window
         for (int i = 0; i < samples.Count; i++)
         {
             double x = i * xStep;
-            double y = height - (samples[i].mbPerSec / max * (height - 2)) - 1;
+            double y = height - (samples[i].MBPerSec / max * (height - 2)) - 1;
             pts.Add(new Windows.Foundation.Point(x, y));
         }
     }
