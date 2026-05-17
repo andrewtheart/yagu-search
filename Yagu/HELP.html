@@ -542,9 +542,9 @@ no restriction.</td>
 <tr>
 <td>Max depth</td>
 <td>Maximum number of subdirectory levels to recurse below the search
-root. 0 means unlimited (search the entire tree). For example, a value
-of 2 searches the root directory and up to two levels of child
-folders.</td>
+root for the current search only. 0 means unlimited (search the entire
+tree). For example, a value of 2 searches the root directory and up to
+two levels of child folders. This value is not saved to settings.</td>
 </tr>
 </tbody>
 </table>
@@ -1009,10 +1009,6 @@ saved to <code>%APPDATA%\Yagu\settings.json</code>.</p>
 <td>Max results</td>
 <td>Stops after this many matches. Non-zero values capped at 50,000. Use
 0 for unlimited.</td>
-</tr>
-<tr>
-<td>Maximum search depth</td>
-<td>How many subdirectory levels to recurse. 0 = unlimited.</td>
 </tr>
 <tr>
 <td>Default file size filter</td>

@@ -79,10 +79,27 @@
           SkipUnchangedFiles="true" />
   </Target>
 
+    <Target Name="CopyWebView2WinRtCoreToOutput"
+        AfterTargets="Build"
+        Condition="'$(PkgMicrosoft_Web_WebView2)' != ''">
+      <ItemGroup>
+    <_YaguWebView2WinRtCore Include="$(PkgMicrosoft_Web_WebView2)\runtimes\$(YaguWebView2Rid)\native_uap\Microsoft.Web.WebView2.Core.dll"
+            Condition="Exists('$(PkgMicrosoft_Web_WebView2)\runtimes\$(YaguWebView2Rid)\native_uap\Microsoft.Web.WebView2.Core.dll')" />
+    <_YaguWebView2WinMd Include="$(PkgMicrosoft_Web_WebView2)\lib\Microsoft.Web.WebView2.Core.winmd"
+            Condition="Exists('$(PkgMicrosoft_Web_WebView2)\lib\Microsoft.Web.WebView2.Core.winmd')" />
+      </ItemGroup>
+      <Copy SourceFiles="@(_YaguWebView2WinRtCore)"
+        DestinationFolder="$(OutDir)"
+        SkipUnchangedFiles="false" />
+      <Copy SourceFiles="@(_YaguWebView2WinMd)"
+        DestinationFolder="$(OutDir)"
+        SkipUnchangedFiles="true" />
+    </Target>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260101001" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.7463" />
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3179.45" />
+      <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3179.45" GeneratePathProperty="true" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.*" />
     <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.*" />
   </ItemGroup>

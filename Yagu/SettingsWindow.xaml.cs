@@ -194,12 +194,6 @@ public sealed partial class SettingsWindow : Window
             g.Children.Add(max);
             g.Children.Add(new TextBlock { Text = "Stops the search after this many matches. Set to 0 for no limit (memory pressure will still protect against runaway usage).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-            g.Children.Add(NextSearchLabel("Maximum search depth (0 = unlimited):"));
-            var depth = new NumberBox { Value = _viewModel.MaxSearchDepth, Minimum = 0 };
-            depth.ValueChanged += (_, args) => _viewModel.MaxSearchDepth = (int)args.NewValue;
-            g.Children.Add(depth);
-            g.Children.Add(new TextBlock { Text = "Limits how many levels of subdirectories are searched below the root directory. 0 means unlimited depth.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
-
             g.Children.Add(NextSearchLabel("Default file size filter (MB):"));
             var sizeDefaults = new Grid { ColumnSpacing = 8 };
             sizeDefaults.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });

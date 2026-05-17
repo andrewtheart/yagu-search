@@ -463,7 +463,7 @@
                             <NumberBox Value="{x:Bind ViewModel.MaxSearchDepth, Mode=TwoWay}"
                                        Minimum="0" Width="90"
                                        SpinButtonPlacementMode="Hidden"
-                                       ToolTipService.ToolTip="Maximum subdirectory depth to recurse (0 = unlimited)." />
+                                       ToolTipService.ToolTip="Maximum subdirectory depth for the current search only (0 = unlimited)." />
                         </StackPanel>
                     </StackPanel>
                     </Border>

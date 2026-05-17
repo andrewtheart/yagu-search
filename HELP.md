@@ -97,7 +97,7 @@ Click the **Advanced Options** expander below the search bar to reveal additiona
 
 | Control | Effect |
 | --- | --- |
-| Max depth | Maximum number of subdirectory levels to recurse below the search root. 0 means unlimited (search the entire tree). For example, a value of 2 searches the root directory and up to two levels of child folders. |
+| Max depth | Maximum number of subdirectory levels to recurse below the search root for the current search only. 0 means unlimited (search the entire tree). For example, a value of 2 searches the root directory and up to two levels of child folders. This value is not saved to settings. |
 
 ---
 
@@ -257,7 +257,6 @@ Settings are organized into tabs:
 | Setting | What It Controls |
 | --- | --- |
 | Max results | Stops after this many matches. Non-zero values capped at 50,000. Use 0 for unlimited. |
-| Maximum search depth | How many subdirectory levels to recurse. 0 = unlimited. |
 | Default file size filter | Min/Max MB applied by default. Both 0 = any size. |
 | Default date filters | Created/Modified date ranges applied by default. |
 | Search binary files | Includes binary-looking files in the scan. Off by default. |

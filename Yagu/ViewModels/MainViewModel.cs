@@ -1657,7 +1657,6 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.MemoryPressurePercent = MemoryPressurePercent;
         _settings.SdkChannelBufferSize = SdkChannelBufferSize;
         _settings.MaxMatchesPerFile = MaxMatchesPerFile;
-        _settings.MaxSearchDepth = MaxSearchDepth;
         _settings.SkipBinary = SkipBinary;
         _settings.SearchInsideArchives = SearchInsideArchives;
         _settings.ArchiveExtensions = ArchiveExtensions;
