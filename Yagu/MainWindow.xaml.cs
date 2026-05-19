@@ -1716,6 +1716,8 @@ public sealed partial class MainWindow : Window
     // Per-section match navigation state (class moved to Models/SectionMatchNav.cs)
     private readonly Dictionary<RichTextBlock, SectionMatchNav> _sectionMatchNavs = new();
     private SectionMatchNav? _activeSectionNav;
+    // Section content-block → gutter-block for sticky line-number display.
+    private readonly Dictionary<RichTextBlock, RichTextBlock> _sectionGutterBlocks = new();
     // Expander → file path, used to render the sticky file-header overlay
     // (shown when the active expander's own header has scrolled out of view).
     private readonly Dictionary<Expander, string> _expanderFilePaths = new();
@@ -2098,6 +2100,7 @@ public sealed partial class MainWindow : Window
         InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
         _sectionMatchNavs.Clear();
+        _sectionGutterBlocks.Clear();
         PreviewScrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
         EnsurePreviewViewChangedHooked();
     }
@@ -2466,7 +2469,12 @@ public sealed partial class MainWindow : Window
 
         // Remove the existing truncation notice.
         if (ov.NoticePara != null)
+        {
             section.Blocks.Remove(ov.NoticePara);
+            // Also remove the corresponding gutter spacer (always the last block).
+            if (_sectionGutterBlocks.TryGetValue(section, out var gb) && gb.Blocks.Count > 0)
+                gb.Blocks.RemoveAt(gb.Blocks.Count - 1);
+        }
 
         // Compute insertion point in _matchParagraphs.
         int insertAt = -1;
@@ -2504,6 +2512,7 @@ public sealed partial class MainWindow : Window
         }
         else
         {
+            var matchLineNums = new HashSet<int>(ov.RemainingResults.Take(chunkSize).Select(r => r.LineNumber));
             int blocksAdded = 0;
             for (int ri = 0; ri < chunkSize; ri++)
             {
@@ -2517,6 +2526,7 @@ public sealed partial class MainWindow : Window
                 sepRun.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 60, 140, 60));
                 sep.Inlines.Add(sepRun);
                 section.Blocks.Add(sep);
+                SyncGutterSpacer(section, sep.Margin);
                 blocksAdded++;
 
                 var lines = GetPreviewLines(r, ov.AllLines, ov.PreviewLines, fullFile: false);
@@ -2525,8 +2535,9 @@ public sealed partial class MainWindow : Window
                     if (blocksAdded >= MaxPreviewBlocksPerExpandChunk)
                         break;
 
-                    bool isMatchLine = lineNum == r.LineNumber;
-                    AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, ov.Rx, truncate: true, _matchParagraphs, sn, out int addedParagraphs);
+                    bool isMatchLine = matchLineNums.Contains(lineNum);
+                    AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, ov.Rx, truncate: true,
+                        lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs);
                     blocksAdded += addedParagraphs;
                 }
                 consumed++;
@@ -3104,6 +3115,14 @@ public sealed partial class MainWindow : Window
                         $"OnMatchLineCheckBoxClicked: failed to add checked line to preview for '{result.FilePath}' line {result.LineNumber}: {ex.GetType().Name}: {ex.Message}");
                 }
             }
+            else
+            {
+                var selected = ViewModel.GetAllSelectedResults();
+                if (selected.Count >= 2)
+                    await UpdateMultiSelectPreviewAsync();
+                else if (selected.Count == 1)
+                    await ShowSingleFilePreviewAsync(selected[0], fullFile: false);
+            }
         }
     }
 
@@ -3177,12 +3196,20 @@ public sealed partial class MainWindow : Window
         bool isHighlight = ViewModel.PreviewModeIndex == 1;
         if (section.Blocks.Count > 0)
         {
-            var separator = new Paragraph();
-            var separatorRun = new Run { Text = isHighlight ? "  \u22EE" : $"{new string('\u2500', 6)}\u00A0Line\u00A0{result.LineNumber}\u00A0{new string('\u2500', 6)}" };
-            separatorRun.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 60, 140, 60));
-            separator.Inlines.Add(separatorRun);
-            separator.Margin = new Thickness(0, 8, 0, 4);
-            section.Blocks.Add(separator);
+            if (isHighlight)
+            {
+                AddGapIndicator(section);
+            }
+            else
+            {
+                var separator = new Paragraph();
+                var separatorRun = new Run { Text = $"{new string('\u2500', 6)}\u00A0Line\u00A0{result.LineNumber}\u00A0{new string('\u2500', 6)}" };
+                separatorRun.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 60, 140, 60));
+                separator.Inlines.Add(separatorRun);
+                separator.Margin = new Thickness(0, 8, 0, 4);
+                section.Blocks.Add(separator);
+                SyncGutterSpacer(section, separator.Margin);
+            }
         }
 
         var lines = GetPreviewLines(result, allLines, previewLines, fullFile: false);
@@ -3292,7 +3319,7 @@ public sealed partial class MainWindow : Window
             await UpdateMultiSelectPreviewAsync();
     }
 
-    private void OnLayoutOptionClicked(object sender, RoutedEventArgs e)
+    private async void OnLayoutOptionClicked(object sender, RoutedEventArgs e)
     {
         if (ReferenceEquals(sender, LayoutConcatenated))
             ViewModel.PreviewModeIndex = 0;
@@ -3300,7 +3327,9 @@ public sealed partial class MainWindow : Window
             ViewModel.PreviewModeIndex = 1;
 
         SyncLayoutToggles(ViewModel.PreviewModeIndex);
-        OnPreviewModeChanged(sender, new SelectionChangedEventArgs([], []));
+        var selected = ViewModel.GetAllSelectedResults();
+        if (selected.Count >= 2)
+            await UpdateMultiSelectPreviewAsync();
     }
 
     private void SyncLayoutToggles(int index)
@@ -3332,8 +3361,10 @@ public sealed partial class MainWindow : Window
             PreviewScrollViewer.HorizontalScrollBarVisibility = hbar;
         foreach (var expander in PreviewSectionsPanel.Children.OfType<Expander>())
         {
-            if (expander.Content is ScrollViewer sv)
+            if (expander.Content is Grid g && g.Children.OfType<ScrollViewer>().FirstOrDefault() is ScrollViewer sv)
                 sv.HorizontalScrollBarVisibility = hbar;
+            else if (expander.Content is ScrollViewer sv2)
+                sv2.HorizontalScrollBarVisibility = hbar;
         }
     }
 
@@ -3371,8 +3402,10 @@ public sealed partial class MainWindow : Window
             foreach (var expander in expanders)
             {
                 // Always toggle the per-section scrollbar (cheap, doesn't relayout the text).
-                if (expander.Content is ScrollViewer sv)
+                if (expander.Content is Grid g && g.Children.OfType<ScrollViewer>().FirstOrDefault() is ScrollViewer sv)
                     sv.HorizontalScrollBarVisibility = hbar;
+                else if (expander.Content is ScrollViewer sv2)
+                    sv2.HorizontalScrollBarVisibility = hbar;
 
                 // Only re-measure expanded sections; collapsed ones are not visible and
                 // will pick up the current wrap state when re-expanded (see Expanding
@@ -4491,7 +4524,13 @@ public sealed partial class MainWindow : Window
 
     private async void OnExportHtmlReport(object sender, RoutedEventArgs e)
     {
-        var groups = ViewModel.ResultGroups.ToList();
+        // Export only files currently shown in the preview panel (i.e. selected results).
+        var selected = ViewModel.GetAllSelectedResults();
+        if (selected.Count == 0) return;
+        var groups = selected
+            .GroupBy(r => r.FilePath, StringComparer.OrdinalIgnoreCase)
+            .Select(g => (FilePath: g.Key, FileName: Path.GetFileName(g.Key), Results: g.ToList()))
+            .ToList();
         if (groups.Count == 0) return;
 
         var picker = new Windows.Storage.Pickers.FileSavePicker();
@@ -4505,7 +4544,7 @@ public sealed partial class MainWindow : Window
         var file = await picker.PickSaveFileAsync();
         if (file is null) return;
 
-        int totalMatches = groups.Sum(g => g.Count);
+        int totalMatches = groups.Sum(g => g.Results.Count);
         var queryText = System.Net.WebUtility.HtmlEncode(ViewModel.Query);
 
         await using var stream = await file.OpenStreamForWriteAsync().ConfigureAwait(true);
@@ -4555,7 +4594,7 @@ public sealed partial class MainWindow : Window
             await w.WriteLineAsync($"<div class=\"file-path\">{escapedPath}</div>").ConfigureAwait(false);
             await w.WriteLineAsync("<table>").ConfigureAwait(false);
 
-            foreach (var result in group)
+            foreach (var result in group.Results)
             {
                 ViewModel.HydrateResult(result);
 
@@ -4583,7 +4622,8 @@ public sealed partial class MainWindow : Window
         }
 
         await w.WriteLineAsync("</body></html>").ConfigureAwait(false);
-        ViewModel.StatusText = $"Exported HTML report ({groups.Count:N0} files, {totalMatches:N0} matches) to {file.Path}";
+        DispatcherQueue.TryEnqueue(() =>
+            ViewModel.StatusText = $"Exported HTML report ({groups.Count:N0} files, {totalMatches:N0} matches) to {file.Path}");
     }
 
     private static string BuildHighlightedMatchHtml(string line, int matchStart, int matchLength)
@@ -4908,6 +4948,7 @@ public sealed partial class MainWindow : Window
             int renderedResults = 0;
             int startingBlocks = section.Blocks.Count;
             int cap = Math.Min(results.Count, MaxMatchesPerSection);
+            var matchLineNums = new HashSet<int>(results.Select(r => r.LineNumber));
             foreach (var r in results)
             {
                 if (renderedResults >= cap || section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
@@ -4924,6 +4965,7 @@ public sealed partial class MainWindow : Window
                 sep.Inlines.Add(sepRun);
                 sep.Margin = new Thickness(0, 8, 0, 4);
                 section.Blocks.Add(sep);
+                SyncGutterSpacer(section, sep.Margin);
 
                 var lines = GetPreviewLines(r, allLines, previewLines, fullFile: false);
                 foreach (var (line, lineNum) in lines)
@@ -4931,12 +4973,13 @@ public sealed partial class MainWindow : Window
                     if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
                         break;
 
-                    bool isMatchLine = lineNum == r.LineNumber;
+                    bool isMatchLine = matchLineNums.Contains(lineNum);
                     _sectionMatchNavs.TryGetValue(section, out var sn);
-                    var firstPara = AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true, _matchParagraphs, sn, out int addedParagraphs);
+                    var firstPara = AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true,
+                        lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs);
                     parasInFile += addedParagraphs;
 
-                    if (scrollTarget is not null && isMatchLine
+                    if (scrollTarget is not null && lineNum == r.LineNumber
                         && r.LineNumber == scrollTarget.LineNumber
                         && string.Equals(r.FilePath, scrollTarget.FilePath, StringComparison.OrdinalIgnoreCase))
                     {
@@ -5069,11 +5112,7 @@ public sealed partial class MainWindow : Window
 
                     if (!firstRange)
                     {
-                        var gap = new Paragraph();
-                        var gapRun = new Run { Text = "  \u22EE" };
-                        gapRun.Foreground = new SolidColorBrush(Microsoft.UI.Colors.DimGray);
-                        gap.Inlines.Add(gapRun);
-                        section.Blocks.Add(gap);
+                        AddGapIndicator(section);
                     }
                     firstRange = false;
 
@@ -5101,6 +5140,7 @@ public sealed partial class MainWindow : Window
             else
             {
                 // Fallback: concatenated style
+                var fallbackMatchLines = new HashSet<int>(cappedResults.Select(r => r.LineNumber));
                 int fallbackIndex = 0;
                 foreach (var r in cappedResults)
                 {
@@ -5113,11 +5153,12 @@ public sealed partial class MainWindow : Window
                         if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
                             break;
 
-                        bool isMatchLine = lineNum == r.LineNumber;
+                        bool isMatchLine = fallbackMatchLines.Contains(lineNum);
                         _sectionMatchNavs.TryGetValue(section, out var sn);
-                        var firstPara = AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true, _matchParagraphs, sn, out _);
+                        var firstPara = AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true,
+                            lineNum == r.LineNumber ? _matchParagraphs : null, sn, out _);
 
-                        if (scrollTarget is not null && isMatchLine
+                        if (scrollTarget is not null && lineNum == r.LineNumber
                             && r.LineNumber == scrollTarget.LineNumber
                             && string.Equals(r.FilePath, scrollTarget.FilePath, StringComparison.OrdinalIgnoreCase))
                         {
@@ -5280,8 +5321,48 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private const int MaxMatchEntriesPerExpandChunk = 2_000;
 
+    /// <summary>Adds a spacer paragraph to the gutter block to keep it aligned with non-line paragraphs in the content.</summary>
+    private void SyncGutterSpacer(RichTextBlock section, Thickness margin)
+    {
+        if (_sectionGutterBlocks.TryGetValue(section, out var gb))
+        {
+            var spacer = new Paragraph { Margin = margin };
+            spacer.Inlines.Add(new Run { Text = " " });
+            gb.Blocks.Add(spacer);
+        }
+    }
+
+    /// <summary>
+    /// Adds a gap indicator (⋮) between non-contiguous line ranges.
+    /// When a gutter block exists, the indicator goes in the gutter and a
+    /// blank spacer is added to the content block to keep them aligned.
+    /// </summary>
+    private void AddGapIndicator(RichTextBlock section)
+    {
+        if (_sectionGutterBlocks.TryGetValue(section, out var gb))
+        {
+            var gutterGap = new Paragraph();
+            var gutterGapRun = new Run { Text = "      \u22EE" };
+            gutterGapRun.Foreground = new SolidColorBrush(Microsoft.UI.Colors.DimGray);
+            gutterGap.Inlines.Add(gutterGapRun);
+            gb.Blocks.Add(gutterGap);
+
+            var contentSpacer = new Paragraph();
+            contentSpacer.Inlines.Add(new Run { Text = "\u22EE", Foreground = _transparentBrush });
+            section.Blocks.Add(contentSpacer);
+        }
+        else
+        {
+            var gap = new Paragraph();
+            var gapRun = new Run { Text = "  \u22EE" };
+            gapRun.Foreground = new SolidColorBrush(Microsoft.UI.Colors.DimGray);
+            gap.Inlines.Add(gapRun);
+            section.Blocks.Add(gap);
+        }
+    }
+
     /// <summary>Appends a notice paragraph when a section's matches were truncated.</summary>
-    private static Paragraph AppendTruncationNotice(RichTextBlock section, int totalMatches, int renderedMatches)
+    private Paragraph AppendTruncationNotice(RichTextBlock section, int totalMatches, int renderedMatches)
     {
         var notice = new Paragraph { Margin = new Thickness(0, 12, 0, 4) };
         var run = new Run
@@ -5292,6 +5373,7 @@ public sealed partial class MainWindow : Window
         run.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 200, 160, 60));
         notice.Inlines.Add(run);
         section.Blocks.Add(notice);
+        SyncGutterSpacer(section, notice.Margin);
         return notice;
     }
 
@@ -5564,6 +5646,7 @@ public sealed partial class MainWindow : Window
         int renderedResults = 0;
         int startingBlocks = section.Blocks.Count;
         int cap = Math.Min(results.Count, MaxMatchesPerSection);
+        var matchLineNums = new HashSet<int>(results.Select(r => r.LineNumber));
         foreach (var r in results)
         {
             if (renderedResults >= cap || section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
@@ -5577,15 +5660,24 @@ public sealed partial class MainWindow : Window
             sep.Margin = new Thickness(0, 8, 0, 4);
             section.Blocks.Add(sep);
 
+            // Keep gutter aligned with separator paragraph.
+            if (_sectionGutterBlocks.TryGetValue(section, out var gb))
+            {
+                var gutterSep = new Paragraph { Margin = new Thickness(0, 8, 0, 4) };
+                gutterSep.Inlines.Add(new Run { Text = " " });
+                gb.Blocks.Add(gutterSep);
+            }
+
             var lines = GetPreviewLines(r, allLines, previewLines, fullFile: false);
             foreach (var (line, lineNum) in lines)
             {
                 if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
                     break;
 
-                bool isMatchLine = lineNum == r.LineNumber;
+                bool isMatchLine = matchLineNums.Contains(lineNum);
                 _sectionMatchNavs.TryGetValue(section, out var sn);
-                AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true, _matchParagraphs, sn, out int addedParagraphs);
+                AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true,
+                    lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs);
                 parasBuilt += addedParagraphs;
             }
 
@@ -5655,11 +5747,7 @@ public sealed partial class MainWindow : Window
 
                 if (!firstRange)
                 {
-                    var gap = new Paragraph();
-                    var gapRun = new Run { Text = "  \u22EE" };
-                    gapRun.Foreground = new SolidColorBrush(Microsoft.UI.Colors.DimGray);
-                    gap.Inlines.Add(gapRun);
-                    section.Blocks.Add(gap);
+                    AddGapIndicator(section);
                 }
                 firstRange = false;
                 for (int i = start; i <= end; i++)
@@ -5686,6 +5774,7 @@ public sealed partial class MainWindow : Window
         }
         else
         {
+            var matchLineNums = new HashSet<int>(cappedResults.Select(r => r.LineNumber));
             foreach (var r in cappedResults)
             {
                 if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
@@ -5697,9 +5786,10 @@ public sealed partial class MainWindow : Window
                     if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
                         break;
 
-                    bool isMatchLine = lineNum == r.LineNumber;
+                    bool isMatchLine = matchLineNums.Contains(lineNum);
                     _sectionMatchNavs.TryGetValue(section, out var sn);
-                    AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true, _matchParagraphs, sn, out int addedParagraphs);
+                    AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true,
+                        lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs);
                     parasBuilt += addedParagraphs;
                     parasSinceYield += addedParagraphs;
                     if (parasSinceYield >= BuildHighlightYieldEvery)
@@ -6257,8 +6347,12 @@ public sealed partial class MainWindow : Window
     {
         foreach (var expander in PreviewSectionsPanel.Children.OfType<Expander>())
         {
-            if (expander.Content is ScrollViewer sv && sv.Content is Border { Child: RichTextBlock block })
+            if (expander.Content is Grid g
+                && g.Children.OfType<ScrollViewer>().FirstOrDefault() is ScrollViewer sv
+                && sv.Content is Border { Child: RichTextBlock block })
                 yield return block;
+            else if (expander.Content is ScrollViewer sv2 && sv2.Content is Border { Child: RichTextBlock block2 })
+                yield return block2;
             else if (expander.Content is Border { Child: RichTextBlock legacyBlock })
                 yield return legacyBlock;
         }
@@ -6271,13 +6365,26 @@ public sealed partial class MainWindow : Window
         {
             FontFamily = new FontFamily("Consolas"),
             TextWrapping = ViewModel.PreviewWordWrap ? TextWrapping.Wrap : TextWrapping.NoWrap,
+            LineHeight = 20,
+            LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
+            IsTextSelectionEnabled = false,
             Tag = filePath,
         };
         AttachPreviewBlockContextFlyout(block);
 
+        var gutterBlock = new RichTextBlock
+        {
+            FontFamily = new FontFamily("Consolas"),
+            TextWrapping = TextWrapping.NoWrap,
+            LineHeight = 20,
+            LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
+            IsTextSelectionEnabled = false,
+        };
+        _sectionGutterBlocks[block] = gutterBlock;
+
         var content = new Border
         {
-            Padding = new Thickness(8, 4, 0, 8),
+            Padding = new Thickness(0, 4, 0, 8),
             Child = block,
         };
         block.AddHandler(UIElement.PointerPressedEvent,
@@ -6307,6 +6414,21 @@ public sealed partial class MainWindow : Window
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
         };
 
+        // Two-column grid: fixed gutter (line numbers) + scrollable content.
+        var sectionGrid = new Grid();
+        sectionGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        sectionGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var gutterBorder = new Border
+        {
+            Padding = new Thickness(8, 4, 0, 8),
+            Child = gutterBlock,
+        };
+        Grid.SetColumn(gutterBorder, 0);
+        sectionGrid.Children.Add(gutterBorder);
+        Grid.SetColumn(sectionScroller, 1);
+        sectionGrid.Children.Add(sectionScroller);
+
         var sectionNav = new SectionMatchNav
         {
             Scroller = sectionScroller,
@@ -6317,7 +6439,7 @@ public sealed partial class MainWindow : Window
         var expander = new Expander
         {
             Header = BuildPreviewSectionHeader(filePath, detail, block, results),
-            Content = sectionScroller,
+            Content = sectionGrid,
             IsExpanded = isExpanded,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
@@ -6339,8 +6461,10 @@ public sealed partial class MainWindow : Window
                     // ApplyWordWrapAsync to keep the toggle responsive for huge previews).
                     var wrap = ViewModel.PreviewWordWrap;
                     b.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
-                    if (exp.Content is ScrollViewer scroller)
+                    if (exp.Content is Grid eg && eg.Children.OfType<ScrollViewer>().FirstOrDefault() is ScrollViewer scroller)
                         scroller.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+                    else if (exp.Content is ScrollViewer scroller2)
+                        scroller2.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
                     ActivateSectionForBlock(b);
                 }
             }
@@ -6535,9 +6659,13 @@ public sealed partial class MainWindow : Window
         for (int i = PreviewSectionsPanel.Children.Count - 1; i >= 0; i--)
         {
             if (PreviewSectionsPanel.Children[i] is Expander expander
-                && expander.Content is ScrollViewer sv
-                && sv.Content is Border border
-                && border.Child == block)
+                && ((expander.Content is Grid g
+                     && g.Children.OfType<ScrollViewer>().FirstOrDefault() is ScrollViewer sv
+                     && sv.Content is Border border
+                     && border.Child == block)
+                    || (expander.Content is ScrollViewer sv2
+                        && sv2.Content is Border border2
+                        && border2.Child == block)))
             {
                 PreviewSectionsPanel.Children.RemoveAt(i);
                 _blockExpanderCache.Remove(block);
@@ -6546,6 +6674,7 @@ public sealed partial class MainWindow : Window
 
                 // Remove per-section match nav data
                 _sectionMatchNavs.Remove(block);
+                _sectionGutterBlocks.Remove(block);
                 _expanderFilePaths.Remove(expander);
                 _expanderHeaderArgs.Remove(expander);
                 if (ReferenceEquals(_stickyHeaderExpander, expander))
@@ -6688,7 +6817,7 @@ public sealed partial class MainWindow : Window
         section.Blocks.Add(para);
     }
 
-    private static (
+    private (
         (RichTextBlock block, Paragraph para, int matchInPara)? firstMatch,
         (RichTextBlock block, Paragraph para, int matchInPara)? preferredMatch)
         RenderFullFileDocument(
@@ -7004,9 +7133,10 @@ public sealed partial class MainWindow : Window
     private static readonly SolidColorBrush s_gutterSepBrush = new(Windows.UI.Color.FromArgb(255, 60, 60, 60));
     private static readonly SolidColorBrush s_contextTextBrush = new(Windows.UI.Color.FromArgb(255, 110, 110, 110));
     private static readonly SolidColorBrush s_matchAccentBrush = new(Windows.UI.Color.FromArgb(255, 70, 140, 70));
+    private static readonly SolidColorBrush _transparentBrush = new(Microsoft.UI.Colors.Transparent);
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphLineNumbers = new();
 
-    private static Paragraph AddPreviewLineParagraphs(
+    private Paragraph AddPreviewLineParagraphs(
         RichTextBlock section,
         string? line,
         int lineNum,
@@ -7022,13 +7152,15 @@ public sealed partial class MainWindow : Window
         if (truncate)
             line = TruncatePreviewLine(line, rx);
 
+        _sectionGutterBlocks.TryGetValue(section, out var gutterBlock);
+
         Paragraph? firstParagraph = null;
         bool addedMatchEntries = false;
         paragraphsAdded = 0;
 
         foreach (var segment in EnumeratePreviewLineLayoutSegments(line))
         {
-            var para = MakePreviewParagraph(segment, lineNum, isMatchLine, result, rx, truncate: false);
+            var para = MakePreviewParagraph(segment, lineNum, isMatchLine, result, rx, truncate: false, gutterBlock: gutterBlock);
             section.Blocks.Add(para);
             firstParagraph ??= para;
             paragraphsAdded++;
@@ -7301,11 +7433,7 @@ public sealed partial class MainWindow : Window
                 if (paragraphsAdded >= maxAdditionalBlocks)
                     break;
 
-                var gap = new Paragraph();
-                var gapRun = new Run { Text = "  \u22EE" };
-                gapRun.Foreground = new SolidColorBrush(Microsoft.UI.Colors.DimGray);
-                gap.Inlines.Add(gapRun);
-                section.Blocks.Add(gap);
+                AddGapIndicator(section);
                 paragraphsAdded++;
             }
             hasExistingRenderedLines = true;
@@ -7365,7 +7493,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private static Paragraph MakePreviewParagraph(string line, int lineNum, bool isMatchLine, SearchResult r, Regex? rx, bool truncate = true, bool continuationGutter = false)
+    private static Paragraph MakePreviewParagraph(string line, int lineNum, bool isMatchLine, SearchResult r, Regex? rx, bool truncate = true, bool continuationGutter = false, RichTextBlock? gutterBlock = null)
     {
         line ??= string.Empty;
         if (truncate)
@@ -7378,14 +7506,28 @@ public sealed partial class MainWindow : Window
         // align horizontally with context lines (which use a plain space).
         var indicator = new Run { Text = isMatchLine ? "│" : " " };
         indicator.Foreground = isMatchLine ? s_matchAccentBrush : s_contextTextBrush;
-        para.Inlines.Add(indicator);
 
         var gutterRun = new Run { Text = continuationGutter ? $"{lineNum,5} (cont) " : $"{lineNum,5} " };
         gutterRun.Foreground = continuationGutter ? s_matchAccentBrush : (isMatchLine ? s_matchGutterBrush : s_contextGutterBrush);
-        para.Inlines.Add(gutterRun);
         var gutterSep = new Run { Text = "│ " };
         gutterSep.Foreground = s_gutterSepBrush;
-        para.Inlines.Add(gutterSep);
+
+        if (gutterBlock is not null)
+        {
+            // Emit gutter to the separate gutter block.
+            var gutterPara = new Paragraph();
+            gutterPara.Inlines.Add(indicator);
+            gutterPara.Inlines.Add(gutterRun);
+            gutterPara.Inlines.Add(gutterSep);
+            gutterBlock.Blocks.Add(gutterPara);
+        }
+        else
+        {
+            // Inline gutter (legacy path for PreviewBlock single-file view).
+            para.Inlines.Add(indicator);
+            para.Inlines.Add(gutterRun);
+            para.Inlines.Add(gutterSep);
+        }
 
         // Keep gutter/nav semantics tied to actual match lines, but color every
         // visible regex hit yellow so context lines don't show unhighlighted matches.
@@ -9750,7 +9892,11 @@ public sealed partial class MainWindow : Window
 
         // Remove the existing truncation notice (we'll re-append it if more remain).
         if (ov.NoticePara != null)
+        {
             section.Blocks.Remove(ov.NoticePara);
+            if (_sectionGutterBlocks.TryGetValue(section, out var gb2) && gb2.Blocks.Count > 0)
+                gb2.Blocks.RemoveAt(gb2.Blocks.Count - 1);
+        }
 
         // Compute the insertion point in _matchParagraphs (right after this
         // section's last existing match) before appending new entries.
@@ -9791,6 +9937,7 @@ public sealed partial class MainWindow : Window
         }
         else
         {
+            var matchLineNums = new HashSet<int>(ov.RemainingResults.Take(chunkSize).Select(r => r.LineNumber));
             int blocksAdded = 0;
             for (int ri = 0; ri < chunkSize; ri++)
             {
@@ -9804,6 +9951,7 @@ public sealed partial class MainWindow : Window
                 sepRun.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 60, 140, 60));
                 sep.Inlines.Add(sepRun);
                 section.Blocks.Add(sep);
+                SyncGutterSpacer(section, sep.Margin);
                 blocksAdded++;
 
                 var lines = GetPreviewLines(r, ov.AllLines, ov.PreviewLines, fullFile: false);
@@ -9812,8 +9960,9 @@ public sealed partial class MainWindow : Window
                     if (blocksAdded >= MaxPreviewBlocksPerExpandChunk)
                         break;
 
-                    bool isMatchLine = lineNum == r.LineNumber;
-                    AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, ov.Rx, truncate: true, _matchParagraphs, sn, out int addedParagraphs);
+                    bool isMatchLine = matchLineNums.Contains(lineNum);
+                    AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, ov.Rx, truncate: true,
+                        lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs);
                     blocksAdded += addedParagraphs;
                 }
                 consumed++;
@@ -10040,14 +10189,20 @@ public sealed partial class MainWindow : Window
     {
         var esPath = FileLister.FindEsExe();
         bool everythingRunning = Process.GetProcessesByName("Everything").Length > 0;
+        LogService.Instance.Info("MainWindow", $"CheckEverythingAsync: esPath={esPath ?? "(null)"}, everythingRunning={everythingRunning}");
 
-        // Both installed and running — nothing to do
-        if (esPath != null && everythingRunning) return;
+        // Everything is running — SDK will work regardless of es.exe presence
+        if (everythingRunning)
+        {
+            LogService.Instance.Info("MainWindow", "CheckEverythingAsync: Everything process is running — SDK will work, no action needed");
+            return;
+        }
 
         // es.exe found but Everything service not running — offer to start it
-        if (esPath != null && !everythingRunning)
+        if (esPath != null)
         {
             var everythingExe = FindEverythingExe(esPath);
+            LogService.Instance.Info("MainWindow", $"CheckEverythingAsync: es.exe found at '{esPath}', Everything.exe resolve={everythingExe ?? "(null)"}");
             if (everythingExe != null)
             {
                 var startDialog = new ContentDialog
@@ -10081,7 +10236,43 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        // es.exe not found — offer to download and install
+        // Check if Everything.exe exists in standard locations even without es.exe
+        var everythingExeStandalone = FindEverythingExeStandalone();
+        if (everythingExeStandalone != null)
+        {
+            LogService.Instance.Info("MainWindow", $"CheckEverythingAsync: Everything.exe found at '{everythingExeStandalone}' (no es.exe), offering to start");
+            var startDialog = new ContentDialog
+            {
+                XamlRoot = ((FrameworkElement)Content).XamlRoot,
+                Title = "Everything Search Not Running",
+                Content = "Everything Search is installed but not currently running.\nIt must be running for fast file discovery.\n\nWould you like to start it now?",
+                PrimaryButtonText = "Start Everything",
+                CloseButtonText = "Skip",
+                DefaultButton = ContentDialogButton.Primary,
+            };
+
+            if (await startDialog.ShowAsync() == ContentDialogResult.Primary)
+            {
+                try
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = everythingExeStandalone,
+                        UseShellExecute = true,
+                    });
+                    await WaitForEverythingReadyAndNotifyAsync();
+                }
+                catch (Exception ex)
+                {
+                    ViewModel.StatusText = $"Could not start Everything: {ex.Message}. Using built-in file enumeration.";
+                    LogService.Instance.Warning("MainWindow", "Failed to start Everything", ex);
+                }
+            }
+            return;
+        }
+
+        // Nothing found — offer to download and install
+        LogService.Instance.Warning("MainWindow", "CheckEverythingAsync: Everything not found anywhere — showing install dialog");
         var dialog = new ContentDialog
         {
             XamlRoot = ((FrameworkElement)Content).XamlRoot,
@@ -10202,7 +10393,11 @@ public sealed partial class MainWindow : Window
         if (dir != null)
         {
             var candidate = Path.Combine(dir, "Everything.exe");
-            if (File.Exists(candidate)) return candidate;
+            if (File.Exists(candidate))
+            {
+                LogService.Instance.Info("MainWindow", $"FindEverythingExe: found at {candidate}");
+                return candidate;
+            }
         }
         // Check standard install locations
         foreach (var path in new[]
@@ -10212,8 +10407,43 @@ public sealed partial class MainWindow : Window
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Everything", "Everything.exe"),
         })
         {
-            if (File.Exists(path)) return path;
+            if (File.Exists(path))
+            {
+                LogService.Instance.Info("MainWindow", $"FindEverythingExe: found at {path}");
+                return path;
+            }
         }
+        LogService.Instance.Warning("MainWindow", $"FindEverythingExe: NOT FOUND (esPath was '{esPath}', dir was '{dir}')");
+        return null;
+    }
+
+    private static string? FindEverythingExeStandalone()
+    {
+        // Check registry install dirs for Everything.exe even when es.exe wasn't found
+        foreach (var installDir in FileLister.GetEverythingInstallDirsFromRegistry())
+        {
+            var candidate = Path.Combine(installDir, "Everything.exe");
+            if (File.Exists(candidate))
+            {
+                LogService.Instance.Info("MainWindow", $"FindEverythingExeStandalone: found via registry at {candidate}");
+                return candidate;
+            }
+        }
+        // Standard install locations
+        foreach (var path in new[]
+        {
+            @"C:\Program Files\Everything\Everything.exe",
+            @"C:\Program Files (x86)\Everything\Everything.exe",
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Everything", "Everything.exe"),
+        })
+        {
+            if (File.Exists(path))
+            {
+                LogService.Instance.Info("MainWindow", $"FindEverythingExeStandalone: found at {path}");
+                return path;
+            }
+        }
+        LogService.Instance.Info("MainWindow", "FindEverythingExeStandalone: Everything.exe not found in any standard location");
         return null;
     }
 

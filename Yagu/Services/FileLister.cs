@@ -431,6 +431,7 @@ public sealed class FileLister : IFileLister
     {
         if (!_sdkAvailable)
         {
+            LogService.Instance.Warning("FileLister", "RunEverythingSdkAsync: _sdkAvailable=false, skipping SDK tier");
             FallbackReason = "Everything SDK not available";
             yield break;
         }
@@ -582,6 +583,9 @@ public sealed class FileLister : IFileLister
                         long earlyMaxSize = EarlyMaxFileSizeBytes;
                         var earlySkipExts = EarlySkipExtensions;
                         bool hasSkipExts = earlySkipExts.Count > 0;
+                        var extLookup = hasSkipExts && earlySkipExts is HashSet<string> hs
+                            ? hs.GetAlternateLookup<ReadOnlySpan<char>>()
+                            : default(HashSet<string>.AlternateLookup<ReadOnlySpan<char>>);
                         int skippedTooSmall = 0;
                         int skippedTooLarge = 0;
                         int skippedBySize = 0;
@@ -615,7 +619,7 @@ public sealed class FileLister : IFileLister
                             if (hasSkipExts)
                             {
                                 var ext = System.IO.Path.GetExtension(path.AsSpan());
-                                if (ext.Length > 1 && earlySkipExts.Contains(ext.Slice(1).ToString()))
+                                if (ext.Length > 1 && extLookup.Contains(ext.Slice(1)))
                                 {
                                     excludedByExtension++;
                                     Volatile.Write(ref _earlyExcludedByExtensionFiles, excludedByExtension);
@@ -690,30 +694,54 @@ public sealed class FileLister : IFileLister
     public static string? FindEsExe()
     {
         var candidates = new List<string>();
+        var log = LogService.Instance;
+
+        log.Info("FileLister", "FindEsExe: beginning Everything detection");
 
         // 1. PATH
         var pathEnv = Environment.GetEnvironmentVariable("PATH");
         if (!string.IsNullOrEmpty(pathEnv))
         {
-            foreach (var dir in pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            var pathDirs = pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
+            log.Info("FileLister", $"FindEsExe: PATH has {pathDirs.Length} entries");
+            foreach (var dir in pathDirs)
             {
                 candidates.Add(Path.Combine(dir.Trim('"'), "es.exe"));
             }
         }
+        else
+        {
+            log.Info("FileLister", "FindEsExe: PATH environment variable is empty/null");
+        }
+
         // 2. Registry — Everything writes its install location to Uninstall keys
-        foreach (var installDir in GetEverythingInstallDirsFromRegistry())
+        var registryDirs = GetEverythingInstallDirsFromRegistry();
+        log.Info("FileLister", $"FindEsExe: registry returned {registryDirs.Count} install dir(s): [{string.Join(", ", registryDirs)}]");
+        foreach (var installDir in registryDirs)
         {
             candidates.Add(Path.Combine(installDir, "es.exe"));
         }
+
         // 3. LocalAppData
-        candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Everything", "es.exe"));
+        var localAppData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Everything", "es.exe");
+        candidates.Add(localAppData);
+        log.Info("FileLister", $"FindEsExe: LocalAppData candidate: {localAppData}");
+
         // 4. Program Files
         candidates.Add(@"C:\Program Files\Everything\es.exe");
         candidates.Add(@"C:\Program Files (x86)\Everything\es.exe");
         // 5. C:\tools
         candidates.Add(@"C:\tools\es.exe");
 
-        return FindEsExe(candidates, File.Exists);
+        log.Info("FileLister", $"FindEsExe: total {candidates.Count} candidate paths to check");
+
+        var result = FindEsExe(candidates, File.Exists);
+        if (result != null)
+            log.Info("FileLister", $"FindEsExe: FOUND es.exe at: {result}");
+        else
+            log.Warning("FileLister", $"FindEsExe: es.exe NOT FOUND in any of {candidates.Count} candidates. Non-PATH candidates checked: {localAppData}, C:\\Program Files\\Everything\\es.exe, C:\\Program Files (x86)\\Everything\\es.exe, C:\\tools\\es.exe");
+
+        return result;
     }
 
     internal static List<string> GetEverythingInstallDirsFromRegistry()
@@ -726,6 +754,7 @@ public sealed class FileLister : IFileLister
     internal static List<string> GetEverythingInstallDirsFromRegistryCore()
     {
         var dirs = new List<string>();
+        var log = LogService.Instance;
         string[] registryPaths =
         [
             @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
@@ -740,7 +769,11 @@ public sealed class FileLister : IFileLister
                 try
                 {
                     using var key = root.OpenSubKey(subPath);
-                    if (key == null) continue;
+                    if (key == null)
+                    {
+                        log.Info("FileLister", $"Registry: {root.Name}\\{subPath} — key not found");
+                        continue;
+                    }
                     foreach (var subKeyName in key.GetSubKeyNames())
                     {
                         try
@@ -752,16 +785,26 @@ public sealed class FileLister : IFileLister
                                 continue;
                             var installLocation = subKey.GetValue("InstallLocation") as string
                                 ?? Path.GetDirectoryName(subKey.GetValue("UninstallString") as string ?? "");
+                            log.Info("FileLister", $"Registry: found Everything entry '{displayName}' in {root.Name}\\{subPath}\\{subKeyName}, InstallLocation='{installLocation}'");
                             if (!string.IsNullOrWhiteSpace(installLocation))
                                 dirs.Add(installLocation.Trim('"'));
+                            else
+                                log.Warning("FileLister", $"Registry: Everything entry '{displayName}' has no InstallLocation or UninstallString");
                         }
-                        catch { /* skip individual key errors */ }
+                        catch (Exception ex)
+                        {
+                            log.Verbose("FileLister", $"Registry: error reading subkey {subKeyName}: {ex.Message}");
+                        }
                     }
                 }
-                catch { /* skip if registry hive not accessible */ }
+                catch (Exception ex)
+                {
+                    log.Warning("FileLister", $"Registry: cannot open {root.Name}\\{subPath}: {ex.Message}");
+                }
             }
         }
 
+        log.Info("FileLister", $"Registry: total {dirs.Count} install dir(s) found");
         return dirs;
     }
 
@@ -769,7 +812,18 @@ public sealed class FileLister : IFileLister
     {
         foreach (var c in candidates)
         {
-            try { if (fileExists(c)) return c; } catch (Exception ex) { LogService.Instance.Verbose("FileLister", $"Cannot check es.exe path: {c}", ex); }
+            try
+            {
+                if (fileExists(c))
+                {
+                    LogService.Instance.Info("FileLister", $"FindEsExe: candidate EXISTS: {c}");
+                    return c;
+                }
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Warning("FileLister", $"FindEsExe: exception checking candidate: {c} — {ex.Message}", ex);
+            }
         }
         return null;
     }

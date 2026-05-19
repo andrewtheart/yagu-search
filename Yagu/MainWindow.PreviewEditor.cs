@@ -76,7 +76,9 @@ public sealed partial class MainWindow
             if (filePath is null) return;
 
             var pt = e.GetPosition(block);
-            var tp = block.GetPositionFromPoint(pt);
+            TextPointer? tp;
+            try { tp = block.GetPositionFromPoint(pt); }
+            catch { tp = null; }
             int lineNum = tp is null ? -1 : ResolveLineNumberAtPointer(block, tp);
             if (lineNum <= 0) return;
 
@@ -104,12 +106,15 @@ public sealed partial class MainWindow
                 var rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
                 if (rx is not null)
                 {
-                    // Resolve the line text from the paragraph content (skip gutter inlines 0-2).
                     var paraText = new System.Text.StringBuilder();
                     var clickedPara = FindParagraphAtOffset(block, tp!.Offset);
                     if (clickedPara is not null)
                     {
-                        for (int pi = 3; pi < clickedPara.Inlines.Count; pi++)
+                        // In two-column layout, gutter runs are in a separate
+                        // block — content inlines start at index 0.
+                        bool hasGutterBlock = _sectionGutterBlocks.ContainsKey(block);
+                        int startInline = hasGutterBlock ? 0 : 3;
+                        for (int pi = startInline; pi < clickedPara.Inlines.Count; pi++)
                             if (clickedPara.Inlines[pi] is Run pr) paraText.Append(pr.Text);
                     }
                     matchLine = paraText.ToString();
@@ -152,15 +157,17 @@ public sealed partial class MainWindow
             int end = para.ContentEnd.Offset;
             if (tpOff < start || tpOff > end) continue;
 
-            // The gutter run created by MakePreviewParagraph has text "{lineNum,5} "
-            // or "{lineNum,5} (cont) " for continuation lines.
-            // Indicator is index 0, gutter is index 1, separator is index 2.
+            // Prefer the line number stored via the ConditionalWeakTable (works
+            // for both inline-gutter and two-column-gutter layouts).
+            if (s_paragraphLineNumbers.TryGetValue(para, out var lineNumObj) && lineNumObj is int storedNum && storedNum > 0)
+                return storedNum;
+
+            // Fallback: parse from inline gutter runs (legacy single-block layout).
             for (int i = 0; i < Math.Min(3, para.Inlines.Count); i++)
             {
                 if (para.Inlines[i] is not Run r) continue;
                 var trimmed = r.Text.AsSpan().Trim();
                 if (trimmed.IsEmpty) continue;
-                // Extract leading digits only — handles both "42" and "42 (cont)".
                 int digits = 0;
                 while (digits < trimmed.Length && char.IsDigit(trimmed[digits])) digits++;
                 if (digits > 0 && int.TryParse(trimmed[..digits], out int n) && n > 0)

@@ -739,8 +739,8 @@
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="Auto" />
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="*" MaxWidth="650" />
+                                                <ColumnDefinition Width="1*" />
+                                                <ColumnDefinition Width="3*" MaxWidth="650" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
                                         <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
@@ -785,6 +785,23 @@
                                         <ItemsControl ItemsSource="{x:Bind VisibleResults}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate x:DataType="models:SearchResult">
+                                                    <StackPanel>
+                                                    <ItemsControl ItemsSource="{x:Bind NumberedBefore}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate x:DataType="models:ContextLine">
+                                                                <Grid ColumnSpacing="3" Padding="28,0,8,0">
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="34" />
+                                                                        <ColumnDefinition Width="*" />
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <TextBlock Text="{x:Bind LineNum}" FontFamily="Consolas" FontSize="11" Opacity="0.45"
+                                                                               HorizontalAlignment="Right" Margin="0,0,6,0" />
+                                                                    <TextBlock Grid.Column="1" Text="{x:Bind Text}" FontFamily="Consolas" FontSize="11" Opacity="0.45"
+                                                                               TextTrimming="CharacterEllipsis" />
+                                                                </Grid>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
                                                     <Grid Padding="0,2,8,2" ColumnSpacing="3" Tapped="OnMatchLineTapped" Background="Transparent">
                                                         <Grid.ContextFlyout>
                                                             <MenuFlyout>
@@ -821,6 +838,23 @@
                                                         </Border>
                                                         <RichTextBlock Grid.Column="2" TextTrimming="CharacterEllipsis" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="False" Loaded="OnMatchLineLoaded" VerticalAlignment="Center" />
                                                     </Grid>
+                                                    <ItemsControl ItemsSource="{x:Bind NumberedAfter}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate x:DataType="models:ContextLine">
+                                                                <Grid ColumnSpacing="3" Padding="28,0,8,0">
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="34" />
+                                                                        <ColumnDefinition Width="*" />
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <TextBlock Text="{x:Bind LineNum}" FontFamily="Consolas" FontSize="11" Opacity="0.45"
+                                                                               HorizontalAlignment="Right" Margin="0,0,6,0" />
+                                                                    <TextBlock Grid.Column="1" Text="{x:Bind Text}" FontFamily="Consolas" FontSize="11" Opacity="0.45"
+                                                                               TextTrimming="CharacterEllipsis" />
+                                                                </Grid>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                    </StackPanel>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
@@ -871,7 +905,7 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel x:Name="PreviewToolbarContent" Orientation="Horizontal" Spacing="4" Visibility="Collapsed">
+                        <StackPanel x:Name="PreviewToolbarContent" Orientation="Horizontal" Spacing="4" Visibility="Collapsed" HorizontalAlignment="Left">
                             <!-- File identity (icon + label hidden) -->
                             <FontIcon Glyph="&#xE7B3;" FontSize="12" VerticalAlignment="Center" Opacity="0.6" Visibility="Collapsed" />
                             <TextBlock x:Name="PreviewFileLabel" VerticalAlignment="Center" FontSize="12" Opacity="0.7"
