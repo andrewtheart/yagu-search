@@ -327,7 +327,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         set
         {
             _allSelected = value;
-            // Always raise PropertyChanged to re-sync the OneWay-bound CheckBox,
+            // Always raise PropertyChanged to re-sync the TwoWay-bound CheckBox,
             // which can diverge from the model after user clicks.
             OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(AllSelected)));
         }

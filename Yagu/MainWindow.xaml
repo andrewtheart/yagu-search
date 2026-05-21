@@ -619,6 +619,7 @@
                         <CheckBox x:Name="SelectAllFilesCheckBox"
                                   ToolTipService.ToolTip="Select / deselect all files"
                                   IsThreeState="False"
+                                  IsChecked="False"
                                   MinWidth="32" MinHeight="0" Padding="0"
                                   VerticalAlignment="Center"
                                   Checked="OnSelectAllFilesChecked"
@@ -745,7 +746,7 @@
                                             </Grid.ColumnDefinitions>
                                         <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
                                                   IsThreeState="False"
-                                                  IsChecked="{x:Bind AllSelected, Mode=OneWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
+                                                  IsChecked="{x:Bind AllSelected, Mode=TwoWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
                                                   Click="OnFileGroupCheckBoxClicked" />
                                         <!-- Match count badge -->
                                         <Border Grid.Column="1" Background="#1A6B5A" CornerRadius="4" Padding="8,2" VerticalAlignment="Center" Margin="0,0,10,0" MinWidth="105">
