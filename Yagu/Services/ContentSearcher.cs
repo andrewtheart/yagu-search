@@ -694,11 +694,34 @@ public sealed class ContentSearcher
 
             int safeStartBytes = Math.Clamp(matchStartBytes, 0, len);
             int safeLengthBytes = Math.Clamp(matchLenBytes, 0, len - safeStartBytes);
+
+            // Fast path: if all relevant bytes are ASCII, char offsets = byte offsets.
+            // Source code is overwhelmingly ASCII, so this avoids two GetCharCount calls.
+            int matchStart, matchLength;
+            if (IsAsciiRegion(ptr, safeStartBytes + safeLengthBytes))
+            {
+                matchStart = safeStartBytes;
+                matchLength = safeLengthBytes;
+            }
+            else
+            {
+                matchStart = Encoding.UTF8.GetCharCount(ptr, safeStartBytes);
+                matchLength = Encoding.UTF8.GetCharCount(ptr + safeStartBytes, safeLengthBytes);
+            }
+
             var line = Encoding.UTF8.GetString(ptr, len);
-            int matchStart = Encoding.UTF8.GetCharCount(ptr, safeStartBytes);
-            int matchLength = Encoding.UTF8.GetCharCount(ptr + safeStartBytes, safeLengthBytes);
             var displayLine = LineTruncator.TruncateAroundMatch(line, matchStart, matchLength);
             return (displayLine.Text, displayLine.MatchStart, matchLength);
+        }
+
+        /// <summary>
+        /// Returns true if all bytes in [ptr, ptr+len) are ASCII (high bit clear).
+        /// Uses vectorized check when possible.
+        /// </summary>
+        private static unsafe bool IsAsciiRegion(byte* ptr, int len)
+        {
+            if (len <= 0) return true;
+            return System.Text.Ascii.IsValid(new ReadOnlySpan<byte>(ptr, len));
         }
 
         internal static unsafe IReadOnlyList<string> UnpackLinesTruncated(byte* ptr, nuint totalBytes, uint count)

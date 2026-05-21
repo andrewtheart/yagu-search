@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Text;
@@ -199,7 +200,7 @@ public sealed class ResultStore : IDisposable
         lock (_lock)
         {
             long offset = _stream.Position;
-            _writer.Write(matchLine ?? string.Empty);
+            WriteStringFast(_writer, matchLine ?? string.Empty);
             WriteStringList(_writer, contextBefore);
             WriteStringList(_writer, contextAfter);
             Interlocked.Increment(ref _evictedCount);
@@ -220,7 +221,7 @@ public sealed class ResultStore : IDisposable
             long WriteOne(string matchLine, IReadOnlyList<string> before, IReadOnlyList<string> after)
             {
                 long offset = _stream.Position;
-                _writer.Write(matchLine ?? string.Empty);
+                WriteStringFast(_writer, matchLine ?? string.Empty);
                 WriteStringList(_writer, before);
                 WriteStringList(_writer, after);
                 Interlocked.Increment(ref _evictedCount);
@@ -272,7 +273,42 @@ public sealed class ResultStore : IDisposable
     {
         w.Write(list.Count);
         for (int i = 0; i < list.Count; i++)
-            w.Write(list[i] ?? string.Empty);
+            WriteStringFast(w, list[i] ?? string.Empty);
+    }
+
+    /// <summary>
+    /// Write a string using BinaryWriter's length-prefixed UTF-8 format but with a
+    /// rented buffer to avoid BinaryWriter's internal 128-byte chunked encoding for
+    /// strings longer than ~42 chars.
+    /// </summary>
+    private static void WriteStringFast(BinaryWriter w, string value)
+    {
+        if (value.Length == 0)
+        {
+            w.Write(value); // 1-byte length prefix (0)
+            return;
+        }
+
+        // For short strings, BinaryWriter.Write is fine (its 128-byte buffer suffices)
+        if (value.Length <= 40)
+        {
+            w.Write(value);
+            return;
+        }
+
+        // For longer strings: encode into a pooled buffer, write length + bytes directly
+        int maxBytes = Encoding.UTF8.GetMaxByteCount(value.Length);
+        byte[] rented = ArrayPool<byte>.Shared.Rent(maxBytes);
+        try
+        {
+            int byteCount = Encoding.UTF8.GetBytes(value, rented);
+            w.Write7BitEncodedInt(byteCount);
+            w.BaseStream.Write(rented, 0, byteCount);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     private static string[] ReadStringList(BinaryReader r)

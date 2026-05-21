@@ -296,4 +296,69 @@ public class ResultStoreDisposeTests
         // Exercise the code path; it scans temp directory for old files
         await ResultStore.CleanupOrphanedTempFilesAsync();
     }
+
+    [Fact]
+    public void Write_LongString_RoundtripsCorrectly()
+    {
+        // Exercises WriteStringFast's pooled-buffer path (strings > 40 chars)
+        using var store = new ResultStore();
+        var longMatch = new string('X', 200) + "MARKER" + new string('Y', 200);
+        var longBefore = new string('A', 100);
+        var longAfter = new string('B', 100);
+
+        long offset = store.Write(longMatch, [longBefore], [longAfter]);
+        var (matchLine, before, after) = store.Read(offset);
+
+        Assert.Equal(longMatch, matchLine);
+        Assert.Single(before);
+        Assert.Equal(longBefore, before[0]);
+        Assert.Single(after);
+        Assert.Equal(longAfter, after[0]);
+    }
+
+    [Fact]
+    public void WriteBatch_LongStrings_RoundtripCorrectly()
+    {
+        // Exercises WriteStringFast via WriteBatch path
+        using var store = new ResultStore();
+        var longLine = new string('Z', 300);
+        var result = new SearchResult(
+            FilePath: @"C:\test.txt",
+            LineNumber: 1,
+            MatchLine: longLine,
+            MatchStartColumn: 0,
+            MatchLength: 5,
+            ContextBefore: [new string('C', 80)],
+            ContextAfter: [new string('D', 80)]);
+
+        store.WriteBatch(writeOne => result.EvictWith(writeOne));
+        result.Hydrate(store);
+
+        Assert.Equal(longLine, result.MatchLine);
+        Assert.Equal(new string('C', 80), result.ContextBefore[0]);
+        Assert.Equal(new string('D', 80), result.ContextAfter[0]);
+    }
+
+    [Fact]
+    public void Evict_WithoutPriorShortPreviewAccess_PreservesPreview()
+    {
+        // Verifies the EnsureShortPreview() fix: evict without ever reading ShortPreview
+        using var store = new ResultStore();
+        var result = new SearchResult(
+            FilePath: @"C:\test.txt",
+            LineNumber: 1,
+            MatchLine: "short match line",
+            MatchStartColumn: 6,
+            MatchLength: 5,
+            ContextBefore: Array.Empty<string>(),
+            ContextAfter: Array.Empty<string>());
+
+        // Deliberately do NOT access result.ShortPreview before eviction
+        result.Evict(store);
+
+        Assert.True(result.IsEvicted);
+        // After eviction, MatchLine should hold the short preview (== full line for short strings)
+        Assert.Equal("short match line", result.MatchLine);
+        Assert.Equal("short match line", result.ShortPreview);
+    }
 }

@@ -67,10 +67,9 @@ public sealed record SearchResult(
         try
         {
             long offset = writer(MatchLine, ContextBefore, ContextAfter);
-            // Keep the ShortPreview text if it was already created (visible items);
-            // otherwise set to empty — the item was never displayed and the preview
-            // will be recreated lazily from disk data if needed later.
-            MatchLine = _shortPreview?.Text ?? string.Empty;
+            // Materialize the short preview before discarding MatchLine —
+            // it's needed for display even while the full data is on disk.
+            MatchLine = EnsureShortPreview().Text;
             ContextBefore = Array.Empty<string>();
             ContextAfter = Array.Empty<string>();
             Volatile.Write(ref _diskOffset, offset);

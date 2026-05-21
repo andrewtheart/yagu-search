@@ -566,7 +566,9 @@ public sealed class FileLister : IFileLister
                         _sdkOps.SetMatchCase(false);
                         // Request size alongside paths so we can pre-filter by file size
                         // and extension without per-file FileInfo calls.
-                        bool wantSize = EarlyMinFileSizeBytes > 0 || EarlyMaxFileSizeBytes > 0;
+                        // Always request size: even without user size filters, the 100 MB
+                        // ContentSearchFileSizeCeiling needs it to avoid per-file stat calls.
+                        bool wantSize = true;
                         bool wantCreatedDate = EarlyCreatedAfterDate.HasValue || EarlyCreatedBeforeDate.HasValue;
                         bool wantModifiedDate = EarlyModifiedAfterDate.HasValue || EarlyModifiedBeforeDate.HasValue;
                         uint requestFlags = EverythingSdk.EVERYTHING_REQUEST_FULL_PATH_AND_FILE_NAME;

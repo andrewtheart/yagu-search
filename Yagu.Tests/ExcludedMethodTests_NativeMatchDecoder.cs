@@ -50,6 +50,50 @@ public sealed class ExcludedMethodTests_NativeMatchDecoder
     }
 
     [Fact]
+    public unsafe void DecodeMatchLine_AsciiLine_UsesAsciFastPath()
+    {
+        // Pure ASCII: byte offsets == char offsets, so fast path is taken.
+        // Verify result is correct (same as before but exercises the IsAsciiRegion branch).
+        byte[] data = Encoding.UTF8.GetBytes("function hello() { return 42; }");
+        fixed (byte* ptr = data)
+        {
+            // match "hello" at byte 9, length 5
+            var (line, start, matchLen) = ContentSearcher.NativeMatchDecoder.DecodeMatchLine(ptr, data.Length, 9, 5);
+            Assert.Contains("hello", line);
+            Assert.Equal(9, start);
+            Assert.Equal(5, matchLen);
+        }
+    }
+
+    [Fact]
+    public unsafe void DecodeMatchLine_NonAsciiPrefix_FallsBackToGetCharCount()
+    {
+        // "日本語hello" — first 9 bytes are multi-byte (3 chars × 3 bytes each),
+        // then "hello" at byte offset 9, length 5. Char offset for "hello" is 3, not 9.
+        byte[] data = Encoding.UTF8.GetBytes("日本語hello");
+        fixed (byte* ptr = data)
+        {
+            var (line, start, matchLen) = ContentSearcher.NativeMatchDecoder.DecodeMatchLine(ptr, data.Length, 9, 5);
+            Assert.Contains("hello", line);
+            Assert.Equal(3, start);   // char offset, not byte offset
+            Assert.Equal(5, matchLen);
+        }
+    }
+
+    [Fact]
+    public unsafe void DecodeMatchLine_EmptyMatchRegion_AsciiPathReturnsZeros()
+    {
+        byte[] data = Encoding.UTF8.GetBytes("abc");
+        fixed (byte* ptr = data)
+        {
+            // matchStartBytes=0, matchLenBytes=0 → fast path (0 bytes is vacuously ASCII)
+            var (line, start, matchLen) = ContentSearcher.NativeMatchDecoder.DecodeMatchLine(ptr, data.Length, 0, 0);
+            Assert.Equal(0, start);
+            Assert.Equal(0, matchLen);
+        }
+    }
+
+    [Fact]
     public unsafe void DecodeAndTruncate_NullPtr_ReturnsEmpty()
     {
         string result = ContentSearcher.NativeMatchDecoder.DecodeAndTruncate(null, 0);

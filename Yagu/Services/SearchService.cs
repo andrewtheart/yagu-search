@@ -301,9 +301,8 @@ public sealed class SearchService
                     if (pending.Writer.TryWrite(path))
                         return;
 
-                    var waitToWrite = pending.Writer.WaitToWriteAsync(cancellationToken).AsTask();
-                    var completed = await Task.WhenAny(waitToWrite, Task.Delay(25, cancellationToken)).ConfigureAwait(false);
-                    if (completed == waitToWrite && !await waitToWrite.ConfigureAwait(false))
+                    // Await space directly — avoids Task.WhenAny + Task.Delay allocations per file.
+                    if (!await pending.Writer.WaitToWriteAsync(cancellationToken).ConfigureAwait(false))
                         return;
                 }
             }
