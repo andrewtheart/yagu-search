@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Yagu.Native;
 using Yagu.Services;
 using static Yagu.Services.FileLister;
 
@@ -21,6 +22,8 @@ internal sealed class MockEverythingSdkOps : IEverythingSdkOps
     public bool? CapturedMatchCase { get; set; }
     public uint? CapturedRequestFlags { get; set; }
     public uint? CapturedMax { get; set; }
+    public Dictionary<uint, long> CreatedFileTimes { get; set; } = [];
+    public Dictionary<uint, long> ModifiedFileTimes { get; set; } = [];
     public bool ThrowOnReset { get; set; }
     public int ResetCallCount { get; private set; }
     public int ThrowOnResetAfterCall { get; set; } = 1; // throw on Nth+ call
@@ -56,6 +59,16 @@ internal sealed class MockEverythingSdkOps : IEverythingSdkOps
     {
         if (index < Results.Count) { size = Results[(int)index].Size; return true; }
         size = 0; return false;
+    }
+
+    public bool GetResultDateCreated(uint index, out long fileTime)
+    {
+        return CreatedFileTimes.TryGetValue(index, out fileTime);
+    }
+
+    public bool GetResultDateModified(uint index, out long fileTime)
+    {
+        return ModifiedFileTimes.TryGetValue(index, out fileTime);
     }
 
     public uint GetResultFullPathName(uint index, char[] buffer, uint capacity)
@@ -760,13 +773,19 @@ public class FileListerSdkTests : IDisposable
     }
 
     [Fact]
-    public async Task Sdk_DateFilter_AddedToQuery()
+    public async Task Sdk_DateFilter_UsesMetadataRequestFlagNotQueryTerm()
     {
-        var sdk = new MockEverythingSdkOps { Results = [(@"C:\a.cs", 100)] };
+        var sdk = new MockEverythingSdkOps
+        {
+            Results = [(@"C:\a.cs", 100)],
+            CreatedFileTimes = { [0] = new DateTime(2025, 1, 2).ToFileTime() }
+        };
         var lister = CreateSdkLister(sdk);
         lister.EarlyCreatedAfterDate = new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero);
-        await foreach (var _ in lister.ListFilesAsync(_root, Array.Empty<string>(), 0, default)) { }
-        Assert.Contains("dc:>=", sdk.CapturedQuery);
+        var files = await CollectAsync(lister.ListFilesAsync(_root, Array.Empty<string>(), 0, default));
+        Assert.Single(files);
+        Assert.DoesNotContain("dc:", sdk.CapturedQuery);
+        Assert.True((sdk.CapturedRequestFlags.GetValueOrDefault() & EverythingSdk.EVERYTHING_REQUEST_DATE_CREATED) != 0);
     }
 
     [Fact]
@@ -884,6 +903,8 @@ internal sealed class ThrowOnQuerySdkOps : IEverythingSdkOps
     public uint GetNumResults() => 0;
     public uint GetTotResults() => 0;
     public bool GetResultSize(uint index, out long size) { size = 0; return false; }
+    public bool GetResultDateCreated(uint index, out long fileTime) { fileTime = 0; return false; }
+    public bool GetResultDateModified(uint index, out long fileTime) { fileTime = 0; return false; }
     public uint GetResultFullPathName(uint index, char[] buffer, uint capacity) => 0;
 }
 
@@ -1049,6 +1070,8 @@ internal sealed class EmptyPathSdkOps : IEverythingSdkOps
     public uint GetNumResults() => 3; // claim 3 results
     public uint GetTotResults() => 3;
     public bool GetResultSize(uint index, out long size) { size = 100; return true; }
+    public bool GetResultDateCreated(uint index, out long fileTime) { fileTime = 0; return false; }
+    public bool GetResultDateModified(uint index, out long fileTime) { fileTime = 0; return false; }
     public uint GetResultFullPathName(uint index, char[] buffer, uint capacity) => 0; // empty
 }
 
@@ -1962,17 +1985,47 @@ public class FileListerGapTests : IDisposable
     // ── SDK: size & date filter terms in query ──
 
     [Fact]
-    public async Task Sdk_SizeAndDateTerms_AddedToQuery()
+    public async Task Sdk_SizeTermInQuery_DateFilterUsesMetadataFlag()
     {
         FileLister.Backend = FileListerBackend.EverythingSdk;
         FileLister.SdkAvailable = true;
-        var sdk = new MockEverythingSdkOps { Results = [(@"C:\a.cs", 500)] };
+        var sdk = new MockEverythingSdkOps
+        {
+            Results = [(@"C:\a.cs", 500)],
+            CreatedFileTimes = { [0] = new DateTime(2024, 1, 2).ToFileTime() }
+        };
         var lister = new FileLister(null, sdk);
         lister.EarlyMinFileSizeBytes = 100;
         lister.EarlyCreatedAfterDate = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
         var files = await CollectAsync(lister.ListFilesAsync(_root, Array.Empty<string>(), 0, default));
         Assert.Contains("size:>=100", sdk.CapturedQuery);
-        Assert.Contains("dc:>=", sdk.CapturedQuery);
+        Assert.DoesNotContain("dc:", sdk.CapturedQuery);
+        Assert.True((sdk.CapturedRequestFlags.GetValueOrDefault() & EverythingSdk.EVERYTHING_REQUEST_SIZE) != 0);
+        Assert.True((sdk.CapturedRequestFlags.GetValueOrDefault() & EverythingSdk.EVERYTHING_REQUEST_DATE_CREATED) != 0);
+    }
+
+    [Fact]
+    public async Task Sdk_DateMetadataFiltering_SkipsOutsideRange()
+    {
+        FileLister.Backend = FileListerBackend.EverythingSdk;
+        FileLister.SdkAvailable = true;
+        var sdk = new MockEverythingSdkOps
+        {
+            Results = [(@"C:\old.cs", 100), (@"C:\new.cs", 100)],
+            CreatedFileTimes =
+            {
+                [0] = new DateTime(2023, 12, 29).ToFileTime(),
+                [1] = new DateTime(2024, 1, 3).ToFileTime(),
+            }
+        };
+        var lister = new FileLister(null, sdk)
+        {
+            EarlyCreatedAfterDate = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
+        };
+        var files = await CollectAsync(lister.ListFilesAsync(_root, Array.Empty<string>(), 0, default));
+        Assert.Single(files);
+        Assert.EndsWith("new.cs", files[0]);
+        Assert.Equal(1, lister.EarlySkippedFiles);
     }
 
     // ── Managed: reparse point handling ──

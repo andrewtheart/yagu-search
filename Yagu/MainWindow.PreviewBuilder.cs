@@ -91,6 +91,72 @@ public sealed partial class MainWindow
     /// </summary>
     private const int MaxMatchEntriesPerExpandChunk = 2_000;
 
+    // ── Gutter-height synchronization (word-wrap support) ─────────────────
+    //
+    // The gutter and content are separate RichTextBlocks in a two-column Grid.
+    // Without word wrap both have 1 visual line (20 px) per paragraph, so they
+    // stay aligned.  With word wrap the content paragraph can occupy N visual
+    // lines while the gutter paragraph stays at 1, causing progressive drift.
+    //
+    // After layout we measure each content paragraph's rendered height via
+    // TextPointer.GetCharacterRect and pad the corresponding gutter paragraph's
+    // bottom margin to compensate.
+
+    private readonly HashSet<RichTextBlock> _gutterSyncPending = new();
+
+    private void ScheduleGutterSync(RichTextBlock contentBlock)
+    {
+        if (!_gutterSyncPending.Add(contentBlock)) return;
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            _gutterSyncPending.Remove(contentBlock);
+            SyncGutterParagraphHeights(contentBlock);
+        });
+    }
+
+    private void SyncGutterParagraphHeights(RichTextBlock contentBlock)
+    {
+        if (!_sectionGutterBlocks.TryGetValue(contentBlock, out var gutterBlock)) return;
+        if (contentBlock.ActualWidth <= 0) return;
+
+        double lineHeight = contentBlock.LineHeight;
+        var contentBlocks = contentBlock.Blocks;
+        var gutterBlocks = gutterBlock.Blocks;
+        if (contentBlocks.Count == 0 || contentBlocks.Count != gutterBlocks.Count) return;
+
+        bool isWrapped = contentBlock.TextWrapping == TextWrapping.Wrap;
+
+        for (int i = 0; i < contentBlocks.Count; i++)
+        {
+            if (contentBlocks[i] is not Paragraph cp || gutterBlocks[i] is not Paragraph gp)
+                continue;
+
+            double targetBottom;
+            if (isWrapped)
+            {
+                try
+                {
+                    var startRect = cp.ContentStart.GetCharacterRect(LogicalDirection.Forward);
+                    var endRect = cp.ContentEnd.GetCharacterRect(LogicalDirection.Backward);
+                    double contentHeight = Math.Max(lineHeight, endRect.Bottom - startRect.Top);
+                    targetBottom = contentHeight - lineHeight + cp.Margin.Bottom;
+                }
+                catch
+                {
+                    continue; // TextPointer measurement can fail before layout
+                }
+            }
+            else
+            {
+                // Word wrap off → gutter bottom margin should match content's.
+                targetBottom = cp.Margin.Bottom;
+            }
+
+            if (Math.Abs(gp.Margin.Bottom - targetBottom) > 0.5)
+                gp.Margin = new Thickness(gp.Margin.Left, gp.Margin.Top, gp.Margin.Right, targetBottom);
+        }
+    }
+
     /// <summary>Adds a spacer paragraph to the gutter block to keep it aligned with non-line paragraphs in the content.</summary>
     private void SyncGutterSpacer(RichTextBlock section, Thickness margin)
     {
@@ -1151,6 +1217,10 @@ public sealed partial class MainWindow
         };
         _sectionGutterBlocks[block] = gutterBlock;
 
+        // Sync gutter paragraph heights after layout so the line numbers stay
+        // aligned with content paragraphs that wrap to multiple visual lines.
+        block.SizeChanged += (_, _) => ScheduleGutterSync(block);
+
         var content = new Border
         {
             Padding = new Thickness(0, 4, 0, 8),
@@ -1929,7 +1999,8 @@ public sealed partial class MainWindow
 
         foreach (var segment in EnumeratePreviewLineLayoutSegments(line))
         {
-            var para = MakePreviewParagraph(segment, lineNum, isMatchLine, result, rx, truncate: false, gutterBlock: gutterBlock);
+            bool isContinuation = firstParagraph is not null;
+            var para = MakePreviewParagraph(segment, lineNum, isMatchLine, result, rx, truncate: false, continuationGutter: isContinuation, gutterBlock: gutterBlock);
             section.Blocks.Add(para);
             firstParagraph ??= para;
             paragraphsAdded++;
@@ -2273,12 +2344,12 @@ public sealed partial class MainWindow
         // Match indicator + line number gutter.
         // Use a glyph that Consolas renders at full cell width so match lines
         // align horizontally with context lines (which use a plain space).
-        var indicator = new Run { Text = isMatchLine ? "│" : " " };
+        var indicator = new Run { Text = continuationGutter ? " " : (isMatchLine ? "│" : " ") };
         indicator.Foreground = isMatchLine ? s_matchAccentBrush : s_contextTextBrush;
 
-        var gutterRun = new Run { Text = continuationGutter ? $"{lineNum,5} (cont) " : $"{lineNum,5} " };
-        gutterRun.Foreground = continuationGutter ? s_matchAccentBrush : (isMatchLine ? s_matchGutterBrush : s_contextGutterBrush);
-        var gutterSep = new Run { Text = "│ " };
+        var gutterRun = new Run { Text = continuationGutter ? "      " : $"{lineNum,5} " };
+        gutterRun.Foreground = continuationGutter ? s_contextGutterBrush : (isMatchLine ? s_matchGutterBrush : s_contextGutterBrush);
+        var gutterSep = new Run { Text = continuationGutter ? "  " : "│ " };
         gutterSep.Foreground = s_gutterSepBrush;
 
         if (gutterBlock is not null)

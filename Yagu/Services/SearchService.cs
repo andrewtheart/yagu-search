@@ -218,6 +218,8 @@ public sealed class SearchService
         int everDegraded = 0;        // 1 once memory-saving mode was used during this search
         int evictionInFlight = 0;    // 1 while an eviction event is being processed by the UI
         int pressureCycles = 0;      // total number of memory pressure events emitted
+        int consecutiveFutileEvictions = 0; // eviction cycles that freed 0 — used to stop futile loops
+        long lastPressureCheckTicks = 0;    // timestamp of last pressure event emission
         int nativeBatchesProcessed = 0; // total native batches flushed
         int contentChannelDrops = 0;    // times TryWrite to contentResults failed (channel full)
         long forwarderItemsForwarded = 0; // total results forwarded from contentResults → events
@@ -306,6 +308,8 @@ public sealed class SearchService
                 }
             }
 
+            bool fileListerAlreadyCheckedMetadata = _fileLister is FileLister;
+
             try
             {
                 int discoveryLogCounter = 0;
@@ -323,8 +327,9 @@ public sealed class SearchService
                         continue;
                     }
 
-                    if (_fileLister is not FileLister
-                        && ShouldSkipByFileMetadata(path, options, out bool tooLarge))
+                        if (ShouldSkipByFileMetadata(path, options, out bool tooLarge,
+                            checkSize: !fileListerAlreadyCheckedMetadata,
+                            checkDates: !fileListerAlreadyCheckedMetadata))
                     {
                         Interlocked.Increment(ref filesScanned);
                         Interlocked.Increment(ref filesSkipped);
@@ -453,8 +458,22 @@ public sealed class SearchService
                             Volatile.Write(ref degraded, 1);
                             Volatile.Write(ref everDegraded, 1);
 
+                            // After several consecutive evictions that freed nothing, stop emitting
+                            // pressure events — they just trigger futile GC cycles. Recheck every
+                            // 60 seconds in case memory actually drops.
+                            int futile = Volatile.Read(ref consecutiveFutileEvictions);
+                            if (futile >= 3)
+                            {
+                                long now = Stopwatch.GetTimestamp();
+                                long last = Volatile.Read(ref lastPressureCheckTicks);
+                                double secSinceLast = last == 0 ? double.MaxValue : (double)(now - last) / Stopwatch.Frequency;
+                                if (secSinceLast < 60)
+                                    return; // skip — futile eviction loop, just keep scanning
+                            }
+
                             if (Interlocked.CompareExchange(ref evictionInFlight, 1, 0) == 0)
                             {
+                                Volatile.Write(ref lastPressureCheckTicks, Stopwatch.GetTimestamp());
                                 int cycle = Interlocked.Increment(ref pressureCycles);
                                 string diagnostics = GetMemoryDiagnostics();
                                 LogService.Instance.Warning("SearchService",
@@ -464,9 +483,14 @@ public sealed class SearchService
                                     var memoryPressureEvent = new SearchEvent.MemoryPressure(
                                         (evictedCount) =>
                                         {
+                                            if (evictedCount == 0)
+                                                Interlocked.Increment(ref consecutiveFutileEvictions);
+                                            else
+                                                Volatile.Write(ref consecutiveFutileEvictions, 0);
                                             LogService.Instance.Warning("SearchService",
                                                 $"Eviction acknowledged: freed {evictedCount}; continuing in memory-saving mode");
-                                            _ = Task.Run(() => CollectForMemoryPressureIfDue(TimeSpan.FromSeconds(3)));
+                                            if (evictedCount > 0)
+                                                _ = Task.Run(() => CollectForMemoryPressureIfDue(TimeSpan.FromSeconds(3)));
                                             Volatile.Write(ref evictionInFlight, 0);
                                         },
                                         options.MemoryPressurePercent,
@@ -487,7 +511,9 @@ public sealed class SearchService
                                 }
                             }
 
-                            CollectForMemoryPressureIfDue(TimeSpan.FromSeconds(10));
+                            // Only trigger GC if eviction has been productive recently.
+                            if (futile < 3)
+                                CollectForMemoryPressureIfDue(TimeSpan.FromSeconds(10));
                         }
                         else if (Volatile.Read(ref degraded) != 0 &&
                                  Volatile.Read(ref evictionInFlight) == 0 &&
@@ -593,21 +619,72 @@ public sealed class SearchService
                                 long lastBatchLogTicks = Stopwatch.GetTimestamp();
                                 const long BatchLogIntervalSec = 10;
 
+                                // Warmup: start with small batches so the first matching results
+                                // appear quickly (especially on large drives like C:\ where the
+                                // first thousands of files are binary/system with 0 matches).
+                                // Ramp up to full nativeBatchSize after the warmup phase.
+                                const int WarmupBatchSize = 64;
+                                const int WarmupBatches = 5;
+                                int currentBatchTarget = WarmupBatchSize;
+
+                                // Per-batch timeout prevents the search from hanging indefinitely
+                                // when the native scanner encounters locked/inaccessible files.
+                                const int WarmupBatchTimeoutMs = 5_000;
+                                const int NormalBatchTimeoutMs = 30_000;
+
                                 void FlushNativeBatch()
                                 {
                                     if (batch.Count == 0) return;
                                     int batchNum = Interlocked.Increment(ref nativeBatchesProcessed);
                                     int batchFileCount = batch.Count;
                                     batchFlushSw.Restart();
-                                    ProcessNativeBatch(batch, batchSession, degradedSession, parallelism, cancelPtr,
-                                        patternOptions, contentResults.Writer,
-                                        ref filesScanned, ref filesSkipped, ref filesWithMatches, ref totalMatches,
-                                        ref bytesScanned, ref truncated, ref degraded, ref contentChannelDrops,
-                                        ref skipBinary, ref skipAccessDenied, ref skipIOError,
-                                        ref skipTooLarge, ref skipNotFound, ref skipOther);
+
+                                    int timeoutMs = batchNum <= WarmupBatches ? WarmupBatchTimeoutMs : NormalBatchTimeoutMs;
+                                    IntPtr batchCancelPtr = Marshal.AllocHGlobal(sizeof(int));
+                                    try
+                                    {
+                                        unsafe { *(int*)batchCancelPtr = 0; }
+
+                                        // Timer fires after timeout to abort the batch.
+                                        using var batchTimer = new Timer(static state =>
+                                        {
+                                            unsafe { Interlocked.Exchange(ref *(int*)(IntPtr)state!, 1); }
+                                        }, batchCancelPtr, timeoutMs, Timeout.Infinite);
+
+                                        // Also respect global search cancellation.
+                                        using var batchCancelReg = cancellationToken.Register(static state =>
+                                        {
+                                            unsafe { Interlocked.Exchange(ref *(int*)(IntPtr)state!, 1); }
+                                        }, batchCancelPtr);
+
+                                        ProcessNativeBatch(batch, batchSession, degradedSession, parallelism, batchCancelPtr,
+                                            patternOptions, contentResults.Writer,
+                                            ref filesScanned, ref filesSkipped, ref filesWithMatches, ref totalMatches,
+                                            ref bytesScanned, ref truncated, ref degraded, ref contentChannelDrops,
+                                            ref skipBinary, ref skipAccessDenied, ref skipIOError,
+                                            ref skipTooLarge, ref skipNotFound, ref skipOther);
+                                    }
+                                    finally
+                                    {
+                                        Marshal.FreeHGlobal(batchCancelPtr);
+                                    }
+
                                     batchFlushSw.Stop();
+                                    long batchMs = batchFlushSw.ElapsedMilliseconds;
+                                    if (batchMs >= timeoutMs - 100)
+                                    {
+                                        LogService.Instance.Warning("Workers",
+                                            $"Batch #{batchNum} TIMED OUT after {batchMs}ms ({batchFileCount} files) — continuing with next batch");
+                                    }
+
                                     CheckMemoryPressure();
                                     batch.Clear();
+
+                                    // Ramp up batch target after warmup phase
+                                    if (batchNum <= WarmupBatches)
+                                        currentBatchTarget = Math.Min(currentBatchTarget * 2, nativeBatchSize);
+                                    else
+                                        currentBatchTarget = nativeBatchSize;
 
                                     // Periodic batch processing summary (every BatchLogIntervalSec seconds)
                                     long now = Stopwatch.GetTimestamp();
@@ -629,7 +706,7 @@ public sealed class SearchService
 
                                 while (Volatile.Read(ref truncated) == 0)
                                 {
-                                    while (batch.Count < nativeBatchSize && pending.Reader.TryRead(out var bufferedFile))
+                                    while (batch.Count < currentBatchTarget && pending.Reader.TryRead(out var bufferedFile))
                                     {
                                         // Route configured archive extensions to the managed searcher.
                                         // Use extension-based check (no I/O) instead of opening
@@ -647,7 +724,7 @@ public sealed class SearchService
                                         }
                                     }
 
-                                    if (batch.Count >= nativeBatchSize)
+                                    if (batch.Count >= currentBatchTarget)
                                     {
                                         FlushNativeBatch();
                                         continue;
@@ -921,6 +998,7 @@ public sealed class SearchService
 
         bool wasTruncated = Volatile.Read(ref truncated) != 0;
         bool wasDegraded = Volatile.Read(ref everDegraded) != 0;
+
         int totalFiles = CurrentTotalFiles();
         int directorySkips = CurrentDirectorySkips();
         int earlySkips = CurrentEarlySkips();
@@ -947,16 +1025,24 @@ public sealed class SearchService
             SkipReasons: skipReasons));
     }
 
-    private static bool ShouldSkipByFileMetadata(string path, SearchOptions options, out bool tooLarge)
+    private static bool ShouldSkipByFileMetadata(
+        string path,
+        SearchOptions options,
+        out bool tooLarge,
+        bool checkSize = true,
+        bool checkDates = true)
     {
         tooLarge = false;
         long minBytes = Math.Max(0, options.MinFileSizeBytes);
         long maxBytes = Math.Max(0, options.MaxFileSizeBytes);
-        bool hasDateFilter = options.CreatedAfterDate.HasValue
+        bool hasSizeFilter = checkSize && (minBytes > 0 || maxBytes > 0);
+        bool hasDateFilter = checkDates && (options.CreatedAfterDate.HasValue
             || options.CreatedBeforeDate.HasValue
             || options.ModifiedAfterDate.HasValue
-            || options.ModifiedBeforeDate.HasValue;
-        if (minBytes == 0 && maxBytes == 0 && !hasDateFilter)
+            || options.ModifiedBeforeDate.HasValue);
+        // Always apply the content-search ceiling even when checkSize is false (unless ceiling is 0 = disabled).
+        bool hasCeiling = (maxBytes == 0) && FileLister.ContentSearchFileSizeCeiling > 0;
+        if (!hasSizeFilter && !hasDateFilter && !hasCeiling)
             return false;
 
         FileMetadata metadata;
@@ -980,19 +1066,26 @@ public sealed class SearchService
             FileMetadataCache.Set(path, metadata);
         }
 
-        if (minBytes > 0 && metadata.Length < minBytes)
+        if (checkSize && minBytes > 0 && metadata.Length < minBytes)
             return true;
 
-        if (maxBytes > 0 && metadata.Length > maxBytes)
+        if (checkSize && maxBytes > 0 && metadata.Length > maxBytes)
         {
             tooLarge = true;
             return true;
         }
 
-        if (FileLister.IsOutsideDateRange(metadata.Created, options.CreatedAfterDate, options.CreatedBeforeDate))
+        // Built-in ceiling: skip files > 100MB when no explicit max is set.
+        if (hasCeiling && metadata.Length > FileLister.ContentSearchFileSizeCeiling)
+        {
+            tooLarge = true;
+            return true;
+        }
+
+        if (checkDates && FileLister.IsOutsideDateRange(metadata.Created, options.CreatedAfterDate, options.CreatedBeforeDate))
             return true;
 
-        if (FileLister.IsOutsideDateRange(metadata.LastModified, options.ModifiedAfterDate, options.ModifiedBeforeDate))
+        if (checkDates && FileLister.IsOutsideDateRange(metadata.LastModified, options.ModifiedAfterDate, options.ModifiedBeforeDate))
             return true;
 
         return false;
@@ -1256,10 +1349,11 @@ public sealed class SearchService
     internal static long ComputeAutoProcessMemoryCap(ulong totalPhysicalBytes)
     {
         const long minCap = 2L * 1024 * 1024 * 1024; // 2 GB floor
-        // ~33% of physical RAM. Lower than the previous 50% so eviction fires
-        // before the host system starts swapping or stealing pages from other apps.
-        long third = (long)(totalPhysicalBytes / 3);
-        return Math.Max(third, minCap);
+        const long maxCap = 6L * 1024 * 1024 * 1024; // 6 GB ceiling
+        // ~25% of physical RAM, clamped so we never let a large-RAM machine
+        // accumulate tens of GB before eviction fires.
+        long quarter = (long)(totalPhysicalBytes / 4);
+        return Math.Clamp(quarter, minCap, maxCap);
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]

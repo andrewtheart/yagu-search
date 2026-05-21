@@ -36,6 +36,8 @@ internal static class EverythingSdk
     internal const uint EVERYTHING_REQUEST_PATH = 0x00000002;
     internal const uint EVERYTHING_REQUEST_FULL_PATH_AND_FILE_NAME = 0x00000004;
     internal const uint EVERYTHING_REQUEST_SIZE = 0x00000010;
+    internal const uint EVERYTHING_REQUEST_DATE_CREATED = 0x00000020;
+    internal const uint EVERYTHING_REQUEST_DATE_MODIFIED = 0x00000040;
 
     // ── Sort types ───────────────────────────────────────────────
     internal const uint EVERYTHING_SORT_PATH_ASCENDING = 3;
@@ -84,6 +86,12 @@ internal static class EverythingSdk
 
     [DllImport(DllName, EntryPoint = "Everything_GetResultSize")]
     internal static extern bool GetResultSize(uint nIndex, out long lpSize);
+
+    [DllImport(DllName, EntryPoint = "Everything_GetResultDateCreated")]
+    internal static extern bool GetResultDateCreated(uint nIndex, out long lpFileTime);
+
+    [DllImport(DllName, EntryPoint = "Everything_GetResultDateModified")]
+    internal static extern bool GetResultDateModified(uint nIndex, out long lpFileTime);
 
     // ── Cleanup ──────────────────────────────────────────────────
     [DllImport(DllName, EntryPoint = "Everything_Reset")]

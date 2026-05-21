@@ -415,6 +415,30 @@ public sealed partial class SettingsWindow : Window
             maxPerFile.ValueChanged += (_, args) => _viewModel.MaxMatchesPerFile = double.IsNaN(args.NewValue) ? 0 : (int)args.NewValue;
             g.Children.Add(maxPerFile);
             g.Children.Add(new TextBlock { Text = "Optional cap on stored matches per file. Useful for taming pathological files (massive logs, generated dumps) that would otherwise dominate memory. Leave at 0 for unlimited matches. Applies to subsequent searches.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            g.Children.Add(NextSearchLabel("Content-search file size ceiling (MB, 0 = no ceiling):"));
+            var fileSizeCeiling = new NumberBox { Value = _viewModel.ContentSearchFileSizeMB, Minimum = 0, Maximum = 10240 };
+            fileSizeCeiling.ValueChanged += (_, args) => _viewModel.ContentSearchFileSizeMB = (int)args.NewValue;
+            g.Children.Add(fileSizeCeiling);
+            g.Children.Add(new TextBlock { Text = "Files larger than this are skipped during content search when no explicit max-size filter is set. Prevents the scanner from blocking for minutes on huge files. Set to 0 to disable (no ceiling).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            g.Children.Add(NextSearchLabel("Max results ceiling (hard cap on max results):"));
+            var resultsCeiling = new NumberBox { Value = _viewModel.MaxResultsCeiling, Minimum = 1000, Maximum = 10_000_000 };
+            resultsCeiling.ValueChanged += (_, args) => _viewModel.MaxResultsCeiling = (int)args.NewValue;
+            g.Children.Add(resultsCeiling);
+            g.Children.Add(new TextBlock { Text = "Absolute ceiling for Max Results regardless of per-search setting. Values above this are clamped down. Must be at least 1,000.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            g.Children.Add(NextSearchLabel("MMF concurrency limit (0 = default 16):"));
+            var mmfLimit = new NumberBox { Value = _viewModel.MmfConcurrencyLimit, Minimum = 0, Maximum = 256 };
+            mmfLimit.ValueChanged += (_, args) => _viewModel.MmfConcurrencyLimit = (int)args.NewValue;
+            g.Children.Add(mmfLimit);
+            g.Children.Add(new TextBlock { Text = "Maximum concurrent memory-mapped file views. Higher values use more virtual address space but may improve throughput on NVMe. Set to 0 for the default (16). Applies to the next search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            g.Children.Add(NextSearchLabel("Native scanner concurrency limit (0 = default):"));
+            var nativeLimit = new NumberBox { Value = _viewModel.NativeConcurrencyLimit, Minimum = 0, Maximum = 256 };
+            nativeLimit.ValueChanged += (_, args) => _viewModel.NativeConcurrencyLimit = (int)args.NewValue;
+            g.Children.Add(nativeLimit);
+            g.Children.Add(new TextBlock { Text = "Maximum concurrent Rust native scans. Higher values improve throughput on fast NVMe storage. Set to 0 for the default (min(64, CPU cores × 2)). Applies to the next search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
         }
 
         // ── Display ──

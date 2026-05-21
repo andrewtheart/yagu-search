@@ -26,6 +26,8 @@ internal interface IEverythingSdkOps
     uint GetNumResults();
     uint GetTotResults();
     bool GetResultSize(uint index, out long size);
+    bool GetResultDateCreated(uint index, out long fileTime);
+    bool GetResultDateModified(uint index, out long fileTime);
     uint GetResultFullPathName(uint index, char[] buffer, uint capacity);
 }
 
@@ -49,6 +51,8 @@ internal sealed class RealEverythingSdkOps : IEverythingSdkOps
     public uint GetNumResults() => EverythingSdk.GetNumResults();
     public uint GetTotResults() => EverythingSdk.GetTotResults();
     public bool GetResultSize(uint index, out long size) => EverythingSdk.GetResultSize(index, out size);
+    public bool GetResultDateCreated(uint index, out long fileTime) => EverythingSdk.GetResultDateCreated(index, out fileTime);
+    public bool GetResultDateModified(uint index, out long fileTime) => EverythingSdk.GetResultDateModified(index, out fileTime);
     public uint GetResultFullPathName(uint index, char[] buffer, uint capacity)
         => EverythingSdk.GetResultFullPathName(index, buffer, capacity);
 }
@@ -123,6 +127,13 @@ internal sealed record EverythingReadinessResult(
 /// </summary>
 public sealed class FileLister : IFileLister
 {
+    /// <summary>
+    /// Hard ceiling for content search: files larger than this are skipped to
+    /// prevent the native scanner from blocking for minutes on huge files.
+    /// Configurable via Settings (ContentSearchFileSizeMB). 0 = no ceiling.
+    /// </summary>
+    internal static long ContentSearchFileSizeCeiling { get; set; } = 100L * 1024 * 1024; // 100 MB
+
     private readonly Func<string, ProcessStartInfo, IProcess>? _processFactory;
     private readonly IEverythingSdkOps _sdkOps;
     private int _skippedDirectories;
@@ -466,8 +477,12 @@ public sealed class FileLister : IFileLister
         }
         foreach (var sizeTerm in BuildEverythingSizeFilterTerms(EarlyMinFileSizeBytes, EarlyMaxFileSizeBytes))
             query += $" {sizeTerm}";
-        foreach (var dateTerm in BuildEverythingDateFilterTerms(EarlyCreatedAfterDate, EarlyCreatedBeforeDate, EarlyModifiedAfterDate, EarlyModifiedBeforeDate))
-            query += $" {dateTerm}";
+        // NOTE: Do NOT add the ContentSearchFileSizeCeiling as a size: predicate here.
+        // Everything's size: filter can make Query() block for 10+ seconds on large drives.
+        // Instead, the ceiling is enforced in the per-result loop via GetResultSize().
+        // Everything date predicates (dc:/dm:) can make Everything_Query block for
+        // tens of seconds before returning any paths. Request date metadata instead
+        // and filter results below, keeping first-result latency low without per-file stat calls.
 
         var fileNameFilter = BuildEverythingFileNameFilter(EarlyFileNameLiteralTerms);
         if (fileNameFilter is not null)
@@ -552,32 +567,30 @@ public sealed class FileLister : IFileLister
                         // Request size alongside paths so we can pre-filter by file size
                         // and extension without per-file FileInfo calls.
                         bool wantSize = EarlyMinFileSizeBytes > 0 || EarlyMaxFileSizeBytes > 0;
+                        bool wantCreatedDate = EarlyCreatedAfterDate.HasValue || EarlyCreatedBeforeDate.HasValue;
+                        bool wantModifiedDate = EarlyModifiedAfterDate.HasValue || EarlyModifiedBeforeDate.HasValue;
                         uint requestFlags = EverythingSdk.EVERYTHING_REQUEST_FULL_PATH_AND_FILE_NAME;
                         if (wantSize)
                             requestFlags |= EverythingSdk.EVERYTHING_REQUEST_SIZE;
+                        if (wantCreatedDate)
+                            requestFlags |= EverythingSdk.EVERYTHING_REQUEST_DATE_CREATED;
+                        if (wantModifiedDate)
+                            requestFlags |= EverythingSdk.EVERYTHING_REQUEST_DATE_MODIFIED;
                         _sdkOps.SetRequestFlags(requestFlags);
                         // Do NOT call SetSort: requesting an explicit sort (especially
                         // path-ascending) forces a slow non-indexed sort unless the user
                         // has enabled fast-sort in Everything. Letting the SDK return
                         // results in its native (unsorted) order is much faster.
-                        if (maxFiles > 0)
-                            _sdkOps.SetMax((uint)maxFiles);
-                        else
-                            _sdkOps.SetMax(0xFFFFFFFF);
 
-                        if (!_sdkOps.Query(bWait: true))
-                        {
-                            var err = _sdkOps.GetLastError();
-                            error = err == EverythingSdk.EVERYTHING_ERROR_IPC
-                                ? "Everything is not running"
-                                : $"Everything SDK query failed: {_sdkOps.ErrorMessage(err)}";
-                            return;
-                        }
+                        // Page through results to avoid blocking 20+ seconds on large drives.
+                        // Each page of 10,000 returns in ~1 second, immediately flowing
+                        // paths to the content scanner.
+                        const uint SdkPageSize = 10_000;
+                        uint userMax = maxFiles > 0 ? (uint)maxFiles : uint.MaxValue;
+                        uint pageSize = Math.Min(SdkPageSize, userMax);
+                        uint offset = 0;
+                        uint totalMatches = 0;
 
-                        uint count = _sdkOps.GetNumResults();
-                        uint total = _sdkOps.GetTotResults();
-                        SetKnownTotalFiles(count);
-                        LogService.Instance.Warning("FileLister", $"Everything SDK: {count} returned, {total} total matches, last error={_sdkOps.GetLastError()}");
                         var buffer = new char[1024];
                         long earlyMinSize = EarlyMinFileSizeBytes;
                         long earlyMaxSize = EarlyMaxFileSizeBytes;
@@ -589,17 +602,46 @@ public sealed class FileLister : IFileLister
                         int skippedTooSmall = 0;
                         int skippedTooLarge = 0;
                         int skippedBySize = 0;
+                        int skippedByDate = 0;
                         int excludedByExtension = 0;
+
+                        while (!cancellationToken.IsCancellationRequested)
+                        {
+                            _sdkOps.SetOffset(offset);
+                            _sdkOps.SetMax(pageSize);
+
+                            if (!_sdkOps.Query(bWait: true))
+                            {
+                                var err = _sdkOps.GetLastError();
+                                error = err == EverythingSdk.EVERYTHING_ERROR_IPC
+                                    ? "Everything is not running"
+                                    : $"Everything SDK query failed: {_sdkOps.ErrorMessage(err)}";
+                                return;
+                            }
+
+                            uint count = _sdkOps.GetNumResults();
+                            if (offset == 0)
+                            {
+                                totalMatches = _sdkOps.GetTotResults();
+                                SetKnownTotalFiles(totalMatches);
+                                LogService.Instance.Warning("FileLister", $"Everything SDK: page0={count}, total={totalMatches}, last error={_sdkOps.GetLastError()}");
+                            }
+
+                            if (count == 0) break;
 
                         for (uint i = 0; i < count; i++)
                         {
                             if (cancellationToken.IsCancellationRequested) break;
 
-                            // ── Early skip by file size ──
+                            // ── Always read file size for caching + ceiling check ──
+                            long sdkFileSize = -1;
                             if (wantSize)
+                                _sdkOps.GetResultSize(i, out sdkFileSize);
+
+                            // ── Early skip by file size (user-configured filter) ──
+                            if (wantSize && sdkFileSize >= 0)
                             {
-                                if (_sdkOps.GetResultSize(i, out long fileSize)
-                                    && IsOutsideEarlyFileSizeRange(fileSize, earlyMinSize, earlyMaxSize, out bool tooLarge))
+                                if (IsOutsideEarlyFileSizeRange(sdkFileSize, earlyMinSize, earlyMaxSize, out bool tooLarge))
                                 {
                                     skippedBySize++;
                                     if (tooLarge)
@@ -607,13 +649,74 @@ public sealed class FileLister : IFileLister
                                     else
                                         skippedTooSmall++;
                                     Volatile.Write(ref _earlySkippedTooLargeFiles, skippedTooLarge);
-                                    Volatile.Write(ref _earlySkippedFiles, skippedBySize);
+                                    Volatile.Write(ref _earlySkippedFiles, skippedBySize + skippedByDate);
                                     continue;
+                                }
+                            }
+
+                            bool needsFileInfoDateFallback = false;
+                            if (wantCreatedDate)
+                            {
+                                if (_sdkOps.GetResultDateCreated(i, out long createdFileTime) && createdFileTime > 0)
+                                {
+                                    if (IsOutsideDateRange(DateTime.FromFileTime(createdFileTime), EarlyCreatedAfterDate, EarlyCreatedBeforeDate))
+                                    {
+                                        skippedByDate++;
+                                        Volatile.Write(ref _earlySkippedFiles, skippedBySize + skippedByDate);
+                                        continue;
+                                    }
+                                }
+                                else
+                                {
+                                    needsFileInfoDateFallback = true;
+                                }
+                            }
+
+                            if (wantModifiedDate)
+                            {
+                                if (_sdkOps.GetResultDateModified(i, out long modifiedFileTime) && modifiedFileTime > 0)
+                                {
+                                    if (IsOutsideDateRange(DateTime.FromFileTime(modifiedFileTime), EarlyModifiedAfterDate, EarlyModifiedBeforeDate))
+                                    {
+                                        skippedByDate++;
+                                        Volatile.Write(ref _earlySkippedFiles, skippedBySize + skippedByDate);
+                                        continue;
+                                    }
+                                }
+                                else
+                                {
+                                    needsFileInfoDateFallback = true;
                                 }
                             }
 
                             string path = ReadSdkFullPath(_sdkOps, i, ref buffer);
                             if (path.Length == 0) continue;
+
+                            // Cache size so downstream ShouldSkipByFileMetadata can use it
+                            // without a per-file FileInfo call.
+                            if (sdkFileSize >= 0)
+                                FileMetadataCache.Set(path, new FileMetadata(sdkFileSize, default, default));
+
+                            if (needsFileInfoDateFallback)
+                            {
+                                try
+                                {
+                                    var fileInfo = new FileInfo(path);
+                                    if (!fileInfo.Exists || IsOutsideEarlyDateRange(fileInfo.CreationTime, fileInfo.LastWriteTime,
+                                            EarlyCreatedAfterDate, EarlyCreatedBeforeDate, EarlyModifiedAfterDate, EarlyModifiedBeforeDate))
+                                    {
+                                        skippedByDate++;
+                                        Volatile.Write(ref _earlySkippedFiles, skippedBySize + skippedByDate);
+                                        continue;
+                                    }
+                                }
+                                catch
+                                {
+                                    skippedByDate++;
+                                    Volatile.Write(ref _earlySkippedFiles, skippedBySize + skippedByDate);
+                                    continue;
+                                }
+                            }
 
                             // ── Early skip by extension blocklist ──
                             if (hasSkipExts)
@@ -635,9 +738,15 @@ public sealed class FileLister : IFileLister
                             }
                         }
 
-                        if (skippedBySize > 0 || excludedByExtension > 0)
+                            // Advance to next page
+                            offset += count;
+                            if (count < pageSize || offset >= totalMatches || offset >= userMax)
+                                break;
+                        } // end while (paging loop)
+
+                        if (skippedBySize > 0 || skippedByDate > 0 || excludedByExtension > 0)
                         {
-                            LogService.Instance.Warning("FileLister", $"Everything SDK: {skippedTooSmall:N0} too-small files skipped, {skippedTooLarge:N0} too-large files skipped, {excludedByExtension:N0} files excluded by extension");
+                            LogService.Instance.Warning("FileLister", $"Everything SDK: {skippedTooSmall:N0} too-small files skipped, {skippedTooLarge:N0} too-large files skipped, {skippedByDate:N0} date-filtered files skipped, {excludedByExtension:N0} files excluded by extension");
                         }
 
                         _sdkOps.Reset();

@@ -130,6 +130,12 @@ public sealed partial class MainViewModel : ObservableObject
         PreviewEditorMaxSizeMB = _settings.PreviewEditorMaxSizeMB;
         PreviewEditorMaxTextLength = _settings.PreviewEditorMaxTextLength;
         PreviewEditorMaxLineLength = _settings.PreviewEditorMaxLineLength;
+        ContentSearchFileSizeMB = _settings.ContentSearchFileSizeMB;
+        MaxResultsCeiling = _settings.MaxResultsCeiling > 0 ? _settings.MaxResultsCeiling : 50_000;
+        MmfConcurrencyLimit = _settings.MmfConcurrencyLimit;
+        NativeConcurrencyLimit = _settings.NativeConcurrencyLimit;
+
+        ApplyLimitSettings();
 
         Helpers.LineTruncator.TruncatedLength = LineTruncationLength;
 
@@ -248,6 +254,21 @@ public sealed partial class MainViewModel : ObservableObject
     {
         Yagu.Models.FileGroup.MaxMatchesPerGroup = value > 0 ? value : int.MaxValue;
     }
+
+    partial void OnContentSearchFileSizeMBChanged(int value) => ApplyLimitSettings();
+    partial void OnMaxResultsCeilingChanged(int value) => ApplyLimitSettings();
+    partial void OnMmfConcurrencyLimitChanged(int value) => ApplyLimitSettings();
+    partial void OnNativeConcurrencyLimitChanged(int value) => ApplyLimitSettings();
+
+    private void ApplyLimitSettings()
+    {
+        SearchOptions.MaxResultsCeiling = MaxResultsCeiling > 0 ? MaxResultsCeiling : 50_000;
+        FileLister.ContentSearchFileSizeCeiling = ContentSearchFileSizeMB > 0
+            ? (long)ContentSearchFileSizeMB * 1024 * 1024
+            : 0;
+        ContentSearcher.ConfigureGates(MmfConcurrencyLimit, NativeConcurrencyLimit);
+    }
+
     [ObservableProperty] public partial bool SkipBinary { get; set; } = true;
 
     /// <summary>UI-facing inverse of <see cref="SkipBinary"/> for the "Search binary" toggle.</summary>
@@ -268,6 +289,10 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial int PreviewEditorMaxSizeMB { get; set; } = 32;
     [ObservableProperty] public partial int PreviewEditorMaxTextLength { get; set; } = 20_000_000;
     [ObservableProperty] public partial int PreviewEditorMaxLineLength { get; set; } = 1_000_000;
+    [ObservableProperty] public partial int ContentSearchFileSizeMB { get; set; } = 100;
+    [ObservableProperty] public partial int MaxResultsCeiling { get; set; } = 50_000;
+    [ObservableProperty] public partial int MmfConcurrencyLimit { get; set; }
+    [ObservableProperty] public partial int NativeConcurrencyLimit { get; set; }
 
     public double MinFileSizeMB
     {
@@ -1079,13 +1104,12 @@ public sealed partial class MainViewModel : ObservableObject
 
         // Reclaim the previous search's result graph on the threadpool so the
         // UI thread isn't blocked by a full compacting GC.
+        // Use blocking: false so search workers aren't suspended for seconds
+        // when the heap is large (e.g. millions of evicted result shells).
         _ = Task.Run(() =>
         {
-            System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
-                System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
-            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.Collect(2, GCCollectionMode.Forced, blocking: false);
             GC.WaitForPendingFinalizers();
-            GC.Collect(0, GCCollectionMode.Forced, blocking: true);
         });
 
         ErrorText = null;
@@ -1672,6 +1696,10 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.PreviewEditorMaxSizeMB = PreviewEditorMaxSizeMB;
         _settings.PreviewEditorMaxTextLength = PreviewEditorMaxTextLength;
         _settings.PreviewEditorMaxLineLength = PreviewEditorMaxLineLength;
+        _settings.ContentSearchFileSizeMB = ContentSearchFileSizeMB;
+        _settings.MaxResultsCeiling = MaxResultsCeiling > 0 ? MaxResultsCeiling : 50_000;
+        _settings.MmfConcurrencyLimit = MmfConcurrencyLimit;
+        _settings.NativeConcurrencyLimit = NativeConcurrencyLimit;
 
         Helpers.LineTruncator.TruncatedLength = LineTruncationLength;
 

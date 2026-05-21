@@ -3219,7 +3219,18 @@ public sealed partial class MainWindow : Window
     private void OnShowMoreClicked(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement fe && fe.DataContext is FileGroup g)
+        {
+            // Hydrate evicted items before making them visible so ShortPreview
+            // can be computed from the restored MatchLine.
+            int start = g.VisibleResults.Count;
+            int end = Math.Min(g.Count, start + FileGroup.PageSize);
+            for (int i = start; i < end; i++)
+            {
+                if (g[i].IsEvicted)
+                    ViewModel.HydrateResult(g[i]);
+            }
             g.ShowMore();
+        }
     }
 
     private void OnCopyFileGroupPath(object sender, RoutedEventArgs e)
@@ -4576,6 +4587,15 @@ public sealed partial class MainWindow : Window
         ((FrameworkElement)sender).Loaded -= OnContentLoaded;
         ApplyWordWrap(ViewModel.PreviewWordWrap);
         if (_launcherMode) PositionLauncherWindow();
+
+        if (_autoSearchOnLoad)
+        {
+            // Suppress dropdowns so the query/directory suggestion lists
+            // don't pop open during an auto-search launch.
+            SuppressQuerySuggestionsFor(3000);
+            DirectoryBox.IsSuggestionListOpen = false;
+        }
+
         FocusSearchOnLaunch();
         await CheckEverythingAsync();
         await CheckFirstRunContextMenuAsync();

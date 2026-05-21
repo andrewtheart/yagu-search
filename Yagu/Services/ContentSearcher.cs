@@ -16,6 +16,9 @@ public sealed class ContentSearcher
 {
     public const long MemoryMapThresholdBytes = 8 * 1024 * 1024;
 
+    private static int s_mmfLimit = 16;
+    private static int s_nativeLimit = Math.Min(64, Environment.ProcessorCount * 2);
+
     /// <summary>
     /// Limits the number of concurrent memory-mapped file views to prevent
     /// runaway virtual address space / private bytes growth. With 24+ parallel
@@ -23,7 +26,7 @@ public sealed class ContentSearcher
     /// Raised from 4 to 16 since the threshold now only targets genuinely large
     /// files (≥ 8 MB), and the Rust side's mmap doesn't gate at all.
     /// </summary>
-    private static readonly SemaphoreSlim s_mmfGate = new(16, 16);
+    private static SemaphoreSlim s_mmfGate = new(s_mmfLimit, s_mmfLimit);
 
     /// <summary>
     /// Limits concurrent native (Rust) scans. The native engine also memory-maps
@@ -38,9 +41,28 @@ public sealed class ContentSearcher
     /// 1,744 opens/sec on NVMe capable of 100K+ IOPS, confirming the cap
     /// was the bottleneck, not the storage.
     /// </summary>
-    private static readonly SemaphoreSlim s_nativeGate = new(
-        Math.Min(64, Environment.ProcessorCount * 2),
-        Math.Min(64, Environment.ProcessorCount * 2));
+    private static SemaphoreSlim s_nativeGate = new(s_nativeLimit, s_nativeLimit);
+
+    /// <summary>
+    /// Reconfigure the MMF and native concurrency gates. Call before starting a search.
+    /// Values ≤ 0 reset to defaults (16 for MMF, min(64, ProcessorCount×2) for native).
+    /// </summary>
+    public static void ConfigureGates(int mmfLimit, int nativeLimit)
+    {
+        int newMmf = mmfLimit > 0 ? mmfLimit : 16;
+        int newNative = nativeLimit > 0 ? nativeLimit : Math.Min(64, Environment.ProcessorCount * 2);
+
+        if (newMmf != s_mmfLimit)
+        {
+            s_mmfLimit = newMmf;
+            s_mmfGate = new SemaphoreSlim(newMmf, newMmf);
+        }
+        if (newNative != s_nativeLimit)
+        {
+            s_nativeLimit = newNative;
+            s_nativeGate = new SemaphoreSlim(newNative, newNative);
+        }
+    }
 
     // Skip-reason codes (all negative so they are distinguishable from match counts).
     public const int SkipBinary     = -1;

@@ -27,13 +27,17 @@ public sealed record SearchResult(
     public IReadOnlyList<string> ContextAfter { get; internal set; } = ContextAfter;
 
     private const int ShortPreviewLength = 120;
-    private readonly ShortPreviewInfo _shortPreview = CreateShortPreview(MatchLine, MatchStartColumn, MatchLength);
+    private ShortPreviewInfo? _shortPreview;
 
-    /// <summary>Short preview kept in memory even when evicted, centered around the match when possible.</summary>
-    public string ShortPreview => _shortPreview.Text;
+    /// <summary>Short preview kept in memory even when evicted, centered around the match when possible.
+    /// Lazily created on first access to avoid allocating the string for non-visible items.</summary>
+    public string ShortPreview => EnsureShortPreview().Text;
 
     /// <summary>Match start adjusted for <see cref="ShortPreview" />.</summary>
-    public int ShortPreviewMatchStart => _shortPreview.MatchStart;
+    public int ShortPreviewMatchStart => EnsureShortPreview().MatchStart;
+
+    private ShortPreviewInfo EnsureShortPreview()
+        => _shortPreview ??= CreateShortPreview(MatchLine, MatchStartColumn, MatchLength);
 
     private const long InMemoryOffset = -1;
     private const long EvictingOffset = -2;
@@ -63,7 +67,10 @@ public sealed record SearchResult(
         try
         {
             long offset = writer(MatchLine, ContextBefore, ContextAfter);
-            MatchLine = ShortPreview;
+            // Keep the ShortPreview text if it was already created (visible items);
+            // otherwise set to empty — the item was never displayed and the preview
+            // will be recreated lazily from disk data if needed later.
+            MatchLine = _shortPreview?.Text ?? string.Empty;
             ContextBefore = Array.Empty<string>();
             ContextAfter = Array.Empty<string>();
             Volatile.Write(ref _diskOffset, offset);
@@ -86,6 +93,7 @@ public sealed record SearchResult(
         MatchLine = ml;
         ContextBefore = cb;
         ContextAfter = ca;
+        _shortPreview = null; // invalidate so lazy getter recreates from restored MatchLine
         Volatile.Write(ref _diskOffset, InMemoryOffset);
     }
 

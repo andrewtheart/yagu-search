@@ -118,6 +118,14 @@ public sealed class AppSettings
     public int PreviewEditorMaxTextLength { get; set; } = 20_000_000;
     /// <summary>Built-in editor: maximum single-line length in characters. Files with a line longer than this are blocked.</summary>
     public int PreviewEditorMaxLineLength { get; set; } = 1_000_000;
+    /// <summary>Content-search file size ceiling in MB. Files larger than this are skipped when no explicit max-size filter is set. 0 = no ceiling.</summary>
+    public int ContentSearchFileSizeMB { get; set; } = 100;
+    /// <summary>Absolute ceiling for max results regardless of user settings. Must be > 0.</summary>
+    public int MaxResultsCeiling { get; set; } = 50_000;
+    /// <summary>Maximum concurrent memory-mapped file views during search. 0 = default (16).</summary>
+    public int MmfConcurrencyLimit { get; set; }
+    /// <summary>Maximum concurrent native (Rust) scans. 0 = default (min(64, ProcessorCount×2)).</summary>
+    public int NativeConcurrencyLimit { get; set; }
 
     public const int MaxRecent = 20; // kept for backward compat; prefer MaxRecentItems
 }

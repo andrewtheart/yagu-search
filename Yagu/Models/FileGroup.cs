@@ -98,7 +98,10 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             if (HiddenMatchCount == 1)
                 OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(HasHiddenMatches)));
             if ((HiddenMatchCount & 0xFF) == 0)
+            {
                 OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(HiddenMatchCount)));
+                OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(MatchCount)));
+            }
             return;
         }
         base.InsertItem(index, item);
@@ -125,6 +128,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             {
                 if (VisibleResults.Count < PageSize)
                 {
+                    _ = item.ShortPreview; // force creation before async eviction clears MatchLine
                     VisibleResults.Add(item);
                     addedToVisible = true;
                 }
@@ -179,7 +183,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(ShowMoreText)));
     }
 
-    public int MatchCount => Count;
+    public int MatchCount => Count + HiddenMatchCount;
 
     public long FileSize { get; private set; }
     public DateTime LastModified { get; private set; }

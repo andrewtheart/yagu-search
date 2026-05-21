@@ -76,8 +76,8 @@ public sealed class SearchOptions
     /// <summary>When true, .gitignore exclusions override explicit include filters. When false, include filters take precedence.</summary>
     public bool GitignoreTakesPrecedence { get; init; } = true;
 
-    /// <summary>Absolute ceiling for <see cref="MaxResults"/> regardless of user settings.</summary>
-    public const int MaxResultsCeiling = 50_000;
+    /// <summary>Absolute ceiling for <see cref="MaxResults"/> regardless of user settings. Configurable via Settings.</summary>
+    public static int MaxResultsCeiling { get; set; } = 50_000;
 
     /// <summary>
     /// Number of concurrent file scans. 0 = auto safe cap chosen by <see cref="Services.SearchService"/>.

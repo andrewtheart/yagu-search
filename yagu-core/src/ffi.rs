@@ -616,6 +616,18 @@ fn pack_lines_borrowed(lines: &[&[u8]], buf: &mut Vec<u8>) {
     }
 }
 
+/// Append packed context lines to an arena buffer without clearing it first.
+/// Returns `(offset, length)` of the appended segment within `arena`.
+#[inline]
+fn pack_lines_into_arena(lines: &[&[u8]], arena: &mut Vec<u8>) -> (usize, usize) {
+    let offset = arena.len();
+    for l in lines {
+        arena.extend_from_slice(&(l.len() as u32).to_le_bytes());
+        arena.extend_from_slice(l);
+    }
+    (offset, arena.len() - offset)
+}
+
 /// Streaming search. Calls `on_match` once per match. Pointers in the
 /// `QgMatchView` are valid only for the duration of the callback. The C#
 /// caller must copy data it wants to retain.
@@ -1208,6 +1220,24 @@ unsafe fn qg_session_scan_paths_parallel_impl(
     // SAFETY: callers contract that `session` and `on_match_ctx` outlive
     // this call and are safe to read concurrently. `sess.matcher` is
     // Send + Sync (LineMatcher impls are read-only).
+
+    /// Per-match metadata buffered during scanning (no mutex held).
+    /// All byte data (line + context) is stored in the per-worker
+    /// `context_arena` via offsets, so no raw pointers are needed.
+    struct BufferedMatchEntry {
+        line_number: u64,
+        match_start: u32,
+        match_len: u32,
+        line_offset: usize,
+        line_len: usize,
+        ctx_before_offset: usize,
+        ctx_before_len: usize,
+        ctx_before_count: c_uint,
+        ctx_after_offset: usize,
+        ctx_after_len: usize,
+        ctx_after_count: c_uint,
+    }
+
     struct CtxPtr(*mut c_void);
     unsafe impl Send for CtxPtr {}
     unsafe impl Sync for CtxPtr {}
@@ -1217,13 +1247,17 @@ unsafe fn qg_session_scan_paths_parallel_impl(
         for _ in 0..workers {
             s.spawn(|| {
                 // Per-thread scratch buffers — reused across files.
-                let mut before_buf: Vec<u8> = Vec::new();
-                let mut after_buf: Vec<u8> = Vec::new();
+                // Context arena holds packed before/after bytes for all matches
+                // in the current file; cleared between files but capacity persists.
+                let mut context_arena: Vec<u8> = Vec::new();
                 // Per-thread file-content scratch. Sized to MMAP_THRESHOLD so
                 // the common small-file case never reallocates after the
                 // first iteration. ~75% of real-world files fit here.
                 let mut file_scratch: Vec<u8> =
                     Vec::with_capacity(MMAP_THRESHOLD_BYTES as usize);
+                // Buffered match metadata — indexes into context_arena and file bytes.
+                // Capacity grows on first match-heavy file and stays for the thread's lifetime.
+                let mut match_buf: Vec<BufferedMatchEntry> = Vec::new();
                 let _ = &ctx_wrapper; // capture by reference
 
                 loop {
@@ -1281,6 +1315,10 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                     };
                     let bytes: &[u8] = file_bytes.as_slice();
 
+                    // Clear per-file buffers (capacity preserved across files).
+                    match_buf.clear();
+                    context_arena.clear();
+
                     let mut line_poll_counter: u32 = 0;
                     let cancel_check = || {
                         line_poll_counter = line_poll_counter.wrapping_add(1);
@@ -1296,49 +1334,43 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                         }
                     };
 
+                    // Phase 1: Scan file, buffer matches WITHOUT holding the mutex.
+                    // Line pointers reference `bytes` which remains valid until we
+                    // move to the next file. Context bytes are copied into the arena.
                     let scan_result = scan_bytes_with_matcher_streaming_ex(
                         bytes,
                         &*sess.matcher,
                         &sess.scan_opts,
                         cancel_check,
                         |view: MatchView<'_>| {
-                            pack_lines_borrowed(view.context_before, &mut before_buf);
-                            pack_lines_borrowed(view.context_after, &mut after_buf);
+                            if early_stop.load(Ordering::Relaxed) {
+                                return false;
+                            }
 
-                            let qg_view = QgMatchView {
+                            let (before_offset, before_len) =
+                                pack_lines_into_arena(view.context_before, &mut context_arena);
+                            let (after_offset, after_len) =
+                                pack_lines_into_arena(view.context_after, &mut context_arena);
+
+                            // Copy line bytes into arena (they may reference
+                            // a reusable scratch buffer that gets overwritten).
+                            let line_offset = context_arena.len();
+                            context_arena.extend_from_slice(view.line);
+                            let line_len = view.line.len();
+
+                            match_buf.push(BufferedMatchEntry {
                                 line_number: view.line_number,
                                 match_start: view.match_start,
                                 match_len: view.match_len,
-                                line_ptr: view.line.as_ptr(),
-                                line_len: view.line.len(),
-                                ctx_before_ptr: if before_buf.is_empty() {
-                                    std::ptr::null()
-                                } else {
-                                    before_buf.as_ptr()
-                                },
-                                ctx_before_bytes: before_buf.len(),
+                                line_offset,
+                                line_len,
+                                ctx_before_offset: before_offset,
+                                ctx_before_len: before_len,
                                 ctx_before_count: view.context_before.len() as c_uint,
-                                ctx_after_ptr: if after_buf.is_empty() {
-                                    std::ptr::null()
-                                } else {
-                                    after_buf.as_ptr()
-                                },
-                                ctx_after_bytes: after_buf.len(),
+                                ctx_after_offset: after_offset,
+                                ctx_after_len: after_len,
                                 ctx_after_count: view.context_after.len() as c_uint,
-                            };
-
-                            let cb_result = {
-                                let _g = cb_mutex.lock().unwrap();
-                                on_match(
-                                    ctx_wrapper.0,
-                                    i as c_uint,
-                                    &qg_view as *const QgMatchView,
-                                )
-                            };
-                            if cb_result != 0 {
-                                early_stop.store(true, Ordering::Relaxed);
-                                return false;
-                            }
+                            });
                             true
                         },
                     );
@@ -1347,7 +1379,44 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                         Ok(_) => STATUS_OK,
                         Err(e) => scan_error_to_status(&e),
                     };
+
+                    // Phase 2: Acquire mutex ONCE, deliver all buffered matches + file_done.
                     let _g = cb_mutex.lock().unwrap();
+                    for entry in &match_buf {
+                        if early_stop.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let qg_view = QgMatchView {
+                            line_number: entry.line_number,
+                            match_start: entry.match_start,
+                            match_len: entry.match_len,
+                            line_ptr: context_arena[entry.line_offset..].as_ptr(),
+                            line_len: entry.line_len,
+                            ctx_before_ptr: if entry.ctx_before_len == 0 {
+                                std::ptr::null()
+                            } else {
+                                context_arena[entry.ctx_before_offset..].as_ptr()
+                            },
+                            ctx_before_bytes: entry.ctx_before_len,
+                            ctx_before_count: entry.ctx_before_count,
+                            ctx_after_ptr: if entry.ctx_after_len == 0 {
+                                std::ptr::null()
+                            } else {
+                                context_arena[entry.ctx_after_offset..].as_ptr()
+                            },
+                            ctx_after_bytes: entry.ctx_after_len,
+                            ctx_after_count: entry.ctx_after_count,
+                        };
+                        let cb_result = on_match(
+                            ctx_wrapper.0,
+                            i as c_uint,
+                            &qg_view as *const QgMatchView,
+                        );
+                        if cb_result != 0 {
+                            early_stop.store(true, Ordering::Relaxed);
+                            break;
+                        }
+                    }
                     dispatch_file_done(
                         on_file_done,
                         ctx_wrapper.0,

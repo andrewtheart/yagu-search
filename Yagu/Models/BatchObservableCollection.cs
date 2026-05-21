@@ -28,6 +28,7 @@ public class BatchObservableCollection<T> : ObservableCollection<T>
         }
 
         _suppressNotification = true;
+        int startIndex = Items.Count;
         try
         {
             for (int i = 0; i < items.Count; i++)
@@ -40,7 +41,11 @@ public class BatchObservableCollection<T> : ObservableCollection<T>
 
         OnPropertyChanged(new PropertyChangedEventArgs("Count"));
         OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
-        OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+        var asList = items as System.Collections.IList ?? new List<T>(items);
+        OnCollectionChanged(new NotifyCollectionChangedEventArgs(
+            NotifyCollectionChangedAction.Add,
+            asList,
+            startIndex));
     }
 
     protected override void OnCollectionChanged(NotifyCollectionChangedEventArgs e)
