@@ -36,6 +36,7 @@
   <ItemGroup>
     <Compile Include="..\Yagu\Models\SearchResult.cs" Link="Source\Models\SearchResult.cs" />
     <Compile Include="..\Yagu\Models\SearchResultCollection.cs" Link="Source\Models\SearchResultCollection.cs" />
+    <Compile Include="..\Yagu\Models\SortCriterion.cs" Link="Source\Models\SortCriterion.cs" />
     <Compile Include="..\Yagu\Models\SearchOptions.cs" Link="Source\Models\SearchOptions.cs" />
     <Compile Include="..\Yagu\Models\SearchProgress.cs" Link="Source\Models\SearchProgress.cs" />
     <Compile Include="..\Yagu\Models\FileGroup.cs" Link="Source\Models\FileGroup.cs" />

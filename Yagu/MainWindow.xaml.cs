@@ -494,6 +494,7 @@ public sealed partial class MainWindow : Window
             HideQuerySuggestions();
             if (!await ClearPreviewPanelForNewSearchAsync()) return;
             if (!await CheckHddAndWarnAsync()) return;
+            CollapseAdvancedOptionsForSearch();
             await ViewModel.StartSearchAsync();
         }
     }
@@ -512,7 +513,14 @@ public sealed partial class MainWindow : Window
         HideQuerySuggestions(sender);
         if (!await ClearPreviewPanelForNewSearchAsync()) return;
         if (!await CheckHddAndWarnAsync()) return;
+        CollapseAdvancedOptionsForSearch();
         await ViewModel.StartSearchAsync();
+    }
+
+    private void CollapseAdvancedOptionsForSearch()
+    {
+        if (AdvancedOptionsExpander.IsExpanded)
+            AdvancedOptionsExpander.IsExpanded = false;
     }
 
     private async void OnQueryKeyDown(object sender, KeyRoutedEventArgs e)
@@ -1178,7 +1186,7 @@ public sealed partial class MainWindow : Window
 
     // ── Responsive results list: compact (stacked) vs wide (side-by-side) ───
     private bool _resultsCompactMode;
-    private const double ResultsCompactThreshold = 550;
+    private const double ResultsCompactThreshold = 760;
 
     private void OnResultsListSizeChanged(object sender, SizeChangedEventArgs e)
     {
@@ -1389,7 +1397,7 @@ public sealed partial class MainWindow : Window
         _currentMatchIndex = -1;
         _sectionMatchNavs.Clear();
         _sectionGutterBlocks.Clear();
-        PreviewScrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+        SetHorizontalPreviewScroll(PreviewScrollViewer, enabled: false);
         EnsurePreviewViewChangedHooked();
     }
 
@@ -1405,7 +1413,7 @@ public sealed partial class MainWindow : Window
         _previewViewChangedHooked = true;
         PreviewScrollViewer.ViewChanged += OnPreviewScrollViewChanged;
         PreviewScrollViewer.AddHandler(UIElement.PointerWheelChangedEvent,
-            new PointerEventHandler((_, _) => NotePreviewManualScrollInput("wheel")),
+            new PointerEventHandler(OnPreviewPointerWheelChanged),
             handledEventsToo: true);
         PreviewScrollViewer.AddHandler(UIElement.PointerPressedEvent,
             new PointerEventHandler((_, _) => NotePreviewManualScrollInput("pointer")),
@@ -1417,6 +1425,62 @@ public sealed partial class MainWindow : Window
                     NotePreviewManualScrollInput($"key:{e.Key}");
             }),
             handledEventsToo: true);
+    }
+
+    private void OnPreviewPointerWheelChanged(object sender, PointerRoutedEventArgs e)
+    {
+        NotePreviewManualScrollInput("wheel");
+
+        if (PreviewScrollViewer.Visibility != Visibility.Visible)
+            return;
+
+        var properties = e.GetCurrentPoint(PreviewScrollViewer).Properties;
+        int delta = properties.MouseWheelDelta;
+        if (delta == 0)
+            return;
+
+        bool horizontalWheel = properties.IsHorizontalMouseWheel;
+        double horizontalOffsetBefore = PreviewScrollViewer.HorizontalOffset;
+        double verticalOffsetBefore = PreviewScrollViewer.VerticalOffset;
+
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            ApplyPreviewPointerWheelFallback(delta, horizontalWheel, horizontalOffsetBefore, verticalOffsetBefore));
+    }
+
+    private void ApplyPreviewPointerWheelFallback(
+        int delta,
+        bool horizontalWheel,
+        double horizontalOffsetBefore,
+        double verticalOffsetBefore)
+    {
+        if (PreviewScrollViewer.Visibility != Visibility.Visible)
+            return;
+
+        if (horizontalWheel)
+        {
+            if (PreviewScrollViewer.ScrollableWidth <= 0)
+                return;
+            if (Math.Abs(PreviewScrollViewer.HorizontalOffset - horizontalOffsetBefore) > 0.5)
+                return;
+
+            double targetX = Math.Clamp(horizontalOffsetBefore - delta, 0, PreviewScrollViewer.ScrollableWidth);
+            if (Math.Abs(targetX - horizontalOffsetBefore) <= 0.5)
+                return;
+
+            PreviewScrollViewer.ChangeView(targetX, null, null, disableAnimation: true);
+            return;
+        }
+
+        if (PreviewScrollViewer.ScrollableHeight <= 0)
+            return;
+        if (Math.Abs(PreviewScrollViewer.VerticalOffset - verticalOffsetBefore) > 0.5)
+            return;
+
+        double targetY = Math.Clamp(verticalOffsetBefore - delta, 0, PreviewScrollViewer.ScrollableHeight);
+        if (Math.Abs(targetY - verticalOffsetBefore) <= 0.5)
+            return;
+
+        PreviewScrollViewer.ChangeView(null, targetY, null, disableAnimation: true);
     }
 
     private void NotePreviewManualScrollInput(string source)
@@ -2626,13 +2690,21 @@ public sealed partial class MainWindow : Window
         LayoutMultiHighlight.IsChecked = index == 1;
     }
 
+    private static void SetHorizontalPreviewScroll(ScrollViewer scrollViewer, bool enabled)
+    {
+        scrollViewer.HorizontalScrollMode = enabled ? ScrollMode.Enabled : ScrollMode.Disabled;
+        scrollViewer.HorizontalScrollBarVisibility = enabled ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled;
+    }
+
+    private static void ApplyPreviewHorizontalScrollForWrap(ScrollViewer scrollViewer, bool wrap)
+        => SetHorizontalPreviewScroll(scrollViewer, enabled: !wrap);
+
     // Synchronous variant retained for callers that already run inside an async preview
     // refresh (e.g. ShowSingleFilePreviewAsync). Only safe when the number of preview
     // sections is small or known. Prefer ApplyWordWrapAsync for user-initiated toggles.
     private void ApplyWordWrap(bool wrap)
     {
         var wrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
-        var hbar = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
 
         InvalidatePendingMatchScrolls();
         UnboxCurrentMatch();
@@ -2646,13 +2718,13 @@ public sealed partial class MainWindow : Window
                 block.TextWrapping = wrapping;
         }
         if (PreviewSectionsPanel.Visibility != Visibility.Visible)
-            PreviewScrollViewer.HorizontalScrollBarVisibility = hbar;
+            ApplyPreviewHorizontalScrollForWrap(PreviewScrollViewer, wrap);
         foreach (var expander in PreviewSectionsPanel.Children.OfType<Expander>())
         {
             if (expander.Content is Grid g && g.Children.OfType<ScrollViewer>().FirstOrDefault() is ScrollViewer sv)
-                sv.HorizontalScrollBarVisibility = hbar;
+                ApplyPreviewHorizontalScrollForWrap(sv, wrap);
             else if (expander.Content is ScrollViewer sv2)
-                sv2.HorizontalScrollBarVisibility = hbar;
+                ApplyPreviewHorizontalScrollForWrap(sv2, wrap);
         }
     }
 
@@ -2666,7 +2738,6 @@ public sealed partial class MainWindow : Window
         {
             WordWrapToggle.IsEnabled = false;
             var wrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
-            var hbar = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
             LogService.Instance.Info("Preview", $"ApplyWordWrapAsync: start wrap={wrap}");
 
             InvalidatePendingMatchScrolls();
@@ -2677,7 +2748,7 @@ public sealed partial class MainWindow : Window
                 PreviewBlock.TextWrapping = wrapping;
             ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || wrap);
             if (PreviewSectionsPanel.Visibility != Visibility.Visible)
-                PreviewScrollViewer.HorizontalScrollBarVisibility = hbar;
+                ApplyPreviewHorizontalScrollForWrap(PreviewScrollViewer, wrap);
 
             // Snapshot the expanders so we don't touch the panel children mid-iteration if
             // anything reflows during a yield.
@@ -2691,9 +2762,9 @@ public sealed partial class MainWindow : Window
             {
                 // Always toggle the per-section scrollbar (cheap, doesn't relayout the text).
                 if (expander.Content is Grid g && g.Children.OfType<ScrollViewer>().FirstOrDefault() is ScrollViewer sv)
-                    sv.HorizontalScrollBarVisibility = hbar;
+                    ApplyPreviewHorizontalScrollForWrap(sv, wrap);
                 else if (expander.Content is ScrollViewer sv2)
-                    sv2.HorizontalScrollBarVisibility = hbar;
+                    ApplyPreviewHorizontalScrollForWrap(sv2, wrap);
 
                 // Only re-measure expanded sections; collapsed ones are not visible and
                 // will pick up the current wrap state when re-expanded (see Expanding
@@ -2955,15 +3026,56 @@ public sealed partial class MainWindow : Window
 
     // ── Sort menu handlers ────────────────────────────────────────
 
-    private void OnSortNone(object sender, RoutedEventArgs e) { ViewModel.SortModeIndex = 0; }
-    private void OnSortMatchesDesc(object sender, RoutedEventArgs e) { ViewModel.SortModeIndex = 1; ViewModel.SortDirectionIndex = 0; }
-    private void OnSortMatchesAsc(object sender, RoutedEventArgs e) { ViewModel.SortModeIndex = 1; ViewModel.SortDirectionIndex = 1; }
-    private void OnSortDateModifiedDesc(object sender, RoutedEventArgs e) { ViewModel.SortModeIndex = 2; ViewModel.SortDirectionIndex = 0; }
-    private void OnSortDateModifiedAsc(object sender, RoutedEventArgs e) { ViewModel.SortModeIndex = 2; ViewModel.SortDirectionIndex = 1; }
-    private void OnSortFileSizeDesc(object sender, RoutedEventArgs e) { ViewModel.SortModeIndex = 3; ViewModel.SortDirectionIndex = 0; }
-    private void OnSortFileSizeAsc(object sender, RoutedEventArgs e) { ViewModel.SortModeIndex = 3; ViewModel.SortDirectionIndex = 1; }
-    private void OnSortFileNameDesc(object sender, RoutedEventArgs e) { ViewModel.SortModeIndex = 4; ViewModel.SortDirectionIndex = 0; }
-    private void OnSortFileNameAsc(object sender, RoutedEventArgs e) { ViewModel.SortModeIndex = 4; ViewModel.SortDirectionIndex = 1; }
+    private void OnSortFlyoutOpening(object sender, object e)
+    {
+        RefreshSortDirectionButtons();
+    }
+
+    private void RefreshSortDirectionButtons()
+    {
+        UpdateSortDirectionButtons(SortMatchesAscButton, SortMatchesDescButton, 1);
+        UpdateSortDirectionButtons(SortDateModifiedAscButton, SortDateModifiedDescButton, 2);
+        UpdateSortDirectionButtons(SortFileSizeAscButton, SortFileSizeDescButton, 3);
+        UpdateSortDirectionButtons(SortFileNameAscButton, SortFileNameDescButton, 4);
+    }
+
+    private void UpdateSortDirectionButtons(Button ascButton, Button descButton, int sortModeIndex)
+    {
+        int? direction = ViewModel.GetSortDirectionIndex(sortModeIndex);
+        ApplySortArrowState(ascButton, selected: direction == 1);
+        ApplySortArrowState(descButton, selected: direction == 0);
+    }
+
+    private static void ApplySortArrowState(Button button, bool selected)
+    {
+        var brush = new SolidColorBrush(selected
+            ? Microsoft.UI.Colors.White
+            : Microsoft.UI.ColorHelper.FromArgb(0x88, 0xFF, 0xFF, 0xFF));
+        button.Foreground = brush;
+        if (button.Content is FontIcon icon)
+            icon.Foreground = brush;
+        button.Opacity = selected ? 1.0 : 0.72;
+    }
+
+    private void ToggleSortDirection(int sortModeIndex, int sortDirectionIndex)
+    {
+        if (ViewModel.GetSortDirectionIndex(sortModeIndex) == sortDirectionIndex)
+            ViewModel.RemoveSortSelection(sortModeIndex);
+        else
+            ViewModel.ApplySortSelection(sortModeIndex, sortDirectionIndex);
+
+        RefreshSortDirectionButtons();
+    }
+
+    private void OnSortNone(object sender, RoutedEventArgs e) { ViewModel.ApplySortSelection(0, 0); RefreshSortDirectionButtons(); SortFlyout.Hide(); }
+    private void OnSortMatchesDesc(object sender, RoutedEventArgs e) => ToggleSortDirection(1, 0);
+    private void OnSortMatchesAsc(object sender, RoutedEventArgs e) => ToggleSortDirection(1, 1);
+    private void OnSortDateModifiedDesc(object sender, RoutedEventArgs e) => ToggleSortDirection(2, 0);
+    private void OnSortDateModifiedAsc(object sender, RoutedEventArgs e) => ToggleSortDirection(2, 1);
+    private void OnSortFileSizeDesc(object sender, RoutedEventArgs e) => ToggleSortDirection(3, 0);
+    private void OnSortFileSizeAsc(object sender, RoutedEventArgs e) => ToggleSortDirection(3, 1);
+    private void OnSortFileNameDesc(object sender, RoutedEventArgs e) => ToggleSortDirection(4, 0);
+    private void OnSortFileNameAsc(object sender, RoutedEventArgs e) => ToggleSortDirection(4, 1);
 
     // ── Date filter menu handlers ─────────────────────────────────
 
@@ -4362,6 +4474,14 @@ public sealed partial class MainWindow : Window
             int renderedCount = allLines != null
                 ? CountPrefixResultsThroughLine(results, lastRenderedLine1, allLines.Length)
                 : Math.Min(results.Count, _matchParagraphs.Count - sectionMatchStart);
+            int actualMatchEntries = _matchParagraphs.Count - sectionMatchStart;
+            // A long single-line file can render only a truncated window with a
+            // handful of visible highlights even though every SearchResult is on
+            // that same source line. Treating the source line as fully rendered
+            // hides the overflow and makes the nav labels say "1 of 5" instead
+            // of the file's real match count.
+            if (allLines != null && renderedCount > actualMatchEntries && actualMatchEntries < results.Count)
+                renderedCount = actualMatchEntries;
             int remainingBlockBudget = Math.Max(0, MaxPreviewBlocksPerSection - (section.Blocks.Count - startingBlocks));
             if (allLines != null && remainingBlockBudget > 0 && renderedCount < Math.Min(MaxMatchesPerSection, results.Count))
             {
@@ -4376,7 +4496,7 @@ public sealed partial class MainWindow : Window
                     ViewModel.PreviewContextLines,
                     MaxMatchesPerSection - renderedCount,
                     MaxMatchesPerSection - renderedCount,
-                    MaxPreviewBlocksPerSection,
+                    remainingBlockBudget,
                     out int consumed,
                     out _,
                     out int appendLastRenderedLine,
@@ -4604,7 +4724,10 @@ public sealed partial class MainWindow : Window
         {
             _autoSearchOnLoad = false;
             if (await CheckHddAndWarnAsync())
+            {
+                CollapseAdvancedOptionsForSearch();
                 await ViewModel.StartSearchAsync();
+            }
         }
         else
         {

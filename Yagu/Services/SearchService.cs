@@ -813,7 +813,10 @@ public sealed class SearchService
                                 switch (produced)
                                 {
                                     case ContentSearcher.SkipBinary: Interlocked.Increment(ref skipBinary); break;
-                                    case ContentSearcher.SkipAccessDenied: Interlocked.Increment(ref skipAccessDenied); break;
+                                    case ContentSearcher.SkipAccessDenied:
+                                        Interlocked.Increment(ref skipAccessDenied);
+                                        LogService.Instance.Verbose("ContentSearcher", $"Access denied: {file}");
+                                        break;
                                     case ContentSearcher.SkipIOError: Interlocked.Increment(ref skipIOError); break;
                                     case ContentSearcher.SkipTooLarge: Interlocked.Increment(ref skipTooLarge); break;
                                     case ContentSearcher.SkipTooSmall: Interlocked.Increment(ref skipSizeFiltered); break;
@@ -1433,7 +1436,10 @@ public sealed class SearchService
                         Interlocked.Increment(ref skipBinary);
                         LogService.Instance.Verbose("ContentSearcher", $"Binary detected (batch native): {batch[i]}");
                         break;
-                    case Native.NativeSearcher.StatusOpenFailed: Interlocked.Increment(ref skipAccessDenied); break;
+                    case Native.NativeSearcher.StatusOpenFailed:
+                        Interlocked.Increment(ref skipAccessDenied);
+                        LogService.Instance.Verbose("ContentSearcher", $"Access denied (batch native): {batch[i]}");
+                        break;
                     case Native.NativeSearcher.StatusTooLarge: Interlocked.Increment(ref skipTooLarge); break;
                     case Native.NativeSearcher.StatusInvalidPath: Interlocked.Increment(ref skipNotFound); break;
                     default: Interlocked.Increment(ref skipOther); break;

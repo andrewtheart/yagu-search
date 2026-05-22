@@ -26,9 +26,27 @@ public sealed class SearchResultCollection
     public FilterPatternMode ExcludeFilterMode { get; set; } = FilterPatternMode.GlobPath;
     public int SortModeIndex { get; set; }
     public int SortDirectionIndex { get; set; }
+    private readonly List<SortCriterion> _sortCriteria = [];
+    public IReadOnlyList<SortCriterion> SortCriteria => _sortCriteria;
     public GroupMode GroupMode { get; set; }
     public int GroupSortDirectionIndex { get; set; }
     public DateRangeFilter DateRangeFilter { get; set; }
+
+    public void SetSortCriteria(IEnumerable<SortCriterion> criteria)
+    {
+        _sortCriteria.Clear();
+        var seenModes = new HashSet<int>();
+        foreach (var criterion in criteria)
+        {
+            if (criterion.SortModeIndex <= 0 || !seenModes.Add(criterion.SortModeIndex))
+                continue;
+
+            int direction = criterion.SortDirectionIndex == 1 ? 1 : 0;
+            _sortCriteria.Add(new SortCriterion(criterion.SortModeIndex, direction));
+        }
+    }
+
+    public void ClearSortCriteria() => _sortCriteria.Clear();
 
     public void Clear()
     {
@@ -178,7 +196,7 @@ public sealed class SearchResultCollection
             : null;
 
         var filtered = _allGroups.Where(MatchesFilter).ToList();
-        bool ascending = SortDirectionIndex == 1;
+        var sortCriteria = GetEffectiveSortCriteria();
         bool groupAscending = GroupSortDirectionIndex == 0;
         bool groupByDirectory = GroupMode == GroupMode.Folder;
         bool groupByDateRange = IsDateRangeGroupMode(GroupMode);
@@ -195,7 +213,7 @@ public sealed class SearchResultCollection
             var orderedGroups = groupAscending
                 ? groupsByDirectory.OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
                 : groupsByDirectory.OrderByDescending(group => group.Key, StringComparer.OrdinalIgnoreCase);
-            sortedList = orderedGroups.SelectMany(group => ApplySecondarySort(group, ascending)).ToList();
+            sortedList = orderedGroups.SelectMany(group => ApplySortChain(group, sortCriteria)).ToList();
         }
         else if (groupByDateRange)
         {
@@ -208,16 +226,7 @@ public sealed class SearchResultCollection
                 ? classified.OrderBy(item => bucketOrder.TryGetValue(item.Bucket, out var order) ? order : 999)
                 : classified.OrderByDescending(item => bucketOrder.TryGetValue(item.Bucket, out var order) ? order : 999);
 
-            sortedList = (SortModeIndex switch
-            {
-                0 => ordered,
-                2 => ascending ? ordered.ThenBy(item => item.Group.LastModified) : ordered.ThenByDescending(item => item.Group.LastModified),
-                3 => ascending ? ordered.ThenBy(item => item.Group.FileSize) : ordered.ThenByDescending(item => item.Group.FileSize),
-                4 => ascending
-                    ? ordered.ThenBy(item => item.Group.FileName, StringComparer.OrdinalIgnoreCase)
-                    : ordered.ThenByDescending(item => item.Group.FileName, StringComparer.OrdinalIgnoreCase),
-                _ => ascending ? ordered.ThenBy(item => item.Group.MatchCount) : ordered.ThenByDescending(item => item.Group.MatchCount),
-            }).Select(item => item.Group).ToList();
+            sortedList = ApplySortChain(ordered, sortCriteria).Select(item => item.Group).ToList();
 
             string? lastBucket = null;
             var classifiedDict = classified.ToDictionary(item => item.Group, item => item.Bucket);
@@ -237,7 +246,7 @@ public sealed class SearchResultCollection
             var orderedGroups = groupAscending
                 ? groupsByExtension.OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
                 : groupsByExtension.OrderByDescending(group => group.Key, StringComparer.OrdinalIgnoreCase);
-            sortedList = orderedGroups.SelectMany(group => ApplySecondarySort(group, ascending)).ToList();
+            sortedList = orderedGroups.SelectMany(group => ApplySortChain(group, sortCriteria)).ToList();
         }
         else if (groupByFileSize)
         {
@@ -250,16 +259,7 @@ public sealed class SearchResultCollection
                 ? classified.OrderBy(item => bucketOrder.TryGetValue(item.Bucket, out var order) ? order : 999)
                 : classified.OrderByDescending(item => bucketOrder.TryGetValue(item.Bucket, out var order) ? order : 999);
 
-            sortedList = (SortModeIndex switch
-            {
-                0 => ordered,
-                2 => ascending ? ordered.ThenBy(item => item.Group.LastModified) : ordered.ThenByDescending(item => item.Group.LastModified),
-                3 => ascending ? ordered.ThenBy(item => item.Group.FileSize) : ordered.ThenByDescending(item => item.Group.FileSize),
-                4 => ascending
-                    ? ordered.ThenBy(item => item.Group.FileName, StringComparer.OrdinalIgnoreCase)
-                    : ordered.ThenByDescending(item => item.Group.FileName, StringComparer.OrdinalIgnoreCase),
-                _ => ascending ? ordered.ThenBy(item => item.Group.MatchCount) : ordered.ThenByDescending(item => item.Group.MatchCount),
-            }).Select(item => item.Group).ToList();
+            sortedList = ApplySortChain(ordered, sortCriteria).Select(item => item.Group).ToList();
 
             string? lastBucket = null;
             var classifiedDict = classified.ToDictionary(item => item.Group, item => item.Bucket);
@@ -275,16 +275,7 @@ public sealed class SearchResultCollection
         }
         else
         {
-            sortedList = (SortModeIndex switch
-            {
-                0 => filtered,
-                2 => ascending ? filtered.OrderBy(group => group.LastModified).ToList() : filtered.OrderByDescending(group => group.LastModified).ToList(),
-                3 => ascending ? filtered.OrderBy(group => group.FileSize).ToList() : filtered.OrderByDescending(group => group.FileSize).ToList(),
-                4 => ascending
-                    ? filtered.OrderBy(group => group.FileName, StringComparer.OrdinalIgnoreCase).ThenBy(group => group.FilePath, StringComparer.OrdinalIgnoreCase).ToList()
-                    : filtered.OrderByDescending(group => group.FileName, StringComparer.OrdinalIgnoreCase).ThenByDescending(group => group.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
-                _ => ascending ? filtered.OrderBy(group => group.MatchCount).ToList() : filtered.OrderByDescending(group => group.MatchCount).ToList(),
-            });
+            sortedList = ApplySortChain(filtered, sortCriteria).ToList();
         }
 
         if (groupByDirectory)
@@ -369,16 +360,85 @@ public sealed class SearchResultCollection
             : s.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
-    private IEnumerable<FileGroup> ApplySecondarySort(IEnumerable<FileGroup> groups, bool ascending) => SortModeIndex switch
+    private IReadOnlyList<SortCriterion> GetEffectiveSortCriteria()
     {
-        0 => groups,
-        2 => ascending ? groups.OrderBy(group => group.LastModified) : groups.OrderByDescending(group => group.LastModified),
-        3 => ascending ? groups.OrderBy(group => group.FileSize) : groups.OrderByDescending(group => group.FileSize),
-        4 => ascending
-            ? groups.OrderBy(group => group.FileName, StringComparer.OrdinalIgnoreCase).ThenBy(group => group.FilePath, StringComparer.OrdinalIgnoreCase)
-            : groups.OrderByDescending(group => group.FileName, StringComparer.OrdinalIgnoreCase).ThenByDescending(group => group.FilePath, StringComparer.OrdinalIgnoreCase),
-        _ => ascending ? groups.OrderBy(group => group.MatchCount) : groups.OrderByDescending(group => group.MatchCount),
-    };
+        if (_sortCriteria.Count > 0)
+            return _sortCriteria;
+
+        return SortModeIndex <= 0
+            ? Array.Empty<SortCriterion>()
+            : [new SortCriterion(SortModeIndex, SortDirectionIndex == 1 ? 1 : 0)];
+    }
+
+    private static IEnumerable<FileGroup> ApplySortChain(IEnumerable<FileGroup> groups, IReadOnlyList<SortCriterion> criteria)
+    {
+        if (criteria.Count == 0)
+            return groups;
+
+        IOrderedEnumerable<FileGroup>? ordered = null;
+        foreach (var criterion in criteria)
+        {
+            ordered = ordered is null
+                ? OrderByCriterion(groups, criterion)
+                : ThenByCriterion(ordered, criterion);
+        }
+
+        return ordered ?? groups;
+    }
+
+    private static IOrderedEnumerable<(FileGroup Group, string Bucket)> ApplySortChain(
+        IOrderedEnumerable<(FileGroup Group, string Bucket)> ordered,
+        IReadOnlyList<SortCriterion> criteria)
+    {
+        foreach (var criterion in criteria)
+            ordered = ThenByCriterion(ordered, criterion);
+
+        return ordered;
+    }
+
+    private static IOrderedEnumerable<FileGroup> OrderByCriterion(IEnumerable<FileGroup> groups, SortCriterion criterion)
+    {
+        bool ascending = criterion.SortDirectionIndex == 1;
+        return criterion.SortModeIndex switch
+        {
+            2 => ascending ? groups.OrderBy(group => group.LastModified) : groups.OrderByDescending(group => group.LastModified),
+            3 => ascending ? groups.OrderBy(group => group.FileSize) : groups.OrderByDescending(group => group.FileSize),
+            4 => ascending
+                ? groups.OrderBy(group => group.FileName, StringComparer.OrdinalIgnoreCase).ThenBy(group => group.FilePath, StringComparer.OrdinalIgnoreCase)
+                : groups.OrderByDescending(group => group.FileName, StringComparer.OrdinalIgnoreCase).ThenByDescending(group => group.FilePath, StringComparer.OrdinalIgnoreCase),
+            _ => ascending ? groups.OrderBy(group => group.MatchCount) : groups.OrderByDescending(group => group.MatchCount),
+        };
+    }
+
+    private static IOrderedEnumerable<FileGroup> ThenByCriterion(IOrderedEnumerable<FileGroup> groups, SortCriterion criterion)
+    {
+        bool ascending = criterion.SortDirectionIndex == 1;
+        return criterion.SortModeIndex switch
+        {
+            2 => ascending ? groups.ThenBy(group => group.LastModified) : groups.ThenByDescending(group => group.LastModified),
+            3 => ascending ? groups.ThenBy(group => group.FileSize) : groups.ThenByDescending(group => group.FileSize),
+            4 => ascending
+                ? groups.ThenBy(group => group.FileName, StringComparer.OrdinalIgnoreCase).ThenBy(group => group.FilePath, StringComparer.OrdinalIgnoreCase)
+                : groups.ThenByDescending(group => group.FileName, StringComparer.OrdinalIgnoreCase).ThenByDescending(group => group.FilePath, StringComparer.OrdinalIgnoreCase),
+            _ => ascending ? groups.ThenBy(group => group.MatchCount) : groups.ThenByDescending(group => group.MatchCount),
+        };
+    }
+
+    private static IOrderedEnumerable<(FileGroup Group, string Bucket)> ThenByCriterion(
+        IOrderedEnumerable<(FileGroup Group, string Bucket)> groups,
+        SortCriterion criterion)
+    {
+        bool ascending = criterion.SortDirectionIndex == 1;
+        return criterion.SortModeIndex switch
+        {
+            2 => ascending ? groups.ThenBy(item => item.Group.LastModified) : groups.ThenByDescending(item => item.Group.LastModified),
+            3 => ascending ? groups.ThenBy(item => item.Group.FileSize) : groups.ThenByDescending(item => item.Group.FileSize),
+            4 => ascending
+                ? groups.ThenBy(item => item.Group.FileName, StringComparer.OrdinalIgnoreCase).ThenBy(item => item.Group.FilePath, StringComparer.OrdinalIgnoreCase)
+                : groups.ThenByDescending(item => item.Group.FileName, StringComparer.OrdinalIgnoreCase).ThenByDescending(item => item.Group.FilePath, StringComparer.OrdinalIgnoreCase),
+            _ => ascending ? groups.ThenBy(item => item.Group.MatchCount) : groups.ThenByDescending(item => item.Group.MatchCount),
+        };
+    }
 
     internal static string ClassifyFileSizeBucket(long fileSize)
     {

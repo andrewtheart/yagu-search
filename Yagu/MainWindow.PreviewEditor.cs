@@ -970,7 +970,7 @@ public sealed partial class MainWindow
             PreviewSectionsPanel.Visibility = Visibility.Visible;
             SetPerFileToolbarVisibility(Visibility.Collapsed);
             PreviewToolbarContent.Visibility = Visibility.Visible;
-            PreviewScrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+            SetHorizontalPreviewScroll(PreviewScrollViewer, enabled: false);
 
             UpdateMatchNavPanel();
             if (_activeSectionNav is null && _sectionMatchNavs.Count == 1)
@@ -993,9 +993,7 @@ public sealed partial class MainWindow
             PreviewSectionsPanel.Visibility = Visibility.Collapsed;
             SetPerFileToolbarVisibility(Visibility.Visible);
             PreviewToolbarContent.Visibility = _previewResult is not null ? Visibility.Visible : Visibility.Collapsed;
-            PreviewScrollViewer.HorizontalScrollBarVisibility = ViewModel.PreviewWordWrap
-                ? ScrollBarVisibility.Disabled
-                : ScrollBarVisibility.Auto;
+            ApplyPreviewHorizontalScrollForWrap(PreviewScrollViewer, ViewModel.PreviewWordWrap);
             HideStickyFileHeader();
             return;
         }

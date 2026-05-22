@@ -41,6 +41,8 @@ public sealed partial class MainViewModel : ObservableObject
     private CancellationTokenSource _metadataCts = new();
     private bool _metadataSortFilterRefreshQueued;
     private bool _clearedDefaultExcludeForRegexMode;
+    private readonly List<SortCriterion> _sortCriteria = [new(1, 0)];
+    private bool _updatingSortCriteria;
     private System.Diagnostics.Stopwatch? _searchTimer;
     private DateTime _searchStartedUtc;
     private TimeSpan _lastSearchElapsed;
@@ -232,6 +234,77 @@ public sealed partial class MainViewModel : ObservableObject
         DateRangeFilter.PastFiveYears => "Last 5 years",
         _ => "Any date",
     };
+
+    public IReadOnlyList<SortCriterion> SortCriteria => _sortCriteria;
+
+    public int? GetSortDirectionIndex(int sortModeIndex)
+    {
+        int index = _sortCriteria.FindIndex(criterion => criterion.SortModeIndex == sortModeIndex);
+        return index >= 0 ? _sortCriteria[index].SortDirectionIndex : null;
+    }
+
+    public void ApplySortSelection(int sortModeIndex, int sortDirectionIndex)
+    {
+        if (sortModeIndex <= 0)
+        {
+            SetSingleSortCriterion(0, sortDirectionIndex);
+        }
+        else
+        {
+            int direction = sortDirectionIndex == 1 ? 1 : 0;
+            int index = _sortCriteria.FindIndex(criterion => criterion.SortModeIndex == sortModeIndex);
+            var criterion = new SortCriterion(sortModeIndex, direction);
+            if (index >= 0)
+                _sortCriteria[index] = criterion;
+            else
+                _sortCriteria.Add(criterion);
+        }
+
+        SyncPrimarySortPropertiesFromCriteria();
+        OnPropertyChanged(nameof(SortCriteria));
+        ApplySortAndFilter();
+    }
+
+    public void RemoveSortSelection(int sortModeIndex)
+    {
+        int index = _sortCriteria.FindIndex(criterion => criterion.SortModeIndex == sortModeIndex);
+        if (index < 0)
+            return;
+
+        _sortCriteria.RemoveAt(index);
+        SyncPrimarySortPropertiesFromCriteria();
+        OnPropertyChanged(nameof(SortCriteria));
+        ApplySortAndFilter();
+    }
+
+    private void SetSingleSortCriterion(int sortModeIndex, int sortDirectionIndex)
+    {
+        _sortCriteria.Clear();
+        if (sortModeIndex > 0)
+            _sortCriteria.Add(new SortCriterion(sortModeIndex, sortDirectionIndex == 1 ? 1 : 0));
+    }
+
+    private void SyncPrimarySortPropertiesFromCriteria()
+    {
+        _updatingSortCriteria = true;
+        try
+        {
+            if (_sortCriteria.Count > 0)
+            {
+                SortModeIndex = _sortCriteria[0].SortModeIndex;
+                SortDirectionIndex = _sortCriteria[0].SortDirectionIndex;
+            }
+            else
+            {
+                SortModeIndex = 0;
+                SortDirectionIndex = 0;
+            }
+        }
+        finally
+        {
+            _updatingSortCriteria = false;
+        }
+    }
     [ObservableProperty] public partial int PreviewModeIndex { get; set; } = 1; // 0 = Concatenated, 1 = Multi-highlight
     [ObservableProperty] public partial bool PreviewWordWrap { get; set; }
     [ObservableProperty] public partial int PreviewAutoLoadMatches { get; set; } = 50;
@@ -246,7 +319,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial int MemoryPressurePercent { get; set; } = 75;
     [ObservableProperty] public partial int SdkChannelBufferSize { get; set; } = 4096;
     [ObservableProperty] public partial int MaxMatchesPerFile { get; set; }
-    [ObservableProperty] public partial int MaxSearchDepth { get; set; }
+    [ObservableProperty] public partial double MaxSearchDepth { get; set; } = double.NaN;
 
     partial void OnMaxMatchesPerFileChanged(int value) => ApplyMaxMatchesPerFile(value);
 
@@ -379,7 +452,7 @@ public sealed partial class MainViewModel : ObservableObject
         {
             int enabled = SkipExtensionItems.Count(i => i.IsEnabled);
             int total = SkipExtensionItems.Count;
-            return total == 0 ? "Skip: none" : $"Skip: {enabled}/{total} ext";
+            return total == 0 ? "Skip Extensions: none" : $"Skip Extensions: {enabled}/{total}";
         }
     }
 
@@ -691,8 +764,21 @@ public sealed partial class MainViewModel : ObservableObject
     partial void OnErrorTextChanged(string? value) => OnPropertyChanged(nameof(HasErrorText));
     partial void OnFilesSkippedChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); }
     partial void OnAccessDeniedCountChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); }
-    partial void OnSortModeIndexChanged(int value) => ApplySortAndFilter();
-    partial void OnSortDirectionIndexChanged(int value) => ApplySortAndFilter();
+    partial void OnSortModeIndexChanged(int value)
+    {
+        if (_updatingSortCriteria) return;
+        SetSingleSortCriterion(value, SortDirectionIndex);
+        OnPropertyChanged(nameof(SortCriteria));
+        ApplySortAndFilter();
+    }
+
+    partial void OnSortDirectionIndexChanged(int value)
+    {
+        if (_updatingSortCriteria) return;
+        SetSingleSortCriterion(SortModeIndex, value);
+        OnPropertyChanged(nameof(SortCriteria));
+        ApplySortAndFilter();
+    }
     partial void OnGroupModeIndexChanged(int value)
     {
         OnPropertyChanged(nameof(GroupMode));
@@ -873,7 +959,7 @@ public sealed partial class MainViewModel : ObservableObject
                 MemoryPressurePercent = MemoryPressurePercent,
                 SdkChannelBufferSize = SdkChannelBufferSize,
                 ExcludeAdminProtectedPaths = ExcludeAdminProtectedPaths,
-                MaxSearchDepth = MaxSearchDepth,
+                MaxSearchDepth = double.IsNaN(MaxSearchDepth) ? 0 : (int)MaxSearchDepth,
             };
 
             cts = new CancellationTokenSource();
@@ -1619,6 +1705,7 @@ public sealed partial class MainViewModel : ObservableObject
         _resultCollection.ExcludeFilterMode = ExcludeFilterMode;
         _resultCollection.SortModeIndex = SortModeIndex;
         _resultCollection.SortDirectionIndex = SortDirectionIndex;
+        _resultCollection.SetSortCriteria(_sortCriteria);
         _resultCollection.GroupMode = GroupMode;
         _resultCollection.GroupSortDirectionIndex = GroupSortDirectionIndex;
         _resultCollection.DateRangeFilter = DateRangeFilter;

@@ -216,8 +216,8 @@
                             BorderThickness="1" CornerRadius="4" Padding="24,16,12,16">
                     <StackPanel Spacing="10">
                         <!-- Search behavior -->
-                        <StackPanel Orientation="Horizontal" Spacing="16">
-                            <TextBlock Text="Search mode" VerticalAlignment="Center" Opacity="0.7" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="Search mode" VerticalAlignment="Center" Opacity="0.7" Width="88" FontWeight="SemiBold" />
                             <ComboBox SelectedIndex="{x:Bind ViewModel.SearchModeIndex, Mode=TwoWay}" VerticalAlignment="Center">
                                 <ComboBoxItem Content="Content + Names"
                                               ToolTipService.ToolTip="Search file contents and match file names against the query" />
@@ -228,14 +228,6 @@
                                 <ComboBoxItem Content="File name, then content"
                                               ToolTipService.ToolTip="First filter by file name, then search contents of matching files" />
                             </ComboBox>
-                            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                                <ToggleSwitch x:Name="ObeyGitignoreCheckBox" OnContent="Obey .gitignore" OffContent="Obey .gitignore"
-                                              IsOn="{x:Bind ViewModel.ObeyGitignore, Mode=TwoWay}" MinWidth="0"
-                                              Toggled="OnObeyGitignoreToggled" />
-                                <FontIcon Glyph="&#xE7BA;" FontSize="12" VerticalAlignment="Center"
-                                          Foreground="{ThemeResource SystemFillColorCautionBrush}"
-                                          ToolTipService.ToolTip="Enabling this decreases search performance due to extra .gitignore processing on every folder encountered during the scan." />
-                            </StackPanel>
                         </StackPanel>
 
                         <!-- Path filters -->
@@ -244,8 +236,8 @@
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="Includes and Excludes" Opacity="0.7"
-                                       VerticalAlignment="Center" Margin="0,0,2,0" />
+                            <TextBlock Text="Path filters" Opacity="0.7"
+                                       VerticalAlignment="Center" Width="88" FontWeight="SemiBold" />
                             <Grid Grid.Column="1" ColumnSpacing="8">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
@@ -303,7 +295,17 @@
                         </Grid>
 
                         <!-- File type filters -->
-                        <StackPanel Orientation="Horizontal" Spacing="16">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="File type filters" Opacity="0.7"
+                                       VerticalAlignment="Center" Width="88" FontWeight="SemiBold" />
+                            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                <ToggleSwitch x:Name="ObeyGitignoreCheckBox" OnContent="Obey .gitignore" OffContent="Obey .gitignore"
+                                              IsOn="{x:Bind ViewModel.ObeyGitignore, Mode=TwoWay}" MinWidth="0"
+                                              Toggled="OnObeyGitignoreToggled" />
+                                <FontIcon Glyph="&#xE7BA;" FontSize="12" VerticalAlignment="Center"
+                                          Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                                          ToolTipService.ToolTip="Enabling this decreases search performance due to extra .gitignore processing on every folder encountered during the scan." />
+                            </StackPanel>
                             <DropDownButton Content="{x:Bind ViewModel.SkipExtensionsSummary, Mode=OneWay}"
                                             VerticalAlignment="Center" FontSize="12"
                                             ToolTipService.ToolTip="Extensions to skip during search">
@@ -344,6 +346,12 @@
                                     </Flyout>
                                 </DropDownButton.Flyout>
                             </DropDownButton>
+                        </StackPanel>
+
+                        <!-- Content options -->
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="Content options" Opacity="0.7"
+                                       VerticalAlignment="Center" Width="88" FontWeight="SemiBold" />
                             <ToggleSwitch OnContent="Search binary" OffContent="Search binary"
                                           IsOn="{x:Bind ViewModel.SearchBinary, Mode=TwoWay}"
                                           VerticalAlignment="Center" MinWidth="0" />
@@ -412,7 +420,7 @@
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="Property filters" Opacity="0.7"
-                                       VerticalAlignment="Center" Margin="0,0,2,0" />
+                                       VerticalAlignment="Center" Width="88" FontWeight="SemiBold" />
                             <StackPanel Grid.Column="1" Spacing="2" Width="100">
                                 <TextBlock Text="Min MB" FontSize="11" Opacity="0.75" />
                                 <NumberBox Value="{x:Bind ViewModel.MinFileSizeMB, Mode=TwoWay}"
@@ -435,8 +443,7 @@
                                                     PlaceholderText="From" HorizontalAlignment="Stretch"
                                                     ToolTipService.ToolTip="Only include files created on or after this date." />
                             </StackPanel>
-                            <StackPanel Grid.Column="5" Spacing="2">
-                                <TextBlock Text="" FontSize="11" Opacity="0.75" />
+                            <StackPanel Grid.Column="5" Spacing="2" VerticalAlignment="Bottom">
                                 <CalendarDatePicker Date="{x:Bind ViewModel.CreatedBeforeDate, Mode=TwoWay}"
                                                     PlaceholderText="To" HorizontalAlignment="Stretch"
                                                     ToolTipService.ToolTip="Only include files created on or before this date." />
@@ -449,8 +456,7 @@
                                                     PlaceholderText="From" HorizontalAlignment="Stretch"
                                                     ToolTipService.ToolTip="Only include files modified on or after this date." />
                             </StackPanel>
-                            <StackPanel Grid.Column="8" Spacing="2">
-                                <TextBlock Text="" FontSize="11" Opacity="0.75" />
+                            <StackPanel Grid.Column="8" Spacing="2" VerticalAlignment="Bottom">
                                 <CalendarDatePicker Date="{x:Bind ViewModel.ModifiedBeforeDate, Mode=TwoWay}"
                                                     PlaceholderText="To" HorizontalAlignment="Stretch"
                                                     ToolTipService.ToolTip="Only include files modified on or before this date." />
@@ -459,7 +465,7 @@
                         <!-- Max search depth -->
                         <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
                             <TextBlock Text="Max depth" Opacity="0.7"
-                                       VerticalAlignment="Center" />
+                                       VerticalAlignment="Center" Width="88" FontWeight="SemiBold" />
                             <NumberBox Value="{x:Bind ViewModel.MaxSearchDepth, Mode=TwoWay}"
                                        Minimum="0" Width="90"
                                        SpinButtonPlacementMode="Hidden"
@@ -520,25 +526,98 @@
                                 <TextBlock Text="Sort" />
                             </StackPanel>
                             <DropDownButton.Flyout>
-                                <MenuFlyout Placement="BottomEdgeAlignedLeft">
-                                    <MenuFlyoutItem Text="None" Click="OnSortNone" />
-                                    <MenuFlyoutSubItem Text="# Matches">
-                                        <MenuFlyoutItem Text="Desc" Click="OnSortMatchesDesc" />
-                                        <MenuFlyoutItem Text="Asc" Click="OnSortMatchesAsc" />
-                                    </MenuFlyoutSubItem>
-                                    <MenuFlyoutSubItem Text="Date Modified">
-                                        <MenuFlyoutItem Text="Desc" Click="OnSortDateModifiedDesc" />
-                                        <MenuFlyoutItem Text="Asc" Click="OnSortDateModifiedAsc" />
-                                    </MenuFlyoutSubItem>
-                                    <MenuFlyoutSubItem Text="File Size">
-                                        <MenuFlyoutItem Text="Desc" Click="OnSortFileSizeDesc" />
-                                        <MenuFlyoutItem Text="Asc" Click="OnSortFileSizeAsc" />
-                                    </MenuFlyoutSubItem>
-                                    <MenuFlyoutSubItem Text="File Name">
-                                        <MenuFlyoutItem Text="Desc" Click="OnSortFileNameDesc" />
-                                        <MenuFlyoutItem Text="Asc" Click="OnSortFileNameAsc" />
-                                    </MenuFlyoutSubItem>
-                                </MenuFlyout>
+                                <Flyout x:Name="SortFlyout" Placement="BottomEdgeAlignedLeft" Opening="OnSortFlyoutOpening">
+                                    <StackPanel MinWidth="154" Padding="8,6" Spacing="2">
+                                        <Button Content="None" Click="OnSortNone"
+                                                MinHeight="32" Padding="8,0"
+                                                HorizontalAlignment="Stretch"
+                                                HorizontalContentAlignment="Left" />
+                                        <Grid MinHeight="32" ColumnSpacing="10" Padding="8,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="# Matches" VerticalAlignment="Center" />
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                                <Button x:Name="SortMatchesAscButton" Click="OnSortMatchesAsc"
+                                                        Width="26" Height="26" MinWidth="0" MinHeight="0" Padding="0"
+                                                        Background="Transparent" BorderThickness="0"
+                                                        ToolTipService.ToolTip="Sort # Matches ascending">
+                                                    <FontIcon Glyph="&#xE74A;" FontSize="11" />
+                                                </Button>
+                                                <Button x:Name="SortMatchesDescButton" Click="OnSortMatchesDesc"
+                                                        Width="26" Height="26" MinWidth="0" MinHeight="0" Padding="0"
+                                                        Background="Transparent" BorderThickness="0"
+                                                        ToolTipService.ToolTip="Sort # Matches descending">
+                                                    <FontIcon Glyph="&#xE74B;" FontSize="11" />
+                                                </Button>
+                                            </StackPanel>
+                                        </Grid>
+                                        <Grid MinHeight="32" ColumnSpacing="10" Padding="8,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="Date Modified" VerticalAlignment="Center" />
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                                <Button x:Name="SortDateModifiedAscButton" Click="OnSortDateModifiedAsc"
+                                                        Width="26" Height="26" MinWidth="0" MinHeight="0" Padding="0"
+                                                        Background="Transparent" BorderThickness="0"
+                                                        ToolTipService.ToolTip="Sort Date Modified ascending">
+                                                    <FontIcon Glyph="&#xE74A;" FontSize="11" />
+                                                </Button>
+                                                <Button x:Name="SortDateModifiedDescButton" Click="OnSortDateModifiedDesc"
+                                                        Width="26" Height="26" MinWidth="0" MinHeight="0" Padding="0"
+                                                        Background="Transparent" BorderThickness="0"
+                                                        ToolTipService.ToolTip="Sort Date Modified descending">
+                                                    <FontIcon Glyph="&#xE74B;" FontSize="11" />
+                                                </Button>
+                                            </StackPanel>
+                                        </Grid>
+                                        <Grid MinHeight="32" ColumnSpacing="10" Padding="8,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="File Size" VerticalAlignment="Center" />
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                                <Button x:Name="SortFileSizeAscButton" Click="OnSortFileSizeAsc"
+                                                        Width="26" Height="26" MinWidth="0" MinHeight="0" Padding="0"
+                                                        Background="Transparent" BorderThickness="0"
+                                                        ToolTipService.ToolTip="Sort File Size ascending">
+                                                    <FontIcon Glyph="&#xE74A;" FontSize="11" />
+                                                </Button>
+                                                <Button x:Name="SortFileSizeDescButton" Click="OnSortFileSizeDesc"
+                                                        Width="26" Height="26" MinWidth="0" MinHeight="0" Padding="0"
+                                                        Background="Transparent" BorderThickness="0"
+                                                        ToolTipService.ToolTip="Sort File Size descending">
+                                                    <FontIcon Glyph="&#xE74B;" FontSize="11" />
+                                                </Button>
+                                            </StackPanel>
+                                        </Grid>
+                                        <Grid MinHeight="32" ColumnSpacing="10" Padding="8,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="File Name" VerticalAlignment="Center" />
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                                <Button x:Name="SortFileNameAscButton" Click="OnSortFileNameAsc"
+                                                        Width="26" Height="26" MinWidth="0" MinHeight="0" Padding="0"
+                                                        Background="Transparent" BorderThickness="0"
+                                                        ToolTipService.ToolTip="Sort File Name ascending">
+                                                    <FontIcon Glyph="&#xE74A;" FontSize="11" />
+                                                </Button>
+                                                <Button x:Name="SortFileNameDescButton" Click="OnSortFileNameDesc"
+                                                        Width="26" Height="26" MinWidth="0" MinHeight="0" Padding="0"
+                                                        Background="Transparent" BorderThickness="0"
+                                                        ToolTipService.ToolTip="Sort File Name descending">
+                                                    <FontIcon Glyph="&#xE74B;" FontSize="11" />
+                                                </Button>
+                                            </StackPanel>
+                                        </Grid>
+                                    </StackPanel>
+                                </Flyout>
                             </DropDownButton.Flyout>
                         </DropDownButton>
                         <DropDownButton Height="30" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Group results by…">
@@ -740,8 +819,8 @@
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="Auto" />
-                                                <ColumnDefinition Width="1*" />
-                                                <ColumnDefinition Width="3*" MaxWidth="650" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" MaxWidth="360" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
                                         <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
@@ -771,6 +850,7 @@
                                         <TextBlock Grid.Column="3" Text="{x:Bind DirectoryName}" Tag="WideDir"
                                                    ToolTipService.ToolTip="{x:Bind DirectoryName}"
                                                    Opacity="0.45" FontSize="11" VerticalAlignment="Center"
+                                                   MaxWidth="360"
                                                    TextTrimming="CharacterEllipsis"
                                                    HorizontalAlignment="Left" Margin="12,0,4,0" />
                                         <Button Grid.Column="4" Click="OnShowFileGroupInExplorer" Tag="{x:Bind FilePath}"
@@ -1084,7 +1164,9 @@
                         </Border>
 
                         <ScrollViewer x:Name="PreviewScrollViewer" Grid.Row="1" Padding="16,12"
-                                      HorizontalScrollBarVisibility="Auto">
+                                      HorizontalScrollMode="Enabled"
+                                      HorizontalScrollBarVisibility="Auto"
+                                      VerticalScrollBarVisibility="Auto">
                             <Grid>
                                 <StackPanel x:Name="PreviewMessagePanel">
                                     <RichTextBlock x:Name="PreviewBlock" FontFamily="Consolas" TextWrapping="NoWrap" />

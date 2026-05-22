@@ -240,6 +240,43 @@ public class SearchResultCollectionCoverageTests
         Assert.Equal("b.txt", col.VisibleGroups[1].FileName);
     }
 
+    [Fact]
+    public void SortCriteria_ThenByFileSize_PreservesMatchCountPrimarySort()
+    {
+        FileMetadataCache.Clear();
+        try
+        {
+            string largeTie = @"C:\src\large-tie.txt";
+            string smallTie = @"C:\src\small-tie.txt";
+            string mostMatches = @"C:\src\most-matches.txt";
+            FileMetadataCache.Set(largeTie, new FileMetadata(30, DateTime.Now));
+            FileMetadataCache.Set(smallTie, new FileMetadata(10, DateTime.Now));
+            FileMetadataCache.Set(mostMatches, new FileMetadata(20, DateTime.Now));
+
+            var col = new SearchResultCollection();
+            col.Add(MakeResult(largeTie, "m1"), group => group.LoadMetadata());
+            col.Add(MakeResult(largeTie, "m2"));
+            col.Add(MakeResult(smallTie, "m1"), group => group.LoadMetadata());
+            col.Add(MakeResult(smallTie, "m2"));
+            col.Add(MakeResult(mostMatches, "m1"), group => group.LoadMetadata());
+            col.Add(MakeResult(mostMatches, "m2"));
+            col.Add(MakeResult(mostMatches, "m3"));
+            col.SetSortCriteria(new[]
+            {
+                new SortCriterion(1, 0),
+                new SortCriterion(3, 1),
+            });
+
+            col.ApplySortAndFilter();
+
+            Assert.Equal(new[] { mostMatches, smallTie, largeTie }, col.VisibleGroups.Select(group => group.FilePath).ToArray());
+        }
+        finally
+        {
+            FileMetadataCache.Clear();
+        }
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(1)]

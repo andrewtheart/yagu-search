@@ -14,6 +14,8 @@ namespace Yagu;
 /// </summary>
 public sealed partial class MainWindow
 {
+    private const double MinimumLauncherHeightDip = 190;
+
     /// <summary>Window pin state: MinimizeToTray (default), StayOpen, AlwaysOnTop, FullWindow.</summary>
     private enum PinState { MinimizeToTray, StayOpen, AlwaysOnTop, FullWindow }
 
@@ -83,7 +85,7 @@ public sealed partial class MainWindow
             RootGrid.UpdateLayout();
             RootGrid.Measure(new Windows.Foundation.Size(1400, double.PositiveInfinity));
             double desiredHeightDip = RootGrid.DesiredSize.Height;
-            if (desiredHeightDip < 225) desiredHeightDip = 225;
+            if (desiredHeightDip < MinimumLauncherHeightDip) desiredHeightDip = MinimumLauncherHeightDip;
 
             // Non-client chrome (border/resize grip) eats into the outer rect.
             // AppWindow.Size vs ClientSize may not be updated synchronously after
@@ -127,7 +129,7 @@ public sealed partial class MainWindow
                     RootGrid.UpdateLayout();
                     RootGrid.Measure(new Windows.Foundation.Size(1400, double.PositiveInfinity));
                     double h = RootGrid.DesiredSize.Height;
-                    if (h < 225) h = 225;
+                    if (h < MinimumLauncherHeightDip) h = MinimumLauncherHeightDip;
                     int newHeight = (int)((h + 2) * deferredScale) + chrome;
                     if (Math.Abs(newHeight - AppWindow.Size.Height) < 4) return;
                     int newY = wa.Y + (int)(4 * deferredScale);
@@ -157,6 +159,26 @@ public sealed partial class MainWindow
         _resultsPaneCollapsed = false;
         CollapseChevronIcon.Glyph = "\uE70D";
         UpdateBottomStatusBarVisibility();
+
+        try
+        {
+            ExtendsContentIntoTitleBar = true;
+            SetTitleBar(AppTitleBar);
+        }
+        catch { }
+        try
+        {
+            if (AppWindow?.Presenter is Microsoft.UI.Windowing.OverlappedPresenter op)
+            {
+                op.SetBorderAndTitleBar(true, true);
+                op.IsResizable = true;
+                op.IsMaximizable = true;
+                op.IsMinimizable = true;
+                ApplyTitleBarButtonTheme();
+            }
+        }
+        catch { }
+        SetNativeCaptionButtonsVisible(true);
 
         try
         {

@@ -667,7 +667,7 @@ public sealed partial class MainWindow
 
         if (ViewModel.PreviewWordWrap)
         {
-            double charWidth = Math.Max(EstimatePreviewCharWidth(block), rect.Width > 0 ? rect.Width : 0);
+            double charWidth = Math.Max(GetPreviewCharWidth(block, targetPara), rect.Width > 0 ? rect.Width : 0);
             double markerWidth = Math.Max(12, (activeRun.Text?.Length ?? 1) * charWidth);
             var endRect = activeRun.ContentEnd.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Backward);
             double rowTolerance = Math.Max(4, markerHeight * 0.6);
@@ -676,13 +676,6 @@ public sealed partial class MainWindow
                 var endPoint = TransformRunRectToOverlay(block, targetPara, endRect);
                 point = new Windows.Foundation.Point(ClampOverlayMarkerLeft(endPoint.X - markerWidth, markerWidth, viewportWidth), endPoint.Y);
                 source = "end";
-            }
-            else if (_activeMatchHighlight is { para: var activePara, column: var activeColumn }
-                && ReferenceEquals(activePara, targetPara)
-                && TryGetEstimatedWrappedMatchPoint(block, targetPara, activeColumn, markerHeight, viewportWidth, markerWidth, point, out var estimatedPoint, out var estimateDetails))
-            {
-                point = estimatedPoint;
-                source = $"wrapped-estimate {estimateDetails}";
             }
         }
 
@@ -727,6 +720,27 @@ public sealed partial class MainWindow
                 return false;
             }
 
+            // Flush pending layout so TransformToVisual reflects any recent
+            // scroll offset changes (both vertical and horizontal).
+            // The canvas must be Visible before UpdateLayout so it receives a
+            // proper arrange pass — TransformToVisual against a Collapsed
+            // element returns unreliable coordinates.
+            // We also update the block itself to ensure word-wrap reflow has
+            // completed before querying character positions.
+            if (ActiveMatchOverlay.Visibility != Visibility.Visible)
+                ActiveMatchOverlay.Visibility = Visibility.Visible;
+            try
+            {
+                // Force text layout reflow at the current actual width.
+                // RichTextBlock.UpdateLayout() alone may not re-wrap text;
+                // an explicit Measure ensures GetCharacterRect returns positions
+                // consistent with the current block width.
+                block.Measure(new Windows.Foundation.Size(block.ActualWidth, double.PositiveInfinity));
+                block.UpdateLayout();
+                PreviewScrollViewer.UpdateLayout();
+            }
+            catch { }
+
             var rect = targetRun.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
             if (!IsUsableTextRect(rect))
                 return false;
@@ -734,8 +748,9 @@ public sealed partial class MainWindow
             var endRect = targetRun.ContentEnd.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Backward);
             var point = TransformRunRectToOverlay(block, targetPara, rect);
             double markerHeight = Math.Max(12, rect.Height);
-            double charWidth = Math.Max(EstimatePreviewCharWidth(block), rect.Width > 0 ? rect.Width : 0);
+            double charWidth = Math.Max(GetPreviewCharWidth(block, targetPara), rect.Width > 0 ? rect.Width : 0);
             double markerWidth = Math.Max(12, (targetRun.Text?.Length ?? 1) * charWidth);
+
             bool usedEndRect = false;
             bool usedWrappedEstimate = false;
             List<Windows.Foundation.Rect>? wrappedMarkerRects = null;
@@ -773,26 +788,11 @@ public sealed partial class MainWindow
                 }
 
                 double rowTolerance = Math.Max(4, markerHeight * 0.6);
-                bool actualPointInViewport = wrappedMarkerRects is not null || (point.X >= 0
-                    && point.X + markerWidth <= viewportWidth
-                    && point.Y >= viewportTop
-                    && point.Y + markerHeight <= viewportBottom);
                 if (wrappedMarkerRects is null && IsUsableTextRect(endRect) && Math.Abs(endRect.Y - rect.Y) > rowTolerance)
                 {
                     var endPoint = TransformRunRectToOverlay(block, targetPara, endRect);
                     point = new Windows.Foundation.Point(ClampOverlayMarkerLeft(endPoint.X - markerWidth, markerWidth, viewportWidth), endPoint.Y);
                     usedEndRect = true;
-                }
-                else if (wrappedMarkerRects is null && !actualPointInViewport
-                    && TryGetEstimatedWrappedMatchPoint(block, targetPara, activeColumn, markerHeight, viewportWidth, markerWidth, point, out var estimatedPoint, out var estimateDetails))
-                {
-                    point = estimatedPoint;
-                    usedWrappedEstimate = true;
-                    if (LogService.Instance.IsVerboseEnabled)
-                    {
-                        int paragraphIndex = GetParagraphIndex(block, targetPara);
-                        LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: using wrapped estimate idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, {estimateDetails}");
-                    }
                 }
             }
             double currentVerticalOffset = PreviewScrollViewer.VerticalOffset;
@@ -964,9 +964,8 @@ public sealed partial class MainWindow
         if (!ViewModel.PreviewWordWrap || column < 0 || matchLength <= 0)
             return false;
 
-        double charWidth = EstimatePreviewCharWidth(block);
-        double availableWidth = GetPreviewTextViewportWidth(block) - 24;
-        int charsPerWrappedLine = Math.Max(1, (int)Math.Floor(availableWidth / charWidth));
+        double charWidth = GetPreviewCharWidth(block, targetPara);
+        int charsPerWrappedLine = GetPreviewWrappedCharsPerLine(block, targetPara, charWidth);
         int startRow = column / charsPerWrappedLine;
         int endExclusive = column + matchLength;
         int endRow = (Math.Max(column, endExclusive - 1)) / charsPerWrappedLine;
@@ -1200,9 +1199,8 @@ public sealed partial class MainWindow
         if (!ViewModel.PreviewWordWrap || column <= 0)
             return false;
 
-        double charWidth = EstimatePreviewCharWidth(block);
-        double availableWidth = GetPreviewTextViewportWidth(block) - 24;
-        int charsPerWrappedLine = Math.Max(1, (int)Math.Floor(availableWidth / charWidth));
+        double charWidth = GetPreviewCharWidth(block, targetPara);
+        int charsPerWrappedLine = GetPreviewWrappedCharsPerLine(block, targetPara, charWidth);
         int wrappedLineIndex = column / charsPerWrappedLine;
         if (wrappedLineIndex <= 0)
             return false;
@@ -1218,20 +1216,10 @@ public sealed partial class MainWindow
         var firstPoint = TransformRunRectToOverlay(block, targetPara, firstRect);
         double lineHeight = Math.Max(markerHeight, firstRect.Height);
         double expectedTop = firstPoint.Y + wrappedLineIndex * lineHeight;
-        double rowTolerance = Math.Max(4, lineHeight * 0.6);
-        bool actualRowMatchesEstimate = Math.Abs(actualPoint.Y - expectedTop) <= rowTolerance;
-        bool actualMarkerHorizontallyVisible = actualPoint.X >= 0
-            && actualPoint.X + markerWidth <= viewportWidth;
-        if (actualRowMatchesEstimate && actualMarkerHorizontallyVisible)
-            return false;
-
         double expectedLeft = firstPoint.X + (column % charsPerWrappedLine) * charWidth;
-        double correctedTop = actualRowMatchesEstimate
-            ? actualPoint.Y
-            : (expectedTop < actualPoint.Y - rowTolerance ? actualPoint.Y : expectedTop);
         double correctedLeft = ClampOverlayMarkerLeft(expectedLeft, markerWidth, viewportWidth);
-        estimatedPoint = new Windows.Foundation.Point(correctedLeft, correctedTop);
-        details = $"column={column}, charsPerLine={charsPerWrappedLine}, wrapRow={wrappedLineIndex}, actual=({actualPoint.X:N1},{actualPoint.Y:N1}), actualXVisible={actualMarkerHorizontallyVisible}, estimated=({estimatedPoint.X:N1},{estimatedPoint.Y:N1})";
+        estimatedPoint = new Windows.Foundation.Point(correctedLeft, expectedTop);
+        details = $"column={column}, charsPerLine={charsPerWrappedLine}, wrapRow={wrappedLineIndex}, charW={charWidth:N1}, wrapW={GetPreviewWrapTextWidth(block):N1}, actual=({actualPoint.X:N1},{actualPoint.Y:N1}), estimated=({estimatedPoint.X:N1},{estimatedPoint.Y:N1})";
         return true;
     }
 
@@ -1391,6 +1379,54 @@ public sealed partial class MainWindow
 
     private static double EstimatePreviewCharWidth(RichTextBlock block) => Math.Max(6d, block.FontSize * 0.58d);
 
+    private double GetPreviewCharWidth(RichTextBlock block, Paragraph? paragraph = null)
+    {
+        if (paragraph is not null)
+        {
+            foreach (var run in paragraph.Inlines.OfType<Run>())
+            {
+                if (string.IsNullOrEmpty(run.Text))
+                    continue;
+
+                try
+                {
+                    var start = run.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+                    var nextPosition = run.ContentStart.GetPositionAtOffset(1, Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+                    if (nextPosition is null)
+                        continue;
+
+                    var next = nextPosition.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+                    double width = next.X - start.X;
+                    if (width > 1 && Math.Abs(next.Y - start.Y) < Math.Max(1, start.Height * 0.25))
+                        return width;
+                }
+                catch { }
+            }
+        }
+
+        return EstimatePreviewCharWidth(block);
+    }
+
+    private double GetPreviewWrapTextWidth(RichTextBlock block)
+    {
+        if (block.ActualWidth > 0)
+            return block.ActualWidth;
+
+        if (_sectionMatchNavs.TryGetValue(block, out var sectionNav) && sectionNav.Scroller.ViewportWidth > 0)
+            return sectionNav.Scroller.ViewportWidth;
+
+        return Math.Max(1, PreviewScrollViewer.ViewportWidth);
+    }
+
+    private int GetPreviewWrappedCharsPerLine(RichTextBlock block, Paragraph? paragraph = null, double? measuredCharWidth = null)
+    {
+        double charWidth = measuredCharWidth.GetValueOrDefault();
+        if (charWidth <= 0)
+            charWidth = GetPreviewCharWidth(block, paragraph);
+
+        return Math.Max(1, (int)Math.Floor(GetPreviewWrapTextWidth(block) / charWidth));
+    }
+
     private double EstimateWrappedLineOffset(RichTextBlock block, Paragraph targetPara)
     {
         if (!ViewModel.PreviewWordWrap)
@@ -1400,9 +1436,9 @@ public sealed partial class MainWindow
             || !ReferenceEquals(activePara, targetPara))
             return 0;
 
-        double charWidth = EstimatePreviewCharWidth(block);
-        double availableWidth = GetPreviewTextViewportWidth(block) - 24;
-        int charsPerWrappedLine = Math.Max(1, (int)Math.Floor(availableWidth / charWidth));
+        double charWidth = GetPreviewCharWidth(block, targetPara);
+        double availableWidth = GetPreviewWrapTextWidth(block);
+        int charsPerWrappedLine = GetPreviewWrappedCharsPerLine(block, targetPara, charWidth);
         double wrappedOffset = column / (double)charsPerWrappedLine;
         LogService.Instance.Verbose("Preview", $"EstimateWrappedLineOffset: idx={_currentMatchIndex}, column={column}, availableW={availableWidth:N1}, charW={charWidth:N1}, charsPerLine={charsPerWrappedLine}, wrappedOffset={wrappedOffset:N1}");
         return wrappedOffset;
@@ -1443,9 +1479,7 @@ public sealed partial class MainWindow
         if (!ViewModel.PreviewWordWrap)
             return blockIndex * lineHeight;
 
-        double availableWidth = GetPreviewTextViewportWidth(block) - 24;
-        double charWidth = EstimatePreviewCharWidth(block);
-        int charsPerLine = Math.Max(1, (int)Math.Floor(availableWidth / charWidth));
+        int charsPerLine = GetPreviewWrappedCharsPerLine(block);
         var metrics = GetParagraphMetrics(block);
         if (metrics.PrefixHeights is not null
             && metrics.PrefixHeights.Length == block.Blocks.Count + 1
@@ -1961,6 +1995,7 @@ public sealed partial class MainWindow
             {
                 ScrollMatchHorizontallyIntoView(block, para);
                 QueueActiveMatchOverlayUpdate(block, para);
+                QueueActiveMatchOverlayUpdate(block, para);
             }
             return;
         }
@@ -2376,6 +2411,38 @@ public sealed partial class MainWindow
                 out int lastRenderedLine,
                 ov.LastRenderedLine);
             ov.LastRenderedLine = Math.Max(ov.LastRenderedLine, lastRenderedLine);
+
+            // Fallback: all remaining results are on already-rendered but truncated
+            // lines (e.g. single-line minified JSON with 100K+ matches). Render
+            // additional truncation windows centered around each next result so the
+            // user can progressively navigate through all matches on the line.
+            if (consumed == 0 && ov.RemainingResults.Count > 0)
+            {
+                int entriesBefore = _matchParagraphs.Count;
+                int maxResults = Math.Min(chunkSize, ov.RemainingResults.Count);
+                for (int ri = 0; ri < maxResults; ri++)
+                {
+                    if (_matchParagraphs.Count - entriesBefore >= MaxMatchEntriesPerExpandChunk)
+                        break;
+
+                    var r = ov.RemainingResults[ri];
+                    int lineIndex = r.LineNumber - 1;
+                    if (lineIndex < 0 || lineIndex >= ov.AllLines.Length) continue;
+
+                    AddGapIndicator(section);
+                    AddPreviewLineParagraphsAroundResult(
+                        section,
+                        ov.AllLines[lineIndex],
+                        r.LineNumber,
+                        r,
+                        ov.Rx,
+                        _matchParagraphs,
+                        sn,
+                        out _,
+                        out _);
+                    consumed++;
+                }
+            }
         }
         else
         {

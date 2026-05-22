@@ -35,3 +35,5 @@ installer/staging/
 installer/output/
 build_debug.txt
 Yagu/Native/yagu_core.dll
+build_output.txt
+build_release.txt

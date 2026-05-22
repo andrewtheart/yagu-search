@@ -637,9 +637,15 @@ public sealed partial class MainWindow
             }
         }
 
+        int actualMatchEntries = _matchParagraphs.Count - sectionMatchStart;
         int renderedCount = allLines != null
             ? CountPrefixResultsThroughLine(results, lastRenderedLine1, allLines.Length)
-            : Math.Min(results.Count, _matchParagraphs.Count - sectionMatchStart);
+            : Math.Min(results.Count, actualMatchEntries);
+        // When a line is truncated, regex matches beyond the truncation window are
+        // invisible. Cap renderedCount so overflow is registered for the hidden matches
+        // and the match-nav total reflects reality (e.g. single-line minified JSON).
+        if (allLines != null && renderedCount > actualMatchEntries && actualMatchEntries < results.Count)
+            renderedCount = actualMatchEntries;
         int remainingBlockBudget = Math.Max(0, MaxPreviewBlocksPerSection - (section.Blocks.Count - startingBlocks));
         if (allLines != null && remainingBlockBudget > 0 && renderedCount < Math.Min(MaxMatchesPerSection, results.Count))
         {
@@ -1117,8 +1123,7 @@ public sealed partial class MainWindow
         SetPerFileToolbarVisibility(Visibility.Visible);
         HideMatchNavPanel();
         // Restore outer horizontal scroll for single-file block view.
-        PreviewScrollViewer.HorizontalScrollBarVisibility =
-            ViewModel.PreviewWordWrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+        ApplyPreviewHorizontalScrollForWrap(PreviewScrollViewer, ViewModel.PreviewWordWrap);
     }
 
     private void ShowPreviewSectionsSurface()
@@ -1132,7 +1137,7 @@ public sealed partial class MainWindow
         SetPerFileToolbarVisibility(Visibility.Collapsed);
         HideMatchNavPanel();
         // Sections have their own per-section horizontal scroll; outer viewer stays vertical-only.
-        PreviewScrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+        SetHorizontalPreviewScroll(PreviewScrollViewer, enabled: false);
     }
 
     private void ShowPreviewLoading(string message = "Loading preview\u2026")
@@ -1247,9 +1252,8 @@ public sealed partial class MainWindow
         var sectionScroller = new ScrollViewer
         {
             Content = content,
-            HorizontalScrollBarVisibility = ViewModel.PreviewWordWrap
-                ? ScrollBarVisibility.Disabled
-                : ScrollBarVisibility.Auto,
+            HorizontalScrollMode = ViewModel.PreviewWordWrap ? ScrollMode.Disabled : ScrollMode.Enabled,
+            HorizontalScrollBarVisibility = ViewModel.PreviewWordWrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto,
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
         };
 
@@ -1301,9 +1305,9 @@ public sealed partial class MainWindow
                     var wrap = ViewModel.PreviewWordWrap;
                     b.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
                     if (exp.Content is Grid eg && eg.Children.OfType<ScrollViewer>().FirstOrDefault() is ScrollViewer scroller)
-                        scroller.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+                        ApplyPreviewHorizontalScrollForWrap(scroller, wrap);
                     else if (exp.Content is ScrollViewer scroller2)
-                        scroller2.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+                        ApplyPreviewHorizontalScrollForWrap(scroller2, wrap);
                     ActivateSectionForBlock(b);
                 }
             }
@@ -2253,7 +2257,10 @@ public sealed partial class MainWindow
 
         if (ranges.Count == 0)
         {
-            consumedResults = CountPrefixResultsThroughLine(pendingResults, lastRenderedLine, allLines.Length);
+            // All pending results are on lines already rendered (likely truncated).
+            // Don't consume them — the caller's overflow tracking keeps the match
+            // total accurate for the navigation label.
+            consumedResults = 0;
             return 0;
         }
 
