@@ -1635,7 +1635,7 @@ public sealed partial class MainWindow
                 try
                 {
                     LogService.Instance.Info("Preview", $"ShowFullFilePreviewAsync: loading file '{System.IO.Path.GetFileName(target.FilePath)}', matches={target.Matches.Count}");
-                    var document = await LoadPreviewDocumentAsync(target.FilePath, cts.Token).ConfigureAwait(true);
+                    var document = await LoadPreviewDocumentAsync(target.FilePath, cts.Token, fileSizeLimit: EffectiveFullFilePreviewLimitBytes).ConfigureAwait(true);
                     LogService.Instance.Info("Preview", $"ShowFullFilePreviewAsync: loaded '{System.IO.Path.GetFileName(target.FilePath)}', bytes={document.ByteLength:N0}, textLen={document.Text.Length:N0}");
                     var section = AddFullFileSection(target, document.ByteLength);
                     _sectionMatchNavs.TryGetValue(section, out var sectionNav);
@@ -1780,8 +1780,9 @@ public sealed partial class MainWindow
     // EnterPreviewEditorAtPointAsync, ResolveLineNumberAtPointer, ShowFullFileEditorAsync,
     // and ScrollEditorToMatch moved to MainWindow.PreviewEditor.cs.
 
-    private static async Task<PreviewTextDocument> LoadPreviewDocumentAsync(string filePath, CancellationToken cancellationToken, bool enforceLimit = true)
+    private static async Task<PreviewTextDocument> LoadPreviewDocumentAsync(string filePath, CancellationToken cancellationToken, bool enforceLimit = true, long fileSizeLimit = 0)
     {
+        long effectiveLimit = fileSizeLimit > 0 ? fileSizeLimit : 1L * 1024 * 1024 * 1024;
         var loadSw = System.Diagnostics.Stopwatch.StartNew();
         LogService.Instance.Verbose("Preview", $"LoadPreviewDocumentAsync: start file='{System.IO.Path.GetFileName(filePath)}'");
 
@@ -1789,7 +1790,7 @@ public sealed partial class MainWindow
         if (ZipArchiveSearcher.IsArchivePath(filePath))
         {
             LogService.Instance.Verbose("Preview", $"LoadPreviewDocumentAsync: archive path, delegating to LoadArchiveEntryPreviewAsync");
-            return await LoadArchiveEntryPreviewAsync(filePath, cancellationToken, enforceLimit).ConfigureAwait(false);
+            return await LoadArchiveEntryPreviewAsync(filePath, cancellationToken, enforceLimit, effectiveLimit).ConfigureAwait(false);
         }
 
         FileInfo info;
@@ -1798,8 +1799,8 @@ public sealed partial class MainWindow
 
         if (!info.Exists)
             throw new PreviewLoadException("Could not load full file: it no longer exists.");
-        if (enforceLimit && info.Length > EffectiveFullFilePreviewLimitBytes)
-            throw new PreviewLoadException($"Full-file preview is limited to {FormatBytes(EffectiveFullFilePreviewLimitBytes)}. This file is {FormatBytes(info.Length)}.");
+        if (enforceLimit && info.Length > effectiveLimit)
+            throw new PreviewLoadException($"Full-file preview is limited to {FormatBytes(effectiveLimit)}. This file is {FormatBytes(info.Length)}.");
 
         try
         {
@@ -1838,15 +1839,16 @@ public sealed partial class MainWindow
         catch (IOException ex) { throw new PreviewLoadException($"Could not load full file: {ex.Message}"); }
     }
 
-    private static async Task<PreviewTextDocument> LoadArchiveEntryPreviewAsync(string archivePath, CancellationToken cancellationToken, bool enforceLimit = true)
+    private static async Task<PreviewTextDocument> LoadArchiveEntryPreviewAsync(string archivePath, CancellationToken cancellationToken, bool enforceLimit = true, long fileSizeLimit = 0)
     {
+        long effectiveLimit = fileSizeLimit > 0 ? fileSizeLimit : 1L * 1024 * 1024 * 1024;
         try
         {
             using var ms = await ZipArchiveSearcher.ExtractToMemoryAsync(archivePath, cancellationToken).ConfigureAwait(false);
             long byteLength = ms.Length;
 
-            if (enforceLimit && byteLength > EffectiveFullFilePreviewLimitBytes)
-                throw new PreviewLoadException($"Full-file preview is limited to {FormatBytes(EffectiveFullFilePreviewLimitBytes)}. This entry is {FormatBytes(byteLength)}.");
+            if (enforceLimit && byteLength > effectiveLimit)
+                throw new PreviewLoadException($"Full-file preview is limited to {FormatBytes(effectiveLimit)}. This entry is {FormatBytes(byteLength)}.");
 
             int probeSize = (int)Math.Min(BinaryDetector.SampleBytes, Math.Max(0, byteLength));
             if (probeSize > 0)

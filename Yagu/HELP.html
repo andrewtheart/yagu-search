@@ -242,33 +242,38 @@
 </header>
 <h1 id="yagu-help-guide">Yagu Help Guide</h1>
 <p>Yagu is a fast Windows search app for finding text, regex matches, or
-file names across large folder trees. The name means “Yet Another Grep
-Utility”. It is built for repeated code, log, and source-tree
+file names across large folder trees. The name stands for “Yet Another
+Grep Utility”. It is built for repeated code, log, and source-tree
 investigation where you want command-line search speed with a graphical
 result browser.</p>
 <h2 id="quick-start">Quick Start</h2>
 <ol type="1">
 <li>Open Yagu.</li>
-<li>Choose a directory to search.
+<li>Choose a directory to search:
 <ul>
-<li>Type or paste a path into the directory box.</li>
-<li>Click Browse to pick a folder.</li>
-<li>Drag a folder onto the window.</li>
-<li>Start from a command line with
+<li>Type or paste a path into the directory box (auto-complete suggests
+folders as you type).</li>
+<li>Click <strong>Browse</strong> to pick a folder.</li>
+<li>Drag a folder from Windows Explorer onto the window.</li>
+<li>Launch from a command line:
 <code>Yagu.exe --dir "D:\projects\myapp"</code>.</li>
+<li>Use the Windows Explorer context menu: right-click a folder →
+<strong>Search with Yagu</strong>.</li>
 </ul></li>
-<li>Enter the search query.</li>
-<li>Choose search options such as Regex, Case sensitive, and search
-mode.</li>
-<li>Click Search or press Enter in the search box.</li>
-<li>Watch results stream in while the search is still running.</li>
-<li>Click a result or match line to preview it.</li>
-<li>Use Open, Editor, copy, or export actions to work with the
+<li>Enter the search query in the search box.</li>
+<li>Choose search options: <strong>Case sensitive</strong> (Alt+C),
+<strong>Regex</strong> (Alt+R), <strong>Exact match</strong>
+(Alt+E).</li>
+<li>Click <strong>Search</strong> or press <strong>Enter</strong> in the
+search box.</li>
+<li>Results stream in while the search runs. Click a result or match
+line to preview it.</li>
+<li>Use Open, Edit, Copy, or Export actions to work with the
 results.</li>
 </ol>
-<p>The bottom-left status text shows progress while a search is active.
-When the search finishes or is canceled, it shows elapsed time and
-processed files per second.</p>
+<p>The status bar shows progress during a search. When the search
+finishes or is canceled, it shows elapsed time and files processed per
+second. A throughput sparkline visualizes I/O activity in real time.</p>
 <h2 id="main-screen">Main Screen</h2>
 <p>The main screen has six working areas:</p>
 <table>
@@ -285,35 +290,44 @@ processed files per second.</p>
 <tbody>
 <tr>
 <td>Title bar</td>
-<td>App title, About button, and Settings gear.</td>
+<td>App title, Help button (F1), Settings gear, and window mode
+pin.</td>
 </tr>
 <tr>
 <td>Directory bar</td>
-<td>The folder tree to search.</td>
+<td>The folder to search, with auto-complete, Browse, and recent
+history.</td>
 </tr>
 <tr>
 <td>Search bar</td>
-<td>Query entry, Search, and Cancel.</td>
+<td>Query entry with history (Down arrow), Search/Cancel (F5), and
+option toggles.</td>
 </tr>
 <tr>
 <td>Options row</td>
-<td>Common search controls such as Regex, case sensitivity, context,
-search mode, skip extensions, and binary skipping.</td>
+<td>Quick toggles for Regex, Case, Exact match, and the Advanced Options
+expander.</td>
 </tr>
 <tr>
-<td>Results pane</td>
-<td>Matching files and lines, with sorting, grouping, filtering,
-selection, copy, and export actions.</td>
+<td>Results pane (left)</td>
+<td>Matching files and lines with sorting, grouping, filtering,
+selection, copy, and export.</td>
 </tr>
 <tr>
-<td>Preview pane</td>
-<td>Match preview, full-file view/editing, open-in-editor actions,
-preview mode, and word wrap.</td>
+<td>Preview pane (right)</td>
+<td>Match preview, full-file view, built-in editor, match navigation,
+and export.</td>
 </tr>
 </tbody>
 </table>
-<p>Click the question-mark button next to the settings gear to open the
-About dialog. Click the gear to open Settings.</p>
+<ul>
+<li>Click the <strong>?</strong> button or press <strong>F1</strong> to
+open Help.</li>
+<li>Click the <strong>gear</strong> to open Settings.</li>
+<li>Click the <strong>pin</strong> button to cycle window modes (Tray /
+Stay open / Always on top / Traditional).</li>
+</ul>
+<hr />
 <h2 id="search-modes">Search Modes</h2>
 <p>Use the search mode dropdown to decide what the query matches:</p>
 <table>
@@ -333,8 +347,8 @@ About dialog. Click the gear to open Settings.</p>
 <tr>
 <td>Content + Names</td>
 <td>File contents and file names.</td>
-<td>General investigation when either the path or the text may contain
-the clue.</td>
+<td>General investigation when either the path or text may contain the
+clue.</td>
 </tr>
 <tr>
 <td>Content only</td>
@@ -344,7 +358,7 @@ the clue.</td>
 <tr>
 <td>File names only</td>
 <td>File names only.</td>
-<td>Finding files by name without reading file contents.</td>
+<td>Finding files by name without reading contents.</td>
 </tr>
 <tr>
 <td>File name, then content</td>
@@ -354,52 +368,59 @@ first.</td>
 </tr>
 </tbody>
 </table>
+<hr />
 <h2 id="query-options">Query Options</h2>
 <table>
 <colgroup>
-<col style="width: 50%" />
-<col style="width: 50%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
 </colgroup>
 <thead>
 <tr>
 <th>Option</th>
+<th>Shortcut</th>
 <th>Effect</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td>Case sensitive</td>
+<td>Alt+C</td>
 <td>Requires exact casing. Leave off for case-insensitive search.</td>
 </tr>
 <tr>
 <td>Regex</td>
+<td>Alt+R</td>
 <td>Treats the query as a .NET regular expression. Invalid regexes are
-reported before scanning starts.</td>
+reported before scanning.</td>
+</tr>
+<tr>
+<td>Exact match</td>
+<td>Alt+E</td>
+<td>Matches whole words only (word boundaries around the query).</td>
 </tr>
 <tr>
 <td>Context</td>
+<td>—</td>
 <td>Number of lines before and after each match stored with each result
 row.</td>
 </tr>
 <tr>
-<td>Preview</td>
+<td>Preview context</td>
+<td>—</td>
 <td>Number of surrounding lines shown in the preview pane.</td>
-</tr>
-<tr>
-<td>Search binary</td>
-<td>Includes binary files in content search. Leave this off for normal
-text searches.</td>
 </tr>
 </tbody>
 </table>
-<p>Literal searches are usually faster than regex searches. Use regex
-when you need pattern matching, anchors, alternation, groups, or
-character classes.</p>
+<p>Literal searches are faster than regex. Use regex when you need
+pattern matching, anchors, alternation, groups, or character
+classes.</p>
+<hr />
 <h2 id="advanced-options">Advanced Options</h2>
 <p>Click the <strong>Advanced Options</strong> expander below the search
-bar to reveal additional search controls. These settings are per-session
-and reset to defaults on the next launch (defaults can be configured in
-Settings).</p>
+bar to reveal additional controls. These are per-session and reset to
+defaults on next launch (defaults can be configured in Settings).</p>
 <h3 id="search-behavior">Search Behavior</h3>
 <table>
 <colgroup>
@@ -415,15 +436,16 @@ Settings).</p>
 <tbody>
 <tr>
 <td>Search mode</td>
-<td>Chooses what the query matches: Content + Names, Content only, File
-names only, or File name then content.</td>
+<td>Chooses what the query matches (see Search Modes above).</td>
 </tr>
 <tr>
 <td>Obey .gitignore</td>
-<td>When enabled, Yagu reads <code>.gitignore</code> files in the
-directory tree and excludes matching paths from the file listing. Has a
-performance cost on very large trees because each directory must be
-checked for gitignore rules.</td>
+<td>Reads <code>.gitignore</code> files in the tree and excludes
+matching paths. Has a performance cost on very large trees.</td>
+</tr>
+<tr>
+<td>Gitignore takes precedence</td>
+<td>When enabled, gitignore rules override include filters.</td>
 </tr>
 </tbody>
 </table>
@@ -443,13 +465,14 @@ checked for gitignore rules.</td>
 <tr>
 <td>Include filter</td>
 <td>Limits the search to files matching these patterns. Accepts comma-
-or semicolon-separated extensions, globs, and path segments. Switch the
-adjacent dropdown between Glob and Regex modes.</td>
+or semicolon-separated extensions, globs, or path segments. Switch the
+dropdown between <strong>Glob</strong> and <strong>Regex</strong>
+modes.</td>
 </tr>
 <tr>
 <td>Exclude filter</td>
-<td>Removes files matching these patterns from the search. Same syntax
-options as Include.</td>
+<td>Removes files matching these patterns. Same syntax options as
+Include.</td>
 </tr>
 </tbody>
 </table>
@@ -469,24 +492,23 @@ options as Include.</td>
 <tr>
 <td>Skip Extensions</td>
 <td>A dropdown list of file extensions to skip entirely. Files with
-these extensions are never opened or read. Use the All/None links to
-quickly toggle the whole list.</td>
+these extensions are never opened or read. Use <strong>All/None</strong>
+links to quickly toggle the whole list.</td>
 </tr>
 <tr>
 <td>Search binary</td>
 <td>When enabled, files detected as binary (null bytes, magic headers)
-are included in content search. Off by default for speed.</td>
+are included in content search. Off by default.</td>
 </tr>
 <tr>
 <td>Search archives</td>
-<td>When enabled, Yagu opens ZIP-format containers (ZIP, DOCX, XLSX,
-JAR, NUPKG, etc.) and searches text entries inside them. Has a
-performance cost.</td>
+<td>Opens ZIP-format containers (ZIP, DOCX, XLSX, JAR, NUPKG, etc.) and
+searches text entries inside. Has a performance cost.</td>
 </tr>
 <tr>
 <td>Archive Extensions</td>
 <td>Visible when Search archives is on. Controls which extensions are
-treated as ZIP-format containers.</td>
+treated as ZIP containers.</td>
 </tr>
 </tbody>
 </table>
@@ -506,23 +528,21 @@ Date)</h3>
 <tbody>
 <tr>
 <td>Min MB</td>
-<td>Only include files at least this many megabytes. 0 or blank means no
-lower limit.</td>
+<td>Only include files at least this many megabytes. 0 = no lower
+limit.</td>
 </tr>
 <tr>
 <td>Max MB</td>
-<td>Only include files at most this many megabytes. 0 or blank means no
-upper limit.</td>
+<td>Only include files at most this many megabytes. 0 = no upper
+limit.</td>
 </tr>
 <tr>
 <td>Created Date From/To</td>
-<td>Only include files created within this date range. Leave blank for
-no restriction.</td>
+<td>Only include files created within this date range.</td>
 </tr>
 <tr>
 <td>Modified Date From/To</td>
-<td>Only include files modified within this date range. Leave blank for
-no restriction.</td>
+<td>Only include files modified within this date range.</td>
 </tr>
 </tbody>
 </table>
@@ -541,17 +561,16 @@ no restriction.</td>
 <tbody>
 <tr>
 <td>Max depth</td>
-<td>Maximum number of subdirectory levels to recurse below the search
-root for the current search only. 0 means unlimited (search the entire
-tree). For example, a value of 2 searches the root directory and up to
-two levels of child folders. This value is not saved to settings.</td>
+<td>Maximum subdirectory levels to recurse below the search root. 0 =
+unlimited. A value of 2 searches the root and up to two levels of child
+folders. This value is per-search and is not saved to settings.</td>
 </tr>
 </tbody>
 </table>
 <hr />
 <h2 id="results-pane-left-panel">Results Pane (Left Panel)</h2>
 <p>Results are grouped by file. Each group header shows the file name,
-match count, file size, modified date, and directory. Expand a file
+match count, file size, modified date, and directory path. Expand a file
 group to see individual matching lines with context.</p>
 <h3 id="results-toolbar">Results Toolbar</h3>
 <table>
@@ -568,41 +587,38 @@ group to see individual matching lines with context.</p>
 <tbody>
 <tr>
 <td>Sort</td>
-<td>Changes the order of result file groups. Options: None (arrival
-order, fastest), Match count (descending/ascending), Date modified, File
-size, File name.</td>
+<td>Changes the order of file groups: None (arrival order), Match count
+↑↓, Date modified ↑↓, File size ↑↓, File name ↑↓.</td>
 </tr>
 <tr>
 <td>Group</td>
-<td>Groups result files into collapsible sections. Options: None, Folder
-(A–Z / Z–A), Date range modified, Date range created, Extension, File
-size range.</td>
+<td>Groups results into collapsible sections: None, Folder A–Z/Z–A, Date
+range (Modified/Created/Both), Extension A–Z/Z–A, File size range.</td>
 </tr>
 <tr>
 <td>Auto-scroll</td>
-<td>When checked, the result list scrolls to follow newly arriving
-results during a search. Uncheck or scroll upward to freeze the
-view.</td>
+<td>Scrolls to follow new results during a search. Uncheck or scroll up
+to freeze.</td>
 </tr>
 <tr>
 <td>Context lines</td>
-<td>Number of lines before and after each match stored with result rows.
-Higher values provide more context but use more memory.</td>
+<td>Lines before/after each match in the result row. Higher = more
+context but more memory.</td>
 </tr>
 <tr>
 <td>Clear results</td>
-<td>Removes all results from the list (trash icon, or
-Ctrl+Shift+Delete).</td>
+<td>Removes all results (trash icon, or
+<strong>Ctrl+Shift+Delete</strong>).</td>
 </tr>
 <tr>
-<td>Expand/collapse</td>
-<td>Toggles between an expanded result list and a split view with the
-preview panel.</td>
+<td>Expand/Collapse panel</td>
+<td>Toggles between expanded result list and split view with
+preview.</td>
 </tr>
 </tbody>
 </table>
 <h3 id="filtering-results">Filtering Results</h3>
-<p>Below the toolbar, the results panel has a filter bar:</p>
+<p>Below the toolbar is a filter bar:</p>
 <table>
 <colgroup>
 <col style="width: 50%" />
@@ -617,7 +633,7 @@ preview panel.</td>
 <tbody>
 <tr>
 <td>Select All checkbox</td>
-<td>Checks or unchecks all file groups at once.</td>
+<td>Checks or unchecks all file groups.</td>
 </tr>
 <tr>
 <td>Filter files textbox</td>
@@ -626,13 +642,22 @@ substring. Does not re-run the search.</td>
 </tr>
 <tr>
 <td>Date range filter</td>
-<td>Quickly narrows results by modification date: Last day, Last week,
-Last month, Last year, etc.</td>
+<td>Narrows results by modification or creation date: Last day, Last
+week, Last month, Last year, etc.</td>
 </tr>
 </tbody>
 </table>
+<h3 id="selecting-results">Selecting Results</h3>
+<ul>
+<li><strong>Checkbox</strong> on each file group header: selects that
+file for batch operations.</li>
+<li><strong>Ctrl+A</strong> in the results list: selects all file
+groups.</li>
+<li><strong>Select All</strong> checkbox in the filter bar: toggles all
+at once.</li>
+</ul>
 <h3 id="right-click-context-menus">Right-Click Context Menus</h3>
-<p><strong>Right-click on a file group header:</strong></p>
+<p><strong>On a file group header:</strong></p>
 <table>
 <colgroup>
 <col style="width: 50%" />
@@ -647,11 +672,20 @@ Last month, Last year, etc.</td>
 <tbody>
 <tr>
 <td>Preview</td>
-<td>Opens a full-file preview of that file in the right panel.</td>
+<td>Opens full-file preview of that file in the right panel.</td>
 </tr>
 <tr>
 <td>Preview all selected</td>
-<td>Previews all checked/selected files.</td>
+<td>Previews all checked files (shows “Preview selected (N)”).</td>
+</tr>
+<tr>
+<td>Open in Editor</td>
+<td>Opens the file in your configured external editor at the first match
+line.</td>
+</tr>
+<tr>
+<td>Open containing folder</td>
+<td>Opens the directory in Windows Explorer.</td>
 </tr>
 <tr>
 <td>Copy Full Path</td>
@@ -675,7 +709,7 @@ Last month, Last year, etc.</td>
 </tr>
 </tbody>
 </table>
-<p><strong>Right-click on a match line:</strong></p>
+<p><strong>On a match line:</strong></p>
 <table>
 <thead>
 <tr>
@@ -700,79 +734,65 @@ Last month, Last year, etc.</td>
 </table>
 <h3 id="previewing-files">Previewing Files</h3>
 <ul>
-<li><strong>Single file:</strong> Right-click a file group header and
-select <strong>Preview</strong>. Or simply click the file group
-header.</li>
-<li><strong>Multiple files:</strong> Check the files you want using the
-checkboxes in the left panel, then right-click any file and select
-<strong>Preview all selected</strong> (shows “Preview selected
-(N)”).</li>
-<li><strong>Match lines:</strong> Click any match line to see a context
-preview in the right panel.</li>
-<li><strong>Double-click a file header:</strong> Selects all matches in
-that file and shows them in the preview.</li>
+<li><strong>Click a file group header</strong> — opens a context preview
+of that file’s matches.</li>
+<li><strong>Double-click a file header</strong> — selects all matches
+and shows full preview.</li>
+<li><strong>Click a match line</strong> — previews that match with
+surrounding context.</li>
+<li><strong>Right-click → Preview all selected</strong> — multi-file
+preview of all checked files.</li>
 </ul>
 <hr />
 <h2 id="preview-pane-right-panel">Preview Pane (Right Panel)</h2>
-<p>The preview pane displays file content with highlighted matches and
-line numbers.</p>
+<p>The preview pane displays file content with highlighted matches, line
+numbers, and an active match overlay band showing the current match
+position.</p>
 <h3 id="preview-toolbar">Preview Toolbar</h3>
 <table>
 <colgroup>
-<col style="width: 33%" />
-<col style="width: 33%" />
-<col style="width: 33%" />
+<col style="width: 50%" />
+<col style="width: 50%" />
 </colgroup>
 <thead>
 <tr>
 <th>Button</th>
-<th>Icon</th>
 <th>Purpose</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td>Full File</td>
-<td>📄</td>
 <td>Shows the complete file content with all matches highlighted.</td>
 </tr>
 <tr>
 <td>Copy Path</td>
-<td>📋</td>
 <td>Copies the previewed file’s full path to clipboard.</td>
 </tr>
 <tr>
 <td>Open</td>
-<td>🔗</td>
 <td>Opens the file with the default Windows application.</td>
 </tr>
 <tr>
+<td>Open in Explorer</td>
+<td>Opens the containing folder in Windows Explorer.</td>
+</tr>
+<tr>
 <td>Edit</td>
-<td>✏️</td>
 <td>Opens the file in the built-in editor (editable mode with
 save).</td>
 </tr>
 <tr>
-<td>Show in Explorer</td>
-<td>📁</td>
-<td>Opens the containing folder in Windows Explorer.</td>
-</tr>
-<tr>
 <td>Expand All</td>
-<td>↕</td>
-<td>Expands and renders all collapsed sections (visible for multi-file
-previews).</td>
-</tr>
-<tr>
-<td>Clear</td>
-<td>✕</td>
-<td>Clears all files from the preview pane.</td>
+<td>Expands and renders all collapsed/lazy-loaded sections.</td>
 </tr>
 <tr>
 <td>Export Report</td>
-<td>📊</td>
-<td>Exports all current results as a styled HTML report with highlighted
-matches, line numbers, and context.</td>
+<td>Exports all current preview content as a styled HTML report.</td>
+</tr>
+<tr>
+<td>Clear</td>
+<td>Removes all files from the preview pane.</td>
 </tr>
 </tbody>
 </table>
@@ -791,33 +811,33 @@ matches, line numbers, and context.</td>
 <tbody>
 <tr>
 <td>Layout → Concatenated</td>
-<td>When multiple files are previewed, shows each file as a separate
-section stacked vertically.</td>
+<td>Multiple files shown as stacked sections. Each file has its own
+header.</td>
 </tr>
 <tr>
 <td>Layout → Multi-highlight</td>
-<td>Shows multiple selections merged into a unified view.</td>
+<td>Multiple files merged into a unified highlighted view.</td>
 </tr>
 <tr>
 <td>Word Wrap</td>
-<td>Toggles line wrapping in the preview. Long lines either wrap or
-scroll horizontally.</td>
+<td>Toggles line wrapping. Long lines either wrap or scroll
+horizontally.</td>
 </tr>
 <tr>
 <td>Find &amp; Replace</td>
-<td>Opens the find/replace bar (Ctrl+H). Search within the previewed
-content.</td>
+<td>Opens the find/replace bar (<strong>Ctrl+H</strong>). Search within
+the preview.</td>
 </tr>
 <tr>
 <td>Preview Context</td>
-<td>Number of context lines shown around each match in the preview.
-Adjust in real time.</td>
+<td>Adjusts the number of context lines around each match in real
+time.</td>
 </tr>
 </tbody>
 </table>
 <h3 id="match-navigation">Match Navigation</h3>
-<p>When viewing a file with multiple matches, use the match navigation
-controls at the bottom-right of the preview:</p>
+<p>When viewing a file with multiple matches, navigation controls appear
+at the bottom-right:</p>
 <table>
 <colgroup>
 <col style="width: 50%" />
@@ -832,25 +852,30 @@ controls at the bottom-right of the preview:</p>
 <tbody>
 <tr>
 <td>“N of M” label</td>
-<td>Shows your position among the matches in the current file.</td>
+<td>Shows your current position among matches.</td>
 </tr>
 <tr>
 <td>Previous (◀)</td>
-<td>Jumps to the previous match. Keyboard: Shift+Enter.</td>
+<td>Jump to previous match. Keyboard: <strong>Shift+Enter</strong>.</td>
 </tr>
 <tr>
 <td>Next (▶)</td>
-<td>Jumps to the next match. Keyboard: Enter.</td>
+<td>Jump to next match. Keyboard: <strong>Enter</strong>.</td>
 </tr>
 <tr>
-<td>Ctrl+Click</td>
-<td>Jumps multiple matches at once.</td>
+<td>Ctrl+Click Next/Prev</td>
+<td>Bulk jump — the first Ctrl+Click shows a flyout asking how many
+matches to skip at a time. After setting the step, subsequent
+Ctrl+Clicks jump by that amount.</td>
 </tr>
 </tbody>
 </table>
-<h3 id="per-file-section-headers">Per-File Section Headers</h3>
-<p>When previewing multiple files, each file section has its own header
-bar with:</p>
+<p>A red flash at the boundary indicates you’ve reached the first or
+last match.</p>
+<h3 id="per-file-section-headers-multi-file-preview">Per-File Section
+Headers (Multi-File Preview)</h3>
+<p>When previewing multiple files, each file section has its own
+header:</p>
 <table>
 <colgroup>
 <col style="width: 50%" />
@@ -865,41 +890,88 @@ bar with:</p>
 <tbody>
 <tr>
 <td>File path</td>
-<td>Full path displayed in the section header.</td>
+<td>Full path in the section header. Click to expand/collapse.</td>
+</tr>
+<tr>
+<td>Open in Explorer</td>
+<td>Opens that file’s containing folder.</td>
 </tr>
 <tr>
 <td>Section match nav</td>
-<td>Previous/Next match navigation within that file section.</td>
+<td>Previous/Next match navigation within that file section only.</td>
 </tr>
 <tr>
-<td>Dismiss</td>
+<td>Dismiss (×)</td>
 <td>Closes that file section from the preview.</td>
+</tr>
+<tr>
+<td>Export section</td>
+<td>Exports just that file section as an HTML report.</td>
 </tr>
 </tbody>
 </table>
+<h3 id="clipboard-copy-in-preview">Clipboard Copy in Preview</h3>
+<ul>
+<li><strong>Ctrl+C</strong> in the preview copies selected text
+<strong>without line numbers</strong> (clean content only).</li>
+</ul>
 <h3 id="double-click-to-edit">Double-Click to Edit</h3>
 <p><strong>Double-click on a highlighted match</strong> in the preview
-panel to open the built-in editor and jump directly to that line and
-word. This lets you quickly navigate from a search result to an editable
-view at the exact match location.</p>
-<h3 id="built-in-editor">Built-in Editor</h3>
+to open the built-in editor and jump directly to that line and column.
+This is the fastest way to go from a search result to editing.</p>
+<hr />
+<h2 id="built-in-editor">Built-in Editor</h2>
 <p>Click the <strong>Edit</strong> (pencil) button in the preview
-toolbar to enter editor mode. The editor provides:</p>
-<ul>
-<li>Full file editing with syntax-aware text display.</li>
-<li><strong>Save</strong> button to write changes back to disk.</li>
-<li><strong>Back</strong> button to return to preview mode.</li>
-<li><strong>Backup on save:</strong> When you save a file, Yagu
-automatically creates a backup named <code>{filename}.yagubak</code> in
-the same directory. If a backup already exists, it appends a number
-(<code>{filename}.yagubak-2</code>, <code>.yagubak-3</code>, etc.). This
-behavior is controlled by the “Backup before save” setting (on by
-default).</li>
-<li>Large files (over ~10 MB) are loaded in chunks with a “Load More”
-button to avoid excessive memory use.</li>
-</ul>
-<h3 id="find-and-replace">Find and Replace</h3>
-<p>Open the find bar with <strong>Ctrl+F</strong> (find only) or
+toolbar to enter editor mode.</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Full editing</td>
+<td>Edit the file content directly with syntax-aware text display.</td>
+</tr>
+<tr>
+<td>Save</td>
+<td>Write changes back to disk. Creates a <code>.yagubak</code> backup
+first (configurable).</td>
+</tr>
+<tr>
+<td>Back</td>
+<td>Return to preview mode (prompts if unsaved changes exist).</td>
+</tr>
+<tr>
+<td>Backup on save</td>
+<td>Automatically creates <code>{filename}.yagubak</code>. Numbered
+backups if one already exists.</td>
+</tr>
+<tr>
+<td>Large file chunking</td>
+<td>Files over ~10 MB load in chunks with a “Load More” button.</td>
+</tr>
+<tr>
+<td>Max file size</td>
+<td>Controlled by the “Preview editor max size” setting (default 32
+MB).</td>
+</tr>
+<tr>
+<td>Forced wrap</td>
+<td>Lines longer than 50,000 characters are force-wrapped for
+display.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="find-and-replace">Find and Replace</h2>
+<p>Open with <strong>Ctrl+F</strong> (find only) or
 <strong>Ctrl+H</strong> (find and replace).</p>
 <table>
 <colgroup>
@@ -915,44 +987,44 @@ button to avoid excessive memory use.</li>
 <tbody>
 <tr>
 <td>Find textbox</td>
-<td>Type text to search within the previewed file.</td>
+<td>Text to search within the preview or editor.</td>
 </tr>
 <tr>
 <td>Previous / Next</td>
-<td>Navigate between find matches.</td>
+<td>Navigate between matches (with wrap-around).</td>
 </tr>
 <tr>
 <td>Match case (Aa)</td>
-<td>Toggles case-sensitive find.</td>
+<td>Toggle case-sensitive find.</td>
 </tr>
 <tr>
 <td>Replace textbox</td>
-<td>Replacement text (visible when replace is toggled on).</td>
+<td>Replacement text (visible in replace mode).</td>
 </tr>
 <tr>
 <td>Replace</td>
-<td>Replaces the current match.</td>
+<td>Replace the current match.</td>
 </tr>
 <tr>
-<td>All</td>
-<td>Replaces all matches in the current file.</td>
+<td>Replace All</td>
+<td>Replace all matches in the current file.</td>
 </tr>
 <tr>
-<td>All Files</td>
-<td>Replaces in all result files on disk (prompts for
-confirmation).</td>
+<td>Replace in All Files</td>
+<td>Replace across all result files on disk (confirmation dialog
+first).</td>
 </tr>
 </tbody>
 </table>
 <blockquote>
-<p><strong>Note:</strong> The “Replace in All Files” feature performs
-disk writes across multiple files. A confirmation dialog shows how many
-occurrences and files will be affected before proceeding.</p>
+<p><strong>Warning:</strong> “Replace in All Files” writes to disk
+across multiple files. A confirmation dialog shows the count of
+occurrences and files that will be affected.</p>
 </blockquote>
+<hr />
 <h2 id="settings">Settings</h2>
-<p>Open Settings from the gear button in the title bar. Settings are
-saved to <code>%APPDATA%\Yagu\settings.json</code>.</p>
-<p>Settings are organized into tabs:</p>
+<p>Open Settings from the <strong>gear</strong> button in the title bar.
+Settings are saved to <code>%APPDATA%\Yagu\settings.json</code>.</p>
 <h3 id="search-defaults-tab">Search Defaults Tab</h3>
 <table>
 <colgroup>
@@ -968,27 +1040,31 @@ saved to <code>%APPDATA%\Yagu\settings.json</code>.</p>
 <tbody>
 <tr>
 <td>Case sensitive</td>
-<td>Default state of case-sensitive matching.</td>
+<td>Default state of case-sensitive matching on launch.</td>
 </tr>
 <tr>
 <td>Regex</td>
-<td>Default state of regex mode.</td>
+<td>Default state of regex mode on launch.</td>
 </tr>
 <tr>
 <td>Exact match</td>
-<td>Default state of whole-word matching.</td>
+<td>Default state of whole-word matching on launch.</td>
 </tr>
 <tr>
 <td>Context lines</td>
-<td>Match context lines saved in result rows.</td>
+<td>Default match context lines stored in result rows.</td>
 </tr>
 <tr>
 <td>Preview context lines</td>
-<td>Match context lines shown in the preview pane.</td>
+<td>Default match context lines shown in preview.</td>
 </tr>
 <tr>
-<td>Default include/exclude globs</td>
-<td>Filters applied by default on app start.</td>
+<td>Default include globs</td>
+<td>Include filter applied by default on app start.</td>
+</tr>
+<tr>
+<td>Default exclude globs</td>
+<td>Exclude filter applied by default on app start.</td>
 </tr>
 </tbody>
 </table>
@@ -1007,8 +1083,8 @@ saved to <code>%APPDATA%\Yagu\settings.json</code>.</p>
 <tbody>
 <tr>
 <td>Max results</td>
-<td>Stops after this many matches. Non-zero values capped at 50,000. Use
-0 for unlimited.</td>
+<td>Stops after this many matches (0 = unlimited, non-zero capped at
+50,000).</td>
 </tr>
 <tr>
 <td>Default file size filter</td>
@@ -1020,26 +1096,32 @@ saved to <code>%APPDATA%\Yagu\settings.json</code>.</p>
 </tr>
 <tr>
 <td>Search binary files</td>
-<td>Includes binary-looking files in the scan. Off by default.</td>
+<td>Includes binary-looking files in the scan.</td>
 </tr>
 <tr>
 <td>Skip admin-protected paths</td>
-<td>Excludes Windows system directories that always deny access when not
-elevated.</td>
+<td>Excludes system directories that deny access when not elevated.</td>
 </tr>
 <tr>
 <td>Admin-protected path segments</td>
-<td>Custom list of path segments to skip (one per line or
-semicolon-separated).</td>
+<td>Custom path segments to skip (semicolon-separated).</td>
 </tr>
 <tr>
 <td>Skip extensions</td>
-<td>Extensions skipped entirely before file contents are read.</td>
+<td>Extensions skipped before contents are read.</td>
 </tr>
 <tr>
 <td>Archive extensions</td>
-<td>Extensions treated as ZIP-format containers when archive search is
-on.</td>
+<td>Extensions treated as ZIP containers when archive search is on.</td>
+</tr>
+<tr>
+<td>Archive max nesting depth</td>
+<td>How deep to recurse into nested archives (default: 5).</td>
+</tr>
+<tr>
+<td>Archive max entry size (MB)</td>
+<td>Largest individual entry to extract from an archive (default: 64
+MB).</td>
 </tr>
 </tbody>
 </table>
@@ -1058,8 +1140,17 @@ on.</td>
 <tbody>
 <tr>
 <td>Content-search parallelism</td>
-<td>Number of concurrent file scan workers: Auto, 1 thread, Half cores,
-2× cores, All cores.</td>
+<td>Concurrent file scan workers: Auto, 1 thread, Half cores, All cores,
+2× cores.</td>
+</tr>
+<tr>
+<td>Native concurrency limit</td>
+<td>Max concurrent Rust native scanner operations (default: min(64,
+cores×2)).</td>
+</tr>
+<tr>
+<td>MMF concurrency limit</td>
+<td>Max concurrent memory-mapped file views (default: 16).</td>
 </tr>
 <tr>
 <td>File-listing backend</td>
@@ -1067,26 +1158,84 @@ on.</td>
 </tr>
 <tr>
 <td>Process memory hard cap (MB)</td>
-<td>Working-set limit before memory-saving behavior activates.</td>
+<td>Working-set limit before memory-saving activates.</td>
+</tr>
+<tr>
+<td>System memory pressure limit (%)</td>
+<td>System RAM usage threshold for memory-saving mode (default:
+75%).</td>
 </tr>
 <tr>
 <td>SDK channel buffer size</td>
-<td>Path buffer capacity between Everything SDK discovery and search
-workers.</td>
+<td>Path buffer between Everything SDK discovery and search workers
+(default: 4096).</td>
 </tr>
 <tr>
-<td>System memory pressure limit</td>
-<td>Machine RAM usage percentage threshold for memory-saving mode.</td>
+<td>Content-search file size (MB)</td>
+<td>Max individual file size for content search (default: 100 MB).</td>
+</tr>
+<tr>
+<td>Max matches per file</td>
+<td>Cap on stored matches per file (0 = unlimited).</td>
 </tr>
 <tr>
 <td>Line truncation length</td>
-<td>Result-list line length cap to keep the UI responsive with very long
+<td>Result-list line cap for UI responsiveness with very long
 lines.</td>
 </tr>
 <tr>
 <td>Limit parallelism on HDD</td>
-<td>Automatically reduces thread count when searching on a rotational
-drive.</td>
+<td>Auto-reduce thread count on rotational drives.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="display-tab">Display Tab</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Setting</th>
+<th>What It Controls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Preview layout</td>
+<td>Default layout: Concatenated or Multi-highlight.</td>
+</tr>
+<tr>
+<td>Word wrap</td>
+<td>Default word-wrap state in preview.</td>
+</tr>
+<tr>
+<td>Auto-load matches on scroll</td>
+<td>Number of matches to auto-load when scrolling (default: 50).</td>
+</tr>
+<tr>
+<td>Max matches per section</td>
+<td>Matches shown per file section before an overflow “show more” button
+(default: 500).</td>
+</tr>
+<tr>
+<td>Preview section page size</td>
+<td>Initial file sections loaded per page, more loaded on scroll
+(default: 50).</td>
+</tr>
+<tr>
+<td>Full-file preview limit (MB)</td>
+<td>Largest file size for full-file preview mode (default: 1024
+MB).</td>
+</tr>
+<tr>
+<td>Selected section background</td>
+<td>Background color for the active preview section.</td>
+</tr>
+<tr>
+<td>Unselected section background</td>
+<td>Background color for inactive preview sections.</td>
 </tr>
 </tbody>
 </table>
@@ -1105,22 +1254,31 @@ drive.</td>
 <tbody>
 <tr>
 <td>Editor command</td>
-<td>External command used by the Editor button. Supports
-<code>{file}</code> and <code>{line}</code> placeholder tokens. Example:
-<code>code -g {file}:{line}</code> for VS Code.</td>
+<td>External editor command. Supports <code>{file}</code> and
+<code>{line}</code> placeholders. Examples:
+<code>code -g {file}:{line}</code>,
+<code>notepad++ {file} -n{line}</code>.</td>
 </tr>
 <tr>
 <td>Backup before save</td>
-<td>When on (default), the built-in editor creates a
-<code>.yagubak</code> file before overwriting.</td>
+<td>Create <code>.yagubak</code> file before overwriting (on by
+default).</td>
 </tr>
 <tr>
 <td>Preview editor max size (MB)</td>
-<td>Maximum file size the built-in editor will load.</td>
+<td>Maximum file size the built-in editor loads (default: 32 MB).</td>
+</tr>
+<tr>
+<td>Preview editor max text length</td>
+<td>Character limit for the built-in editor (default: 20 million).</td>
+</tr>
+<tr>
+<td>Preview editor max line length</td>
+<td>Single-line character limit (default: 1 million).</td>
 </tr>
 </tbody>
 </table>
-<h3 id="ui-tab">UI Tab</h3>
+<h3 id="window-tab">Window Tab</h3>
 <table>
 <colgroup>
 <col style="width: 50%" />
@@ -1134,34 +1292,67 @@ drive.</td>
 </thead>
 <tbody>
 <tr>
-<td>Global hotkey</td>
-<td>Optional system-wide keyboard shortcut to bring Yagu to the
-foreground.</td>
-</tr>
-<tr>
 <td>Window focus behavior</td>
-<td>Controls window mode: Minimize to tray, Stay open, Always on top, or
-Traditional window.</td>
+<td>Minimize to tray, Stay open, Always on top, or Traditional
+(default).</td>
 </tr>
 <tr>
 <td>Close to tray</td>
-<td>When enabled, closing the window minimizes to the system tray
-instead of exiting.</td>
+<td>Closing the window minimizes to tray instead of exiting (on by
+default).</td>
+</tr>
+</tbody>
+</table>
+<h3 id="general-tab">General Tab</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Setting</th>
+<th>What It Controls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Global hotkey enabled</td>
+<td>Enable a system-wide hotkey to summon Yagu from any app.</td>
 </tr>
 <tr>
-<td>Max recent items</td>
-<td>Number of recent directories and queries stored.</td>
+<td>Global hotkey key</td>
+<td>The Ctrl+Shift+[letter] combination for the global hotkey.</td>
 </tr>
+</tbody>
+</table>
+<h3 id="developer-options-tab">Developer Options Tab</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
 <tr>
-<td>Log verbosity</td>
-<td>Amount of diagnostic logging. Verbose logging can reduce
-performance.</td>
+<th>Setting</th>
+<th>What It Controls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Show memory pressure warning</td>
+<td>Display the orange toolbar warning when memory-saving mode
+activates.</td>
 </tr>
 </tbody>
 </table>
 <hr />
 <h2 id="keyboard-shortcuts">Keyboard Shortcuts</h2>
 <table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
 <thead>
 <tr>
 <th>Shortcut</th>
@@ -1170,58 +1361,82 @@ performance.</td>
 </thead>
 <tbody>
 <tr>
-<td>Enter (in search box)</td>
+<td><strong>Enter</strong> (search box)</td>
 <td>Start search.</td>
 </tr>
 <tr>
-<td>Escape (in search box)</td>
+<td><strong>Escape</strong> (search box)</td>
 <td>Cancel running search.</td>
 </tr>
 <tr>
-<td>F5</td>
-<td>Start search.</td>
+<td><strong>Down arrow</strong> (search box)</td>
+<td>Open search history dropdown.</td>
 </tr>
 <tr>
-<td>Ctrl+F</td>
-<td>Open Find bar in preview.</td>
+<td><strong>F1</strong></td>
+<td>Open Help window.</td>
 </tr>
 <tr>
-<td>Ctrl+H</td>
+<td><strong>F5</strong></td>
+<td>Start search (from anywhere).</td>
+</tr>
+<tr>
+<td><strong>Ctrl+F</strong></td>
+<td>Open Find bar in preview (find only).</td>
+</tr>
+<tr>
+<td><strong>Ctrl+H</strong></td>
 <td>Open Find &amp; Replace bar in preview.</td>
 </tr>
 <tr>
-<td>Ctrl+Shift+Delete</td>
+<td><strong>Ctrl+C</strong> (preview)</td>
+<td>Copy selected text without line numbers.</td>
+</tr>
+<tr>
+<td><strong>Ctrl+A</strong> (results)</td>
+<td>Select all file groups.</td>
+</tr>
+<tr>
+<td><strong>Ctrl+Shift+Delete</strong></td>
 <td>Clear all results.</td>
 </tr>
 <tr>
-<td>Ctrl+Shift+S</td>
+<td><strong>Ctrl+Shift+S</strong></td>
 <td>Copy window screenshot to clipboard.</td>
 </tr>
 <tr>
-<td>Enter (in preview)</td>
+<td><strong>Enter</strong> (preview)</td>
 <td>Jump to next match.</td>
 </tr>
 <tr>
-<td>Shift+Enter (in preview)</td>
+<td><strong>Shift+Enter</strong> (preview)</td>
 <td>Jump to previous match.</td>
 </tr>
 <tr>
-<td>Alt+C</td>
+<td><strong>Ctrl+Click</strong> Next/Prev</td>
+<td>Bulk match jump (configurable step size).</td>
+</tr>
+<tr>
+<td><strong>Alt+C</strong></td>
 <td>Toggle case sensitive.</td>
 </tr>
 <tr>
-<td>Alt+R</td>
+<td><strong>Alt+R</strong></td>
 <td>Toggle regex.</td>
 </tr>
 <tr>
-<td>Alt+E</td>
+<td><strong>Alt+E</strong></td>
 <td>Toggle exact match.</td>
+</tr>
+<tr>
+<td><strong>Double-click</strong> (preview match)</td>
+<td>Open built-in editor at that line.</td>
 </tr>
 </tbody>
 </table>
 <hr />
 <h2 id="window-modes">Window Modes</h2>
-<p>The pin/window button in the title bar cycles through four modes:</p>
+<p>The pin button in the title bar cycles through four modes:</p>
 <table>
 <colgroup>
 <col style="width: 50%" />
@@ -1236,8 +1451,8 @@ performance.</td>
 <tbody>
 <tr>
 <td>Minimize to tray</td>
-<td>Window minimizes to the system tray when it loses focus. Click the
-tray icon to restore.</td>
+<td>Minimizes to system tray when window loses focus. Click tray icon to
+restore.</td>
 </tr>
 <tr>
 <td>Stay open</td>
@@ -1249,7 +1464,7 @@ tray icon to restore.</td>
 </tr>
 <tr>
 <td>Traditional window</td>
-<td>Full window with standard title bar and close button (default).</td>
+<td>Standard title bar and close button (default).</td>
 </tr>
 </tbody>
 </table>
@@ -1258,120 +1473,233 @@ tray icon to restore.</td>
 <p>Drag a folder from Windows Explorer onto the Yagu window to set it as
 the search directory.</p>
 <hr />
+<h2 id="explorer-context-menu">Explorer Context Menu</h2>
+<p>When registered, the <strong>“Search with Yagu”</strong> entry
+appears in the right-click menu of any folder in Windows Explorer (and
+on the folder background). Clicking it launches Yagu with that folder
+already set as the search directory.</p>
+<h3 id="how-to-use-it">How to use it</h3>
+<ul>
+<li><strong>Right-click a folder</strong> → <strong>Search with
+Yagu</strong> — opens Yagu targeting that folder.</li>
+<li><strong>Right-click the background</strong> of an open folder →
+<strong>Search with Yagu</strong> — opens Yagu targeting the current
+folder.</li>
+</ul>
+<p>If Yagu is already running, the directory is forwarded to the
+existing window (single-instance mode).</p>
+<h3 id="registering-the-context-menu">Registering the context menu</h3>
+<p>The installer registers it automatically. If you’re running a
+portable (non-installed) copy, register it manually from an elevated
+PowerShell prompt:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode powershell"><code class="sourceCode powershell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="op">.</span>\scripts\register-context-menu<span class="op">.</span><span class="fu">ps1</span> <span class="op">-</span>ExePath <span class="st">&quot;C:\path\to\Yagu.exe&quot;</span></span></code></pre></div>
+<p>To remove it:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode powershell"><code class="sourceCode powershell"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="op">.</span>\scripts\register-context-menu<span class="op">.</span><span class="fu">ps1</span> <span class="op">-</span>Uninstall</span></code></pre></div>
+<p>No restart is required — the menu appears immediately in new Explorer
+windows.</p>
+<hr />
 <h2 id="system-tray">System Tray</h2>
-<p>When tray mode is active, the system tray icon provides:</p>
+<p>When tray mode or close-to-tray is active, the system tray icon
+provides:</p>
+<ul>
+<li><strong>Left-click</strong> — Restores the window.</li>
+<li><strong>Right-click menu:</strong>
 <ul>
 <li><strong>Open (reset)</strong> — Restores the window and clears the
 directory.</li>
-<li><strong>Open (existing)</strong> — Restores the window keeping the
-current directory.</li>
+<li><strong>Open (existing)</strong> — Restores keeping the current
+directory.</li>
 <li><strong>Close</strong> — Exits the application.</li>
+</ul></li>
+<li><strong>Tooltip</strong> — Shows search progress when a search is
+running.</li>
 </ul>
+<hr />
+<h2 id="taskbar-integration">Taskbar Integration</h2>
+<p>During a search, Yagu shows progress in the Windows taskbar icon
+(progress bar overlay). This lets you monitor search completion even
+when the window is minimized.</p>
+<hr />
+<h2 id="single-instance">Single Instance</h2>
+<p>Yagu enforces single-instance mode. If you launch Yagu when it’s
+already running, the existing window is brought to the foreground.
+Command-line arguments (<code>--dir</code>, <code>--query</code>) are
+forwarded to the running instance.</p>
 <hr />
 <h2 id="skipped-files">Skipped Files</h2>
-<p>During a search, the status bar shows a “Skipped: N” count. Click it
-to see a breakdown of why files were skipped (access denied, too large,
-binary, extension, gitignore, admin-protected paths, etc.).</p>
+<p>During a search, the status bar shows “Skipped: N”. Click it to see a
+categorized breakdown:</p>
+<ul>
+<li>Access denied</li>
+<li>Too large (exceeded max file size)</li>
+<li>Binary file</li>
+<li>Skipped extension</li>
+<li>Gitignore rule</li>
+<li>Admin-protected path</li>
+<li>Archive entry too large</li>
+<li>Archive nesting too deep</li>
+</ul>
 <hr />
 <h2 id="admin-elevation">Admin Elevation</h2>
-<p>If Yagu detects it cannot access certain directories, a banner
-appears offering:</p>
+<p>If Yagu detects access-denied errors, a banner appears:</p>
 <ul>
 <li><strong>Learn more…</strong> — Explains the limitation.</li>
-<li><strong>Restart as Admin</strong> — Relaunches Yagu with
-administrator privileges.</li>
-<li><strong>Don’t show again</strong> — Suppresses the banner for future
-sessions.</li>
+<li><strong>Restart as Admin</strong> — Relaunches with administrator
+privileges.</li>
+<li><strong>Don’t show again</strong> — Suppresses the banner
+permanently.</li>
 </ul>
+<hr />
+<h2 id="hdd-detection">HDD Detection</h2>
+<p>When Yagu detects the search directory is on a rotational (HDD)
+drive, it can automatically limit parallelism to avoid disk thrashing. A
+dialog informs you when this occurs. Control this with the “Limit
+parallelism on HDD” setting.</p>
+<hr />
+<h2 id="throughput-sparkline">Throughput Sparkline</h2>
+<p>During a search, a real-time sparkline graph appears in the status
+area showing I/O throughput over time. It brightens during active
+scanning and dims during idle periods. This helps identify bottlenecks
+(e.g., if throughput drops to zero, the disk may be saturated or a large
+file is being processed).</p>
+<hr />
+<h2 id="export-and-reports">Export and Reports</h2>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Feature</th>
+<th>How to Access</th>
+<th>Output</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Export HTML report (all results)</td>
+<td>Preview toolbar → Export Report button</td>
+<td>Styled HTML with matches, line numbers, and context</td>
+</tr>
+<tr>
+<td>Export HTML report (single section)</td>
+<td>Right-click a file section header → Export</td>
+<td>HTML report for just that file</td>
+</tr>
+<tr>
+<td>Copy selected file paths</td>
+<td>Right-click file group → Copy Selected File Paths</td>
+<td>Clipboard: one path per line</td>
+</tr>
+<tr>
+<td>Copy files with content</td>
+<td>Right-click → Copy Selected Files With Content</td>
+<td>Clipboard: paths + matched lines</td>
+</tr>
+<tr>
+<td>Save file paths to file</td>
+<td>Right-click → Save Selected File Paths…</td>
+<td>Text file</td>
+</tr>
+<tr>
+<td>Save files with content</td>
+<td>Right-click → Save Selected Files With Content…</td>
+<td>Text file</td>
+</tr>
+<tr>
+<td>Copy window screenshot</td>
+<td><strong>Ctrl+Shift+S</strong></td>
+<td>Clipboard: PNG image of the Yagu window</td>
+</tr>
+</tbody>
+</table>
+<hr />
 <h2 id="performance-overview">Performance Overview</h2>
 <p>Yagu is designed around a streaming search pipeline:</p>
 <ol type="1">
-<li>File discovery finds candidate paths.</li>
-<li>Filters remove files that do not need to be opened.</li>
-<li>Content workers scan files concurrently.</li>
-<li>Results stream to the UI as batches.</li>
-<li>Memory-pressure mode can page result payloads to disk and keep the
-search alive.</li>
+<li><strong>File discovery</strong> finds candidate paths (Everything
+SDK or .NET enumeration).</li>
+<li><strong>Filters</strong> remove files that don’t need to be opened
+(extension, size, date, binary, gitignore, admin-protected).</li>
+<li><strong>Content workers</strong> scan files concurrently using the
+native Rust scanner or managed C# fallback.</li>
+<li><strong>Results stream</strong> to the UI in batches for responsive
+display.</li>
+<li><strong>Memory-pressure mode</strong> pages result payloads to disk
+when memory thresholds are exceeded.</li>
 </ol>
-<p>The fastest path uses:</p>
+<h3 id="fastest-configuration">Fastest Configuration</h3>
 <ul>
-<li>voidtools Everything running with the Everything SDK backend.</li>
-<li>The Rust native scanner DLL, <code>yagu_core.dll</code>, built for
-the same architecture as the app.</li>
-<li>Release builds.</li>
-<li>Literal search when regex is not required.</li>
+<li>voidtools Everything running → Everything SDK backend for
+near-instant file discovery.</li>
+<li>Native Rust scanner (<code>yagu_core.dll</code>) for content
+search.</li>
+<li>Release build of Yagu.</li>
+<li>Literal (non-regex) query.</li>
 <li>Tight include/exclude filters.</li>
-<li>Keep Search binary off.</li>
-<li>A practical max file size.</li>
-<li>A practical max result count when you are exploring very broad
-result sets.</li>
+<li>Search binary: off.</li>
+<li>Practical max file size limit.</li>
 </ul>
-<p>The slowest searches are usually very broad scans that make Yagu open
-or inspect huge numbers of files. On large drives, file discovery can
-produce millions of candidates, and avoiding unnecessary file opens is
-often the biggest win.</p>
-<h2 id="reading-files-per-second">Reading Files Per Second</h2>
-<p>After a search completes or is canceled, the status bar includes a
-rate such as <code>12,345.6 files/sec</code>. This is the number of
-files processed divided by elapsed search time.</p>
-<p>Use it to compare changes on the same machine and same dataset:</p>
+<h3 id="what-makes-searches-slow">What Makes Searches Slow</h3>
+<p>Broad scans that open/inspect huge numbers of files. On large drives,
+discovery can produce millions of candidates. Avoiding unnecessary file
+opens (via filters, extensions, and size limits) is the biggest win.</p>
+<hr />
+<h2 id="files-per-second">Files Per Second</h2>
+<p>After a search completes or is canceled, the status bar shows a rate
+like <code>12,345.6 files/sec</code>. Use it to compare settings on the
+same machine and dataset:</p>
 <ol type="1">
 <li>Run the same query against the same directory.</li>
 <li>Change one setting at a time.</li>
 <li>Compare the final files/sec value.</li>
 <li>Also compare match count, skipped count, and whether the search was
-truncated or degraded.</li>
+truncated.</li>
 </ol>
-<p>Do not compare files/sec across unrelated directories. A tree of tiny
-source files behaves very differently from a tree of large logs,
-archives, binaries, or cloud-synced files.</p>
+<p>Do not compare rates across unrelated directories — a tree of tiny
+source files behaves differently from large logs or archives.</p>
+<hr />
 <h2 id="performance-tuning-recipes">Performance Tuning Recipes</h2>
 <h3 id="fast-code-search">Fast Code Search</h3>
 <ul>
-<li>Use Content only unless file-name matches matter; use File name,
-then content when both must match.</li>
-<li>Prefer a literal query over regex.</li>
-<li>Include only source extensions, such as
-<code>cs;ts;js;py;rs</code>.</li>
-<li>Exclude generated folders, such as
-<code>bin;obj;node_modules;.git;target</code>.</li>
-<li>Keep Search binary off.</li>
-<li>Use Auto file-listing backend.</li>
-<li>Use Auto parallelism first. Try <code>2x cores</code> on fast SSDs
-if the CPU is underused.</li>
+<li>Search mode: Content only (or File name, then content).</li>
+<li>Literal query (not regex).</li>
+<li>Include: <code>cs;ts;js;py;rs;go;java;cpp;h</code>.</li>
+<li>Exclude:
+<code>bin;obj;node_modules;.git;target;dist;__pycache__</code>.</li>
+<li>Search binary: off.</li>
+<li>Parallelism: Auto (try 2× cores on fast NVMe SSDs).</li>
 </ul>
 <h3 id="large-log-search">Large Log Search</h3>
 <ul>
-<li>Include only log-like extensions, such as
-<code>log;txt;json</code>.</li>
-<li>Raise Max file size if your logs are larger than the default.</li>
-<li>Keep Max results bounded if you only need enough examples to
-diagnose the issue.</li>
-<li>Use regex only for patterns that literal search cannot express.</li>
+<li>Include: <code>log;txt;json;csv</code>.</li>
+<li>Raise max file size if your logs exceed the default.</li>
+<li>Set max results to a bounded number if you only need examples.</li>
+<li>Regex only for patterns literal search can’t express.</li>
 </ul>
-<h3 id="whole-drive-or-very-large-tree">Whole Drive Or Very Large
-Tree</h3>
+<h3 id="whole-drive-very-large-tree">Whole Drive / Very Large Tree</h3>
 <ul>
 <li>Install and run voidtools Everything.</li>
-<li>Keep File-listing backend on Auto or Everything SDK only.</li>
-<li>Use include filters before starting the search.</li>
-<li>Use skip extensions aggressively for archives, databases, media,
-build outputs, and dumps.</li>
-<li>Keep Max file size set unless you specifically need very large
-files.</li>
-<li>Watch the skipped count and click it for the skip breakdown.</li>
-<li>If you see memory-saving mode, narrow the search or lower result
-volume.</li>
+<li>File-listing backend: Auto or Everything SDK only.</li>
+<li>Use include filters aggressively.</li>
+<li>Skip extensions for archives, databases, media, build outputs,
+dumps.</li>
+<li>Set a practical max file size.</li>
+<li>Watch skipped count and click for breakdown.</li>
 </ul>
-<h3 id="hdd-or-network-share">HDD Or Network Share</h3>
+<h3 id="hdd-network-share">HDD / Network Share</h3>
 <ul>
-<li>Try 1 thread or Half cores instead of <code>2x cores</code>.</li>
-<li>Use stricter include/exclude filters.</li>
-<li>Avoid broad regex scans.</li>
-<li>Expect lower files/sec because storage latency dominates.</li>
+<li>Parallelism: 1 thread or Half cores.</li>
+<li>Strict include/exclude filters.</li>
+<li>Avoid broad regex.</li>
+<li>Expect lower files/sec (storage latency dominates).</li>
 </ul>
+<hr />
 <h2 id="file-discovery-backends">File Discovery Backends</h2>
-<p>Yagu can find files in several ways:</p>
 <table>
 <colgroup>
 <col style="width: 33%" />
@@ -1388,58 +1716,109 @@ volume.</li>
 <tbody>
 <tr>
 <td>Auto</td>
-<td>Tries Everything SDK, then <code>es.exe</code>, then .NET
-enumeration.</td>
-<td>Best default.</td>
+<td>Tries Everything SDK → <code>es.exe</code> → .NET enumeration.</td>
+<td>Best default for all users.</td>
 </tr>
 <tr>
 <td>Everything SDK only</td>
-<td>In-process Everything API. Fastest when Everything is installed and
-running.</td>
-<td>Maximum discovery speed.</td>
+<td>In-process Everything API. Fastest discovery.</td>
+<td>When Everything is installed and running.</td>
 </tr>
 <tr>
 <td><code>es.exe</code> only</td>
-<td>Uses the voidtools command-line client.</td>
-<td>Useful when SDK is unavailable but <code>es.exe</code> works.</td>
+<td>voidtools command-line client.</td>
+<td>When SDK DLL is unavailable.</td>
 </tr>
 <tr>
 <td>.NET enumeration only</td>
-<td>Built-in recursive enumeration.</td>
-<td>No Everything dependency, but slower on very large trees.</td>
+<td>Built-in recursive directory scan.</td>
+<td>No Everything dependency; slower on large trees.</td>
 </tr>
 </tbody>
 </table>
-<p>If Everything is missing or not running, Yagu falls back and shows
-the reason in the UI. Searches still work without Everything.</p>
-<h2 id="native-scanner-and-managed-fallback">Native Scanner And Managed
+<p>If Everything is not available, Yagu falls back automatically and
+shows the reason in the status area.</p>
+<hr />
+<h2 id="native-scanner-and-managed-fallback">Native Scanner and Managed
 Fallback</h2>
 <p>Yagu has two content search engines:</p>
-<ul>
-<li>Native Rust fast path through <code>yagu_core.dll</code>.</li>
-<li>Managed C# fallback path.</li>
-</ul>
-<p>If the native DLL is missing, has the wrong architecture, or fails
-its ABI check, Yagu logs the issue and continues with the managed
-scanner. The managed path is slower for many workloads, but it preserves
-functionality.</p>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Engine</th>
+<th>Speed</th>
+<th>Requirements</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Native Rust (<code>yagu_core.dll</code>)</td>
+<td>Fastest</td>
+<td>DLL present, correct architecture, ABI check passes.</td>
+</tr>
+<tr>
+<td>Managed C#</td>
+<td>Slower but always available</td>
+<td>No additional requirements.</td>
+</tr>
+</tbody>
+</table>
+<p>If the native DLL is missing or incompatible, Yagu logs the reason
+and uses the managed scanner transparently.</p>
+<hr />
 <h2 id="memory-behavior">Memory Behavior</h2>
-<p>Large searches can produce many results. Yagu uses several
-safeguards:</p>
-<ul>
-<li>Bounded channels apply back-pressure between discovery, scanning,
-and UI updates.</li>
-<li>Max results can stop runaway result streams.</li>
-<li>Max file size prevents accidental reads of enormous files.</li>
-<li>Skip binary and skip extensions reduce unnecessary reads.</li>
-<li>Memory-pressure mode pages result payloads to
-<code>%TEMP%\yagu-results-*.tmp</code>.</li>
-<li>The status text says when memory-saving mode is active.</li>
-</ul>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Safeguard</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bounded channels</td>
+<td>Back-pressure between discovery, scanning, and UI.</td>
+</tr>
+<tr>
+<td>Max results</td>
+<td>Stops runaway result streams.</td>
+</tr>
+<tr>
+<td>Max file size</td>
+<td>Prevents accidental reads of enormous files.</td>
+</tr>
+<tr>
+<td>Skip binary / extensions</td>
+<td>Reduces unnecessary reads.</td>
+</tr>
+<tr>
+<td>Memory-pressure mode</td>
+<td>Pages result payloads to
+<code>%TEMP%\yagu-results-*.tmp</code>.</td>
+</tr>
+<tr>
+<td>Process memory cap</td>
+<td>Hard limit on working set before eviction kicks in.</td>
+</tr>
+<tr>
+<td>System memory pressure</td>
+<td>Activates when system-wide RAM usage exceeds threshold.</td>
+</tr>
+</tbody>
+</table>
 <p>If memory-saving mode appears often, reduce result volume with
-include/exclude filters, a more specific query, fewer context lines, or
-a lower max result count.</p>
-<h2 id="logs-and-diagnostics">Logs And Diagnostics</h2>
+narrower queries, fewer context lines, or stricter filters.</p>
+<hr />
+<h2 id="logs-and-diagnostics">Logs and Diagnostics</h2>
 <table>
 <thead>
 <tr>
@@ -1462,114 +1841,430 @@ a lower max result count.</p>
 </tr>
 <tr>
 <td>Crash log</td>
-<td><code>yagu-crash.log</code> next to the executable when
-possible.</td>
+<td><code>yagu-crash.log</code> (next to the executable)</td>
 </tr>
 <tr>
-<td>Memory-pressure result temp files</td>
+<td>Memory-pressure temp files</td>
 <td><code>%TEMP%\yagu-results-*.tmp</code></td>
+</tr>
+<tr>
+<td>Editor backups</td>
+<td><code>{filename}.yagubak</code> (same directory as original)</td>
 </tr>
 </tbody>
 </table>
-<p>Use Info logging for normal troubleshooting. Use Verbose only when
-you need detailed diagnostics, because it can add overhead during large
-searches.</p>
+<p>Log levels: None → Critical → Warning → Info → Verbose. Use Info for
+normal troubleshooting. Verbose adds overhead during large searches.</p>
+<hr />
 <h2 id="troubleshooting">Troubleshooting</h2>
 <h3 id="no-results-appear">No results appear</h3>
 <ul>
 <li>Confirm the directory exists and is readable.</li>
-<li>Check whether Content only, File names only, File name, then
-content, or Content + Names is selected.</li>
-<li>Clear Include, Exclude, Filter results, and Filter files to rule out
-filters.</li>
+<li>Check the search mode (Content only vs. File names only, etc.).</li>
+<li>Clear all filters: Include, Exclude, Filter files textbox, date
+range.</li>
 <li>Turn off Regex if the query should be literal text.</li>
-<li>Check the status area for invalid regex or fallback messages.</li>
+<li>Check the status area for error messages (invalid regex, access
+denied, etc.).</li>
+<li>Ensure the query isn’t too short for Exact match mode.</li>
 </ul>
 <h3 id="search-is-slower-than-expected">Search is slower than
 expected</h3>
 <ul>
-<li>Install and run voidtools Everything.</li>
-<li>Keep File-listing backend on Auto.</li>
-<li>Build/run Release rather than Debug.</li>
-<li>Use include filters and skip extensions.</li>
-<li>Keep Search binary off.</li>
-<li>Avoid broad regex searches when a literal query works.</li>
-<li>Turn off Verbose logging.</li>
-<li>Compare the final files/sec value after changing only one
-setting.</li>
+<li>Install and run voidtools Everything for fast discovery.</li>
+<li>File-listing backend: Auto.</li>
+<li>Use include filters and skip extensions to reduce file opens.</li>
+<li>Search binary: off.</li>
+<li>Avoid broad regex when a literal query works.</li>
+<li>Log verbosity: Warning or Info (not Verbose).</li>
+<li>Compare files/sec after changing one setting at a time.</li>
 </ul>
 <h3 id="access-denied-or-missing-files">Access denied or missing
 files</h3>
 <ul>
-<li>Some directories require administrator rights.</li>
-<li>Use the Restart as Admin action in the banner if you need elevated
-access.</li>
+<li>Some directories require admin rights.</li>
+<li>Click “Restart as Admin” in the banner.</li>
 <li>Cloud-synced, offline, locked, or protected files may still be
 skipped.</li>
-<li>Click the skipped count to see why files were skipped.</li>
+<li>Click the skipped count for a categorized breakdown.</li>
 </ul>
 <h3 id="search-gets-truncated">Search gets truncated</h3>
-<p>The result cap was reached. Use a narrower query or change Max
-results in Settings. Setting Max results to 0 allows unlimited results,
-but memory-pressure protections can still activate.</p>
+<p>Max results reached. Set a higher value or use 0 (unlimited).
+Memory-pressure protections still apply.</p>
 <h3 id="memory-saving-mode-appears">Memory-saving mode appears</h3>
-<p>Yagu detected high process or system memory pressure and paged result
-payloads to disk. The search can continue, but previews may need to
-hydrate data from temp storage. Narrow the query or reduce
-context/result volume for better responsiveness.</p>
+<p>High process or system memory pressure detected. Results paged to
+disk. Narrow the query, reduce context lines, or lower max results for
+better responsiveness.</p>
 <h3 id="everything-is-not-used">Everything is not used</h3>
 <ul>
-<li>Make sure voidtools Everything is installed and running.</li>
-<li>Keep the backend on Auto or Everything SDK only.</li>
-<li>If SDK is unavailable, install or configure <code>es.exe</code> so
-Yagu can use the second backend.</li>
-<li>If neither backend is available, Yagu uses .NET enumeration.</li>
+<li>Verify voidtools Everything is installed and running.</li>
+<li>Backend: Auto or Everything SDK only.</li>
+<li>Check if <code>es.exe</code> is on PATH as a fallback.</li>
+<li>Status area shows the reason when Everything is unavailable.</li>
 </ul>
-<h2 id="running-from-source">Running From Source</h2>
-<p>Use these commands from the repository root:</p>
-<div class="sourceCode" id="cb1"><pre
-class="sourceCode powershell"><code class="sourceCode powershell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>dotnet restore Yagu<span class="op">.</span><span class="fu">sln</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>dotnet build Yagu<span class="op">.</span><span class="fu">sln</span> <span class="op">-</span>c Release</span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>dotnet run <span class="op">-</span>c Release <span class="op">--</span>project Yagu <span class="op">--</span> <span class="op">--</span>dir <span class="st">&quot;D:\projects\myapp&quot;</span></span></code></pre></div>
-<p>If Rust is not installed and you only need the managed fallback:</p>
-<div class="sourceCode" id="cb2"><pre
-class="sourceCode powershell"><code class="sourceCode powershell"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>dotnet build Yagu<span class="op">.</span><span class="fu">sln</span> <span class="op">-</span>c Release <span class="op">-</span>p<span class="op">:</span>BuildRustCore<span class="op">=</span>false</span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>dotnet run <span class="op">-</span>c Release <span class="op">--</span>project Yagu <span class="op">-</span>p<span class="op">:</span>BuildRustCore<span class="op">=</span>false</span></code></pre></div>
-<h2 id="running-benchmarks">Running Benchmarks</h2>
-<p>Yagu includes a BenchmarkDotNet project for repeatable search
-benchmark scenarios:</p>
-<div class="sourceCode" id="cb3"><pre
-class="sourceCode powershell"><code class="sourceCode powershell"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>dotnet run <span class="op">-</span>c Release <span class="op">--</span>project Yagu<span class="op">.</span><span class="fu">Benchmarks</span></span></code></pre></div>
-<p>For a shorter smoke benchmark:</p>
-<div class="sourceCode" id="cb4"><pre
-class="sourceCode powershell"><code class="sourceCode powershell"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>dotnet run <span class="op">-</span>c Release <span class="op">--</span>project Yagu<span class="op">.</span><span class="fu">Benchmarks</span> <span class="op">--</span> <span class="op">--</span>filter <span class="st">&quot;*LiteralSearch*&quot;</span> <span class="op">--</span>job short <span class="op">--</span>launchCount <span class="dv">1</span> <span class="op">--</span>warmupCount <span class="dv">1</span> <span class="op">--</span>iterationCount <span class="dv">1</span></span></code></pre></div>
-<p>Benchmarks are useful for code changes. For day-to-day tuning, the
-in-app files/sec rate is faster to compare.</p>
-<h2 id="explorer-context-menu">Explorer Context Menu</h2>
-<p>Yagu can be launched from a folder right-click menu with the helper
-script:</p>
-<div class="sourceCode" id="cb5"><pre
-class="sourceCode powershell"><code class="sourceCode powershell"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="op">.</span>\scripts\register-context-menu<span class="op">.</span><span class="fu">ps1</span> <span class="op">-</span>ExePath <span class="st">&#39;C:\Tools\Yagu\Yagu.exe&#39;</span></span></code></pre></div>
-<p>Remove the entry with:</p>
-<div class="sourceCode" id="cb6"><pre
-class="sourceCode powershell"><code class="sourceCode powershell"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="op">.</span>\scripts\register-context-menu<span class="op">.</span><span class="fu">ps1</span> <span class="op">-</span>Uninstall</span></code></pre></div>
-<p>The context menu command opens Yagu with the selected folder already
-filled in.</p>
+<h3 id="preview-shows-load-more-button">Preview shows “Load More”
+button</h3>
+<p>The file exceeds the preview section page size. Click “Load More” to
+render additional sections, or click “Expand All” in the toolbar to
+render everything at once.</p>
+<h3 id="editor-wont-open-a-large-file">Editor won’t open a large
+file</h3>
+<p>The file exceeds the “Preview editor max size” setting (default 32
+MB). Increase it in Settings → Editor, or use the external editor
+command instead.</p>
+<hr />
+<h2 id="command-line-interface-cli-mode">Command-Line Interface (CLI
+Mode)</h2>
+<p>Yagu includes a full CLI mode for scripting and pipeline
+integration:</p>
+<pre><code>Yagu.exe --cli --directory &lt;path&gt; PATTERN [OPTIONS]</code></pre>
+<h3 id="required">Required</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--directory &lt;path&gt;</code></td>
+<td>Directory to search recursively.</td>
+</tr>
+<tr>
+<td><code>PATTERN</code> (positional) or
+<code>--pattern &lt;pat&gt;</code></td>
+<td>Search pattern (literal by default).</td>
+</tr>
+</tbody>
+</table>
+<h3 id="matching-options">Matching Options</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-e</code>, <code>--regex</code></td>
+<td>Treat pattern as regex.</td>
+</tr>
+<tr>
+<td><code>--no-regex</code></td>
+<td>Literal string (default).</td>
+</tr>
+<tr>
+<td><code>-s</code>, <code>--case-sensitive</code></td>
+<td>Case-sensitive match.</td>
+</tr>
+<tr>
+<td><code>-i</code>, <code>--ignore-case</code></td>
+<td>Case-insensitive (default).</td>
+</tr>
+<tr>
+<td><code>-C</code>, <code>--context &lt;n&gt;</code></td>
+<td>Context lines around matches (default: 3).</td>
+</tr>
+<tr>
+<td><code>--search-mode &lt;mode&gt;</code></td>
+<td><code>both</code>, <code>content</code>, <code>filenames</code>,
+<code>filename-then-content</code>.</td>
+</tr>
+<tr>
+<td><code>--exact-match</code></td>
+<td>Match whole words only (default).</td>
+</tr>
+<tr>
+<td><code>--no-exact-match</code></td>
+<td>Allow substring matches.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="file-filtering">File Filtering</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-g</code>, <code>--glob &lt;glob&gt;</code></td>
+<td>Include files matching GLOB (repeatable).</td>
+</tr>
+<tr>
+<td><code>--exclude-glob &lt;glob&gt;</code></td>
+<td>Exclude files matching GLOB (repeatable).</td>
+</tr>
+<tr>
+<td><code>--include-regex</code> / <code>--include-glob</code></td>
+<td>Interpret include patterns as regex or glob.</td>
+</tr>
+<tr>
+<td><code>--exclude-regex</code> / <code>--exclude-glob-mode</code></td>
+<td>Interpret exclude patterns as regex or glob.</td>
+</tr>
+<tr>
+<td><code>--min-filesize &lt;size&gt;</code></td>
+<td>Skip files smaller than SIZE (e.g. <code>1M</code>,
+<code>10K</code>).</td>
+</tr>
+<tr>
+<td><code>--max-filesize &lt;size&gt;</code></td>
+<td>Skip files larger than SIZE.</td>
+</tr>
+<tr>
+<td><code>--binary</code> / <code>--no-binary</code></td>
+<td>Include or skip binary files.</td>
+</tr>
+<tr>
+<td><code>--skip-extensions &lt;ext&gt;</code></td>
+<td>Semicolon-separated extensions to skip.</td>
+</tr>
+<tr>
+<td><code>--created-after/before &lt;date&gt;</code></td>
+<td>Filter by creation date (ISO 8601).</td>
+</tr>
+<tr>
+<td><code>--modified-after/before &lt;date&gt;</code></td>
+<td>Filter by modification date.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="gitignore">Gitignore</h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--obey-gitignore</code></td>
+<td>Respect <code>.gitignore</code> exclusions.</td>
+</tr>
+<tr>
+<td><code>--no-obey-gitignore</code></td>
+<td>Ignore <code>.gitignore</code> files (default).</td>
+</tr>
+<tr>
+<td><code>--gitignore-precedence</code></td>
+<td>Gitignore wins over include filters.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="performance">Performance</h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--threads &lt;n&gt;</code></td>
+<td>Worker threads (0 = auto).</td>
+</tr>
+<tr>
+<td><code>--memory-limit &lt;MB&gt;</code></td>
+<td>Process memory cap.</td>
+</tr>
+<tr>
+<td><code>--memory-pressure &lt;n&gt;</code></td>
+<td>System memory threshold 0–100.</td>
+</tr>
+<tr>
+<td><code>--file-lister-backend &lt;n&gt;</code></td>
+<td>0=Auto, 1=SDK, 2=es.exe, 3=Managed.</td>
+</tr>
+<tr>
+<td><code>--max-matches-per-file &lt;n&gt;</code></td>
+<td>Cap matches per file (0 = unlimited).</td>
+</tr>
+<tr>
+<td><code>--max-depth &lt;n&gt;</code></td>
+<td>Max recursion depth (0 = unlimited).</td>
+</tr>
+</tbody>
+</table>
+<h3 id="archive-search">Archive Search</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--search-archives</code></td>
+<td>Search inside ZIP-like archives.</td>
+</tr>
+<tr>
+<td><code>--archive-extensions &lt;ext&gt;</code></td>
+<td>Semicolon-separated archive extensions.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="output">Output</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--max-results &lt;n&gt;</code></td>
+<td>Stop after N matches (default: 50000).</td>
+</tr>
+<tr>
+<td><code>--line-truncation &lt;n&gt;</code></td>
+<td>Truncate lines to N characters (0 = no limit).</td>
+</tr>
+</tbody>
+</table>
+<h3 id="exit-codes">Exit Codes</h3>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>One or more matches found.</td>
+</tr>
+<tr>
+<td>1</td>
+<td>No matches found.</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Usage error.</td>
+</tr>
+<tr>
+<td>130</td>
+<td>Cancelled (Ctrl+C).</td>
+</tr>
+</tbody>
+</table>
+<h3 id="local-settings-file">Local Settings File</h3>
+<p>If <code>.yagu.json</code> exists in the current working directory,
+it is used as the base configuration. CLI flags always override file
+settings. Falls back to global AppData settings when no local file
+exists.</p>
+<hr />
+<h2 id="gui-command-line-arguments">GUI Command-Line Arguments</h2>
+<p>When launching Yagu in GUI mode (without <code>--cli</code>):</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--dir &lt;path&gt;</code></td>
+<td>Set initial search directory.</td>
+</tr>
+<tr>
+<td><code>--query &lt;text&gt;</code></td>
+<td>Set initial query (auto-starts search if <code>--dir</code> is also
+provided).</td>
+</tr>
+<tr>
+<td><code>--window-mode &lt;mode&gt;</code></td>
+<td>Window behavior:
+<code>0</code>/<code>minimize</code>/<code>tray</code>,
+<code>1</code>/<code>stay-open</code>,
+<code>2</code>/<code>always-on-top</code>,
+<code>3</code>/<code>traditional</code>/<code>desktop</code>.</td>
+</tr>
+</tbody>
+</table>
+<hr />
 <h2 id="practical-defaults">Practical Defaults</h2>
-<p>For most users, start with these defaults:</p>
-<ul>
-<li>File-listing backend: Auto.</li>
-<li>Content-search parallelism: Auto.</li>
-<li>Search binary files: off (default).</li>
-<li>Skip extensions: keep the default broad
-binary/archive/media/database list.</li>
-<li>Max file size: keep a practical limit unless you know you need huge
-files.</li>
-<li>Max results: 0 (unlimited) by default; set a bounded value while
-exploring very broad result sets.</li>
-<li>Log verbosity: Warning or Info.</li>
-</ul>
-<p>Then tune only the filters and query until the result set is small
-enough to review comfortably.</p>
+<p>For most users:</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Recommended</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>File-listing backend</td>
+<td>Auto</td>
+</tr>
+<tr>
+<td>Parallelism</td>
+<td>Auto</td>
+</tr>
+<tr>
+<td>Search binary</td>
+<td>Off</td>
+</tr>
+<tr>
+<td>Skip extensions</td>
+<td>Keep the default broad list</td>
+</tr>
+<tr>
+<td>Max file size</td>
+<td>Keep a practical limit</td>
+</tr>
+<tr>
+<td>Max results</td>
+<td>0 (unlimited)</td>
+</tr>
+<tr>
+<td>Log verbosity</td>
+<td>Warning or Info</td>
+</tr>
+<tr>
+<td>Archive search</td>
+<td>Off unless needed</td>
+</tr>
+<tr>
+<td>Close to tray</td>
+<td>On (keeps Yagu available)</td>
+</tr>
+</tbody>
+</table>
+<p>Then tune filters and query until the result set is manageable.</p>
 </body>
 </html>

@@ -552,11 +552,11 @@ public class SettingsServiceAsyncCoverageTests
         try
         {
             var svc = new SettingsService(tmp);
-            var s = new AppSettings { MaxResults = 42, CaseSensitive = true };
+            var s = new AppSettings { MaxResults = 42, PreviewWordWrap = true };
             await svc.SaveAsync(s);
             var loaded = await svc.LoadAsync();
             Assert.Equal(42, loaded.MaxResults);
-            Assert.True(loaded.CaseSensitive);
+            Assert.True(loaded.PreviewWordWrap);
         }
         finally { File.Delete(tmp); }
     }

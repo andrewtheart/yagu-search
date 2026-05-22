@@ -509,7 +509,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("renderedCount = actualMatchEntries", multiHighlight);
 
         string concatenated = ExtractMethodWindow(MainWindowSource, "BuildConcatenatedSection");
-        Assert.Contains("cap = Math.Min(results.Count, MaxMatchesPerSection)", concatenated);
+        Assert.Contains("cap = Math.Min(results.Count, EffectiveMaxMatchesPerSection)", concatenated);
         Assert.Contains("section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection", concatenated);
         Assert.Contains("remainingResults: results.GetRange(renderedResults, results.Count - renderedResults)", concatenated);
         Assert.Contains("RegisterSectionOverflow", concatenated);

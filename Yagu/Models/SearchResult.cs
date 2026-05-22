@@ -94,6 +94,10 @@ public sealed record SearchResult(
         ContextAfter = ca;
         _shortPreview = null; // invalidate so lazy getter recreates from restored MatchLine
         Volatile.Write(ref _diskOffset, InMemoryOffset);
+
+        // Notify UI so OneWay bindings on context lines refresh after hydration.
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NumberedBefore)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NumberedAfter)));
     }
 
     private bool _isSelected;

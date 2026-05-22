@@ -1222,7 +1222,21 @@ public sealed partial class MainWindow : Window
     private void OnResultsListContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
     {
         if (!args.InRecycleQueue)
+        {
             ApplyResultsCompactState(args.ItemContainer, _resultsCompactMode);
+
+            // Hydrate evicted items eagerly so context-line bindings have data
+            // when the container is realized (handles recycled containers where
+            // the expander is already in the expanded state).
+            if (args.Item is FileGroup g && g.IsExpanded)
+            {
+                foreach (var item in g.VisibleResults)
+                {
+                    if (item.IsEvicted)
+                        ViewModel.HydrateResult(item);
+                }
+            }
+        }
     }
 
     private static void ApplyResultsCompactState(FrameworkElement container, bool compact)
@@ -2266,6 +2280,14 @@ public sealed partial class MainWindow : Window
         {
             try
             {
+                // Hydrate evicted items so context-line bindings have data when the
+                // expander content becomes visible.
+                foreach (var item in g.VisibleResults)
+                {
+                    if (item.IsEvicted)
+                        ViewModel.HydrateResult(item);
+                }
+
                 LogService.Instance.Info("Preview", $"OnFileGroupExpanding: expand only file='{g.FilePath}', matchCount={g.Count}");
             }
             catch (Exception ex)
@@ -3242,6 +3264,19 @@ public sealed partial class MainWindow : Window
             {
                 LogService.Instance.Warning("Preview",
                     $"OnFileGroupCheckBoxClicked: failed to add checked file(s) to preview: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+        else if (!shouldSelect)
+        {
+            // Remove preview sections for deselected file groups.
+            var deselectedGroups = isShift && currentIndex >= 0
+                ? ViewModel.ResultGroups.Take(currentIndex + 1)
+                : new[] { group };
+
+            foreach (var g in deselectedGroups)
+            {
+                if (TryFindPreviewSection(g.FilePath, out _, out var block))
+                    RemovePreviewSection(block, g.FilePath);
             }
         }
     }
@@ -4296,7 +4331,7 @@ public sealed partial class MainWindow : Window
 
             int renderedResults = 0;
             int startingBlocks = section.Blocks.Count;
-            int cap = Math.Min(results.Count, MaxMatchesPerSection);
+            int cap = Math.Min(results.Count, EffectiveMaxMatchesPerSection);
             var matchLineNums = new HashSet<int>(results.Select(r => r.LineNumber));
             foreach (var r in results)
             {
@@ -4426,8 +4461,8 @@ public sealed partial class MainWindow : Window
 
             fileContents.TryGetValue(filePath, out string[]? allLines);
 
-            bool initiallyCapped = results.Count > MaxMatchesPerSection;
-            var cappedResults = initiallyCapped ? results.GetRange(0, MaxMatchesPerSection) : results;
+            bool initiallyCapped = results.Count > EffectiveMaxMatchesPerSection;
+            var cappedResults = initiallyCapped ? results.GetRange(0, EffectiveMaxMatchesPerSection) : results;
             int previewLines = ViewModel.PreviewContextLines;
             int lastRenderedLine1 = 0;
 
@@ -4531,7 +4566,7 @@ public sealed partial class MainWindow : Window
             if (allLines != null && renderedCount > actualMatchEntries && actualMatchEntries < results.Count)
                 renderedCount = actualMatchEntries;
             int remainingBlockBudget = Math.Max(0, MaxPreviewBlocksPerSection - (section.Blocks.Count - startingBlocks));
-            if (allLines != null && remainingBlockBudget > 0 && renderedCount < Math.Min(MaxMatchesPerSection, results.Count))
+            if (allLines != null && remainingBlockBudget > 0 && renderedCount < Math.Min(EffectiveMaxMatchesPerSection, results.Count))
             {
                 _sectionMatchNavs.TryGetValue(section, out var sn);
                 var pending = results.Skip(renderedCount).ToList();
@@ -4542,8 +4577,8 @@ public sealed partial class MainWindow : Window
                     rx,
                     sn,
                     ViewModel.PreviewContextLines,
-                    MaxMatchesPerSection - renderedCount,
-                    MaxMatchesPerSection - renderedCount,
+                    EffectiveMaxMatchesPerSection - renderedCount,
+                    EffectiveMaxMatchesPerSection - renderedCount,
                     remainingBlockBudget,
                     out int consumed,
                     out _,
@@ -4554,7 +4589,7 @@ public sealed partial class MainWindow : Window
             }
             else if (allLines == null)
             {
-                renderedCount = Math.Min(MaxMatchesPerSection, results.Count);
+                renderedCount = Math.Min(EffectiveMaxMatchesPerSection, results.Count);
             }
             var remaining = results.Skip(renderedCount).ToList();
             if (remaining.Count > 0)
