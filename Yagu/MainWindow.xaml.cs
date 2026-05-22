@@ -60,7 +60,8 @@ public sealed partial class MainWindow : Window
     private readonly Services.DiskUtilizationService _diskUtilService = new();
     private readonly Services.ScreenshotCaptureService _screenshotService = new();
     private DispatcherTimer? _diskSparklineTimer;
-    private const long FullFilePreviewLimitBytes = 1L * 1024 * 1024 * 1024;
+    private const long DefaultFullFilePreviewLimitBytes = 1L * 1024 * 1024 * 1024;
+    private long EffectiveFullFilePreviewLimitBytes => ViewModel.FullFilePreviewLimitMB > 0 ? (long)ViewModel.FullFilePreviewLimitMB * 1024 * 1024 : DefaultFullFilePreviewLimitBytes;
     private CancellationTokenSource? _previewLoadCts;
     private string? _previewEditorPath;
     private Encoding? _previewEditorEncoding;
@@ -1159,6 +1160,16 @@ public sealed partial class MainWindow : Window
         }
 
         UpdateBottomStatusBarVisibility();
+        // Reposition the active match overlay after the panel layout changes.
+        // Schedule two refreshes: one immediate (Low priority, after current
+        // layout pass) and a second deferred one to catch cases where inner
+        // RichTextBlock reflow hasn't completed by the first refresh.
+        QueueActiveMatchOverlayRefresh();
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            _activeMatchOverlayRefreshPending = false;
+            QueueActiveMatchOverlayRefresh();
+        });
     }
 
     private void UpdateBottomStatusBarVisibility()
@@ -1868,6 +1879,36 @@ public sealed partial class MainWindow : Window
                 out int lastRenderedLine,
                 ov.LastRenderedLine);
             ov.LastRenderedLine = Math.Max(ov.LastRenderedLine, lastRenderedLine);
+
+            // Fallback for single-line files: all results are on an already-rendered
+            // line, so AppendHighlightMatchWindows returns 0. Render individual
+            // truncated windows centered on each match's column position.
+            if (consumed == 0 && ov.RemainingResults.Count > 0)
+            {
+                int blocksAdded = 0;
+                for (int ri = 0; ri < chunkSize && ri < ov.RemainingResults.Count; ri++)
+                {
+                    if (blocksAdded >= MaxPreviewBlocksPerExpandChunk)
+                        break;
+                    if (_matchParagraphs.Count - beforeCount >= MaxMatchEntriesPerExpandChunk)
+                        break;
+
+                    var r = ov.RemainingResults[ri];
+                    int lineIndex = r.LineNumber - 1;
+                    string line = (lineIndex >= 0 && lineIndex < ov.AllLines.Length)
+                        ? ov.AllLines[lineIndex] : string.Empty;
+
+                    AddGapIndicator(section);
+                    blocksAdded++;
+
+                    AddPreviewLineParagraphsAroundResult(
+                        section, line, r.LineNumber, r, ov.Rx,
+                        _matchParagraphs, sn,
+                        out int addedParagraphs, out _);
+                    blocksAdded += addedParagraphs;
+                    consumed++;
+                }
+            }
         }
         else
         {
@@ -2059,13 +2100,13 @@ public sealed partial class MainWindow : Window
         // in via "Show more" using the same machinery as LoadMoreSectionsAsync.
         var orderedFiles = filesToPrepend.ToList();
         int totalRequested = orderedFiles.Count;
-        int pageEnd = Math.Min(totalRequested, PreviewSectionPageSize);
+        int pageEnd = Math.Min(totalRequested, EffectivePreviewSectionPageSize);
         bool deferRemainder = pageEnd < totalRequested;
         if (deferRemainder)
             LogService.Instance.Info("Preview",
                 $"PrependPreviewSectionsForFilesAsync: capping initial render at {pageEnd:N0}/{totalRequested:N0}; remainder deferred to 'Show more'.");
 
-        bool showSpinner = pageEnd > PreviewSectionPageSize / 2 || deferRemainder;
+        bool showSpinner = pageEnd > EffectivePreviewSectionPageSize / 2 || deferRemainder;
         if (showSpinner)
             ShowProgressOverlay($"Adding {pageEnd:N0} of {totalRequested:N0} files\u2026", 0);
 
@@ -2455,9 +2496,9 @@ public sealed partial class MainWindow : Window
 
     private async void OnMatchLineCheckBoxClicked(object sender, RoutedEventArgs e)
     {
-        if (sender is CheckBox { DataContext: SearchResult result } checkBox)
+        if (sender is ToggleButton { DataContext: SearchResult result } toggle)
         {
-            if (checkBox.IsChecked is bool isChecked && result.IsSelected != isChecked)
+            if (toggle.IsChecked is bool isChecked && result.IsSelected != isChecked)
                 result.IsSelected = isChecked;
 
             UpdateSelectionForMatchLine(result, nameof(OnMatchLineCheckBoxClicked));
@@ -4204,7 +4245,7 @@ public sealed partial class MainWindow : Window
         }
 
         // Show loading indicator immediately for large previews.
-        if (byFile.Count > PreviewSectionPageSize)
+        if (byFile.Count > EffectivePreviewSectionPageSize)
             ShowPreviewLoading($"Reading {byFile.Count:N0} files\u2026");
 
         PreviewToolbarContent.Visibility = Visibility.Visible;
@@ -4236,7 +4277,7 @@ public sealed partial class MainWindow : Window
         var orderedFiles = OrderByFileFirst(byFile, scrollTarget?.FilePath).ToList();
 
         // Determine which files to render in this page.
-        int pageEnd = Math.Min(orderedFiles.Count, PreviewSectionPageSize);
+        int pageEnd = Math.Min(orderedFiles.Count, EffectivePreviewSectionPageSize);
         var pageFiles = orderedFiles.GetRange(0, pageEnd);
 
         // Batch-read page file contents off the UI thread.
@@ -4367,7 +4408,7 @@ public sealed partial class MainWindow : Window
         var orderedFiles = OrderByFileFirst(byFile, scrollTarget?.FilePath).ToList();
 
         // Determine which files to render in this page.
-        int pageEnd = Math.Min(orderedFiles.Count, PreviewSectionPageSize);
+        int pageEnd = Math.Min(orderedFiles.Count, EffectivePreviewSectionPageSize);
         var pageFiles = orderedFiles.GetRange(0, pageEnd);
 
         // Batch-read page file contents off the UI thread.
@@ -4690,6 +4731,7 @@ public sealed partial class MainWindow : Window
             SplitPaneGrid.ColumnDefinitions[2].Width = new GridLength(col2 / total, GridUnitType.Star);
         }
         e.Handled = true;
+        QueueActiveMatchOverlayRefresh();
     }
 
     private void OnSplitterPointerEntered(object sender, PointerRoutedEventArgs e)
@@ -5185,6 +5227,7 @@ public sealed partial class MainWindow : Window
     // ── Find / Replace bar ─────────────────────────────────────────────
 
     private int _findIndex = -1; // last match start index in the editor text
+    private RichTextBlock? _findHighlightBlock; // block with active find highlight
 
     private void OnRootGridPreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {

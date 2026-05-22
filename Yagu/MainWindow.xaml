@@ -871,7 +871,7 @@
                                                     <ItemsControl ItemsSource="{x:Bind NumberedBefore}">
                                                         <ItemsControl.ItemTemplate>
                                                             <DataTemplate x:DataType="models:ContextLine">
-                                                                <Grid ColumnSpacing="3" Padding="28,0,8,0">
+                                                                <Grid ColumnSpacing="3" Padding="4,0,8,0">
                                                                     <Grid.ColumnDefinitions>
                                                                         <ColumnDefinition Width="34" />
                                                                         <ColumnDefinition Width="*" />
@@ -899,31 +899,25 @@
                                                         </Grid.ContextFlyout>
                                                         <Grid.ColumnDefinitions>
                                                             <ColumnDefinition Width="Auto" />
-                                                            <ColumnDefinition Width="Auto" />
                                                             <ColumnDefinition Width="*" />
                                                         </Grid.ColumnDefinitions>
-                                                        <CheckBox IsChecked="{x:Bind IsSelected, Mode=TwoWay}" MinWidth="28" MinHeight="0" Padding="0" VerticalAlignment="Center"
-                                                                  Click="OnMatchLineCheckBoxClicked" />
-                                                        <Border Grid.Column="1" MinWidth="34" Padding="5,1" Margin="-2,0,2,0"
-                                                                CornerRadius="4"
-                                                                Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
-                                                                BorderBrush="{ThemeResource SystemAccentColor}"
-                                                                BorderThickness="1"
-                                                                VerticalAlignment="Center">
+                                                        <ToggleButton Grid.Column="0" IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
+                                                                      Click="OnMatchLineCheckBoxClicked"
+                                                                      MinWidth="34" MinHeight="22" Padding="5,1" Margin="4,0,2,0"
+                                                                      CornerRadius="4"
+                                                                      VerticalAlignment="Center"
+                                                                      HorizontalContentAlignment="Center">
                                                             <TextBlock Text="{x:Bind LineNumber}"
-                                                                       HorizontalAlignment="Center"
-                                                                       TextAlignment="Center"
                                                                        FontFamily="Consolas"
                                                                        FontSize="12"
-                                                                       FontWeight="SemiBold"
-                                                                       Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
-                                                        </Border>
-                                                        <RichTextBlock Grid.Column="2" TextTrimming="CharacterEllipsis" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="False" Loaded="OnMatchLineLoaded" VerticalAlignment="Center" />
+                                                                       FontWeight="SemiBold" />
+                                                        </ToggleButton>
+                                                        <RichTextBlock Grid.Column="1" TextTrimming="CharacterEllipsis" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="False" Loaded="OnMatchLineLoaded" VerticalAlignment="Center" />
                                                     </Grid>
                                                     <ItemsControl ItemsSource="{x:Bind NumberedAfter}">
                                                         <ItemsControl.ItemTemplate>
                                                             <DataTemplate x:DataType="models:ContextLine">
-                                                                <Grid ColumnSpacing="3" Padding="28,0,8,0">
+                                                                <Grid ColumnSpacing="3" Padding="4,0,8,0">
                                                                     <Grid.ColumnDefinitions>
                                                                         <ColumnDefinition Width="34" />
                                                                         <ColumnDefinition Width="*" />

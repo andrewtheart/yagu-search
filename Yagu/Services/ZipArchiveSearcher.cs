@@ -27,11 +27,24 @@ public static class ZipArchiveSearcher
     /// <summary>Separator between the archive path and the internal entry path.</summary>
     public const char ArchiveSeparator = '?';
 
-    /// <summary>Maximum nesting depth for nested zip archives.</summary>
-    public const int MaxNestingDepth = 5;
+    /// <summary>Default maximum nesting depth for nested zip archives.</summary>
+    private const int DefaultMaxNestingDepth = 5;
 
-    /// <summary>Maximum size of a single ZIP entry that will be searched (64 MB).</summary>
-    public const long MaxEntrySize = 64L * 1024 * 1024;
+    /// <summary>Default maximum size of a single ZIP entry that will be searched (64 MB).</summary>
+    private const long DefaultMaxEntrySize = 64L * 1024 * 1024;
+
+    /// <summary>Maximum nesting depth for nested zip archives. Settable via settings (0 = use default 5).</summary>
+    public static int MaxNestingDepth { get; set; } = DefaultMaxNestingDepth;
+
+    /// <summary>Maximum size of a single ZIP entry that will be searched. Settable via settings (0 = use default 64 MB).</summary>
+    public static long MaxEntrySize { get; set; } = DefaultMaxEntrySize;
+
+    /// <summary>Apply settings values. Pass 0 for either to use defaults.</summary>
+    public static void Configure(int maxNestingDepth, int maxEntryMB)
+    {
+        MaxNestingDepth = maxNestingDepth > 0 ? maxNestingDepth : DefaultMaxNestingDepth;
+        MaxEntrySize = maxEntryMB > 0 ? (long)maxEntryMB * 1024 * 1024 : DefaultMaxEntrySize;
+    }
 
     /// <summary>
     /// Concurrency gate for entry decompression — limits simultaneous MemoryStream

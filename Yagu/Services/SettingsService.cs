@@ -133,6 +133,21 @@ public sealed class AppSettings
     /// <summary>Maximum concurrent native (Rust) scans. 0 = default (min(64, ProcessorCount×2)).</summary>
     public int NativeConcurrencyLimit { get; set; }
 
+    /// <summary>Max matches to render per file section before truncating with overflow. 0 = 500 (default).</summary>
+    public int MaxMatchesPerSection { get; set; }
+
+    /// <summary>Max file sections to render per page. 0 = 50 (default).</summary>
+    public int PreviewSectionPageSize { get; set; }
+
+    /// <summary>Max file size (MB) for full-file preview mode. 0 = 1024 (1 GB default).</summary>
+    public int FullFilePreviewLimitMB { get; set; }
+
+    /// <summary>Max nesting depth when searching inside nested archives. 0 = 5 (default).</summary>
+    public int ArchiveMaxNestingDepth { get; set; }
+
+    /// <summary>Max individual entry size (MB) inside archives. 0 = 64 (default).</summary>
+    public int ArchiveMaxEntryMB { get; set; }
+
     public const int MaxRecent = 20; // kept for backward compat; prefer MaxRecentItems
 }
 

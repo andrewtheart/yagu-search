@@ -58,6 +58,13 @@ public sealed partial class MainWindow
         _findIndex = -1;
         FindStatusText.Text = string.Empty;
 
+        // Clear any preview block highlight
+        if (_findHighlightBlock is not null)
+        {
+            _findHighlightBlock.TextHighlighters.Clear();
+            _findHighlightBlock = null;
+        }
+
         // Return focus to the editor or preview
         if (PreviewEditor.Visibility == Visibility.Visible)
             PreviewEditor.Focus(FocusState.Programmatic);
@@ -200,6 +207,138 @@ public sealed partial class MainWindow
             PreviewEditor.Focus(FocusState.Programmatic);
             SelectPreviewEditorText(index, length);
         }
+        else
+        {
+            HighlightFindMatchInPreviewBlock(index, length);
+        }
+    }
+
+    /// <summary>
+    /// Clears any previous find highlight, maps the global text index to a
+    /// specific RichTextBlock section, applies a TextHighlighter, and scrolls
+    /// the match into view.
+    /// </summary>
+    private void HighlightFindMatchInPreviewBlock(int globalIndex, int length)
+    {
+        // Clear previous highlight
+        if (_findHighlightBlock is not null)
+        {
+            _findHighlightBlock.TextHighlighters.Clear();
+            _findHighlightBlock = null;
+        }
+
+        if (PreviewSectionsPanel.Visibility != Visibility.Visible && PreviewBlock.Visibility != Visibility.Visible)
+            return;
+
+        // Determine which block(s) to search.
+        var blocks = PreviewSectionsPanel.Visibility == Visibility.Visible
+            ? EnumeratePreviewSectionBlocks().ToList()
+            : new List<RichTextBlock> { PreviewBlock };
+
+        // Walk blocks counting chars (matching GetPreviewBlockText's output) to
+        // find which block the match is in and compute the block-local offset.
+        int offset = 0;
+        foreach (var block in blocks)
+        {
+            int blockSearchLen = 0; // length in the search text (\r\n separators)
+            int blockTextLen = 0;   // length in block's text model (1-char separators)
+
+            foreach (var b in block.Blocks)
+            {
+                if (b is not Microsoft.UI.Xaml.Documents.Paragraph p) continue;
+                int paraLen = GetParagraphTextLength(p);
+                int searchParaLen = paraLen + 2; // paragraph text + \r\n
+
+                if (offset + blockSearchLen + searchParaLen > globalIndex && globalIndex >= offset + blockSearchLen)
+                {
+                    // Match starts in this paragraph
+                    int localOffset = blockTextLen + (globalIndex - offset - blockSearchLen);
+                    ApplyFindHighlighter(block, localOffset, length);
+                    ScrollBlockIntoView(block);
+                    return;
+                }
+
+                blockSearchLen += searchParaLen;
+                blockTextLen += paraLen + 1; // +1 for paragraph separator in text model
+            }
+
+            // Check if match starts in this block but spans across paragraphs
+            if (globalIndex >= offset && globalIndex < offset + blockSearchLen)
+            {
+                int localOffset = MapSearchOffsetToBlockOffset(block, globalIndex - offset);
+                ApplyFindHighlighter(block, localOffset, length);
+                ScrollBlockIntoView(block);
+                return;
+            }
+
+            offset += blockSearchLen;
+        }
+    }
+
+    private static int GetParagraphTextLength(Microsoft.UI.Xaml.Documents.Paragraph p)
+    {
+        int len = 0;
+        foreach (var inline in p.Inlines)
+        {
+            if (inline is Microsoft.UI.Xaml.Documents.Run run)
+                len += run.Text?.Length ?? 0;
+            else if (inline is Microsoft.UI.Xaml.Documents.Span span)
+            {
+                foreach (var inner in span.Inlines)
+                {
+                    if (inner is Microsoft.UI.Xaml.Documents.Run innerRun)
+                        len += innerRun.Text?.Length ?? 0;
+                }
+            }
+        }
+        return len;
+    }
+
+    private static int MapSearchOffsetToBlockOffset(RichTextBlock block, int searchOffset)
+    {
+        // searchOffset uses \r\n (2) per paragraph separator; block model uses 1.
+        int searchPos = 0;
+        int blockPos = 0;
+        foreach (var b in block.Blocks)
+        {
+            if (b is not Microsoft.UI.Xaml.Documents.Paragraph p) continue;
+            int paraLen = GetParagraphTextLength(p);
+            if (searchOffset < searchPos + paraLen)
+                return blockPos + (searchOffset - searchPos);
+            searchPos += paraLen + 2; // \r\n
+            blockPos += paraLen + 1;  // paragraph separator
+        }
+        return blockPos;
+    }
+
+    private void ApplyFindHighlighter(RichTextBlock block, int startIndex, int length)
+    {
+        _findHighlightBlock = block;
+        var highlighter = new Microsoft.UI.Xaml.Documents.TextHighlighter
+        {
+            Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                Windows.UI.Color.FromArgb(180, 255, 185, 0)),
+        };
+        highlighter.Ranges.Add(new Microsoft.UI.Xaml.Documents.TextRange
+        {
+            StartIndex = startIndex,
+            Length = length,
+        });
+        block.TextHighlighters.Clear();
+        block.TextHighlighters.Add(highlighter);
+    }
+
+    private void ScrollBlockIntoView(RichTextBlock block)
+    {
+        try
+        {
+            var transform = block.TransformToVisual(PreviewScrollViewer);
+            var point = transform.TransformPoint(new Windows.Foundation.Point(0, 0));
+            double targetOffset = PreviewScrollViewer.VerticalOffset + point.Y - PreviewScrollViewer.ViewportHeight / 3;
+            targetOffset = Math.Max(0, Math.Min(targetOffset, PreviewScrollViewer.ScrollableHeight));
+            PreviewScrollViewer.ChangeView(null, targetOffset, null, disableAnimation: false);
+        }
+        catch { /* block might not be in visual tree */ }
     }
 
     private void UpdateFindStatus()

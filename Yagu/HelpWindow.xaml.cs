@@ -57,8 +57,9 @@ public sealed partial class HelpWindow : Window
 
             var environment = await CoreWebView2Environment.CreateAsync();
             await HelpWebView.EnsureCoreWebView2Async(environment);
+            HelpWebView.DefaultBackgroundColor = Windows.UI.Color.FromArgb(255, 32, 32, 32);
+            HelpWebView.CoreWebView2.NavigationCompleted += OnHelpNavigationCompleted;
             HelpWebView.CoreWebView2.Navigate(new Uri(_helpPath).AbsoluteUri);
-            LoadingPanel.Visibility = Visibility.Collapsed;
             FallbackPanel.Visibility = Visibility.Collapsed;
         }
         catch (Exception ex)
@@ -98,6 +99,21 @@ public sealed partial class HelpWindow : Window
         text = Regex.Replace(text, "[ \t]+", " ");
         text = Regex.Replace(text, "\n{3,}", "\n\n");
         return text.Trim();
+    }
+
+    private async void OnHelpNavigationCompleted(CoreWebView2 sender, CoreWebView2NavigationCompletedEventArgs args)
+    {
+        const string darkCss = @"
+            html { background-color: #202020 !important; color: #e0e0e0 !important; }
+            body { color: #e0e0e0 !important; }
+            a { color: #6cb6ff !important; }
+            code, pre { background-color: #2d2d2d !important; color: #d4d4d4 !important; }
+            table, th, td { border-color: #444 !important; }
+            h1, h2, h3, h4, h5, h6 { color: #ffffff !important; }
+        ";
+        string script = $"var s=document.createElement('style');s.textContent=`{darkCss}`;document.head.appendChild(s);";
+        await sender.ExecuteScriptAsync(script);
+        LoadingPanel.Visibility = Visibility.Collapsed;
     }
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]

@@ -52,7 +52,8 @@ public sealed partial class MainWindow
     private const int PreviewYieldBatchSize = 32;
 
     /// <summary>Max file sections to render in one page. Remaining are loaded on demand via "Show more".</summary>
-    private const int PreviewSectionPageSize = 50;
+    private const int DefaultPreviewSectionPageSize = 50;
+    private int EffectivePreviewSectionPageSize => ViewModel.PreviewSectionPageSize > 0 ? ViewModel.PreviewSectionPageSize : DefaultPreviewSectionPageSize;
 
     /// <summary>XAML paragraph chunk size for very long physical lines; all text is still rendered.</summary>
     private const int PreviewLineLayoutSegmentChars = 4096;
@@ -62,7 +63,8 @@ public sealed partial class MainWindow
     /// Prevents multi-second UI freezes when a single file has hundreds
     /// of thousands of matches (e.g. 600K).
     /// </summary>
-    private const int MaxMatchesPerSection = 500;
+    private const int DefaultMaxMatchesPerSection = 500;
+    private int EffectiveMaxMatchesPerSection => ViewModel.MaxMatchesPerSection > 0 ? ViewModel.MaxMatchesPerSection : DefaultMaxMatchesPerSection;
 
     /// <summary>
     /// Maximum RichTextBlock blocks to build for an expanded preview section
@@ -302,7 +304,7 @@ public sealed partial class MainWindow
         panel.Children.Add(moreBtn);
         panel.Children.Add(allBtn);
 
-        moreBtn.Click += async (_, _) => await LoadMoreSectionsAsync(panel, orderedFiles, nextIndex, nextIndex + PreviewSectionPageSize, allSelected, gen);
+        moreBtn.Click += async (_, _) => await LoadMoreSectionsAsync(panel, orderedFiles, nextIndex, nextIndex + EffectivePreviewSectionPageSize, allSelected, gen);
         allBtn.Click += async (_, _) => await LoadMoreSectionsAsync(panel, orderedFiles, nextIndex, orderedFiles.Count, allSelected, gen);
 
         PreviewSectionsPanel.Children.Add(panel);
@@ -337,7 +339,7 @@ public sealed partial class MainWindow
 
         // When loading all remaining files, process in page-sized chunks
         // with a longer yield between pages so the layout engine stays responsive.
-        bool loadingAll = requestedEnd - pageStart > PreviewSectionPageSize;
+        bool loadingAll = requestedEnd - pageStart > EffectivePreviewSectionPageSize;
         int cursor = pageStart;
         int finalEnd = Math.Min(orderedFiles.Count, requestedEnd);
         int totalToLoad = finalEnd - pageStart;
@@ -349,7 +351,7 @@ public sealed partial class MainWindow
 
         while (cursor < finalEnd)
         {
-            int chunkEnd = Math.Min(finalEnd, cursor + PreviewSectionPageSize);
+            int chunkEnd = Math.Min(finalEnd, cursor + EffectivePreviewSectionPageSize);
             var pageFiles = orderedFiles.GetRange(cursor, chunkEnd - cursor);
 
             // Only pre-read files we will eagerly expand in this chunk.
@@ -481,7 +483,7 @@ public sealed partial class MainWindow
         int parasBuilt = 0;
         int renderedResults = 0;
         int startingBlocks = section.Blocks.Count;
-        int cap = Math.Min(results.Count, MaxMatchesPerSection);
+        int cap = Math.Min(results.Count, EffectiveMaxMatchesPerSection);
         foreach (var r in results)
         {
             if (renderedResults >= cap || section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
@@ -552,8 +554,8 @@ public sealed partial class MainWindow
         int yieldCount = 0;
         int sectionMatchStart = _matchParagraphs.Count;
         int startingBlocks = section.Blocks.Count;
-        bool initiallyCapped = results.Count > MaxMatchesPerSection;
-        var cappedResults = initiallyCapped ? results.GetRange(0, MaxMatchesPerSection) : results;
+        bool initiallyCapped = results.Count > EffectiveMaxMatchesPerSection;
+        var cappedResults = initiallyCapped ? results.GetRange(0, EffectiveMaxMatchesPerSection) : results;
         int lastRenderedLine1 = 0;
 
         if (allLines != null)
@@ -694,7 +696,7 @@ public sealed partial class MainWindow
         if (allLines != null && renderedCount > actualMatchEntries && actualMatchEntries < results.Count)
             renderedCount = actualMatchEntries;
         int remainingBlockBudget = Math.Max(0, MaxPreviewBlocksPerSection - (section.Blocks.Count - startingBlocks));
-        if (allLines != null && remainingBlockBudget > 0 && renderedCount < Math.Min(MaxMatchesPerSection, results.Count))
+        if (allLines != null && remainingBlockBudget > 0 && renderedCount < Math.Min(EffectiveMaxMatchesPerSection, results.Count))
         {
             _sectionMatchNavs.TryGetValue(section, out var sn);
             var pending = results.Skip(renderedCount).ToList();
@@ -705,8 +707,8 @@ public sealed partial class MainWindow
                 rx,
                 sn,
                 previewLines,
-                MaxMatchesPerSection - renderedCount,
-                MaxMatchesPerSection - renderedCount,
+                EffectiveMaxMatchesPerSection - renderedCount,
+                EffectiveMaxMatchesPerSection - renderedCount,
                 remainingBlockBudget,
                 out int consumed,
                 out int addedParagraphs,
@@ -719,7 +721,7 @@ public sealed partial class MainWindow
         }
         else if (allLines == null && renderedCount == 0)
         {
-            renderedCount = Math.Min(MaxMatchesPerSection, results.Count);
+            renderedCount = Math.Min(EffectiveMaxMatchesPerSection, results.Count);
         }
 
         var remaining = results.Skip(renderedCount).ToList();
@@ -1254,7 +1256,7 @@ public sealed partial class MainWindow
             TextWrapping = ViewModel.PreviewWordWrap ? TextWrapping.Wrap : TextWrapping.NoWrap,
             LineHeight = 20,
             LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
-            IsTextSelectionEnabled = false,
+            IsTextSelectionEnabled = true,
             Tag = filePath,
         };
         AttachPreviewBlockContextFlyout(block);
@@ -1796,8 +1798,8 @@ public sealed partial class MainWindow
 
         if (!info.Exists)
             throw new PreviewLoadException("Could not load full file: it no longer exists.");
-        if (enforceLimit && info.Length > FullFilePreviewLimitBytes)
-            throw new PreviewLoadException($"Full-file preview is limited to {FormatBytes(FullFilePreviewLimitBytes)}. This file is {FormatBytes(info.Length)}.");
+        if (enforceLimit && info.Length > EffectiveFullFilePreviewLimitBytes)
+            throw new PreviewLoadException($"Full-file preview is limited to {FormatBytes(EffectiveFullFilePreviewLimitBytes)}. This file is {FormatBytes(info.Length)}.");
 
         try
         {
@@ -1843,8 +1845,8 @@ public sealed partial class MainWindow
             using var ms = await ZipArchiveSearcher.ExtractToMemoryAsync(archivePath, cancellationToken).ConfigureAwait(false);
             long byteLength = ms.Length;
 
-            if (enforceLimit && byteLength > FullFilePreviewLimitBytes)
-                throw new PreviewLoadException($"Full-file preview is limited to {FormatBytes(FullFilePreviewLimitBytes)}. This entry is {FormatBytes(byteLength)}.");
+            if (enforceLimit && byteLength > EffectiveFullFilePreviewLimitBytes)
+                throw new PreviewLoadException($"Full-file preview is limited to {FormatBytes(EffectiveFullFilePreviewLimitBytes)}. This entry is {FormatBytes(byteLength)}.");
 
             int probeSize = (int)Math.Min(BinaryDetector.SampleBytes, Math.Max(0, byteLength));
             if (probeSize > 0)

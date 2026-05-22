@@ -144,6 +144,12 @@ public sealed partial class MainViewModel : ObservableObject
         MmfConcurrencyLimit = _settings.MmfConcurrencyLimit;
         NativeConcurrencyLimit = _settings.NativeConcurrencyLimit;
 
+        MaxMatchesPerSection = _settings.MaxMatchesPerSection;
+        PreviewSectionPageSize = _settings.PreviewSectionPageSize;
+        FullFilePreviewLimitMB = _settings.FullFilePreviewLimitMB;
+        ArchiveMaxNestingDepth = _settings.ArchiveMaxNestingDepth;
+        ArchiveMaxEntryMB = _settings.ArchiveMaxEntryMB;
+
         ApplyLimitSettings();
 
         Helpers.LineTruncator.TruncatedLength = LineTruncationLength;
@@ -342,6 +348,8 @@ public sealed partial class MainViewModel : ObservableObject
     partial void OnMaxResultsCeilingChanged(int value) => ApplyLimitSettings();
     partial void OnMmfConcurrencyLimitChanged(int value) => ApplyLimitSettings();
     partial void OnNativeConcurrencyLimitChanged(int value) => ApplyLimitSettings();
+    partial void OnArchiveMaxNestingDepthChanged(int value) => ApplyLimitSettings();
+    partial void OnArchiveMaxEntryMBChanged(int value) => ApplyLimitSettings();
 
     private void ApplyLimitSettings()
     {
@@ -350,6 +358,7 @@ public sealed partial class MainViewModel : ObservableObject
             ? (long)ContentSearchFileSizeMB * 1024 * 1024
             : 0;
         ContentSearcher.ConfigureGates(MmfConcurrencyLimit, NativeConcurrencyLimit);
+        ZipArchiveSearcher.Configure(ArchiveMaxNestingDepth, ArchiveMaxEntryMB);
     }
 
     [ObservableProperty] public partial bool SkipBinary { get; set; } = true;
@@ -376,6 +385,11 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial int MaxResultsCeiling { get; set; } = 50_000;
     [ObservableProperty] public partial int MmfConcurrencyLimit { get; set; }
     [ObservableProperty] public partial int NativeConcurrencyLimit { get; set; }
+    [ObservableProperty] public partial int MaxMatchesPerSection { get; set; }
+    [ObservableProperty] public partial int PreviewSectionPageSize { get; set; }
+    [ObservableProperty] public partial int FullFilePreviewLimitMB { get; set; }
+    [ObservableProperty] public partial int ArchiveMaxNestingDepth { get; set; }
+    [ObservableProperty] public partial int ArchiveMaxEntryMB { get; set; }
 
     public double MinFileSizeMB
     {
@@ -1810,6 +1824,11 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.MaxResultsCeiling = MaxResultsCeiling > 0 ? MaxResultsCeiling : 50_000;
         _settings.MmfConcurrencyLimit = MmfConcurrencyLimit;
         _settings.NativeConcurrencyLimit = NativeConcurrencyLimit;
+        _settings.MaxMatchesPerSection = MaxMatchesPerSection;
+        _settings.PreviewSectionPageSize = PreviewSectionPageSize;
+        _settings.FullFilePreviewLimitMB = FullFilePreviewLimitMB;
+        _settings.ArchiveMaxNestingDepth = ArchiveMaxNestingDepth;
+        _settings.ArchiveMaxEntryMB = ArchiveMaxEntryMB;
 
         Helpers.LineTruncator.TruncatedLength = LineTruncationLength;
 

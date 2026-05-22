@@ -402,6 +402,20 @@ public sealed partial class SettingsWindow : Window
             archiveExt.TextChanged += (_, _) => _viewModel.ArchiveExtensions = archiveExt.Text;
             g.Children.Add(archiveExt);
             g.Children.Add(new TextBlock { Text = "Extensions that are ZIP-like containers. When 'Search archives' is on, these are removed from the skip list so they reach the content searcher. Detection still uses file-header magic bytes.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            g.Children.Add(new TextBlock { Text = "Archive search limits", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 8, 0, 0) });
+
+            g.Children.Add(NextSearchLabel("Max archive nesting depth (0 = 5):"));
+            var archiveNesting = new NumberBox { Value = _viewModel.ArchiveMaxNestingDepth, Minimum = 0, Maximum = 50 };
+            archiveNesting.ValueChanged += (_, args) => _viewModel.ArchiveMaxNestingDepth = (int)args.NewValue;
+            g.Children.Add(archiveNesting);
+            g.Children.Add(new TextBlock { Text = "How many levels deep to search nested archives (zip inside zip). Higher values find deeply nested content but may be slower. 0 uses the default (5).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            g.Children.Add(NextSearchLabel("Max archive entry size (MB, 0 = 64):"));
+            var archiveEntrySize = new NumberBox { Value = _viewModel.ArchiveMaxEntryMB, Minimum = 0, Maximum = 4096 };
+            archiveEntrySize.ValueChanged += (_, args) => _viewModel.ArchiveMaxEntryMB = (int)args.NewValue;
+            g.Children.Add(archiveEntrySize);
+            g.Children.Add(new TextBlock { Text = "Individual files inside archives larger than this are skipped. Higher values search larger archive entries but use more memory. 0 uses the default (64 MB).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
         }
 
         // ── Performance ──
@@ -536,6 +550,26 @@ public sealed partial class SettingsWindow : Window
             var autoLoad = new NumberBox { Value = _viewModel.PreviewAutoLoadMatches, Minimum = 0, Maximum = 5000, SpinButtonPlacementMode = Microsoft.UI.Xaml.Controls.NumberBoxSpinButtonPlacementMode.Compact };
             autoLoad.ValueChanged += (_, args) => _viewModel.PreviewAutoLoadMatches = (int)args.NewValue;
             g.Children.Add(autoLoad);
+
+            g.Children.Add(new TextBlock { Text = "Preview section limits", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 8, 0, 0) });
+
+            g.Children.Add(new TextBlock { Text = "Max matches per file section before truncation (0 = 500):" });
+            var maxPerSection = new NumberBox { Value = _viewModel.MaxMatchesPerSection, Minimum = 0, Maximum = 100_000, SpinButtonPlacementMode = Microsoft.UI.Xaml.Controls.NumberBoxSpinButtonPlacementMode.Compact };
+            maxPerSection.ValueChanged += (_, args) => _viewModel.MaxMatchesPerSection = (int)args.NewValue;
+            g.Children.Add(maxPerSection);
+            g.Children.Add(new TextBlock { Text = "Limits how many matches are rendered per file section before the 'Load more' overflow button appears. Higher values show more upfront but may slow the UI with dense files. 0 uses the default (500).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            g.Children.Add(new TextBlock { Text = "File sections per page (0 = 50):" });
+            var sectionPageSize = new NumberBox { Value = _viewModel.PreviewSectionPageSize, Minimum = 0, Maximum = 10_000, SpinButtonPlacementMode = Microsoft.UI.Xaml.Controls.NumberBoxSpinButtonPlacementMode.Compact };
+            sectionPageSize.ValueChanged += (_, args) => _viewModel.PreviewSectionPageSize = (int)args.NewValue;
+            g.Children.Add(sectionPageSize);
+            g.Children.Add(new TextBlock { Text = "How many file sections are rendered before a 'Show more' button. Higher values load more files at once but can cause layout delays. 0 uses the default (50).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            g.Children.Add(new TextBlock { Text = "Full-file preview size limit (MB, 0 = 1024):" });
+            var fullFileLimit = new NumberBox { Value = _viewModel.FullFilePreviewLimitMB, Minimum = 0, Maximum = 10_240, SpinButtonPlacementMode = Microsoft.UI.Xaml.Controls.NumberBoxSpinButtonPlacementMode.Compact };
+            fullFileLimit.ValueChanged += (_, args) => _viewModel.FullFilePreviewLimitMB = (int)args.NewValue;
+            g.Children.Add(fullFileLimit);
+            g.Children.Add(new TextBlock { Text = "Maximum file size allowed for the full-file preview tab. Files larger than this limit will show an error instead. 0 uses the default (1024 MB / 1 GB).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
         }
 
         // ── Editor ──
