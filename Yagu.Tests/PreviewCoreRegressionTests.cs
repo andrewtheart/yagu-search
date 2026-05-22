@@ -176,6 +176,31 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void DeveloperOptions_CanHideMemoryPressureWarningLabel()
+    {
+        string settingsSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "Services", "SettingsService.cs"));
+        Assert.Contains("ShowMemoryPressureWarningLabel", settingsSource);
+        Assert.Contains("ShowMemoryPressureWarningLabel { get; set; } = true", settingsSource);
+
+        string viewModelSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
+        Assert.Contains("ShowMemoryPressureWarningLabel = _settings.ShowMemoryPressureWarningLabel;", viewModelSource);
+        Assert.Contains("_settings.ShowMemoryPressureWarningLabel = ShowMemoryPressureWarningLabel;", viewModelSource);
+        AssertContainsInOrder(viewModelSource,
+            "MemoryPressureWarningVisibility =>",
+            "ShowMemoryPressureWarningLabel && !string.IsNullOrWhiteSpace(DegradedNoticeText)",
+            "Microsoft.UI.Xaml.Visibility.Visible",
+            "Microsoft.UI.Xaml.Visibility.Collapsed");
+        Assert.Contains("OnShowMemoryPressureWarningLabelChanged", viewModelSource);
+
+        string resultsToolbar = ExtractXamlWindow("Text=\"{x:Bind ViewModel.DegradedNoticeText", 360);
+        Assert.Contains("Visibility=\"{x:Bind ViewModel.MemoryPressureWarningVisibility, Mode=OneWay}\"", resultsToolbar);
+
+        Assert.Contains("AddTab(\"Developer Options\")", SettingsWindowSource);
+        Assert.Contains("Show memory pressure warning label", SettingsWindowSource);
+        Assert.Contains("_viewModel.ShowMemoryPressureWarningLabel = false", SettingsWindowSource);
+    }
+
+    [Fact]
     public void SortFlyout_UsesInlineArrowButtonsForEachSortField()
     {
         string sortFlyout = ExtractXamlWindow("<Flyout x:Name=\"SortFlyout\"", 9000);
@@ -472,6 +497,11 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("remainingBlockBudget", highlight);
         Assert.Contains("RegisterSectionOverflow", highlight);
         Assert.Contains("remaining = results.Skip(renderedCount).ToList()", highlight);
+        AssertContainsInOrder(highlight,
+            "distinctMatchLines.Length == 1",
+            "bool isMatchLine = lineNum == matchLineNumber;",
+            "truncate: true",
+            "fall through to AppendHighlightMatchWindows");
 
         string multiHighlight = ExtractMethodWindow(MainWindowSource, "ShowMultiHighlightPreviewAsync");
         Assert.Contains("actualMatchEntries = _matchParagraphs.Count - sectionMatchStart", multiHighlight);

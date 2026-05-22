@@ -558,6 +558,52 @@ public sealed partial class MainWindow
 
         if (allLines != null)
         {
+            var distinctMatchLines = results
+                .Select(result => result.LineNumber)
+                .Where(lineNumber => lineNumber >= 1 && lineNumber <= allLines.Length)
+                .Distinct()
+                .Take(2)
+                .ToArray();
+            if (distinctMatchLines.Length == 1)
+            {
+                int matchLineNumber = distinctMatchLines[0];
+                int start = Math.Max(0, matchLineNumber - 1 - previewLines);
+                int end = Math.Min(allLines.Length - 1, matchLineNumber - 1 + previewLines);
+                var matchResult = results.First(result => result.LineNumber == matchLineNumber);
+                _sectionMatchNavs.TryGetValue(section, out var singleLineSectionNav);
+
+                for (int i = start; i <= end; i++)
+                {
+                    int lineNum = i + 1;
+                    bool isMatchLine = lineNum == matchLineNumber;
+                    AddPreviewLineParagraphs(
+                        section,
+                        allLines[i],
+                        lineNum,
+                        isMatchLine,
+                        matchResult,
+                        rx,
+                        truncate: true,
+                        isMatchLine ? _matchParagraphs : null,
+                        singleLineSectionNav,
+                        out int addedParagraphs);
+                    lastRenderedLine1 = lineNum;
+                    parasBuilt += addedParagraphs;
+                    parasSinceYield += addedParagraphs;
+                    if (parasSinceYield >= BuildHighlightYieldEvery)
+                    {
+                        parasSinceYield = 0;
+                        yieldCount++;
+                        await DispatchIdleAsync();
+                    }
+                }
+
+                // Don't return — fall through to AppendHighlightMatchWindows
+                // which renders windowed snippets around additional match positions.
+            }
+            else
+            {
+
             var ranges = new List<(int start, int end)>();
             foreach (var lineNum in cappedResults.Select(r => r.LineNumber).Distinct().OrderBy(n => n))
             {
@@ -606,6 +652,7 @@ public sealed partial class MainWindow
                     }
                 }
             }
+            } // end else (multi-line range rendering)
         }
         else
         {

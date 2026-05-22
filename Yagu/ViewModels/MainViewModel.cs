@@ -118,6 +118,7 @@ public sealed partial class MainViewModel : ObservableObject
             : HotkeyService.DefaultStartKey.ToString();
         MemoryLimitMB = _settings.MemoryLimitMB;
         MemoryPressurePercent = _settings.MemoryPressurePercent;
+        ShowMemoryPressureWarningLabel = _settings.ShowMemoryPressureWarningLabel;
         SdkChannelBufferSize = _settings.SdkChannelBufferSize;
         MaxMatchesPerFile = _settings.MaxMatchesPerFile;
         ApplyMaxMatchesPerFile(MaxMatchesPerFile);
@@ -325,6 +326,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial bool GlobalHotkeyEnabled { get; set; }
     [ObservableProperty] public partial int MemoryLimitMB { get; set; }
     [ObservableProperty] public partial int MemoryPressurePercent { get; set; } = 75;
+    [ObservableProperty] public partial bool ShowMemoryPressureWarningLabel { get; set; } = true;
     [ObservableProperty] public partial int SdkChannelBufferSize { get; set; } = 4096;
     [ObservableProperty] public partial int MaxMatchesPerFile { get; set; }
     [ObservableProperty] public partial double MaxSearchDepth { get; set; } = double.NaN;
@@ -729,6 +731,10 @@ public sealed partial class MainViewModel : ObservableObject
     public bool HasFallbackReason => !string.IsNullOrEmpty(FallbackReason);
     public bool HasErrorText => !string.IsNullOrEmpty(ErrorText);
     public int OtherSkippedCount => Math.Max(0, FilesSkipped - AccessDeniedCount);
+    public Microsoft.UI.Xaml.Visibility MemoryPressureWarningVisibility =>
+        ShowMemoryPressureWarningLabel && !string.IsNullOrWhiteSpace(DegradedNoticeText)
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
 
     private SkipBreakdown? _lastSkipBreakdown;
     private const string ExtensionExclusionSkipNote = "Files excluded by extension during discovery are filtered before counting and are not included in skipped counts.";
@@ -770,6 +776,8 @@ public sealed partial class MainViewModel : ObservableObject
 
     partial void OnFallbackReasonChanged(string? value) => OnPropertyChanged(nameof(HasFallbackReason));
     partial void OnErrorTextChanged(string? value) => OnPropertyChanged(nameof(HasErrorText));
+    partial void OnDegradedNoticeTextChanged(string value) => OnPropertyChanged(nameof(MemoryPressureWarningVisibility));
+    partial void OnShowMemoryPressureWarningLabelChanged(bool value) => OnPropertyChanged(nameof(MemoryPressureWarningVisibility));
     partial void OnFilesSkippedChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); }
     partial void OnAccessDeniedCountChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); }
     partial void OnSortModeIndexChanged(int value)
@@ -1780,6 +1788,7 @@ public sealed partial class MainViewModel : ObservableObject
             : HotkeyService.DefaultStartKey.ToString();
         _settings.MemoryLimitMB = MemoryLimitMB;
         _settings.MemoryPressurePercent = MemoryPressurePercent;
+        _settings.ShowMemoryPressureWarningLabel = ShowMemoryPressureWarningLabel;
         _settings.SdkChannelBufferSize = SdkChannelBufferSize;
         _settings.MaxMatchesPerFile = MaxMatchesPerFile;
         _settings.SkipBinary = SkipBinary;

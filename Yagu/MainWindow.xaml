@@ -678,6 +678,7 @@
                         </StackPanel>
                         </StackPanel>
                         <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.DegradedNoticeText, Mode=OneWay}"
+                                   Visibility="{x:Bind ViewModel.MemoryPressureWarningVisibility, Mode=OneWay}"
                                    HorizontalAlignment="Right" VerticalAlignment="Center"
                                    FontSize="12" Foreground="DarkOrange" Opacity="0.9" Margin="8,0,4,0" />
                         <Button x:Name="ExpandResultsButton" Grid.Column="2"

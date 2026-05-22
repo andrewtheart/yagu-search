@@ -204,6 +204,7 @@ public sealed partial class SettingsWindow : Window
         "Display" => "\uE7B5",
         "Editor" => "\uE70F",
         "Window" => "\uE737",
+        "Developer Options" => "\uE713",
         "General" => "\uE713",
         _ => "\uE7FC",
     };
@@ -591,6 +592,27 @@ public sealed partial class SettingsWindow : Window
             closeToTray.Unchecked += (_, _) => _viewModel.CloseToTray = false;
             g.Children.Add(closeToTray);
             g.Children.Add(new TextBlock { Text = "When enabled, closing the window hides Yagu to the system tray. Right-click the tray icon to reopen or exit.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+        }
+
+        // ── Developer Options ──
+        {
+            var g = AddTab("Developer Options");
+
+            var showMemoryPressureLabel = new CheckBox
+            {
+                Content = "Show memory pressure warning label",
+                IsChecked = _viewModel.ShowMemoryPressureWarningLabel,
+            };
+            showMemoryPressureLabel.Checked += (_, _) => _viewModel.ShowMemoryPressureWarningLabel = true;
+            showMemoryPressureLabel.Unchecked += (_, _) => _viewModel.ShowMemoryPressureWarningLabel = false;
+            g.Children.Add(showMemoryPressureLabel);
+            g.Children.Add(new TextBlock
+            {
+                Text = "Controls only the orange toolbar label shown while Yagu is paging results to disk. Memory-saving mode still activates normally.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
         }
 
         // ── General ──

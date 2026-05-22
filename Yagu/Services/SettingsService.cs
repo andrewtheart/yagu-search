@@ -62,6 +62,8 @@ public sealed class AppSettings
     public int MemoryLimitMB { get; set; }
     /// <summary>System-wide memory pressure threshold (0-100). Search evicts cached results and switches to memory-saving mode when total machine memory usage exceeds this %. 0 = disabled.</summary>
     public int MemoryPressurePercent { get; set; } = 75;
+    /// <summary>When true, show the memory pressure warning label in the results toolbar.</summary>
+    public bool ShowMemoryPressureWarningLabel { get; set; } = true;
     /// <summary>Bounded channel buffer size for the Everything SDK streaming path. Higher values use more memory but can improve throughput.</summary>
     public int SdkChannelBufferSize { get; set; } = 4096;
     /// <summary>Current directory recursion depth. 0 = unlimited. This is intentionally session-only.</summary>
