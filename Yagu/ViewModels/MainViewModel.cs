@@ -100,6 +100,12 @@ public sealed partial class MainViewModel : ObservableObject
         PreviewModeIndex = _settings.PreviewModeIndex;
         PreviewWordWrap = _settings.PreviewWordWrap;
         PreviewAutoLoadMatches = _settings.PreviewAutoLoadMatches;
+        SelectedPreviewContentBackgroundColor = ColorStringHelper.Normalize(
+            _settings.SelectedPreviewContentBackgroundColor,
+            Windows.UI.Color.FromArgb(0xFF, 0x00, 0x00, 0x00));
+        UnselectedPreviewContentBackgroundColor = ColorStringHelper.Normalize(
+            _settings.UnselectedPreviewContentBackgroundColor,
+            Windows.UI.Color.FromArgb(0x00, 0x00, 0x00, 0x00));
         FileLogLevelIndex = _settings.LogLevelIndex;
         ConsoleLogLevelIndex = _settings.ConsoleLogLevelIndex;
         FileListerBackendIndex = _settings.FileListerBackendIndex;
@@ -308,6 +314,8 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial int PreviewModeIndex { get; set; } = 1; // 0 = Concatenated, 1 = Multi-highlight
     [ObservableProperty] public partial bool PreviewWordWrap { get; set; }
     [ObservableProperty] public partial int PreviewAutoLoadMatches { get; set; } = 50;
+    [ObservableProperty] public partial string SelectedPreviewContentBackgroundColor { get; set; } = AppSettings.DefaultSelectedPreviewContentBackgroundColor;
+    [ObservableProperty] public partial string UnselectedPreviewContentBackgroundColor { get; set; } = AppSettings.DefaultUnselectedPreviewContentBackgroundColor;
     [ObservableProperty] public partial int FileLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] public partial int ConsoleLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] public partial int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
@@ -1754,6 +1762,12 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.PreviewModeIndex = PreviewModeIndex;
         _settings.PreviewWordWrap = PreviewWordWrap;
         _settings.PreviewAutoLoadMatches = PreviewAutoLoadMatches;
+        _settings.SelectedPreviewContentBackgroundColor = ColorStringHelper.Normalize(
+            SelectedPreviewContentBackgroundColor,
+            Windows.UI.Color.FromArgb(0xFF, 0x00, 0x00, 0x00));
+        _settings.UnselectedPreviewContentBackgroundColor = ColorStringHelper.Normalize(
+            UnselectedPreviewContentBackgroundColor,
+            Windows.UI.Color.FromArgb(0x00, 0x00, 0x00, 0x00));
         _settings.LogLevelIndex = FileLogLevelIndex;
         _settings.ConsoleLogLevelIndex = ConsoleLogLevelIndex;
         _settings.FileListerBackendIndex = FileListerBackendIndex;

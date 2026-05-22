@@ -180,6 +180,12 @@ public sealed partial class MainWindow : Window
             {
                 ApplyGlobalHotkeyRegistration();
             }
+
+            if (e.PropertyName == nameof(ViewModel.SelectedPreviewContentBackgroundColor) ||
+                e.PropertyName == nameof(ViewModel.UnselectedPreviewContentBackgroundColor))
+            {
+                ApplyPreviewSectionBackgrounds();
+            }
         };
 
         ((FrameworkElement)Content).Loaded += OnContentLoaded;
@@ -859,7 +865,7 @@ public sealed partial class MainWindow : Window
             catch { _settingsWindow = null; }
         }
 
-        _settingsWindow = new SettingsWindow(ViewModel, _hotkeyService, _hwnd, ApplyWordWrap);
+        _settingsWindow = new SettingsWindow(ViewModel, _hotkeyService, _hwnd, ApplyWordWrap, ApplyPreviewSectionBackgrounds);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Activate();
     }
@@ -901,7 +907,7 @@ public sealed partial class MainWindow : Window
                 try { _settingsWindow.Activate(); return; }
                 catch { _settingsWindow = null; }
             }
-            _settingsWindow = new SettingsWindow(ViewModel, _hotkeyService, _hwnd, ApplyWordWrap);
+            _settingsWindow = new SettingsWindow(ViewModel, _hotkeyService, _hwnd, ApplyWordWrap, ApplyPreviewSectionBackgrounds);
             _settingsWindow.Closed += (_, _) => _settingsWindow = null;
             _settingsWindow.Activate();
             _settingsWindow.SelectTab(2);
@@ -1041,7 +1047,8 @@ public sealed partial class MainWindow : Window
     private int _lazyMatchCount; // total matches in un-rendered sections
     private bool _previewViewChangedHooked;
     private bool _viewportMaterializePending;
-    private static readonly SolidColorBrush s_activeExpanderBrush = new(Windows.UI.Color.FromArgb(25, 80, 180, 255));
+    private static readonly Windows.UI.Color s_defaultSelectedPreviewContentBackground = Windows.UI.Color.FromArgb(0xFF, 0x00, 0x00, 0x00);
+    private static readonly Windows.UI.Color s_defaultUnselectedPreviewContentBackground = Windows.UI.Color.FromArgb(0x00, 0x00, 0x00, 0x00);
 
     // Tracks remaining (un-rendered) matches for sections that were truncated to
     // avoid UI freezes on huge files (see MaxMatchesPerSection). Each click of

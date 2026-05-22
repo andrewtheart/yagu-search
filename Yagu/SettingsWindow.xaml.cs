@@ -5,6 +5,7 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Windows.Graphics;
+using Yagu.Helpers;
 using Yagu.Services;
 using Yagu.ViewModels;
 
@@ -16,14 +17,16 @@ public sealed partial class SettingsWindow : Window
     private readonly HotkeyService _hotkeyService;
     private readonly IntPtr _mainHwnd;
     private readonly Action<bool>? _applyWordWrap;
+    private readonly Action? _applyPreviewSectionBackgrounds;
     private readonly List<UIElement> _tabPages = new();
 
-    public SettingsWindow(MainViewModel viewModel, HotkeyService hotkeyService, IntPtr mainHwnd, Action<bool>? applyWordWrap)
+    public SettingsWindow(MainViewModel viewModel, HotkeyService hotkeyService, IntPtr mainHwnd, Action<bool>? applyWordWrap, Action? applyPreviewSectionBackgrounds)
     {
         _viewModel = viewModel;
         _hotkeyService = hotkeyService;
         _mainHwnd = mainHwnd;
         _applyWordWrap = applyWordWrap;
+        _applyPreviewSectionBackgrounds = applyPreviewSectionBackgrounds;
         InitializeComponent();
 
         // Set up custom title bar
@@ -143,6 +146,54 @@ public sealed partial class SettingsWindow : Window
         ToolTipService.SetToolTip(icon, "Takes effect on the next search");
         panel.Children.Add(icon);
         return panel;
+    }
+
+    private void AddPreviewContentColorSetting(
+        StackPanel parent,
+        string label,
+        string description,
+        string currentHex,
+        Windows.UI.Color fallback,
+        Action<string> assign)
+    {
+        parent.Children.Add(new TextBlock
+        {
+            Text = label,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Margin = new Thickness(0, 8, 0, 0),
+        });
+
+        var picker = new ColorPicker
+        {
+            Color = ColorStringHelper.Parse(currentHex, fallback),
+            IsAlphaEnabled = true,
+            Width = 320,
+            MaxWidth = 360,
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        picker.ColorChanged += (_, args) =>
+        {
+            assign(ColorStringHelper.ToHex(args.NewColor));
+            _applyPreviewSectionBackgrounds?.Invoke();
+        };
+        parent.Children.Add(picker);
+
+        var reset = new Button
+        {
+            Content = "Reset",
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Padding = new Thickness(10, 4, 10, 4),
+        };
+        reset.Click += (_, _) => picker.Color = fallback;
+        parent.Children.Add(reset);
+
+        parent.Children.Add(new TextBlock
+        {
+            Text = description,
+            FontSize = 11,
+            Opacity = 0.6,
+            TextWrapping = TextWrapping.Wrap,
+        });
     }
 
     private static string SettingsGroupIcon(string header) => header switch
@@ -463,6 +514,22 @@ public sealed partial class SettingsWindow : Window
             wordWrap.Checked += (_, _) => { _viewModel.PreviewWordWrap = true; _applyWordWrap?.Invoke(true); };
             wordWrap.Unchecked += (_, _) => { _viewModel.PreviewWordWrap = false; _applyWordWrap?.Invoke(false); };
             g.Children.Add(wordWrap);
+
+            AddPreviewContentColorSetting(
+                g,
+                "Selected preview content background:",
+                "Background for the content body of the active preview section. Default is black.",
+                _viewModel.SelectedPreviewContentBackgroundColor,
+                Windows.UI.Color.FromArgb(0xFF, 0x00, 0x00, 0x00),
+                value => _viewModel.SelectedPreviewContentBackgroundColor = value);
+
+            AddPreviewContentColorSetting(
+                g,
+                "Unselected preview content background:",
+                "Background for preview section content that is not active. Default is transparent so it follows the app theme.",
+                _viewModel.UnselectedPreviewContentBackgroundColor,
+                Windows.UI.Color.FromArgb(0x00, 0x00, 0x00, 0x00),
+                value => _viewModel.UnselectedPreviewContentBackgroundColor = value);
 
             g.Children.Add(new TextBlock { Text = "Auto-load matches on scroll (matches to load when reaching end of truncated section, 0 = disabled):" });
             var autoLoad = new NumberBox { Value = _viewModel.PreviewAutoLoadMatches, Minimum = 0, Maximum = 5000, SpinButtonPlacementMode = Microsoft.UI.Xaml.Controls.NumberBoxSpinButtonPlacementMode.Compact };

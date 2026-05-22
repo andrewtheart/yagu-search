@@ -150,6 +150,32 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void PreviewSectionContentBackgrounds_AreConfigurableAndDefaultSelectedToBlack()
+    {
+        string settingsSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "Services", "SettingsService.cs"));
+        Assert.Contains("DefaultSelectedPreviewContentBackgroundColor = \"#FF000000\"", settingsSource);
+        Assert.Contains("DefaultUnselectedPreviewContentBackgroundColor = \"#00000000\"", settingsSource);
+
+        Assert.Contains("Selected preview content background:", SettingsWindowSource);
+        Assert.Contains("Unselected preview content background:", SettingsWindowSource);
+        Assert.Contains("new ColorPicker", SettingsWindowSource);
+        Assert.Contains("IsAlphaEnabled = true", SettingsWindowSource);
+
+        string highlight = ExtractMethodWindow(MainWindowSource, "HighlightActiveExpander", 1800);
+        AssertContainsInOrder(highlight,
+            "child.Background = null;",
+            "ApplyPreviewSectionContentBackground(child, isActive);");
+        Assert.DoesNotContain("s_activeExpanderBrush", MainWindowSource);
+
+        string backgroundHelper = ExtractMethodWindow(MainWindowSource, "ApplyPreviewSectionContentBackground", 2600);
+        AssertContainsInOrder(backgroundHelper,
+            "CreatePreviewSectionContentBackgroundBrush(isActive)",
+            "grid.Background = brush;",
+            "scroller.Background = brush;",
+            "contentBorder.Background = brush;");
+    }
+
+    [Fact]
     public void SortFlyout_UsesInlineArrowButtonsForEachSortField()
     {
         string sortFlyout = ExtractXamlWindow("<Flyout x:Name=\"SortFlyout\"", 9000);

@@ -1326,6 +1326,7 @@ public sealed partial class MainWindow
         _blockExpanderCache[block] = expander;
         _expanderFilePaths[expander] = filePath;
         _expanderHeaderArgs[expander] = (filePath, detail, block, results);
+        ApplyPreviewSectionContentBackground(expander, ReferenceEquals(_activeSectionNav?.Block, block));
         if (addToPanel)
         {
             PreviewSectionsPanel.Children.Add(expander);

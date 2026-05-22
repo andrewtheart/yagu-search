@@ -7,6 +7,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Yagu.Helpers;
 using Yagu.Models;
 using Yagu.Services;
 
@@ -1880,17 +1881,65 @@ public sealed partial class MainWindow
     private void HighlightActiveExpander()
     {
         var activeBlock = _activeSectionNav?.Block;
-        // Avoid the per-click loop when the active section hasn't changed:
-        // setting Background on every Expander invalidates each section panel
-        // and is wasted work during rapid Next/Prev within a single file.
+        // Avoid the per-click loop when the active section hasn't changed.
         if (ReferenceEquals(activeBlock, _lastHighlightedActiveBlock))
             return;
         _lastHighlightedActiveBlock = activeBlock;
         foreach (var child in PreviewSectionsPanel.Children.OfType<Expander>())
         {
             bool isActive = child.Tag is RichTextBlock b && b == activeBlock;
-            child.Background = isActive ? s_activeExpanderBrush : null;
+            child.Background = null;
+            ApplyPreviewSectionContentBackground(child, isActive);
         }
+    }
+
+    private void ApplyPreviewSectionBackgrounds()
+    {
+        var activeBlock = _activeSectionNav?.Block;
+        foreach (var child in PreviewSectionsPanel.Children.OfType<Expander>())
+        {
+            bool isActive = child.Tag is RichTextBlock block && block == activeBlock;
+            child.Background = null;
+            ApplyPreviewSectionContentBackground(child, isActive);
+        }
+    }
+
+    private void ApplyPreviewSectionContentBackground(Expander expander, bool isActive)
+    {
+        var brush = CreatePreviewSectionContentBackgroundBrush(isActive);
+        if (expander.Content is Grid grid)
+        {
+            grid.Background = brush;
+            foreach (var border in grid.Children.OfType<Border>())
+                border.Background = brush;
+            foreach (var scroller in grid.Children.OfType<ScrollViewer>())
+            {
+                scroller.Background = brush;
+                if (scroller.Content is Border contentBorder)
+                    contentBorder.Background = brush;
+            }
+        }
+        else if (expander.Content is ScrollViewer scroller)
+        {
+            scroller.Background = brush;
+            if (scroller.Content is Border contentBorder)
+                contentBorder.Background = brush;
+        }
+        else if (expander.Content is Border border)
+        {
+            border.Background = brush;
+        }
+    }
+
+    private SolidColorBrush CreatePreviewSectionContentBackgroundBrush(bool isActive)
+    {
+        string value = isActive
+            ? ViewModel.SelectedPreviewContentBackgroundColor
+            : ViewModel.UnselectedPreviewContentBackgroundColor;
+        var fallback = isActive
+            ? s_defaultSelectedPreviewContentBackground
+            : s_defaultUnselectedPreviewContentBackground;
+        return new SolidColorBrush(ColorStringHelper.Parse(value, fallback));
     }
 
     private void UpdateSectionNavOverlay()
