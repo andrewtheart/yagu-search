@@ -821,7 +821,7 @@
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" MaxWidth="360" />
+                                                <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
                                         <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
@@ -851,7 +851,6 @@
                                         <TextBlock Grid.Column="3" Text="{x:Bind DirectoryName}" Tag="WideDir"
                                                    ToolTipService.ToolTip="{x:Bind DirectoryName}"
                                                    Opacity="0.45" FontSize="11" VerticalAlignment="Center"
-                                                   MaxWidth="360"
                                                    TextTrimming="CharacterEllipsis"
                                                    HorizontalAlignment="Left" Margin="12,0,4,0" />
                                         <Button Grid.Column="4" Click="OnShowFileGroupInExplorer" Tag="{x:Bind FilePath}"

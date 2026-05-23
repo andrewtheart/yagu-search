@@ -78,4 +78,8 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\vendor\SharpSevenZip\SharpSevenZip\SharpSevenZip\SharpSevenZip.csproj" />
+  </ItemGroup>
+
 </Project>

@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Channels;
+using SharpSevenZip;
 using Yagu.Helpers;
 using Yagu.Models;
 
@@ -64,6 +65,7 @@ public static class ZipArchiveSearcher
         // Touch ZipArchive to force assembly load; the JIT will also
         // compile the static constructor and any referenced methods.
         RuntimeHelpers.RunClassConstructor(typeof(ZipArchive).TypeHandle);
+        RuntimeHelpers.RunClassConstructor(typeof(SharpSevenZipExtractor).TypeHandle);
     }
 
     /// <summary>
@@ -201,11 +203,12 @@ public static class ZipArchiveSearcher
     {
         Unknown,
         Zip,
+        SevenZip,
     }
 
     private static ArchiveKind DetectArchiveKind(Stream archiveStream)
     {
-        Span<byte> magic = stackalloc byte[4];
+        Span<byte> magic = stackalloc byte[6];
         int read = 0;
         long originalPosition = archiveStream.CanSeek ? archiveStream.Position : 0;
 
@@ -221,6 +224,7 @@ public static class ZipArchiveSearcher
 
         var sample = magic[..read];
         if (BinaryDetector.IsZipMagic(sample)) return ArchiveKind.Zip;
+        if (BinaryDetector.IsSevenZipMagic(sample)) return ArchiveKind.SevenZip;
         return ArchiveKind.Unknown;
     }
 
@@ -241,9 +245,12 @@ public static class ZipArchiveSearcher
         if (archiveStream.CanSeek)
             archiveStream.Position = 0;
 
-        return kind == ArchiveKind.Zip
-            ? SearchArchiveStreamAsync(archiveStream, archiveDisplayPath, regex, literal, literalComparison, options, writer, cancellationToken, nestingDepth)
-            : Task.FromResult((0, 0));
+        return kind switch
+        {
+            ArchiveKind.Zip => SearchArchiveStreamAsync(archiveStream, archiveDisplayPath, regex, literal, literalComparison, options, writer, cancellationToken, nestingDepth),
+            ArchiveKind.SevenZip => SearchSevenZipArchiveStreamAsync(archiveStream, archiveDisplayPath, regex, literal, literalComparison, options, writer, cancellationToken, nestingDepth),
+            _ => Task.FromResult((0, 0)),
+        };
     }
 
     /// <summary>
@@ -332,12 +339,14 @@ public static class ZipArchiveSearcher
 
                 bool isNestedZip = nestingDepth < MaxNestingDepth && peekRead >= 4
                     && BinaryDetector.IsZipMagic(peekBuf.AsSpan(0, Math.Min(peekRead, 4)));
+                bool isNestedSevenZip = nestingDepth < MaxNestingDepth && peekRead >= 6
+                    && BinaryDetector.IsSevenZipMagic(peekBuf.AsSpan(0, Math.Min(peekRead, 6)));
 
                 // Binary detection on the peek buffer — skip before full decompression.
                 if (options.SkipBinary && BinaryDetector.IsBinary(peekBuf.AsSpan(0, peekRead)))
                 {
                     // But still check for nested archives (binary archives should be recursed into).
-                    if (isNestedZip)
+                    if (isNestedZip || isNestedSevenZip)
                     {
                         // Need full content for recursive archive search
                     }
@@ -372,7 +381,7 @@ public static class ZipArchiveSearcher
 
                 entriesScanned++;
 
-                if (isNestedZip)
+                if (isNestedZip || isNestedSevenZip)
                 {
                     // Launch nested archive search as a task.
                     string nestedArchivePath = virtualPath;
@@ -380,7 +389,11 @@ public static class ZipArchiveSearcher
                     {
                         using (ms)
                         {
-                            return await SearchArchiveStreamAsync(
+                            return isNestedSevenZip
+                                ? await SearchSevenZipArchiveStreamAsync(
+                                    ms, nestedArchivePath, regex, literal, literalComparison,
+                                    options, writer, cancellationToken, nestingDepth + 1).ConfigureAwait(false)
+                                : await SearchArchiveStreamAsync(
                                     ms, nestedArchivePath, regex, literal, literalComparison,
                                     options, writer, cancellationToken, nestingDepth + 1).ConfigureAwait(false);
                         }
@@ -417,6 +430,182 @@ public static class ZipArchiveSearcher
         }
 
         return (totalMatches, entriesScanned);
+    }
+
+    internal static async Task<(int MatchCount, int EntriesScanned)> SearchSevenZipArchiveStreamAsync(
+        Stream archiveStream,
+        string archiveDisplayPath,
+        Regex? regex,
+        string? literal,
+        StringComparison literalComparison,
+        SearchOptions options,
+        ChannelWriter<SearchResult> writer,
+        CancellationToken cancellationToken,
+        int nestingDepth)
+    {
+        if (nestingDepth > MaxNestingDepth) return (0, 0);
+
+        if (archiveStream.CanSeek)
+            archiveStream.Position = 0;
+
+        SharpSevenZipExtractor extractor;
+        try
+        {
+            extractor = new SharpSevenZipExtractor(archiveStream, leaveOpen: true, InArchiveFormat.SevenZip);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            LogService.Instance.Verbose("ZipArchiveSearcher", $"Invalid 7z archive: {archiveDisplayPath}", ex);
+            return (0, 0);
+        }
+
+        using (extractor)
+        {
+            IReadOnlyList<ArchiveFileInfo> entries;
+            try
+            {
+                entries = extractor.ArchiveFileData;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                LogService.Instance.Verbose("ZipArchiveSearcher", $"Could not enumerate 7z archive: {archiveDisplayPath}", ex);
+                return (0, 0);
+            }
+
+            GlobMatcher? globMatcher = (options.IncludeGlobs.Count > 0 || options.ExcludeGlobs.Count > 0)
+                ? new GlobMatcher(options.IncludeGlobs, options.ExcludeGlobs, options.IncludeFilterMode, options.ExcludeFilterMode)
+                : null;
+
+            var candidates = new List<ArchiveFileInfo>();
+            foreach (var entry in entries)
+            {
+                if (entry.IsDirectory || entry.Encrypted) continue;
+                if (entry.Size > (ulong)MaxEntrySize) continue;
+
+                string entryName = NormalizeArchiveEntryName(entry.FileName);
+                if (string.IsNullOrWhiteSpace(entryName)) continue;
+
+                if (options.SkipExtensions.Count > 0)
+                {
+                    var ext = Path.GetExtension(entryName);
+                    if (ext.Length > 1 && options.SkipExtensions.Contains(ext.AsSpan(1).ToString()))
+                        continue;
+                }
+
+                if (globMatcher is not null && !globMatcher.Matches(entryName))
+                    continue;
+
+                candidates.Add(entry);
+            }
+
+            int totalMatches = 0;
+            int entriesScanned = 0;
+            var tasks = new List<Task<(int MatchCount, int EntriesScanned)>>(candidates.Count);
+
+            foreach (var entry in candidates)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                string entryName = NormalizeArchiveEntryName(entry.FileName);
+                string virtualPath = $"{archiveDisplayPath}{ArchiveSeparator}/{entryName}";
+
+                await s_entryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                MemoryStream? ms = null;
+                try
+                {
+                    ms = CreateEntryMemoryStream(entry.Size);
+                    await Task.Run(() => extractor.ExtractFile(entry.Index, ms), cancellationToken).ConfigureAwait(false);
+                    ms.Position = 0;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    ms?.Dispose();
+                    LogService.Instance.Verbose("ZipArchiveSearcher", $"Could not extract 7z entry: {virtualPath}", ex);
+                    continue;
+                }
+                finally
+                {
+                    s_entryGate.Release();
+                }
+
+                if (ms is null || ms.Length == 0)
+                {
+                    ms?.Dispose();
+                    continue;
+                }
+
+                int peekLength = (int)Math.Min(BinaryDetector.SampleBytes, ms.Length);
+                var peekBuf = new byte[peekLength];
+                int peekRead = await ms.ReadAsync(peekBuf.AsMemory(0, peekLength), cancellationToken).ConfigureAwait(false);
+                ms.Position = 0;
+
+                bool isNestedZip = nestingDepth < MaxNestingDepth && peekRead >= 4
+                    && BinaryDetector.IsZipMagic(peekBuf.AsSpan(0, Math.Min(peekRead, 4)));
+                bool isNestedSevenZip = nestingDepth < MaxNestingDepth && peekRead >= 6
+                    && BinaryDetector.IsSevenZipMagic(peekBuf.AsSpan(0, Math.Min(peekRead, 6)));
+
+                if (options.SkipBinary && BinaryDetector.IsBinary(peekBuf.AsSpan(0, peekRead))
+                    && !isNestedZip && !isNestedSevenZip)
+                {
+                    ms.Dispose();
+                    continue;
+                }
+
+                entriesScanned++;
+
+                if (isNestedZip || isNestedSevenZip)
+                {
+                    string nestedArchivePath = virtualPath;
+                    tasks.Add(Task.Run(async () =>
+                    {
+                        using (ms)
+                        {
+                            return isNestedSevenZip
+                                ? await SearchSevenZipArchiveStreamAsync(
+                                    ms, nestedArchivePath, regex, literal, literalComparison,
+                                    options, writer, cancellationToken, nestingDepth + 1).ConfigureAwait(false)
+                                : await SearchArchiveStreamAsync(
+                                    ms, nestedArchivePath, regex, literal, literalComparison,
+                                    options, writer, cancellationToken, nestingDepth + 1).ConfigureAwait(false);
+                        }
+                    }, cancellationToken));
+                    continue;
+                }
+
+                tasks.Add(Task.Run(async () =>
+                {
+                    using (ms)
+                    {
+                        var encoding = EncodingDetector.DetectEncoding(ms);
+                        ms.Position = 0;
+                        using var reader = new StreamReader(ms, encoding, detectEncodingFromByteOrderMarks: true);
+
+                        int matches = await SearchEntryLinesAsync(
+                            virtualPath, reader, regex, literal, literalComparison, options, writer, cancellationToken).ConfigureAwait(false);
+                        return (matches, 0);
+                    }
+                }, cancellationToken));
+            }
+
+            if (tasks.Count > 0)
+            {
+                var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+                foreach (var (matches, nestedEntries) in results)
+                {
+                    totalMatches += matches;
+                    entriesScanned += nestedEntries;
+                }
+            }
+
+            return (totalMatches, entriesScanned);
+        }
+    }
+
+    private static MemoryStream CreateEntryMemoryStream(ulong entrySize)
+    {
+        return entrySize > 0 && entrySize <= (ulong)MaxEntrySize
+            ? new MemoryStream((int)entrySize)
+            : new MemoryStream();
     }
 
     private static string NormalizeArchiveEntryName(string entryName) =>
@@ -579,7 +768,18 @@ public static class ZipArchiveSearcher
         throw new InvalidOperationException("Failed to extract archive entry.");
     }
 
-    private static async Task<MemoryStream> ExtractEntryToMemoryAsync(Stream archiveStream, string entryPath, CancellationToken cancellationToken)
+    private static Task<MemoryStream> ExtractEntryToMemoryAsync(Stream archiveStream, string entryPath, CancellationToken cancellationToken)
+    {
+        var kind = DetectArchiveKind(archiveStream);
+        if (archiveStream.CanSeek)
+            archiveStream.Position = 0;
+
+        return kind == ArchiveKind.SevenZip
+            ? ExtractSevenZipEntryToMemoryAsync(archiveStream, entryPath, cancellationToken)
+            : ExtractZipEntryToMemoryAsync(archiveStream, entryPath, cancellationToken);
+    }
+
+    private static async Task<MemoryStream> ExtractZipEntryToMemoryAsync(Stream archiveStream, string entryPath, CancellationToken cancellationToken)
     {
         using var archive = new ZipArchive(archiveStream, ZipArchiveMode.Read, leaveOpen: true);
         var entry = archive.GetEntry(entryPath)
@@ -594,6 +794,36 @@ public static class ZipArchiveSearcher
         await entryStream.CopyToAsync(ms, cancellationToken).ConfigureAwait(false);
         ms.Position = 0;
         return ms;
+    }
+
+    private static async Task<MemoryStream> ExtractSevenZipEntryToMemoryAsync(Stream archiveStream, string entryPath, CancellationToken cancellationToken)
+    {
+        using var extractor = new SharpSevenZipExtractor(archiveStream, leaveOpen: true, InArchiveFormat.SevenZip);
+        ArchiveFileInfo? selectedEntry = null;
+        foreach (var entry in extractor.ArchiveFileData)
+        {
+            if (!entry.IsDirectory && ArchiveEntryNameEquals(entry.FileName, entryPath))
+            {
+                selectedEntry = entry;
+                break;
+            }
+        }
+
+        if (selectedEntry is not ArchiveFileInfo entryInfo)
+            throw new FileNotFoundException($"Entry '{entryPath}' not found in archive.");
+
+        var ms = CreateEntryMemoryStream(entryInfo.Size);
+        try
+        {
+            await Task.Run(() => extractor.ExtractFile(entryInfo.Index, ms), cancellationToken).ConfigureAwait(false);
+            ms.Position = 0;
+            return ms;
+        }
+        catch
+        {
+            ms.Dispose();
+            throw;
+        }
     }
 
     /// <summary>

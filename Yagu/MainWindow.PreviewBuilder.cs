@@ -390,6 +390,8 @@ public sealed partial class MainWindow
                         await BuildHighlightSectionAsync(section, results, allLines, previewLines, rx);
                     else
                         BuildConcatenatedSection(section, results, allLines, previewLines, rx);
+
+                    ApplySingleLineAutoWrap(section, allLines);
                 }
                 else
                 {
@@ -817,6 +819,8 @@ public sealed partial class MainWindow
         else
             BuildConcatenatedSection(section, lazy.Results, allLines, lazy.PreviewLines, rx);
 
+        ApplySingleLineAutoWrap(section, allLines);
+
         _lazyMatchCount -= lazy.MatchCount;
         matSw.Stop();
         LogService.Instance.Info("Preview", $"MaterializeLazySection complete: file='{System.IO.Path.GetFileName(lazy.FilePath)}', elapsed={matSw.ElapsedMilliseconds}ms, remainingLazy={_lazySections.Count}");
@@ -1087,6 +1091,8 @@ public sealed partial class MainWindow
             section.Blocks.Add(para);
         }
 
+        ApplySingleLineAutoWrap(section, allLines);
+
         // Update navigation state
         UpdateMatchNavPanel();
         UpdateSectionMatchNavPanels();
@@ -1161,6 +1167,13 @@ public sealed partial class MainWindow
         }
         singleSw.Stop();
         LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync complete: lines={lineCount}, blocks={PreviewBlock.Blocks.Count}, elapsed={singleSw.ElapsedMilliseconds}ms");
+
+        // Auto-enable word wrap for single-line files so content is visible without horizontal scrolling.
+        if (allLines is { Length: 1 } || (!fullFile && lineCount == 1))
+        {
+            PreviewBlock.TextWrapping = TextWrapping.Wrap;
+            ApplyPreviewHorizontalScrollForWrap(PreviewScrollViewer, wrap: true);
+        }
     }
 
     private void ShowPreviewBlockSurface()
@@ -1351,7 +1364,8 @@ public sealed partial class MainWindow
                     // Re-apply the current wrap state in case the user toggled wrap while
                     // this section was collapsed (we skip collapsed sections in
                     // ApplyWordWrapAsync to keep the toggle responsive for huge previews).
-                    var wrap = ViewModel.PreviewWordWrap;
+                    // Single-line files always stay wrapped regardless of the user toggle.
+                    var wrap = ViewModel.PreviewWordWrap || _singleLineSections.Contains(b);
                     b.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
                     if (exp.Content is Grid eg && eg.Children.OfType<ScrollViewer>().FirstOrDefault() is ScrollViewer scroller)
                         ApplyPreviewHorizontalScrollForWrap(scroller, wrap);
@@ -1567,6 +1581,7 @@ public sealed partial class MainWindow
 
                 // Remove per-section match nav data
                 _sectionMatchNavs.Remove(block);
+                _singleLineSections.Remove(block);
                 _sectionGutterBlocks.Remove(block);
                 _expanderFilePaths.Remove(expander);
                 _expanderHeaderArgs.Remove(expander);
@@ -1935,6 +1950,22 @@ public sealed partial class MainWindow
         }
 
         return current > max ? current : max;
+    }
+
+    /// <summary>
+    /// If the file is a single line, force word wrap on the section so content is
+    /// visible without horizontal scrolling.
+    /// </summary>
+    private void ApplySingleLineAutoWrap(RichTextBlock section, string[]? allLines)
+    {
+        if (allLines is not { Length: 1 }) return;
+
+        _singleLineSections.Add(section);
+        section.TextWrapping = TextWrapping.Wrap;
+
+        // Also disable horizontal scroll on the section's ScrollViewer.
+        if (_sectionMatchNavs.TryGetValue(section, out var sn) && sn.Scroller is ScrollViewer sv)
+            ApplyPreviewHorizontalScrollForWrap(sv, wrap: true);
     }
 
     private sealed record PreviewTextDocument(string Text, Encoding Encoding, long ByteLength, int MaxLineLength);

@@ -263,6 +263,13 @@ public sealed partial class MainWindow
                         $"ShowFullFileEditorAsync: long line loaded with user word-wrap setting, maxLen={document.MaxLineLength:N0}");
             }
 
+            // Auto-enable word wrap for single-line files.
+            if (!text.Contains('\n'))
+            {
+                _previewEditorForcedWrap = true;
+                ApplyPreviewEditorWordWrap(true);
+            }
+
             // Assign while collapsed so the editor does one document load instead of
             // repeatedly re-laying out an ever-growing text buffer.
             var textSetSw = System.Diagnostics.Stopwatch.StartNew();

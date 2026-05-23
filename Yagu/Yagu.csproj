@@ -107,6 +107,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\vendor\TextControlBox-WinUI\TextControlBox\TextControlBox.csproj" />
+    <ProjectReference Include="..\vendor\SharpSevenZip\SharpSevenZip\SharpSevenZip\SharpSevenZip.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -114,6 +115,12 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Include="Everything64.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\vendor\SharpSevenZip\SharpSevenZip\SharpSevenZip\x64\7z.dll" Link="x64\7z.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\vendor\SharpSevenZip\SharpSevenZip\SharpSevenZip\x86\7z.dll" Link="x86\7z.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

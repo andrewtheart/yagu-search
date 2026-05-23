@@ -1045,6 +1045,7 @@ public sealed partial class MainWindow : Window
         public int MatchCount { get; init; } // pre-computed match count for nav label
     }
     private readonly Dictionary<RichTextBlock, LazySection> _lazySections = new();
+    private readonly HashSet<RichTextBlock> _singleLineSections = new();
     private int _lazyMatchCount; // total matches in un-rendered sections
     private bool _previewViewChangedHooked;
     private bool _viewportMaterializePending;
@@ -1225,15 +1226,18 @@ public sealed partial class MainWindow : Window
         {
             ApplyResultsCompactState(args.ItemContainer, _resultsCompactMode);
 
-            // Hydrate evicted items eagerly so context-line bindings have data
-            // when the container is realized (handles recycled containers where
-            // the expander is already in the expanded state).
+            // Hydrate evicted items off the UI thread so context-line bindings have
+            // data when the container is realized.
             if (args.Item is FileGroup g && g.IsExpanded)
             {
-                foreach (var item in g.VisibleResults)
+                var evicted = g.VisibleResults.Where(item => item.IsEvicted).ToList();
+                if (evicted.Count > 0)
                 {
-                    if (item.IsEvicted)
-                        ViewModel.HydrateResult(item);
+                    _ = Task.Run(() =>
+                    {
+                        foreach (var item in evicted)
+                            ViewModel.HydrateResult(item);
+                    });
                 }
             }
         }
@@ -1258,7 +1262,17 @@ public sealed partial class MainWindow : Window
                     if (tag == "CompactDir")
                         tb.Visibility = compact ? Visibility.Visible : Visibility.Collapsed;
                     else if (tag == "WideDir")
+                    {
                         tb.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+                        // Collapse/expand the grid column so it doesn't reserve space when hidden.
+                        if (Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(tb) is Grid g
+                            && g.ColumnDefinitions.Count > 3)
+                        {
+                            g.ColumnDefinitions[3].Width = compact
+                                ? new GridLength(0)
+                                : new GridLength(1, GridUnitType.Star);
+                        }
+                    }
                 }
             }
             else if (child is Microsoft.UI.Xaml.DependencyObject dep)
@@ -1428,6 +1442,7 @@ public sealed partial class MainWindow : Window
         InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
         _sectionMatchNavs.Clear();
+        _singleLineSections.Clear();
         _sectionGutterBlocks.Clear();
         SetHorizontalPreviewScroll(PreviewScrollViewer, enabled: false);
         EnsurePreviewViewChangedHooked();
@@ -2274,18 +2289,22 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void OnFileGroupExpanding(Expander sender, ExpanderExpandingEventArgs args)
+    private async void OnFileGroupExpanding(Expander sender, ExpanderExpandingEventArgs args)
     {
         if (sender.DataContext is FileGroup g)
         {
             try
             {
-                // Hydrate evicted items so context-line bindings have data when the
-                // expander content becomes visible.
-                foreach (var item in g.VisibleResults)
+                // Hydrate evicted items off the UI thread to avoid freezing the GUI
+                // when many results need disk reads.
+                var evicted = g.VisibleResults.Where(item => item.IsEvicted).ToList();
+                if (evicted.Count > 0)
                 {
-                    if (item.IsEvicted)
-                        ViewModel.HydrateResult(item);
+                    await Task.Run(() =>
+                    {
+                        foreach (var item in evicted)
+                            ViewModel.HydrateResult(item);
+                    });
                 }
 
                 LogService.Instance.Info("Preview", $"OnFileGroupExpanding: expand only file='{g.FilePath}', matchCount={g.Count}");
@@ -2784,8 +2803,9 @@ public sealed partial class MainWindow : Window
         ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || wrap);
         foreach (var block in EnumeratePreviewSectionBlocks())
         {
-            if (block.TextWrapping != wrapping)
-                block.TextWrapping = wrapping;
+            var effectiveWrapping = _singleLineSections.Contains(block) ? TextWrapping.Wrap : wrapping;
+            if (block.TextWrapping != effectiveWrapping)
+                block.TextWrapping = effectiveWrapping;
         }
         if (PreviewSectionsPanel.Visibility != Visibility.Visible)
             ApplyPreviewHorizontalScrollForWrap(PreviewScrollViewer, wrap);
@@ -2841,8 +2861,9 @@ public sealed partial class MainWindow : Window
                 // handler in AddPreviewSection).
                 if (expander.IsExpanded && expander.Tag is RichTextBlock block)
                 {
-                    if (block.TextWrapping != wrapping)
-                        block.TextWrapping = wrapping;
+                    var effectiveWrapping = _singleLineSections.Contains(block) ? TextWrapping.Wrap : wrapping;
+                    if (block.TextWrapping != effectiveWrapping)
+                        block.TextWrapping = effectiveWrapping;
 
                     processed++;
                     // Yield to the UI thread between heavy sections so the toggle remains
@@ -3411,18 +3432,27 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void OnShowMoreClicked(object sender, RoutedEventArgs e)
+    private async void OnShowMoreClicked(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement fe && fe.DataContext is FileGroup g)
         {
-            // Hydrate evicted items before making them visible so ShortPreview
-            // can be computed from the restored MatchLine.
+            // Hydrate evicted items off the UI thread before making them visible
+            // so ShortPreview can be computed from the restored MatchLine.
             int start = g.VisibleResults.Count;
             int end = Math.Min(g.Count, start + FileGroup.PageSize);
+            var evicted = new List<SearchResult>();
             for (int i = start; i < end; i++)
             {
                 if (g[i].IsEvicted)
-                    ViewModel.HydrateResult(g[i]);
+                    evicted.Add(g[i]);
+            }
+            if (evicted.Count > 0)
+            {
+                await Task.Run(() =>
+                {
+                    foreach (var item in evicted)
+                        ViewModel.HydrateResult(item);
+                });
             }
             g.ShowMore();
         }
