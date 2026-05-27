@@ -19,6 +19,9 @@ namespace Yagu;
 /// </summary>
 public sealed partial class MainWindow
 {
+    private string? _previewEditorFindHighlightNeedle;
+    private bool _previewEditorFindHighlightMatchCase;
+
     private void OnOpenFindReplaceBar(object sender, RoutedEventArgs e)
     {
         OpenFindBar(showReplace: true);
@@ -41,6 +44,7 @@ public sealed partial class MainWindow
         if (PreviewEditor.Visibility == Visibility.Visible && PreviewEditor.SelectedText.Length > 0 && !PreviewEditor.SelectedText.Contains('\n'))
             FindTextBox.Text = PreviewEditor.SelectedText;
 
+        SyncPreviewEditorFindHighlights();
         FindTextBox.Focus(FocusState.Programmatic);
         FindTextBox.SelectAll();
     }
@@ -64,6 +68,7 @@ public sealed partial class MainWindow
             _findHighlightBlock.TextHighlighters.Clear();
             _findHighlightBlock = null;
         }
+        ClearPreviewEditorFindHighlights();
 
         // Return focus to the editor or preview
         if (PreviewEditor.Visibility == Visibility.Visible)
@@ -102,12 +107,14 @@ public sealed partial class MainWindow
     private void OnFindTextBoxTextChanged(object sender, TextChangedEventArgs e)
     {
         _findIndex = -1; // reset so next find starts from current selection
+        SyncPreviewEditorFindHighlights();
         UpdateFindStatus();
     }
 
     private void OnFindOptionChanged(object sender, RoutedEventArgs e)
     {
         _findIndex = -1;
+        SyncPreviewEditorFindHighlights();
         UpdateFindStatus();
     }
 
@@ -204,6 +211,7 @@ public sealed partial class MainWindow
     {
         if (PreviewEditor.Visibility == Visibility.Visible)
         {
+            SyncPreviewEditorFindHighlights();
             PreviewEditor.Focus(FocusState.Programmatic);
             SelectPreviewEditorText(index, length);
         }
@@ -344,7 +352,7 @@ public sealed partial class MainWindow
     private void UpdateFindStatus()
     {
         var needle = FindTextBox.Text;
-        if (string.IsNullOrEmpty(needle)) { FindStatusText.Text = string.Empty; return; }
+        if (string.IsNullOrEmpty(needle)) { FindStatusText.Text = string.Empty; ClearPreviewEditorFindHighlights(); return; }
         var haystack = FindTarget;
         int count = 0;
         int pos = 0;
@@ -354,6 +362,52 @@ public sealed partial class MainWindow
             pos += needle.Length;
         }
         FindStatusText.Text = count == 0 ? "No matches" : $"{count} match{(count == 1 ? "" : "es")}";
+    }
+
+    private void SyncPreviewEditorFindHighlights(bool force = false)
+    {
+        if (PreviewEditor.Visibility != Visibility.Visible)
+            return;
+
+        var needle = FindTextBox.Text;
+        bool matchCase = FindMatchCaseCheckBox.IsChecked == true;
+        if (FindBar.Visibility != Visibility.Visible || string.IsNullOrEmpty(needle))
+        {
+            ClearPreviewEditorFindHighlights();
+            return;
+        }
+
+        if (!force
+            && string.Equals(_previewEditorFindHighlightNeedle, needle, StringComparison.Ordinal)
+            && _previewEditorFindHighlightMatchCase == matchCase)
+        {
+            return;
+        }
+
+        try
+        {
+            PreviewEditor.BeginSearch(needle, wholeWord: false, matchCase: matchCase);
+            _previewEditorFindHighlightNeedle = needle;
+            _previewEditorFindHighlightMatchCase = matchCase;
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Verbose("Find", $"Could not update editor find highlights for '{needle}'", ex);
+        }
+    }
+
+    private void ClearPreviewEditorFindHighlights()
+    {
+        try
+        {
+            PreviewEditor.EndSearch();
+            _previewEditorFindHighlightNeedle = null;
+            _previewEditorFindHighlightMatchCase = false;
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Verbose("Find", "Could not clear editor find highlights", ex);
+        }
     }
 
     private void ReplaceOne()
@@ -383,6 +437,7 @@ public sealed partial class MainWindow
         _suppressPreviewEditorTextChanged = false;
         _previewEditorDirty = true;
         _findIndex = replaceAt;
+        SyncPreviewEditorFindHighlights();
         SelectFindMatch(replaceAt, replacement.Length);
         UpdatePreviewEditorButtons();
         FindNext();
@@ -419,6 +474,7 @@ public sealed partial class MainWindow
         }
 
         _findIndex = -1;
+        SyncPreviewEditorFindHighlights(force: true);
         FindStatusText.Text = count > 0 ? $"Replaced {count}" : "No matches";
     }
 

@@ -73,7 +73,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         }
     }
 
-    /// <summary>Capped subset of items currently rendered in the UI.</summary>
+    /// <summary>Subset of items currently rendered in the UI. Populated lazily when the group expands.</summary>
     public BatchObservableCollection<SearchResult> VisibleResults { get; } = new();
 
     private volatile bool _cleaned;
@@ -124,13 +124,16 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         if (e.Action == NotifyCollectionChangedAction.Add && e.NewItems is not null)
         {
             bool addedToVisible = false;
-            foreach (SearchResult item in e.NewItems)
+            if (IsExpanded)
             {
-                if (VisibleResults.Count < PageSize)
+                foreach (SearchResult item in e.NewItems)
                 {
-                    _ = item.ShortPreview; // force creation before async eviction clears MatchLine
-                    VisibleResults.Add(item);
-                    addedToVisible = true;
+                    if (VisibleResults.Count < PageSize)
+                    {
+                        _ = item.ShortPreview;
+                        VisibleResults.Add(item);
+                        addedToVisible = true;
+                    }
                 }
             }
             if (Count == PageSize + 1 || (!addedToVisible && Count % HiddenNotificationInterval == 0))
@@ -155,15 +158,35 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     public int RemainingCount => Count - VisibleResults.Count;
     public string ShowMoreText => $"Show more ({RemainingCount:N0} remaining)";
 
-    public void ShowMore()
+    public void ClearVisibleResults()
     {
+        if (VisibleResults.Count == 0) return;
+        VisibleResults.Clear();
+        NotifyMoreStateChanged();
+    }
+
+    public int ShowMore(int maxItems = PageSize)
+    {
+        if (maxItems <= 0)
+            return 0;
+
         int start = VisibleResults.Count;
-        int end = Math.Min(Count, start + PageSize);
+        int end = Math.Min(Count, start + maxItems);
+        if (end <= start)
+        {
+            NotifyMoreStateChanged();
+            return 0;
+        }
+
         var batch = new List<SearchResult>(end - start);
         for (int i = start; i < end; i++)
+        {
+            _ = this[i].ShortPreview;
             batch.Add(this[i]);
+        }
         VisibleResults.AddRange(batch);
         NotifyMoreStateChanged();
+        return batch.Count;
     }
 
     public void ShowAll()
@@ -171,7 +194,10 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         int start = VisibleResults.Count;
         var batch = new List<SearchResult>(Count - start);
         for (int i = start; i < Count; i++)
+        {
+            _ = this[i].ShortPreview;
             batch.Add(this[i]);
+        }
         VisibleResults.AddRange(batch);
         NotifyMoreStateChanged();
     }

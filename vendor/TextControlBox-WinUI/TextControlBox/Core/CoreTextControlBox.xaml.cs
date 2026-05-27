@@ -1140,6 +1140,8 @@ internal sealed partial class CoreTextControlBox : UserControl
 
     public int ZoomFactor { get => zoomManager._ZoomFactor; set { zoomManager._ZoomFactor = value; zoomManager.UpdateZoom(); } } //%
 
+    public int MaxSearchHighlightsPerRender { get; set; } = SearchHighlightsRenderer.DefaultMaxSearchHighlightsPerRender;
+
     public bool IsReadOnly { get => textManager._IsReadOnly; set { textManager._IsReadOnly = inputHandler.IsReadOnly = value; } }
 
     public CursorSize CursorSize { get => cursorRenderer._CursorSize; set { cursorRenderer._CursorSize = value; canvasUpdateManager.UpdateCursor(); } }

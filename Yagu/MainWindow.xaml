@@ -12,7 +12,8 @@
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-    <Grid x:Name="RootGrid" AllowDrop="True" DragOver="OnDragOver" Drop="OnDrop"
+        <Grid x:Name="RootGrid" AllowDrop="True" DragOver="OnDragOver" Drop="OnDrop"
+            SizeChanged="OnRootGridSizeChanged"
           PreviewKeyDown="OnRootGridPreviewKeyDown">
         <Grid.RowDefinitions>
             <RowDefinition x:Name="TitleBarRow" Height="Auto" />  <!-- Custom title bar -->
@@ -96,7 +97,7 @@
         </Border>
 
         <!-- Search controls card -->
-        <Border Grid.Row="2" Margin="16,10,16,4" Padding="16,12"
+        <Border x:Name="SearchControlsBorder" Grid.Row="2" Margin="16,10,16,4" Padding="16,12"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1" CornerRadius="8">
@@ -211,7 +212,7 @@
                             <TextBlock Text="Advanced Options" VerticalAlignment="Center" />
                         </StackPanel>
                     </Expander.Header>
-                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        <Border Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                             BorderThickness="1" CornerRadius="4" Padding="24,16,12,16">
                     <StackPanel Spacing="10">
@@ -355,6 +356,47 @@
                             <ToggleSwitch OnContent="Search binary" OffContent="Search binary"
                                           IsOn="{x:Bind ViewModel.SearchBinary, Mode=TwoWay}"
                                           VerticalAlignment="Center" MinWidth="0" />
+                            <DropDownButton Content="{x:Bind ViewModel.BinaryExtensionsSummary, Mode=OneWay}"
+                                            Visibility="{x:Bind ViewModel.BinaryExtensionsVisibility, Mode=OneWay}"
+                                            VerticalAlignment="Center" FontSize="12"
+                                            ToolTipService.ToolTip="Known compiled binary/build artifact extensions to skip even when binary search is enabled">
+                                <DropDownButton.Flyout>
+                                    <Flyout Placement="BottomEdgeAlignedLeft">
+                                        <StackPanel Width="320" Spacing="2">
+                                            <Grid Margin="0,0,0,6">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="Binary Extensions" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                                <HyperlinkButton Grid.Column="1" Content="All" Click="OnBinaryExtSelectAll" Padding="4,2" />
+                                                <HyperlinkButton Grid.Column="2" Content="None" Click="OnBinaryExtSelectNone" Padding="4,2" />
+                                            </Grid>
+                                            <ScrollViewer MaxHeight="380" VerticalScrollBarVisibility="Auto">
+                                                <ItemsRepeater x:Name="BinaryExtRepeater"
+                                                               ItemsSource="{x:Bind ViewModel.BinaryExtensionItems, Mode=OneWay}">
+                                                    <ItemsRepeater.Layout>
+                                                        <StackLayout Spacing="0" />
+                                                    </ItemsRepeater.Layout>
+                                                    <ItemsRepeater.ItemTemplate>
+                                                        <DataTemplate x:DataType="vm:SkipExtensionItem">
+                                                            <CheckBox IsChecked="{x:Bind IsEnabled, Mode=TwoWay}"
+                                                                      MinWidth="0" MinHeight="0" Padding="6,2"
+                                                                      Checked="OnBinaryExtToggled" Unchecked="OnBinaryExtToggled">
+                                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                                    <TextBlock Text="{x:Bind Extension}" FontFamily="Consolas" Width="50" />
+                                                                    <TextBlock Text="{x:Bind Category}" Opacity="0.5" FontSize="11" />
+                                                                </StackPanel>
+                                                            </CheckBox>
+                                                        </DataTemplate>
+                                                    </ItemsRepeater.ItemTemplate>
+                                                </ItemsRepeater>
+                                            </ScrollViewer>
+                                        </StackPanel>
+                                    </Flyout>
+                                </DropDownButton.Flyout>
+                            </DropDownButton>
                             <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                                 <ToggleSwitch OnContent="Search archives" OffContent="Search archives"
                                               IsOn="{x:Bind ViewModel.SearchInsideArchives, Mode=TwoWay}"
@@ -478,7 +520,7 @@
         </Border>
 
         <!-- Status / progress -->
-        <StackPanel Grid.Row="3" Padding="16,2,16,2" Spacing="4">
+        <StackPanel x:Name="SearchStatusPanel" Grid.Row="3" Padding="16,2,16,2" Spacing="4">
             <ProgressBar
                 Visibility="{x:Bind ViewModel.IsSearching, Mode=OneWay}"
                 Maximum="{x:Bind ViewModel.TotalFiles, Mode=OneWay}"
@@ -786,7 +828,7 @@
                                             <SolidColorBrush Color="{ThemeResource SystemAccentColor}" />
                                         </TextBlock.Foreground>
                                     </TextBlock>
-                                    <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}" Expanding="OnFileGroupExpanding">
+                                    <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}" Expanding="OnFileGroupExpanding" Collapsed="OnFileGroupCollapsed">
                                     <Expander.Header>
                                         <Grid PointerPressed="OnFileGroupHeaderPointerPressed" PointerReleased="OnFileGroupHeaderPointerReleased" Tapped="OnFileGroupHeaderTapped" DoubleTapped="OnFileGroupHeaderDoubleTapped" Tag="{x:Bind FilePath}" Background="Transparent">
                                             <Grid.ContextFlyout>
@@ -843,7 +885,7 @@
                                                        Visibility="Collapsed" />
                                             <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,2,0,0">
                                                 <TextBlock Opacity="0.45" FontSize="11">
-                                                    <Run Text="Modified:" /><Run Text=" " /><Run Text="{x:Bind FormattedDate}" /><Run Text=" | Size:" /><Run Text=" " /><Run Text="{x:Bind FormattedSize}" />
+                                                    <Run Text="Modified:" /><Run Text=" " /><Run Text="{x:Bind FormattedDate, Mode=OneWay}" /><Run Text=" | Size:" /><Run Text=" " /><Run Text="{x:Bind FormattedSize, Mode=OneWay}" />
                                                 </TextBlock>
                                             </StackPanel>
                                         </StackPanel>
@@ -1330,9 +1372,12 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <TextBlock Text="{x:Bind ViewModel.FilesPerSecondText, Mode=OneWay}" Opacity="0.6" FontSize="12" FontFamily="Consolas" />
+            <TextBlock Text="{x:Bind ViewModel.FilesPerSecondText, Mode=OneWay}"
+                     Visibility="{x:Bind ViewModel.StatsForNerdsVisibility, Mode=OneWay}"
+                     Opacity="0.6" FontSize="12" FontFamily="Consolas" />
             <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Opacity="0.8" FontSize="12" />
-            <Grid Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Stretch" Height="20">
+            <Grid Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Stretch" Height="20"
+                Visibility="{x:Bind ViewModel.StatsForNerdsVisibility, Mode=OneWay}">
                 <!-- Background utilization gauge -->
                 <Rectangle x:Name="DiskGaugeBar" HorizontalAlignment="Left" VerticalAlignment="Stretch"
                            Fill="CornflowerBlue" Opacity="0.18" Width="0" />

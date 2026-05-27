@@ -46,6 +46,8 @@ public sealed partial class MainViewModel : ObservableObject
     private System.Diagnostics.Stopwatch? _searchTimer;
     private DateTime _searchStartedUtc;
     private TimeSpan _lastSearchElapsed;
+    private long _lastSearchSortRefreshTicks;
+    private bool _searchSortRefreshQueued;
     private long _bytesScanned;
     private long _prevBytesScanned;
     private int _prevFilesScanned;
@@ -56,6 +58,8 @@ public sealed partial class MainViewModel : ObservableObject
     private static int s_postEvictionCompactingGcInFlight;
     private static long s_lastPostEvictionCompactingGcTicks;
     private static readonly TimeSpan PostEvictionCompactingGcCooldown = TimeSpan.FromSeconds(15);
+    private static readonly long SearchSortRefreshIntervalTicks = System.Diagnostics.Stopwatch.Frequency * 2;
+    private const int InSearchSortRefreshMaxGroups = 5000;
 
     public MainViewModel() : this(new SearchService(), new SettingsService(), new EditorLauncher(),
                                    DispatcherQueue.GetForCurrentThread())
@@ -119,13 +123,18 @@ public sealed partial class MainViewModel : ObservableObject
         MemoryLimitMB = _settings.MemoryLimitMB;
         MemoryPressurePercent = _settings.MemoryPressurePercent;
         ShowMemoryPressureWarningLabel = _settings.ShowMemoryPressureWarningLabel;
+        ShowStatsForNerds = _settings.ShowStatsForNerds;
         SdkChannelBufferSize = _settings.SdkChannelBufferSize;
         MaxMatchesPerFile = _settings.MaxMatchesPerFile;
         ApplyMaxMatchesPerFile(MaxMatchesPerFile);
         SkipBinary = _settings.SkipBinary;
         SearchInsideArchives = _settings.SearchInsideArchives;
-        ArchiveExtensions = _settings.ArchiveExtensions;
-        SkipExtensions = _settings.SkipExtensions;
+        SettingsSkipExtensions = _settings.SkipExtensions;
+        SettingsBinaryExtensions = _settings.BinaryExtensions;
+        SettingsArchiveExtensions = _settings.ArchiveExtensions;
+        SkipExtensions = SettingsSkipExtensions;
+        BinaryExtensions = SettingsBinaryExtensions;
+        ArchiveExtensions = SettingsArchiveExtensions;
         SuppressAdminWarning = _settings.SuppressAdminWarning;
         ExcludeAdminProtectedPaths = _settings.ExcludeAdminProtectedPaths;
         AdminProtectedPathSegments = string.IsNullOrWhiteSpace(_settings.AdminProtectedPathSegments)
@@ -159,6 +168,7 @@ public sealed partial class MainViewModel : ObservableObject
         foreach (var q in _settings.SearchHistory) SearchHistory.Add(q);
 
         SyncSkipExtensionItems();
+        SyncBinaryExtensionItems();
         SyncArchiveExtensionItems();
     }
 
@@ -333,6 +343,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial int MemoryLimitMB { get; set; }
     [ObservableProperty] public partial int MemoryPressurePercent { get; set; } = 75;
     [ObservableProperty] public partial bool ShowMemoryPressureWarningLabel { get; set; } = true;
+    [ObservableProperty] public partial bool ShowStatsForNerds { get; set; } = true;
     [ObservableProperty] public partial int SdkChannelBufferSize { get; set; } = 4096;
     [ObservableProperty] public partial int MaxMatchesPerFile { get; set; }
     [ObservableProperty] public partial double MaxSearchDepth { get; set; } = double.NaN;
@@ -373,11 +384,16 @@ public sealed partial class MainViewModel : ObservableObject
     partial void OnSkipBinaryChanged(bool value)
     {
         OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(SearchBinary)));
+        OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(BinaryExtensionsVisibility)));
     }
 
     [ObservableProperty] public partial string SkipExtensions { get; set; } = AppSettings.DefaultSkipExtensions;
+    [ObservableProperty] public partial string BinaryExtensions { get; set; } = AppSettings.DefaultBinaryExtensions;
     [ObservableProperty] public partial bool SearchInsideArchives { get; set; }
     [ObservableProperty] public partial string ArchiveExtensions { get; set; } = AppSettings.DefaultArchiveExtensions;
+    [ObservableProperty] public partial string SettingsSkipExtensions { get; set; } = AppSettings.DefaultSkipExtensions;
+    [ObservableProperty] public partial string SettingsBinaryExtensions { get; set; } = AppSettings.DefaultBinaryExtensions;
+    [ObservableProperty] public partial string SettingsArchiveExtensions { get; set; } = AppSettings.DefaultArchiveExtensions;
     [ObservableProperty] public partial int PreviewEditorMaxSizeMB { get; set; } = 32;
     [ObservableProperty] public partial int PreviewEditorMaxTextLength { get; set; } = 20_000_000;
     [ObservableProperty] public partial int PreviewEditorMaxLineLength { get; set; } = 1_000_000;
@@ -528,6 +544,12 @@ public sealed partial class MainViewModel : ObservableObject
         SyncSkipExtensionItems();
     }
 
+    partial void OnSettingsSkipExtensionsChanged(string value)
+    {
+        if (_suppressSkipExtensionSync || _updatingSkipExtensionsFromItems) return;
+        SyncSkipExtensionItems();
+    }
+
     /// <summary>Rebuild the <see cref="SkipExtensionItems"/> collection from the current <see cref="SkipExtensions"/> string.</summary>
     public void SyncSkipExtensionItems()
     {
@@ -535,15 +557,13 @@ public sealed partial class MainViewModel : ObservableObject
         try
         {
             var enabled = ParseExtensionSet(SkipExtensions);
-            // Gather all known extensions: union of currently enabled + all category keys
-            var allExts = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var e in enabled) allExts.Add(e);
-            foreach (var e in ExtensionCategories.Keys) allExts.Add(e);
+            var available = ParseExtensionSet(SettingsSkipExtensions);
+            foreach (var ext in enabled)
+                available.Add(ext);
 
             SkipExtensionItems.Clear();
 
-            // Group by category, sorted
-            var groups = allExts
+            var groups = available
                 .GroupBy(CategorizeExtension)
                 .OrderBy(g => g.Key);
 
@@ -579,6 +599,86 @@ public sealed partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(SkipExtensionsSummary));
     }
 
+    // ── Binary extensions dropdown ───────────────────────────────
+
+    public ObservableCollection<SkipExtensionItem> BinaryExtensionItems { get; } = [];
+
+    public string BinaryExtensionsSummary
+    {
+        get
+        {
+            int enabled = BinaryExtensionItems.Count(i => i.IsEnabled);
+            int total = BinaryExtensionItems.Count;
+            return total == 0 ? "Binary ext: none" : $"Binary ext: {enabled}/{total}";
+        }
+    }
+
+    public Microsoft.UI.Xaml.Visibility BinaryExtensionsVisibility => SearchBinary
+        ? Microsoft.UI.Xaml.Visibility.Visible
+        : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+    private bool _suppressBinaryExtensionSync;
+    private bool _updatingBinaryExtensionsFromItems;
+
+    partial void OnBinaryExtensionsChanged(string value)
+    {
+        if (_suppressBinaryExtensionSync || _updatingBinaryExtensionsFromItems) return;
+        SyncBinaryExtensionItems();
+    }
+
+    partial void OnSettingsBinaryExtensionsChanged(string value)
+    {
+        if (_suppressBinaryExtensionSync || _updatingBinaryExtensionsFromItems) return;
+        SyncBinaryExtensionItems();
+    }
+
+    public void SyncBinaryExtensionItems()
+    {
+        _suppressBinaryExtensionSync = true;
+        try
+        {
+            var enabled = ParseExtensionSet(BinaryExtensions);
+            var available = ParseExtensionSet(SettingsBinaryExtensions);
+            foreach (var ext in enabled)
+                available.Add(ext);
+
+            BinaryExtensionItems.Clear();
+
+            var groups = available
+                .GroupBy(CategorizeExtension)
+                .OrderBy(g => g.Key);
+
+            foreach (var group in groups)
+            {
+                foreach (var ext in group.OrderBy(e => e, StringComparer.OrdinalIgnoreCase))
+                {
+                    BinaryExtensionItems.Add(new SkipExtensionItem(ext, group.Key, enabled.Contains(ext)));
+                }
+            }
+            OnPropertyChanged(nameof(BinaryExtensionsSummary));
+        }
+        finally
+        {
+            _suppressBinaryExtensionSync = false;
+        }
+    }
+
+    public void OnBinaryExtensionToggled()
+    {
+        if (_suppressBinaryExtensionSync) return;
+
+        _updatingBinaryExtensionsFromItems = true;
+        try
+        {
+            BinaryExtensions = string.Join(';', BinaryExtensionItems.Where(i => i.IsEnabled).Select(i => i.Extension));
+        }
+        finally
+        {
+            _updatingBinaryExtensionsFromItems = false;
+        }
+        OnPropertyChanged(nameof(BinaryExtensionsSummary));
+    }
+
     // ── Archive (ZIP-like) extensions dropdown ────────────────────
 
     /// <summary>Observable collection of archive-extension items for the multi-select dropdown.</summary>
@@ -589,8 +689,9 @@ public sealed partial class MainViewModel : ObservableObject
     {
         get
         {
-            int count = ArchiveExtensionItems.Count;
-            return count == 0 ? "Archive ext: none" : $"Archive ext: {count}";
+            int enabled = ArchiveExtensionItems.Count(i => i.IsEnabled);
+            int total = ArchiveExtensionItems.Count;
+            return total == 0 ? "Archive ext: none" : $"Archive ext: {enabled}/{total}";
         }
     }
 
@@ -628,6 +729,12 @@ public sealed partial class MainViewModel : ObservableObject
         SyncArchiveExtensionItems();
     }
 
+    partial void OnSettingsArchiveExtensionsChanged(string value)
+    {
+        if (_suppressArchiveExtensionSync || _updatingArchiveExtensionsFromItems) return;
+        SyncArchiveExtensionItems();
+    }
+
     /// <summary>Rebuild the <see cref="ArchiveExtensionItems"/> collection from the current <see cref="ArchiveExtensions"/> string.</summary>
     public void SyncArchiveExtensionItems()
     {
@@ -635,12 +742,13 @@ public sealed partial class MainViewModel : ObservableObject
         try
         {
             var enabled = ParseExtensionSet(ArchiveExtensions);
+            var available = ParseExtensionSet(SettingsArchiveExtensions);
+            foreach (var ext in enabled)
+                available.Add(ext);
 
             ArchiveExtensionItems.Clear();
 
-            // Only show extensions that are currently configured — removing one
-            // from the settings text box removes it from the dropdown entirely.
-            var groups = enabled
+            var groups = available
                 .GroupBy(CategorizeArchiveExtension)
                 .OrderBy(g => g.Key);
 
@@ -648,7 +756,7 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 foreach (var ext in group.OrderBy(e => e, StringComparer.OrdinalIgnoreCase))
                 {
-                    ArchiveExtensionItems.Add(new SkipExtensionItem(ext, group.Key, isEnabled: true));
+                    ArchiveExtensionItems.Add(new SkipExtensionItem(ext, group.Key, enabled.Contains(ext)));
                 }
             }
             OnPropertyChanged(nameof(ArchiveExtensionsSummary));
@@ -664,19 +772,10 @@ public sealed partial class MainViewModel : ObservableObject
     {
         if (_suppressArchiveExtensionSync) return;
 
-        // Remove unchecked items directly instead of rebuilding the whole
-        // collection — a full Clear()+rebuild while the ItemsRepeater is
-        // materializing templates crashes WinUI.
-        for (int i = ArchiveExtensionItems.Count - 1; i >= 0; i--)
-        {
-            if (!ArchiveExtensionItems[i].IsEnabled)
-                ArchiveExtensionItems.RemoveAt(i);
-        }
-
         _updatingArchiveExtensionsFromItems = true;
         try
         {
-            ArchiveExtensions = string.Join(';', ArchiveExtensionItems.Select(i => i.Extension));
+            ArchiveExtensions = string.Join(';', ArchiveExtensionItems.Where(i => i.IsEnabled).Select(i => i.Extension));
         }
         finally
         {
@@ -749,6 +848,10 @@ public sealed partial class MainViewModel : ObservableObject
         ShowMemoryPressureWarningLabel && !string.IsNullOrWhiteSpace(DegradedNoticeText)
             ? Microsoft.UI.Xaml.Visibility.Visible
             : Microsoft.UI.Xaml.Visibility.Collapsed;
+    public Microsoft.UI.Xaml.Visibility StatsForNerdsVisibility =>
+        ShowStatsForNerds
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
 
     private SkipBreakdown? _lastSkipBreakdown;
     private const string ExtensionExclusionSkipNote = "Files excluded by extension during discovery are filtered before counting and are not included in skipped counts.";
@@ -792,6 +895,7 @@ public sealed partial class MainViewModel : ObservableObject
     partial void OnErrorTextChanged(string? value) => OnPropertyChanged(nameof(HasErrorText));
     partial void OnDegradedNoticeTextChanged(string value) => OnPropertyChanged(nameof(MemoryPressureWarningVisibility));
     partial void OnShowMemoryPressureWarningLabelChanged(bool value) => OnPropertyChanged(nameof(MemoryPressureWarningVisibility));
+    partial void OnShowStatsForNerdsChanged(bool value) => OnPropertyChanged(nameof(StatsForNerdsVisibility));
     partial void OnFilesSkippedChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); }
     partial void OnAccessDeniedCountChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); }
     partial void OnSortModeIndexChanged(int value)
@@ -909,7 +1013,7 @@ public sealed partial class MainViewModel : ObservableObject
         // Validate: skip extensions must not contradict archive extensions when archive search is on.
         if (SearchInsideArchives)
         {
-            var skipSet = ParseExtensionSet(SkipExtensions);
+            var skipSet = BuildEffectiveSkipExtensionSet();
             var archiveSet = ParseExtensionSet(ArchiveExtensions);
             var conflicts = skipSet.Intersect(archiveSet, StringComparer.OrdinalIgnoreCase).OrderBy(e => e, StringComparer.OrdinalIgnoreCase).ToList();
             if (conflicts.Count > 0)
@@ -958,6 +1062,8 @@ public sealed partial class MainViewModel : ObservableObject
             SyncRecent();
             await PersistSettingsAsync();
 
+            var effectiveSkipExtensions = BuildEffectiveSkipExtensionSet();
+
             var options = new SearchOptions
             {
                 Directory = Directory,
@@ -981,7 +1087,7 @@ public sealed partial class MainViewModel : ObservableObject
                 SkipBinary = SkipBinary,
                 ObeyGitignore = ObeyGitignore,
                 GitignoreTakesPrecedence = GitignoreTakesPrecedence,
-                SkipExtensions = ParseExtensionSet(SkipExtensions),
+                SkipExtensions = effectiveSkipExtensions,
                 SearchInsideArchives = SearchInsideArchives,
                 ArchiveExtensions = ParseDottedExtensionSet(ArchiveExtensions),
                 MaxDegreeOfParallelism = ResolveParallelism(ParallelismIndex),
@@ -1051,7 +1157,7 @@ public sealed partial class MainViewModel : ObservableObject
                         break;
                     case SearchEvent.Match m:
                         uiMatchesReceived++;
-                        AddMatch(m.Result);
+                        await AddMatchAsync(m.Result, token).ConfigureAwait(true);
                         break;
                     case SearchEvent.MatchBatch mb:
                         // Drain the whole batch under a single dispatcher tick. AddMatch is
@@ -1061,7 +1167,7 @@ public sealed partial class MainViewModel : ObservableObject
                         // we own it now and don't need a copy.
                         uiMatchesReceived += mb.Results.Count;
                         uiEventSw.Restart();
-                        AddMatches(mb.Results);
+                        await AddMatchesAsync(mb.Results, token).ConfigureAwait(true);
                         uiEventSw.Stop();
                         if (uiEventSw.ElapsedMilliseconds > 200)
                         {
@@ -1087,12 +1193,9 @@ public sealed partial class MainViewModel : ObservableObject
                         DegradedNoticeText = "Memory pressure — paging results to disk";
                         Degraded = true;
                         LogService.Instance.Warning("ViewModel", $"Memory pressure event received — starting async eviction ({_resultCollection.AllGroups.Count:N0} groups, {MatchesFound:N0} matches)");
-                        // Fire-and-forget: the eviction must NOT block this UI event loop,
-                        // otherwise Progress/Match events back up while paging is in flight
-                        // and the search appears frozen. EvictAll only enqueues into the
-                        // ResultStore's background drain channel and returns immediately;
-                        // the actual disk writes and post-eviction compacting GC happen
-                        // on the threadpool below.
+                        // Fire-and-forget from the UI thread: the background task may wait
+                        // for ResultStore queue space so existing payloads do not pile up
+                        // in RAM while the disk writer catches up.
                         _ = Task.Run(() =>
                         {
                             var evictSw = System.Diagnostics.Stopwatch.StartNew();
@@ -1205,6 +1308,8 @@ public sealed partial class MainViewModel : ObservableObject
     private void ResetStateForNewSearch()
     {
         _cts = null;
+        _lastSearchSortRefreshTicks = 0;
+        _searchSortRefreshQueued = false;
 
         // Cancel pending metadata tasks first so fire-and-forget closures
         // release their FileGroup references promptly.
@@ -1362,27 +1467,49 @@ public sealed partial class MainViewModel : ObservableObject
         catch (Exception ex) { LogService.Instance.Verbose("Clipboard", "Clipboard unavailable", ex); }
     }
 
-    private void AddMatch(SearchResult result)
+    private async Task AddMatchAsync(SearchResult result, CancellationToken cancellationToken)
     {
+        if (Degraded && _resultStore is not null)
+            await EvictNewResultsBeforeUiAsync([result], cancellationToken).ConfigureAwait(true);
+
         bool resultAvailabilityChanged = AddMatchCore(result, evictedResultWriter: null);
 
-        if (Degraded && _resultStore is not null)
-            _resultStore.EnqueueEvict(result);
+        QueueSearchSortRefreshIfDue();
 
         if (resultAvailabilityChanged)
             NotifyResultAvailabilityChanged();
     }
 
-    private void AddMatches(IReadOnlyList<SearchResult> results)
+    private async Task AddMatchesAsync(IReadOnlyList<SearchResult> results, CancellationToken cancellationToken)
     {
+        if (Degraded && _resultStore is not null)
+            await EvictNewResultsBeforeUiAsync(results, cancellationToken).ConfigureAwait(true);
+
         bool resultAvailabilityChanged = _resultCollection.AddRange(
             results,
             InitializeResultGroup,
-            evictNewResults: Degraded,
-            Degraded ? _resultStore : null);
+            evictNewResults: false,
+            resultStore: null);
+
+        QueueSearchSortRefreshIfDue();
 
         if (resultAvailabilityChanged)
             NotifyResultAvailabilityChanged();
+    }
+
+    private async Task EvictNewResultsBeforeUiAsync(IReadOnlyList<SearchResult> results, CancellationToken cancellationToken)
+    {
+        if (_resultStore is null || results.Count == 0)
+            return;
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        int evicted = await Task.Run(() => _resultStore.EvictManyNow(results), cancellationToken).ConfigureAwait(true);
+        sw.Stop();
+        if (sw.ElapsedMilliseconds >= 500)
+        {
+            LogService.Instance.Warning("ViewModel",
+                $"Pre-evicted {evicted:N0}/{results.Count:N0} new result payload(s) before UI insertion in {sw.ElapsedMilliseconds}ms");
+        }
     }
 
     private bool AddMatchCore(
@@ -1439,6 +1566,41 @@ public sealed partial class MainViewModel : ObservableObject
         || GroupMode is GroupMode.DateRangeModified or GroupMode.DateRangeCreated or GroupMode.DateRangeModifiedCreated
         || GroupMode == GroupMode.FileSize
         || SortModeIndex is 2 or 3;
+
+    private void QueueSearchSortRefreshIfDue()
+    {
+        int groupCount = _resultCollection.AllGroups.Count;
+        if (!IsSearching || Degraded || _searchSortRefreshQueued || groupCount < 2 || groupCount > InSearchSortRefreshMaxGroups)
+            return;
+
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (_lastSearchSortRefreshTicks != 0 && now - _lastSearchSortRefreshTicks < SearchSortRefreshIntervalTicks)
+            return;
+
+        _searchSortRefreshQueued = true;
+        _lastSearchSortRefreshTicks = now;
+
+        if (!_dispatcher.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            _searchSortRefreshQueued = false;
+            int currentGroupCount = _resultCollection.AllGroups.Count;
+            if (!IsSearching || Degraded || currentGroupCount < 2 || currentGroupCount > InSearchSortRefreshMaxGroups)
+                return;
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            ApplySortAndFilter();
+            sw.Stop();
+
+            if (sw.ElapsedMilliseconds >= 200)
+            {
+                LogService.Instance.Warning("ViewModel",
+                    $"Periodic in-search sort refresh took {sw.ElapsedMilliseconds}ms for {currentGroupCount:N0} group(s)");
+            }
+        }))
+        {
+            _searchSortRefreshQueued = false;
+        }
+    }
 
     private void NotifyResultAvailabilityChanged()
     {
@@ -1803,12 +1965,14 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.MemoryLimitMB = MemoryLimitMB;
         _settings.MemoryPressurePercent = MemoryPressurePercent;
         _settings.ShowMemoryPressureWarningLabel = ShowMemoryPressureWarningLabel;
+        _settings.ShowStatsForNerds = ShowStatsForNerds;
         _settings.SdkChannelBufferSize = SdkChannelBufferSize;
         _settings.MaxMatchesPerFile = MaxMatchesPerFile;
         _settings.SkipBinary = SkipBinary;
         _settings.SearchInsideArchives = SearchInsideArchives;
-        _settings.ArchiveExtensions = ArchiveExtensions;
-        _settings.SkipExtensions = SkipExtensions;
+        _settings.ArchiveExtensions = SettingsArchiveExtensions;
+        _settings.SkipExtensions = SettingsSkipExtensions;
+        _settings.BinaryExtensions = SettingsBinaryExtensions;
         _settings.SuppressAdminWarning = SuppressAdminWarning;
         _settings.ExcludeAdminProtectedPaths = ExcludeAdminProtectedPaths;
         _settings.AdminProtectedPathSegments = AdminProtectedPathSegments;
@@ -1875,6 +2039,14 @@ public sealed partial class MainViewModel : ObservableObject
                 s.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                  .Select(e => e.TrimStart('.', '*')),
                 StringComparer.OrdinalIgnoreCase);
+
+    private HashSet<string> BuildEffectiveSkipExtensionSet()
+    {
+        var effective = ParseExtensionSet(SkipExtensions);
+        foreach (var ext in ParseExtensionSet(BinaryExtensions))
+            effective.Add(ext);
+        return effective;
+    }
 
     /// <summary>Parse a semicolon-separated extension string into a set WITH leading dots (e.g. ".zip", ".docx").</summary>
     private static HashSet<string> ParseDottedExtensionSet(string s)

@@ -97,7 +97,7 @@ public sealed class SearchOptions
         };
     }
 
-    /// <summary>Hard process working-set cap in bytes. 0 = auto (50% of physical RAM, min 2 GB).</summary>
+    /// <summary>Hard process working-set cap in bytes. 0 = automatic sub-GB paging target.</summary>
     public long MaxProcessMemoryBytes { get; init; }
 
     /// <summary>System-wide memory pressure threshold (0-100). 0 = disabled.</summary>

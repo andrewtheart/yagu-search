@@ -463,8 +463,8 @@ public sealed partial class MainWindow
         // Update match count and file count to reflect all loaded files.
         int loadedFiles = PreviewSectionsPanel.Children.OfType<Expander>().Count();
         var (deferredFileCount, deferredMatchCount) = GetDeferredCounts();
-        int totalMatches = _matchParagraphs.Count + _lazyMatchCount + deferredMatchCount;
-        int grandFileCount = loadedFiles + deferredFileCount;
+        int totalMatches = _previewTotalMatchCount > 0 ? _previewTotalMatchCount : _matchParagraphs.Count + _lazyMatchCount + deferredMatchCount;
+        int grandFileCount = _previewTotalFileCount > 0 ? _previewTotalFileCount : loadedFiles + deferredFileCount;
         SetPreviewFileLabel(
             $"{totalMatches:N0} selected matches across {grandFileCount:N0} file(s)",
             string.Join(Environment.NewLine, orderedFiles.Take(finalEnd).Select(kv => kv.Key)));
@@ -1178,6 +1178,7 @@ public sealed partial class MainWindow
 
     private void ShowPreviewBlockSurface()
     {
+        PreviewScrollViewer.Padding = new Thickness(16, 12, 16, 12);
         PreviewSectionsPanel.Children.Clear();
         PreviewSectionsPanel.Visibility = Visibility.Collapsed;
         PreviewBlock.Visibility = Visibility.Visible;
@@ -1191,6 +1192,7 @@ public sealed partial class MainWindow
     private void ShowPreviewSectionsSurface()
     {
         LogService.Instance.Info("Preview", $"ShowPreviewSectionsSurface: clearing {PreviewSectionsPanel.Children.Count} existing sections");
+        PreviewScrollViewer.Padding = new Thickness(0, 0, 0, 0);
         PreviewBlock.Blocks.Clear();
         PreviewBlock.Visibility = Visibility.Collapsed;
         PreviewSectionsPanel.Children.Clear();
@@ -1202,8 +1204,9 @@ public sealed partial class MainWindow
         SetHorizontalPreviewScroll(PreviewScrollViewer, enabled: false);
     }
 
-    private void ShowPreviewLoading(string message = "Loading preview\u2026")
+    private void ShowPreviewLoading(string message = "Loading preview…")
     {
+        PreviewScrollViewer.Padding = new Thickness(16, 12, 16, 12);
         PreviewMessagePanel.Visibility = Visibility.Collapsed;
         PreviewSectionsPanel.Visibility = Visibility.Collapsed;
         PreviewLoadingText.Text = message;
@@ -1290,7 +1293,6 @@ public sealed partial class MainWindow
 
         var content = new Border
         {
-            Padding = new Thickness(0, 4, 0, 8),
             Child = block,
         };
         block.AddHandler(UIElement.PointerPressedEvent,
@@ -1326,7 +1328,7 @@ public sealed partial class MainWindow
 
         var gutterBorder = new Border
         {
-            Padding = new Thickness(8, 4, 0, 8),
+            Padding = new Thickness(8, 0, 0, 0),
             Child = gutterBlock,
         };
         Grid.SetColumn(gutterBorder, 0);
@@ -1386,6 +1388,8 @@ public sealed partial class MainWindow
         // Tooltip is set on the header grid only (BuildPreviewSectionHeader);
         // setting it on the Expander itself would also show when hovering the
         // content body, which is noisy.
+        if (results is not null)
+            RegisterSectionMatchTotal(block, results.Count);
         _blockExpanderCache[block] = expander;
         _expanderFilePaths[expander] = filePath;
         _expanderHeaderArgs[expander] = (filePath, detail, block, results);
@@ -1556,6 +1560,17 @@ public sealed partial class MainWindow
 
         grid.Children.Add(buttonPanel);
 
+        if (sectionBlock is not null)
+        {
+            var capturedBlock = sectionBlock;
+            var capturedPath = filePath;
+            var closeItem = new MenuFlyoutItem { Text = "Close" };
+            closeItem.Click += (_, _) => RemovePreviewSection(capturedBlock, capturedPath);
+            var flyout = new MenuFlyout();
+            flyout.Items.Add(closeItem);
+            grid.ContextFlyout = flyout;
+        }
+
         ToolTipService.SetToolTip(grid, filePath);
         return grid;
     }
@@ -1596,6 +1611,13 @@ public sealed partial class MainWindow
                 if (_lazySections.Remove(block, out var lazy))
                     _lazyMatchCount -= lazy.MatchCount;
 
+                int sectionTotal = _sectionTotalMatchCounts.TryGetValue(block, out int registeredTotal)
+                    ? registeredTotal
+                    : 0;
+                _sectionTotalMatchCounts.Remove(block);
+                if (sectionTotal > 0)
+                    SubtractPreviewMatchTotals(sectionTotal, files: 1);
+
                 // Remove global matches for this block
                 _matchParagraphs.RemoveAll(m => m.block == block);
                 _currentMatchIndex = -1;
@@ -1609,6 +1631,16 @@ public sealed partial class MainWindow
                 {
                     group.DeselectAll();
                     group.IsExpanded = false;
+                    group.ClearVisibleResults();
+                }
+
+                if (!PreviewSectionsPanel.Children.OfType<Expander>().Any())
+                {
+                    SetPreviewFileLabel(string.Empty);
+                    PreviewToolbarContent.Visibility = Visibility.Collapsed;
+                    _previewResult = null;
+                    HideMatchNavPanel();
+                    UpdateExpandAllButtonVisibility();
                 }
                 return;
             }
@@ -1636,6 +1668,7 @@ public sealed partial class MainWindow
         {
             Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
             ShowPreviewSectionsSurface();
+            SetPreviewMatchTotals(targets.Sum(t => t.Matches.Count), targets.Count);
 
             int filesLoaded = 0;
             (RichTextBlock block, Paragraph para, int matchInPara)? firstMatch = null;
@@ -1713,7 +1746,9 @@ public sealed partial class MainWindow
     private RichTextBlock AddFullFileSection(FullFilePreviewTarget target, long? byteLength)
     {
         var detail = byteLength.HasValue ? FormatBytes(byteLength.Value) : null;
-        return AddPreviewSection(target.FilePath, detail).block;
+        var block = AddPreviewSection(target.FilePath, detail).block;
+        RegisterSectionMatchTotal(block, target.Matches.Count);
+        return block;
     }
 
     private static void AddFullFileError(RichTextBlock section, string message)

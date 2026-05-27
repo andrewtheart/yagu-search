@@ -11,7 +11,9 @@ internal sealed partial class AppSettingsJsonContext : JsonSerializerContext { }
 public sealed class AppSettings
 {
     public const string LegacyDefaultSkipExtensions = "exe;dll;pdb;obj;lib;so;dylib;zip;gz;tar;7z;rar;bz2;xz;iso;cab;msi;nupkg;whl;png;jpg;jpeg;gif;bmp;ico;tif;tiff;webp;svg;mp3;mp4;avi;mov;wmv;flv;mkv;wav;ogg;flac;woff;woff2;ttf;eot;otf;pdf;doc;docx;xls;xlsx;ppt;pptx";
-    public const string DefaultSkipExtensions = "exe;dll;pdb;obj;lib;so;dylib;png;jpg;jpeg;gif;bmp;ico;tif;tiff;webp;svg;mp3;mp4;avi;mov;wmv;flv;mkv;wav;ogg;flac;woff;woff2;ttf;eot;otf;pdf;doc;xls;ppt;com;scr;sys;drv;ocx;cpl;mui;winmd;pri;cat;res;resources;o;a;lo;la;ilk;iobj;ipdb;exp;pyc;pyo;class;dex;wasm;bin;dat;db;db3;sqlite;sqlite3;edb;mdb;accdb;ldb;sdf;cache;tmp;bak;etl;evtx;dmp;mdmp;hdmp;hprof;vhd;vhdx;vmdk;pak;usm;bundle;assets;m4a;webm;heic;heif;avif";
+    public const string LegacyExpandedBinaryPrefilterExtensions = "exe;dll;pdb;obj;lib;so;dylib;png;jpg;jpeg;gif;bmp;ico;tif;tiff;webp;svg;mp3;mp4;avi;mov;wmv;flv;mkv;wav;ogg;flac;woff;woff2;ttf;eot;otf;pdf;doc;xls;ppt;com;scr;sys;drv;ocx;cpl;mui;winmd;pri;cat;res;resources;o;a;lo;la;ilk;iobj;ipdb;exp;pyc;pyo;class;dex;wasm;bin;dat;db;db3;sqlite;sqlite3;edb;mdb;accdb;ldb;sdf;cache;tmp;bak;etl;evtx;dmp;mdmp;hdmp;hprof;vhd;vhdx;vmdk;pak;usm;bundle;assets;m4a;webm;heic;heif;avif";
+    public const string DefaultSkipExtensions = "png;jpg;jpeg;gif;bmp;ico;tif;tiff;webp;svg;mp3;mp4;avi;mov;wmv;flv;mkv;wav;ogg;flac;m4a;webm;woff;woff2;ttf;eot;otf;pdf;doc;xls;ppt;bin;dat;db;db3;sqlite;sqlite3;edb;mdb;accdb;ldb;sdf;cache;tmp;bak;etl;evtx;dmp;mdmp;hdmp;hprof;vhd;vhdx;vmdk;pak;usm;bundle;assets;heic;heif;avif";
+    public const string DefaultBinaryExtensions = "exe;dll;pdb;obj;lib;so;dylib;com;scr;sys;drv;ocx;cpl;mui;winmd;pri;cat;res;resources;o;a;lo;la;ilk;iobj;ipdb;exp;pyc;pyo;class;dex;wasm";
     public const string DefaultArchiveExtensions = "zip;jar;war;ear;nupkg;vsix;apk;aab;aar;appx;msix;appxbundle;msixbundle;docx;xlsx;pptx;odt;ods;odp;epub;whl;gz;tar;7z;rar;bz2;xz;iso;cab;msi;tgz;tbz2;txz;zst;zstd;br;lz4;lzma";
     public const string DefaultExcludeGlobs = "node_modules;bin;obj;.git";
     public const string DefaultSelectedPreviewContentBackgroundColor = "#FF000000";
@@ -58,12 +60,14 @@ public sealed class AppSettings
     public int ParallelismIndex { get; set; } // 0 = Auto, 1 = 1, 2 = half cores, 3 = 2x cores, 4 = all cores
     public int LineTruncationLength { get; set; } = 500;
     public int MaxRecentItems { get; set; } = 20;
-    /// <summary>Hard process memory cap in MB. 0 = auto cap based on physical RAM.</summary>
+    /// <summary>Hard process memory cap in MB. 0 = automatic sub-GB paging target.</summary>
     public int MemoryLimitMB { get; set; }
     /// <summary>System-wide memory pressure threshold (0-100). Search evicts cached results and switches to memory-saving mode when total machine memory usage exceeds this %. 0 = disabled.</summary>
     public int MemoryPressurePercent { get; set; } = 75;
     /// <summary>When true, show the memory pressure warning label in the results toolbar.</summary>
     public bool ShowMemoryPressureWarningLabel { get; set; } = true;
+    /// <summary>When true, show throughput labels and disk utilization sparkline in the bottom status bar.</summary>
+    public bool ShowStatsForNerds { get; set; } = true;
     /// <summary>Bounded channel buffer size for the Everything SDK streaming path. Higher values use more memory but can improve throughput.</summary>
     public int SdkChannelBufferSize { get; set; } = 4096;
     /// <summary>Current directory recursion depth. 0 = unlimited. This is intentionally session-only.</summary>
@@ -75,9 +79,11 @@ public sealed class AppSettings
     /// <summary>When true, detect ZIP archives by file header and search text files inside them. Default true.</summary>
     [JsonIgnore] public bool SearchInsideArchives { get; set; }
     /// <summary>Semicolon-separated file extensions that are known ZIP-like containers (bypassed from skip-extensions when archive search is on). e.g. "zip;jar;docx;xlsx".</summary>
-    [JsonIgnore] public string ArchiveExtensions { get; set; } = DefaultArchiveExtensions;
-    /// <summary>Semicolon-separated file extensions to skip entirely (no binary check, no content read). e.g. "exe;dll;zip;png;jpg".</summary>
-    [JsonIgnore] public string SkipExtensions { get; set; } = DefaultSkipExtensions;
+    public string ArchiveExtensions { get; set; } = DefaultArchiveExtensions;
+    /// <summary>Semicolon-separated file extensions to skip entirely (no binary check, no content read).</summary>
+    public string SkipExtensions { get; set; } = DefaultSkipExtensions;
+    /// <summary>Semicolon-separated known binary/media/data extensions that are skipped by extension prefilter.</summary>
+    public string BinaryExtensions { get; set; } = DefaultBinaryExtensions;
     /// <summary>When true, do not show the non-admin access warning banner on startup.</summary>
     public bool SuppressAdminWarning { get; set; }
     /// <summary>When true (default) and the process is not elevated, file listing skips well-known admin-protected paths (System Volume Information, $Recycle.Bin, Windows\System32\config, etc.) to speed up search.</summary>
@@ -173,8 +179,19 @@ public sealed class SettingsService
             // Migrate: old default was int.MaxValue which caused unbounded memory growth.
             if (settings.MaxResults > SearchOptions.MaxResultsCeiling)
                 settings.MaxResults = SearchOptions.MaxResultsCeiling;
+            if (settings.SkipExtensions is null)
+                settings.SkipExtensions = AppSettings.DefaultSkipExtensions;
+            if (settings.ArchiveExtensions is null)
+                settings.ArchiveExtensions = AppSettings.DefaultArchiveExtensions;
             if (IsLegacyDefaultSkipExtensions(settings.SkipExtensions))
                 settings.SkipExtensions = AppSettings.DefaultSkipExtensions;
+            if (settings.BinaryExtensions is null)
+                settings.BinaryExtensions = AppSettings.DefaultBinaryExtensions;
+            else if (IsLegacyExpandedBinaryPrefilter(settings.BinaryExtensions))
+            {
+                settings.BinaryExtensions = AppSettings.DefaultBinaryExtensions;
+                settings.SkipExtensions = MergeExtensionLists(settings.SkipExtensions, AppSettings.DefaultSkipExtensions);
+            }
             return settings;
         }
         catch (Exception ex) { LogService.Instance.Warning("Settings", $"Failed to load settings from {_path}", ex); return new AppSettings(); }
@@ -189,15 +206,51 @@ public sealed class SettingsService
             var settings = await JsonSerializer.DeserializeAsync(fs, AppSettingsJsonContext.Default.AppSettings, cancellationToken).ConfigureAwait(false) ?? new AppSettings();
             if (settings.MaxResults > SearchOptions.MaxResultsCeiling)
                 settings.MaxResults = SearchOptions.MaxResultsCeiling;
+            if (settings.SkipExtensions is null)
+                settings.SkipExtensions = AppSettings.DefaultSkipExtensions;
+            if (settings.ArchiveExtensions is null)
+                settings.ArchiveExtensions = AppSettings.DefaultArchiveExtensions;
             if (IsLegacyDefaultSkipExtensions(settings.SkipExtensions))
                 settings.SkipExtensions = AppSettings.DefaultSkipExtensions;
+            if (settings.BinaryExtensions is null)
+                settings.BinaryExtensions = AppSettings.DefaultBinaryExtensions;
+            else if (IsLegacyExpandedBinaryPrefilter(settings.BinaryExtensions))
+            {
+                settings.BinaryExtensions = AppSettings.DefaultBinaryExtensions;
+                settings.SkipExtensions = MergeExtensionLists(settings.SkipExtensions, AppSettings.DefaultSkipExtensions);
+            }
             return settings;
         }
         catch (Exception ex) { LogService.Instance.Warning("Settings", $"Failed to load settings from {_path}", ex); return new AppSettings(); }
     }
 
     private static bool IsLegacyDefaultSkipExtensions(string skipExtensions) =>
-        string.Equals(skipExtensions, AppSettings.LegacyDefaultSkipExtensions, StringComparison.OrdinalIgnoreCase);
+        string.Equals(skipExtensions, AppSettings.LegacyDefaultSkipExtensions, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(skipExtensions, AppSettings.LegacyExpandedBinaryPrefilterExtensions, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(skipExtensions, AppSettings.DefaultBinaryExtensions, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsLegacyExpandedBinaryPrefilter(string binaryExtensions) =>
+        string.Equals(binaryExtensions, AppSettings.LegacyExpandedBinaryPrefilterExtensions, StringComparison.OrdinalIgnoreCase);
+
+    private static string MergeExtensionLists(string first, string second)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var merged = new List<string>();
+        AddExtensions(first, seen, merged);
+        AddExtensions(second, seen, merged);
+        return string.Join(';', merged);
+    }
+
+    private static void AddExtensions(string value, ISet<string> seen, List<string> target)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return;
+        foreach (var extension in value.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var normalized = extension.TrimStart('.', '*');
+            if (!string.IsNullOrWhiteSpace(normalized) && seen.Add(normalized))
+                target.Add(normalized);
+        }
+    }
 
     public void Save(AppSettings settings)
     {

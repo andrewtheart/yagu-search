@@ -826,6 +826,15 @@ public partial class TextControlBox : UserControl
     }
 
     /// <summary>
+    /// Gets or sets the maximum number of search highlights rendered per frame.
+    /// </summary>
+    public int MaxSearchHighlightsPerRender
+    {
+        get => coreTextBox.MaxSearchHighlightsPerRender;
+        set => coreTextBox.MaxSearchHighlightsPerRender = value;
+    }
+
+    /// <summary>
     /// Gets or sets a value indicating whether the textbox is in read-only mode.
     /// ReadOnly only prevents the user from entering and modifying text. 
     /// The developer can still call many functions to modify the text. 

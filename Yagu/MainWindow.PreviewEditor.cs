@@ -866,6 +866,11 @@ public sealed partial class MainWindow
         {
             PreviewEditorPathText.Text = _previewEditorPath ?? string.Empty;
             ToolTipService.SetToolTip(PreviewEditorPathBar, _previewEditorPath ?? string.Empty);
+            SyncPreviewEditorFindHighlights();
+        }
+        else
+        {
+            ClearPreviewEditorFindHighlights();
         }
 
         // Editor-mode group (now in its own Grid.Column="1" panel)

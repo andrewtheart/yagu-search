@@ -24,6 +24,7 @@ public sealed class ResultStore : IDisposable
 {
     private const string TempFileSearchPattern = "yagu-results-*.tmp";
     private const int DrainBatchCap = 512;
+    private const int EvictionChannelCapacity = 4096;
 
     private readonly string _path;
     private readonly FileStream _stream;
@@ -48,11 +49,12 @@ public sealed class ResultStore : IDisposable
         _stream = new FileStream(_path, FileMode.Create, FileAccess.ReadWrite, FileShare.Read, 64 * 1024);
         _writer = new BinaryWriter(_stream, Encoding.UTF8, leaveOpen: true);
 
-        _evictionChannel = Channel.CreateUnbounded<SearchResult>(new UnboundedChannelOptions
+        _evictionChannel = Channel.CreateBounded<SearchResult>(new BoundedChannelOptions(EvictionChannelCapacity)
         {
             SingleReader = true,
             SingleWriter = false,
             AllowSynchronousContinuations = false,
+            FullMode = BoundedChannelFullMode.Wait,
         });
         _drainTask = Task.Run(DrainLoopAsync);
     }
@@ -64,14 +66,54 @@ public sealed class ResultStore : IDisposable
     /// </summary>
     public bool EnqueueEvict(SearchResult result)
     {
-        if (_disposed || result is null || result.IsEvicted)
+        if (_disposed || result is null || !result.TryBeginEviction())
             return false;
+
         Interlocked.Increment(ref _enqueuedCount);
         if (_evictionChannel.Writer.TryWrite(result))
             return true;
         // Failure path (channel closed): re-balance the counter so Drain() can complete.
+        result.CancelEvictionReservation();
         Interlocked.Decrement(ref _enqueuedCount);
         return false;
+    }
+
+    public async ValueTask<bool> EnqueueEvictAsync(SearchResult result, CancellationToken cancellationToken = default)
+    {
+        if (_disposed || result is null || !result.TryBeginEviction())
+            return false;
+
+        Interlocked.Increment(ref _enqueuedCount);
+        try
+        {
+            await _evictionChannel.Writer.WriteAsync(result, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch
+        {
+            result.CancelEvictionReservation();
+            Interlocked.Decrement(ref _enqueuedCount);
+            return false;
+        }
+    }
+
+    public bool EnqueueEvictBlocking(SearchResult result, CancellationToken cancellationToken = default)
+    {
+        if (_disposed || result is null || !result.TryBeginEviction())
+            return false;
+
+        Interlocked.Increment(ref _enqueuedCount);
+        try
+        {
+            _evictionChannel.Writer.WriteAsync(result, cancellationToken).AsTask().GetAwaiter().GetResult();
+            return true;
+        }
+        catch
+        {
+            result.CancelEvictionReservation();
+            Interlocked.Decrement(ref _enqueuedCount);
+            return false;
+        }
     }
 
     /// <summary>Enqueue many results for asynchronous eviction.</summary>
@@ -82,6 +124,42 @@ public sealed class ResultStore : IDisposable
         for (int i = 0; i < results.Count; i++)
             if (EnqueueEvict(results[i])) queued++;
         return queued;
+    }
+
+    public async ValueTask<int> EnqueueEvictManyAsync(IReadOnlyList<SearchResult> results, CancellationToken cancellationToken = default)
+    {
+        if (results is null || results.Count == 0) return 0;
+        int queued = 0;
+        for (int i = 0; i < results.Count && !cancellationToken.IsCancellationRequested; i++)
+            if (await EnqueueEvictAsync(results[i], cancellationToken).ConfigureAwait(false)) queued++;
+        return queued;
+    }
+
+    /// <summary>
+    /// Evict a batch immediately on the caller's thread using one writer lock.
+    /// Intended for worker-thread pre-eviction before results are attached to the UI graph.
+    /// </summary>
+    public int EvictManyNow(IReadOnlyList<SearchResult> results)
+    {
+        if (results is null || results.Count == 0) return 0;
+        int evicted = 0;
+        WriteBatch(writeOne =>
+        {
+            for (int i = 0; i < results.Count; i++)
+            {
+                try
+                {
+                    if (results[i].EvictWith(writeOne))
+                        evicted++;
+                }
+                catch
+                {
+                    // Keep the rest of the batch moving; individual failures leave
+                    // their result in memory and can be picked up by later EvictAll cycles.
+                }
+            }
+        });
+        return evicted;
     }
 
     /// <summary>
@@ -117,7 +195,7 @@ public sealed class ResultStore : IDisposable
                     {
                         for (int i = 0; i < batch.Count; i++)
                         {
-                            try { batch[i].EvictWith(writeOne); }
+                            try { batch[i].CompleteReservedEvictionWith(writeOne); }
                             catch { /* skip and continue draining */ }
                         }
                     });

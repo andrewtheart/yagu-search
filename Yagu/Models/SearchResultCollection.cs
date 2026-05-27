@@ -165,7 +165,7 @@ public sealed class SearchResultCollection
         {
             // Use index-based iteration: the UI thread may append to the
             // group concurrently, but existing indices remain stable and
-            // EvictWith is idempotent (no-op if already evicted).
+            // EnqueueEvict is idempotent (no-op if already queued/evicted).
             int count = group.Count;
             for (int i = 0; i < count; i++)
             {
@@ -173,7 +173,7 @@ public sealed class SearchResultCollection
                 if (result.IsEvicted)
                     continue;
 
-                if (resultStore.EnqueueEvict(result))
+                if (resultStore.EnqueueEvictBlocking(result))
                     enqueued++;
             }
         }

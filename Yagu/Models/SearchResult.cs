@@ -39,6 +39,8 @@ public sealed record SearchResult(
     private ShortPreviewInfo EnsureShortPreview()
         => _shortPreview ??= CreateShortPreview(MatchLine, MatchStartColumn, MatchLength);
 
+    private ShortPreviewInfo? ExistingShortPreview => _shortPreview;
+
     private const long InMemoryOffset = -1;
     private const long EvictingOffset = -2;
     private long _diskOffset = InMemoryOffset;
@@ -48,6 +50,17 @@ public sealed record SearchResult(
 
     /// <summary>True when heavy data has been evicted to disk.</summary>
     public bool IsEvicted => DiskOffset >= 0;
+
+    /// <summary>True when this result has been queued for eviction but has not been written yet.</summary>
+    internal bool IsEvicting => DiskOffset == EvictingOffset;
+
+    internal bool TryBeginEviction()
+        => Interlocked.CompareExchange(ref _diskOffset, EvictingOffset, InMemoryOffset) == InMemoryOffset;
+
+    internal void CancelEvictionReservation()
+    {
+        _ = Interlocked.CompareExchange(ref _diskOffset, InMemoryOffset, EvictingOffset);
+    }
 
     /// <summary>Evict heavy payload (match line + context) to disk, keeping only ShortPreview.</summary>
     public void Evict(ResultStore store)
@@ -61,15 +74,31 @@ public sealed record SearchResult(
     /// </summary>
     internal bool EvictWith(Func<string, IReadOnlyList<string>, IReadOnlyList<string>, long> writer)
     {
-        if (Interlocked.CompareExchange(ref _diskOffset, EvictingOffset, InMemoryOffset) != InMemoryOffset)
+        if (!TryBeginEviction())
+            return false;
+
+        return CompleteReservedEvictionWith(writer, materializePreview: true);
+    }
+
+    internal bool CompleteReservedEvictionWith(Func<string, IReadOnlyList<string>, IReadOnlyList<string>, long> writer)
+        => CompleteReservedEvictionWith(writer, materializePreview: false);
+
+    private bool CompleteReservedEvictionWith(
+        Func<string, IReadOnlyList<string>, IReadOnlyList<string>, long> writer,
+        bool materializePreview)
+    {
+        if (DiskOffset != EvictingOffset)
             return false;
 
         try
         {
+            var preview = materializePreview ? EnsureShortPreview() : ExistingShortPreview;
             long offset = writer(MatchLine, ContextBefore, ContextAfter);
-            // Materialize the short preview before discarding MatchLine —
-            // it's needed for display even while the full data is on disk.
-            MatchLine = EnsureShortPreview().Text;
+            // Visible rows materialize ShortPreview before queued eviction; keep only
+            // those previews. Non-visible rows are hydrated before paging into view,
+            // so retaining a short string per hidden match would just recreate the
+            // large result graph that disk paging is meant to avoid.
+            MatchLine = preview?.Text ?? string.Empty;
             ContextBefore = Array.Empty<string>();
             ContextAfter = Array.Empty<string>();
             Volatile.Write(ref _diskOffset, offset);

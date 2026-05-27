@@ -28,6 +28,8 @@ namespace Yagu;
 
 public sealed partial class MainWindow : Window
 {
+    private const int VisibleResultShowMoreBatchSize = 24;
+
     public MainViewModel ViewModel { get; }
     private bool _suppressPreviewUpdate;
     private int _previewUpdateGen;
@@ -1047,6 +1049,9 @@ public sealed partial class MainWindow : Window
     private readonly Dictionary<RichTextBlock, LazySection> _lazySections = new();
     private readonly HashSet<RichTextBlock> _singleLineSections = new();
     private int _lazyMatchCount; // total matches in un-rendered sections
+    private int _previewTotalMatchCount;
+    private int _previewTotalFileCount;
+    private readonly Dictionary<RichTextBlock, int> _sectionTotalMatchCounts = new();
     private bool _previewViewChangedHooked;
     private bool _viewportMaterializePending;
     private static readonly Windows.UI.Color s_defaultSelectedPreviewContentBackground = Windows.UI.Color.FromArgb(0xFF, 0x00, 0x00, 0x00);
@@ -1091,14 +1096,14 @@ public sealed partial class MainWindow : Window
     private long _activeOverlayLastMoveTick;
     private int _activeOverlayStablePasses;
 
-    private enum SplitLayoutMode { Split, ResultsMaximized, PreviewMaximized }
+    private enum SplitLayoutMode { Split, ResultsMaximized, PreviewMaximized, PreviewTopExpanded }
     private SplitLayoutMode _splitLayoutMode = SplitLayoutMode.ResultsMaximized;
 
     private void EnsurePreviewPanelVisible()
     {
-        if (_previewPanelRevealed && _splitLayoutMode == SplitLayoutMode.Split) return;
+        if (_previewPanelRevealed && _splitLayoutMode == SplitLayoutMode.PreviewTopExpanded) return;
         _previewPanelRevealed = true;
-        ApplySplitLayout(SplitLayoutMode.Split);
+        ApplySplitLayout(SplitLayoutMode.PreviewTopExpanded);
     }
 
     private void CollapsePreviewPanel()
@@ -1111,6 +1116,7 @@ public sealed partial class MainWindow : Window
     private void ApplySplitLayout(SplitLayoutMode mode)
     {
         _splitLayoutMode = mode;
+        ResetTopExpandedPreviewLayout();
         switch (mode)
         {
             case SplitLayoutMode.Split:
@@ -1155,8 +1161,11 @@ public sealed partial class MainWindow : Window
                 _previewPanelRevealed = true;
                 ExpandResultsIcon.Glyph = "\uE740";
                 ToolTipService.SetToolTip(ExpandResultsButton, "Maximize file list / hide preview");
-                ExpandPreviewIcon.Glyph = "\uE73F"; // BackToWindow
-                ToolTipService.SetToolTip(ExpandPreviewButton, "Restore split view");
+                ExpandPreviewIcon.Glyph = "\uE740"; // FullScreen
+                ToolTipService.SetToolTip(ExpandPreviewButton, "Extend preview to top");
+                break;
+            case SplitLayoutMode.PreviewTopExpanded:
+                ApplyTopExpandedPreviewLayout();
                 break;
         }
 
@@ -1171,6 +1180,77 @@ public sealed partial class MainWindow : Window
             _activeMatchOverlayRefreshPending = false;
             QueueActiveMatchOverlayRefresh();
         });
+    }
+
+    private void ResetTopExpandedPreviewLayout()
+    {
+        Grid.SetRow(SplitPaneGrid, 4);
+        Grid.SetRowSpan(SplitPaneGrid, 1);
+        SplitPaneGrid.Margin = new Thickness(16, 2, 20, 4);
+        ResultsPanelBorder.Margin = new Thickness(0);
+
+        SearchControlsBorder.Width = double.NaN;
+        SearchControlsBorder.HorizontalAlignment = HorizontalAlignment.Stretch;
+        SearchStatusPanel.Width = double.NaN;
+        SearchStatusPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
+
+        Canvas.SetZIndex(SearchControlsBorder, 0);
+        Canvas.SetZIndex(SearchStatusPanel, 0);
+        Canvas.SetZIndex(SplitPaneGrid, 0);
+    }
+
+    private void ApplyTopExpandedPreviewLayout()
+    {
+        ResultsPanelBorder.Visibility = Visibility.Visible;
+        ResultsColumn.Width = new GridLength(2, GridUnitType.Star);
+        ResultsColumn.MinWidth = 280;
+        SplitterColumn.Width = GridLength.Auto;
+        PreviewColumn.Width = new GridLength(3, GridUnitType.Star);
+        PreviewColumn.MinWidth = 360;
+        SplitterBorder.Visibility = Visibility.Visible;
+        PreviewPanelBorder.Visibility = Visibility.Visible;
+        _previewPanelRevealed = true;
+
+        Grid.SetRow(SplitPaneGrid, 2);
+        Grid.SetRowSpan(SplitPaneGrid, 3);
+        SplitPaneGrid.Margin = new Thickness(16, 10, 20, 4);
+        Canvas.SetZIndex(SplitPaneGrid, 0);
+        Canvas.SetZIndex(SearchControlsBorder, 10);
+        Canvas.SetZIndex(SearchStatusPanel, 10);
+
+        UpdateTopExpandedPreviewMeasurements();
+
+        ExpandResultsIcon.Glyph = "\uE740";
+        ToolTipService.SetToolTip(ExpandResultsButton, "Maximize file list / hide preview");
+        ExpandPreviewIcon.Glyph = "\uE70E"; // ChevronUp
+        ToolTipService.SetToolTip(ExpandPreviewButton, "Restore split view");
+
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, UpdateTopExpandedPreviewMeasurements);
+    }
+
+    private void UpdateTopExpandedPreviewMeasurements()
+    {
+        if (_splitLayoutMode != SplitLayoutMode.PreviewTopExpanded)
+            return;
+
+        double availableWidth = Math.Max(0, RootGrid.ActualWidth - SplitPaneGrid.Margin.Left - SplitPaneGrid.Margin.Right);
+        double splitterWidth = SplitterBorder.ActualWidth > 0 ? SplitterBorder.ActualWidth : 8;
+        double leftWidth = Math.Max(320, (availableWidth - splitterWidth) * 2.0 / 5.0);
+        double maxLeftWidth = Math.Max(320, availableWidth - splitterWidth - 360);
+        leftWidth = Math.Min(leftWidth, maxLeftWidth);
+
+        SearchControlsBorder.HorizontalAlignment = HorizontalAlignment.Left;
+        SearchControlsBorder.Width = Math.Max(280, leftWidth);
+        SearchStatusPanel.HorizontalAlignment = HorizontalAlignment.Left;
+        SearchStatusPanel.Width = Math.Max(280, leftWidth);
+
+        double topOffset = SearchControlsBorder.ActualHeight + SearchStatusPanel.ActualHeight + 10;
+        ResultsPanelBorder.Margin = new Thickness(0, Math.Max(0, topOffset), 0, 0);
+    }
+
+    private void OnRootGridSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        UpdateTopExpandedPreviewMeasurements();
     }
 
     private void UpdateBottomStatusBarVisibility()
@@ -1196,9 +1276,11 @@ public sealed partial class MainWindow : Window
 
     private void OnExpandPreviewPanel(object sender, RoutedEventArgs e)
     {
-        // Toggle: maximize preview <-> split view.
-        if (_splitLayoutMode == SplitLayoutMode.PreviewMaximized)
+        // Cycle: split/results -> preview-only -> top-expanded preview -> split.
+        if (_splitLayoutMode == SplitLayoutMode.PreviewTopExpanded)
             ApplySplitLayout(SplitLayoutMode.Split);
+        else if (_splitLayoutMode == SplitLayoutMode.PreviewMaximized)
+            ApplySplitLayout(SplitLayoutMode.PreviewTopExpanded);
         else
             ApplySplitLayout(SplitLayoutMode.PreviewMaximized);
     }
@@ -1226,20 +1308,8 @@ public sealed partial class MainWindow : Window
         {
             ApplyResultsCompactState(args.ItemContainer, _resultsCompactMode);
 
-            // Hydrate evicted items off the UI thread so context-line bindings have
-            // data when the container is realized.
             if (args.Item is FileGroup g && g.IsExpanded)
-            {
-                var evicted = g.VisibleResults.Where(item => item.IsEvicted).ToList();
-                if (evicted.Count > 0)
-                {
-                    _ = Task.Run(() =>
-                    {
-                        foreach (var item in evicted)
-                            ViewModel.HydrateResult(item);
-                    });
-                }
-            }
+                _ = EnsureVisibleResultsForExpandedGroupAsync(g);
         }
     }
 
@@ -2121,6 +2191,9 @@ public sealed partial class MainWindow : Window
 
         EnsurePreviewPanelVisible();
         EnsureSectionsSurface();
+        AddPreviewMatchTotals(
+            filesToPrepend.Values.Sum(results => results.Count),
+            filesToPrepend.Count);
         PreviewToolbarContent.Visibility = Visibility.Visible;
 
         // Cap the initial render at PreviewSectionPageSize. Adding 10k+
@@ -2253,8 +2326,8 @@ public sealed partial class MainWindow : Window
         // Update match nav and file label to include the new sections.
         var totalFiles = PreviewSectionsPanel.Children.OfType<Expander>().Count();
         var (deferredFileCount, deferredMatchCount) = GetDeferredCounts();
-        int totalMatches = _matchParagraphs.Count + _lazyMatchCount + deferredMatchCount;
-        int grandFileCount = totalFiles + deferredFileCount;
+        int totalMatches = _previewTotalMatchCount > 0 ? _previewTotalMatchCount : _matchParagraphs.Count + _lazyMatchCount + deferredMatchCount;
+        int grandFileCount = _previewTotalFileCount > 0 ? _previewTotalFileCount : totalFiles + deferredFileCount;
         SetPreviewFileLabel(
             $"{totalMatches:N0} selected matches across {grandFileCount:N0} file(s)",
             string.Join(Environment.NewLine, GetExistingPreviewFilePaths()));
@@ -2295,17 +2368,7 @@ public sealed partial class MainWindow : Window
         {
             try
             {
-                // Hydrate evicted items off the UI thread to avoid freezing the GUI
-                // when many results need disk reads.
-                var evicted = g.VisibleResults.Where(item => item.IsEvicted).ToList();
-                if (evicted.Count > 0)
-                {
-                    await Task.Run(() =>
-                    {
-                        foreach (var item in evicted)
-                            ViewModel.HydrateResult(item);
-                    });
-                }
+                await EnsureVisibleResultsForExpandedGroupAsync(g);
 
                 LogService.Instance.Info("Preview", $"OnFileGroupExpanding: expand only file='{g.FilePath}', matchCount={g.Count}");
             }
@@ -2315,6 +2378,53 @@ public sealed partial class MainWindow : Window
                     $"OnFileGroupExpanding threw: {ex.GetType().Name}: {ex.Message}");
             }
         }
+    }
+
+    private void OnFileGroupCollapsed(Expander sender, ExpanderCollapsedEventArgs args)
+    {
+        if (sender.DataContext is FileGroup g)
+            g.ClearVisibleResults();
+    }
+
+    private async Task EnsureVisibleResultsForExpandedGroupAsync(FileGroup group)
+    {
+        if (group.VisibleResults.Count == 0 && group.Count > 0)
+        {
+            await ShowMoreVisibleResultsIncrementalAsync(group, FileGroup.PageSize).ConfigureAwait(true);
+            return;
+        }
+
+        await HydrateVisibleResultsAsync(group).ConfigureAwait(true);
+    }
+
+    private async Task HydrateVisibleResultsAsync(FileGroup group)
+    {
+        var evicted = group.VisibleResults.Where(item => item.IsEvicted).ToList();
+        if (evicted.Count == 0) return;
+
+        await Task.Run(() =>
+        {
+            foreach (var item in evicted)
+                ViewModel.HydrateResult(item);
+        }).ConfigureAwait(true);
+    }
+
+    private async Task HydrateRangeAsync(FileGroup group, int start, int end)
+    {
+        var evicted = new List<SearchResult>();
+        for (int i = start; i < end; i++)
+        {
+            if (group[i].IsEvicted)
+                evicted.Add(group[i]);
+        }
+
+        if (evicted.Count == 0) return;
+
+        await Task.Run(() =>
+        {
+            foreach (var item in evicted)
+                ViewModel.HydrateResult(item);
+        }).ConfigureAwait(true);
     }
 
     private void OnFileGroupHeaderPointerPressed(object sender, PointerRoutedEventArgs e)
@@ -2667,8 +2777,8 @@ public sealed partial class MainWindow : Window
 
         var totalFiles = PreviewSectionsPanel.Children.OfType<Expander>().Count();
         var (deferredFileCount, deferredMatchCount) = GetDeferredCounts();
-        int totalMatches = _matchParagraphs.Count + _lazyMatchCount + deferredMatchCount;
-        int grandFileCount = totalFiles + deferredFileCount;
+        int totalMatches = _previewTotalMatchCount > 0 ? _previewTotalMatchCount : _matchParagraphs.Count + _lazyMatchCount + deferredMatchCount;
+        int grandFileCount = _previewTotalFileCount > 0 ? _previewTotalFileCount : totalFiles + deferredFileCount;
         SetPreviewFileLabel(
             $"{totalMatches:N0} selected matches across {grandFileCount:N0} file(s)",
             string.Join(Environment.NewLine, GetExistingPreviewFilePaths()));
@@ -3436,25 +3546,52 @@ public sealed partial class MainWindow : Window
     {
         if (sender is FrameworkElement fe && fe.DataContext is FileGroup g)
         {
-            // Hydrate evicted items off the UI thread before making them visible
-            // so ShortPreview can be computed from the restored MatchLine.
-            int start = g.VisibleResults.Count;
-            int end = Math.Min(g.Count, start + FileGroup.PageSize);
-            var evicted = new List<SearchResult>();
-            for (int i = start; i < end; i++)
+            if (sender is Control control)
+                control.IsEnabled = false;
+
+            try
             {
-                if (g[i].IsEvicted)
-                    evicted.Add(g[i]);
+                await ShowMoreVisibleResultsIncrementalAsync(g, FileGroup.PageSize).ConfigureAwait(true);
             }
-            if (evicted.Count > 0)
+            finally
             {
-                await Task.Run(() =>
-                {
-                    foreach (var item in evicted)
-                        ViewModel.HydrateResult(item);
-                });
+                if (sender is Control controlToRestore)
+                    controlToRestore.IsEnabled = g.HasMore;
             }
-            g.ShowMore();
+        }
+    }
+
+    private async Task ShowMoreVisibleResultsIncrementalAsync(FileGroup group, int requestedCount)
+    {
+        if (requestedCount <= 0 || !group.HasMore)
+            return;
+
+        int remainingToShow = Math.Min(requestedCount, group.RemainingCount);
+        var sw = Stopwatch.StartNew();
+
+        while (remainingToShow > 0 && group.HasMore)
+        {
+            int chunkSize = Math.Min(VisibleResultShowMoreBatchSize, remainingToShow);
+            int start = group.VisibleResults.Count;
+            int end = Math.Min(group.Count, start + chunkSize);
+            if (end <= start)
+                break;
+
+            await HydrateRangeAsync(group, start, end).ConfigureAwait(true);
+            int shown = group.ShowMore(end - start);
+            if (shown <= 0)
+                break;
+
+            remainingToShow -= shown;
+            if (remainingToShow > 0 && group.HasMore)
+                await Task.Yield();
+        }
+
+        sw.Stop();
+        if (sw.ElapsedMilliseconds >= 250)
+        {
+            LogService.Instance.Info("Results",
+                $"ShowMoreVisibleResultsIncrementalAsync: file='{System.IO.Path.GetFileName(group.FilePath)}', requested={requestedCount:N0}, elapsed={sw.ElapsedMilliseconds}ms");
         }
     }
 
@@ -4328,6 +4465,7 @@ public sealed partial class MainWindow : Window
     {
         LogService.Instance.Info("Preview", $"ShowConcatenatedPreviewAsync: {byFile.Count} files, {selected.Count} results, gen={gen}");
         ShowPreviewSectionsSurface();
+        SetPreviewMatchTotals(selected.Count, byFile.Count);
         _matchParagraphs.Clear();
         _sectionOverflow.Clear();
         InvalidateParagraphIndexCache();
@@ -4460,6 +4598,7 @@ public sealed partial class MainWindow : Window
     {
         LogService.Instance.Info("Preview", $"ShowMultiHighlightPreviewAsync: {byFile.Count} files, {selected.Count} results, gen={gen}");
         ShowPreviewSectionsSurface();
+        SetPreviewMatchTotals(selected.Count, byFile.Count);
         _matchParagraphs.Clear();
         _sectionOverflow.Clear();
         InvalidateParagraphIndexCache();
@@ -5229,6 +5368,21 @@ public sealed partial class MainWindow : Window
         ViewModel.OnSkipExtensionToggled();
     }
 
+    // ── Binary-extensions dropdown ───────────────────────────────
+    private void OnBinaryExtToggled(object sender, RoutedEventArgs e) => ViewModel.OnBinaryExtensionToggled();
+
+    private void OnBinaryExtSelectAll(object sender, RoutedEventArgs e)
+    {
+        foreach (var item in ViewModel.BinaryExtensionItems) item.IsEnabled = true;
+        ViewModel.OnBinaryExtensionToggled();
+    }
+
+    private void OnBinaryExtSelectNone(object sender, RoutedEventArgs e)
+    {
+        foreach (var item in ViewModel.BinaryExtensionItems) item.IsEnabled = false;
+        ViewModel.OnBinaryExtensionToggled();
+    }
+
     // ── Archive-extensions dropdown ───────────────────────────────
     private void OnArchiveExtToggled(object sender, RoutedEventArgs e) => ViewModel.OnArchiveExtensionToggled();
 
@@ -5246,6 +5400,7 @@ public sealed partial class MainWindow : Window
 
     // ── Skip-count breakdown overlay ─────────────────────────────
     private bool _resultsPaneCollapsed;
+    private int _resultsPaneExpandedWindowHeight;
 
     private void OnToggleResultsPane(object sender, RoutedEventArgs e)
     {
@@ -5253,6 +5408,7 @@ public sealed partial class MainWindow : Window
 
         if (_resultsPaneCollapsed)
         {
+            _resultsPaneExpandedWindowHeight = AppWindow?.Size.Height ?? 0;
             SplitPaneRow.Height = new GridLength(0);
             ProgressRow.Height = new GridLength(0);
             SplitPaneGrid.Visibility = Visibility.Collapsed;
@@ -5267,6 +5423,70 @@ public sealed partial class MainWindow : Window
         }
 
         UpdateBottomStatusBarVisibility();
+
+        if (_resultsPaneCollapsed)
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FitWindowHeightToVisibleContent);
+        else
+            RestoreResultsPaneExpandedWindowHeight();
+    }
+
+    private void FitWindowHeightToVisibleContent()
+    {
+        try
+        {
+            if (AppWindow is null) return;
+            if (AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter { State: Microsoft.UI.Windowing.OverlappedPresenterState.Maximized }) return;
+
+            double scale = (Content?.XamlRoot?.RasterizationScale) ?? 1.0;
+            double measureWidthDip = AppWindow.ClientSize.Width > 0
+                ? AppWindow.ClientSize.Width / scale
+                : Math.Max(1, RootGrid.ActualWidth);
+
+            RootGrid.UpdateLayout();
+            RootGrid.Measure(new Windows.Foundation.Size(measureWidthDip, double.PositiveInfinity));
+
+            int chromeHeight = Math.Max(0, AppWindow.Size.Height - AppWindow.ClientSize.Height);
+            int desiredHeight = (int)Math.Ceiling((Math.Max(MinimumLauncherHeightDip, RootGrid.DesiredSize.Height) + 2) * scale) + chromeHeight;
+            if (desiredHeight >= AppWindow.Size.Height - 4) return;
+
+            var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(
+                AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
+            var wa = displayArea?.WorkArea ?? default;
+            int maxHeight = wa.Height > 0 ? Math.Max(0, wa.Y + wa.Height - AppWindow.Position.Y) : desiredHeight;
+            if (maxHeight > 0)
+                desiredHeight = Math.Min(desiredHeight, maxHeight);
+
+            AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(
+                AppWindow.Position.X,
+                AppWindow.Position.Y,
+                AppWindow.Size.Width,
+                desiredHeight));
+        }
+        catch { }
+    }
+
+    private void RestoreResultsPaneExpandedWindowHeight()
+    {
+        try
+        {
+            if (AppWindow is null || _resultsPaneExpandedWindowHeight <= 0) return;
+            if (AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter { State: Microsoft.UI.Windowing.OverlappedPresenterState.Maximized }) return;
+            if (AppWindow.Size.Height >= _resultsPaneExpandedWindowHeight - 4) return;
+
+            var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(
+                AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
+            var wa = displayArea?.WorkArea ?? default;
+            int restoredHeight = _resultsPaneExpandedWindowHeight;
+            if (wa.Height > 0)
+                restoredHeight = Math.Min(restoredHeight, Math.Max(0, wa.Y + wa.Height - AppWindow.Position.Y));
+
+            AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(
+                AppWindow.Position.X,
+                AppWindow.Position.Y,
+                AppWindow.Size.Width,
+                restoredHeight));
+        }
+        catch { }
     }
 
     private void OnSkipCountTapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)

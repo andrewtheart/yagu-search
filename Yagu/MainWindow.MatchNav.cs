@@ -1636,6 +1636,62 @@ public sealed partial class MainWindow
         ? _sectionMatchNavs.Count
         : _matchParagraphs.Select(m => m.block).Distinct().Count() + _lazySections.Count;
 
+    private void ResetPreviewMatchTotals()
+    {
+        _previewTotalMatchCount = 0;
+        _previewTotalFileCount = 0;
+        _sectionTotalMatchCounts.Clear();
+    }
+
+    private void SetPreviewMatchTotals(int matches, int files)
+    {
+        _previewTotalMatchCount = Math.Max(0, matches);
+        _previewTotalFileCount = Math.Max(0, files);
+    }
+
+    private void AddPreviewMatchTotals(int matches, int files)
+    {
+        _previewTotalMatchCount += Math.Max(0, matches);
+        _previewTotalFileCount += Math.Max(0, files);
+    }
+
+    private void SubtractPreviewMatchTotals(int matches, int files)
+    {
+        _previewTotalMatchCount = Math.Max(0, _previewTotalMatchCount - Math.Max(0, matches));
+        _previewTotalFileCount = Math.Max(0, _previewTotalFileCount - Math.Max(0, files));
+    }
+
+    private void RegisterSectionMatchTotal(RichTextBlock block, int total)
+    {
+        _sectionTotalMatchCounts[block] = Math.Max(0, total);
+    }
+
+    private int GetRenderedMatchTotal()
+    {
+        var (_, deferredMatches) = GetDeferredCounts();
+        int overflowRemaining = 0;
+        foreach (var ov in _sectionOverflow.Values)
+            overflowRemaining += ov.RemainingResults.Count;
+        return _matchParagraphs.Count + _lazyMatchCount + deferredMatches + overflowRemaining;
+    }
+
+    private int GetStableMatchNavTotal()
+        => _previewTotalMatchCount > 0 ? _previewTotalMatchCount : GetRenderedMatchTotal();
+
+    private int GetStableMatchNavFileCount(int deferredFiles)
+        => _previewTotalFileCount > 0 ? _previewTotalFileCount : MatchNavFileCount + deferredFiles;
+
+    private int GetSectionMatchTotal(SectionMatchNav sectionNav)
+    {
+        if (_sectionTotalMatchCounts.TryGetValue(sectionNav.Block, out int total))
+            return total;
+
+        total = sectionNav.Matches.Count;
+        if (_sectionOverflow.TryGetValue(sectionNav.Block, out var ov))
+            total += ov.RemainingResults.Count;
+        return total;
+    }
+
     /// <summary>
     /// Files and matches not yet inserted into the visual tree (waiting behind
     /// a "Show more" button). Included in the match-nav grand totals so the
@@ -1671,19 +1727,15 @@ public sealed partial class MainWindow
 
     private string FormatMatchNavLabel(int index)
     {
-        var (deferredFiles, deferredMatches) = GetDeferredCounts();
-        int overflowRemaining = 0;
-        foreach (var ov in _sectionOverflow.Values)
-            overflowRemaining += ov.RemainingResults.Count;
-        int totalMatches = _matchParagraphs.Count + _lazyMatchCount + deferredMatches + overflowRemaining;
-        int fileCount = MatchNavFileCount + deferredFiles;
+        var (deferredFiles, _) = GetDeferredCounts();
+        int totalMatches = GetStableMatchNavTotal();
+        int fileCount = GetStableMatchNavFileCount(deferredFiles);
         return $"Match {index + 1} of {totalMatches} (across {fileCount} file{(fileCount != 1 ? "s" : "")})";
     }
 
     private void UpdateMatchNavPanel()
     {
-        var (_, deferredMatches) = GetDeferredCounts();
-        int totalMatches = _matchParagraphs.Count + _lazyMatchCount + deferredMatches;
+        int totalMatches = GetStableMatchNavTotal();
         if (totalMatches > 0)
         {
             MatchNavPanel.Visibility = Visibility.Visible;
@@ -1816,6 +1868,7 @@ public sealed partial class MainWindow
         _activeSectionNav = null;
         _lazySections.Clear();
         _lazyMatchCount = 0;
+        ResetPreviewMatchTotals();
         _sectionOverflow.Clear();
         _deferredOrderedFiles = null;
         _deferredAllSelected = null;
@@ -1852,7 +1905,7 @@ public sealed partial class MainWindow
         if (_sectionMatchNavs.Count == 1)
         {
             var sn = _sectionMatchNavs.Values.First();
-            if (sn.Matches.Count > 1)
+            if (GetSectionMatchTotal(sn) > 1)
                 _activeSectionNav = sn;
             else
                 _activeSectionNav = null;
@@ -1944,15 +1997,18 @@ public sealed partial class MainWindow
 
     private void UpdateSectionNavOverlay()
     {
-        if (_activeSectionNav is null || _activeSectionNav.Matches.Count <= 1)
+        if (_activeSectionNav is null)
+        {
+            SectionNavOverlay.Visibility = Visibility.Collapsed;
+            return;
+        }
+        int total = GetSectionMatchTotal(_activeSectionNav);
+        if (total <= 1)
         {
             SectionNavOverlay.Visibility = Visibility.Collapsed;
             return;
         }
         SectionNavOverlay.Visibility = Visibility.Visible;
-        int total = _activeSectionNav.Matches.Count;
-        if (_sectionOverflow.TryGetValue(_activeSectionNav.Block, out var ov))
-            total += ov.RemainingResults.Count;
         SectionNavLabel.Text = $"Match {_activeSectionNav.CurrentIndex + 1} of {total}";
     }
 

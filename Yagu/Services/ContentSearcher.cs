@@ -659,18 +659,39 @@ public sealed class ContentSearcher
                 ContextBefore: before,
                 ContextAfter: after);
 
-            // TryWrite is non-blocking; the channel is unbounded for streaming
-            // (global MaxResults bounds total memory). If TryWrite ever fails
-            // (closed channel), stop scanning.
             if (!_metadataCached)
             {
                 FileMetadataCache.Set(_filePath, _metadata);
                 _metadataCached = true;
             }
 
-            if (!_writer.TryWrite(result)) return 1;
+            if (!TryWriteWithBackpressure(result)) return 1;
             Emitted++;
             return 0;
+        }
+
+        private bool TryWriteWithBackpressure(SearchResult result)
+        {
+            if (_writer.TryWrite(result))
+                return true;
+
+            while (!_ct.IsCancellationRequested)
+            {
+                try
+                {
+                    if (!_writer.WaitToWriteAsync(_ct).AsTask().GetAwaiter().GetResult())
+                        return false;
+                }
+                catch (OperationCanceledException)
+                {
+                    return false;
+                }
+
+                if (_writer.TryWrite(result))
+                    return true;
+            }
+
+            return false;
         }
 
         private static unsafe (string Line, int MatchStart, int MatchLength) DecodeMatchLine(byte* ptr, int len, int matchStartBytes, int matchLenBytes)
@@ -695,24 +716,78 @@ public sealed class ContentSearcher
             int safeStartBytes = Math.Clamp(matchStartBytes, 0, len);
             int safeLengthBytes = Math.Clamp(matchLenBytes, 0, len - safeStartBytes);
 
+            if (LineTruncator.TruncatedLength == 0 || len <= LineTruncator.MaxDisplayLength * 4)
+            {
+                int fullMatchStart;
+                int fullMatchLength;
+                if (IsAsciiRegion(ptr, safeStartBytes + safeLengthBytes))
+                {
+                    fullMatchStart = safeStartBytes;
+                    fullMatchLength = safeLengthBytes;
+                }
+                else
+                {
+                    fullMatchStart = Encoding.UTF8.GetCharCount(ptr, safeStartBytes);
+                    fullMatchLength = Encoding.UTF8.GetCharCount(ptr + safeStartBytes, safeLengthBytes);
+                }
+
+                var fullLine = Encoding.UTF8.GetString(ptr, len);
+                var fullDisplayLine = LineTruncator.TruncateAroundMatch(fullLine, fullMatchStart, fullMatchLength);
+                return (fullDisplayLine.Text, fullDisplayLine.MatchStart, fullMatchLength);
+            }
+
+            int windowBytes = Math.Max(safeLengthBytes, LineTruncator.TruncatedLength + 2);
+            int contextBytes = Math.Max(0, (windowBytes - safeLengthBytes) / 2);
+            int windowStart = Math.Max(0, safeStartBytes - contextBytes);
+            int windowEnd = Math.Min(len, windowStart + windowBytes);
+
+            int minEnd = Math.Min(len, safeStartBytes + safeLengthBytes);
+            if (windowEnd < minEnd)
+                windowEnd = minEnd;
+
+            if (windowEnd - windowStart < windowBytes)
+                windowStart = Math.Max(0, windowEnd - windowBytes);
+
+            windowStart = AlignUtf8Start(ptr, windowStart, len);
+            windowEnd = AlignUtf8End(ptr, windowStart, windowEnd, len);
+
             // Fast path: if all relevant bytes are ASCII, char offsets = byte offsets.
             // Source code is overwhelmingly ASCII, so this avoids two GetCharCount calls.
             int matchStart, matchLength;
-            if (IsAsciiRegion(ptr, safeStartBytes + safeLengthBytes))
+            int matchBytesFromWindowStart = Math.Max(0, safeStartBytes - windowStart);
+            if (IsAsciiRegion(ptr + windowStart, Math.Min(windowEnd - windowStart, matchBytesFromWindowStart + safeLengthBytes)))
             {
-                matchStart = safeStartBytes;
+                matchStart = matchBytesFromWindowStart;
                 matchLength = safeLengthBytes;
             }
             else
             {
-                matchStart = Encoding.UTF8.GetCharCount(ptr, safeStartBytes);
+                matchStart = Encoding.UTF8.GetCharCount(ptr + windowStart, matchBytesFromWindowStart);
                 matchLength = Encoding.UTF8.GetCharCount(ptr + safeStartBytes, safeLengthBytes);
             }
 
-            var line = Encoding.UTF8.GetString(ptr, len);
-            var displayLine = LineTruncator.TruncateAroundMatch(line, matchStart, matchLength);
-            return (displayLine.Text, displayLine.MatchStart, matchLength);
+            var window = Encoding.UTF8.GetString(ptr + windowStart, windowEnd - windowStart);
+            var prefix = windowStart > 0 ? LineTruncator.Ellipsis : string.Empty;
+            var suffix = windowEnd < len ? LineTruncator.Ellipsis : string.Empty;
+            return (string.Concat(prefix, window, suffix), matchStart + prefix.Length, matchLength);
         }
+
+        private static unsafe int AlignUtf8Start(byte* ptr, int start, int totalLength)
+        {
+            while (start < totalLength && IsUtf8ContinuationByte(ptr[start]))
+                start++;
+            return start;
+        }
+
+        private static unsafe int AlignUtf8End(byte* ptr, int start, int end, int totalLength)
+        {
+            end = Math.Clamp(end, start, totalLength);
+            while (end > start && end < totalLength && IsUtf8ContinuationByte(ptr[end]))
+                end--;
+            return end;
+        }
+
+        private static bool IsUtf8ContinuationByte(byte value) => (value & 0xC0) == 0x80;
 
         /// <summary>
         /// Returns true if all bytes in [ptr, ptr+len) are ASCII (high bit clear).

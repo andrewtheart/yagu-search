@@ -673,7 +673,8 @@ internal class TextRenderer
                     searchManager.searchParameter.SearchExpression,
                     DrawTextOffsetX,
                     IsWordWrapEnabled ? DrawTextOffsetY - SingleLineHeight + (SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity) : SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity,
-                    designHelper._Design.SearchHighlightColor
+                    designHelper._Design.SearchHighlightColor,
+                    coreTextbox.MaxSearchHighlightsPerRender
                     );
 
             ccls.DrawTextLayout(DrawnTextLayout, DrawTextOffsetX, DrawTextOffsetY, designHelper.TextColorBrush);

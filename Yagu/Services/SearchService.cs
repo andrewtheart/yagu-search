@@ -13,6 +13,14 @@ public sealed class SearchService
 {
     private const int MemoryPressureRecoveryMarginPercent = 5;
     private const double ProcessMemoryRecoveryRatio = 0.90;
+    private const int EventChannelCapacity = 64;
+    private const int UnlimitedContentResultChannelCapacity = 2_048;
+    private const int MaxContentResultChannelCapacity = 4_096;
+    private const long AutoProcessMemoryCapFloor = 512L * 1024 * 1024;
+    private const long AutoProcessMemoryCapCeiling = 768L * 1024 * 1024;
+    private const long AutoProcessMemoryCapFallback = AutoProcessMemoryCapCeiling;
+    private const int MemorySavingNativeBatchSize = 256;
+    private static readonly TimeSpan PeriodicMemoryPressureCheckInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan NativePartialBatchFlushDelay = TimeSpan.FromMilliseconds(100);
 
     private static int s_memoryPressureGcInFlight;
@@ -181,7 +189,7 @@ public sealed class SearchService
         // can bypass extension-based skip for ZIP-like containers.
         _searcher.ZipLikeExtensions = options.ArchiveExtensions;
 
-        var events = Channel.CreateBounded<SearchEvent>(new BoundedChannelOptions(2048)
+        var events = Channel.CreateBounded<SearchEvent>(new BoundedChannelOptions(EventChannelCapacity)
         {
             SingleReader = true,
             SingleWriter = false,
@@ -195,17 +203,19 @@ public sealed class SearchService
             FullMode = BoundedChannelFullMode.Wait,
         });
         // Bounded for streaming: limits in-flight results between workers and the
-        // consumer, preventing unbounded memory growth. The native FFI uses TryWrite
-        // (stops scanning when full); the managed path uses WriteAsync (backpressure).
+        // consumer, preventing unbounded memory growth. Native and managed paths
+        // both wait for space instead of dropping matches when the channel is full.
         // Channel buffer size — independent of total result limit.
-        int contentCap = options.MaxResults > 0 ? Math.Clamp(options.MaxResults, 512, 16_384) : 16_384;
+        int contentCap = options.MaxResults > 0
+            ? Math.Clamp(options.MaxResults, 256, MaxContentResultChannelCapacity)
+            : UnlimitedContentResultChannelCapacity;
         var contentResults = Channel.CreateBounded<SearchResult>(new BoundedChannelOptions(contentCap)
         {
             SingleReader = true,
             SingleWriter = false,
             FullMode = BoundedChannelFullMode.Wait,
         });
-        LogService.Instance.Warning("SearchService", $"Pipeline channels created: events=2048, pending=1024, contentResults={contentCap}");
+        LogService.Instance.Warning("SearchService", $"Pipeline channels created: events={EventChannelCapacity}, pending=1024, contentResults={contentCap}");
 
         int filesScanned = 0;
         int filesSkipped = 0;
@@ -221,7 +231,6 @@ public sealed class SearchService
         int consecutiveFutileEvictions = 0; // eviction cycles that freed 0 — used to stop futile loops
         long lastPressureCheckTicks = 0;    // timestamp of last pressure event emission
         int nativeBatchesProcessed = 0; // total native batches flushed
-        int contentChannelDrops = 0;    // times TryWrite to contentResults failed (channel full)
         long forwarderItemsForwarded = 0; // total results forwarded from contentResults → events
         long forwarderWriteStallMs = 0;   // cumulative ms the forwarder was blocked writing to events channel
         string? fallbackReason = null;
@@ -275,6 +284,92 @@ public sealed class SearchService
                 sw.Elapsed,
                 accessDenied,
                 breakdown);
+        }
+
+        // Captures the search locals directly so workers and the progress timer can
+        // trigger the same degradation path without waiting for a native batch to end.
+        void CheckMemoryPressure()
+        {
+            if (IsMemoryPressureHigh(options.MaxProcessMemoryBytes, options.MemoryPressurePercent))
+            {
+                Volatile.Write(ref degraded, 1);
+                Volatile.Write(ref everDegraded, 1);
+
+                // After several consecutive evictions that freed nothing, stop emitting
+                // pressure events — they just trigger futile GC cycles. Recheck every
+                // 60 seconds in case memory actually drops.
+                int futile = Volatile.Read(ref consecutiveFutileEvictions);
+                if (futile >= 3)
+                {
+                    long now = Stopwatch.GetTimestamp();
+                    long last = Volatile.Read(ref lastPressureCheckTicks);
+                    double secSinceLast = last == 0 ? double.MaxValue : (double)(now - last) / Stopwatch.Frequency;
+                    if (secSinceLast < 60)
+                        return;
+                }
+
+                if (Interlocked.CompareExchange(ref evictionInFlight, 1, 0) == 0)
+                {
+                    Volatile.Write(ref lastPressureCheckTicks, Stopwatch.GetTimestamp());
+                    int cycle = Interlocked.Increment(ref pressureCycles);
+                    string diagnostics = GetMemoryDiagnostics();
+                    LogService.Instance.Warning("SearchService",
+                        $"Memory pressure cycle #{cycle}: {diagnostics} - shedding Yagu memory (scanned={filesScanned:N0}, matches={totalMatches:N0})");
+                    try
+                    {
+                        var memoryPressureEvent = new SearchEvent.MemoryPressure(
+                            (evictedCount) =>
+                            {
+                                if (evictedCount == 0)
+                                    Interlocked.Increment(ref consecutiveFutileEvictions);
+                                else
+                                    Volatile.Write(ref consecutiveFutileEvictions, 0);
+                                LogService.Instance.Warning("SearchService",
+                                    $"Eviction acknowledged: freed {evictedCount}; continuing in memory-saving mode");
+                                if (evictedCount > 0)
+                                    _ = Task.Run(() => CollectForMemoryPressureIfDue(TimeSpan.FromSeconds(3)));
+                                Volatile.Write(ref evictionInFlight, 0);
+                            },
+                            options.MemoryPressurePercent,
+                            diagnostics);
+
+                        if (!events.Writer.TryWrite(memoryPressureEvent))
+                        {
+                            _ = Task.Run(async () =>
+                            {
+                                try { await events.Writer.WriteAsync(memoryPressureEvent, cancellationToken).ConfigureAwait(false); }
+                                catch { Volatile.Write(ref evictionInFlight, 0); }
+                            }, CancellationToken.None);
+                        }
+                    }
+                    catch
+                    {
+                        Volatile.Write(ref evictionInFlight, 0);
+                    }
+                }
+
+                // Only trigger GC if eviction has been productive recently.
+                if (futile < 3)
+                    CollectForMemoryPressureIfDue(TimeSpan.FromSeconds(10));
+            }
+            else if (Volatile.Read(ref degraded) != 0 &&
+                     Volatile.Read(ref evictionInFlight) == 0 &&
+                     IsMemoryPressureRelieved(options.MaxProcessMemoryBytes, options.MemoryPressurePercent))
+            {
+                Volatile.Write(ref degraded, 0);
+                string diagnostics = GetMemoryDiagnostics();
+                LogService.Instance.Warning("SearchService",
+                    $"Memory pressure relieved: {diagnostics} - leaving memory-saving mode");
+                var relievedEvent = new SearchEvent.MemoryPressureRelieved(diagnostics);
+                if (!events.Writer.TryWrite(relievedEvent))
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        try { await events.Writer.WriteAsync(relievedEvent, cancellationToken).ConfigureAwait(false); }
+                        catch { }
+                    }, CancellationToken.None);
+                }
+            }
         }
 
         // ── Discovery ──
@@ -432,11 +527,6 @@ public sealed class SearchService
                     bool nativeAvailable = Native.NativeSearcher.IsAvailable;
                     int parallelism = options.MaxDegreeOfParallelism > 0
                         ? options.MaxDegreeOfParallelism
-                        // Native scanning overlaps file open/read work in Rust.
-                        // ETL profiling shows 1,744 opens/sec with median disk
-                        // latency 0.072ms — NVMe is far from saturated. Raising
-                        // the cap to 64 (matching Rust MAX_WORKERS) lets more
-                        // workers overlap I/O with scanning.
                         : nativeAvailable
                             ? Math.Max(1, Math.Min(64, Environment.ProcessorCount * 2))
                             : Math.Max(1, Math.Min(16, Environment.ProcessorCount));
@@ -447,92 +537,6 @@ public sealed class SearchService
                     var degradedOptions = patternOptions.ContextLines > 0
                         ? CopyOptions(patternOptions, contextLines: 0)
                         : patternOptions;
-
-                    // Local function that captures the enclosing method's locals directly
-                    // (avoids the C# restriction on capturing ref params in lambdas).
-                    void CheckMemoryPressure()
-                    {
-                        if (IsMemoryPressureHigh(options.MaxProcessMemoryBytes, options.MemoryPressurePercent))
-                        {
-                            Volatile.Write(ref degraded, 1);
-                            Volatile.Write(ref everDegraded, 1);
-
-                            // After several consecutive evictions that freed nothing, stop emitting
-                            // pressure events — they just trigger futile GC cycles. Recheck every
-                            // 60 seconds in case memory actually drops.
-                            int futile = Volatile.Read(ref consecutiveFutileEvictions);
-                            if (futile >= 3)
-                            {
-                                long now = Stopwatch.GetTimestamp();
-                                long last = Volatile.Read(ref lastPressureCheckTicks);
-                                double secSinceLast = last == 0 ? double.MaxValue : (double)(now - last) / Stopwatch.Frequency;
-                                if (secSinceLast < 60)
-                                    return; // skip — futile eviction loop, just keep scanning
-                            }
-
-                            if (Interlocked.CompareExchange(ref evictionInFlight, 1, 0) == 0)
-                            {
-                                Volatile.Write(ref lastPressureCheckTicks, Stopwatch.GetTimestamp());
-                                int cycle = Interlocked.Increment(ref pressureCycles);
-                                string diagnostics = GetMemoryDiagnostics();
-                                LogService.Instance.Warning("SearchService",
-                                    $"Memory pressure cycle #{cycle}: {diagnostics} - shedding Yagu memory (scanned={filesScanned:N0}, matches={totalMatches:N0})");
-                                try
-                                {
-                                    var memoryPressureEvent = new SearchEvent.MemoryPressure(
-                                        (evictedCount) =>
-                                        {
-                                            if (evictedCount == 0)
-                                                Interlocked.Increment(ref consecutiveFutileEvictions);
-                                            else
-                                                Volatile.Write(ref consecutiveFutileEvictions, 0);
-                                            LogService.Instance.Warning("SearchService",
-                                                $"Eviction acknowledged: freed {evictedCount}; continuing in memory-saving mode");
-                                            if (evictedCount > 0)
-                                                _ = Task.Run(() => CollectForMemoryPressureIfDue(TimeSpan.FromSeconds(3)));
-                                            Volatile.Write(ref evictionInFlight, 0);
-                                        },
-                                        options.MemoryPressurePercent,
-                                        diagnostics);
-
-                                    if (!events.Writer.TryWrite(memoryPressureEvent))
-                                    {
-                                        _ = Task.Run(async () =>
-                                        {
-                                            try { await events.Writer.WriteAsync(memoryPressureEvent, cancellationToken).ConfigureAwait(false); }
-                                            catch { Volatile.Write(ref evictionInFlight, 0); }
-                                        }, CancellationToken.None);
-                                    }
-                                }
-                                catch
-                                {
-                                    Volatile.Write(ref evictionInFlight, 0);
-                                }
-                            }
-
-                            // Only trigger GC if eviction has been productive recently.
-                            if (futile < 3)
-                                CollectForMemoryPressureIfDue(TimeSpan.FromSeconds(10));
-                        }
-                        else if (Volatile.Read(ref degraded) != 0 &&
-                                 Volatile.Read(ref evictionInFlight) == 0 &&
-                                 IsMemoryPressureRelieved(options.MaxProcessMemoryBytes, options.MemoryPressurePercent))
-                        {
-                            Volatile.Write(ref degraded, 0);
-                            string diagnostics = GetMemoryDiagnostics();
-                            LogService.Instance.Warning("SearchService",
-                                $"Memory pressure relieved: {diagnostics} - leaving memory-saving mode");
-                            var relievedEvent = new SearchEvent.MemoryPressureRelieved(diagnostics);
-                            if (!events.Writer.TryWrite(relievedEvent))
-                            {
-                                _ = Task.Run(async () =>
-                                {
-                                    try { await events.Writer.WriteAsync(relievedEvent, cancellationToken).ConfigureAwait(false); }
-                                    catch { }
-                                }, CancellationToken.None);
-                            }
-                        }
-                    }
 
                     if (nativeAvailable)
                     {
@@ -659,7 +663,7 @@ public sealed class SearchService
                                         ProcessNativeBatch(batch, batchSession, degradedSession, parallelism, batchCancelPtr,
                                             patternOptions, contentResults.Writer,
                                             ref filesScanned, ref filesSkipped, ref filesWithMatches, ref totalMatches,
-                                            ref bytesScanned, ref truncated, ref degraded, ref contentChannelDrops,
+                                            ref bytesScanned, ref truncated, ref degraded,
                                             ref skipBinary, ref skipAccessDenied, ref skipIOError,
                                             ref skipTooLarge, ref skipNotFound, ref skipOther);
                                     }
@@ -680,7 +684,9 @@ public sealed class SearchService
                                     batch.Clear();
 
                                     // Ramp up batch target after warmup phase
-                                    if (batchNum <= WarmupBatches)
+                                    if (Volatile.Read(ref degraded) != 0)
+                                        currentBatchTarget = MemorySavingNativeBatchSize;
+                                    else if (batchNum <= WarmupBatches)
                                         currentBatchTarget = Math.Min(currentBatchTarget * 2, nativeBatchSize);
                                     else
                                         currentBatchTarget = nativeBatchSize;
@@ -695,7 +701,7 @@ public sealed class SearchService
                                             $"Batch #{batchNum}: {batchFileCount} files in {batchFlushSw.ElapsedMilliseconds}ms | " +
                                             $"scanned={Volatile.Read(ref filesScanned):N0}, matches={Volatile.Read(ref totalMatches):N0}, " +
                                             $"withMatches={Volatile.Read(ref filesWithMatches):N0}, skipped={Volatile.Read(ref filesSkipped):N0}, " +
-                                            $"degraded={Volatile.Read(ref degraded) != 0}, channelDrops={Volatile.Read(ref contentChannelDrops)}, " +
+                                            $"degraded={Volatile.Read(ref degraded) != 0}, parallelism={parallelism}, batchTarget={currentBatchTarget}, " +
                                             $"elapsed={sw.Elapsed.TotalSeconds:F1}s, {memDiag}");
                                     }
                                 }
@@ -705,7 +711,8 @@ public sealed class SearchService
 
                                 while (Volatile.Read(ref truncated) == 0)
                                 {
-                                    while (batch.Count < currentBatchTarget && pending.Reader.TryRead(out var bufferedFile))
+                                    int batchTarget = ResolveNativeBatchTarget(currentBatchTarget, Volatile.Read(ref degraded) != 0);
+                                    while (batch.Count < batchTarget && pending.Reader.TryRead(out var bufferedFile))
                                     {
                                         // Route configured archive extensions to the managed searcher.
                                         // Use extension-based check (no I/O) instead of opening
@@ -723,7 +730,7 @@ public sealed class SearchService
                                         }
                                     }
 
-                                    if (batch.Count >= currentBatchTarget)
+                                    if (batch.Count >= batchTarget)
                                     {
                                         FlushNativeBatch();
                                         continue;
@@ -863,7 +870,6 @@ public sealed class SearchService
                         $"Content workers finished: scanned={filesScanned:N0}, withMatches={filesWithMatches:N0}, " +
                         $"totalMatches={totalMatches:N0}, skipped={Volatile.Read(ref filesSkipped):N0}, " +
                         $"batches={Volatile.Read(ref nativeBatchesProcessed)}, pressureCycles={Volatile.Read(ref pressureCycles)}, " +
-                        $"channelDrops={Volatile.Read(ref contentChannelDrops)}, " +
                         $"elapsed={sw.Elapsed.TotalSeconds:F2}s, {finishMemDiag}");
                     contentResults.Writer.TryComplete();
                 }
@@ -880,6 +886,7 @@ public sealed class SearchService
             try
             {
                 const int ContentBatchSize = 256;
+                const int DegradedContentBatchSize = 32;
                 List<SearchResult>? contentBatch = null;
                 long fwdLogLastTicks = Stopwatch.GetTimestamp();
                 const long FwdLogIntervalSec = 10;
@@ -928,7 +935,8 @@ public sealed class SearchService
                     while (contentResults.Reader.TryRead(out var r))
                     {
                         (contentBatch ??= new List<SearchResult>(ContentBatchSize)).Add(r);
-                        if (contentBatch.Count >= ContentBatchSize)
+                        int targetBatchSize = Volatile.Read(ref degraded) != 0 ? DegradedContentBatchSize : ContentBatchSize;
+                        if (contentBatch.Count >= targetBatchSize)
                             await FlushContentBatchAsync().ConfigureAwait(false);
                     }
 
@@ -966,10 +974,19 @@ public sealed class SearchService
             try
             {
                 using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(100));
+                long lastMemoryPressurePollTicks = 0;
+                long memoryPressurePollIntervalTicks = (long)(PeriodicMemoryPressureCheckInterval.TotalSeconds * Stopwatch.Frequency);
                 while (!pipelineComplete.Task.IsCompleted &&
                        await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
                 {
                     if (pipelineComplete.Task.IsCompleted || Volatile.Read(ref truncated) != 0) break;
+                    long now = Stopwatch.GetTimestamp();
+                    if (lastMemoryPressurePollTicks == 0 ||
+                        now - lastMemoryPressurePollTicks >= memoryPressurePollIntervalTicks)
+                    {
+                        lastMemoryPressurePollTicks = now;
+                        CheckMemoryPressure();
+                    }
                     events.Writer.TryWrite(new SearchEvent.Progress(CreateProgressSnapshot()));
                 }
             }
@@ -1011,7 +1028,7 @@ public sealed class SearchService
         int nonAccessDeniedDirectorySkips = Math.Max(0, directorySkips - _fileLister.AccessDeniedDirectories);
         var skipReasons = new SkipBreakdown(skipBinary, accessDeniedSkips, skipIOError, skipTooLarge + earlyTooLargeSkips, skipNotFound, skipEncoding, skipOther, skipByExtension, nonAccessDeniedDirectorySkips, earlySkips + discoverySizeSkips, skipGlobExcluded, _fileLister.GitignoreSkipped);
         LogService.Instance.Warning("SearchService", $"Search complete: {totalMatches} matches in {filesWithMatches} files, {filesScanned} scanned, {totalSkipped} skipped ({skipReasons}), earlyFiltered={earlySkips + discoverySizeSkips}, degraded={wasDegraded}, truncated={wasTruncated}, " +
-            $"batches={Volatile.Read(ref nativeBatchesProcessed)}, pressureCycles={pressureCycles}, forwarderItems={Volatile.Read(ref forwarderItemsForwarded):N0}, forwarderStallMs={Volatile.Read(ref forwarderWriteStallMs)}, channelDrops={Volatile.Read(ref contentChannelDrops)}, {sw.Elapsed.TotalSeconds:F2}s");
+            $"batches={Volatile.Read(ref nativeBatchesProcessed)}, pressureCycles={pressureCycles}, forwarderItems={Volatile.Read(ref forwarderItemsForwarded):N0}, forwarderStallMs={Volatile.Read(ref forwarderWriteStallMs)}, {sw.Elapsed.TotalSeconds:F2}s");
         yield return new SearchEvent.Completed(new SearchSummary(
             TotalFiles: totalFiles,
             FilesScanned: CurrentFilesProcessed(),
@@ -1183,7 +1200,7 @@ public sealed class SearchService
     /// <summary>
     /// Returns true when memory limits are exceeded.
     /// <paramref name="maxProcessBytes"/>: hard process working-set cap. When 0, auto-calculates
-    /// 25% of total physical RAM (min 2 GB) so the process never runs uncapped.
+    /// a sub-GB working-set target so the process never runs uncapped.
     /// <paramref name="pressurePercent"/>: system-wide memory pressure threshold 0-100 (0 = disabled).
     /// </summary>
 
@@ -1290,6 +1307,8 @@ public sealed class SearchService
         return Math.Clamp(workers * 128, 1024, 4096);
     }
 
+    internal static int ResolveNativeBatchTarget(int currentBatchTarget, bool memorySaving)
+        => memorySaving ? MemorySavingNativeBatchSize : currentBatchTarget;
 
     internal static bool TryGetSystemMemoryLoadPercent(out uint systemLoadPercent)
     {
@@ -1304,13 +1323,9 @@ public sealed class SearchService
         return false;
     }
 
-    // When the user has not set an explicit process cap (0), fall back to the
-    // auto-cap (~33% of physical RAM, 2 GB floor). Previously this returned
-    // long.MaxValue, leaving the process uncapped — only the system-wide
-    // pressure% threshold fired, and only after Yagu had already grown to
-    // 40+ GB on a 64 GB host. Enforcing the auto-cap triggers eviction much
-    // sooner and prevents the working set from ballooning past a sane fraction
-    // of physical memory.
+    // When the user has not set an explicit process cap (0), fall back to a
+    // sub-GB auto-cap. This triggers disk paging based on Yagu's own working
+    // set instead of waiting for machine-wide memory pressure on large-RAM hosts.
     private static long EffectiveProcessMemoryCap(long maxProcessBytes) =>
         maxProcessBytes > 0 ? maxProcessBytes : AutoProcessMemoryCap();
 
@@ -1334,7 +1349,7 @@ public sealed class SearchService
         catch { return "unknown"; }
     }
 
-    /// <summary>Auto-calculates a process memory cap: ~33% of total physical RAM, minimum 2 GB.</summary>
+    /// <summary>Auto-calculates a sub-GB process memory target for default searches.</summary>
 
     internal static long AutoProcessMemoryCap()
     {
@@ -1345,17 +1360,16 @@ public sealed class SearchService
                 return ComputeAutoProcessMemoryCap(status.ullTotalPhys);
         }
         catch { }
-        return 4L * 1024 * 1024 * 1024; // fallback: 4 GB
+        return AutoProcessMemoryCapFallback;
     }
 
     internal static long ComputeAutoProcessMemoryCap(ulong totalPhysicalBytes)
     {
-        const long minCap = 2L * 1024 * 1024 * 1024; // 2 GB floor
-        const long maxCap = 6L * 1024 * 1024 * 1024; // 6 GB ceiling
-        // ~25% of physical RAM, clamped so we never let a large-RAM machine
-        // accumulate tens of GB before eviction fires.
+        // ~25% of physical RAM, clamped to a sub-GB target. This is a paging
+        // threshold, not a result limit: matches keep streaming and evicted
+        // payloads move to the disk-backed ResultStore.
         long quarter = (long)(totalPhysicalBytes / 4);
-        return Math.Clamp(quarter, minCap, maxCap);
+        return Math.Clamp(quarter, AutoProcessMemoryCapFloor, AutoProcessMemoryCapCeiling);
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -1393,7 +1407,7 @@ public sealed class SearchService
         ChannelWriter<SearchResult> contentWriter,
         ref int filesScanned, ref int filesSkipped, ref int filesWithMatches,
         ref int totalMatches, ref long bytesScanned, ref int truncated,
-        ref int degraded, ref int contentChannelDrops,
+        ref int degraded,
         ref int skipBinary, ref int skipAccessDenied, ref int skipIOError,
         ref int skipTooLarge, ref int skipNotFound, ref int skipOther)
     {
@@ -1413,14 +1427,6 @@ public sealed class SearchService
             Interlocked.Add(ref totalMatches, sink.TotalEmitted);
         if (sink.Truncated)
             Volatile.Write(ref truncated, 1);
-        if (sink.ChannelFullDrops > 0)
-        {
-            Interlocked.Add(ref contentChannelDrops, sink.ChannelFullDrops);
-            LogService.Instance.Warning("Workers",
-                $"Content channel full: {sink.ChannelFullDrops} results could not be written (TryWrite failed). " +
-                $"Scanner stopped for this batch. Total drops={Volatile.Read(ref contentChannelDrops)}");
-        }
-
         // Post-batch: reconcile per-file stats (filesScanned already incremented in OnFileDone).
         for (int i = 0; i < batch.Count; i++)
         {
@@ -1457,9 +1463,9 @@ public sealed class SearchService
     /// <summary>
     /// Sink for the batch native parallel scanner. The Rust side serialises callbacks
     /// under a mutex, so this does not need to be thread-safe.
-    /// Arrays are rented from ArrayPool to avoid per-batch allocations (ETL showed
-    /// 112 MB of SearchResult[] + int[] churn). Results reuse the indexed path
-    /// string from the input batch instead of hashing per match.
+    /// Per-file counters are rented from ArrayPool, and matches are written through
+    /// the bounded result channel immediately so a single match-heavy file cannot
+    /// accumulate an unbounded managed buffer before backpressure applies.
     /// </summary>
 
     internal sealed class BatchScanSink : Native.NativeSearcher.IParallelSink, IDisposable
@@ -1471,11 +1477,6 @@ public sealed class SearchService
         private readonly int[] _emitted;
         private readonly int[] _statuses;
         private readonly long[] _fileLength;
-        // Per-file result buffers: accumulate matches for each file and flush them
-        // atomically in OnFileDone so the channel never contains interleaved results
-        // from different files (which would corrupt ripgrep-style grouped output).
-        // The buffer array is pooled because this object is created for every batch.
-        private readonly List<SearchResult>?[] _buffers;
         private readonly unsafe int* _cancelPtr; // Rust cancel flag — checked during backpressure waits
         private readonly unsafe int* _filesScannedPtr; // incremented per file for live progress
         private int _runningTotal; // starts from outer totalMatches at batch start
@@ -1483,7 +1484,6 @@ public sealed class SearchService
 
         public bool Truncated { get; private set; }
         public int TotalEmitted { get; private set; }
-        public int ChannelFullDrops { get; private set; }
         public Exception? CapturedException { get; set; }
         public string? ErrorMessage { get; set; }
 
@@ -1505,22 +1505,16 @@ public sealed class SearchService
             _emitted = ArrayPool<int>.Shared.Rent(paths.Count);
             _statuses = ArrayPool<int>.Shared.Rent(paths.Count);
             _fileLength = ArrayPool<long>.Shared.Rent(paths.Count);
-            _buffers = ArrayPool<List<SearchResult>?>.Shared.Rent(paths.Count);
             Array.Clear(_emitted, 0, paths.Count);
             Array.Clear(_statuses, 0, paths.Count);
             Array.Clear(_fileLength, 0, paths.Count);
-            Array.Clear(_buffers, 0, paths.Count);
         }
 
         public void Dispose()
         {
-            for (int i = 0; i < _count; i++)
-                _buffers[i]?.Clear();
-            Array.Clear(_buffers, 0, _count);
             ArrayPool<int>.Shared.Return(_emitted);
             ArrayPool<int>.Shared.Return(_statuses);
             ArrayPool<long>.Shared.Return(_fileLength);
-            ArrayPool<List<SearchResult>?>.Shared.Return(_buffers);
         }
 
         public int GetEmitted(int i) => _emitted[i];
@@ -1559,10 +1553,11 @@ public sealed class SearchService
                 ContextBefore: before,
                 ContextAfter: after);
 
-            // Buffer the result; we write to the channel atomically in OnFileDone
-            // so that all results for a file arrive contiguously and never interleave
-            // with results from other files processed in parallel by the Rust scanner.
-            (_buffers[idx] ??= new List<SearchResult>()).Add(result);
+            if (!TryWriteWithBackpressure(result))
+            {
+                _stopped = true;
+                return 1;
+            }
 
             _emitted[idx]++;
             TotalEmitted++;
@@ -1574,6 +1569,23 @@ public sealed class SearchService
                 return 1;
             }
             return 0;
+        }
+
+        private unsafe bool TryWriteWithBackpressure(SearchResult result)
+        {
+            if (_writer.TryWrite(result))
+                return true;
+
+            var spinWait = new SpinWait();
+            while (true)
+            {
+                if (_cancelPtr != null && Volatile.Read(ref *_cancelPtr) != 0)
+                    return false;
+
+                spinWait.SpinOnce(sleep1Threshold: 2);
+                if (_writer.TryWrite(result))
+                    return true;
+            }
         }
 
         public void OnFileDone(uint fileIndex, int status, ulong fileLength, ulong lastModifiedFileTime)
@@ -1599,46 +1611,6 @@ public sealed class SearchService
                 FileMetadataCache.Set(_paths[idx], new FileMetadata((long)fileLength, lastMod, created));
             }
 
-            // Flush this file's buffered results to the channel as a contiguous run.
-            var buf = _buffers[idx];
-            if (buf != null && !_stopped)
-            {
-                foreach (var r in buf)
-                {
-                    if (_writer.TryWrite(r))
-                        continue;
-
-                    // Channel full — apply backpressure. Spin-wait for the forwarder to
-                    // drain space instead of silently dropping results. This runs on a
-                    // thread-pool thread inside ProcessNativeBatch, so blocking is safe
-                    // and produces the desired effect: the scanner slows to match the
-                    // consumer's pace.
-                    bool written = false;
-                    var spinWait = new SpinWait();
-                    while (true)
-                    {
-                        // Check for cancellation (Rust cancel flag) to avoid deadlock
-                        // when the search is cancelled while we're waiting.
-                        unsafe
-                        {
-                            if (_cancelPtr != null && Volatile.Read(ref *_cancelPtr) != 0)
-                                break;
-                        }
-                        spinWait.SpinOnce(sleep1Threshold: 2);
-                        if (_writer.TryWrite(r))
-                        {
-                            written = true;
-                            break;
-                        }
-                    }
-                    if (!written)
-                    {
-                        _stopped = true;
-                        break;
-                    }
-                }
-                buf.Clear(); // keep the list for potential reuse within this batch
-            }
         }
     }
 }

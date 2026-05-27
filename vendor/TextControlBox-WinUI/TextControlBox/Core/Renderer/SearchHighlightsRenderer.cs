@@ -9,6 +9,8 @@ namespace TextControlBoxNS.Core.Renderer
 {
     internal class SearchHighlightsRenderer
     {
+        internal const int DefaultMaxSearchHighlightsPerRender = 1000;
+
         public static void RenderHighlights(
             CanvasDrawEventArgs args,
             CanvasDrawingSession drawingSession,
@@ -18,7 +20,8 @@ namespace TextControlBoxNS.Core.Renderer
             string searchRegex,
             float scrollOffsetX,
             float offsetTop,
-            Color searchHighlightColor)
+            Color searchHighlightColor,
+            int maxHighlights = DefaultMaxSearchHighlightsPerRender)
         {
             if (!HasHighlightInput(renderedText, searchRegex, possibleLines) || drawnTextLayout == null)
                 return;
@@ -26,15 +29,19 @@ namespace TextControlBoxNS.Core.Renderer
             //draw the characters only to the drawingSession, which gets passed as a 
             //CanvasCommandList instance for efficient batched rendering 
 
-            MatchCollection matches = Regex.Matches(renderedText, searchRegex);
-            for (int j = 0; j < matches.Count; j++)
+            int renderedHighlights = 0;
+            for (Match match = Regex.Match(renderedText, searchRegex); match.Success; match = match.NextMatch())
             {
-                var match = matches[j];
+                if (match.Length <= 0)
+                    continue;
 
                 var layoutRegion = drawnTextLayout.GetCharacterRegions(match.Index, match.Length);
                 if (layoutRegion.Length > 0)
                 {
                     drawingSession.FillRectangle(Utils.CreateRect(layoutRegion[0].LayoutBounds, scrollOffsetX, offsetTop), searchHighlightColor);
+                    renderedHighlights++;
+                    if (renderedHighlights >= maxHighlights)
+                        break;
                 }
             }
             return;

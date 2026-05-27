@@ -390,16 +390,44 @@ public sealed partial class SettingsWindow : Window
             var skipExtLabel = NextSearchLabel("Skip extensions (semicolon-separated, no dots):");
             skipExtLabel.Margin = new Thickness(0, 4, 0, 0);
             g.Children.Add(skipExtLabel);
-            var skipExt = new TextBox { Text = _viewModel.SkipExtensions, PlaceholderText = "e.g. exe;dll;zip;png;pdf", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false, MaxWidth = 300, HorizontalAlignment = HorizontalAlignment.Left };
-            skipExt.TextChanged += (_, _) => _viewModel.SkipExtensions = skipExt.Text;
+            var skipExt = new TextBox { Text = _viewModel.SettingsSkipExtensions, PlaceholderText = "e.g. svg;sqlite;etl;log", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false, MaxWidth = 300, HorizontalAlignment = HorizontalAlignment.Left };
+            skipExt.TextChanged += (_, _) =>
+            {
+                _viewModel.SettingsSkipExtensions = skipExt.Text;
+                _viewModel.SkipExtensions = skipExt.Text;
+            };
             g.Children.Add(skipExt);
-            g.Children.Add(new TextBlock { Text = "Files with these extensions are skipped entirely — no binary check, no content read.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            g.Children.Add(new TextBlock { Text = "Files with these extensions are skipped entirely. Default media, document, data, and dump prefilters live here; add custom text/project extensions as needed.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            var binaryExtLabel = NextSearchLabel("Binary extensions (semicolon-separated, no dots):");
+            binaryExtLabel.Margin = new Thickness(0, 4, 0, 0);
+            g.Children.Add(binaryExtLabel);
+            var binaryExt = new TextBox { Text = _viewModel.SettingsBinaryExtensions, PlaceholderText = "e.g. exe;dll;pdb;wasm", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false, MaxWidth = 520, HorizontalAlignment = HorizontalAlignment.Left };
+            binaryExt.TextChanged += (_, _) =>
+            {
+                _viewModel.SettingsBinaryExtensions = binaryExt.Text;
+                _viewModel.BinaryExtensions = binaryExt.Text;
+            };
+            g.Children.Add(binaryExt);
+            var resetBinaryExt = new Button { Content = "Reset binary extensions", Margin = new Thickness(0, 4, 0, 0), HorizontalAlignment = HorizontalAlignment.Left };
+            resetBinaryExt.Click += (_, _) =>
+            {
+                binaryExt.Text = AppSettings.DefaultBinaryExtensions;
+                _viewModel.SettingsBinaryExtensions = binaryExt.Text;
+                _viewModel.BinaryExtensions = binaryExt.Text;
+            };
+            g.Children.Add(resetBinaryExt);
+            g.Children.Add(new TextBlock { Text = "These populate the Binary ext dropdown shown beside Skip Extensions when Search binary is enabled. Use this for compiled binary and build artifact extensions that should remain skipped even during binary search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             var archiveExtLabel = NextSearchLabel("Archive extensions (semicolon-separated, no dots):");
             archiveExtLabel.Margin = new Thickness(0, 4, 0, 0);
             g.Children.Add(archiveExtLabel);
-            var archiveExt = new TextBox { Text = _viewModel.ArchiveExtensions, PlaceholderText = "e.g. zip;jar;docx;xlsx;pptx;epub", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false, MaxWidth = 300, HorizontalAlignment = HorizontalAlignment.Left };
-            archiveExt.TextChanged += (_, _) => _viewModel.ArchiveExtensions = archiveExt.Text;
+            var archiveExt = new TextBox { Text = _viewModel.SettingsArchiveExtensions, PlaceholderText = "e.g. zip;jar;docx;xlsx;pptx;epub", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false, MaxWidth = 300, HorizontalAlignment = HorizontalAlignment.Left };
+            archiveExt.TextChanged += (_, _) =>
+            {
+                _viewModel.SettingsArchiveExtensions = archiveExt.Text;
+                _viewModel.ArchiveExtensions = archiveExt.Text;
+            };
             g.Children.Add(archiveExt);
             g.Children.Add(new TextBlock { Text = "Extensions that are ZIP-like containers. When 'Search archives' is on, these are removed from the skip list so they reach the content searcher. Detection still uses file-header magic bytes.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
@@ -643,6 +671,22 @@ public sealed partial class SettingsWindow : Window
             g.Children.Add(new TextBlock
             {
                 Text = "Controls only the orange toolbar label shown while Yagu is paging results to disk. Memory-saving mode still activates normally.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var showStatsForNerds = new CheckBox
+            {
+                Content = "Stats for nerds",
+                IsChecked = _viewModel.ShowStatsForNerds,
+            };
+            showStatsForNerds.Checked += (_, _) => _viewModel.ShowStatsForNerds = true;
+            showStatsForNerds.Unchecked += (_, _) => _viewModel.ShowStatsForNerds = false;
+            g.Children.Add(showStatsForNerds);
+            g.Children.Add(new TextBlock
+            {
+                Text = "Shows the files/second and MB/s text, plus the disk throughput sparkline, MB/s, and utilization percentage in the bottom status bar.",
                 FontSize = 11,
                 Opacity = 0.6,
                 TextWrapping = TextWrapping.Wrap,
