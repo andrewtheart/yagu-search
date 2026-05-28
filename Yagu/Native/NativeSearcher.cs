@@ -143,6 +143,31 @@ internal static partial class NativeSearcher
         delegate* unmanaged[Cdecl]<void*, uint, int, ulong, ulong, void> onFileDone,
         void* onMatchCtx);
 
+    // ── Streaming scanner FFI ──
+
+    [LibraryImport(DllName, EntryPoint = "qg_create_streaming_scanner")]
+    private static unsafe partial IntPtr QgCreateStreamingScanner(
+        IntPtr session,
+        uint threadCount,
+        int* cancelFlag,
+        delegate* unmanaged[Cdecl]<void*, uint, QgMatchView*, int> onMatch,
+        delegate* unmanaged[Cdecl]<void*, uint, int, ulong, ulong, void> onFileDone,
+        void* onMatchCtx);
+
+    [LibraryImport(DllName, EntryPoint = "qg_scanner_push_paths")]
+    private static unsafe partial int QgScannerPushPaths(
+        IntPtr scanner,
+        char* pathsUtf16Concat,
+        uint* pathLengths,
+        nuint pathCount,
+        uint fileIndexBase);
+
+    [LibraryImport(DllName, EntryPoint = "qg_scanner_finish")]
+    private static unsafe partial int QgScannerFinish(IntPtr scanner);
+
+    [LibraryImport(DllName, EntryPoint = "qg_scanner_destroy")]
+    private static unsafe partial void QgScannerDestroy(IntPtr scanner);
+
     private static readonly Lazy<bool> _available = new(TryLoad, LazyThreadSafetyMode.ExecutionAndPublication);
     public static bool IsAvailable => _available.Value;
 
@@ -498,6 +523,101 @@ internal static partial class NativeSearcher
             ArrayPool<uint>.Shared.Return(lengths);
             ArrayPool<char>.Shared.Return(concat);
         }
+    }
+
+    // ── Streaming scanner high-level API ──
+
+    /// <summary>
+    /// Creates a streaming scanner with persistent worker threads that pull
+    /// paths from an internal queue. Use <see cref="PushPaths"/> to feed work
+    /// and <see cref="FinishStreamingScanner"/> to wait for completion.
+    /// </summary>
+    public static unsafe IntPtr CreateStreamingScanner(
+        NativeSession session,
+        int threadCount,
+        int* cancelFlag,
+        IParallelSink sink,
+        out GCHandle sinkHandle)
+    {
+        if (!IsAvailable) { sinkHandle = default; return IntPtr.Zero; }
+
+        sinkHandle = GCHandle.Alloc(sink, GCHandleType.Normal);
+        var scanner = QgCreateStreamingScanner(
+            session.Handle,
+            (uint)Math.Max(0, threadCount),
+            cancelFlag,
+            &OnParallelMatchTrampoline,
+            &OnParallelFileDoneTrampoline,
+            (void*)GCHandle.ToIntPtr(sinkHandle));
+
+        if (scanner == IntPtr.Zero)
+        {
+            sinkHandle.Free();
+            sinkHandle = default;
+        }
+        return scanner;
+    }
+
+    /// <summary>
+    /// Push a batch of paths into the streaming scanner's work queue.
+    /// Workers pick them up immediately without waiting for a full batch.
+    /// </summary>
+    public static unsafe int PushPaths(IntPtr scanner, IReadOnlyList<string> paths, int fileIndexBase)
+    {
+        if (scanner == IntPtr.Zero || paths.Count == 0) return StatusOk;
+
+        int totalChars = 0;
+        for (int i = 0; i < paths.Count; i++)
+            totalChars = checked(totalChars + paths[i].Length);
+
+        var concat = ArrayPool<char>.Shared.Rent(totalChars);
+        var lengths = ArrayPool<uint>.Shared.Rent(paths.Count);
+        try
+        {
+            var concatSpan = concat.AsSpan(0, totalChars);
+            var lengthsSpan = lengths.AsSpan(0, paths.Count);
+            int cursor = 0;
+            for (int i = 0; i < paths.Count; i++)
+            {
+                var s = paths[i];
+                s.AsSpan().CopyTo(concatSpan[cursor..]);
+                lengthsSpan[i] = (uint)s.Length;
+                cursor += s.Length;
+            }
+
+            fixed (char* pConcat = concatSpan)
+            fixed (uint* pLengths = lengthsSpan)
+            {
+                return QgScannerPushPaths(
+                    scanner,
+                    pConcat,
+                    pLengths,
+                    (nuint)paths.Count,
+                    (uint)fileIndexBase);
+            }
+        }
+        finally
+        {
+            ArrayPool<uint>.Shared.Return(lengths);
+            ArrayPool<char>.Shared.Return(concat);
+        }
+    }
+
+    /// <summary>
+    /// Signal no more paths and wait for all workers to drain.
+    /// </summary>
+    public static unsafe int FinishStreamingScanner(IntPtr scanner)
+    {
+        if (scanner == IntPtr.Zero) return StatusOk;
+        return QgScannerFinish(scanner);
+    }
+
+    /// <summary>
+    /// Destroy a streaming scanner (must be called after Finish).
+    /// </summary>
+    public static unsafe void DestroyStreamingScanner(IntPtr scanner)
+    {
+        if (scanner != IntPtr.Zero) QgScannerDestroy(scanner);
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]

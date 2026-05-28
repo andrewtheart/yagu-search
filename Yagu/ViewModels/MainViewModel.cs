@@ -1096,6 +1096,7 @@ public sealed partial class MainViewModel : ObservableObject
                 SdkChannelBufferSize = SdkChannelBufferSize,
                 ExcludeAdminProtectedPaths = ExcludeAdminProtectedPaths,
                 MaxSearchDepth = double.IsNaN(MaxSearchDepth) ? 0 : (int)MaxSearchDepth,
+                DegradedResultStore = _resultStore,
             };
 
             cts = new CancellationTokenSource();

@@ -137,13 +137,16 @@ internal static class CliRunner
         // by the shell) BEFORE we do anything to the handles.
         nint hOutBefore = GetStdHandle(STD_OUTPUT_HANDLE);
         nint hErrBefore = GetStdHandle(STD_ERROR_HANDLE);
-        // FILE_TYPE_CHAR means an interactive console device; anything else (pipe/disk) means redirected.
-        bool outPiped = hOutBefore == 0 || hOutBefore == -1 || GetFileType(hOutBefore) != FILE_TYPE_CHAR;
-        bool errPiped = hErrBefore == 0 || hErrBefore == -1 || GetFileType(hErrBefore) != FILE_TYPE_CHAR;
+        // A handle is "piped" only when it's a VALID handle pointing at a pipe or file.
+        // Invalid handles (0/-1) mean we're a GUI app with no console — need AttachConsole.
+        bool outHasHandle = hOutBefore != 0 && hOutBefore != -1;
+        bool errHasHandle = hErrBefore != 0 && hErrBefore != -1;
+        bool outPiped = outHasHandle && GetFileType(hOutBefore) != FILE_TYPE_CHAR;
+        bool errPiped = errHasHandle && GetFileType(hErrBefore) != FILE_TYPE_CHAR;
 
         if (!outPiped || !errPiped)
         {
-            // Not piped/redirected — attach to the parent console so CONOUT$ is valid.
+            // Need a console for at least one stream — attach to parent or allocate.
             if (!AttachConsole(ATTACH_PARENT_PROCESS))
                 AllocConsole();
         }
@@ -510,7 +513,12 @@ internal static class CliRunner
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
         var service  = new SearchService();
-        var writer   = new RipgrepWriter(Console.Out, useColor);
+
+        // Direct output mode: bypass RipgrepWriter entirely — the DirectOutputSink
+        // writes ripgrep-formatted UTF-8 directly from Rust's byte buffers.
+        options.DirectOutputStream = Console.OpenStandardOutput();
+        options.DirectOutputColor = useColor;
+
         var progress = vtEnabled ? new ProgressLine(useColor) : null;
 
         try
@@ -519,19 +527,6 @@ internal static class CliRunner
             {
                 switch (ev)
                 {
-                    case SearchEvent.Match m:
-                        progress?.Hide();
-                        writer.Add(m.Result);
-                        progress?.Show();
-                        break;
-
-                    case SearchEvent.MatchBatch mb:
-                        progress?.Hide();
-                        foreach (var r in mb.Results)
-                            writer.Add(r);
-                        progress?.Show();
-                        break;
-
                     case SearchEvent.Progress p:
                         progress?.Update(p.Snapshot);
                         break;
@@ -557,17 +552,15 @@ internal static class CliRunner
 
                     case SearchEvent.Completed c:
                         progress?.Dismiss();
-                        writer.Flush();
                         WriteCompletionSummary(c.Summary, useColor);
                         if (c.Summary.Cancelled) return 130;
-                        return writer.TotalMatches > 0 ? 0 : 1;
+                        return c.Summary.TotalMatches > 0 ? 0 : 1;
                 }
             }
         }
         catch (OperationCanceledException)
         {
             progress?.Dismiss();
-            writer.Flush();
             WriteError("search cancelled.");
             return 130;
         }
@@ -576,12 +569,11 @@ internal static class CliRunner
             // Broken pipe — consumer closed the pipe before we finished.
             // This is normal when users pipe to head/Select-Object -First N.
             progress?.Dismiss();
-            return writer.TotalMatches > 0 ? 0 : 1;
+            return 0;
         }
 
         progress?.Dismiss();
-        writer.Flush();
-        return writer.TotalMatches > 0 ? 0 : 1;
+        return 1;
     }
 
     private const string Orange = "\x1B[38;5;208m";

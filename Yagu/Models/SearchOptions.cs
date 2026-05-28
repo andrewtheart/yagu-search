@@ -1,3 +1,5 @@
+using Yagu.Services;
+
 namespace Yagu.Models;
 
 /// <summary>What to match the query against.</summary>
@@ -130,4 +132,22 @@ public sealed class SearchOptions
     /// is used.
     /// </summary>
     public IReadOnlyList<string>? AdminProtectedPathSegments { get; init; }
+
+    /// <summary>
+    /// When set, the streaming scanner writes ripgrep-formatted UTF-8 output
+    /// directly to this stream, bypassing SearchResult allocation entirely.
+    /// Used by CLI mode for maximum throughput.
+    /// </summary>
+    public Stream? DirectOutputStream { get; set; }
+
+    /// <summary>Whether to emit ANSI color codes in direct output mode.</summary>
+    public bool DirectOutputColor { get; set; }
+
+    /// <summary>
+    /// When set, the streaming scanner in degraded mode writes raw UTF-8 bytes directly
+    /// to this store, bypassing String materialization entirely. The SearchResult sent
+    /// through the pipeline will be pre-evicted (empty MatchLine, valid DiskOffset).
+    /// Set by the ViewModel to its active ResultStore before starting the search.
+    /// </summary>
+    public ResultStore? DegradedResultStore { get; set; }
 }

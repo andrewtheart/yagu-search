@@ -1149,6 +1149,23 @@ pub unsafe extern "C" fn qg_session_scan_paths_parallel_ex(
     )
 }
 
+/// Per-match metadata buffered during scanning (no mutex held).
+/// All byte data (line + context) is stored in the per-worker
+/// `context_arena` via offsets, so no raw pointers are needed.
+struct BufferedMatchEntry {
+    line_number: u64,
+    match_start: u32,
+    match_len: u32,
+    line_offset: usize,
+    line_len: usize,
+    ctx_before_offset: usize,
+    ctx_before_len: usize,
+    ctx_before_count: c_uint,
+    ctx_after_offset: usize,
+    ctx_after_len: usize,
+    ctx_after_count: c_uint,
+}
+
 #[allow(clippy::too_many_arguments)]
 unsafe fn qg_session_scan_paths_parallel_impl(
     session: *const QgSession,
@@ -1220,23 +1237,6 @@ unsafe fn qg_session_scan_paths_parallel_impl(
     // SAFETY: callers contract that `session` and `on_match_ctx` outlive
     // this call and are safe to read concurrently. `sess.matcher` is
     // Send + Sync (LineMatcher impls are read-only).
-
-    /// Per-match metadata buffered during scanning (no mutex held).
-    /// All byte data (line + context) is stored in the per-worker
-    /// `context_arena` via offsets, so no raw pointers are needed.
-    struct BufferedMatchEntry {
-        line_number: u64,
-        match_start: u32,
-        match_len: u32,
-        line_offset: usize,
-        line_len: usize,
-        ctx_before_offset: usize,
-        ctx_before_len: usize,
-        ctx_before_count: c_uint,
-        ctx_after_offset: usize,
-        ctx_after_len: usize,
-        ctx_after_count: c_uint,
-    }
 
     struct CtxPtr(*mut c_void);
     unsafe impl Send for CtxPtr {}
@@ -1436,6 +1436,397 @@ unsafe fn qg_session_scan_paths_parallel_impl(
         }
     }
     STATUS_OK
+}
+
+// ---------------------------------------------------------------------------
+// Streaming parallel scanner: persistent worker threads pull from an internal
+// queue fed by C# as discovery runs. Eliminates batch-boundary idle time and
+// per-batch thread creation cost.
+// ---------------------------------------------------------------------------
+
+use std::collections::VecDeque;
+use std::sync::Condvar;
+
+/// Internal work item: an owned path with its C#-assigned file index.
+struct StreamingWorkItem {
+    file_index: u32,
+    path: String,
+}
+
+/// Shared state between the pusher (C# thread) and worker threads.
+struct StreamingWorkQueue {
+    queue: Mutex<VecDeque<StreamingWorkItem>>,
+    available: Condvar,
+    finished: std::sync::atomic::AtomicBool,
+}
+
+/// Opaque streaming scanner handle returned to C#.
+pub struct QgStreamingScanner {
+    work: std::sync::Arc<StreamingWorkQueue>,
+    workers: Vec<std::thread::JoinHandle<()>>,
+}
+
+/// Create a streaming scanner. Worker threads are spawned immediately and
+/// begin waiting for paths. Use `qg_scanner_push_paths` to feed work,
+/// `qg_scanner_finish` to signal completion and join workers.
+///
+/// # Safety
+/// `session` must remain valid until `qg_scanner_finish` returns.
+/// `cancel_flag` must remain valid until `qg_scanner_finish` returns.
+/// Callback pointers must be valid `extern "C"` function pointers that
+/// remain valid until `qg_scanner_finish` returns.
+#[no_mangle]
+pub unsafe extern "C" fn qg_create_streaming_scanner(
+    session: *const QgSession,
+    thread_count: c_uint,
+    cancel_flag: *const i32,
+    on_match: QgFileMatchCallback,
+    on_file_done: QgFileDoneExCallback,
+    on_match_ctx: *mut c_void,
+) -> *mut QgStreamingScanner {
+    if session.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let cancel_atomic: Option<&AtomicI32> = if cancel_flag.is_null() {
+        None
+    } else {
+        Some(&*(cancel_flag as *const AtomicI32))
+    };
+
+    const MAX_WORKERS: usize = 64;
+    let workers = if thread_count == 0 {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+    } else {
+        thread_count as usize
+    };
+    let workers = workers.clamp(1, MAX_WORKERS);
+
+    let work = std::sync::Arc::new(StreamingWorkQueue {
+        queue: Mutex::new(VecDeque::with_capacity(4096)),
+        available: Condvar::new(),
+        finished: std::sync::atomic::AtomicBool::new(false),
+    });
+
+    // Shared callback mutex — same serialization contract as the batch API.
+    let cb_mutex = std::sync::Arc::new(Mutex::new(()));
+    let early_stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    // SAFETY wrappers for Send
+    struct CtxPtr(*mut c_void);
+    unsafe impl Send for CtxPtr {}
+    unsafe impl Sync for CtxPtr {}
+
+    struct SessionPtr(*const QgSession);
+    unsafe impl Send for SessionPtr {}
+    unsafe impl Sync for SessionPtr {}
+
+    struct CancelPtr(Option<*const AtomicI32>);
+    unsafe impl Send for CancelPtr {}
+    unsafe impl Sync for CancelPtr {}
+
+    let ctx_wrapper = std::sync::Arc::new(CtxPtr(on_match_ctx));
+    let sess_wrapper = std::sync::Arc::new(SessionPtr(session));
+    let cancel_wrapper = std::sync::Arc::new(CancelPtr(
+        cancel_atomic.map(|a| a as *const AtomicI32),
+    ));
+
+    let mut handles = Vec::with_capacity(workers);
+
+    for _ in 0..workers {
+        let work = std::sync::Arc::clone(&work);
+        let cb_mutex = std::sync::Arc::clone(&cb_mutex);
+        let early_stop = std::sync::Arc::clone(&early_stop);
+        let ctx_wrapper = std::sync::Arc::clone(&ctx_wrapper);
+        let sess_wrapper = std::sync::Arc::clone(&sess_wrapper);
+        let cancel_wrapper = std::sync::Arc::clone(&cancel_wrapper);
+
+        let handle = std::thread::spawn(move || {
+            let sess: &QgSession = unsafe { &*sess_wrapper.0 };
+            let cancel_atomic: Option<&AtomicI32> = unsafe {
+                cancel_wrapper.0.map(|p| &*p)
+            };
+
+            // Per-thread scratch buffers
+            let mut context_arena: Vec<u8> = Vec::new();
+            let mut file_scratch: Vec<u8> = Vec::with_capacity(MMAP_THRESHOLD_BYTES as usize);
+            let mut match_buf: Vec<BufferedMatchEntry> = Vec::new();
+
+            loop {
+                if early_stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                if let Some(flag) = cancel_atomic {
+                    if flag.load(Ordering::Relaxed) != 0 {
+                        return;
+                    }
+                }
+
+                // Pull next work item from queue
+                let item = {
+                    let mut q = work.queue.lock().unwrap();
+                    loop {
+                        if let Some(item) = q.pop_front() {
+                            break item;
+                        }
+                        if work.finished.load(Ordering::Acquire) {
+                            return; // no more work coming
+                        }
+                        if early_stop.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        if let Some(flag) = cancel_atomic {
+                            if flag.load(Ordering::Relaxed) != 0 {
+                                return;
+                            }
+                        }
+                        q = work.available.wait(q).unwrap();
+                    }
+                };
+
+                let file_index = item.file_index;
+                let path = &item.path;
+
+                let (file_bytes, file_len, last_modified) = match open_file_for_scan_into(
+                    path,
+                    sess.max_file_size,
+                    sess.scan_opts.skip_binary,
+                    &mut file_scratch,
+                ) {
+                    Ok(b) => b,
+                    Err(status) => {
+                        let _g = cb_mutex.lock().unwrap();
+                        unsafe {
+                            on_file_done(
+                                ctx_wrapper.0,
+                                file_index,
+                                status,
+                                0,
+                                0,
+                            );
+                        }
+                        continue;
+                    }
+                };
+                let bytes: &[u8] = file_bytes.as_slice();
+
+                match_buf.clear();
+                context_arena.clear();
+
+                let mut line_poll_counter: u32 = 0;
+                let cancel_check = || {
+                    line_poll_counter = line_poll_counter.wrapping_add(1);
+                    if line_poll_counter & 0x3f != 0 {
+                        return early_stop.load(Ordering::Relaxed);
+                    }
+                    if early_stop.load(Ordering::Relaxed) {
+                        return true;
+                    }
+                    match cancel_atomic {
+                        Some(flag) => flag.load(Ordering::Relaxed) != 0,
+                        None => false,
+                    }
+                };
+
+                let scan_result = scan_bytes_with_matcher_streaming_ex(
+                    bytes,
+                    &*sess.matcher,
+                    &sess.scan_opts,
+                    cancel_check,
+                    |view: MatchView<'_>| {
+                        if early_stop.load(Ordering::Relaxed) {
+                            return false;
+                        }
+
+                        let (before_offset, before_len) =
+                            pack_lines_into_arena(view.context_before, &mut context_arena);
+                        let (after_offset, after_len) =
+                            pack_lines_into_arena(view.context_after, &mut context_arena);
+
+                        let line_offset = context_arena.len();
+                        context_arena.extend_from_slice(view.line);
+                        let line_len = view.line.len();
+
+                        match_buf.push(BufferedMatchEntry {
+                            line_number: view.line_number,
+                            match_start: view.match_start,
+                            match_len: view.match_len,
+                            line_offset,
+                            line_len,
+                            ctx_before_offset: before_offset,
+                            ctx_before_len: before_len,
+                            ctx_before_count: view.context_before.len() as c_uint,
+                            ctx_after_offset: after_offset,
+                            ctx_after_len: after_len,
+                            ctx_after_count: view.context_after.len() as c_uint,
+                        });
+                        true
+                    },
+                );
+
+                let final_status = match scan_result {
+                    Ok(_) => STATUS_OK,
+                    Err(e) => scan_error_to_status(&e),
+                };
+
+                // Acquire mutex ONCE, deliver all buffered matches + file_done.
+                let _g = cb_mutex.lock().unwrap();
+                for entry in &match_buf {
+                    if early_stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let qg_view = QgMatchView {
+                        line_number: entry.line_number,
+                        match_start: entry.match_start,
+                        match_len: entry.match_len,
+                        line_ptr: context_arena[entry.line_offset..].as_ptr(),
+                        line_len: entry.line_len,
+                        ctx_before_ptr: if entry.ctx_before_len == 0 {
+                            std::ptr::null()
+                        } else {
+                            context_arena[entry.ctx_before_offset..].as_ptr()
+                        },
+                        ctx_before_bytes: entry.ctx_before_len,
+                        ctx_before_count: entry.ctx_before_count,
+                        ctx_after_ptr: if entry.ctx_after_len == 0 {
+                            std::ptr::null()
+                        } else {
+                            context_arena[entry.ctx_after_offset..].as_ptr()
+                        },
+                        ctx_after_bytes: entry.ctx_after_len,
+                        ctx_after_count: entry.ctx_after_count,
+                    };
+                    let cb_result = unsafe {
+                        on_match(
+                            ctx_wrapper.0,
+                            file_index,
+                            &qg_view as *const QgMatchView,
+                        )
+                    };
+                    if cb_result != 0 {
+                        early_stop.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                }
+                unsafe {
+                    on_file_done(
+                        ctx_wrapper.0,
+                        file_index,
+                        final_status,
+                        file_len,
+                        last_modified,
+                    );
+                }
+            }
+        });
+
+        handles.push(handle);
+    }
+
+    Box::into_raw(Box::new(QgStreamingScanner {
+        work,
+        workers: handles,
+    }))
+}
+
+/// Push paths into the streaming scanner's work queue. Non-blocking; paths
+/// are queued for the worker threads to pick up. `file_index_base` is the
+/// index assigned to the first path; subsequent paths get base+1, base+2, etc.
+///
+/// # Safety
+/// `scanner` must be a live scanner from `qg_create_streaming_scanner`.
+/// `paths_utf16_concat` must reference valid UTF-16 data of the specified lengths.
+#[no_mangle]
+pub unsafe extern "C" fn qg_scanner_push_paths(
+    scanner: *mut QgStreamingScanner,
+    paths_utf16_concat: *const c_ushort,
+    path_lengths: *const c_uint,
+    path_count: usize,
+    file_index_base: c_uint,
+) -> c_int {
+    if scanner.is_null() || path_count == 0 {
+        return STATUS_OK;
+    }
+
+    let sc = &*scanner;
+
+    // Decode paths
+    let lengths_slice = std::slice::from_raw_parts(path_lengths, path_count);
+    let mut total: usize = 0;
+    for &l in lengths_slice {
+        total = match total.checked_add(l as usize) {
+            Some(t) => t,
+            None => return STATUS_INVALID_PATH,
+        };
+    }
+    let all_utf16 = std::slice::from_raw_parts(paths_utf16_concat, total);
+
+    let mut items = Vec::with_capacity(path_count);
+    let mut cursor = 0usize;
+    for (i, &l) in lengths_slice.iter().enumerate() {
+        let end = cursor + l as usize;
+        let path = match String::from_utf16(&all_utf16[cursor..end]) {
+            Ok(s) => s,
+            Err(_) => {
+                cursor = end;
+                continue; // skip invalid path
+            }
+        };
+        items.push(StreamingWorkItem {
+            file_index: file_index_base + i as u32,
+            path,
+        });
+        cursor = end;
+    }
+
+    // Push all items under one lock acquisition
+    {
+        let mut q = sc.work.queue.lock().unwrap();
+        for item in items {
+            q.push_back(item);
+        }
+    }
+    sc.work.available.notify_all();
+
+    STATUS_OK
+}
+
+/// Signal that no more paths will be pushed and wait for all workers to
+/// finish processing remaining items. Blocks until complete.
+///
+/// # Safety
+/// `scanner` must be a live scanner. Must be called exactly once.
+#[no_mangle]
+pub unsafe extern "C" fn qg_scanner_finish(scanner: *mut QgStreamingScanner) -> c_int {
+    if scanner.is_null() {
+        return STATUS_OK;
+    }
+    let sc = &mut *scanner;
+
+    // Signal workers that no more work is coming
+    sc.work.finished.store(true, Ordering::Release);
+    sc.work.available.notify_all();
+
+    // Join all workers
+    for handle in sc.workers.drain(..) {
+        let _ = handle.join();
+    }
+
+    STATUS_OK
+}
+
+/// Destroy a streaming scanner. Must be called after `qg_scanner_finish`.
+///
+/// # Safety
+/// `scanner` must be a pointer returned by `qg_create_streaming_scanner`
+/// and must not be used after this call.
+#[no_mangle]
+pub unsafe extern "C" fn qg_scanner_destroy(scanner: *mut QgStreamingScanner) {
+    if !scanner.is_null() {
+        drop(Box::from_raw(scanner));
+    }
 }
 
 #[cfg(test)]

@@ -57,6 +57,25 @@ public sealed record SearchResult(
     internal bool TryBeginEviction()
         => Interlocked.CompareExchange(ref _diskOffset, EvictingOffset, InMemoryOffset) == InMemoryOffset;
 
+    /// <summary>
+    /// Creates a SearchResult that is already evicted to disk at <paramref name="diskOffset"/>.
+    /// Used in degraded mode to avoid allocating full strings that will be immediately evicted.
+    /// The result has empty MatchLine and contexts — FileGroup will not retain it visually.
+    /// </summary>
+    internal static SearchResult CreatePreEvicted(string filePath, int lineNumber, int matchStartColumn, int matchLength, long diskOffset)
+    {
+        var result = new SearchResult(
+            FilePath: filePath,
+            LineNumber: lineNumber,
+            MatchLine: string.Empty,
+            MatchStartColumn: matchStartColumn,
+            MatchLength: matchLength,
+            ContextBefore: Array.Empty<string>(),
+            ContextAfter: Array.Empty<string>());
+        Volatile.Write(ref result._diskOffset, diskOffset);
+        return result;
+    }
+
     internal void CancelEvictionReservation()
     {
         _ = Interlocked.CompareExchange(ref _diskOffset, InMemoryOffset, EvictingOffset);
@@ -78,6 +97,19 @@ public sealed record SearchResult(
             return false;
 
         return CompleteReservedEvictionWith(writer, materializePreview: true);
+    }
+
+    /// <summary>
+    /// Evict without materializing ShortPreview — saves ~266 bytes per result for items
+    /// that won't be displayed (e.g. results in collapsed groups during degraded mode).
+    /// MatchLine is set to string.Empty; ShortPreview is lazily recreated on hydration.
+    /// </summary>
+    internal bool EvictWithLight(Func<string, IReadOnlyList<string>, IReadOnlyList<string>, long> writer)
+    {
+        if (!TryBeginEviction())
+            return false;
+
+        return CompleteReservedEvictionWith(writer, materializePreview: false);
     }
 
     internal bool CompleteReservedEvictionWith(Func<string, IReadOnlyList<string>, IReadOnlyList<string>, long> writer)

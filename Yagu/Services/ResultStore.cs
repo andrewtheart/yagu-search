@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Text;
 using System.Threading.Channels;
+using Yagu.Helpers;
 using Yagu.Models;
 
 namespace Yagu.Services;
@@ -149,7 +150,7 @@ public sealed class ResultStore : IDisposable
             {
                 try
                 {
-                    if (results[i].EvictWith(writeOne))
+                    if (results[i].EvictWithLight(writeOne))
                         evicted++;
                 }
                 catch
@@ -283,6 +284,82 @@ public sealed class ResultStore : IDisposable
             WriteStringList(_writer, contextAfter);
             Interlocked.Increment(ref _evictedCount);
             return offset;
+        }
+    }
+
+    /// <summary>
+    /// Write raw UTF-8 bytes directly to the store, bypassing String allocation entirely.
+    /// Used in degraded mode to avoid the UTF-8 → String → UTF-8 round-trip per match.
+    /// The format matches <see cref="Read"/>: BinaryWriter-style length-prefixed string
+    /// for match line, then Int32-counted string lists for context.
+    /// </summary>
+    /// <param name="matchLineUtf8">Raw UTF-8 bytes of the match line (already truncated).</param>
+    /// <param name="contextBeforePtr">Rust-packed context: repeated [4-byte LE len][bytes].</param>
+    /// <param name="contextBeforeBytes">Total byte length of the before-context buffer.</param>
+    /// <param name="contextBeforeCount">Number of lines in before-context.</param>
+    /// <param name="contextAfterPtr">Rust-packed context: repeated [4-byte LE len][bytes].</param>
+    /// <param name="contextAfterBytes">Total byte length of the after-context buffer.</param>
+    /// <param name="contextAfterCount">Number of lines in after-context.</param>
+    /// <returns>Byte offset that can be passed to <see cref="Read"/> later.</returns>
+    public unsafe long WriteRawUtf8(
+        ReadOnlySpan<byte> matchLineUtf8,
+        byte* contextBeforePtr, int contextBeforeBytes, int contextBeforeCount,
+        byte* contextAfterPtr, int contextAfterBytes, int contextAfterCount)
+    {
+        lock (_lock)
+        {
+            long offset = _stream.Position;
+
+            // Match line: 7-bit-encoded length + raw UTF-8 bytes
+            _writer.Write7BitEncodedInt(matchLineUtf8.Length);
+            if (matchLineUtf8.Length > 0)
+                _writer.BaseStream.Write(matchLineUtf8);
+
+            // Context before
+            WriteRawContextLines(_writer, contextBeforePtr, contextBeforeBytes, contextBeforeCount);
+
+            // Context after
+            WriteRawContextLines(_writer, contextAfterPtr, contextAfterBytes, contextAfterCount);
+
+            Interlocked.Increment(ref _evictedCount);
+            return offset;
+        }
+    }
+
+    /// <summary>
+    /// Writes Rust-packed context lines as BinaryWriter-format string list.
+    /// Rust format: repeated [4-byte LE length][UTF-8 bytes].
+    /// Output format: Int32(count) + repeated [7-bit-encoded length][UTF-8 bytes].
+    /// Lines are truncated to <see cref="LineTruncator.MaxDisplayLength"/> bytes.
+    /// </summary>
+    private static unsafe void WriteRawContextLines(BinaryWriter w, byte* ptr, int totalBytes, int count)
+    {
+        w.Write(count);
+        if (count == 0 || ptr == null || totalBytes == 0) return;
+
+        int pos = 0;
+        int maxBytes = (LineTruncator.MaxDisplayLength + 1) * 4; // same cap as DecodeAndTruncate
+        for (int i = 0; i < count && pos + 4 <= totalBytes; i++)
+        {
+            uint len = (uint)(ptr[pos] | (ptr[pos + 1] << 8) | (ptr[pos + 2] << 16) | (ptr[pos + 3] << 24));
+            pos += 4;
+            if (len > int.MaxValue || pos + (int)len > totalBytes)
+            {
+                // Malformed — write empty string for remaining
+                w.Write7BitEncodedInt(0);
+                continue;
+            }
+            int writeLen = Math.Min((int)len, maxBytes);
+            // Align to UTF-8 char boundary if truncated
+            if (writeLen < (int)len)
+            {
+                while (writeLen > 0 && (ptr[pos + writeLen] & 0xC0) == 0x80)
+                    writeLen--;
+            }
+            w.Write7BitEncodedInt(writeLen);
+            if (writeLen > 0)
+                w.BaseStream.Write(new ReadOnlySpan<byte>(ptr + pos, writeLen));
+            pos += (int)len;
         }
     }
 

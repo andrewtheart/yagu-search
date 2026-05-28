@@ -14,6 +14,9 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     public const int PageSize = 200;
     private const int HiddenNotificationInterval = PageSize;
 
+    /// <summary>Count of evicted results that were not retained in the collection (disk-only).</summary>
+    private int _evictedOnlyCount;
+
     /// <summary>
     /// Optional per-file hard cap on stored matches. Default <see cref="int.MaxValue"/>
     /// (effectively unlimited). When set to a finite value, matches beyond the cap are
@@ -104,6 +107,20 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             }
             return;
         }
+
+        // In degraded mode, evicted results beyond the visible page are not retained —
+        // their data is on disk and can be hydrated if needed. This avoids retaining
+        // millions of zombie SearchResult objects that consume memory without value.
+        // Condition: item is evicted with no display text (EvictWithLight path) —
+        // these have empty MatchLine and no ShortPreview, so retaining them is pure waste.
+        if (item.IsEvicted && item.MatchLine.Length == 0)
+        {
+            _evictedOnlyCount++;
+            if ((_evictedOnlyCount & 0xFF) == 0)
+                OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(MatchCount)));
+            return;
+        }
+
         base.InsertItem(index, item);
     }
 
@@ -114,6 +131,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     public void Cleanup()
     {
         _cleaned = true;
+        _evictedOnlyCount = 0;
         CollectionChanged -= OnSelfChanged;
         VisibleResults.Clear();
         Clear();          // base ObservableCollection items
@@ -209,7 +227,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(ShowMoreText)));
     }
 
-    public int MatchCount => Count + HiddenMatchCount;
+    public int MatchCount => Count + HiddenMatchCount + _evictedOnlyCount;
 
     public long FileSize { get; private set; }
     public DateTime LastModified { get; private set; }
