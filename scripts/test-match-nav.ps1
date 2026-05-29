@@ -4,7 +4,7 @@
 param(
     [string]$Directory = "C:",
     [string]$Query = "a",
-    [string]$ScreenshotDir = "D:\yagu\TestResults\MatchNavScreenshots",
+    [string]$ScreenshotDir = "C:\src\Yagu\TestResults\MatchNavScreenshots",
     [int]$MatchIterations = 200,
     [int]$SearchWaitSeconds = 15,
     [int]$PreviewLoadSeconds = 120,
@@ -179,7 +179,7 @@ Write-Host ""
 
 # 1. Launch Yagu with directory and query
 Write-Host "[1] Launching Yagu..."
-$proc = Start-Process -FilePath "D:\yagu\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe" `
+$proc = Start-Process -FilePath "C:\src\Yagu\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe" `
     -ArgumentList "--dir `"$Directory`" --query `"$Query`" --window-mode traditional" `
     -PassThru
 

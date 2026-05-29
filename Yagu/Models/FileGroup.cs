@@ -18,6 +18,21 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     private int _evictedOnlyCount;
 
     /// <summary>
+    /// 24-byte compact record for an evicted match. Stored in <see cref="_evictedStubs"/> instead of
+    /// the full <see cref="SearchResult"/> (~88 B + per-record overhead) while the group is collapsed.
+    /// FilePath is implicit (held once on <see cref="FilePath"/>). Stubs are materialized into
+    /// <see cref="Items"/> on demand when the group is expanded (see <see cref="MaterializeEvictedStubs"/>).
+    /// </summary>
+    internal readonly record struct EvictedStub(int LineNumber, int MatchStartColumn, int MatchLength, long DiskOffset);
+
+    /// <summary>
+    /// Compact stub list for collapsed groups. Each entry is a struct (24 B vs ~88 B for SearchResult)
+    /// and the SearchResult instance itself is never retained — it is GC'd immediately after
+    /// <see cref="InsertItem"/> returns, dropping retained heap by ~1.4 GB on a full-disk scan.
+    /// </summary>
+    private List<EvictedStub>? _evictedStubs;
+
+    /// <summary>
     /// Optional per-file hard cap on stored matches. Default <see cref="int.MaxValue"/>
     /// (effectively unlimited). When set to a finite value, matches beyond the cap are
     /// dropped and counted in <see cref="HiddenMatchCount"/>. Bound from
@@ -93,6 +108,10 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     /// is dropped immediately, so its heavy MatchLine/Context strings become eligible
     /// for GC without ever being retained by this group.
     /// </summary>
+    // Cached event args (avoid per-insert allocation on the hot path).
+    private static readonly System.ComponentModel.PropertyChangedEventArgs s_countChanged = new("Count");
+    private static readonly System.ComponentModel.PropertyChangedEventArgs s_indexerChanged = new("Item[]");
+
     protected override void InsertItem(int index, SearchResult item)
     {
         if (Count >= MaxMatchesPerGroup)
@@ -108,20 +127,76 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             return;
         }
 
-        // In degraded mode, evicted results beyond the visible page are not retained —
-        // their data is on disk and can be hydrated if needed. This avoids retaining
-        // millions of zombie SearchResult objects that consume memory without value.
-        // Condition: item is evicted with no display text (EvictWithLight path) —
-        // these have empty MatchLine and no ShortPreview, so retaining them is pure waste.
-        if (item.IsEvicted && item.MatchLine.Length == 0)
+        // Fast path for the common case: group is collapsed (no expanded UI rows bound to
+        // this collection). Bypass ObservableCollection's per-item NotifyCollectionChanged
+        // allocation (~100 B each × 10M matches = ~1 GB allocated in Iter 14). The Add
+        // notification has no observers besides OnSelfChanged, which we inline here. When
+        // the group later becomes expanded, ShowMore() backfills VisibleResults from Items.
+        if (!_isExpanded)
         {
-            _evictedOnlyCount++;
-            if ((_evictedOnlyCount & 0xFF) == 0)
-                OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(MatchCount)));
+            // Iter 16: for pre-evicted items (degraded mode = always-on), drop the
+            // SearchResult reference entirely and remember the match as a 24-byte struct.
+            // The SearchResult is recreated lazily via MaterializeEvictedStubs() on expand.
+            if (item.IsEvicted)
+            {
+                (_evictedStubs ??= new List<EvictedStub>(64))
+                    .Add(new EvictedStub(item.LineNumber, item.MatchStartColumn, item.MatchLength, item.DiskOffset));
+                _evictedOnlyCount++;
+                int totalStub = Items.Count + _evictedOnlyCount;
+                bool notifyStub = totalStub == PageSize + 1
+                              || (totalStub % HiddenNotificationInterval) == 0;
+                if (notifyStub)
+                {
+                    OnPropertyChanged(s_countChanged);
+                    OnPropertyChanged(s_indexerChanged);
+                    NotifyMoreStateChanged();
+                    OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(MatchCount)));
+                }
+                return;
+            }
+
+            Items.Insert(index, item);
+            // Coalesced bookkeeping — same thresholds as the OnSelfChanged Add branch's
+            // "hidden growth" notify. PageSize / HiddenNotificationInterval throttle.
+            int count = Count;
+            bool notify = count == PageSize + 1
+                       || (count % HiddenNotificationInterval) == 0;
+            if (notify)
+            {
+                OnPropertyChanged(s_countChanged);
+                OnPropertyChanged(s_indexerChanged);
+                NotifyMoreStateChanged();
+            }
             return;
         }
 
         base.InsertItem(index, item);
+    }
+
+    /// <summary>
+    /// Iter 16: Materialize any compact <see cref="EvictedStub"/> entries into real
+    /// <see cref="SearchResult"/> instances stored in <see cref="Items"/>. Called from
+    /// the <see cref="IsExpanded"/> setter (true transition) and from the UI's
+    /// expansion handler before <see cref="ShowMore"/> indexes into the group.
+    /// </summary>
+    public void MaterializeEvictedStubs()
+    {
+        var stubs = _evictedStubs;
+        if (stubs is null || stubs.Count == 0) return;
+        _evictedStubs = null;
+        int materialized = stubs.Count;
+        if (Items is List<SearchResult> list)
+            list.EnsureCapacity(list.Count + materialized);
+        for (int i = 0; i < stubs.Count; i++)
+        {
+            var s = stubs[i];
+            Items.Add(SearchResult.CreatePreEvicted(FilePath, s.LineNumber, s.MatchStartColumn, s.MatchLength, s.DiskOffset));
+        }
+        _evictedOnlyCount -= materialized;
+        OnPropertyChanged(s_countChanged);
+        OnPropertyChanged(s_indexerChanged);
+        NotifyMoreStateChanged();
+        OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(MatchCount)));
     }
 
     /// <summary>
@@ -132,6 +207,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     {
         _cleaned = true;
         _evictedOnlyCount = 0;
+        _evictedStubs = null;
         CollectionChanged -= OnSelfChanged;
         VisibleResults.Clear();
         Clear();          // base ObservableCollection items
@@ -146,7 +222,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             {
                 foreach (SearchResult item in e.NewItems)
                 {
-                    if (VisibleResults.Count < PageSize)
+                    if (VisibleResults.Count < PageSize && !item.IsEvicted)
                     {
                         _ = item.ShortPreview;
                         VisibleResults.Add(item);
@@ -154,8 +230,13 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
                     }
                 }
             }
-            if (Count == PageSize + 1 || (!addedToVisible && Count % HiddenNotificationInterval == 0))
+            bool notify = Count == PageSize + 1
+                || (!addedToVisible && Count % HiddenNotificationInterval == 0)
+                || (!addedToVisible && IsExpanded && Count == VisibleResults.Count + 1);
+            if (notify)
+            {
                 NotifyMoreStateChanged();
+            }
         }
         else if (e.Action == NotifyCollectionChangedAction.Remove && e.OldItems is not null)
         {
@@ -172,8 +253,11 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         }
     }
 
-    public bool HasMore => VisibleResults.Count < Count;
-    public int RemainingCount => Count - VisibleResults.Count;
+    // Iter 16: include unmaterialized evicted stubs in the "more" calculation so the
+    // expand-evicted code path always finds work to do (and the UI's "Show more" text
+    // reflects the true remaining count, not just the materialized Items count).
+    public bool HasMore => VisibleResults.Count < (Count + _evictedOnlyCount);
+    public int RemainingCount => (Count + _evictedOnlyCount) - VisibleResults.Count;
     public string ShowMoreText => $"Show more ({RemainingCount:N0} remaining)";
 
     public void ClearVisibleResults()
@@ -197,10 +281,20 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         }
 
         var batch = new List<SearchResult>(end - start);
+        int evictedCount = 0;
+        int emptyMatchCount = 0;
         for (int i = start; i < end; i++)
         {
             _ = this[i].ShortPreview;
+            if (this[i].IsEvicted) evictedCount++;
+            if (this[i].MatchLine.Length == 0) emptyMatchCount++;
             batch.Add(this[i]);
+        }
+        if (evictedCount > 0 || emptyMatchCount > 0)
+        {
+            Services.LogService.Instance.Info("FileGroup",
+                $"ShowMore: file='{System.IO.Path.GetFileName(FilePath)}', start={start}, end={end}, " +
+                $"batchSize={batch.Count}, stillEvicted={evictedCount}, emptyMatchLine={emptyMatchCount}");
         }
         VisibleResults.AddRange(batch);
         NotifyMoreStateChanged();
@@ -358,6 +452,10 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         {
             if (_isExpanded != value)
             {
+                // Iter 16: hydrate compact stubs into real SearchResult instances BEFORE
+                // any code that indexes into Items (ShowMore, selection, preview) runs.
+                if (value)
+                    MaterializeEvictedStubs();
                 _isExpanded = value;
                 OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(IsExpanded)));
             }
@@ -382,6 +480,9 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
 
     public void SelectAll()
     {
+        // Iter 16: SelectAll on a collapsed evicted-only group needs the SearchResult
+        // instances to actually exist before we can flip IsSelected on them.
+        MaterializeEvictedStubs();
         foreach (var r in this) r.IsSelected = true;
         AllSelected = true;
         NotifySelectionChanged();
@@ -389,6 +490,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
 
     public void DeselectAll()
     {
+        MaterializeEvictedStubs();
         foreach (var r in this) r.IsSelected = false;
         AllSelected = false;
         NotifySelectionChanged();

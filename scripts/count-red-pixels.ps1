@@ -21,10 +21,10 @@
     AT MOST this value (i.e. likely-failing screenshots).
 
 .EXAMPLE
-    .\scripts\count-red-pixels.ps1 -Directory D:\yagu\TestResults\MatchNavScreenshots\MatchCase3
+    .\scripts\count-red-pixels.ps1 -Directory C:\src\Yagu\TestResults\MatchNavScreenshots\MatchCase3
 
 .EXAMPLE
-    .\scripts\count-red-pixels.ps1 -Directory D:\yagu\TestResults\MatchNavScreenshots\MatchCase3 -Threshold 30
+    .\scripts\count-red-pixels.ps1 -Directory C:\src\Yagu\TestResults\MatchNavScreenshots\MatchCase3 -Threshold 30
 #>
 param(
     [Parameter(Mandatory = $true, Position = 0)]

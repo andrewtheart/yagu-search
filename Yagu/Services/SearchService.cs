@@ -227,8 +227,8 @@ public sealed class SearchService
         int totalDiscovered = 0;
         long bytesScanned = 0;
         int truncated = 0;
-        int degraded = 0;            // 0 = normal, ≥1 = actively degraded (0 context, evicting to disk)
-        int everDegraded = 0;        // 1 once memory-saving mode was used during this search
+        int degraded = options.DegradedResultStore != null ? 1 : 0; // start degraded immediately when a result store is available
+        int everDegraded = degraded;   // 1 once memory-saving mode was used during this search
         int evictionInFlight = 0;    // 1 while an eviction event is being processed by the UI
         int pressureCycles = 0;      // total number of memory pressure events emitted
         int consecutiveFutileEvictions = 0; // eviction cycles that freed 0 — used to stop futile loops
@@ -375,7 +375,8 @@ public sealed class SearchService
                 if (futile < 3)
                     CollectForMemoryPressureIfDue(TimeSpan.FromSeconds(10));
             }
-            else if (Volatile.Read(ref degraded) != 0 &&
+            else if (options.DegradedResultStore == null && // never leave degraded if we started there by design
+                     Volatile.Read(ref degraded) != 0 &&
                      Volatile.Read(ref evictionInFlight) == 0 &&
                      IsMemoryPressureRelieved(options.MaxProcessMemoryBytes, options.MemoryPressurePercent))
             {
@@ -1513,6 +1514,13 @@ public sealed class SearchService
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool EmptyWorkingSet(IntPtr hProcess);
 
+    // Debounce TrimProcessWorkingSet — Iter 14 profile showed 1420 inclusive samples
+    // (2.1% of process CPU) from this called on every memory-pressure check. EmptyWorkingSet
+    // walks the page table; back-to-back calls within the same pressure cycle do almost
+    // nothing useful. Limit to once per 5 s across the whole process.
+    private const long TrimMinIntervalTicks = 5L * 10_000_000L; // 5 s in 100-ns ticks (Stopwatch frequency is 10MHz on Windows)
+    private static long s_lastTrimTicks;
+
     /// <summary>
     /// Trims the process working set, releasing soft-faulted pages (e.g. unmapped
     /// mmap regions) back to the OS. Pages still actively used will soft-fault
@@ -1521,6 +1529,12 @@ public sealed class SearchService
     /// </summary>
     internal static void TrimProcessWorkingSet()
     {
+        long now = Stopwatch.GetTimestamp();
+        long last = Volatile.Read(ref s_lastTrimTicks);
+        if (last != 0 && (now - last) < TrimMinIntervalTicks)
+            return;
+        if (Interlocked.CompareExchange(ref s_lastTrimTicks, now, last) != last)
+            return;
         try
         {
             using var proc = System.Diagnostics.Process.GetCurrentProcess();

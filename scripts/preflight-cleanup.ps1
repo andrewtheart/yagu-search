@@ -63,7 +63,87 @@ if ($removedCount -eq 0) {
     Write-Host "  No temp directories to clean."
 }
 
-# ── 3. Clear old Yagu log ─────────────────────────────────────────────
+# ── 3. Aggressive disk cleanup — TestResults artifacts ─────────────────
+# Removes large extracted ETL folders, .diagsession archives, screenshots,
+# stale reports, and .analysis caches that bloat D:\ between iterations.
+$testResults = "C:\src\Yagu\TestResults"
+$freedMB = 0
+
+if (Test-Path $testResults) {
+    Write-Host "Cleaning TestResults artifacts..."
+
+    # Extracted ETL folders (4-8 GB each)
+    Get-ChildItem "$testResults\PerfTraces\extracted-*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $size = (Get-ChildItem $_.FullName -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+        Remove-Item $_.FullName -Recurse -Force
+        $freedMB += [math]::Round($size / 1MB)
+        Write-Host "  Removed: $($_.Name) ($([math]::Round($size/1GB, 1)) GB)"
+    }
+
+    # .diagsession files in PerfTraces
+    Get-ChildItem "$testResults\PerfTraces\*.diagsession" -ErrorAction SilentlyContinue | ForEach-Object {
+        $freedMB += [math]::Round($_.Length / 1MB)
+        Remove-Item $_.FullName -Force
+        Write-Host "  Removed: $($_.Name)"
+    }
+
+    # TaskManagerScreenshots
+    $shots = Get-ChildItem "$testResults\TaskManagerScreenshots\*" -ErrorAction SilentlyContinue
+    if ($shots) {
+        $shotSize = ($shots | Measure-Object -Property Length -Sum).Sum
+        $freedMB += [math]::Round($shotSize / 1MB)
+        Remove-Item "$testResults\TaskManagerScreenshots\*" -Force
+        Write-Host "  Cleared TaskManagerScreenshots ($($shots.Count) files)"
+    }
+
+    # MatchNavScreenshots
+    if (Test-Path "$testResults\MatchNavScreenshots") {
+        $size = (Get-ChildItem "$testResults\MatchNavScreenshots" -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+        if ($size -gt 0) {
+            $freedMB += [math]::Round($size / 1MB)
+            Remove-Item "$testResults\MatchNavScreenshots" -Recurse -Force
+            Write-Host "  Removed: MatchNavScreenshots ($([math]::Round($size/1MB)) MB)"
+        }
+    }
+
+    # Old report directories (Report* older than current day)
+    Get-ChildItem "$testResults\Report*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $size = (Get-ChildItem $_.FullName -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+        if ($size -gt 100MB) {
+            $freedMB += [math]::Round($size / 1MB)
+            Remove-Item $_.FullName -Recurse -Force
+            Write-Host "  Removed: $($_.Name) ($([math]::Round($size/1MB)) MB)"
+        }
+    }
+}
+
+# ResultStore temp data (can grow to 25+ GB between runs)
+$resultStoreTmp = "D:\Temp\Yagu"
+if (Test-Path $resultStoreTmp) {
+    $size = (Get-ChildItem $resultStoreTmp -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+    if ($size -gt 0) {
+        Remove-Item $resultStoreTmp -Recurse -Force -ErrorAction SilentlyContinue
+        $freedMB += [math]::Round($size / 1MB)
+        Write-Host "  Removed: D:\Temp\Yagu ($([math]::Round($size/1GB, 1)) GB)"
+    }
+}
+
+# .analysis cache at repo root
+if (Test-Path "C:\src\Yagu\.analysis") {
+    $size = (Get-ChildItem "C:\src\Yagu\.analysis" -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+    $freedMB += [math]::Round($size / 1MB)
+    Remove-Item "C:\src\Yagu\.analysis" -Recurse -Force
+    Write-Host "  Removed: .analysis ($([math]::Round($size/1MB)) MB)"
+}
+
+if ($freedMB -gt 0) {
+    Write-Host "  Freed ~$([math]::Round($freedMB/1024, 1)) GB total."
+} else {
+    Write-Host "  Nothing to clean."
+}
+Write-Host "  D:\ free: $([math]::Round((Get-PSDrive D).Free/1GB, 1)) GB"
+
+# ── 4. Clear old Yagu log ─────────────────────────────────────────────
 $yaguLog = "$env:APPDATA\Yagu\yagu.log"
 if (Test-Path $yaguLog) {
     Remove-Item $yaguLog -Force -ErrorAction SilentlyContinue
@@ -72,7 +152,7 @@ if (Test-Path $yaguLog) {
     Write-Host "No Yagu log to clear."
 }
 
-# ── 4. Ensure Everything is running ───────────────────────────────────
+# ── 5. Ensure Everything is running ───────────────────────────────────
 $everythingRunning = Get-Process -Name Everything -ErrorAction SilentlyContinue
 if (-not $everythingRunning) {
     Start-Process "C:\Program Files\Everything\Everything.exe" -ArgumentList "-startup"
@@ -82,7 +162,7 @@ if (-not $everythingRunning) {
     Write-Host "Everything is already running."
 }
 
-# ── 5. Kill any existing Yagu process (by PID) ────────────────────────
+# ── 6. Kill any existing Yagu process (by PID) ────────────────────────
 $yaguProc = Get-Process -Name Yagu -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($yaguProc) {
     Stop-Process -Id $yaguProc.Id -Force
@@ -92,7 +172,7 @@ if ($yaguProc) {
     Write-Host "No existing Yagu process."
 }
 
-# ── 6. Quick verification — just check sessions 1-3 (the ones profile-monitor uses) ──
+# ── 7. Quick verification — just check sessions 1-3 (the ones profile-monitor uses) ──
 $anyActive = $false
 1..3 | ForEach-Object {
     $result = & $VSDiag status $_ 2>&1 | Out-String

@@ -2362,13 +2362,23 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void OnFileGroupExpanding(Expander sender, ExpanderExpandingEventArgs args)
+    private void OnFileGroupExpanding(Expander sender, ExpanderExpandingEventArgs args)
     {
         if (sender.DataContext is FileGroup g)
         {
             try
             {
-                await EnsureVisibleResultsForExpandedGroupAsync(g);
+                // Iter 16: ensure any compact evicted-stubs are materialized into Items
+                // before the EnsureVisible code path reads group.Count and indexes into
+                // the group via ShowMore.
+                g.MaterializeEvictedStubs();
+                EnsureVisibleResultsForExpandedGroup(g);
+
+                // Force the ListView's virtualizing panel to re-measure this item container
+                // after content was added, so it allocates the correct height.
+                InvalidateListViewItemContainer(sender);
+                sender.InvalidateMeasure();
+                sender.UpdateLayout();
 
                 LogService.Instance.Info("Preview", $"OnFileGroupExpanding: expand only file='{g.FilePath}', matchCount={g.Count}");
             }
@@ -2380,6 +2390,24 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private static void InvalidateListViewItemContainer(DependencyObject element)
+    {
+        // Walk up the visual tree to find the ListViewItem container
+        var current = element;
+        while (current != null)
+        {
+            if (current is ListViewItem lvi)
+            {
+                lvi.InvalidateMeasure();
+                // Also invalidate the panel that hosts list view items
+                if (Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(lvi) is FrameworkElement panel)
+                    panel.InvalidateMeasure();
+                break;
+            }
+            current = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(current);
+        }
+    }
+
     private void OnFileGroupCollapsed(Expander sender, ExpanderCollapsedEventArgs args)
     {
         if (sender.DataContext is FileGroup g)
@@ -2388,13 +2416,61 @@ public sealed partial class MainWindow : Window
 
     private async Task EnsureVisibleResultsForExpandedGroupAsync(FileGroup group)
     {
+        LogService.Instance.Info("FileGroup",
+            $"EnsureVisible START: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+            $"Count={group.Count}, VisibleCount={group.VisibleResults.Count}, HasMore={group.HasMore}, IsExpanded={group.IsExpanded}");
+
         if (group.VisibleResults.Count == 0 && group.Count > 0)
         {
             await ShowMoreVisibleResultsIncrementalAsync(group, FileGroup.PageSize).ConfigureAwait(true);
+
+            // Dump sample items to diagnose render issue
+            int sampleCount = Math.Min(10, group.VisibleResults.Count);
+            for (int i = 0; i < sampleCount; i++)
+            {
+                var r = group.VisibleResults[i];
+                LogService.Instance.Info("FileGroup",
+                    $"EnsureVisible SAMPLE[{i}]: line={r.LineNumber}, IsEvicted={r.IsEvicted}, " +
+                    $"MatchLine.Length={r.MatchLine.Length}, DiskOffset={r.DiskOffset}, " +
+                    $"MatchLine='{(r.MatchLine.Length > 60 ? r.MatchLine[..60] : r.MatchLine)}'");
+            }
+
+            LogService.Instance.Info("FileGroup",
+                $"EnsureVisible AFTER ShowMore: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+                $"Count={group.Count}, VisibleCount={group.VisibleResults.Count}, HasMore={group.HasMore}");
             return;
         }
 
         await HydrateVisibleResultsAsync(group).ConfigureAwait(true);
+    }
+
+    private void EnsureVisibleResultsForExpandedGroup(FileGroup group)
+    {
+        LogService.Instance.Info("FileGroup",
+            $"EnsureVisible SYNC START: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+            $"Count={group.Count}, VisibleCount={group.VisibleResults.Count}, HasMore={group.HasMore}, IsExpanded={group.IsExpanded}");
+
+        if (group.VisibleResults.Count == 0 && group.Count > 0)
+        {
+            ShowMoreVisibleResultsIncremental(group, FileGroup.PageSize);
+
+            int sampleCount = Math.Min(10, group.VisibleResults.Count);
+            for (int i = 0; i < sampleCount; i++)
+            {
+                var r = group.VisibleResults[i];
+                LogService.Instance.Info("FileGroup",
+                    $"EnsureVisible SYNC SAMPLE[{i}]: line={r.LineNumber}, IsEvicted={r.IsEvicted}, " +
+                    $"MatchLine.Length={r.MatchLine.Length}, DiskOffset={r.DiskOffset}, " +
+                    $"MatchLine='{(r.MatchLine.Length > 60 ? r.MatchLine[..60] : r.MatchLine)}'");
+            }
+
+            LogService.Instance.Info("FileGroup",
+                $"EnsureVisible SYNC AFTER ShowMore: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+                $"Count={group.Count}, VisibleCount={group.VisibleResults.Count}, HasMore={group.HasMore}");
+            return;
+        }
+
+        HydrateVisibleResults(group);
     }
 
     private async Task HydrateVisibleResultsAsync(FileGroup group)
@@ -2402,11 +2478,16 @@ public sealed partial class MainWindow : Window
         var evicted = group.VisibleResults.Where(item => item.IsEvicted).ToList();
         if (evicted.Count == 0) return;
 
-        await Task.Run(() =>
-        {
-            foreach (var item in evicted)
-                ViewModel.HydrateResult(item);
-        }).ConfigureAwait(true);
+        var payloads = await Task.Run(() => ViewModel.ReadHydrationPayloads(evicted)).ConfigureAwait(true);
+        MainViewModel.ApplyHydrationPayloads(payloads);
+    }
+
+    private void HydrateVisibleResults(FileGroup group)
+    {
+        var evicted = group.VisibleResults.Where(item => item.IsEvicted).ToList();
+        if (evicted.Count == 0) return;
+
+        ViewModel.HydrateResults(evicted);
     }
 
     private async Task HydrateRangeAsync(FileGroup group, int start, int end)
@@ -2418,13 +2499,50 @@ public sealed partial class MainWindow : Window
                 evicted.Add(group[i]);
         }
 
+        LogService.Instance.Info("FileGroup",
+            $"HydrateRange: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+            $"range=[{start},{end}), evictedToHydrate={evicted.Count}, totalInRange={end - start}");
+
         if (evicted.Count == 0) return;
 
-        await Task.Run(() =>
+        var payloads = await Task.Run(() => ViewModel.ReadHydrationPayloads(evicted)).ConfigureAwait(true);
+        MainViewModel.ApplyHydrationPayloads(payloads);
+
+        int stillEvicted = evicted.Count(r => r.IsEvicted);
+        int stillEmpty = evicted.Count(r => r.MatchLine.Length == 0);
+        if (stillEvicted > 0 || stillEmpty > 0)
         {
-            foreach (var item in evicted)
-                ViewModel.HydrateResult(item);
-        }).ConfigureAwait(true);
+            LogService.Instance.Warning("FileGroup",
+                $"HydrateRange AFTER: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+                $"stillEvicted={stillEvicted}, stillEmptyMatchLine={stillEmpty} (of {evicted.Count} attempted)");
+        }
+    }
+
+    private void HydrateRange(FileGroup group, int start, int end)
+    {
+        var evicted = new List<SearchResult>();
+        for (int i = start; i < end; i++)
+        {
+            if (group[i].IsEvicted)
+                evicted.Add(group[i]);
+        }
+
+        LogService.Instance.Info("FileGroup",
+            $"HydrateRange SYNC: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+            $"range=[{start},{end}), evictedToHydrate={evicted.Count}, totalInRange={end - start}");
+
+        if (evicted.Count == 0) return;
+
+        ViewModel.HydrateResults(evicted);
+
+        int stillEvicted = evicted.Count(r => r.IsEvicted);
+        int stillEmpty = evicted.Count(r => r.MatchLine.Length == 0);
+        if (stillEvicted > 0 || stillEmpty > 0)
+        {
+            LogService.Instance.Warning("FileGroup",
+                $"HydrateRange SYNC AFTER: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+                $"stillEvicted={stillEvicted}, stillEmptyMatchLine={stillEmpty} (of {evicted.Count} attempted)");
+        }
     }
 
     private void OnFileGroupHeaderPointerPressed(object sender, PointerRoutedEventArgs e)
@@ -3563,8 +3681,17 @@ public sealed partial class MainWindow : Window
 
     private async Task ShowMoreVisibleResultsIncrementalAsync(FileGroup group, int requestedCount)
     {
+        LogService.Instance.Info("FileGroup",
+            $"ShowMoreIncremental START: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+            $"requested={requestedCount}, Count={group.Count}, VisibleCount={group.VisibleResults.Count}, " +
+            $"HasMore={group.HasMore}, RemainingCount={group.RemainingCount}");
+
         if (requestedCount <= 0 || !group.HasMore)
+        {
+            LogService.Instance.Info("FileGroup",
+                $"ShowMoreIncremental EARLY EXIT: requested={requestedCount}, HasMore={group.HasMore}");
             return;
+        }
 
         int remainingToShow = Math.Min(requestedCount, group.RemainingCount);
         var sw = Stopwatch.StartNew();
@@ -3592,6 +3719,47 @@ public sealed partial class MainWindow : Window
         {
             LogService.Instance.Info("Results",
                 $"ShowMoreVisibleResultsIncrementalAsync: file='{System.IO.Path.GetFileName(group.FilePath)}', requested={requestedCount:N0}, elapsed={sw.ElapsedMilliseconds}ms");
+        }
+    }
+
+    private void ShowMoreVisibleResultsIncremental(FileGroup group, int requestedCount)
+    {
+        LogService.Instance.Info("FileGroup",
+            $"ShowMoreIncremental SYNC START: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+            $"requested={requestedCount}, Count={group.Count}, VisibleCount={group.VisibleResults.Count}, " +
+            $"HasMore={group.HasMore}, RemainingCount={group.RemainingCount}");
+
+        if (requestedCount <= 0 || !group.HasMore)
+        {
+            LogService.Instance.Info("FileGroup",
+                $"ShowMoreIncremental SYNC EARLY EXIT: requested={requestedCount}, HasMore={group.HasMore}");
+            return;
+        }
+
+        int remainingToShow = Math.Min(requestedCount, group.RemainingCount);
+        var sw = Stopwatch.StartNew();
+
+        while (remainingToShow > 0 && group.HasMore)
+        {
+            int chunkSize = Math.Min(VisibleResultShowMoreBatchSize, remainingToShow);
+            int start = group.VisibleResults.Count;
+            int end = Math.Min(group.Count, start + chunkSize);
+            if (end <= start)
+                break;
+
+            HydrateRange(group, start, end);
+            int shown = group.ShowMore(end - start);
+            if (shown <= 0)
+                break;
+
+            remainingToShow -= shown;
+        }
+
+        sw.Stop();
+        if (sw.ElapsedMilliseconds >= 25)
+        {
+            LogService.Instance.Info("Results",
+                $"ShowMoreVisibleResultsIncremental SYNC: file='{System.IO.Path.GetFileName(group.FilePath)}', requested={requestedCount:N0}, elapsed={sw.ElapsedMilliseconds}ms");
         }
     }
 

@@ -28,6 +28,7 @@ public class FileGroupTests
     public void VisibleResults_PagesAtPageSize()
     {
         var group = new FileGroup(@"D:\file.txt");
+        group.IsExpanded = true;
         for (int i = 0; i < FileGroup.PageSize + 50; i++)
             group.Add(MakeResult(@"D:\file.txt", i + 1));
 
@@ -40,6 +41,7 @@ public class FileGroupTests
     public void ShowMore_AddsNextPage()
     {
         var group = new FileGroup(@"D:\file.txt");
+        group.IsExpanded = true;
         for (int i = 0; i < FileGroup.PageSize + 50; i++)
             group.Add(MakeResult(@"D:\file.txt", i + 1));
 
@@ -76,6 +78,7 @@ public class FileGroupTests
     public void Clear_ResetsVisibleResults()
     {
         var group = new FileGroup(@"D:\file.txt");
+        group.IsExpanded = true;
         group.Add(MakeResult(@"D:\file.txt", 1));
         Assert.Single(group.VisibleResults);
 
@@ -306,10 +309,10 @@ public class FileGroupTests
         group.AllSelected = true;
         Assert.Equal(nameof(group.AllSelected), changedProp);
 
-        // Setting same value doesn't fire
+        // AllSelected setter always fires PropertyChanged (for TwoWay-bound CheckBox sync)
         changedProp = null;
         group.AllSelected = true;
-        Assert.Null(changedProp);
+        Assert.Equal(nameof(group.AllSelected), changedProp);
     }
 
     [Fact]
@@ -328,6 +331,42 @@ public class FileGroupTests
         };
         group.Add(MakeResult(@"D:\file.txt", FileGroup.PageSize + 1));
         Assert.True(hasMoreChanged);
+    }
+
+    /// <summary>
+    /// Regression: pre-evicted items beyond PageSize must still be retained in the
+    /// collection so that HasMore is true and "Show More" remains visible.
+    /// Previously, InsertItem dropped pre-evicted stubs past PageSize, making Count == PageSize
+    /// and HasMore == false, hiding the button entirely.
+    /// </summary>
+    [Fact]
+    public void PreEvictedItems_BeyondPageSize_RetainedAndHasMoreIsTrue()
+    {
+        var group = new FileGroup(@"D:\file.txt");
+        group.IsExpanded = true;
+
+        // Add PageSize normal items (these will appear in VisibleResults)
+        for (int i = 0; i < FileGroup.PageSize; i++)
+            group.Add(MakeResult(@"D:\file.txt", i + 1));
+
+        Assert.Equal(FileGroup.PageSize, group.VisibleResults.Count);
+        Assert.False(group.HasMore);
+
+        // Add pre-evicted items beyond the page size
+        int extraCount = 50;
+        for (int i = 0; i < extraCount; i++)
+        {
+            var preEvicted = SearchResult.CreatePreEvicted(@"D:\file.txt", FileGroup.PageSize + i + 1, 0, 5, diskOffset: (i + 1) * 100L);
+            group.Add(preEvicted);
+        }
+
+        // The pre-evicted items must be retained in the collection
+        Assert.Equal(FileGroup.PageSize + extraCount, group.Count);
+        // They should NOT be added to VisibleResults (they are evicted stubs)
+        Assert.Equal(FileGroup.PageSize, group.VisibleResults.Count);
+        // HasMore must be true so the "Show More" button appears
+        Assert.True(group.HasMore);
+        Assert.Equal(extraCount, group.RemainingCount);
     }
 }
 

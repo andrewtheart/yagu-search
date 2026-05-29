@@ -25,6 +25,12 @@ public sealed partial class SkipExtensionItem : ObservableObject
     }
 }
 
+public readonly record struct HydrationPayload(
+    SearchResult Result,
+    string MatchLine,
+    IReadOnlyList<string> ContextBefore,
+    IReadOnlyList<string> ContextAfter);
+
 public sealed partial class MainViewModel : ObservableObject
 {
     private readonly SearchService _search;
@@ -1322,7 +1328,7 @@ public sealed partial class MainViewModel : ObservableObject
         FileMetadataCache.Clear();
 
         _resultStore?.Dispose();
-        _resultStore = new ResultStore();
+        _resultStore = new ResultStore(ChooseResultStoreTempDir());
 
         // Reclaim the previous search's result graph on the threadpool so the
         // UI thread isn't blocked by a full compacting GC.
@@ -1367,6 +1373,23 @@ public sealed partial class MainViewModel : ObservableObject
 
     private bool IsCurrentSearch(int runId, CancellationTokenSource cts) =>
         runId == Volatile.Read(ref _searchRunId) && ReferenceEquals(_cts, cts);
+
+    /// <summary>
+    /// Pick a temp directory on a different fixed drive than the search target to avoid
+    /// I/O contention between reading scanned files and writing evicted results.
+    /// Falls back to the system %TEMP% if no alternative drive is available.
+    /// </summary>
+    private string? ChooseResultStoreTempDir()
+    {
+        // Override via environment variable (e.g. for profiling on the same fast SSD)
+        string? envOverride = Environment.GetEnvironmentVariable("YAGU_RESULTSTORE_TEMP");
+        if (!string.IsNullOrWhiteSpace(envOverride))
+            return envOverride;
+
+        // Always use C:\Temp\Yagu — the fast SSD with plenty of space.
+        // Avoids accidentally picking D:\ or other small/slow drives.
+        return @"C:\Temp\Yagu";
+    }
 
     private string BuildProgressStatus(SearchProgress progress)
     {
@@ -1719,6 +1742,66 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 LogService.Instance.Warning("ViewModel", $"Could not hydrate result at offset {result.DiskOffset}: {ex.Message}");
             }
+        }
+    }
+
+    /// <summary>
+    /// Hydrate multiple evicted results in a single batched read, minimizing lock contention.
+    /// </summary>
+    public void HydrateResults(IReadOnlyList<SearchResult> results)
+    {
+        ApplyHydrationPayloads(ReadHydrationPayloads(results));
+    }
+
+    /// <summary>
+    /// Read evicted result payloads from disk without mutating UI-bound SearchResult objects.
+    /// Safe to call from a worker thread.
+    /// </summary>
+    public IReadOnlyList<HydrationPayload> ReadHydrationPayloads(IReadOnlyList<SearchResult> results)
+    {
+        if (_resultStore is null || results.Count == 0) return Array.Empty<HydrationPayload>();
+
+        // Collect offsets for evicted items
+        long[] offsets = new long[results.Count];
+        int evictedCount = 0;
+        int[] evictedIndices = new int[results.Count];
+        for (int i = 0; i < results.Count; i++)
+        {
+            if (results[i].IsEvicted)
+            {
+                offsets[evictedCount] = results[i].DiskOffset;
+                evictedIndices[evictedCount] = i;
+                evictedCount++;
+            }
+        }
+        if (evictedCount == 0) return Array.Empty<HydrationPayload>();
+
+        try
+        {
+            var readResults = _resultStore.ReadBatch(offsets.AsSpan(0, evictedCount));
+            var payloads = new List<HydrationPayload>(evictedCount);
+            for (int i = 0; i < evictedCount; i++)
+            {
+                var data = readResults[i];
+                if (data is null) continue;
+                var (ml, cb, ca) = data.Value;
+                payloads.Add(new HydrationPayload(results[evictedIndices[i]], ml, cb, ca));
+            }
+            return payloads;
+        }
+        catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException)
+        {
+            LogService.Instance.Warning("ViewModel", $"Batch hydration failed: {ex.Message}");
+            return Array.Empty<HydrationPayload>();
+        }
+    }
+
+    /// <summary>Apply hydrated payloads to SearchResult objects. Must run on the UI thread.</summary>
+    public static void ApplyHydrationPayloads(IEnumerable<HydrationPayload> payloads)
+    {
+        foreach (var payload in payloads)
+        {
+            payload.Result.HydrateFrom(payload.MatchLine, payload.ContextBefore, payload.ContextAfter);
         }
     }
 

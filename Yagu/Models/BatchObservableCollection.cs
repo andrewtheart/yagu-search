@@ -28,7 +28,6 @@ public class BatchObservableCollection<T> : ObservableCollection<T>
         }
 
         _suppressNotification = true;
-        int startIndex = Items.Count;
         try
         {
             for (int i = 0; i < items.Count; i++)
@@ -41,11 +40,11 @@ public class BatchObservableCollection<T> : ObservableCollection<T>
 
         OnPropertyChanged(new PropertyChangedEventArgs("Count"));
         OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
-        var asList = items as System.Collections.IList ?? new List<T>(items);
+        // WinUI ItemsControl/ListView do not support multi-item Add notifications
+        // (only the first NewItem is processed). Use Reset so bound controls
+        // re-read the full collection.
         OnCollectionChanged(new NotifyCollectionChangedEventArgs(
-            NotifyCollectionChangedAction.Add,
-            asList,
-            startIndex));
+            NotifyCollectionChangedAction.Reset));
     }
 
     protected override void OnCollectionChanged(NotifyCollectionChangedEventArgs e)

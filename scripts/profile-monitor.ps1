@@ -145,8 +145,18 @@ if ($searchBox) {
     }
     Start-Sleep -Milliseconds 500
 } else {
-    Write-Error "FATAL: Task Manager search box not found after $maxRetries attempts. Ensure Task Manager is on the Processes tab."
-    exit 1
+    # WinUI 3 controls sometimes don't expose to UIA. Fall back to keyboard:
+    # Ctrl+F focuses the filter box in modern Task Manager.
+    Write-Host "UIA search box not found; using Ctrl+F keyboard fallback..."
+    [void][TmAutomate]::ForceForeground($tmProc.MainWindowHandle)
+    Start-Sleep -Milliseconds 500
+    [System.Windows.Forms.SendKeys]::SendWait("^f")
+    Start-Sleep -Milliseconds 800
+    [System.Windows.Forms.SendKeys]::SendWait("^a")
+    Start-Sleep -Milliseconds 200
+    [System.Windows.Forms.SendKeys]::SendWait("Yagu")
+    Start-Sleep -Milliseconds 800
+    Write-Host "Search filter set via Ctrl+F + SendKeys"
 }
 
 # ── 2. Attach VSDiagnostics sessions ──────────────────────────────────
@@ -175,25 +185,26 @@ Write-Host "All 3 profiling sessions attached."
 
 # ── 3. Launch parallel monitoring jobs ────────────────────────────────
 
-# Job 1: Task Manager screenshots every 10s for 2 minutes (12 screenshots)
+# Job 1: Task Manager screenshots every 1s for 2 minutes (no limit)
 $screenshotJob = Start-Job -ScriptBlock {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
 
-    $screenshotDir = "D:\yagu\TestResults\TaskManagerScreenshots"
+    $screenshotDir = "C:\src\Yagu\TestResults\TaskManagerScreenshots"
     if (!(Test-Path $screenshotDir)) { New-Item -ItemType Directory -Path $screenshotDir -Force | Out-Null }
     $ts = Get-Date -Format 'yyyyMMdd-HHmmss'
-    for ($i = 1; $i -le 12; $i++) {
-        Start-Sleep -Seconds 10
+    $durationSec = 120
+    for ($i = 1; $i -le $durationSec; $i++) {
+        Start-Sleep -Seconds 1
         $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
         $bitmap = New-Object System.Drawing.Bitmap($screen.Width, $screen.Height)
         $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
         $graphics.CopyFromScreen(0, 0, 0, 0, $screen.Size)
-        $bitmap.Save("$screenshotDir\taskmgr-$ts-t$($i*10)s.png", [System.Drawing.Imaging.ImageFormat]::Png)
+        $bitmap.Save("$screenshotDir\taskmgr-$ts-t${i}s.png", [System.Drawing.Imaging.ImageFormat]::Png)
         $graphics.Dispose(); $bitmap.Dispose()
-        Write-Output "Screenshot $i/12 (t=$($i*10)s)"
+        if ($i % 10 -eq 0) { Write-Output "Screenshot $i/$durationSec (t=${i}s)" }
     }
-    Write-Output "All screenshots saved to: $screenshotDir"
+    Write-Output "All $durationSec screenshots saved to: $screenshotDir"
 }
 
 # Job 2: Process I/O counters every 1s for 2 minutes

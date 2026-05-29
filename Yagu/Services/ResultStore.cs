@@ -34,6 +34,11 @@ public sealed class ResultStore : IDisposable
     private bool _disposed;
     private int _evictedCount;
 
+    // Dedicated read stream to avoid contention with write-side _lock.
+    // Opened with FileShare.ReadWrite so it coexists with the write stream.
+    private readonly FileStream _readStream;
+    private readonly object _readLock = new();
+
     private readonly Channel<SearchResult> _evictionChannel;
     private readonly Task _drainTask;
     private readonly CancellationTokenSource _drainCts = new();
@@ -44,11 +49,15 @@ public sealed class ResultStore : IDisposable
     public int EvictedCount => Volatile.Read(ref _evictedCount);
     public string TempFilePath => _path;
 
-    public ResultStore()
+    public ResultStore(string? tempDirectory = null)
     {
-        _path = Path.Combine(Path.GetTempPath(), $"yagu-results-{Guid.NewGuid():N}.tmp");
-        _stream = new FileStream(_path, FileMode.Create, FileAccess.ReadWrite, FileShare.Read, 64 * 1024);
+        string baseDir = tempDirectory ?? Path.GetTempPath();
+        if (!System.IO.Directory.Exists(baseDir))
+            System.IO.Directory.CreateDirectory(baseDir);
+        _path = Path.Combine(baseDir, $"yagu-results-{Guid.NewGuid():N}.tmp");
+        _stream = new FileStream(_path, FileMode.Create, FileAccess.ReadWrite, FileShare.Read, 1024 * 1024);
         _writer = new BinaryWriter(_stream, Encoding.UTF8, leaveOpen: true);
+        _readStream = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 64 * 1024);
 
         _evictionChannel = Channel.CreateBounded<SearchResult>(new BoundedChannelOptions(EvictionChannelCapacity)
         {
@@ -311,18 +320,58 @@ public sealed class ResultStore : IDisposable
             long offset = _stream.Position;
 
             // Match line: 7-bit-encoded length + raw UTF-8 bytes
-            _writer.Write7BitEncodedInt(matchLineUtf8.Length);
+            // Write directly to _stream, bypassing BinaryWriter whose BaseStream
+            // getter calls Flush() on every access (was 5.8% of total CPU).
+            Write7BitEncodedIntDirect(matchLineUtf8.Length);
             if (matchLineUtf8.Length > 0)
-                _writer.BaseStream.Write(matchLineUtf8);
+                _stream.Write(matchLineUtf8);
 
             // Context before
-            WriteRawContextLines(_writer, contextBeforePtr, contextBeforeBytes, contextBeforeCount);
+            WriteRawContextLinesDirect(contextBeforePtr, contextBeforeBytes, contextBeforeCount);
 
             // Context after
-            WriteRawContextLines(_writer, contextAfterPtr, contextAfterBytes, contextAfterCount);
+            WriteRawContextLinesDirect(contextAfterPtr, contextAfterBytes, contextAfterCount);
 
             Interlocked.Increment(ref _evictedCount);
             return offset;
+        }
+    }
+
+    /// <summary>
+    /// Writes Rust-packed context lines as BinaryWriter-format string list directly to the stream.
+    /// Rust format: repeated [4-byte LE length][UTF-8 bytes].
+    /// Output format: Int32(count) + repeated [7-bit-encoded length][UTF-8 bytes].
+    /// Lines are truncated to <see cref="LineTruncator.MaxDisplayLength"/> bytes.
+    /// Bypasses BinaryWriter to avoid implicit Flush() on BaseStream access.
+    /// </summary>
+    private unsafe void WriteRawContextLinesDirect(byte* ptr, int totalBytes, int count)
+    {
+        WriteInt32Direct(count);
+        if (count == 0 || ptr == null || totalBytes == 0) return;
+
+        int pos = 0;
+        int maxBytes = (LineTruncator.MaxDisplayLength + 1) * 4; // same cap as DecodeAndTruncate
+        for (int i = 0; i < count && pos + 4 <= totalBytes; i++)
+        {
+            uint len = (uint)(ptr[pos] | (ptr[pos + 1] << 8) | (ptr[pos + 2] << 16) | (ptr[pos + 3] << 24));
+            pos += 4;
+            if (len > int.MaxValue || pos + (int)len > totalBytes)
+            {
+                // Malformed — write empty string for remaining
+                Write7BitEncodedIntDirect(0);
+                continue;
+            }
+            int writeLen = Math.Min((int)len, maxBytes);
+            // Align to UTF-8 char boundary if truncated
+            if (writeLen < (int)len)
+            {
+                while (writeLen > 0 && (ptr[pos + writeLen] & 0xC0) == 0x80)
+                    writeLen--;
+            }
+            Write7BitEncodedIntDirect(writeLen);
+            if (writeLen > 0)
+                _stream.Write(new ReadOnlySpan<byte>(ptr + pos, writeLen));
+            pos += (int)len;
         }
     }
 
@@ -392,20 +441,70 @@ public sealed class ResultStore : IDisposable
     /// </summary>
     public (string MatchLine, IReadOnlyList<string> ContextBefore, IReadOnlyList<string> ContextAfter) Read(long offset)
     {
-        lock (_lock)
+        // Flush writes so the read stream sees them, then read without holding the write lock.
+        FlushForRead();
+        lock (_readLock)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            // Ensure buffered writes are committed before switching the shared stream to read mode.
-            _writer.Flush();
-            if (offset < 0 || offset >= _stream.Length)
-                throw new InvalidOperationException($"ResultStore offset {offset} is out of range (stream length {_stream.Length}).");
+            if (offset < 0 || offset >= _readStream.Length)
+                throw new InvalidOperationException($"ResultStore offset {offset} is out of range (stream length {_readStream.Length}).");
 
-            _stream.Position = offset;
-            using var reader = new BinaryReader(_stream, Encoding.UTF8, leaveOpen: true);
+            _readStream.Position = offset;
+            using var reader = new BinaryReader(_readStream, Encoding.UTF8, leaveOpen: true);
             var matchLine = reader.ReadString();
             var before = ReadStringList(reader);
             var after = ReadStringList(reader);
             return (matchLine, before, after);
+        }
+    }
+
+    /// <summary>
+    /// Read multiple offsets in a single batch, minimizing lock contention.
+    /// Returns results in the same order as the input offsets.
+    /// Invalid offsets produce null entries.
+    /// </summary>
+    public (string MatchLine, IReadOnlyList<string> ContextBefore, IReadOnlyList<string> ContextAfter)?[] ReadBatch(ReadOnlySpan<long> offsets)
+    {
+        if (offsets.Length == 0) return [];
+        FlushForRead();
+        var results = new (string, IReadOnlyList<string>, IReadOnlyList<string>)?[offsets.Length];
+        lock (_readLock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            using var reader = new BinaryReader(_readStream, Encoding.UTF8, leaveOpen: true);
+            long streamLen = _readStream.Length;
+            for (int i = 0; i < offsets.Length; i++)
+            {
+                long offset = offsets[i];
+                if (offset < 0 || offset >= streamLen)
+                {
+                    results[i] = null;
+                    continue;
+                }
+                _readStream.Position = offset;
+                try
+                {
+                    var matchLine = reader.ReadString();
+                    var before = ReadStringList(reader);
+                    var after = ReadStringList(reader);
+                    results[i] = (matchLine, before, after);
+                }
+                catch (Exception ex) when (ex is EndOfStreamException or FormatException)
+                {
+                    results[i] = null;
+                }
+            }
+        }
+        return results;
+    }
+
+    private void FlushForRead()
+    {
+        lock (_lock)
+        {
+            if (_disposed) return;
+            _writer.Flush();
+            _stream.Flush();
         }
     }
 
@@ -421,7 +520,39 @@ public sealed class ResultStore : IDisposable
         _drainCts.Dispose();
         _writer.Dispose();
         _stream.Dispose();
+        _readStream.Dispose();
         try { File.Delete(_path); } catch { /* best-effort cleanup */ }
+    }
+
+    /// <summary>
+    /// Write a 7-bit encoded int directly to <see cref="_stream"/>, bypassing BinaryWriter.
+    /// Equivalent to BinaryWriter.Write7BitEncodedInt but avoids the implicit Flush()
+    /// that BinaryWriter.BaseStream getter causes.
+    /// </summary>
+    private void Write7BitEncodedIntDirect(int value)
+    {
+        uint v = (uint)value;
+        // Max 5 bytes for a 32-bit value
+        Span<byte> buf = stackalloc byte[5];
+        int pos = 0;
+        while (v > 0x7F)
+        {
+            buf[pos++] = (byte)(v | 0x80);
+            v >>= 7;
+        }
+        buf[pos++] = (byte)v;
+        _stream.Write(buf[..pos]);
+    }
+
+    /// <summary>
+    /// Write a 32-bit integer (little-endian) directly to <see cref="_stream"/>.
+    /// Equivalent to BinaryWriter.Write(int) but avoids BinaryWriter overhead.
+    /// </summary>
+    private void WriteInt32Direct(int value)
+    {
+        Span<byte> buf = stackalloc byte[4];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(buf, value);
+        _stream.Write(buf);
     }
 
     private static void WriteStringList(BinaryWriter w, IReadOnlyList<string> list)

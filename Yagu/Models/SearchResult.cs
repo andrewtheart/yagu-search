@@ -161,6 +161,19 @@ public sealed record SearchResult(
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NumberedAfter)));
     }
 
+    /// <summary>Restore full payload from pre-read data (batch hydration path).</summary>
+    internal void HydrateFrom(string matchLine, IReadOnlyList<string> contextBefore, IReadOnlyList<string> contextAfter)
+    {
+        if (DiskOffset < 0) return;
+        MatchLine = matchLine;
+        ContextBefore = contextBefore;
+        ContextAfter = contextAfter;
+        _shortPreview = null;
+        Volatile.Write(ref _diskOffset, InMemoryOffset);
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NumberedBefore)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NumberedAfter)));
+    }
+
     private bool _isSelected;
     public bool IsSelected
     {
