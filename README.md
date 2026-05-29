@@ -8,7 +8,7 @@ For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
 
 ## Current Project Status
 
-Use [Yagu.sln](Yagu.sln) for current development. [QuickGrep.sln](QuickGrep.sln) and the [QuickGrep](QuickGrep/) folder are legacy remnants from the previous project name and are not the active build target.
+Use [Yagu.sln](Yagu.sln) for current development.
 
 The [PLANS](PLANS/) directory contains design notes, performance investigations, and future optimization plans. Treat those files as engineering history and roadmap material, not as the canonical build instructions. This README is the entry point for new contributors.
 
