@@ -313,6 +313,11 @@ public sealed class SearchService
                 Volatile.Write(ref everDegraded, 1);
                 activeStreamingSink?.SetDegraded(true);
 
+                // Immediately trim WS on every pressure check to release soft-faulted
+                // mmap pages. This is cheap (no-op if pages are actively used) and keeps
+                // WS below target between GC collection cooldown windows.
+                TrimProcessWorkingSet();
+
                 // After several consecutive evictions that freed nothing, slow down
                 // pressure events to avoid futile GC churn. But use a short cooldown
                 // so we don't let memory grow unchecked for long.
@@ -406,6 +411,7 @@ public sealed class SearchService
 
             // Request a non-blocking GC to free evicted strings without freezing I/O threads.
             GC.Collect(2, GCCollectionMode.Optimized, blocking: false, compacting: false);
+            TrimProcessWorkingSet();
 
             var deadline = Stopwatch.GetTimestamp() + (long)(MemoryThrottleMaxWaitMs / 1000.0 * Stopwatch.Frequency);
             while (!ct.IsCancellationRequested && Stopwatch.GetTimestamp() < deadline)
@@ -1315,6 +1321,7 @@ public sealed class SearchService
                 $"heapSize={gcInfo.HeapSizeBytes / (1024*1024)}MB, gen0={GC.CollectionCount(0)}, gen1={GC.CollectionCount(1)}, gen2={GC.CollectionCount(2)}");
             LogService.Instance.Info("SearchService", "Requesting GC for memory pressure relief");
             GC.Collect(2, GCCollectionMode.Optimized, blocking: false, compacting: false);
+            TrimProcessWorkingSet();
             Volatile.Write(ref s_lastMemoryPressureGcTicks, Stopwatch.GetTimestamp());
         }
         finally
@@ -1501,6 +1508,26 @@ public sealed class SearchService
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
+
+    [DllImport("psapi.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EmptyWorkingSet(IntPtr hProcess);
+
+    /// <summary>
+    /// Trims the process working set, releasing soft-faulted pages (e.g. unmapped
+    /// mmap regions) back to the OS. Pages still actively used will soft-fault
+    /// back cheaply on next access. This is the primary mechanism for reducing WS
+    /// when native memory (Rust mmap) dominates.
+    /// </summary>
+    internal static void TrimProcessWorkingSet()
+    {
+        try
+        {
+            using var proc = System.Diagnostics.Process.GetCurrentProcess();
+            EmptyWorkingSet(proc.Handle);
+        }
+        catch { /* best-effort */ }
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct MEMORYSTATUSEX

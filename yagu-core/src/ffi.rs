@@ -1425,6 +1425,15 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                         file_len,
                         last_modified,
                     );
+
+                    // Shrink buffers that grew excessively for match-heavy files.
+                    const ARENA_SHRINK_THRESHOLD: usize = 4 * 1024 * 1024; // 4 MB
+                    if context_arena.capacity() > ARENA_SHRINK_THRESHOLD {
+                        context_arena.shrink_to(ARENA_SHRINK_THRESHOLD);
+                    }
+                    if match_buf.capacity() > 16384 {
+                        match_buf.shrink_to(4096);
+                    }
                 }
             });
         }
@@ -1718,6 +1727,18 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
                         file_len,
                         last_modified,
                     );
+                }
+
+                // Shrink buffers that grew excessively for match-heavy files.
+                // This returns memory to the allocator (and potentially the OS)
+                // rather than letting each worker thread retain hundreds of MB
+                // from a single large file for the rest of the scan.
+                const ARENA_SHRINK_THRESHOLD: usize = 4 * 1024 * 1024; // 4 MB
+                if context_arena.capacity() > ARENA_SHRINK_THRESHOLD {
+                    context_arena.shrink_to(ARENA_SHRINK_THRESHOLD);
+                }
+                if match_buf.capacity() > 16384 {
+                    match_buf.shrink_to(4096);
                 }
             }
         });
