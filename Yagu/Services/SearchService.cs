@@ -243,6 +243,7 @@ public sealed class SearchService
         int skipGlobExcluded = 0;
         int skipSizeFiltered = 0;
         StreamingScanSink? activeStreamingSink = null; // promoted to outer scope so CheckMemoryPressure can toggle degraded mode
+        IntPtr activeFilesScannedPtr = IntPtr.Zero; // unmanaged counter updated atomically during streaming scan
         IntPtr activeTotalMatchesPtr = IntPtr.Zero; // unmanaged counter updated atomically during streaming scan
         IntPtr activeFilesWithMatchesPtr = IntPtr.Zero;
 
@@ -253,7 +254,17 @@ public sealed class SearchService
         int CurrentFilesSkipped() => Volatile.Read(ref filesSkipped) + CurrentDirectorySkips() + CurrentEarlySkips();
         // Total files processed (content-scanned + early-filtered + discovery-filtered)
         // so the progress bar increments for every file that has been "dealt with".
-        int CurrentFilesProcessed() => Volatile.Read(ref filesScanned) + CurrentEarlySkips() + Volatile.Read(ref skipSizeFiltered);
+        int CurrentFilesScanned()
+        {
+            unsafe
+            {
+                return activeFilesScannedPtr != IntPtr.Zero
+                    ? Volatile.Read(ref *(int*)activeFilesScannedPtr)
+                    : Volatile.Read(ref filesScanned);
+            }
+        }
+
+        int CurrentFilesProcessed() => CurrentFilesScanned() + CurrentEarlySkips() + Volatile.Read(ref skipSizeFiltered);
         int CurrentTotalFiles()
         {
             int knownTotal = _fileLister.KnownTotalFiles;
@@ -684,6 +695,7 @@ public sealed class SearchService
                                     *(int*)totalMatchesAlloc = Volatile.Read(ref totalMatches);
                                     *(int*)filesWithMatchesAlloc = Volatile.Read(ref filesWithMatches);
                                 }
+                                activeFilesScannedPtr = filesScannedAlloc;
                                 try
                                 {
                                     // Track paths by file index for post-scan stats reconciliation
@@ -782,7 +794,7 @@ public sealed class SearchService
                                                     string memDiag = GetMemoryDiagnostics();
                                                     LogService.Instance.Warning("Workers",
                                                         $"Streaming: pushed={fileIndexCounter:N0} | " +
-                                                        $"scanned={Volatile.Read(ref filesScanned):N0}, matches={Volatile.Read(ref totalMatches):N0}, " +
+                                                        $"scanned={CurrentFilesScanned():N0}, matches={Volatile.Read(ref totalMatches):N0}, " +
                                                         $"withMatches={Volatile.Read(ref filesWithMatches):N0}, skipped={Volatile.Read(ref filesSkipped):N0}, " +
                                                         $"degraded={Volatile.Read(ref degraded) != 0}, parallelism={parallelism}, " +
                                                         $"elapsed={sw.Elapsed.TotalSeconds:F1}s, {memDiag}");
@@ -873,6 +885,7 @@ public sealed class SearchService
                                     directSink?.Dispose();
                                     streamingSink?.Dispose();
                                     activeStreamingSink = null;
+                                    activeFilesScannedPtr = IntPtr.Zero;
                                     activeTotalMatchesPtr = IntPtr.Zero;
                                     activeFilesWithMatchesPtr = IntPtr.Zero;
                                     // Sync back counters from unmanaged memory
@@ -885,6 +898,10 @@ public sealed class SearchService
                                 }
                                 finally
                                 {
+                                    activeStreamingSink = null;
+                                    activeFilesScannedPtr = IntPtr.Zero;
+                                    activeTotalMatchesPtr = IntPtr.Zero;
+                                    activeFilesWithMatchesPtr = IntPtr.Zero;
                                     Marshal.FreeHGlobal(filesScannedAlloc);
                                     Marshal.FreeHGlobal(totalMatchesAlloc);
                                     Marshal.FreeHGlobal(filesWithMatchesAlloc);
@@ -1014,7 +1031,7 @@ public sealed class SearchService
             try
             {
                 const int ContentBatchSize = 256;
-                const int DegradedContentBatchSize = 32;
+                const int DegradedContentBatchSize = ContentBatchSize;
                 List<SearchResult>? contentBatch = null;
                 long fwdLogLastTicks = Stopwatch.GetTimestamp();
                 const long FwdLogIntervalSec = 10;
@@ -1058,32 +1075,52 @@ public sealed class SearchService
                 // short timeout so the UI sees results promptly even when matches
                 // arrive infrequently (e.g. a rare query across millions of files).
                 const int PartialFlushDelayMs = 250;
-                while (await contentResults.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+                // Reuse a single linked CTS across iterations to eliminate the
+                // ~389K Linked1CancellationTokenSource + TimerQueueTimer + CallbackNode
+                // allocations measured in the previous profiling iteration.
+                CancellationTokenSource? delayCts = null;
+                try
                 {
-                    while (contentResults.Reader.TryRead(out var r))
+                    while (await contentResults.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
                     {
-                        (contentBatch ??= new List<SearchResult>(ContentBatchSize)).Add(r);
-                        int targetBatchSize = Volatile.Read(ref degraded) != 0 ? DegradedContentBatchSize : ContentBatchSize;
-                        if (contentBatch.Count >= targetBatchSize)
-                            await FlushContentBatchAsync().ConfigureAwait(false);
-                    }
+                        while (contentResults.Reader.TryRead(out var r))
+                        {
+                            (contentBatch ??= new List<SearchResult>(ContentBatchSize)).Add(r);
+                            int targetBatchSize = Volatile.Read(ref degraded) != 0 ? DegradedContentBatchSize : ContentBatchSize;
+                            if (contentBatch.Count >= targetBatchSize)
+                                await FlushContentBatchAsync().ConfigureAwait(false);
+                        }
 
-                    // If we have a partial batch, wait briefly for more items before flushing.
-                    if (contentBatch is { Count: > 0 })
-                    {
-                        using var delayCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                        delayCts.CancelAfter(PartialFlushDelayMs);
-                        try
+                        // If we have a partial batch, wait briefly for more items before flushing.
+                        if (contentBatch is { Count: > 0 })
                         {
-                            if (await contentResults.Reader.WaitToReadAsync(delayCts.Token).ConfigureAwait(false))
-                                continue; // More items available — loop back to drain them.
+                            // Reset (or recreate if reset fails) the linked CTS+timer instead of allocating new each iteration.
+                            if (delayCts is null || !delayCts.TryReset())
+                            {
+                                delayCts?.Dispose();
+                                delayCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                            }
+                            delayCts.CancelAfter(PartialFlushDelayMs);
+                            try
+                            {
+                                if (await contentResults.Reader.WaitToReadAsync(delayCts.Token).ConfigureAwait(false))
+                                {
+                                    // More items available — disarm timer to avoid spurious cancellation, then loop back.
+                                    delayCts.CancelAfter(Timeout.Infinite);
+                                    continue;
+                                }
+                            }
+                            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                            {
+                                // Timeout expired, not a real cancellation — flush what we have.
+                            }
+                            await FlushContentBatchAsync().ConfigureAwait(false);
                         }
-                        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-                        {
-                            // Timeout expired, not a real cancellation — flush what we have.
-                        }
-                        await FlushContentBatchAsync().ConfigureAwait(false);
                     }
+                }
+                finally
+                {
+                    delayCts?.Dispose();
                 }
 
                 await FlushContentBatchAsync().ConfigureAwait(false);

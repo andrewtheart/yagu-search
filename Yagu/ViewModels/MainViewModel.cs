@@ -1493,7 +1493,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     private async Task AddMatchAsync(SearchResult result, CancellationToken cancellationToken)
     {
-        if (Degraded && _resultStore is not null)
+        if (Degraded && _resultStore is not null && !result.IsEvicted)
             await EvictNewResultsBeforeUiAsync([result], cancellationToken).ConfigureAwait(true);
 
         bool resultAvailabilityChanged = AddMatchCore(result, evictedResultWriter: null);
@@ -1506,7 +1506,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     private async Task AddMatchesAsync(IReadOnlyList<SearchResult> results, CancellationToken cancellationToken)
     {
-        if (Degraded && _resultStore is not null)
+        if (Degraded && _resultStore is not null && ContainsInMemoryPayload(results))
             await EvictNewResultsBeforeUiAsync(results, cancellationToken).ConfigureAwait(true);
 
         bool resultAvailabilityChanged = _resultCollection.AddRange(
@@ -1519,6 +1519,17 @@ public sealed partial class MainViewModel : ObservableObject
 
         if (resultAvailabilityChanged)
             NotifyResultAvailabilityChanged();
+    }
+
+    private static bool ContainsInMemoryPayload(IReadOnlyList<SearchResult> results)
+    {
+        for (int i = 0; i < results.Count; i++)
+        {
+            if (!results[i].IsEvicted)
+                return true;
+        }
+
+        return false;
     }
 
     private async Task EvictNewResultsBeforeUiAsync(IReadOnlyList<SearchResult> results, CancellationToken cancellationToken)

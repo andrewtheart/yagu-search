@@ -16,6 +16,15 @@ $ErrorActionPreference = 'Continue'
 $VSDiag = "C:\Program Files\Microsoft Visual Studio\18\Enterprise\Team Tools\DiagnosticsHub\Collector\VSDiagnostics.exe"
 $cleanupDir = "$env:TEMP\vsdiag-cleanup"
 
+# Helper: Best-effort delete that retries after stopping the StandardCollector service
+# if a file handle is still held. Returns $true if the path is gone after the call.
+function Remove-WithRetry {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $true }
+    Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+    return -not (Test-Path -LiteralPath $Path)
+}
+
 # ── 1. Stop all VSDiagnostics sessions (1-6) ──────────────────────────
 # CRITICAL: VSDiagnostics `stop` requires /output:<path> — without it, the session
 # stays running and subsequent `start` calls fail with "The file exists (0x80070050)".
@@ -43,14 +52,55 @@ if ($stoppedCount -eq 0) {
 # ── 2. Remove diagnostic temp directories ─────────────────────────────
 # VSDiag creates GUID-named dirs like "0197E42F-003D-4F91-A845-6404CF289E84" and ".scratch"
 # The pattern for session IDs 1-10 is: {XX}97E42F-003D-4F91-A845-6404CF289E84
+#
+# CRITICAL: StandardCollector.Service holds an open handle on `<GUID>\lock` for every
+# session it has ever hosted. While the service is running, Remove-Item silently
+# fails to delete that lock file (the directory then partially survives, the dir
+# LWT updates but the lock file lingers). On the next `vsdiag start N`, VSDiag
+# tries to (re)create the lock file and fails with "The file exists (HRESULT
+# 0x80070050)" — which is exactly the FileIO session-3 attach failure we observed.
+#
+# Fix: stop VSStandardCollectorService150 BEFORE attempting deletion. The service
+# auto-restarts on the next `vsdiag start`, so this is safe. We do NOT restart the
+# service manually here (see step 7's comment about kernel ETW DACLs — that only
+# matters after sessions are attached, not during pre-attach cleanup).
+$svc = Get-Service -Name VSStandardCollectorService150 -ErrorAction SilentlyContinue
+if ($svc -and $svc.Status -eq 'Running') {
+    Write-Host "Stopping VSStandardCollectorService150 to release session lock files..."
+    Stop-Service -Name VSStandardCollectorService150 -Force -ErrorAction SilentlyContinue
+    # Wait for the StandardCollector.Service process to actually exit so handles release.
+    $deadline = (Get-Date).AddSeconds(10)
+    while ((Get-Date) -lt $deadline) {
+        $proc = Get-Process -Name StandardCollector.Service -ErrorAction SilentlyContinue
+        if (-not $proc) { break }
+        Start-Sleep -Milliseconds 200
+    }
+    $proc = Get-Process -Name StandardCollector.Service -ErrorAction SilentlyContinue
+    if ($proc) {
+        Write-Warning "  StandardCollector.Service did not exit cleanly; forcing kill (PID $($proc.Id))"
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 500
+    }
+    Write-Host "  Service stopped (will auto-restart on next vsdiag start)."
+}
+
 Write-Host "Cleaning temp directories..."
 $removedCount = 0
+$survivors = @()
 Get-ChildItem $env:TEMP -Directory -ErrorAction SilentlyContinue | Where-Object {
     $_.Name -match 'diagsession|VSDiag|DiagnosticsHub|DiagHub|97E42F-003D-4F91-A845-6404CF289E84'
 } | ForEach-Object {
-    Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-    $removedCount++
-    Write-Host "  Removed: $($_.Name)"
+    $full = $_.FullName
+    $name = $_.Name
+    if (Remove-WithRetry -Path $full) {
+        $removedCount++
+        Write-Host "  Removed: $name"
+    } else {
+        # Likely a held lock file. Surface it so we can investigate further.
+        $survivors += $full
+        $kids = Get-ChildItem $full -Force -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+        Write-Warning "  Could NOT fully remove: $name (still contains: $($kids -join ', '))"
+    }
 }
 
 # Also clean up the cleanup dir itself (from previous runs)
@@ -117,15 +167,36 @@ if (Test-Path $testResults) {
     }
 }
 
-# ResultStore temp data (can grow to 25+ GB between runs)
-$resultStoreTmp = "D:\Temp\Yagu"
-if (Test-Path $resultStoreTmp) {
-    $size = (Get-ChildItem $resultStoreTmp -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
-    if ($size -gt 0) {
-        Remove-Item $resultStoreTmp -Recurse -Force -ErrorAction SilentlyContinue
-        $freedMB += [math]::Round($size / 1MB)
-        Write-Host "  Removed: D:\Temp\Yagu ($([math]::Round($size/1GB, 1)) GB)"
+# ResultStore temp data (can grow to 25+ GB between runs).
+# Yagu writes `yagu-results-*.tmp` files via ResultStore. Possible locations:
+#   - C:\Temp\Yagu          (current default — see ChooseResultStoreTempDir)
+#   - $env:TEMP\Yagu        (profiling override via YAGU_RESULTSTORE_TEMP)
+#   - D:\Temp\Yagu          (legacy default)
+#   - $env:TEMP             (Path.GetTempPath() fallback if no tempDirectory passed)
+$resultStoreDirs = @(
+    'C:\Temp\Yagu',
+    'D:\Temp\Yagu',
+    (Join-Path $env:TEMP 'Yagu')
+) | Select-Object -Unique
+
+foreach ($dir in $resultStoreDirs) {
+    if (Test-Path $dir) {
+        $size = (Get-ChildItem $dir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+        if ($size -gt 0 -or (Get-ChildItem $dir -Force -ErrorAction SilentlyContinue)) {
+            Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+            $freedMB += [math]::Round($size / 1MB)
+            Write-Host "  Removed: $dir ($([math]::Round($size/1GB, 2)) GB)"
+        }
     }
+}
+
+# Orphaned yagu-results-*.tmp files left directly in %TEMP% (matches ResultStore.TempFileSearchPattern)
+$orphans = Get-ChildItem -Path $env:TEMP -Filter 'yagu-results-*.tmp' -File -ErrorAction SilentlyContinue
+if ($orphans) {
+    $orphanSize = ($orphans | Measure-Object -Property Length -Sum).Sum
+    $orphans | Remove-Item -Force -ErrorAction SilentlyContinue
+    $freedMB += [math]::Round($orphanSize / 1MB)
+    Write-Host "  Removed: $($orphans.Count) orphaned yagu-results-*.tmp file(s) in `$env:TEMP ($([math]::Round($orphanSize/1GB, 2)) GB)"
 }
 
 # .analysis cache at repo root
@@ -173,6 +244,16 @@ if ($yaguProc) {
 }
 
 # ── 7. Quick verification — just check sessions 1-3 (the ones profile-monitor uses) ──
+#
+# History: previously, if any session reported "Running" we restarted
+# VSStandardCollectorService150. That breaks the FileIO session (session 3) on the
+# NEXT stop: the FileIO agent uses a kernel-mode ETW logger whose DACL is tied to
+# the original service-instance token. After the service restart, the new instance
+# can stop the user-mode CPU/DotNet sessions (re-attached from on-disk GUIDs) but
+# `ICollectionSession.Stop()` on the kernel-mode logger fails with E_ACCESSDENIED
+# even when running elevated, because the new token isn't on the kernel session's
+# ACL. We now drop straight to `logman -ets` to terminate any stuck kernel/user
+# ETW sessions directly, without restarting the controller service.
 $anyActive = $false
 1..3 | ForEach-Object {
     $result = & $VSDiag status $_ 2>&1 | Out-String
@@ -184,8 +265,29 @@ $anyActive = $false
 if (-not $anyActive) {
     Write-Host "`nPre-flight cleanup complete. All VSDiag sessions clear."
 } else {
-    Write-Warning "Some sessions still active — restarting VSStandardCollectorService150..."
-    Restart-Service 'VSStandardCollectorService150' -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 3
-    Write-Host "Service restarted. Pre-flight cleanup complete."
+    Write-Warning "Some sessions still active — terminating ETW sessions via logman -ets..."
+    # logman speaks directly to the ETW kernel API (StopTrace) and bypasses the
+    # collector service entirely. It can stop both user-mode and kernel-mode
+    # loggers as long as the caller is elevated (which the loop requires).
+    $logmanList = & logman query -ets 2>&1 | Out-String
+    $stoppedAny = $false
+    foreach ($line in $logmanList -split "`r?`n") {
+        # Session names from the DiagnosticsHub collector typically look like
+        # "VSDiagnostics_<GUID>" or "DiagnosticsHub_<GUID>" or "Microsoft-VSDiag-*".
+        if ($line -match '^\s*(VSDiagnostics_\S+|DiagnosticsHub_\S+|Microsoft-VSDiag\S*)\s') {
+            $sessionName = $Matches[1]
+            $r = & logman stop $sessionName -ets 2>&1 | Out-String
+            if ($LASTEXITCODE -eq 0 -or $r -match 'success') {
+                Write-Host "  logman stopped: $sessionName"
+                $stoppedAny = $true
+            } else {
+                Write-Warning "  logman could not stop $sessionName : $($r.Trim())"
+            }
+        }
+    }
+    if (-not $stoppedAny) {
+        Write-Warning "  No matching ETW sessions found via logman. Sessions may be ghost entries in VSDiag's session table only."
+    }
+    Start-Sleep -Seconds 1
+    Write-Host "Pre-flight cleanup complete (ETW fallback path)."
 }

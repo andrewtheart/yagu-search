@@ -102,6 +102,13 @@ public class TmAutomate {
 $fgOk = [TmAutomate]::ForceForeground($tmProc.MainWindowHandle)
 Write-Host "Task Manager foreground: $fgOk"
 
+# Maximize Task Manager so the Disk MB/s column is wide enough for reliable OCR
+# (SW_MAXIMIZE = 3). Without this, Task Manager often opens narrow and OCR can
+# misread the disk/CPU/memory columns or capture VS Code text underneath.
+[void][TmAutomate]::ShowWindow($tmProc.MainWindowHandle, 3)
+Start-Sleep -Milliseconds 300
+Write-Host "Task Manager maximized."
+
 # Use UI Automation to click search box and set filter text (with retries for WinUI load delay)
 $searchBox = $null
 $maxRetries = 5

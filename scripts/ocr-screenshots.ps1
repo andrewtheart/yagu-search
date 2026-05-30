@@ -73,6 +73,27 @@ function Await-Action([object]$WinRtTask) {
     $netTask.Wait(-1) | Out-Null
 }
 
+function Convert-OcrNumberText([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value)) { return "" }
+    $text = $Value.Trim()
+
+    # Task Manager uses comma thousands for values >= 1000. OCR sometimes drops
+    # the decimal point after that comma, e.g. "1,1221" for 1,122.1.
+    if ($text -match '^(\d{1,3}),(\d{4})$') {
+        return "$($Matches[1])$($Matches[2].Substring(0, 3)).$($Matches[2].Substring(3, 1))"
+    }
+
+    if ($text -match '^\d{1,3}(?:,\d{3})+(?:\.\d+)?$') {
+        return $text -replace ',', ''
+    }
+
+    if ($text -match '^\d+,\d+$') {
+        return $text -replace ',', '.'
+    }
+
+    return $text -replace ',', ''
+}
+
 # Create OCR engine (uses system language)
 $ocrEngine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
 if (-not $ocrEngine) {
@@ -153,23 +174,39 @@ foreach ($img in $screenshots) {
     }
 
     if ($dataLine) {
-        # Extract Disk MB/s value
-        if ($dataLine -match '(\d+[\.,]\d+)\s*MB/s') {
-            $diskMBps = $Matches[1] -replace ',', '.'
-        } elseif ($dataLine -match '(\d+)\s*MB/s') {
-            $diskMBps = $Matches[1]
+        # Windows OCR variants for "MB/s": observed renderings include "MB/s",
+        # "MB's" (apostrophe), "M B/s" (split), "MBs", "M B's". Be permissive.
+        # Pattern explanation:
+        #   M\s?B   = "MB" with optional space
+        #   \s?[/']?s = optional "/" or "'" before final 's'
+        $mbpsUnit = '\s*M\s?B\s?[/'']?s\b'
+
+        # ── Yagu's CPU/Memory/Disk are always the FIRST values after each
+        # keyword, because Task Manager sorts by Disk-desc and Yagu is the only
+        # heavy I/O process. Anchor on keywords for precision.
+        $numberPattern = '(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d{1,3},\d{4}|\d+(?:[\.,]\d+)?)'
+
+        # Disk: "Disk 731.7 MB's" / "Disk 731.7 MB/s" / "Disk 731 M B/s"
+        if ($dataLine -match "Disk\s+$numberPattern$mbpsUnit") {
+            $diskMBps = Convert-OcrNumberText $Matches[1]
+        }
+        # Some OCR captures drop the unit on the first value; fall back to first
+        # number after "Disk" if it's plausible (>= 0.1, not "0.1 MB's" alone).
+        if (-not $diskMBps -and $dataLine -match "Disk\s+$numberPattern\s+\d") {
+            $diskMBps = Convert-OcrNumberText $Matches[1]
+        }
+        if (-not $diskMBps -and $dataLine -match "Disk\s+$numberPattern\s+Command\s+line") {
+            $diskMBps = Convert-OcrNumberText $Matches[1]
         }
 
-        # Extract Memory (number followed by MB but not MB/s)
-        if ($dataLine -match '(\d{2,}[\.,]\d+)\s*MB(?!\s*/s)') {
-            $memMB = $Matches[1] -replace ',', '.'
+        # Memory: "Memory 681.1 MB" — first number after "Memory" keyword
+        if ($dataLine -match 'Memory\s+([\d,]+(?:\.\d+)?)\s*MB(?!/)') {
+            $memMB = $Matches[1] -replace ',', ''
         }
 
-        # Extract CPU % (first percentage value, typically like "20.6%")
-        if ($dataLine -match '(\d+[\.,]\d+)\s*%') {
+        # CPU: "CPU 27.1%" — first percentage after "CPU" keyword
+        if ($dataLine -match 'CPU\s+(\d+(?:[.,]\d+)?)\s*%') {
             $cpuPct = $Matches[1] -replace ',', '.'
-        } elseif ($dataLine -match '(\d+)\s*%') {
-            $cpuPct = $Matches[1]
         }
 
         $rawLine = $dataLine -replace '\s+', ' '
@@ -198,12 +235,20 @@ if ($dataLines.Count -gt 0) {
         $max = ($diskValues | Measure-Object -Maximum).Maximum
         $min = ($diskValues | Measure-Object -Minimum).Minimum
         $above600 = ($diskValues | Where-Object { $_ -ge 600 }).Count
+        $above1000 = ($diskValues | Where-Object { $_ -ge 1000 }).Count
+        $pct1000 = [math]::Round($above1000/$diskValues.Count*100)
         Write-Host "`n=== Disk Throughput Summary ==="
         Write-Host "  Samples with data: $($diskValues.Count) / $($screenshots.Count)"
         Write-Host "  Average: $([math]::Round($avg, 1)) MB/s"
         Write-Host "  Max:     $([math]::Round($max, 1)) MB/s"
         Write-Host "  Min:     $([math]::Round($min, 1)) MB/s"
-        Write-Host "  >= 600 MB/s: $above600 / $($diskValues.Count) ($([math]::Round($above600/$diskValues.Count*100))%)"
+        Write-Host "  >= 600 MB/s:  $above600 / $($diskValues.Count) ($([math]::Round($above600/$diskValues.Count*100))%)"
+        Write-Host "  >= 1000 MB/s: $above1000 / $($diskValues.Count) ($pct1000%)  [TARGET: >= 70%]"
+        if ($pct1000 -ge 70) {
+            Write-Host "  PASS: >= 1000 MB/s threshold met ($pct1000% >= 70%)" -ForegroundColor Green
+        } else {
+            Write-Host "  FAIL: >= 1000 MB/s threshold NOT met ($pct1000% < 70%)" -ForegroundColor Yellow
+        }
     }
 } else {
     Write-Warning "No valid data rows extracted. Check screenshots or OCR output."
