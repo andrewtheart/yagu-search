@@ -2863,6 +2863,20 @@ public sealed partial class MainWindow : Window
         }
 
         bool isHighlight = ViewModel.PreviewModeIndex == 1;
+        _sectionMatchNavs.TryGetValue(section, out var sectionNav);
+
+        // In highlight mode, if the match line is already rendered (as context),
+        // promote it in-place rather than appending duplicate context.
+        if (isHighlight && TryPromoteContextLineToMatch(section, result, allLines, rx, sectionNav))
+        {
+            UpdateMatchNavPanel();
+            UpdateSectionMatchNavPanels();
+            return;
+        }
+
+        // Determine the last rendered line to avoid backwards line numbers.
+        int lastRenderedLine = isHighlight ? GetSectionLastRenderedLine(section) : 0;
+
         if (section.Blocks.Count > 0)
         {
             if (isHighlight)
@@ -2882,7 +2896,20 @@ public sealed partial class MainWindow : Window
         }
 
         var lines = GetPreviewLines(result, allLines, previewLines, fullFile: false);
-        _sectionMatchNavs.TryGetValue(section, out var sectionNav);
+
+        // In highlight mode, clip lines to only show content after what's
+        // already rendered, preventing backwards line-number jumps.
+        if (isHighlight && lastRenderedLine > 0)
+        {
+            lines = lines.Where(l => l.lineNum > lastRenderedLine).ToList();
+            if (lines.Count == 0)
+            {
+                // Nothing new to show — remove the gap indicator we just added.
+                RemoveLastBlock(section);
+                return;
+            }
+        }
+
         foreach (var (line, lineNum) in lines)
         {
             bool isMatchLine = lineNum == result.LineNumber;
@@ -2903,6 +2930,115 @@ public sealed partial class MainWindow : Window
         UpdateMatchNavPanel();
         UpdateSectionMatchNavPanels();
         UpdateExpandAllButtonVisibility();
+    }
+
+    /// <summary>
+    /// If the target line is already rendered as a context line in the section,
+    /// promotes it to a highlighted match line and registers it in _matchParagraphs.
+    /// Returns true if promotion succeeded (no appending needed).
+    /// </summary>
+    private bool TryPromoteContextLineToMatch(
+        RichTextBlock section,
+        SearchResult result,
+        string[]? allLines,
+        Regex? rx,
+        SectionMatchNav? sectionNav)
+    {
+        // Find existing paragraph for the target line number using the
+        // ConditionalWeakTable (works for sections with separate gutter blocks).
+        int blockIdx = -1;
+        Paragraph? existingPara = null;
+        for (int i = 0; i < section.Blocks.Count; i++)
+        {
+            if (section.Blocks[i] is Paragraph para
+                && s_paragraphLineNumbers.TryGetValue(para, out var lineObj)
+                && lineObj is int lineNumber
+                && lineNumber == result.LineNumber)
+            {
+                blockIdx = i;
+                existingPara = para;
+                break;
+            }
+        }
+
+        if (existingPara is null)
+            return false;
+
+        // Promote content paragraph: clear context foreground from text runs.
+        foreach (var inline in existingPara.Inlines)
+        {
+            if (inline is Run run)
+            {
+                var localValue = run.ReadLocalValue(Run.ForegroundProperty);
+                if (localValue != Microsoft.UI.Xaml.DependencyProperty.UnsetValue
+                    && ReferenceEquals(localValue, s_contextTextBrush))
+                    run.ClearValue(Run.ForegroundProperty);
+            }
+        }
+
+        // Promote gutter paragraph: change indicator and colors.
+        if (_sectionGutterBlocks.TryGetValue(section, out var gutterBlock)
+            && blockIdx < gutterBlock.Blocks.Count
+            && gutterBlock.Blocks[blockIdx] is Paragraph gutterPara)
+        {
+            var inlines = gutterPara.Inlines;
+            if (inlines.Count >= 2)
+            {
+                if (inlines[0] is Run indicator)
+                {
+                    indicator.Text = "\u2502"; // │
+                    indicator.Foreground = s_matchAccentBrush;
+                }
+                if (inlines[1] is Run gutterNum)
+                {
+                    gutterNum.Foreground = s_matchGutterBrush;
+                }
+            }
+        }
+
+        // Register in _matchParagraphs so match navigation can find it.
+        string lineText = (allLines != null && result.LineNumber >= 1 && result.LineNumber <= allLines.Length)
+            ? allLines[result.LineNumber - 1]
+            : result.MatchLine;
+        AddMatchEntries(_matchParagraphs, sectionNav, section, existingPara, lineText, rx, minimumOne: true);
+
+        InvalidateParagraphIndexCache(section);
+        if (sectionNav is not null)
+            sectionNav.IndexByMatch = null;
+        return true;
+    }
+
+    /// <summary>
+    /// Returns the highest 1-based line number rendered in a section,
+    /// or 0 if no line-number paragraphs are found.
+    /// </summary>
+    private static int GetSectionLastRenderedLine(RichTextBlock section)
+    {
+        int lastLine = 0;
+        for (int i = section.Blocks.Count - 1; i >= 0; i--)
+        {
+            if (section.Blocks[i] is Paragraph para
+                && s_paragraphLineNumbers.TryGetValue(para, out var lineObj)
+                && lineObj is int lineNumber
+                && lineNumber > 0)
+            {
+                lastLine = lineNumber;
+                break;
+            }
+        }
+        return lastLine;
+    }
+
+    /// <summary>
+    /// Removes the last block from a section (and its corresponding gutter block)
+    /// to undo an optimistically-added gap indicator when no content follows.
+    /// </summary>
+    private void RemoveLastBlock(RichTextBlock section)
+    {
+        if (section.Blocks.Count > 0)
+            section.Blocks.RemoveAt(section.Blocks.Count - 1);
+        if (_sectionGutterBlocks.TryGetValue(section, out var gutterBlock) && gutterBlock.Blocks.Count > 0)
+            gutterBlock.Blocks.RemoveAt(gutterBlock.Blocks.Count - 1);
     }
 
     private bool TryFindPreviewMatchParagraph(

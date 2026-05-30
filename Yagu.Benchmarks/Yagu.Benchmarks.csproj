@@ -39,8 +39,14 @@
     <Compile Include="..\Yagu\Services\SearchQueryParser.cs" Link="Source\Services\SearchQueryParser.cs" />
     <Compile Include="..\Yagu\Services\FileWatchDiagnostics.cs" Link="Source\Services\FileWatchDiagnostics.cs" />
     <Compile Include="..\Yagu\Services\LogService.cs" Link="Source\Services\LogService.cs" />
+    <Compile Include="..\Yagu\Services\DirectOutputSink.cs" Link="Source\Services\DirectOutputSink.cs" />
+    <Compile Include="..\Yagu\Services\ResultStoreTempLocationService.cs" Link="Source\Services\ResultStoreTempLocationService.cs" />
     <Compile Include="..\Yagu\Native\NativeSearcher.cs" Link="Source\Native\NativeSearcher.cs" />
     <Compile Include="..\Yagu\Native\EverythingSdk.cs" Link="Source\Native\EverythingSdk.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\vendor\SharpSevenZip\SharpSevenZip\SharpSevenZip\SharpSevenZip.csproj" />
   </ItemGroup>
 
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)..\yagu-core\target\release\yagu_core.dll')">
