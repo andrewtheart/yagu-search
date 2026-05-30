@@ -5138,6 +5138,7 @@ public sealed partial class MainWindow : Window
         }
 
         FocusSearchOnLaunch();
+        await CheckFirstRunResultStoreTempLocationAsync();
         await CheckEverythingAsync();
         await CheckFirstRunContextMenuAsync();
 
@@ -5436,6 +5437,31 @@ public sealed partial class MainWindow : Window
         }
         LogService.Instance.Info("MainWindow", "FindEverythingExeStandalone: Everything.exe not found in any standard location");
         return null;
+    }
+
+    private async Task CheckFirstRunResultStoreTempLocationAsync()
+    {
+        if (ViewModel.HasChosenSearchResultTempDirectory &&
+            ResultStoreTempLocationService.IsUsableTempDirectory(ViewModel.SearchResultTempDirectory, requireMinimumFreeSpace: false))
+        {
+            return;
+        }
+
+        string? launchDrive = ResultStoreTempLocationService.GetLaunchDriveRoot();
+        var options = ResultStoreTempLocationService.GetWritableDriveOptions(launchDrive);
+
+        var result = await ResultStoreTempLocationWindow.ShowAsync(
+            _hwnd,
+            launchDrive,
+            options,
+            ViewModel.SearchResultTempDirectory);
+
+        if (!result.Accepted)
+            return;
+
+        ViewModel.SearchResultTempDirectory = result.SelectedOption?.TempDirectory ?? Path.GetTempPath();
+        ViewModel.HasChosenSearchResultTempDirectory = true;
+        await ViewModel.PersistSettingsAsync();
     }
 
     // ── First-run context menu prompt ──────────────────────────────────

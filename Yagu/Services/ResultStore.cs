@@ -237,12 +237,26 @@ public sealed class ResultStore : IDisposable
         }
     }
 
-    public static Task CleanupOrphanedTempFilesAsync()
+    public static Task CleanupOrphanedTempFilesAsync(params string?[] tempDirectories)
     {
         var scheduledAtUtc = DateTime.UtcNow;
         return Task.Run(() =>
         {
-            int deleted = DeleteOrphanedTempFiles(Path.GetTempPath(), scheduledAtUtc);
+            var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                Path.GetTempPath(),
+            };
+
+            foreach (var tempDirectory in tempDirectories)
+            {
+                if (!string.IsNullOrWhiteSpace(tempDirectory))
+                    directories.Add(ResultStoreTempLocationService.NormalizeTempDirectory(tempDirectory));
+            }
+
+            int deleted = 0;
+            foreach (var directory in directories)
+                deleted += DeleteOrphanedTempFiles(directory, scheduledAtUtc);
+
             if (deleted > 0)
                 LogService.Instance.Info("ResultStore", $"Deleted {deleted:N0} orphaned Yagu temp result file(s)");
         });

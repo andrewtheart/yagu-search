@@ -1166,6 +1166,11 @@ cores×2)).</td>
 75%).</td>
 </tr>
 <tr>
+<td>Search result temp-file drive</td>
+<td>Drive used for disk-backed result temp files during memory-saving
+mode. Only writable drives with at least 50 GB free are listed.</td>
+</tr>
+<tr>
 <td>SDK channel buffer size</td>
 <td>Path buffer between Everything SDK discovery and search workers
 (default: 4096).</td>
@@ -1802,8 +1807,8 @@ and uses the managed scanner transparently.</p>
 </tr>
 <tr>
 <td>Memory-pressure mode</td>
-<td>Pages result payloads to
-<code>%TEMP%\yagu-results-*.tmp</code>.</td>
+<td>Pages result payloads to the configured search result temp-file
+drive.</td>
 </tr>
 <tr>
 <td>Process memory cap</td>
@@ -1820,6 +1825,10 @@ narrower queries, fewer context lines, or stricter filters.</p>
 <hr />
 <h2 id="logs-and-diagnostics">Logs and Diagnostics</h2>
 <table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
 <thead>
 <tr>
 <th>Data</th>
@@ -1845,7 +1854,8 @@ narrower queries, fewer context lines, or stricter filters.</p>
 </tr>
 <tr>
 <td>Memory-pressure temp files</td>
-<td><code>%TEMP%\yagu-results-*.tmp</code></td>
+<td>Configured temp-file drive under
+<code>Temp\Yagu\yagu-results-*.tmp</code></td>
 </tr>
 <tr>
 <td>Editor backups</td>

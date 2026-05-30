@@ -209,6 +209,82 @@ public sealed partial class SettingsWindow : Window
         _ => "\uE7FC",
     };
 
+    private void AddResultTempDriveSetting(StackPanel parent)
+    {
+        string? launchDrive = ResultStoreTempLocationService.GetLaunchDriveRoot();
+        var options = ResultStoreTempLocationService.GetWritableDriveOptions(launchDrive);
+
+        parent.Children.Add(NextSearchLabel("Search result temp-file drive:"));
+        parent.Children.Add(new TextBlock
+        {
+            Text = $"Yagu was launched from {launchDrive ?? "an unknown drive"}. Choosing a different drive can reduce disk contention. Only writable drives with at least 50 GB free are listed.",
+            FontSize = 11,
+            Opacity = 0.7,
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        if (options.Count == 0)
+        {
+            parent.Children.Add(new TextBlock
+            {
+                Text = "No writable drive with at least 50 GB free is currently available. Yagu will use the Windows temp folder until an eligible drive is selected.",
+                FontSize = 11,
+                Opacity = 0.7,
+                TextWrapping = TextWrapping.Wrap,
+            });
+            return;
+        }
+
+        var picker = new ComboBox
+        {
+            MinWidth = 340,
+            MaxWidth = 520,
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+
+        ResultStoreTempDriveOption? selectedOption = ResultStoreTempLocationService.ChoosePreferredOption(
+            options,
+            _viewModel.SearchResultTempDirectory,
+            launchDrive);
+
+        for (int i = 0; i < options.Count; i++)
+        {
+            picker.Items.Add(new ComboBoxItem
+            {
+                Content = options[i].DisplayName,
+                Tag = options[i],
+            });
+
+            if (Equals(options[i], selectedOption))
+                picker.SelectedIndex = i;
+        }
+
+        void ApplySelectedDrive()
+        {
+            if (picker.SelectedItem is ComboBoxItem item && item.Tag is ResultStoreTempDriveOption option)
+            {
+                _viewModel.SearchResultTempDirectory = option.TempDirectory;
+                _viewModel.HasChosenSearchResultTempDirectory = true;
+            }
+        }
+
+        picker.SelectionChanged += (_, _) => ApplySelectedDrive();
+
+        if (picker.SelectedIndex < 0 && picker.Items.Count > 0)
+            picker.SelectedIndex = 0;
+
+        ApplySelectedDrive();
+
+        parent.Children.Add(picker);
+        parent.Children.Add(new TextBlock
+        {
+            Text = "Temp files will be written under the selected drive's Temp\\Yagu folder starting with the next search.",
+            FontSize = 11,
+            Opacity = 0.6,
+            TextWrapping = TextWrapping.Wrap,
+        });
+    }
+
     private void BuildSettingsContent()
     {
         // ── Search Defaults ──
@@ -485,6 +561,8 @@ public sealed partial class SettingsWindow : Window
 
             g.Children.Add(new TextBlock { Text = "Memory saving mode", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 8, 0, 0) });
             g.Children.Add(new TextBlock { Text = "These two settings control when Yagu enters memory-saving mode. Use one or the other — if the hard cap is set (> 0), it takes precedence over the pressure percentage. Changes apply to the next search.", FontSize = 11, Opacity = 0.7, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
+
+            AddResultTempDriveSetting(g);
 
             g.Children.Add(NextSearchLabel("System memory pressure limit (%, 0 = disabled):"));
             var memPressure = new NumberBox { Value = _viewModel.MemoryPressurePercent, Minimum = 0, Maximum = 100 };

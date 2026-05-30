@@ -64,6 +64,10 @@ public sealed class AppSettings
     public int MemoryLimitMB { get; set; }
     /// <summary>System-wide memory pressure threshold (0-100). Search evicts cached results and switches to memory-saving mode when total machine memory usage exceeds this %. 0 = disabled.</summary>
     public int MemoryPressurePercent { get; set; } = 75;
+    /// <summary>Directory used for memory-saving search result temp files.</summary>
+    public string? SearchResultTempDirectory { get; set; }
+    /// <summary>Whether the user has chosen the search result temp-file location.</summary>
+    public bool HasChosenSearchResultTempDirectory { get; set; }
     /// <summary>When true, show the memory pressure warning label in the results toolbar.</summary>
     public bool ShowMemoryPressureWarningLabel { get; set; } = true;
     /// <summary>When true, show throughput labels and disk utilization sparkline in the bottom status bar.</summary>

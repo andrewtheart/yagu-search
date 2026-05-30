@@ -62,6 +62,7 @@
     <Compile Include="..\Yagu\Services\DirectoryAutoCompleteService.cs" Link="Source\Services\DirectoryAutoCompleteService.cs" />
     <Compile Include="..\Yagu\Services\GitignoreService.cs" Link="Source\Services\GitignoreService.cs" />
     <Compile Include="..\Yagu\Services\DynamicGitignoreMatcher.cs" Link="Source\Services\DynamicGitignoreMatcher.cs" />
+    <Compile Include="..\Yagu\Services\ResultStoreTempLocationService.cs" Link="Source\Services\ResultStoreTempLocationService.cs" />
     <Compile Include="..\Yagu\Services\ResultStore.cs" Link="Source\Services\ResultStore.cs" />
     <Compile Include="..\Yagu\Services\DirectOutputSink.cs" Link="Source\Services\DirectOutputSink.cs" />
     <Compile Include="..\Yagu\Services\FileWatchDiagnostics.cs" Link="Source\Services\FileWatchDiagnostics.cs" />

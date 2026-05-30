@@ -128,6 +128,8 @@ public sealed partial class MainViewModel : ObservableObject
             : HotkeyService.DefaultStartKey.ToString();
         MemoryLimitMB = _settings.MemoryLimitMB;
         MemoryPressurePercent = _settings.MemoryPressurePercent;
+        SearchResultTempDirectory = ResultStoreTempLocationService.NormalizeTempDirectory(_settings.SearchResultTempDirectory);
+        HasChosenSearchResultTempDirectory = _settings.HasChosenSearchResultTempDirectory;
         ShowMemoryPressureWarningLabel = _settings.ShowMemoryPressureWarningLabel;
         ShowStatsForNerds = _settings.ShowStatsForNerds;
         SdkChannelBufferSize = _settings.SdkChannelBufferSize;
@@ -483,6 +485,8 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial string AdminProtectedPathSegments { get; set; } = AppSettings.DefaultAdminProtectedPathSegments;
 
     [ObservableProperty] public partial bool HasCompletedFirstRun { get; set; }
+    [ObservableProperty] public partial string SearchResultTempDirectory { get; set; } = string.Empty;
+    [ObservableProperty] public partial bool HasChosenSearchResultTempDirectory { get; set; }
     [ObservableProperty] public partial bool LimitParallelismOnHdd { get; set; } = true;
     [ObservableProperty] public partial bool BackupBeforeSave { get; set; } = true;
     [ObservableProperty] public partial int WindowFocusBehavior { get; set; } // 0 = MinimizeToTray, 1 = StayOpen, 2 = AlwaysOnTop, 3 = FullWindow
@@ -1328,7 +1332,7 @@ public sealed partial class MainViewModel : ObservableObject
         FileMetadataCache.Clear();
 
         _resultStore?.Dispose();
-        _resultStore = new ResultStore(ChooseResultStoreTempDir());
+        _resultStore = CreateResultStore();
 
         // Reclaim the previous search's result graph on the threadpool so the
         // UI thread isn't blocked by a full compacting GC.
@@ -1374,11 +1378,21 @@ public sealed partial class MainViewModel : ObservableObject
     private bool IsCurrentSearch(int runId, CancellationTokenSource cts) =>
         runId == Volatile.Read(ref _searchRunId) && ReferenceEquals(_cts, cts);
 
-    /// <summary>
-    /// Pick a temp directory on a different fixed drive than the search target to avoid
-    /// I/O contention between reading scanned files and writing evicted results.
-    /// Falls back to the system %TEMP% if no alternative drive is available.
-    /// </summary>
+    private ResultStore CreateResultStore()
+    {
+        string? tempDir = ChooseResultStoreTempDir();
+        try
+        {
+            return new ResultStore(tempDir);
+        }
+        catch (Exception ex) when (!string.IsNullOrWhiteSpace(tempDir))
+        {
+            LogService.Instance.Warning("ResultStore", $"Could not create result store in '{tempDir}', falling back to Windows temp", ex);
+            return new ResultStore();
+        }
+    }
+
+    /// <summary>Pick the configured temp directory for disk-backed search results.</summary>
     private string? ChooseResultStoreTempDir()
     {
         // Override via environment variable (e.g. for profiling on the same fast SSD)
@@ -1386,9 +1400,10 @@ public sealed partial class MainViewModel : ObservableObject
         if (!string.IsNullOrWhiteSpace(envOverride))
             return envOverride;
 
-        // Always use C:\Temp\Yagu — the fast SSD with plenty of space.
-        // Avoids accidentally picking D:\ or other small/slow drives.
-        return @"C:\Temp\Yagu";
+        if (!string.IsNullOrWhiteSpace(SearchResultTempDirectory))
+            return SearchResultTempDirectory;
+
+        return Path.GetTempPath();
     }
 
     private string BuildProgressStatus(SearchProgress progress)
@@ -2059,6 +2074,8 @@ public sealed partial class MainViewModel : ObservableObject
             : HotkeyService.DefaultStartKey.ToString();
         _settings.MemoryLimitMB = MemoryLimitMB;
         _settings.MemoryPressurePercent = MemoryPressurePercent;
+        _settings.SearchResultTempDirectory = ResultStoreTempLocationService.NormalizeTempDirectory(SearchResultTempDirectory);
+        _settings.HasChosenSearchResultTempDirectory = HasChosenSearchResultTempDirectory;
         _settings.ShowMemoryPressureWarningLabel = ShowMemoryPressureWarningLabel;
         _settings.ShowStatsForNerds = ShowStatsForNerds;
         _settings.SdkChannelBufferSize = SdkChannelBufferSize;

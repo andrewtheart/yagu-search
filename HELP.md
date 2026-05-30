@@ -311,6 +311,7 @@ Open Settings from the **gear** button in the title bar. Settings are saved to `
 | File-listing backend | Auto, Everything SDK, `es.exe`, or .NET enumeration. |
 | Process memory hard cap (MB) | Working-set limit before memory-saving activates. |
 | System memory pressure limit (%) | System RAM usage threshold for memory-saving mode (default: 75%). |
+| Search result temp-file drive | Drive used for disk-backed result temp files during memory-saving mode. Only writable drives with at least 50 GB free are listed. |
 | SDK channel buffer size | Path buffer between Everything SDK discovery and search workers (default: 4096). |
 | Content-search file size (MB) | Max individual file size for content search (default: 100 MB). |
 | Max matches per file | Cap on stored matches per file (0 = unlimited). |
@@ -620,7 +621,7 @@ If the native DLL is missing or incompatible, Yagu logs the reason and uses the 
 | Max results | Stops runaway result streams. |
 | Max file size | Prevents accidental reads of enormous files. |
 | Skip binary / extensions | Reduces unnecessary reads. |
-| Memory-pressure mode | Pages result payloads to `%TEMP%\yagu-results-*.tmp`. |
+| Memory-pressure mode | Pages result payloads to the configured search result temp-file drive. |
 | Process memory cap | Hard limit on working set before eviction kicks in. |
 | System memory pressure | Activates when system-wide RAM usage exceeds threshold. |
 
@@ -636,7 +637,7 @@ If memory-saving mode appears often, reduce result volume with narrower queries,
 | Current log | `%APPDATA%\Yagu\yagu.log` |
 | Rotated log | `%APPDATA%\Yagu\yagu.log.old` |
 | Crash log | `yagu-crash.log` (next to the executable) |
-| Memory-pressure temp files | `%TEMP%\yagu-results-*.tmp` |
+| Memory-pressure temp files | Configured temp-file drive under `Temp\Yagu\yagu-results-*.tmp` |
 | Editor backups | `{filename}.yagubak` (same directory as original) |
 
 Log levels: None → Critical → Warning → Info → Verbose. Use Info for normal troubleshooting. Verbose adds overhead during large searches.

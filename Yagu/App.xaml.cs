@@ -32,7 +32,7 @@ public partial class App : Application
         LogService.Instance.RotateIfNeeded();
         LogService.Init((LogLevel)settings.LogLevelIndex, (LogLevel)settings.ConsoleLogLevelIndex);
         FileLister.Backend = (FileListerBackend)settings.FileListerBackendIndex;
-        _ = ResultStore.CleanupOrphanedTempFilesAsync();
+        _ = ResultStore.CleanupOrphanedTempFilesAsync(settings.SearchResultTempDirectory);
 
         // Eagerly load System.IO.Compression on a background thread so the
         // first archive search doesn't pay the ~20 ms assembly-load + JIT cost.
