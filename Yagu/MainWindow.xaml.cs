@@ -2843,6 +2843,12 @@ public sealed partial class MainWindow : Window
         }
 
         SetCurrentMatchToMatch(section, paragraph, matchInPara);
+        try
+        {
+            section.UpdateLayout();
+            PreviewScrollViewer.UpdateLayout();
+        }
+        catch { }
         ScrollPreviewToLine(section, paragraph);
     }
 
