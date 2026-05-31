@@ -155,6 +155,7 @@
   -->
   <PropertyGroup>
     <BuildRustCore Condition="'$(BuildRustCore)' == ''">true</BuildRustCore>
+    <RustProfile Condition="'$(RustProfile)' == '' And '$(Configuration)' == 'Debug'">profiling</RustProfile>
     <RustProfile Condition="'$(RustProfile)' == ''">release</RustProfile>
     <RustCargoProfileArgs Condition="'$(RustProfile)' == 'release'">--release</RustCargoProfileArgs>
     <RustCargoProfileArgs Condition="'$(RustCargoProfileArgs)' == ''">--profile $(RustProfile)</RustCargoProfileArgs>

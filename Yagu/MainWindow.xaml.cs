@@ -1074,7 +1074,6 @@ public sealed partial class MainWindow : Window
         public int MatchCount { get; init; } // pre-computed match count for nav label
     }
     private readonly Dictionary<RichTextBlock, LazySection> _lazySections = new();
-    private readonly HashSet<RichTextBlock> _singleLineSections = new();
     private int _lazyMatchCount; // total matches in un-rendered sections
     private int _previewTotalMatchCount;
     private int _previewTotalFileCount;
@@ -1590,7 +1589,6 @@ public sealed partial class MainWindow : Window
         InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
         _sectionMatchNavs.Clear();
-        _singleLineSections.Clear();
         _sectionGutterBlocks.Clear();
         SetHorizontalPreviewScroll(PreviewScrollViewer, enabled: false);
         EnsurePreviewViewChangedHooked();
@@ -2037,6 +2035,7 @@ public sealed partial class MainWindow : Window
 
         _sectionMatchNavs.TryGetValue(section, out var sn);
         int beforeCount = _matchParagraphs.Count;
+        bool truncatePreviewLines = ShouldTruncatePreviewLines();
 
         int consumed = 0;
         if (ov.IsHighlightMode && ov.AllLines != null)
@@ -2054,14 +2053,16 @@ public sealed partial class MainWindow : Window
                 out consumed,
                 out _,
                 out int lastRenderedLine,
-                ov.LastRenderedLine);
+                ov.LastRenderedLine,
+                truncatePreviewLines);
             ov.LastRenderedLine = Math.Max(ov.LastRenderedLine, lastRenderedLine);
 
             // Fallback for single-line files: all results are on an already-rendered
             // line, so AppendHighlightMatchWindows returns 0. Render individual
             // truncated windows centered on each match's column position.
-            if (consumed == 0 && ov.RemainingResults.Count > 0)
+            if (truncatePreviewLines && consumed == 0 && ov.RemainingResults.Count > 0)
             {
+                AddGapIndicator(section);
                 int blocksAdded = 0;
                 for (int ri = 0; ri < chunkSize && ri < ov.RemainingResults.Count; ri++)
                 {
@@ -2079,6 +2080,7 @@ public sealed partial class MainWindow : Window
                         section, line, r.LineNumber, r, ov.Rx,
                         _matchParagraphs, sn,
                         out int addedParagraphs, out _,
+                        truncate: truncatePreviewLines,
                         continuationGutter: true);
                     blocksAdded += addedParagraphs;
                     consumed++;
@@ -2111,7 +2113,7 @@ public sealed partial class MainWindow : Window
                         break;
 
                     bool isMatchLine = matchLineNums.Contains(lineNum);
-                    AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, ov.Rx, truncate: true,
+                    AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, ov.Rx, truncate: truncatePreviewLines,
                         lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs);
                     blocksAdded += addedParagraphs;
                 }
@@ -2978,6 +2980,7 @@ public sealed partial class MainWindow : Window
         // Determine the last rendered line to avoid backwards line numbers when appending forward.
         int lastRenderedLine = isHighlight ? GetSectionLastRenderedLine(section) : 0;
         int firstRenderedLine = isHighlight && section.Blocks.Count > 0 ? GetSectionFirstRenderedLine(section) : 0;
+        bool truncatePreviewLines = ShouldTruncatePreviewLines();
 
         var lines = GetPreviewLines(result, allLines, previewLines, fullFile: false);
 
@@ -2994,6 +2997,9 @@ public sealed partial class MainWindow : Window
                 if (!targetLineAlreadyRendered)
                     return;
 
+                if (!truncatePreviewLines)
+                    return;
+
                 string lineForWindow = (allLines != null && result.LineNumber >= 1 && result.LineNumber <= allLines.Length)
                     ? allLines[result.LineNumber - 1]
                     : result.MatchLine;
@@ -3008,6 +3014,7 @@ public sealed partial class MainWindow : Window
                     sectionNav,
                     out _,
                     out int matchEntriesAdded,
+                    truncate: truncatePreviewLines,
                     continuationGutter: true);
 
                 if (matchEntriesAdded == 0)
@@ -3047,7 +3054,7 @@ public sealed partial class MainWindow : Window
                     foreach (var (line, lineNum) in lines)
                     {
                         bool isMatchLine = lineNum == result.LineNumber;
-                        AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, result, rx, truncate: true, _matchParagraphs, sectionNav, out _);
+                        AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, result, rx, truncate: truncatePreviewLines, _matchParagraphs, sectionNav, out _);
                     }
 
                     // Add gap indicator between new and old content.
@@ -3086,7 +3093,7 @@ public sealed partial class MainWindow : Window
             foreach (var (line, lineNum) in lines)
             {
                 bool isMatchLine = lineNum == result.LineNumber;
-                AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, result, rx, truncate: true, _matchParagraphs, sectionNav, out _);
+                AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, result, rx, truncate: truncatePreviewLines, _matchParagraphs, sectionNav, out _);
             }
         }
 
@@ -3474,9 +3481,8 @@ public sealed partial class MainWindow : Window
         ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || wrap);
         foreach (var block in EnumeratePreviewSectionBlocks())
         {
-            var effectiveWrapping = _singleLineSections.Contains(block) ? TextWrapping.Wrap : wrapping;
-            if (block.TextWrapping != effectiveWrapping)
-                block.TextWrapping = effectiveWrapping;
+            if (block.TextWrapping != wrapping)
+                block.TextWrapping = wrapping;
         }
         if (PreviewSectionsPanel.Visibility != Visibility.Visible)
             ApplyPreviewHorizontalScrollForWrap(PreviewScrollViewer, wrap);
@@ -3533,9 +3539,8 @@ public sealed partial class MainWindow : Window
                 // handler in AddPreviewSection).
                 if (expander.IsExpanded && expander.Tag is RichTextBlock block)
                 {
-                    var effectiveWrapping = _singleLineSections.Contains(block) ? TextWrapping.Wrap : wrapping;
-                    if (block.TextWrapping != effectiveWrapping)
-                        block.TextWrapping = effectiveWrapping;
+                    if (block.TextWrapping != wrapping)
+                        block.TextWrapping = wrapping;
 
                     processed++;
                     // Yield to the UI thread between heavy sections so the toggle remains
@@ -5020,24 +5025,62 @@ public sealed partial class MainWindow : Window
         string textToCopy;
         if (withLineNumbers)
         {
-            // The selected text already contains gutter line numbers from the paragraph Runs.
-            // Just copy it as-is.
-            textToCopy = selectedText;
+            // The gutter is in a separate RichTextBlock for multi-section previews,
+            // so SelectedText doesn't include line numbers. Reconstruct them by
+            // walking selected paragraphs and prepending line numbers from metadata.
+            var selStart = block.SelectionStart;
+            var selEnd = block.SelectionEnd;
+            if (selStart is null || selEnd is null)
+            {
+                textToCopy = selectedText;
+            }
+            else
+            {
+                int startOff = selStart.Offset;
+                int endOff = selEnd.Offset;
+                var sb = new StringBuilder();
+                bool first = true;
+                foreach (var b in block.Blocks)
+                {
+                    if (b is not Paragraph para) continue;
+                    var pStart = para.ContentStart;
+                    var pEnd = para.ContentEnd;
+                    if (pStart is null || pEnd is null) continue;
+                    if (pEnd.Offset <= startOff) continue;
+                    if (pStart.Offset >= endOff) break;
+
+                    // Extract text from paragraph inlines
+                    var paraText = new StringBuilder();
+                    foreach (var inline in para.Inlines)
+                    {
+                        if (inline is Run run)
+                            paraText.Append(run.Text);
+                    }
+
+                    string lineText = paraText.ToString();
+                    if (!first) sb.AppendLine();
+                    first = false;
+
+                    if (s_paragraphLineNumbers.TryGetValue(para, out var tag) && tag is int lineNum && lineNum > 0)
+                        sb.Append($"{lineNum,5} │ {lineText}");
+                    else
+                        sb.Append($"      │ {lineText}");
+                }
+                textToCopy = sb.ToString();
+            }
         }
         else
         {
-            // Strip the gutter prefix: pattern is  "│NN │ " or " NN (cont) │ " at start of each line.
-            // The gutter format is: indicator char + padded number + optional " (cont)" + " │ "
+            // Strip any inline gutter prefix (legacy path where gutter is in the same block).
+            // Pattern: indicator char + padded number + " │ "
             var lines = selectedText.Split('\n');
             var sb = new StringBuilder();
             for (int i = 0; i < lines.Length; i++)
             {
                 string line = lines[i].TrimEnd('\r');
-                // Find the gutter separator "│ " and strip everything up to and including it
                 int sepIdx = line.IndexOf("│ ", StringComparison.Ordinal);
                 if (sepIdx >= 0)
                 {
-                    // There may be two separators (indicator│ and gutter│), take the last one
                     int secondSep = line.IndexOf("│ ", sepIdx + 2, StringComparison.Ordinal);
                     if (secondSep >= 0)
                         line = line[(secondSep + 2)..];
@@ -5267,6 +5310,7 @@ public sealed partial class MainWindow : Window
             var (section, _) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
 
             fileContents.TryGetValue(filePath, out string[]? allLines);
+            bool truncatePreviewLines = ShouldTruncatePreviewLines();
             int parasInFile = 0;
 
             int renderedResults = 0;
@@ -5299,7 +5343,7 @@ public sealed partial class MainWindow : Window
 
                     bool isMatchLine = matchLineNums.Contains(lineNum);
                     _sectionMatchNavs.TryGetValue(section, out var sn);
-                    var firstPara = AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true,
+                    var firstPara = AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: truncatePreviewLines,
                         lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs);
                     parasInFile += addedParagraphs;
 
@@ -5401,6 +5445,7 @@ public sealed partial class MainWindow : Window
             int startingBlocks = section.Blocks.Count;
 
             fileContents.TryGetValue(filePath, out string[]? allLines);
+            bool truncatePreviewLines = ShouldTruncatePreviewLines();
 
             bool initiallyCapped = results.Count > EffectiveMaxMatchesPerSection;
             var cappedResults = initiallyCapped ? results.GetRange(0, EffectiveMaxMatchesPerSection) : results;
@@ -5450,7 +5495,7 @@ public sealed partial class MainWindow : Window
                         bool isMatchLine = matchByLine.TryGetValue(lineNum, out var matchResult);
                         matchResult ??= cappedResults[0];
                         _sectionMatchNavs.TryGetValue(section, out var sn);
-                        var firstPara = AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatchLine, matchResult, rx, truncate: true, _matchParagraphs, sn, out _);
+                        var firstPara = AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatchLine, matchResult, rx, truncate: truncatePreviewLines, _matchParagraphs, sn, out _);
                         lastRenderedLine1 = lineNum;
 
                         if (scrollTarget is not null && isMatchLine && lineNum == scrollTarget.LineNumber
@@ -5480,7 +5525,7 @@ public sealed partial class MainWindow : Window
 
                         bool isMatchLine = fallbackMatchLines.Contains(lineNum);
                         _sectionMatchNavs.TryGetValue(section, out var sn);
-                        var firstPara = AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true,
+                        var firstPara = AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: truncatePreviewLines,
                             lineNum == r.LineNumber ? _matchParagraphs : null, sn, out _);
 
                         if (scrollTarget is not null && lineNum == r.LineNumber
@@ -5524,7 +5569,8 @@ public sealed partial class MainWindow : Window
                     out int consumed,
                     out _,
                     out int appendLastRenderedLine,
-                    lastRenderedLine1);
+                    lastRenderedLine1,
+                    truncatePreviewLines);
                 lastRenderedLine1 = Math.Max(lastRenderedLine1, appendLastRenderedLine);
                 renderedCount = Math.Min(results.Count, renderedCount + consumed);
             }

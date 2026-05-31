@@ -2497,6 +2497,7 @@ public sealed partial class MainWindow
 
         _sectionMatchNavs.TryGetValue(section, out var sn);
         int beforeCount = _matchParagraphs.Count;
+        bool truncatePreviewLines = ShouldTruncatePreviewLines();
 
         // Stop early once we've added enough match entries to keep the UI
         // responsive — dense lines can produce 20×+ match entries per result.
@@ -2516,15 +2517,17 @@ public sealed partial class MainWindow
                 out consumed,
                 out _,
                 out int lastRenderedLine,
-                ov.LastRenderedLine);
+                ov.LastRenderedLine,
+                truncatePreviewLines);
             ov.LastRenderedLine = Math.Max(ov.LastRenderedLine, lastRenderedLine);
 
             // Fallback: all remaining results are on already-rendered but truncated
             // lines (e.g. single-line minified JSON with 100K+ matches). Render
             // additional truncation windows centered around each next result so the
             // user can progressively navigate through all matches on the line.
-            if (consumed == 0 && ov.RemainingResults.Count > 0)
+            if (truncatePreviewLines && consumed == 0 && ov.RemainingResults.Count > 0)
             {
+                AddGapIndicator(section);
                 int entriesBefore = _matchParagraphs.Count;
                 int maxResults = Math.Min(chunkSize, ov.RemainingResults.Count);
                 for (int ri = 0; ri < maxResults; ri++)
@@ -2546,6 +2549,7 @@ public sealed partial class MainWindow
                         sn,
                         out _,
                         out _,
+                        truncate: truncatePreviewLines,
                         continuationGutter: true);
                     consumed++;
                 }
@@ -2577,7 +2581,7 @@ public sealed partial class MainWindow
                         break;
 
                     bool isMatchLine = matchLineNums.Contains(lineNum);
-                    AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, ov.Rx, truncate: true,
+                    AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, ov.Rx, truncate: truncatePreviewLines,
                         lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs);
                     blocksAdded += addedParagraphs;
                 }

@@ -504,8 +504,12 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(highlight,
             "distinctMatchLines.Length == 1",
             "bool isMatchLine = lineNum == matchLineNumber;",
-            "truncate: true",
+            "truncate: truncatePreviewLines",
             "fall through to AppendHighlightMatchWindows");
+        Assert.Contains("bool truncatePreviewLines = ShouldTruncatePreviewLines()", highlight);
+        Assert.Contains("=> ViewModel.PreviewWordWrap", MainWindowSource);
+        Assert.DoesNotContain("allLines is { Length: 1 }", MainWindowSource);
+        Assert.DoesNotContain("_singleLineSections", MainWindowSource);
 
         string multiHighlight = ExtractMethodWindow(MainWindowSource, "ShowMultiHighlightPreviewAsync");
         Assert.Contains("actualMatchEntries = _matchParagraphs.Count - sectionMatchStart", multiHighlight);
@@ -525,12 +529,19 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("CountPrefixResultsThroughLine", appendWindows);
         Assert.Contains("AddPreviewLineParagraphsAroundResult", appendWindows);
         Assert.Contains("continuationGutter: true", appendWindows);
+        Assert.Contains("if (!truncatePreviewLines)", appendWindows);
 
         string aroundResult = ExtractMethodWindow(MainWindowSource, "AddPreviewLineParagraphsAroundResult");
+        Assert.Contains("bool truncate = true", aroundResult);
         Assert.Contains("firstParagraph is not null || continuationGutter", aroundResult);
+
+        string getPreviewLines = ExtractMethodWindow(MainWindowSource, "GetPreviewLines");
+        Assert.Contains("lines.Add((allLines[i], i + 1))", getPreviewLines);
+        Assert.DoesNotContain("r.MatchLine : allLines[i]", getPreviewLines);
 
         string expandChunk = ExtractMethodWindow(MainWindowSource, "ExpandSectionNextChunk");
         Assert.Contains("MaxPreviewBlocksPerExpandChunk", expandChunk);
+        Assert.Contains("truncatePreviewLines && consumed == 0", expandChunk);
     }
 
     [Fact]

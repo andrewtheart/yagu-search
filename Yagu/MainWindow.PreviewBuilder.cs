@@ -58,6 +58,9 @@ public sealed partial class MainWindow
     /// <summary>XAML paragraph chunk size for very long physical lines; all text is still rendered.</summary>
     private const int PreviewLineLayoutSegmentChars = 4096;
 
+    private bool ShouldTruncatePreviewLines()
+        => ViewModel.PreviewWordWrap;
+
     /// <summary>
     /// Maximum matches to render per file section before truncating.
     /// Prevents multi-second UI freezes when a single file has hundreds
@@ -391,7 +394,6 @@ public sealed partial class MainWindow
                     else
                         BuildConcatenatedSection(section, results, allLines, previewLines, rx);
 
-                    ApplySingleLineAutoWrap(section, allLines);
                 }
                 else
                 {
@@ -482,6 +484,7 @@ public sealed partial class MainWindow
         string[]? allLines, int previewLines, Regex? rx)
     {
         var buildSw = System.Diagnostics.Stopwatch.StartNew();
+        bool truncatePreviewLines = ShouldTruncatePreviewLines();
         int parasBuilt = 0;
         int renderedResults = 0;
         int startingBlocks = section.Blocks.Count;
@@ -515,7 +518,7 @@ public sealed partial class MainWindow
 
                 bool isMatchLine = lineNum == r.LineNumber;
                 _sectionMatchNavs.TryGetValue(section, out var sn);
-                AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true,
+                AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: truncatePreviewLines,
                     lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs);
                 parasBuilt += addedParagraphs;
             }
@@ -551,6 +554,7 @@ public sealed partial class MainWindow
         string[]? allLines, int previewLines, Regex? rx)
     {
         var buildSw = System.Diagnostics.Stopwatch.StartNew();
+        bool truncatePreviewLines = ShouldTruncatePreviewLines();
         int parasBuilt = 0;
         int parasSinceYield = 0;
         int yieldCount = 0;
@@ -587,7 +591,7 @@ public sealed partial class MainWindow
                         isMatchLine,
                         matchResult,
                         rx,
-                        truncate: true,
+                        truncate: truncatePreviewLines,
                         isMatchLine ? _matchParagraphs : null,
                         singleLineSectionNav,
                         out int addedParagraphs);
@@ -644,7 +648,7 @@ public sealed partial class MainWindow
                     bool isMatchLine = matchByLine.TryGetValue(lineNum, out var matchResult);
                     matchResult ??= cappedResults[0];
                     _sectionMatchNavs.TryGetValue(section, out var sn);
-                    AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatchLine, matchResult, rx, truncate: true, _matchParagraphs, sn, out int addedParagraphs);
+                    AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatchLine, matchResult, rx, truncate: truncatePreviewLines, _matchParagraphs, sn, out int addedParagraphs);
                     lastRenderedLine1 = lineNum;
                     parasBuilt += addedParagraphs;
                     parasSinceYield += addedParagraphs;
@@ -674,7 +678,7 @@ public sealed partial class MainWindow
 
                     bool isMatchLine = matchLineNums.Contains(lineNum);
                     _sectionMatchNavs.TryGetValue(section, out var sn);
-                    AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: true,
+                    AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: truncatePreviewLines,
                         lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs);
                     parasBuilt += addedParagraphs;
                     parasSinceYield += addedParagraphs;
@@ -715,7 +719,8 @@ public sealed partial class MainWindow
                 out int consumed,
                 out int addedParagraphs,
                 out int appendLastRenderedLine,
-                lastRenderedLine1);
+                lastRenderedLine1,
+                truncatePreviewLines);
             lastRenderedLine1 = Math.Max(lastRenderedLine1, appendLastRenderedLine);
             renderedCount = Math.Min(results.Count, renderedCount + consumed);
             parasBuilt += addedParagraphs;
@@ -818,8 +823,6 @@ public sealed partial class MainWindow
             await BuildHighlightSectionAsync(section, lazy.Results, allLines, lazy.PreviewLines, rx);
         else
             BuildConcatenatedSection(section, lazy.Results, allLines, lazy.PreviewLines, rx);
-
-        ApplySingleLineAutoWrap(section, allLines);
 
         _lazyMatchCount -= lazy.MatchCount;
         matSw.Stop();
@@ -1091,8 +1094,6 @@ public sealed partial class MainWindow
             section.Blocks.Add(para);
         }
 
-        ApplySingleLineAutoWrap(section, allLines);
-
         // Update navigation state
         UpdateMatchNavPanel();
         UpdateSectionMatchNavPanels();
@@ -1127,8 +1128,7 @@ public sealed partial class MainWindow
             }
             for (int i = startLine; i <= endLine; i++)
             {
-                var line = !fullFile && i == matchIdx ? r.MatchLine : allLines[i];
-                lines.Add((line, i + 1));
+                lines.Add((allLines[i], i + 1));
             }
         }
         else
@@ -1167,22 +1167,17 @@ public sealed partial class MainWindow
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
 
         int lineCount = 0;
+        bool truncatePreviewLines = !fullFile && ShouldTruncatePreviewLines();
         var lines = GetPreviewLines(r, allLines, ViewModel.PreviewContextLines, fullFile);
         foreach (var (line, lineNum) in lines)
         {
             bool isMatchLine = lineNum == r.LineNumber;
-            AddPreviewLineParagraphs(PreviewBlock, line, lineNum, isMatchLine, r, rx, truncate: !fullFile, null, null, out int addedParagraphs);
+            AddPreviewLineParagraphs(PreviewBlock, line, lineNum, isMatchLine, r, rx, truncate: truncatePreviewLines, null, null, out int addedParagraphs);
             lineCount += addedParagraphs;
         }
         singleSw.Stop();
         LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync complete: lines={lineCount}, blocks={PreviewBlock.Blocks.Count}, elapsed={singleSw.ElapsedMilliseconds}ms");
 
-        // Auto-enable word wrap for single-line files so content is visible without horizontal scrolling.
-        if (allLines is { Length: 1 } || (!fullFile && lineCount == 1))
-        {
-            PreviewBlock.TextWrapping = TextWrapping.Wrap;
-            ApplyPreviewHorizontalScrollForWrap(PreviewScrollViewer, wrap: true);
-        }
         }
         finally
         {
@@ -1381,8 +1376,7 @@ public sealed partial class MainWindow
                     // Re-apply the current wrap state in case the user toggled wrap while
                     // this section was collapsed (we skip collapsed sections in
                     // ApplyWordWrapAsync to keep the toggle responsive for huge previews).
-                    // Single-line files always stay wrapped regardless of the user toggle.
-                    var wrap = ViewModel.PreviewWordWrap || _singleLineSections.Contains(b);
+                    var wrap = ViewModel.PreviewWordWrap;
                     b.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
                     if (exp.Content is Grid eg && eg.Children.OfType<ScrollViewer>().FirstOrDefault() is ScrollViewer scroller)
                         ApplyPreviewHorizontalScrollForWrap(scroller, wrap);
@@ -1611,7 +1605,6 @@ public sealed partial class MainWindow
 
                 // Remove per-section match nav data
                 _sectionMatchNavs.Remove(block);
-                _singleLineSections.Remove(block);
                 _sectionGutterBlocks.Remove(block);
                 _expanderFilePaths.Remove(expander);
                 _expanderHeaderArgs.Remove(expander);
@@ -2003,22 +1996,6 @@ public sealed partial class MainWindow
         return current > max ? current : max;
     }
 
-    /// <summary>
-    /// If the file is a single line, force word wrap on the section so content is
-    /// visible without horizontal scrolling.
-    /// </summary>
-    private void ApplySingleLineAutoWrap(RichTextBlock section, string[]? allLines)
-    {
-        if (allLines is not { Length: 1 }) return;
-
-        _singleLineSections.Add(section);
-        section.TextWrapping = TextWrapping.Wrap;
-
-        // Also disable horizontal scroll on the section's ScrollViewer.
-        if (_sectionMatchNavs.TryGetValue(section, out var sn) && sn.Scroller is ScrollViewer sv)
-            ApplyPreviewHorizontalScrollForWrap(sv, wrap: true);
-    }
-
     private sealed record PreviewTextDocument(string Text, Encoding Encoding, long ByteLength, int MaxLineLength);
 
     private sealed record PreviewEditorChunk(string Text, Encoding Encoding, long TotalByteLength, long NextByteOffset, int MaxLineLength);
@@ -2286,9 +2263,13 @@ public sealed partial class MainWindow
         SectionMatchNav? sectionNav,
         out int paragraphsAdded,
         out int matchEntriesAdded,
+        bool truncate = true,
         bool continuationGutter = false)
     {
-        var window = TruncatePreviewLineAroundResult(line, result, rx);
+        line ??= string.Empty;
+        var window = truncate
+            ? TruncatePreviewLineAroundResult(line, result, rx)
+            : new PreviewLineWindow(line, 0, line.Length);
         _sectionGutterBlocks.TryGetValue(section, out var gutterBlock);
         Paragraph? firstParagraph = null;
         bool addedMatchEntries = false;
@@ -2392,7 +2373,8 @@ public sealed partial class MainWindow
         out int consumedResults,
         out int paragraphsAdded,
         out int lastRenderedLine,
-        int previouslyRenderedLine = 0)
+        int previouslyRenderedLine = 0,
+        bool truncatePreviewLines = true)
     {
         consumedResults = 0;
         paragraphsAdded = 0;
@@ -2429,6 +2411,17 @@ public sealed partial class MainWindow
             // windows around each result so navigation/highlighting stays one
             // entry per selected match instead of collapsing by line number.
             int maxResults = Math.Min(anchorLimit, pendingResults.Count);
+            if (!truncatePreviewLines)
+            {
+                consumedResults = maxResults;
+                for (int i = 0; i < maxResults; i++)
+                    lastRenderedLine = Math.Max(lastRenderedLine, pendingResults[i].LineNumber);
+                return 0;
+            }
+
+            AddGapIndicator(section);
+            paragraphsAdded++;
+
             for (int i = 0; i < maxResults; i++)
             {
                 if (addedMatchEntries >= maxAdditionalMatchEntries || paragraphsAdded >= maxAdditionalBlocks)
@@ -2452,6 +2445,7 @@ public sealed partial class MainWindow
                     sectionNav,
                     out int addedParagraphs,
                     out int matchEntriesAdded,
+                    truncate: truncatePreviewLines,
                     continuationGutter: true);
 
                 paragraphsAdded += addedParagraphs;
@@ -2501,7 +2495,7 @@ public sealed partial class MainWindow
                     isMatchLine,
                     matchResult,
                     rx,
-                    truncate: true,
+                    truncate: truncatePreviewLines,
                     _matchParagraphs,
                     sectionNav,
                     out int addedParagraphs);

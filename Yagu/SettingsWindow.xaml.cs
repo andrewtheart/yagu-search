@@ -42,6 +42,11 @@ public sealed partial class SettingsWindow : Window
         appWindow.Resize(new SizeInt32(w, h));
         CenterOverOwner(appWindow, mainHwnd, w, h);
 
+        // Set window icon to match the main Yagu window
+        var icoPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "yagu.ico");
+        if (System.IO.File.Exists(icoPath))
+            appWindow.SetIcon(icoPath);
+
         BuildSettingsContent();
         TabList.SelectedIndex = 0;
     }
@@ -863,6 +868,52 @@ public sealed partial class SettingsWindow : Window
                 Opacity = 0.6,
                 TextWrapping = TextWrapping.Wrap,
             });
+
+            g.Children.Add(new TextBlock { Text = "File log level:", Margin = new Thickness(0, 12, 0, 0) });
+            var fileLogRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
+            var fileLogLevel = new ComboBox();
+            fileLogLevel.Items.Add("None (logging disabled)");
+            fileLogLevel.Items.Add("Critical (errors only)");
+            fileLogLevel.Items.Add("Warning (errors + warnings)");
+            fileLogLevel.Items.Add("Info (general activity)");
+            fileLogLevel.Items.Add("Verbose (all details, may slow performance)");
+            fileLogLevel.SelectedIndex = _viewModel.FileLogLevelIndex + 1;
+            var fileLogWarn = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Visibility = Visibility.Collapsed, VerticalAlignment = VerticalAlignment.Center };
+            fileLogWarn.Children.Add(new FontIcon { Glyph = "\uE7BA", FontSize = 14, Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gold) });
+            fileLogWarn.Children.Add(new TextBlock { Text = "Verbose logging will degrade performance", FontSize = 11, Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gold), VerticalAlignment = VerticalAlignment.Center });
+            if (fileLogLevel.SelectedIndex == 4) fileLogWarn.Visibility = Visibility.Visible;
+            fileLogLevel.SelectionChanged += (_, _) =>
+            {
+                _viewModel.FileLogLevelIndex = fileLogLevel.SelectedIndex - 1;
+                fileLogWarn.Visibility = fileLogLevel.SelectedIndex == 4 ? Visibility.Visible : Visibility.Collapsed;
+            };
+            fileLogRow.Children.Add(fileLogLevel);
+            fileLogRow.Children.Add(fileLogWarn);
+            g.Children.Add(fileLogRow);
+
+            g.Children.Add(new TextBlock { Text = "Console log level:" });
+            var consoleLogRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
+            var consoleLogLevel = new ComboBox();
+            consoleLogLevel.Items.Add("None (logging disabled)");
+            consoleLogLevel.Items.Add("Critical (errors only)");
+            consoleLogLevel.Items.Add("Warning (errors + warnings)");
+            consoleLogLevel.Items.Add("Info (general activity)");
+            consoleLogLevel.Items.Add("Verbose (all details, may slow performance)");
+            consoleLogLevel.SelectedIndex = _viewModel.ConsoleLogLevelIndex + 1;
+            var consoleLogWarn = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Visibility = Visibility.Collapsed, VerticalAlignment = VerticalAlignment.Center };
+            consoleLogWarn.Children.Add(new FontIcon { Glyph = "\uE7BA", FontSize = 14, Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gold) });
+            consoleLogWarn.Children.Add(new TextBlock { Text = "Verbose logging will degrade performance", FontSize = 11, Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gold), VerticalAlignment = VerticalAlignment.Center });
+            if (consoleLogLevel.SelectedIndex == 4) consoleLogWarn.Visibility = Visibility.Visible;
+            consoleLogLevel.SelectionChanged += (_, _) =>
+            {
+                _viewModel.ConsoleLogLevelIndex = consoleLogLevel.SelectedIndex - 1;
+                consoleLogWarn.Visibility = consoleLogLevel.SelectedIndex == 4 ? Visibility.Visible : Visibility.Collapsed;
+            };
+            consoleLogRow.Children.Add(consoleLogLevel);
+            consoleLogRow.Children.Add(consoleLogWarn);
+            g.Children.Add(consoleLogRow);
+
+            g.Children.Add(new TextBlock { Text = $"Log file: {LogService.DefaultLogPath()}", FontSize = 11, Opacity = 0.6 });
         }
 
         // ── General ──
@@ -920,29 +971,7 @@ public sealed partial class SettingsWindow : Window
             recent.ValueChanged += (_, args) => _viewModel.MaxRecentItems = (int)args.NewValue;
             g.Children.Add(recent);
 
-            g.Children.Add(new TextBlock { Text = "File log level:" });
-            var fileLogLevel = new ComboBox();
-            fileLogLevel.Items.Add("None (logging disabled)");
-            fileLogLevel.Items.Add("Critical (errors only)");
-            fileLogLevel.Items.Add("Warning (errors + warnings)");
-            fileLogLevel.Items.Add("Info (general activity)");
-            fileLogLevel.Items.Add("Verbose (all details, may slow performance)");
-            fileLogLevel.SelectedIndex = _viewModel.FileLogLevelIndex + 1;
-            fileLogLevel.SelectionChanged += (_, _) => _viewModel.FileLogLevelIndex = fileLogLevel.SelectedIndex - 1;
-            g.Children.Add(fileLogLevel);
 
-            g.Children.Add(new TextBlock { Text = "Console log level:" });
-            var consoleLogLevel = new ComboBox();
-            consoleLogLevel.Items.Add("None (logging disabled)");
-            consoleLogLevel.Items.Add("Critical (errors only)");
-            consoleLogLevel.Items.Add("Warning (errors + warnings)");
-            consoleLogLevel.Items.Add("Info (general activity)");
-            consoleLogLevel.Items.Add("Verbose (all details, may slow performance)");
-            consoleLogLevel.SelectedIndex = _viewModel.ConsoleLogLevelIndex + 1;
-            consoleLogLevel.SelectionChanged += (_, _) => _viewModel.ConsoleLogLevelIndex = consoleLogLevel.SelectedIndex - 1;
-            g.Children.Add(consoleLogLevel);
-
-            g.Children.Add(new TextBlock { Text = $"Log file: {LogService.DefaultLogPath()}", FontSize = 11, Opacity = 0.6 });
 
             // Reset admin warning
             if (_viewModel.SuppressAdminWarning)
