@@ -570,7 +570,8 @@ public sealed class FileLister : IFileLister
                         // ContentSearchFileSizeCeiling needs it to avoid per-file stat calls.
                         bool wantSize = true;
                         bool wantCreatedDate = EarlyCreatedAfterDate.HasValue || EarlyCreatedBeforeDate.HasValue;
-                        bool wantModifiedDate = EarlyModifiedAfterDate.HasValue || EarlyModifiedBeforeDate.HasValue;
+                        bool wantModifiedDate = true; // Always fetch so FileGroup can display it without a per-file stat
+                        bool filterByModifiedDate = EarlyModifiedAfterDate.HasValue || EarlyModifiedBeforeDate.HasValue;
                         uint requestFlags = EverythingSdk.EVERYTHING_REQUEST_FULL_PATH_AND_FILE_NAME;
                         if (wantSize)
                             requestFlags |= EverythingSdk.EVERYTHING_REQUEST_SIZE;
@@ -674,11 +675,13 @@ public sealed class FileLister : IFileLister
                                 }
                             }
 
+                            DateTime modifiedDateFromSdk = default;
                             if (wantModifiedDate)
                             {
                                 if (_sdkOps.GetResultDateModified(i, out long modifiedFileTime) && modifiedFileTime > 0)
                                 {
-                                    if (IsOutsideDateRange(DateTime.FromFileTime(modifiedFileTime), EarlyModifiedAfterDate, EarlyModifiedBeforeDate))
+                                    modifiedDateFromSdk = DateTime.FromFileTime(modifiedFileTime);
+                                    if (filterByModifiedDate && IsOutsideDateRange(modifiedDateFromSdk, EarlyModifiedAfterDate, EarlyModifiedBeforeDate))
                                     {
                                         skippedByDate++;
                                         Volatile.Write(ref _earlySkippedFiles, skippedBySize + skippedByDate);
@@ -687,17 +690,18 @@ public sealed class FileLister : IFileLister
                                 }
                                 else
                                 {
-                                    needsFileInfoDateFallback = true;
+                                    if (filterByModifiedDate)
+                                        needsFileInfoDateFallback = true;
                                 }
                             }
 
                             string path = ReadSdkFullPath(_sdkOps, i, ref buffer);
                             if (path.Length == 0) continue;
 
-                            // Cache size so downstream ShouldSkipByFileMetadata can use it
-                            // without a per-file FileInfo call.
+                            // Cache size + modified date so downstream ShouldSkipByFileMetadata
+                            // and FileGroup.LoadMetadata can use them without a per-file stat call.
                             if (sdkFileSize >= 0)
-                                FileMetadataCache.Set(path, new FileMetadata(sdkFileSize, default, default));
+                                FileMetadataCache.Set(path, new FileMetadata(sdkFileSize, modifiedDateFromSdk, default));
 
                             if (needsFileInfoDateFallback)
                             {

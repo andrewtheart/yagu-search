@@ -60,6 +60,16 @@ internal static class CliRunner
     // Public entry-point
     // -----------------------------------------------------------------------
 
+    /// <summary>
+    /// Attaches to the parent console and prints help text. Called from Program.Main
+    /// when a help flag is detected without requiring --cli.
+    /// </summary>
+    public static void RunHelp()
+    {
+        EnsureConsole();
+        PrintHelp();
+    }
+
     public static int Run(string[] rawArgs)
     {
         bool vtEnabled = EnsureConsole();
@@ -508,6 +518,14 @@ internal static class CliRunner
     private static async Task<int> RunSearchAsync(SearchOptions options, CliArgs args, bool vtEnabled)
     {
         bool useColor = vtEnabled;
+        bool exporting = !string.IsNullOrWhiteSpace(args.ExportPath);
+
+        // When exporting, disable direct output so results are available via events
+        if (exporting)
+        {
+            options.DirectOutputStream = null;
+            options.DirectOutputColor = false;
+        }
 
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
@@ -516,10 +534,17 @@ internal static class CliRunner
 
         // Direct output mode: bypass RipgrepWriter entirely — the DirectOutputSink
         // writes ripgrep-formatted UTF-8 directly from Rust's byte buffers.
-        options.DirectOutputStream = Console.OpenStandardOutput();
-        options.DirectOutputColor = useColor;
+        if (!exporting)
+        {
+            options.DirectOutputStream = Console.OpenStandardOutput();
+            options.DirectOutputColor = useColor;
+        }
 
         var progress = vtEnabled ? new ProgressLine(useColor) : null;
+        var collectedResults = exporting ? new List<SearchResult>() : null;
+        long filesScanned = 0;
+        long bytesScanned = 0;
+        DateTime searchStarted = DateTime.UtcNow;
 
         try
         {
@@ -552,9 +577,24 @@ internal static class CliRunner
 
                     case SearchEvent.Completed c:
                         progress?.Dismiss();
+                        filesScanned = c.Summary.FilesScanned;
+                        bytesScanned = c.Summary.BytesScanned;
                         WriteCompletionSummary(c.Summary, useColor);
+
+                        if (exporting && collectedResults != null)
+                            await WriteExportFileAsync(args, collectedResults, options.Query, searchStarted, filesScanned, bytesScanned);
+
                         if (c.Summary.Cancelled) return 130;
                         return c.Summary.TotalMatches > 0 ? 0 : 1;
+                }
+
+                // Collect results for export
+                if (exporting)
+                {
+                    if (ev is SearchEvent.Match m)
+                        collectedResults!.Add(m.Result);
+                    else if (ev is SearchEvent.MatchBatch mb)
+                        collectedResults!.AddRange(mb.Results);
                 }
             }
         }
@@ -612,6 +652,85 @@ internal static class CliRunner
 
     private static void WriteError(string msg, bool color = false)
         => Console.Error.WriteLine(color ? $"{Orange}{msg}{Reset}" : msg);
+
+    // -----------------------------------------------------------------------
+    // Export file writing
+    // -----------------------------------------------------------------------
+
+    private static async Task WriteExportFileAsync(
+        CliArgs args,
+        List<SearchResult> results,
+        string query,
+        DateTime searchStarted,
+        long filesScanned,
+        long bytesScanned)
+    {
+        if (string.IsNullOrWhiteSpace(args.ExportPath) || results.Count == 0)
+            return;
+
+        var format = args.ExportFormat switch
+        {
+            "json" => ReportFormat.Json,
+            "csv"  => ReportFormat.Csv,
+            "html" => ReportFormat.Html,
+            _      => InferFormatFromExtension(args.ExportPath),
+        };
+
+        var exportOptions = new ReportExportOptions
+        {
+            Format = format,
+            IncludeFileSizes = args.ExportFileSizes,
+            IncludeModifiedDates = args.ExportModifiedDates,
+            IncludeContextLines = true,
+            ContextLineCount = args.ExportContextLines ?? 3,
+            IncludeMatchMarkers = !args.ExportNoMarkers,
+            CsvEmbedContext = args.ExportCsvEmbedContext,
+        };
+
+        var groups = results
+            .GroupBy(r => r.FilePath, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new HtmlReportExportService.FileMatchGroup(g.Key, Path.GetFileName(g.Key), g.ToList()))
+            .ToList();
+
+        var stats = new HtmlReportExportService.SearchStats(
+            searchStarted,
+            DateTime.UtcNow - searchStarted,
+            filesScanned,
+            bytesScanned);
+
+        var exportDir = Path.GetDirectoryName(args.ExportPath);
+        if (!string.IsNullOrEmpty(exportDir) && !Directory.Exists(exportDir))
+            Directory.CreateDirectory(exportDir);
+
+        await using var fs = new FileStream(args.ExportPath, FileMode.Create, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.Asynchronous);
+        using var w = new StreamWriter(fs, new UTF8Encoding(false), bufferSize: 64 * 1024, leaveOpen: false);
+
+        switch (format)
+        {
+            case ReportFormat.Json:
+                await ReportExportService.WriteJsonReportAsync(w, query, groups, stats, exportOptions).ConfigureAwait(false);
+                break;
+            case ReportFormat.Csv:
+                await ReportExportService.WriteCsvReportAsync(w, query, groups, exportOptions).ConfigureAwait(false);
+                break;
+            default:
+                await HtmlReportExportService.WriteMultiFileReportAsync(w, query, groups, stats).ConfigureAwait(false);
+                break;
+        }
+
+        WriteError($"Exported {format.ToString().ToUpperInvariant()} report ({groups.Count:N0} files, {results.Count:N0} matches) to {args.ExportPath}");
+    }
+
+    private static ReportFormat InferFormatFromExtension(string path)
+    {
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext switch
+        {
+            ".json" => ReportFormat.Json,
+            ".csv"  => ReportFormat.Csv,
+            _ => ReportFormat.Html,
+        };
+    }
 
     // -----------------------------------------------------------------------
     // Help text
@@ -698,6 +817,15 @@ internal static class CliRunner
                   --max-results <n>       Stop after N matches (default: 50000).
                   --line-truncation <n>   Truncate printed lines to N characters (0 = no limit).
                   --editor-command <cmd>  Editor launch command (e.g. "code -g {file}:{line}").
+
+            EXPORT:
+                  --export <path>         Export results to a file (triggers export mode).
+                  --export-format <fmt>   Export format: html, json, csv (default: inferred from extension).
+                  --export-context <n>    Context lines in exported report (default: 3, 0 = none).
+                  --export-file-sizes     Include file sizes in export.
+                  --export-modified-dates Include file modified dates in export.
+                  --export-no-markers     Omit <match></match> markers in JSON/CSV exports.
+                  --export-csv-embed-context  Embed context as multi-line CSV fields (RFC 4180).
 
             SETTINGS FILE:
               If .yagu.json exists in the current working directory it is used as the
@@ -969,6 +1097,15 @@ internal sealed class CliArgs
     public bool             SuppressAdminWarning { get; private set; }
     public bool             ShowHelp     { get; private set; }
 
+    // Export options
+    public string?          ExportPath { get; private set; }
+    public string?          ExportFormat { get; private set; } // html, json, csv
+    public int?             ExportContextLines { get; private set; }
+    public bool             ExportFileSizes { get; private set; }
+    public bool             ExportModifiedDates { get; private set; }
+    public bool             ExportNoMarkers { get; private set; }
+    public bool             ExportCsvEmbedContext { get; private set; }
+
     private CliArgs() { }
 
     public static CliArgs Parse(string[] raw)
@@ -1059,6 +1196,15 @@ internal sealed class CliArgs
             if (TryGetVal(raw, ref i, out v, "--created-before"))        { if (DateTimeOffset.TryParse(v, out var d)) a.CreatedBefore = d; continue; }
             if (TryGetVal(raw, ref i, out v, "--modified-after"))        { if (DateTimeOffset.TryParse(v, out var d)) a.ModifiedAfter = d; continue; }
             if (TryGetVal(raw, ref i, out v, "--modified-before"))       { if (DateTimeOffset.TryParse(v, out var d)) a.ModifiedBefore = d; continue; }
+
+            // Export options
+            if (TryGetVal(raw, ref i, out v, "--export"))               { a.ExportPath = v.Trim('"'); continue; }
+            if (TryGetVal(raw, ref i, out v, "--export-format"))        { a.ExportFormat = v.ToLowerInvariant(); continue; }
+            if (TryGetInt(raw, ref i, out n, "--export-context"))        { a.ExportContextLines = n; continue; }
+            if (Eq(tok, "--export-file-sizes"))                          { a.ExportFileSizes = true; i++; continue; }
+            if (Eq(tok, "--export-modified-dates"))                      { a.ExportModifiedDates = true; i++; continue; }
+            if (Eq(tok, "--export-no-markers"))                          { a.ExportNoMarkers = true; i++; continue; }
+            if (Eq(tok, "--export-csv-embed-context"))                   { a.ExportCsvEmbedContext = true; i++; continue; }
 
             // Positional: first non-flag is the pattern
             if (!tok.StartsWith('-') && a.Pattern is null)

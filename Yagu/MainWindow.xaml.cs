@@ -189,6 +189,15 @@ public sealed partial class MainWindow : Window
             {
                 ApplyPreviewSectionBackgrounds();
             }
+
+            if (e.PropertyName == nameof(ViewModel.PreviewGutterContextColor) ||
+                e.PropertyName == nameof(ViewModel.PreviewGutterMatchColor) ||
+                e.PropertyName == nameof(ViewModel.PreviewMatchTextColor) ||
+                e.PropertyName == nameof(ViewModel.PreviewOverlayColor) ||
+                e.PropertyName == nameof(ViewModel.PreviewMatchLineColor))
+            {
+                ApplyPreviewColors();
+            }
         };
 
         ((FrameworkElement)Content).Loaded += OnContentLoaded;
@@ -2774,6 +2783,7 @@ public sealed partial class MainWindow : Window
 
             if (result.IsSelected)
             {
+                if (!ViewModel.MatchLineCheckAddsToPreview) return;
                 try
                 {
                     await EnsureCheckedMatchInPreviewAsync(result);
@@ -2875,19 +2885,79 @@ public sealed partial class MainWindow : Window
         // promote it in-place rather than appending duplicate context.
         if (isHighlight && TryPromoteContextLineToMatch(section, result, allLines, rx, sectionNav))
         {
+            AddPreviewMatchTotals(1, 0);
             UpdateMatchNavPanel();
             UpdateSectionMatchNavPanels();
             return;
         }
 
-        // Determine the last rendered line to avoid backwards line numbers.
+        // Determine the last rendered line to avoid backwards line numbers when appending forward.
         int lastRenderedLine = isHighlight ? GetSectionLastRenderedLine(section) : 0;
+        int firstRenderedLine = isHighlight && section.Blocks.Count > 0 ? GetSectionFirstRenderedLine(section) : 0;
+
+        var lines = GetPreviewLines(result, allLines, previewLines, fullFile: false);
+
+        // In highlight mode, remove lines that are already rendered to avoid duplicates.
+        if (isHighlight && lastRenderedLine > 0)
+        {
+            var renderedLineNumbers = GetRenderedLineNumbers(section);
+            lines = lines.Where(l => !renderedLineNumbers.Contains(l.lineNum)).ToList();
+            if (lines.Count == 0)
+            {
+                return;
+            }
+        }
+
+        // Determine whether the new content should be prepended (all new lines before existing content).
+        bool shouldPrepend = isHighlight && firstRenderedLine > 0 && lines.Count > 0
+            && lines.Max(l => l.lineNum) < firstRenderedLine;
 
         if (section.Blocks.Count > 0)
         {
             if (isHighlight)
             {
-                AddGapIndicator(section);
+                if (shouldPrepend)
+                {
+                    // Save existing blocks, clear, we'll re-add after the new content.
+                    var existingBlocks = new List<Block>();
+                    for (int i = 0; i < section.Blocks.Count; i++)
+                        existingBlocks.Add(section.Blocks[i]);
+                    section.Blocks.Clear();
+
+                    List<Block>? existingGutterBlocks = null;
+                    RichTextBlock? gutterBlock = null;
+                    if (_sectionGutterBlocks.TryGetValue(section, out gutterBlock))
+                    {
+                        existingGutterBlocks = new List<Block>();
+                        for (int i = 0; i < gutterBlock.Blocks.Count; i++)
+                            existingGutterBlocks.Add(gutterBlock.Blocks[i]);
+                        gutterBlock.Blocks.Clear();
+                    }
+
+                    // Add new lines first.
+                    foreach (var (line, lineNum) in lines)
+                    {
+                        bool isMatchLine = lineNum == result.LineNumber;
+                        AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, result, rx, truncate: true, _matchParagraphs, sectionNav, out _);
+                    }
+
+                    // Add gap indicator between new and old content.
+                    AddGapIndicator(section);
+
+                    // Re-add existing blocks.
+                    foreach (var block in existingBlocks)
+                        section.Blocks.Add(block);
+                    if (existingGutterBlocks is not null && gutterBlock is not null)
+                    {
+                        foreach (var block in existingGutterBlocks)
+                            gutterBlock.Blocks.Add(block);
+                    }
+                }
+                else
+                {
+                    // Append after existing content with gap indicator.
+                    AddGapIndicator(section);
+                }
             }
             else
             {
@@ -2901,30 +2971,21 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        var lines = GetPreviewLines(result, allLines, previewLines, fullFile: false);
-
-        // In highlight mode, clip lines to only show content after what's
-        // already rendered, preventing backwards line-number jumps.
-        if (isHighlight && lastRenderedLine > 0)
+        // Append lines (skipped for prepend path which already added them above).
+        if (!shouldPrepend)
         {
-            lines = lines.Where(l => l.lineNum > lastRenderedLine).ToList();
-            if (lines.Count == 0)
+            foreach (var (line, lineNum) in lines)
             {
-                // Nothing new to show — remove the gap indicator we just added.
-                RemoveLastBlock(section);
-                return;
+                bool isMatchLine = lineNum == result.LineNumber;
+                AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, result, rx, truncate: true, _matchParagraphs, sectionNav, out _);
             }
-        }
-
-        foreach (var (line, lineNum) in lines)
-        {
-            bool isMatchLine = lineNum == result.LineNumber;
-            AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, result, rx, truncate: true, _matchParagraphs, sectionNav, out _);
         }
 
         InvalidateParagraphIndexCache(section);
         if (sectionNav is not null)
             sectionNav.IndexByMatch = null;
+
+        AddPreviewMatchTotals(1, 0);
 
         var totalFiles = PreviewSectionsPanel.Children.OfType<Expander>().Count();
         var (deferredFileCount, deferredMatchCount) = GetDeferredCounts();
@@ -2978,7 +3039,7 @@ public sealed partial class MainWindow : Window
                 var localValue = run.ReadLocalValue(Run.ForegroundProperty);
                 if (localValue != Microsoft.UI.Xaml.DependencyProperty.UnsetValue
                     && ReferenceEquals(localValue, s_contextTextBrush))
-                    run.ClearValue(Run.ForegroundProperty);
+                    run.Foreground = _matchLineBrush;
             }
         }
 
@@ -3035,6 +3096,37 @@ public sealed partial class MainWindow : Window
         return lastLine;
     }
 
+    private static int GetSectionFirstRenderedLine(RichTextBlock section)
+    {
+        for (int i = 0; i < section.Blocks.Count; i++)
+        {
+            if (section.Blocks[i] is Paragraph para
+                && s_paragraphLineNumbers.TryGetValue(para, out var lineObj)
+                && lineObj is int lineNumber
+                && lineNumber > 0)
+            {
+                return lineNumber;
+            }
+        }
+        return 0;
+    }
+
+    private static SortedSet<int> GetRenderedLineNumbers(RichTextBlock section)
+    {
+        var set = new SortedSet<int>();
+        for (int i = 0; i < section.Blocks.Count; i++)
+        {
+            if (section.Blocks[i] is Paragraph para
+                && s_paragraphLineNumbers.TryGetValue(para, out var lineObj)
+                && lineObj is int lineNumber
+                && lineNumber > 0)
+            {
+                set.Add(lineNumber);
+            }
+        }
+        return set;
+    }
+
     /// <summary>
     /// Removes the last block from a section (and its corresponding gutter block)
     /// to undo an optimistically-added gap indicator when no content follows.
@@ -3087,6 +3179,15 @@ public sealed partial class MainWindow : Window
     private static bool TryGetPreviewParagraphLineNumber(Paragraph paragraph, out int lineNumber)
     {
         lineNumber = 0;
+
+        // Prefer the ConditionalWeakTable (works for sections with separate gutter blocks).
+        if (s_paragraphLineNumbers.TryGetValue(paragraph, out var lineObj) && lineObj is int stored && stored > 0)
+        {
+            lineNumber = stored;
+            return true;
+        }
+
+        // Fallback: parse from inline gutter runs (legacy single-block path).
         var gutter = paragraph.Inlines.OfType<Run>().Skip(1).FirstOrDefault()?.Text;
         if (string.IsNullOrWhiteSpace(gutter))
             return false;
@@ -3647,6 +3748,7 @@ public sealed partial class MainWindow : Window
 
         if (groupsToPreview.Count > 0)
         {
+            if (!ViewModel.FileHeaderCheckAddsToPreview) return;
             try
             {
                 await EnsureFileGroupsInPreviewAsync(groupsToPreview, group.FilePath);
@@ -4503,10 +4605,28 @@ public sealed partial class MainWindow : Window
             .ToList();
         if (groups.Count == 0) return;
 
+        // Show export options dialog
+        var exportOptions = await ReportExportDialog.ShowAsync(Content.XamlRoot, ViewModel.ContextLines);
+        if (exportOptions is null) return;
+
+        // Pick file extension based on format
         var picker = new Windows.Storage.Pickers.FileSavePicker();
         picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
-        picker.FileTypeChoices.Add("HTML File", new List<string> { ".html" });
-        picker.SuggestedFileName = "Yagu_Report";
+        switch (exportOptions.Format)
+        {
+            case Services.ReportFormat.Json:
+                picker.FileTypeChoices.Add("JSON File", new List<string> { ".json" });
+                picker.SuggestedFileName = "Yagu_Report";
+                break;
+            case Services.ReportFormat.Csv:
+                picker.FileTypeChoices.Add("CSV File", new List<string> { ".csv" });
+                picker.SuggestedFileName = "Yagu_Report";
+                break;
+            default:
+                picker.FileTypeChoices.Add("HTML File", new List<string> { ".html" });
+                picker.SuggestedFileName = "Yagu_Report";
+                break;
+        }
 
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
@@ -4531,10 +4651,22 @@ public sealed partial class MainWindow : Window
             ViewModel.FilesScanned,
             ViewModel.BytesScanned);
 
-        await HtmlReportExportService.WriteMultiFileReportAsync(w, ViewModel.Query, groups, stats).ConfigureAwait(false);
+        switch (exportOptions.Format)
+        {
+            case Services.ReportFormat.Json:
+                await Services.ReportExportService.WriteJsonReportAsync(w, ViewModel.Query, groups, stats, exportOptions).ConfigureAwait(false);
+                break;
+            case Services.ReportFormat.Csv:
+                await Services.ReportExportService.WriteCsvReportAsync(w, ViewModel.Query, groups, exportOptions).ConfigureAwait(false);
+                break;
+            default:
+                await HtmlReportExportService.WriteMultiFileReportAsync(w, ViewModel.Query, groups, stats).ConfigureAwait(false);
+                break;
+        }
 
+        var formatName = exportOptions.Format.ToString().ToUpperInvariant();
         DispatcherQueue.TryEnqueue(() =>
-            ViewModel.StatusText = $"Exported HTML report ({groups.Count:N0} files, {totalMatches:N0} matches) to {file.Path}");
+            ViewModel.StatusText = $"Exported {formatName} report ({groups.Count:N0} files, {totalMatches:N0} matches) to {file.Path}");
     }
 
     private static string BuildHighlightedMatchHtml(string line, int matchStart, int matchLength)
@@ -4566,7 +4698,7 @@ public sealed partial class MainWindow : Window
 
         flyout.Items.Add(new MenuFlyoutSeparator());
 
-        var exportFileItem = new MenuFlyoutItem { Text = "Export file as HTML report", Icon = new FontIcon { Glyph = "\uE9F9" } };
+        var exportFileItem = new MenuFlyoutItem { Text = "Export report (HTML/JSON/CSV)", Icon = new FontIcon { Glyph = "\uE9F9" } };
         exportFileItem.Click += async (_, _) =>
         {
             var filePath = block.Tag as string;
@@ -4656,10 +4788,27 @@ public sealed partial class MainWindow : Window
             string.Equals(g.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
         if (group is null || group.Count == 0) return;
 
+        // Show export options dialog (same as the main report button)
+        var exportOptions = await ReportExportDialog.ShowAsync(Content.XamlRoot, ViewModel.ContextLines);
+        if (exportOptions is null) return;
+
         var picker = new Windows.Storage.Pickers.FileSavePicker();
         picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
-        picker.FileTypeChoices.Add("HTML File", new List<string> { ".html" });
-        picker.SuggestedFileName = $"Yagu_Report_{Path.GetFileNameWithoutExtension(filePath)}";
+        switch (exportOptions.Format)
+        {
+            case Services.ReportFormat.Json:
+                picker.FileTypeChoices.Add("JSON File", new List<string> { ".json" });
+                picker.SuggestedFileName = $"Yagu_Report_{Path.GetFileNameWithoutExtension(filePath)}";
+                break;
+            case Services.ReportFormat.Csv:
+                picker.FileTypeChoices.Add("CSV File", new List<string> { ".csv" });
+                picker.SuggestedFileName = $"Yagu_Report_{Path.GetFileNameWithoutExtension(filePath)}";
+                break;
+            default:
+                picker.FileTypeChoices.Add("HTML File", new List<string> { ".html" });
+                picker.SuggestedFileName = $"Yagu_Report_{Path.GetFileNameWithoutExtension(filePath)}";
+                break;
+        }
 
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
@@ -4678,12 +4827,30 @@ public sealed partial class MainWindow : Window
         using var w = new StreamWriter(stream, new UTF8Encoding(false), bufferSize: 64 * 1024, leaveOpen: false);
 
         var fileGroup = new HtmlReportExportService.FileMatchGroup(group.FilePath, group.FileName, group.ToList());
-        await HtmlReportExportService.WriteSingleFileReportAsync(w, ViewModel.Query, fileGroup).ConfigureAwait(false);
+        var stats = new HtmlReportExportService.SearchStats(
+            ViewModel.SearchStartedUtc,
+            ViewModel.LastSearchElapsed,
+            ViewModel.FilesScanned,
+            ViewModel.BytesScanned);
 
-        ViewModel.StatusText = $"Exported HTML report ({totalMatches:N0} matches) for {Path.GetFileName(filePath)} to {file.Path}";
+        switch (exportOptions.Format)
+        {
+            case Services.ReportFormat.Json:
+                await Services.ReportExportService.WriteJsonReportAsync(w, ViewModel.Query, [fileGroup], stats, exportOptions).ConfigureAwait(false);
+                break;
+            case Services.ReportFormat.Csv:
+                await Services.ReportExportService.WriteCsvReportAsync(w, ViewModel.Query, [fileGroup], exportOptions).ConfigureAwait(false);
+                break;
+            default:
+                await HtmlReportExportService.WriteSingleFileReportAsync(w, ViewModel.Query, fileGroup).ConfigureAwait(false);
+                break;
+        }
+
+        var formatName = exportOptions.Format.ToString().ToUpperInvariant();
+        ViewModel.StatusText = $"Exported {formatName} report ({totalMatches:N0} matches) for {Path.GetFileName(filePath)} to {file.Path}";
     }
 
-    private static void HighlightInline(Paragraph para, string line, int matchStart, int matchLength)
+    private void HighlightInline(Paragraph para, string line, int matchStart, int matchLength)
     {
         var displayLine = LineTruncator.TruncateAroundMatch(line, matchStart, matchLength);
         line = displayLine.Text;
@@ -4694,7 +4861,7 @@ public sealed partial class MainWindow : Window
             if (matchStart > 0) para.Inlines.Add(new Run { Text = line[..matchStart] });
             var hit = new Run { Text = line.Substring(matchStart, safeLen) };
             hit.FontWeight = Microsoft.UI.Text.FontWeights.Bold;
-            hit.Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gold);
+            hit.Foreground = _matchTextBrush;
             para.Inlines.Add(hit);
             if (matchStart + safeLen < line.Length)
                 para.Inlines.Add(new Run { Text = line[(matchStart + safeLen)..] });
@@ -5269,7 +5436,15 @@ public sealed partial class MainWindow : Window
     {
         ((FrameworkElement)sender).Loaded -= OnContentLoaded;
         ApplyWordWrap(ViewModel.PreviewWordWrap);
+        ApplyPreviewColors();
         if (_launcherMode) PositionLauncherWindow();
+
+        // Apply maximize-on-startup setting (only in non-launcher mode)
+        if (!_launcherMode && ViewModel.MaximizeOnStartup &&
+            AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter)
+        {
+            presenter.Maximize();
+        }
 
         if (_autoSearchOnLoad)
         {

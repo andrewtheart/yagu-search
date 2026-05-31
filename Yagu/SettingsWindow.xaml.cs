@@ -204,6 +204,7 @@ public sealed partial class SettingsWindow : Window
         "Display" => "\uE7B5",
         "Editor" => "\uE70F",
         "Window" => "\uE737",
+        "UI Behaviors" => "\uE7C4",
         "Developer Options" => "\uE713",
         "General" => "\uE713",
         _ => "\uE7FC",
@@ -652,6 +653,48 @@ public sealed partial class SettingsWindow : Window
                 Windows.UI.Color.FromArgb(0x00, 0x00, 0x00, 0x00),
                 value => _viewModel.UnselectedPreviewContentBackgroundColor = value);
 
+            g.Children.Add(new TextBlock { Text = "Preview font colors", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 12, 0, 0) });
+
+            AddPreviewContentColorSetting(
+                g,
+                "Gutter line numbers (context lines):",
+                "Color of line numbers in the gutter for non-matched context lines. Default is grey.",
+                _viewModel.PreviewGutterContextColor,
+                Windows.UI.Color.FromArgb(0xFF, 0x50, 0x50, 0x50),
+                value => _viewModel.PreviewGutterContextColor = value);
+
+            AddPreviewContentColorSetting(
+                g,
+                "Gutter line numbers (matched lines):",
+                "Color of line numbers in the gutter for matched lines. Default is lime green.",
+                _viewModel.PreviewGutterMatchColor,
+                Windows.UI.Color.FromArgb(0xFF, 0x32, 0xCD, 0x32),
+                value => _viewModel.PreviewGutterMatchColor = value);
+
+            AddPreviewContentColorSetting(
+                g,
+                "Match highlight text:",
+                "Color of the highlighted match text (the search term occurrence). Default is gold.",
+                _viewModel.PreviewMatchTextColor,
+                Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00),
+                value => _viewModel.PreviewMatchTextColor = value);
+
+            AddPreviewContentColorSetting(
+                g,
+                "Active match overlay:",
+                "Color of the overlay border/underline on the currently-active match. Default is orange-red.",
+                _viewModel.PreviewOverlayColor,
+                Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x45, 0x00),
+                value => _viewModel.PreviewOverlayColor = value);
+
+            AddPreviewContentColorSetting(
+                g,
+                "Matched line text:",
+                "Color of text on matched lines (non-highlighted portions). Default is white.",
+                _viewModel.PreviewMatchLineColor,
+                Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF),
+                value => _viewModel.PreviewMatchLineColor = value);
+
             g.Children.Add(new TextBlock { Text = "Auto-load matches on scroll (matches to load when reaching end of truncated section, 0 = disabled):" });
             var autoLoad = new NumberBox { Value = _viewModel.PreviewAutoLoadMatches, Minimum = 0, Maximum = 5000, SpinButtonPlacementMode = Microsoft.UI.Xaml.Controls.NumberBoxSpinButtonPlacementMode.Compact };
             autoLoad.ValueChanged += (_, args) => _viewModel.PreviewAutoLoadMatches = (int)args.NewValue;
@@ -732,6 +775,31 @@ public sealed partial class SettingsWindow : Window
             closeToTray.Unchecked += (_, _) => _viewModel.CloseToTray = false;
             g.Children.Add(closeToTray);
             g.Children.Add(new TextBlock { Text = "When enabled, closing the window hides Yagu to the system tray. Right-click the tray icon to reopen or exit.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            var maximizeOnStartup = new CheckBox { Content = "Maximize window on startup", IsChecked = _viewModel.MaximizeOnStartup };
+            maximizeOnStartup.Checked += (_, _) => _viewModel.MaximizeOnStartup = true;
+            maximizeOnStartup.Unchecked += (_, _) => _viewModel.MaximizeOnStartup = false;
+            g.Children.Add(maximizeOnStartup);
+            g.Children.Add(new TextBlock { Text = "When enabled, the main window starts maximized instead of its default size.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+        }
+
+        // ── UI Behaviors ──
+        {
+            var g = AddTab("UI Behaviors");
+
+            g.Children.Add(new TextBlock { Text = "Selection → Preview Behaviors", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 8) });
+
+            var fileHeaderCheck = new CheckBox { Content = "Checking a file header adds it to the preview pane", IsChecked = _viewModel.FileHeaderCheckAddsToPreview };
+            fileHeaderCheck.Checked += (_, _) => _viewModel.FileHeaderCheckAddsToPreview = true;
+            fileHeaderCheck.Unchecked += (_, _) => _viewModel.FileHeaderCheckAddsToPreview = false;
+            g.Children.Add(fileHeaderCheck);
+            g.Children.Add(new TextBlock { Text = "When enabled, selecting the checkbox on a file header in the results list immediately shows that file's matches in the preview pane.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            var matchLineCheck = new CheckBox { Content = "Checking a match line adds it to the preview pane", IsChecked = _viewModel.MatchLineCheckAddsToPreview };
+            matchLineCheck.Checked += (_, _) => _viewModel.MatchLineCheckAddsToPreview = true;
+            matchLineCheck.Unchecked += (_, _) => _viewModel.MatchLineCheckAddsToPreview = false;
+            g.Children.Add(matchLineCheck);
+            g.Children.Add(new TextBlock { Text = "When enabled, selecting the checkbox on an individual match line immediately shows that match in the preview pane.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
         }
 
         // ── Developer Options ──

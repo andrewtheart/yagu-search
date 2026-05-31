@@ -27,6 +27,13 @@ internal static class Program
     [global::System.STAThread]
     private static void Main(string[] args)
     {
+        // Help flags: print CLI help and exit without launching GUI.
+        if (args.Any(a => IsHelpFlag(a)))
+        {
+            CliRunner.RunHelp();
+            return;
+        }
+
         // CLI mode: runs entirely without the WinUI runtime.
         if (args.Any(a => string.Equals(a, "--cli", StringComparison.OrdinalIgnoreCase)))
         {
@@ -139,4 +146,15 @@ internal static class Program
             return;
         }
     }
+
+    private static bool IsHelpFlag(string arg) =>
+        string.Equals(arg, "--help", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(arg, "-help", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(arg, "-h", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(arg, "--h", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(arg, "-?", StringComparison.Ordinal) ||
+        string.Equals(arg, "/?", StringComparison.Ordinal) ||
+        string.Equals(arg, "?", StringComparison.Ordinal) ||
+        string.Equals(arg, "/help", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(arg, "/h", StringComparison.OrdinalIgnoreCase);
 }

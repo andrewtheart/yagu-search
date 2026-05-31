@@ -19,6 +19,13 @@ public sealed class AppSettings
     public const string DefaultSelectedPreviewContentBackgroundColor = "#FF000000";
     public const string DefaultUnselectedPreviewContentBackgroundColor = "#00000000";
 
+    // Preview editor font colors (ARGB hex strings)
+    public const string DefaultPreviewGutterContextColor = "#FF505050";
+    public const string DefaultPreviewGutterMatchColor = "#FF32CD32"; // LimeGreen
+    public const string DefaultPreviewMatchTextColor = "#FFFFD700"; // Gold
+    public const string DefaultPreviewOverlayColor = "#FFFF4500"; // OrangeRed
+    public const string DefaultPreviewMatchLineColor = "#FFFFFFFF"; // White
+
     public string? LastDirectory { get; set; }
     public List<string> RecentDirectories { get; set; } = [];
     public List<string> SearchHistory { get; set; } = [];
@@ -54,6 +61,11 @@ public sealed class AppSettings
     public bool PreviewWordWrap { get; set; }
     public string SelectedPreviewContentBackgroundColor { get; set; } = DefaultSelectedPreviewContentBackgroundColor;
     public string UnselectedPreviewContentBackgroundColor { get; set; } = DefaultUnselectedPreviewContentBackgroundColor;
+    public string PreviewGutterContextColor { get; set; } = DefaultPreviewGutterContextColor;
+    public string PreviewGutterMatchColor { get; set; } = DefaultPreviewGutterMatchColor;
+    public string PreviewMatchTextColor { get; set; } = DefaultPreviewMatchTextColor;
+    public string PreviewOverlayColor { get; set; } = DefaultPreviewOverlayColor;
+    public string PreviewMatchLineColor { get; set; } = DefaultPreviewMatchLineColor;
     public int LogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose (file logging)
     public int ConsoleLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     public int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
@@ -126,6 +138,12 @@ public sealed class AppSettings
     public bool CloseToTray { get; set; } = true;
     /// <summary>Whether the user has been informed that closing docks to the system tray.</summary>
     public bool HasShownCloseToTrayNotification { get; set; }
+    /// <summary>When true, maximize the window on startup. Default false.</summary>
+    public bool MaximizeOnStartup { get; set; }
+    /// <summary>When true (default), checking a file header checkbox immediately adds it to the preview pane.</summary>
+    public bool FileHeaderCheckAddsToPreview { get; set; } = true;
+    /// <summary>When true (default), checking a match line checkbox immediately adds it to the preview pane.</summary>
+    public bool MatchLineCheckAddsToPreview { get; set; } = true;
     /// <summary>Number of matches to auto-load when user scrolls to the end of a truncated section. 0 = disabled.</summary>
     public int PreviewAutoLoadMatches { get; set; } = 50;
     /// <summary>Built-in editor: maximum file size in MB. Files larger than this are blocked from opening.</summary>

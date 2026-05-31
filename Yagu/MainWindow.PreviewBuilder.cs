@@ -1539,7 +1539,7 @@ public sealed partial class MainWindow
             Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
             Content = new FontIcon { Glyph = "\uE9F9", FontSize = 12 },
         };
-        ToolTipService.SetToolTip(reportBtn, "Export this file's matches as HTML report");
+        ToolTipService.SetToolTip(reportBtn, "Export report (HTML/JSON/CSV)");
         reportBtn.Click += async (_, _) => await ExportSingleFileHtmlReportAsync(path);
         buttonPanel.Children.Add(reportBtn);
 
@@ -2058,7 +2058,7 @@ public sealed partial class MainWindow
         }
     }
 
-    private static readonly SolidColorBrush s_matchGutterBrush = new(Microsoft.UI.Colors.LimeGreen);
+    private SolidColorBrush s_matchGutterBrush = new(Microsoft.UI.Colors.LimeGreen);
 
     /// <summary>
     /// Returns the number of individual regex match occurrences on a line (minimum 1 for a match line).
@@ -2090,12 +2090,34 @@ public sealed partial class MainWindow
         }
     }
 
-    private static readonly SolidColorBrush s_contextGutterBrush = new(Windows.UI.Color.FromArgb(255, 80, 80, 80));
+    private SolidColorBrush s_contextGutterBrush = new(Windows.UI.Color.FromArgb(255, 80, 80, 80));
     private static readonly SolidColorBrush s_gutterSepBrush = new(Windows.UI.Color.FromArgb(255, 60, 60, 60));
-    private static readonly SolidColorBrush s_contextTextBrush = new(Windows.UI.Color.FromArgb(255, 110, 110, 110));
-    private static readonly SolidColorBrush s_matchAccentBrush = new(Windows.UI.Color.FromArgb(255, 70, 140, 70));
+    private SolidColorBrush s_contextTextBrush = new(Windows.UI.Color.FromArgb(255, 110, 110, 110));
+    private SolidColorBrush s_matchAccentBrush = new(Windows.UI.Color.FromArgb(255, 70, 140, 70));
     private static readonly SolidColorBrush _transparentBrush = new(Microsoft.UI.Colors.Transparent);
+    private SolidColorBrush _matchTextBrush = new(Microsoft.UI.Colors.Gold);
+    private SolidColorBrush _matchLineBrush = new(Microsoft.UI.Colors.White);
+    private Windows.UI.Color _overlayColor = Microsoft.UI.Colors.OrangeRed;
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphLineNumbers = new();
+
+    private void ApplyPreviewColors()
+    {
+        var vm = ViewModel;
+        s_contextGutterBrush = new SolidColorBrush(ColorStringHelper.Parse(vm.PreviewGutterContextColor, Windows.UI.Color.FromArgb(0xFF, 0x50, 0x50, 0x50)));
+        s_matchGutterBrush = new SolidColorBrush(ColorStringHelper.Parse(vm.PreviewGutterMatchColor, Windows.UI.Color.FromArgb(0xFF, 0x32, 0xCD, 0x32)));
+        var matchTextColor = ColorStringHelper.Parse(vm.PreviewMatchTextColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00));
+        _matchTextBrush = new SolidColorBrush(matchTextColor);
+        _overlayColor = ColorStringHelper.Parse(vm.PreviewOverlayColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x45, 0x00));
+        _matchLineBrush = new SolidColorBrush(ColorStringHelper.Parse(vm.PreviewMatchLineColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)));
+        s_contextTextBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 110, 110, 110));
+        s_matchAccentBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 70, 140, 70));
+
+        // Update overlay elements
+        ActiveMatchBand.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x22, _overlayColor.R, _overlayColor.G, _overlayColor.B));
+        ActiveMatchBand.BorderBrush = new SolidColorBrush(_overlayColor);
+        ActiveMatchWordMarker.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x1A, _overlayColor.R, _overlayColor.G, _overlayColor.B));
+        ActiveMatchWordMarker.BorderBrush = new SolidColorBrush(_overlayColor);
+    }
 
     private Paragraph AddPreviewLineParagraphs(
         RichTextBlock section,
@@ -2231,7 +2253,7 @@ public sealed partial class MainWindow
         return match.Success && match.Index == start;
     }
 
-    private static Paragraph AddPreviewLineParagraphsAroundResult(
+    private Paragraph AddPreviewLineParagraphsAroundResult(
         RichTextBlock section,
         string? line,
         int lineNum,
@@ -2363,10 +2385,12 @@ public sealed partial class MainWindow
 
             int start = Math.Max(0, lineIndex - previewLines);
             int end = Math.Min(allLines.Length - 1, lineIndex + previewLines);
-            if (end + 1 <= previouslyRenderedLine)
+            // previouslyRenderedLine is 1-indexed; convert to 0-indexed for array comparisons
+            int previouslyRenderedIndex = previouslyRenderedLine > 0 ? previouslyRenderedLine - 1 : -1;
+            if (end <= previouslyRenderedIndex)
                 continue;
 
-            start = Math.Max(start, previouslyRenderedLine);
+            start = Math.Max(start, previouslyRenderedIndex + 1);
             if (ranges.Count > 0 && start <= ranges[^1].end + 1)
                 ranges[^1] = (ranges[^1].start, Math.Max(ranges[^1].end, end));
             else
@@ -2458,7 +2482,7 @@ public sealed partial class MainWindow
         }
     }
 
-    private static Paragraph MakePreviewParagraph(string line, int lineNum, bool isMatchLine, SearchResult r, Regex? rx, bool truncate = true, bool continuationGutter = false, RichTextBlock? gutterBlock = null)
+    private Paragraph MakePreviewParagraph(string line, int lineNum, bool isMatchLine, SearchResult r, Regex? rx, bool truncate = true, bool continuationGutter = false, RichTextBlock? gutterBlock = null)
     {
         line ??= string.Empty;
         if (truncate)
@@ -2505,11 +2529,12 @@ public sealed partial class MainWindow
                 {
                     var before = new Run { Text = line[lastIdx..m.Index] };
                     if (!isMatchLine) before.Foreground = s_contextTextBrush;
+                    else before.Foreground = _matchLineBrush;
                     para.Inlines.Add(before);
                 }
                 var hit = new Run { Text = m.Value };
                 hit.FontWeight = Microsoft.UI.Text.FontWeights.Bold;
-                hit.Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gold);
+                hit.Foreground = _matchTextBrush;
                 para.Inlines.Add(hit);
                 lastIdx = m.Index + m.Length;
             }
@@ -2517,6 +2542,7 @@ public sealed partial class MainWindow
             {
                 var tail = new Run { Text = line[lastIdx..] };
                 if (!isMatchLine) tail.Foreground = s_contextTextBrush;
+                else tail.Foreground = _matchLineBrush;
                 para.Inlines.Add(tail);
             }
         }
@@ -2524,6 +2550,7 @@ public sealed partial class MainWindow
         {
             var plain = new Run { Text = line };
             if (!isMatchLine) plain.Foreground = s_contextTextBrush;
+            else plain.Foreground = _matchLineBrush;
             para.Inlines.Add(plain);
         }
 

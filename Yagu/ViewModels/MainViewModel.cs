@@ -116,6 +116,21 @@ public sealed partial class MainViewModel : ObservableObject
         UnselectedPreviewContentBackgroundColor = ColorStringHelper.Normalize(
             _settings.UnselectedPreviewContentBackgroundColor,
             Windows.UI.Color.FromArgb(0x00, 0x00, 0x00, 0x00));
+        PreviewGutterContextColor = ColorStringHelper.Normalize(
+            _settings.PreviewGutterContextColor,
+            Windows.UI.Color.FromArgb(0xFF, 0x50, 0x50, 0x50));
+        PreviewGutterMatchColor = ColorStringHelper.Normalize(
+            _settings.PreviewGutterMatchColor,
+            Windows.UI.Color.FromArgb(0xFF, 0x32, 0xCD, 0x32));
+        PreviewMatchTextColor = ColorStringHelper.Normalize(
+            _settings.PreviewMatchTextColor,
+            Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00));
+        PreviewOverlayColor = ColorStringHelper.Normalize(
+            _settings.PreviewOverlayColor,
+            Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x45, 0x00));
+        PreviewMatchLineColor = ColorStringHelper.Normalize(
+            _settings.PreviewMatchLineColor,
+            Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF));
         FileLogLevelIndex = _settings.LogLevelIndex;
         ConsoleLogLevelIndex = _settings.ConsoleLogLevelIndex;
         FileListerBackendIndex = _settings.FileListerBackendIndex;
@@ -153,6 +168,9 @@ public sealed partial class MainViewModel : ObservableObject
         BackupBeforeSave = _settings.BackupBeforeSave;
         WindowFocusBehavior = _settings.WindowFocusBehavior;
         CloseToTray = _settings.CloseToTray;
+        MaximizeOnStartup = _settings.MaximizeOnStartup;
+        FileHeaderCheckAddsToPreview = _settings.FileHeaderCheckAddsToPreview;
+        MatchLineCheckAddsToPreview = _settings.MatchLineCheckAddsToPreview;
         PreviewEditorMaxSizeMB = _settings.PreviewEditorMaxSizeMB;
         PreviewEditorMaxTextLength = _settings.PreviewEditorMaxTextLength;
         PreviewEditorMaxLineLength = _settings.PreviewEditorMaxLineLength;
@@ -341,6 +359,11 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial int PreviewAutoLoadMatches { get; set; } = 50;
     [ObservableProperty] public partial string SelectedPreviewContentBackgroundColor { get; set; } = AppSettings.DefaultSelectedPreviewContentBackgroundColor;
     [ObservableProperty] public partial string UnselectedPreviewContentBackgroundColor { get; set; } = AppSettings.DefaultUnselectedPreviewContentBackgroundColor;
+    [ObservableProperty] public partial string PreviewGutterContextColor { get; set; } = AppSettings.DefaultPreviewGutterContextColor;
+    [ObservableProperty] public partial string PreviewGutterMatchColor { get; set; } = AppSettings.DefaultPreviewGutterMatchColor;
+    [ObservableProperty] public partial string PreviewMatchTextColor { get; set; } = AppSettings.DefaultPreviewMatchTextColor;
+    [ObservableProperty] public partial string PreviewOverlayColor { get; set; } = AppSettings.DefaultPreviewOverlayColor;
+    [ObservableProperty] public partial string PreviewMatchLineColor { get; set; } = AppSettings.DefaultPreviewMatchLineColor;
     [ObservableProperty] public partial int FileLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] public partial int ConsoleLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] public partial int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
@@ -491,6 +514,9 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial bool BackupBeforeSave { get; set; } = true;
     [ObservableProperty] public partial int WindowFocusBehavior { get; set; } // 0 = MinimizeToTray, 1 = StayOpen, 2 = AlwaysOnTop, 3 = FullWindow
     [ObservableProperty] public partial bool CloseToTray { get; set; } = true;
+    [ObservableProperty] public partial bool MaximizeOnStartup { get; set; }
+    [ObservableProperty] public partial bool FileHeaderCheckAddsToPreview { get; set; } = true;
+    [ObservableProperty] public partial bool MatchLineCheckAddsToPreview { get; set; } = true;
 
     /// <summary>Observable collection of skip-extension items for the multi-select dropdown.</summary>
     public ObservableCollection<SkipExtensionItem> SkipExtensionItems { get; } = [];
@@ -1943,8 +1969,7 @@ public sealed partial class MainViewModel : ObservableObject
     private static string FormatThroughput(int filesProcessed, long bytesScanned, TimeSpan elapsed)
     {
         double seconds = Math.Max(elapsed.TotalSeconds, 0.001);
-        double mbPerSec = bytesScanned / (1024.0 * 1024.0) / seconds;
-        return $"{filesProcessed / seconds:N1} files/sec, {mbPerSec:N0} MB/s";
+        return $"{filesProcessed / seconds:N1} files/sec";
     }
 
     private double _instantFilesPerSec;
@@ -1975,7 +2000,7 @@ public sealed partial class MainViewModel : ObservableObject
             _prevDisplayTime = seconds;
         }
 
-        StatusText = $"{MatchesFound:N0} matches in {filesWithMatches:N0} files ({FormatElapsed(_searchTimer.Elapsed)}, {_instantFilesPerSec:N1} files/sec, {_instantMbPerSec:N0} MB/s)";
+        StatusText = $"{MatchesFound:N0} matches in {filesWithMatches:N0} files ({FormatElapsed(_searchTimer.Elapsed)}, {_instantFilesPerSec:N1} files/sec)";
 
         // Collect incremental sample for sparkline (~0.15s window, rolling 30s)
         double dt = seconds - _prevSampleTime;
@@ -2062,6 +2087,21 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.UnselectedPreviewContentBackgroundColor = ColorStringHelper.Normalize(
             UnselectedPreviewContentBackgroundColor,
             Windows.UI.Color.FromArgb(0x00, 0x00, 0x00, 0x00));
+        _settings.PreviewGutterContextColor = ColorStringHelper.Normalize(
+            PreviewGutterContextColor,
+            Windows.UI.Color.FromArgb(0xFF, 0x50, 0x50, 0x50));
+        _settings.PreviewGutterMatchColor = ColorStringHelper.Normalize(
+            PreviewGutterMatchColor,
+            Windows.UI.Color.FromArgb(0xFF, 0x32, 0xCD, 0x32));
+        _settings.PreviewMatchTextColor = ColorStringHelper.Normalize(
+            PreviewMatchTextColor,
+            Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00));
+        _settings.PreviewOverlayColor = ColorStringHelper.Normalize(
+            PreviewOverlayColor,
+            Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x45, 0x00));
+        _settings.PreviewMatchLineColor = ColorStringHelper.Normalize(
+            PreviewMatchLineColor,
+            Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF));
         _settings.LogLevelIndex = FileLogLevelIndex;
         _settings.ConsoleLogLevelIndex = ConsoleLogLevelIndex;
         _settings.FileListerBackendIndex = FileListerBackendIndex;
@@ -2093,6 +2133,9 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.BackupBeforeSave = BackupBeforeSave;
         _settings.WindowFocusBehavior = WindowFocusBehavior;
         _settings.CloseToTray = CloseToTray;
+        _settings.MaximizeOnStartup = MaximizeOnStartup;
+        _settings.FileHeaderCheckAddsToPreview = FileHeaderCheckAddsToPreview;
+        _settings.MatchLineCheckAddsToPreview = MatchLineCheckAddsToPreview;
         _settings.PreviewEditorMaxSizeMB = PreviewEditorMaxSizeMB;
         _settings.PreviewEditorMaxTextLength = PreviewEditorMaxTextLength;
         _settings.PreviewEditorMaxLineLength = PreviewEditorMaxLineLength;

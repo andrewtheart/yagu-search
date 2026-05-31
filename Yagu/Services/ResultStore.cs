@@ -24,6 +24,7 @@ namespace Yagu.Services;
 public sealed class ResultStore : IDisposable
 {
     private const string TempFileSearchPattern = "yagu-results-*.tmp";
+    private const string TempFilePidPrefix = "yagu-results-p";
     private const int DrainBatchCap = 512;
     private const int EvictionChannelCapacity = 4096;
 
@@ -54,7 +55,7 @@ public sealed class ResultStore : IDisposable
         string baseDir = tempDirectory ?? Path.GetTempPath();
         if (!System.IO.Directory.Exists(baseDir))
             System.IO.Directory.CreateDirectory(baseDir);
-        _path = Path.Combine(baseDir, $"yagu-results-{Guid.NewGuid():N}.tmp");
+        _path = Path.Combine(baseDir, $"yagu-results-p{Environment.ProcessId}-{Guid.NewGuid():N}.tmp");
         _stream = new FileStream(_path, FileMode.Create, FileAccess.ReadWrite, FileShare.Read, 1024 * 1024);
         _writer = new BinaryWriter(_stream, Encoding.UTF8, leaveOpen: true);
         _readStream = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 64 * 1024);
@@ -265,6 +266,7 @@ public sealed class ResultStore : IDisposable
     internal static int DeleteOrphanedTempFiles(string tempDirectory, DateTime deleteFilesLastWrittenAtOrBeforeUtc)
     {
         int deleted = 0;
+        string ownPidMarker = $"{TempFilePidPrefix}{Environment.ProcessId}-";
         try
         {
             if (!Directory.Exists(tempDirectory)) return 0;
@@ -273,6 +275,12 @@ public sealed class ResultStore : IDisposable
             {
                 try
                 {
+                    var fileName = Path.GetFileName(path);
+
+                    // Never delete files belonging to the currently running process.
+                    if (fileName.StartsWith(ownPidMarker, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
                     var file = new FileInfo(path);
                     if (!file.Exists || file.LastWriteTimeUtc > deleteFilesLastWrittenAtOrBeforeUtc)
                         continue;

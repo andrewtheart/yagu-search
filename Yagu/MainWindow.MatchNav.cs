@@ -55,7 +55,7 @@ public sealed partial class MainWindow
     private void FlashActiveMatchOverlayRed()
     {
         var flashBrush = new SolidColorBrush(Microsoft.UI.Colors.Red) { Opacity = 0.45 };
-        var normalBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(0x22, 0xFF, 0x6A, 0x00));
+        var normalBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(0x22, _overlayColor.R, _overlayColor.G, _overlayColor.B));
         ActiveMatchBand.Background = flashBrush;
         ActiveMatchWordMarker.Background = new SolidColorBrush(Microsoft.UI.Colors.Red) { Opacity = 0.55 };
         ActiveMatchBand.BorderBrush = new SolidColorBrush(Microsoft.UI.Colors.Red);
@@ -72,13 +72,13 @@ public sealed partial class MainWindow
         timer.Tick += (_, _) =>
         {
             ActiveMatchBand.Background = normalBrush;
-            ActiveMatchWordMarker.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x1A, 0xFF, 0x45, 0x00));
-            ActiveMatchBand.BorderBrush = new SolidColorBrush(Microsoft.UI.Colors.OrangeRed);
-            ActiveMatchWordMarker.BorderBrush = new SolidColorBrush(Microsoft.UI.Colors.OrangeRed);
+            ActiveMatchWordMarker.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x1A, _overlayColor.R, _overlayColor.G, _overlayColor.B));
+            ActiveMatchBand.BorderBrush = new SolidColorBrush(_overlayColor);
+            ActiveMatchWordMarker.BorderBrush = new SolidColorBrush(_overlayColor);
             foreach (var marker in _activeMatchExtraWordMarkers)
             {
-                marker.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x1A, 0xFF, 0x45, 0x00));
-                marker.BorderBrush = new SolidColorBrush(Microsoft.UI.Colors.OrangeRed);
+                marker.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x1A, _overlayColor.R, _overlayColor.G, _overlayColor.B));
+                marker.BorderBrush = new SolidColorBrush(_overlayColor);
             }
             timer.Stop();
         };
@@ -114,10 +114,10 @@ public sealed partial class MainWindow
         return matches;
     }
 
-    private static bool IsSearchMatchRun(Run run)
+    private bool IsSearchMatchRun(Run run)
         => run.FontWeight.Weight == Microsoft.UI.Text.FontWeights.Bold.Weight
            && run.Foreground is SolidColorBrush brush
-           && brush.Color == Microsoft.UI.Colors.Gold;
+           && brush.Color == _matchTextBrush.Color;
 
     private void UnboxCurrentMatch([System.Runtime.CompilerServices.CallerMemberName] string caller = "")
     {
@@ -1074,14 +1074,14 @@ public sealed partial class MainWindow
         return markerRects.Count > 1;
     }
 
-    private static Border CreateActiveMatchWordMarker()
+    private Border CreateActiveMatchWordMarker()
     {
         var marker = new Border
         {
             Height = 18,
             MinWidth = 12,
-            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x1A, 0xFF, 0x45, 0x00)),
-            BorderBrush = new SolidColorBrush(Microsoft.UI.Colors.OrangeRed),
+            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x1A, _overlayColor.R, _overlayColor.G, _overlayColor.B)),
+            BorderBrush = new SolidColorBrush(_overlayColor),
             BorderThickness = new Thickness(0, 0, 0, 2),
             CornerRadius = new CornerRadius(2),
         };
