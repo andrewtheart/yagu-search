@@ -20,12 +20,12 @@ namespace TextControlBoxNS.Helper
         {
             menuFlyout = new MenuFlyout();
             menuFlyout.Items.Add(CreateItem(() => { CopyWithLineNumbers(sender); }, "Copy (with line numbers)", Symbol.Copy, ""));
-            menuFlyout.Items.Add(CreateItem(() => { sender.Copy(); }, "Copy (without line numbers)", Symbol.Copy, "Ctrl + C"));
-            menuFlyout.Items.Add(CreateItem(() => { sender.Paste(); }, "Paste", Symbol.Paste, "Ctrl + V"));
-            menuFlyout.Items.Add(CreateItem(() => { sender.Cut(); }, "Cut", Symbol.Cut, "Ctrl + X"));
+            menuFlyout.Items.Add(CreateItem(() => { sender.Copy(); }, "Copy (without line numbers)", Symbol.Copy, ""));
+            menuFlyout.Items.Add(CreateItem(() => { sender.Paste(); }, "Paste", Symbol.Paste, ""));
+            menuFlyout.Items.Add(CreateItem(() => { sender.Cut(); }, "Cut", Symbol.Cut, ""));
             menuFlyout.Items.Add(new MenuFlyoutSeparator());
-            menuFlyout.Items.Add(CreateItem(() => { sender.Undo(); }, "Undo", Symbol.Undo, "Ctrl + Z"));
-            menuFlyout.Items.Add(CreateItem(() => { sender.Redo(); }, "Redo", Symbol.Redo, "Ctrl + Y"));
+            menuFlyout.Items.Add(CreateItem(() => { sender.Undo(); }, "Undo", Symbol.Undo, ""));
+            menuFlyout.Items.Add(CreateItem(() => { sender.Redo(); }, "Redo", Symbol.Redo, ""));
 
             menuFlyout.Closed += (_, _) => { sender.Focus(FocusState.Programmatic); };
 

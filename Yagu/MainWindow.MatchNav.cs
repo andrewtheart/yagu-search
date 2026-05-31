@@ -758,6 +758,8 @@ public sealed partial class MainWindow
             string wrappedMarkerDetails = string.Empty;
             if (ViewModel.PreviewWordWrap)
             {
+                double rowTolerance = Math.Max(4, markerHeight * 0.6);
+                bool measuredEndSameRow = IsUsableTextRect(endRect) && Math.Abs(endRect.Y - rect.Y) <= rowTolerance;
                 if (TryBuildMeasuredWrappedActiveMatchMarkerRects(
                         block,
                         targetPara,
@@ -773,7 +775,7 @@ public sealed partial class MainWindow
                     point = new Windows.Foundation.Point(wrappedMarkerRects[0].X, wrappedMarkerRects[0].Y);
                     markerWidth = wrappedMarkerRects[0].Width;
                 }
-                else if (TryBuildWrappedActiveMatchMarkerRects(
+                else if (!measuredEndSameRow && TryBuildWrappedActiveMatchMarkerRects(
                         block,
                         targetPara,
                         activeColumn,
@@ -784,11 +786,11 @@ public sealed partial class MainWindow
                         out wrappedMarkerDetails))
                 {
                     wrappedMarkerRects = estimatedMarkerRects;
+                    usedWrappedEstimate = true;
                     point = new Windows.Foundation.Point(wrappedMarkerRects[0].X, wrappedMarkerRects[0].Y);
                     markerWidth = wrappedMarkerRects[0].Width;
                 }
 
-                double rowTolerance = Math.Max(4, markerHeight * 0.6);
                 if (wrappedMarkerRects is null && IsUsableTextRect(endRect) && Math.Abs(endRect.Y - rect.Y) > rowTolerance)
                 {
                     var endPoint = TransformRunRectToOverlay(block, targetPara, endRect);

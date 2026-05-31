@@ -23,7 +23,12 @@ namespace TextControlBoxNS.Core.Renderer
         private ZoomManager zoomManager;
         private DesignHelper designHelper;
         private TextManager textManager;
+        private SearchManager searchManager;
         private const byte MaximumReadableOverlayAlpha = 110;
+        private const byte ActiveSearchSelectionOverlayAlpha = 145;
+        private const float ActiveSearchSelectionBorderWidth = 2f;
+        private string _lastSelectionDiagnosticsKey = string.Empty;
+        private long _lastSelectionDiagnosticsTick;
 
         internal static Color GetReadableOverlayColor(Color color)
         {
@@ -39,7 +44,8 @@ namespace TextControlBoxNS.Core.Renderer
             ScrollManager scrollManager,
             ZoomManager zoomManager,
             DesignHelper designHelper,
-            TextManager textManager
+            TextManager textManager,
+            SearchManager searchManager
             )
         {
             this.selectionManager = selectionManager;
@@ -49,6 +55,7 @@ namespace TextControlBoxNS.Core.Renderer
             this.zoomManager = zoomManager;
             this.designHelper = designHelper;
             this.textManager = textManager;
+            this.searchManager = searchManager;
         }
 
         public void DrawSelection(
@@ -128,6 +135,7 @@ namespace TextControlBoxNS.Core.Renderer
                 {
                     selectionManager.currentTextSelection.renderedIndex = 0;
                     selectionManager.currentTextSelection.renderedLength = 0;
+                    LogWordWrapSelectionDiagnostics("virtualized selection outside rendered line", startLine, characterPosStart, endLine, characterPosEnd, 0, 0, 0, marginLeft, marginTop);
                     return;
                 }
 
@@ -137,6 +145,7 @@ namespace TextControlBoxNS.Core.Renderer
                 {
                     selectionManager.currentTextSelection.renderedIndex = 0;
                     selectionManager.currentTextSelection.renderedLength = 0;
+                    LogWordWrapSelectionDiagnostics("virtualized selection outside rendered slice", startLine, characterPosStart, endLine, characterPosEnd, selStartIndex, selEndIndex, 0, marginLeft, marginTop);
                     return;
                 }
             }
@@ -197,6 +206,7 @@ namespace TextControlBoxNS.Core.Renderer
                 {
                     selectionManager.currentTextSelection.renderedIndex = 0;
                     selectionManager.currentTextSelection.renderedLength = 0;
+                    LogWordWrapSelectionDiagnostics("horizontal selection outside rendered slice", startLine, characterPosStart, endLine, characterPosEnd, renderedSelectionStart, renderedSelectionLength, 0, marginLeft, marginTop);
                     return;
                 }
                 if (renderedSelectionStart + renderedSelectionLength > layoutLen)
@@ -209,14 +219,21 @@ namespace TextControlBoxNS.Core.Renderer
             {
                 selectionManager.currentTextSelection.renderedIndex = 0;
                 selectionManager.currentTextSelection.renderedLength = 0;
+                LogWordWrapSelectionDiagnostics("zero rendered selection", startLine, characterPosStart, endLine, characterPosEnd, renderedSelectionStart, renderedSelectionLength, 0, marginLeft, marginTop);
                 return;
             }
+
+            CanvasTextLayoutRegion[] regions = textLayout.GetCharacterRegions(renderedSelectionStart, renderedSelectionLength);
+            LogWordWrapSelectionDiagnostics("render selection", startLine, characterPosStart, endLine, characterPosEnd, renderedSelectionStart, renderedSelectionLength, regions.Length, marginLeft, marginTop, regions.Length > 0 ? regions[0].LayoutBounds : null);
 
             using CanvasCommandList canvasCommandList = new CanvasCommandList(args.DrawingSession);
             using (var ccls = canvasCommandList.CreateDrawingSession())
             {
-                CanvasTextLayoutRegion[] regions = textLayout.GetCharacterRegions(renderedSelectionStart, renderedSelectionLength);
-                Color readableSelectionColor = GetReadableOverlayColor(selectionColor);
+                bool isActiveSearchMatch = IsActiveSearchMatchSelection();
+                Color readableSelectionColor = isActiveSearchMatch
+                    ? GetActiveSearchSelectionOverlayColor(selectionColor)
+                    : GetReadableOverlayColor(selectionColor);
+                Color activeSearchSelectionBorderColor = GetActiveSearchSelectionBorderColor(selectionColor);
                 float width = fontSize / scrollManager.DefaultVerticalScrollSensitivity;
                 for (int i = 0; i < regions.Length; i++)
                 {
@@ -233,13 +250,87 @@ namespace TextControlBoxNS.Core.Renderer
                         };
                     }
 
-                    ccls.FillRectangle(Utils.CreateRect(regions[i].LayoutBounds, marginLeft, marginTop), readableSelectionColor);
+                    Rect selectionRect = Utils.CreateRect(regions[i].LayoutBounds, marginLeft, marginTop);
+                    ccls.FillRectangle(selectionRect, readableSelectionColor);
+                    if (isActiveSearchMatch)
+                    {
+                        ccls.DrawRectangle(selectionRect, activeSearchSelectionBorderColor, ActiveSearchSelectionBorderWidth);
+                    }
                 }
             }
             args.DrawingSession.DrawImage(canvasCommandList);
 
             selectionManager.currentTextSelection.renderedIndex = renderedSelectionStart;
             selectionManager.currentTextSelection.renderedLength = renderedSelectionLength;
+        }
+
+        private bool IsActiveSearchMatchSelection()
+        {
+            if (searchManager?.IsSearchOpen != true || string.IsNullOrEmpty(searchManager.searchParameter?.Word))
+                return false;
+
+            var selection = selectionManager.OrderTextSelectionSeparated();
+            if (selection.startNull || selection.endNull || selection.startLine != selection.endLine)
+                return false;
+
+            int selectionLength = selection.endChar - selection.startChar;
+            string searchWord = searchManager.searchParameter.Word;
+            if (selectionLength != searchWord.Length)
+                return false;
+
+            if (selection.startLine < 0 || selection.startLine >= textManager.LinesCount)
+                return false;
+
+            string line = textManager.GetLineText(selection.startLine);
+            if (selection.startChar < 0 || selection.endChar > line.Length)
+                return false;
+
+            string selectedText = line.Substring(selection.startChar, selectionLength);
+            StringComparison comparison = searchManager.searchParameter.MatchCase
+                ? StringComparison.Ordinal
+                : StringComparison.OrdinalIgnoreCase;
+            return string.Equals(selectedText, searchWord, comparison);
+        }
+
+        private static Color GetActiveSearchSelectionOverlayColor(Color selectionColor)
+        {
+            return Color.FromArgb(ActiveSearchSelectionOverlayAlpha, selectionColor.R, selectionColor.G, selectionColor.B);
+        }
+
+        private static Color GetActiveSearchSelectionBorderColor(Color selectionColor)
+        {
+            byte green = selectionColor.G < 160 ? (byte)160 : selectionColor.G;
+            return Color.FromArgb(255, selectionColor.R, green, selectionColor.B);
+        }
+
+        private void LogWordWrapSelectionDiagnostics(
+            string reason,
+            int startLine,
+            int startChar,
+            int endLine,
+            int endChar,
+            int renderedStart,
+            int renderedLength,
+            int regionCount,
+            float marginLeft,
+            float marginTop,
+            Rect? firstRegion = null)
+        {
+            if (!textRenderer.IsWordWrapEnabled || !TextControlBoxDiagnostics.IsVerboseEnabled)
+                return;
+
+            long now = Environment.TickCount64;
+            string key = $"{reason}|{startLine}:{startChar}-{endLine}:{endChar}|{renderedStart}+{renderedLength}|regions={regionCount}|line={textRenderer.NumberOfStartLine}|rows={textRenderer.StartVisualRow}";
+            if (string.Equals(key, _lastSelectionDiagnosticsKey, StringComparison.Ordinal) && now - _lastSelectionDiagnosticsTick < 500)
+                return;
+
+            _lastSelectionDiagnosticsKey = key;
+            _lastSelectionDiagnosticsTick = now;
+
+            string first = firstRegion is { } rect
+                ? $" first=({rect.X:F1},{rect.Y:F1},{rect.Width:F1},{rect.Height:F1})"
+                : string.Empty;
+            TextControlBoxDiagnostics.Verbose("TextControlBox.SelectionHighlight", $"{reason}: doc={startLine}:{startChar}-{endLine}:{endChar}, rendered={renderedStart}+{renderedLength}, regions={regionCount},{first} margin=({marginLeft:F1},{marginTop:F1}), startLine={textRenderer.NumberOfStartLine}, renderedLines={textRenderer.NumberOfRenderedLines}, startVisualRow={textRenderer.StartVisualRow}, wrappedStartRowOffset={textRenderer.WrappedStartRowOffset}, virtualWrapped={textRenderer.IsVirtualizedWrappedLine}, virtualSliceStart={textRenderer.VirtualizedLineSliceStart}, renderedTextLen={textRenderer.RenderedText?.Length ?? 0}");
         }
 
 

@@ -111,6 +111,26 @@ internal class ScrollManager
             canvasHelper.UpdateAll();
     }
 
+    public void ScrollCursorToCenter(bool update = true)
+    {
+        if (coreTextbox.WordWrap)
+        {
+            textRenderer.EnsureWrapMetrics(coreTextbox.canvasText);
+            int cursorVisualRow = textRenderer.GetVisualRowForCursorPosition(coreTextbox.canvasText, cursorManager.currentCursorPosition);
+            int visibleRows = textRenderer.GetVisibleVisualRowCount(coreTextbox.canvasText);
+            int targetRow = Math.Max(0, cursorVisualRow - visibleRows / 2);
+            verticalScrollBar.Value = targetRow * textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+        }
+        else
+        {
+            int targetLine = Math.Max(0, cursorManager.LineNumber - textRenderer.NumberOfRenderedLines / 2);
+            verticalScrollBar.Value = targetLine * textRenderer.SingleLineHeight / DefaultVerticalScrollSensitivity;
+        }
+
+        if (update)
+            canvasHelper.UpdateAll();
+    }
+
     public void ScrollTopIntoView(bool update = true)
     {
         if (coreTextbox.WordWrap)

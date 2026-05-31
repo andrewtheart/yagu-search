@@ -762,6 +762,10 @@ internal class TextRenderer
                 //Only update the textformat when the text changes:
                 //render the search highlights
                 if (searchManager.IsSearchOpen)
+                {
+                    string diagnosticsContext = TextControlBoxDiagnostics.IsVerboseEnabled && IsWordWrapEnabled
+                        ? $"wordWrap={IsWordWrapEnabled}, startLine={NumberOfStartLine}, renderedLines={NumberOfRenderedLines}, startVisualRow={StartVisualRow}, wrappedStartRowOffset={WrappedStartRowOffset}, virtualWrapped={IsVirtualizedWrappedLine}, virtualSliceStart={VirtualizedLineSliceStart}, virtualRows={VirtualizedWrappedRowsToRender}, virtualCharsPerRow={VirtualizedLineCharsPerRow}, drawOffset=({DrawTextOffsetX:F1},{DrawTextOffsetY:F1}), layout=({layoutSize.Width:F1},{layoutSize.Height:F1}), canvas=({canvasText.Size.Width:F1},{canvasText.Size.Height:F1})"
+                        : string.Empty;
                     SearchHighlightsRenderer.RenderHighlights(
                         args,
                         ccls,
@@ -772,8 +776,14 @@ internal class TextRenderer
                         DrawTextOffsetX,
                         IsWordWrapEnabled ? DrawTextOffsetY - SingleLineHeight + (SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity) : SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity,
                         designHelper._Design.SearchHighlightColor,
-                        coreTextbox.MaxSearchHighlightsPerRender
+                        coreTextbox.MaxSearchHighlightsPerRender,
+                        logDiagnostics: IsWordWrapEnabled,
+                        diagnosticsContext: diagnosticsContext,
+                        virtualizedWrappedLine: IsVirtualizedWrappedLine,
+                        virtualizedWrappedLineCharsPerRow: VirtualizedLineCharsPerRow,
+                        virtualizedWrappedLineNewLineLength: textManager.NewLineCharacter.Length
                         );
+                    }
 
                 ccls.DrawTextLayout(DrawnTextLayout, DrawTextOffsetX, DrawTextOffsetY, designHelper.TextColorBrush);
 

@@ -31,6 +31,7 @@ public sealed partial class MainWindow
     {
         FindBar.Visibility = Visibility.Visible;
         bool inEditor = PreviewEditor.Visibility == Visibility.Visible;
+        LogFindVerbose($"OpenFindBar: showReplace={showReplace}, {FindSurfaceDescription()}, selectedTextLength={(inEditor ? PreviewEditor.SelectedText.Length : 0)}");
         if (showReplace)
         {
             ReplaceRow.Visibility = Visibility.Visible;
@@ -56,6 +57,7 @@ public sealed partial class MainWindow
 
     private void CloseFindBar()
     {
+        LogFindVerbose($"CloseFindBar: previousIndex={_findIndex}, {FindSurfaceDescription()}");
         FindBar.Visibility = Visibility.Collapsed;
         ReplaceRow.Visibility = Visibility.Collapsed;
         FindReplaceToggle.IsChecked = false;
@@ -78,6 +80,7 @@ public sealed partial class MainWindow
     private void OnFindReplaceToggle(object sender, RoutedEventArgs e)
     {
         bool show = FindReplaceToggle.IsChecked == true;
+        LogFindVerbose($"FindReplaceToggle: showReplace={show}, {FindSurfaceDescription()}");
         ReplaceRow.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
         // Single-file replace buttons only make sense in the editor
         bool inEditor = PreviewEditor.Visibility == Visibility.Visible;
@@ -107,6 +110,7 @@ public sealed partial class MainWindow
     private void OnFindTextBoxTextChanged(object sender, TextChangedEventArgs e)
     {
         _findIndex = -1; // reset so next find starts from current selection
+        LogFindVerbose($"FindTextChanged: needle={DescribeFindText(FindTextBox.Text)}, resetIndex=true, {FindSurfaceDescription()}");
         SyncPreviewEditorFindHighlights();
         UpdateFindStatus();
     }
@@ -114,6 +118,7 @@ public sealed partial class MainWindow
     private void OnFindOptionChanged(object sender, RoutedEventArgs e)
     {
         _findIndex = -1;
+        LogFindVerbose($"FindOptionChanged: matchCase={FindMatchCaseCheckBox.IsChecked == true}, needle={DescribeFindText(FindTextBox.Text)}, {FindSurfaceDescription()}");
         SyncPreviewEditorFindHighlights();
         UpdateFindStatus();
     }
@@ -127,6 +132,60 @@ public sealed partial class MainWindow
         FindMatchCaseCheckBox.IsChecked == true ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
     private string FindTarget => PreviewEditor.Visibility == Visibility.Visible ? GetPreviewEditorText() : GetPreviewBlockText();
+
+    private void LogFindVerbose(string message)
+    {
+        if (LogService.Instance.IsVerboseEnabled)
+            LogService.Instance.Verbose("FindReplace", message);
+    }
+
+    private string FindSurfaceDescription()
+    {
+        if (PreviewEditor.Visibility == Visibility.Visible)
+        {
+            return $"surface=editor, wordWrap={PreviewEditor.WordWrap}, searchOpen={PreviewEditor.SearchIsOpen}, selection={DescribePreviewEditorSelection()}";
+        }
+
+        return $"surface=preview, sectionsVisible={PreviewSectionsPanel.Visibility == Visibility.Visible}, previewWrap={ViewModel.PreviewWordWrap}";
+    }
+
+    private string DescribePreviewEditorSelection()
+    {
+        try
+        {
+            var selection = PreviewEditor.CurrentSelectionOrdered;
+            return selection is { } s
+                ? $"{s.StartLinePos}:{s.StartCharacterPos}-{s.EndLinePos}:{s.EndCharacterPos}"
+                : "<none>";
+        }
+        catch
+        {
+            return "<unavailable>";
+        }
+    }
+
+    private static string DescribeFindText(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return "<empty>";
+        var escaped = text
+            .Replace("\r", "\\r", StringComparison.Ordinal)
+            .Replace("\n", "\\n", StringComparison.Ordinal)
+            .Replace("\t", "\\t", StringComparison.Ordinal);
+        if (escaped.Length > 80)
+            escaped = escaped[..80] + "...";
+        return $"'{escaped}' len={text.Length}";
+    }
+
+    private static int GetFindLineNumber(string text, int index)
+    {
+        int clamped = Math.Clamp(index, 0, text.Length);
+        int line = 1;
+        for (int i = 0; i < clamped; i++)
+        {
+            if (text[i] == '\n') line++;
+        }
+        return line;
+    }
 
     private string GetPreviewBlockText()
     {
@@ -168,18 +227,40 @@ public sealed partial class MainWindow
     private void FindNext()
     {
         var needle = FindTextBox.Text;
-        if (string.IsNullOrEmpty(needle)) return;
+        if (string.IsNullOrEmpty(needle))
+        {
+            LogFindVerbose($"FindNext: ignored empty needle, {FindSurfaceDescription()}");
+            return;
+        }
         var haystack = FindTarget;
-        if (haystack.Length == 0) { FindStatusText.Text = "No content"; return; }
+        if (haystack.Length == 0)
+        {
+            LogFindVerbose($"FindNext: no content, needle={DescribeFindText(needle)}, {FindSurfaceDescription()}");
+            FindStatusText.Text = "No content";
+            return;
+        }
 
+        int previousIndex = _findIndex;
         int startPos = _findIndex >= 0 ? _findIndex + needle.Length : 0;
         if (startPos >= haystack.Length) startPos = 0;
 
         int idx = haystack.IndexOf(needle, startPos, FindComparison);
+        bool wrapped = false;
         if (idx < 0 && startPos > 0)
+        {
+            wrapped = true;
             idx = haystack.IndexOf(needle, 0, FindComparison); // wrap around
+        }
 
-        if (idx < 0) { FindStatusText.Text = "No matches"; _findIndex = -1; return; }
+        if (idx < 0)
+        {
+            LogFindVerbose($"FindNext: no match, needle={DescribeFindText(needle)}, haystackLen={haystack.Length}, previousIndex={previousIndex}, startPos={startPos}, wrapped={wrapped}, {FindSurfaceDescription()}");
+            FindStatusText.Text = "No matches";
+            _findIndex = -1;
+            return;
+        }
+
+        LogFindVerbose($"FindNext: found, needle={DescribeFindText(needle)}, haystackLen={haystack.Length}, previousIndex={previousIndex}, startPos={startPos}, resultIndex={idx}, resultLine={GetFindLineNumber(haystack, idx)}, wrapped={wrapped}, {FindSurfaceDescription()}");
 
         _findIndex = idx;
         SelectFindMatch(idx, needle.Length);
@@ -189,18 +270,40 @@ public sealed partial class MainWindow
     private void FindPrevious()
     {
         var needle = FindTextBox.Text;
-        if (string.IsNullOrEmpty(needle)) return;
+        if (string.IsNullOrEmpty(needle))
+        {
+            LogFindVerbose($"FindPrevious: ignored empty needle, {FindSurfaceDescription()}");
+            return;
+        }
         var haystack = FindTarget;
-        if (haystack.Length == 0) { FindStatusText.Text = "No content"; return; }
+        if (haystack.Length == 0)
+        {
+            LogFindVerbose($"FindPrevious: no content, needle={DescribeFindText(needle)}, {FindSurfaceDescription()}");
+            FindStatusText.Text = "No content";
+            return;
+        }
 
+        int previousIndex = _findIndex;
         int startPos = _findIndex > 0 ? _findIndex - 1 : haystack.Length - 1;
 
         // Search backwards by scanning substring before startPos
         int idx = haystack.LastIndexOf(needle, startPos, FindComparison);
+        bool wrapped = false;
         if (idx < 0 && startPos < haystack.Length - 1)
+        {
+            wrapped = true;
             idx = haystack.LastIndexOf(needle, haystack.Length - 1, FindComparison); // wrap around
+        }
 
-        if (idx < 0) { FindStatusText.Text = "No matches"; _findIndex = -1; return; }
+        if (idx < 0)
+        {
+            LogFindVerbose($"FindPrevious: no match, needle={DescribeFindText(needle)}, haystackLen={haystack.Length}, previousIndex={previousIndex}, startPos={startPos}, wrapped={wrapped}, {FindSurfaceDescription()}");
+            FindStatusText.Text = "No matches";
+            _findIndex = -1;
+            return;
+        }
+
+        LogFindVerbose($"FindPrevious: found, needle={DescribeFindText(needle)}, haystackLen={haystack.Length}, previousIndex={previousIndex}, startPos={startPos}, resultIndex={idx}, resultLine={GetFindLineNumber(haystack, idx)}, wrapped={wrapped}, {FindSurfaceDescription()}");
 
         _findIndex = idx;
         SelectFindMatch(idx, needle.Length);
@@ -209,12 +312,14 @@ public sealed partial class MainWindow
 
     private void SelectFindMatch(int index, int length)
     {
+        LogFindVerbose($"SelectFindMatch: index={index}, length={length}, before={FindSurfaceDescription()}");
         if (PreviewEditor.Visibility == Visibility.Visible)
         {
             SyncPreviewEditorFindHighlights();
             PreviewEditor.Focus(FocusState.Programmatic);
             SelectPreviewEditorText(index, length);
             ScrollPreviewEditorMatchIntoView(index);
+            LogFindVerbose($"SelectFindMatch: editor selected, index={index}, length={length}, after={FindSurfaceDescription()}");
         }
         else
         {
@@ -239,8 +344,12 @@ public sealed partial class MainWindow
                 if (text[i] == '\n') line++;
             }
             PreviewEditor.ScrollLineToCenter(line);
+            LogFindVerbose($"ScrollPreviewEditorMatchIntoView: index={index}, clamped={clamped}, line={line}, wordWrap={PreviewEditor.WordWrap}");
         }
-        catch { /* editor not ready or empty */ }
+        catch (Exception ex)
+        {
+            LogFindVerbose($"ScrollPreviewEditorMatchIntoView failed: index={index}, error={ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -343,6 +452,7 @@ public sealed partial class MainWindow
 
     private void ApplyFindHighlighter(RichTextBlock block, int startIndex, int length)
     {
+        LogFindVerbose($"ApplyFindHighlighter: startIndex={startIndex}, length={length}, block={block.Name}, previewWrap={ViewModel.PreviewWordWrap}");
         _findHighlightBlock = block;
         var highlighter = new Microsoft.UI.Xaml.Documents.TextHighlighter
         {
@@ -386,6 +496,7 @@ public sealed partial class MainWindow
             pos += needle.Length;
         }
         FindStatusText.Text = count == 0 ? "No matches" : $"{count} match{(count == 1 ? "" : "es")}";
+        LogFindVerbose($"UpdateFindStatus: needle={DescribeFindText(needle)}, count={count}, currentIndex={_findIndex}, {FindSurfaceDescription()}");
     }
 
     private void SyncPreviewEditorFindHighlights(bool force = false)
@@ -397,6 +508,7 @@ public sealed partial class MainWindow
         bool matchCase = FindMatchCaseCheckBox.IsChecked == true;
         if (FindBar.Visibility != Visibility.Visible || string.IsNullOrEmpty(needle))
         {
+            LogFindVerbose($"SyncPreviewEditorFindHighlights: clearing, force={force}, findBarVisible={FindBar.Visibility == Visibility.Visible}, needle={DescribeFindText(needle)}, {FindSurfaceDescription()}");
             ClearPreviewEditorFindHighlights();
             return;
         }
@@ -405,14 +517,16 @@ public sealed partial class MainWindow
             && string.Equals(_previewEditorFindHighlightNeedle, needle, StringComparison.Ordinal)
             && _previewEditorFindHighlightMatchCase == matchCase)
         {
+            LogFindVerbose($"SyncPreviewEditorFindHighlights: unchanged, force={force}, needle={DescribeFindText(needle)}, matchCase={matchCase}, {FindSurfaceDescription()}");
             return;
         }
 
         try
         {
-            PreviewEditor.BeginSearch(needle, wholeWord: false, matchCase: matchCase);
+            var result = PreviewEditor.BeginSearch(needle, wholeWord: false, matchCase: matchCase);
             _previewEditorFindHighlightNeedle = needle;
             _previewEditorFindHighlightMatchCase = matchCase;
+            LogFindVerbose($"SyncPreviewEditorFindHighlights: BeginSearch result={result}, force={force}, needle={DescribeFindText(needle)}, matchCase={matchCase}, {FindSurfaceDescription()}");
         }
         catch (Exception ex)
         {
@@ -424,9 +538,11 @@ public sealed partial class MainWindow
     {
         try
         {
+            LogFindVerbose($"ClearPreviewEditorFindHighlights: before={FindSurfaceDescription()}");
             PreviewEditor.EndSearch();
             _previewEditorFindHighlightNeedle = null;
             _previewEditorFindHighlightMatchCase = false;
+            LogFindVerbose($"ClearPreviewEditorFindHighlights: done, after={FindSurfaceDescription()}");
         }
         catch (Exception ex)
         {
@@ -442,6 +558,7 @@ public sealed partial class MainWindow
 
         var text = GetPreviewEditorText();
         int replaceAt = _findIndex;
+        LogFindVerbose($"ReplaceOne: start, needle={DescribeFindText(needle)}, replacementLen={ReplaceTextBox.Text.Length}, replaceAt={replaceAt}, textLen={text.Length}, {FindSurfaceDescription()}");
         if (replaceAt < 0
             || replaceAt + needle.Length > text.Length
             || !text.AsSpan(replaceAt, needle.Length).Equals(needle.AsSpan(), FindComparison))
@@ -450,6 +567,7 @@ public sealed partial class MainWindow
             if (replaceAt < 0)
             {
                 FindStatusText.Text = "No matches";
+                LogFindVerbose($"ReplaceOne: no match after fallback, needle={DescribeFindText(needle)}, {FindSurfaceDescription()}");
                 return;
             }
         }
@@ -465,6 +583,7 @@ public sealed partial class MainWindow
         SelectFindMatch(replaceAt, replacement.Length);
         UpdatePreviewEditorButtons();
         FindNext();
+        LogFindVerbose($"ReplaceOne: done, replacedAt={replaceAt}, replacementLen={replacement.Length}, {FindSurfaceDescription()}");
     }
 
     private void ReplaceAll()
@@ -475,6 +594,7 @@ public sealed partial class MainWindow
 
         var replacement = ReplaceTextBox.Text;
         var text = GetPreviewEditorText();
+        LogFindVerbose($"ReplaceAll: start, needle={DescribeFindText(needle)}, replacementLen={replacement.Length}, textLen={text.Length}, {FindSurfaceDescription()}");
         var sb = new StringBuilder(text.Length);
         int count = 0;
         int pos = 0;
@@ -500,6 +620,7 @@ public sealed partial class MainWindow
         _findIndex = -1;
         SyncPreviewEditorFindHighlights(force: true);
         FindStatusText.Text = count > 0 ? $"Replaced {count}" : "No matches";
+        LogFindVerbose($"ReplaceAll: done, count={count}, forceSynced=true, {FindSurfaceDescription()}");
     }
 
     private async void OnReplaceInAllFiles(object sender, RoutedEventArgs e)

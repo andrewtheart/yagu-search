@@ -23,10 +23,14 @@ internal class SearchManager
     public InternSearchResult FindNext(CursorPosition cursorPosition)
     {
         if (!IsSearchOpen || MatchingSearchLines == null || MatchingSearchLines.Length == 0)
+        {
+            TextControlBoxDiagnostics.Verbose("TextControlBox.SearchManager", $"FindNext: not available, isOpen={IsSearchOpen}, matchingLines={MatchingSearchLines?.Length ?? 0}, cursor={DescribePosition(cursorPosition)}");
             return new InternSearchResult(SearchResult.NotFound, null);
+        }
 
         int startLine = cursorPosition.LineNumber;
         int startIndex = cursorPosition.CharacterPosition;
+        TextControlBoxDiagnostics.Verbose("TextControlBox.SearchManager", $"FindNext: start cursor={DescribePosition(cursorPosition)}, searchLines={MatchingSearchLines.Length}, expression={TextControlBoxDiagnostics.DescribeText(searchParameter.SearchExpression)}");
 
         for (int i = 0; i < MatchingSearchLines.Length; i++)
         {
@@ -40,20 +44,26 @@ internal class SearchManager
                 if (lineNumber > startLine || match.Index >= startIndex)
                 {
                     cursorPosition.SetChangeValues(lineNumber, match.Index + match.Length);
+                    TextControlBoxDiagnostics.Verbose("TextControlBox.SearchManager", $"FindNext: found line={lineNumber}, matchIndex={match.Index}, matchLength={match.Length}, cursorAfter={DescribePosition(cursorPosition)}");
                     return new InternSearchResult(SearchResult.Found, new TextSelection(0, 0, lineNumber, match.Index, lineNumber, match.Index + match.Length));
                 }
             }
         }
+        TextControlBoxDiagnostics.Verbose("TextControlBox.SearchManager", $"FindNext: reached end from line={startLine}, index={startIndex}");
         return new InternSearchResult(SearchResult.ReachedEnd, null);
     }
 
     public InternSearchResult FindPrevious(CursorPosition cursorPosition)
     {
         if (!IsSearchOpen || MatchingSearchLines == null || MatchingSearchLines.Length == 0)
+        {
+            TextControlBoxDiagnostics.Verbose("TextControlBox.SearchManager", $"FindPrevious: not available, isOpen={IsSearchOpen}, matchingLines={MatchingSearchLines?.Length ?? 0}, cursor={DescribePosition(cursorPosition)}");
             return new InternSearchResult(SearchResult.NotFound, null);
+        }
 
         int startLine = cursorPosition.LineNumber;
         int startIndex = cursorPosition.CharacterPosition;
+        TextControlBoxDiagnostics.Verbose("TextControlBox.SearchManager", $"FindPrevious: start cursor={DescribePosition(cursorPosition)}, searchLines={MatchingSearchLines.Length}, expression={TextControlBoxDiagnostics.DescribeText(searchParameter.SearchExpression)}");
 
         for (int i = MatchingSearchLines.Length - 1; i >= 0; i--)
         {
@@ -68,10 +78,12 @@ internal class SearchManager
                 if (lineNumber < startLine || (lineNumber == startLine && match.Index < startIndex))
                 {
                     cursorPosition.SetChangeValues(lineNumber, match.Index);
+                    TextControlBoxDiagnostics.Verbose("TextControlBox.SearchManager", $"FindPrevious: found line={lineNumber}, matchIndex={match.Index}, matchLength={match.Length}, cursorAfter={DescribePosition(cursorPosition)}");
                     return new InternSearchResult(SearchResult.Found, new TextSelection(0, 0, lineNumber, match.Index, lineNumber, match.Index + match.Length));
                 }
             }
         }
+        TextControlBoxDiagnostics.Verbose("TextControlBox.SearchManager", $"FindPrevious: reached beginning from line={startLine}, index={startIndex}");
         return new InternSearchResult(SearchResult.ReachedBegin, null);
     }
 
@@ -94,10 +106,12 @@ internal class SearchManager
         if (MatchingSearchLines.Length > 0)
             IsSearchOpen = true;
 
+        TextControlBoxDiagnostics.Verbose("TextControlBox.SearchManager", $"BeginSearch: word={TextControlBoxDiagnostics.DescribeText(word)}, expression={TextControlBoxDiagnostics.DescribeText(searchParameter.SearchExpression)}, wholeWord={wholeWord}, matchCase={matchCase}, lines={textManager.totalLines.Count}, matchingLines={MatchingSearchLines.Length}, firstMatches={DescribeFirstLines(MatchingSearchLines)}");
         return MatchingSearchLines.Length > 0 ? SearchResult.Found : SearchResult.NotFound;
     }
     public void EndSearch()
     {
+        TextControlBoxDiagnostics.Verbose("TextControlBox.SearchManager", $"EndSearch: matchingLines={MatchingSearchLines?.Length ?? 0}, isOpen={IsSearchOpen}");
         IsSearchOpen = false;
         MatchingSearchLines = null;
     }
@@ -112,4 +126,10 @@ internal class SearchManager
         };
         return results.ToArray();
     }
+
+    private static string DescribePosition(CursorPosition cursorPosition)
+        => cursorPosition is null ? "<null>" : $"{cursorPosition.LineNumber}:{cursorPosition.CharacterPosition}";
+
+    private static string DescribeFirstLines(int[] lines)
+        => lines.Length == 0 ? "<none>" : string.Join(",", lines.Take(8));
 }

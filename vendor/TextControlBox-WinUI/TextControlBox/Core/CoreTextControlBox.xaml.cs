@@ -121,7 +121,7 @@ internal sealed partial class CoreTextControlBox : UserControl
         cursorManager.Init(textManager, currentLineManager);
         selectionManager.Init(textManager, cursorManager, eventsManager);
         undoRedo.Init(textManager, selectionManager, cursorManager, eventsManager, tabSpaceManager);
-        selectionRenderer.Init(selectionManager, textRenderer, eventsManager, scrollManager, zoomManager, designHelper, textManager);
+        selectionRenderer.Init(selectionManager, textRenderer, eventsManager, scrollManager, zoomManager, designHelper, textManager, searchManager);
         flyoutHelper.Init(this);
         canvasUpdateManager.Init(this);
         textActionManager.Init(this, textRenderer, undoRedo, currentLineManager, longestLineManager, canvasUpdateManager, textManager, selectionRenderer, cursorManager, scrollManager, eventsManager, stringManager, selectionManager, autoIndentionManager);
@@ -711,7 +711,9 @@ internal sealed partial class CoreTextControlBox : UserControl
 
     public void SetSelection(int start, int length)
     {
-        var result = selectionManager.GetSelectionFromPosition(start, length, CharacterCount());
+        int characterCount = CharacterCount();
+        var result = selectionManager.GetSelectionFromPosition(start, length, characterCount);
+        TextControlBoxDiagnostics.Verbose("TextControlBox.Selection", $"SetSelection(index): start={start}, length={length}, characterCount={characterCount}, mapped={DescribeSelection(result)}, beforeCursor={DescribePosition(CursorPosition)}, {DescribeTextControlBoxState()}");
         if (result != null)
         {
             selectionManager.SetSelection(result.StartPosition, result.EndPosition);
@@ -721,15 +723,18 @@ internal sealed partial class CoreTextControlBox : UserControl
 
         canvasUpdateManager.UpdateSelection();
         canvasUpdateManager.UpdateCursor();
+        TextControlBoxDiagnostics.Verbose("TextControlBox.Selection", $"SetSelection(index): updated, cursor={DescribePosition(CursorPosition)}, current={DescribeSelection(selectionManager.currentTextSelection)}, {DescribeTextControlBoxState()}");
     }
 
     public void SetSelection(int startLine, int startChar, int endLine, int endChar)
     {
+        TextControlBoxDiagnostics.Verbose("TextControlBox.Selection", $"SetSelection(line): start={startLine}:{startChar}, end={endLine}:{endChar}, beforeCursor={DescribePosition(CursorPosition)}, {DescribeTextControlBoxState()}");
         selectionManager.SetSelection(startLine, startChar, endLine, endChar);
         CursorPosition.SetChangeValues(endLine, endChar);
 
         canvasUpdateManager.UpdateSelection();
         canvasUpdateManager.UpdateCursor();
+        TextControlBoxDiagnostics.Verbose("TextControlBox.Selection", $"SetSelection(line): updated, cursor={DescribePosition(CursorPosition)}, current={DescribeSelection(selectionManager.currentTextSelection)}, {DescribeTextControlBoxState()}");
     }
 
     public void SelectAll()
@@ -760,7 +765,12 @@ internal sealed partial class CoreTextControlBox : UserControl
 
     public void ScrollLineToCenter(int line)
     {
-        scrollManager.ScrollLineIntoViewIfOutside(line);
+        TextControlBoxDiagnostics.Verbose("TextControlBox.Scroll", $"ScrollLineToCenter: line={line}, before={DescribeTextControlBoxState()}");
+        if (WordWrap && CursorPosition.LineNumber == line)
+            scrollManager.ScrollCursorToCenter();
+        else
+            scrollManager.ScrollLineIntoViewIfOutside(line);
+        TextControlBoxDiagnostics.Verbose("TextControlBox.Scroll", $"ScrollLineToCenter: done line={line}, after={DescribeTextControlBoxState()}");
     }
 
     public void ScrollOneLineUp(bool update = true)
@@ -890,42 +900,73 @@ internal sealed partial class CoreTextControlBox : UserControl
     public SearchResult FindNext()
     {
         if (!searchManager.IsSearchOpen)
+        {
+            TextControlBoxDiagnostics.Verbose("TextControlBox.Search", $"FindNext: search not open, {DescribeTextControlBoxState()}");
             return SearchResult.SearchNotOpened;
+        }
 
+        TextControlBoxDiagnostics.Verbose("TextControlBox.Search", $"FindNext: start, cursor={DescribePosition(CursorPosition)}, searchLines={searchManager.MatchingSearchLines?.Length ?? 0}, {DescribeTextControlBoxState()}");
         var res = searchManager.FindNext(CursorPosition);
         if (res.Selection != null)
         {
             selectionManager.SetSelection(res.Selection);
             ScrollLineIntoView(CursorPosition.LineNumber);
         }
+        TextControlBoxDiagnostics.Verbose("TextControlBox.Search", $"FindNext: result={res.Result}, selection={DescribeSelection(res.Selection)}, cursor={DescribePosition(CursorPosition)}, {DescribeTextControlBoxState()}");
         return res.Result;
     }
 
     public SearchResult FindPrevious()
     {
         if (!searchManager.IsSearchOpen)
+        {
+            TextControlBoxDiagnostics.Verbose("TextControlBox.Search", $"FindPrevious: search not open, {DescribeTextControlBoxState()}");
             return SearchResult.SearchNotOpened;
+        }
 
+        TextControlBoxDiagnostics.Verbose("TextControlBox.Search", $"FindPrevious: start, cursor={DescribePosition(CursorPosition)}, searchLines={searchManager.MatchingSearchLines?.Length ?? 0}, {DescribeTextControlBoxState()}");
         var res = searchManager.FindPrevious(CursorPosition);
         if (res.Selection != null)
         {
             selectionManager.SetSelection(res.Selection);
             ScrollLineIntoView(CursorPosition.LineNumber);
         }
+        TextControlBoxDiagnostics.Verbose("TextControlBox.Search", $"FindPrevious: result={res.Result}, selection={DescribeSelection(res.Selection)}, cursor={DescribePosition(CursorPosition)}, {DescribeTextControlBoxState()}");
         return res.Result;
     }
 
     public SearchResult BeginSearch(string word, bool wholeWord, bool matchCase)
     {
+        TextControlBoxDiagnostics.Verbose("TextControlBox.Search", $"BeginSearch: word={TextControlBoxDiagnostics.DescribeText(word)}, wholeWord={wholeWord}, matchCase={matchCase}, before={DescribeTextControlBoxState()}");
         var res = searchManager.BeginSearch(word, wholeWord, matchCase);
         canvasUpdateManager.UpdateText();
+        TextControlBoxDiagnostics.Verbose("TextControlBox.Search", $"BeginSearch: result={res}, searchOpen={searchManager.IsSearchOpen}, matchingLines={searchManager.MatchingSearchLines?.Length ?? 0}, expression={TextControlBoxDiagnostics.DescribeText(searchManager.searchParameter?.SearchExpression)}, after={DescribeTextControlBoxState()}");
         return res;
     }
 
     public void EndSearch()
     {
+        TextControlBoxDiagnostics.Verbose("TextControlBox.Search", $"EndSearch: beforeOpen={searchManager.IsSearchOpen}, matchingLines={searchManager.MatchingSearchLines?.Length ?? 0}, {DescribeTextControlBoxState()}");
         searchManager.EndSearch();
         canvasUpdateManager.UpdateText();
+        TextControlBoxDiagnostics.Verbose("TextControlBox.Search", $"EndSearch: done, {DescribeTextControlBoxState()}");
+    }
+
+    private string DescribeTextControlBoxState()
+    {
+        return $"wordWrap={WordWrap}, lines={textManager.LinesCount}, cursor={DescribePosition(CursorPosition)}, renderedStartLine={textRenderer.NumberOfStartLine}, renderedLines={textRenderer.NumberOfRenderedLines}, startVisualRow={textRenderer.StartVisualRow}, wrappedStartRowOffset={textRenderer.WrappedStartRowOffset}, virtualWrapped={textRenderer.IsVirtualizedWrappedLine}, verticalScroll={scrollManager.VerticalScroll:F2}, horizontalScroll={scrollManager.HorizontalScroll:F2}";
+    }
+
+    private static string DescribeSelection(TextSelection selection)
+    {
+        if (selection is null) return "<none>";
+        return $"{DescribePosition(selection.StartPosition)}-{DescribePosition(selection.EndPosition)}, rendered={selection.renderedIndex}+{selection.renderedLength}";
+    }
+
+    private static string DescribePosition(CursorPosition position)
+    {
+        if (position is null || position.IsNull) return "<null>";
+        return $"{position.LineNumber}:{position.CharacterPosition}";
     }
 
     public void Unload()

@@ -41,6 +41,12 @@
         <StackPanel x:Name="TitleBarActions" Grid.Row="0" Orientation="Horizontal" Spacing="4"
                     VerticalAlignment="Center" HorizontalAlignment="Right"
                     Margin="0,0,156,0" Canvas.ZIndex="100">
+            <Button x:Name="PinButton" Click="OnPinToggle" VerticalAlignment="Center"
+                    Width="36" Height="32" MinWidth="0" Padding="0"
+                    Background="Transparent" BorderThickness="0" Foreground="White"
+                    ToolTipService.ToolTip="Minimize to system tray when window loses focus">
+                <FontIcon x:Name="PinIcon" Glyph="&#xE77A;" FontSize="14" Foreground="White" />
+            </Button>
             <Button Click="OnOpenCredits" VerticalAlignment="Center"
                     Width="36" Height="32" MinWidth="0" Padding="0"
                     Background="Transparent" BorderThickness="0" Foreground="White"
@@ -118,19 +124,12 @@
                         TextChanged="OnDirectoryTextChanged"
                         SuggestionChosen="OnDirectorySuggestionChosen"
                         QuerySubmitted="OnDirectoryQuerySubmitted" />
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4">
-                        <Button Click="OnBrowseDirectory" ToolTipService.ToolTip="Browse for folder" Padding="8,6">
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <FontIcon Glyph="&#xED25;" FontSize="14" />
-                                <TextBlock Text="Browse" />
-                            </StackPanel>
-                        </Button>
-                        <Button x:Name="PinButton" Click="OnPinToggle"
-                                      ToolTipService.ToolTip="Minimize to system tray when window loses focus"
-                                      Padding="8,6">
-                            <FontIcon x:Name="PinIcon" Glyph="&#xE77A;" FontSize="14" />
-                        </Button>
-                    </StackPanel>
+                    <Button x:Name="BrowseDirectoryButton" Grid.Column="2" Click="OnBrowseDirectory" ToolTipService.ToolTip="Browse for folder" Padding="8,6">
+                        <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center">
+                            <FontIcon Glyph="&#xED25;" FontSize="14" />
+                            <TextBlock Text="Browse" />
+                        </StackPanel>
+                    </Button>
                 </Grid>
 
                 <!-- Search bar -->
@@ -1058,35 +1057,34 @@
 
                             <!-- Primary actions (icon-only compact buttons) -->
                             <Button x:Name="FullFileButton" Click="OnShowFullFile" Width="28" Height="28" MinWidth="0" MinHeight="0"
-                                    Padding="0" ToolTipService.ToolTip="Show full file content">
+                                    Padding="0">
                                 <FontIcon Glyph="&#xE8A5;" FontSize="12" />
                             </Button>
                             <Button x:Name="CopyPreviewFilePathButton" Click="OnCopyPreviewFilePath" Width="28" Height="28" MinWidth="0" MinHeight="0"
-                                    Padding="0" ToolTipService.ToolTip="Copy full file path">
+                                    Padding="0">
                                 <FontIcon Glyph="&#xE8C8;" FontSize="12" />
                             </Button>
                             <Button x:Name="OpenInDefaultAppButton" Click="OnOpenInDefaultApp" Width="28" Height="28" MinWidth="0" MinHeight="0"
-                                    Padding="0" ToolTipService.ToolTip="Open with default Windows application">
+                                    Padding="0">
                                 <FontIcon Glyph="&#xE8A7;" FontSize="12" />
                             </Button>
                             <Button x:Name="OpenInEditorButton" Click="OnOpenInEditor" Width="28" Height="28" MinWidth="0" MinHeight="0"
-                                    Padding="0" ToolTipService.ToolTip="Edit file in built-in editor">
+                                    Padding="0">
                                 <FontIcon Glyph="&#xE70F;" FontSize="12" />
                             </Button>
                             <Button x:Name="ExpandAllSectionsButton" Click="OnExpandAllSections" Width="28" Height="28" MinWidth="0" MinHeight="0"
-                                    Padding="0" ToolTipService.ToolTip="Expand and render all collapsed sections" Visibility="Collapsed">
+                                    Padding="0" Visibility="Collapsed">
                                 <FontIcon Glyph="&#xE740;" FontSize="12" />
                             </Button>
                             <Button x:Name="ExportReportButton" Click="OnExportHtmlReport" Width="28" Height="28" MinWidth="0" MinHeight="0"
-                                    Padding="0" ToolTipService.ToolTip="Export results (HTML, JSON, or CSV)">
+                                    Padding="0">
                                 <FontIcon Glyph="&#xE9F9;" FontSize="12" />
                             </Button>
 
                             <AppBarSeparator x:Name="PreviewToolbarSeparator" />
 
                             <!-- View options -->
-                            <DropDownButton x:Name="LayoutDropDown" Content="Layout" VerticalAlignment="Center" FontSize="12"
-                                             ToolTipService.ToolTip="Multi-select preview layout">
+                            <DropDownButton x:Name="LayoutDropDown" Content="Layout" VerticalAlignment="Center" FontSize="12">
                                 <DropDownButton.Flyout>
                                     <MenuFlyout>
                                         <ToggleMenuFlyoutItem x:Name="LayoutConcatenated" Text="Concatenated" Click="OnLayoutOptionClicked" />
@@ -1095,13 +1093,13 @@
                                 </DropDownButton.Flyout>
                             </DropDownButton>
                             <ToggleButton x:Name="WordWrapToggle" Width="28" Height="28" MinWidth="0" MinHeight="0"
-                                          Padding="0" ToolTipService.ToolTip="Toggle word wrap in preview"
+                                          Padding="0"
                                           IsChecked="{x:Bind ViewModel.PreviewWordWrap, Mode=TwoWay}"
                                           Click="OnWordWrapToggled">
                                 <FontIcon Glyph="&#xE8B3;" FontSize="12" />
                             </ToggleButton>
                             <Button x:Name="FindReplaceButton" Click="OnOpenFindReplaceBar" Width="28" Height="28" MinWidth="0" MinHeight="0"
-                                    Padding="0" ToolTipService.ToolTip="Find &amp; Replace (Ctrl+H)">
+                                    Padding="0">
                                 <FontIcon Glyph="&#xE721;" FontSize="12" />
                             </Button>
                             <StackPanel x:Name="PreviewContextPanel" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
@@ -1110,7 +1108,7 @@
                                            SpinButtonPlacementMode="Compact" MinWidth="64" Width="64" FontSize="12" />
                             </StackPanel>
                             <Button x:Name="ClearPreviewButton" Click="OnClearPreview" Width="28" Height="28" MinWidth="0" MinHeight="0"
-                                    Padding="0" ToolTipService.ToolTip="Clear all files from preview">
+                                    Padding="0">
                                 <FontIcon Glyph="&#xE894;" FontSize="12" />
                             </Button>
 
@@ -1119,14 +1117,13 @@
                         <StackPanel x:Name="EditorButtonsPanel" Grid.Column="1" Orientation="Horizontal" Spacing="6"
                                     VerticalAlignment="Center" Visibility="Collapsed">
                             <Button x:Name="SavePreviewEditButton" Click="OnSavePreviewEdit" FontSize="12" Padding="8,4"
-                                    ToolTipService.ToolTip="Save changes to file" IsEnabled="False">
+                                    IsEnabled="False">
                                 <StackPanel Orientation="Horizontal" Spacing="4">
                                     <FontIcon Glyph="&#xE74E;" FontSize="12" />
                                     <TextBlock Text="Save" />
                                 </StackPanel>
                             </Button>
-                            <Button x:Name="ClosePreviewEditButton" Click="OnClosePreviewEdit" FontSize="12" Padding="8,4"
-                                    ToolTipService.ToolTip="Close editor and return to preview">
+                            <Button x:Name="ClosePreviewEditButton" Click="OnClosePreviewEdit" FontSize="12" Padding="8,4">
                                 <StackPanel Orientation="Horizontal" Spacing="4">
                                     <FontIcon Glyph="&#xE72B;" FontSize="12" />
                                     <TextBlock Text="Back" />
@@ -1144,15 +1141,13 @@
                                     <Button x:Name="PrevMatchButton" Click="OnPrevMatch"
                                             Style="{StaticResource AccentButtonStyle}"
                                             Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
-                                            CornerRadius="4"
-                                            ToolTipService.ToolTip="Previous match (Shift+Enter) · Ctrl+Click to jump multiple">
+                                            CornerRadius="4">
                                         <FontIcon Glyph="&#xE70E;" FontSize="12" />
                                     </Button>
                                     <Button x:Name="NextMatchButton" Click="OnNextMatch"
                                             Style="{StaticResource AccentButtonStyle}"
                                             Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
-                                            CornerRadius="4"
-                                            ToolTipService.ToolTip="Next match (Enter) · Ctrl+Click to jump multiple">
+                                            CornerRadius="4">
                                         <FontIcon Glyph="&#xE70D;" FontSize="12" />
                                     </Button>
                                 </StackPanel>
@@ -1161,8 +1156,7 @@
                         <Button x:Name="ExpandPreviewButton" Grid.Column="2"
                                 Click="OnExpandPreviewPanel"
                                 Background="Transparent" BorderThickness="0"
-                                Padding="6,4" VerticalAlignment="Center" Margin="6,0,0,0"
-                                ToolTipService.ToolTip="Expand preview / collapse file list">
+                            Padding="6,4" VerticalAlignment="Center" Margin="6,0,0,0">
                             <FontIcon x:Name="ExpandPreviewIcon" Glyph="&#xE740;" FontSize="12" />
                         </Button>
                     </Grid>
@@ -1186,21 +1180,19 @@
                                     <TextBox x:Name="FindTextBox" PlaceholderText="Find…" Width="220" FontSize="12"
                                              KeyDown="OnFindTextBoxKeyDown" TextChanged="OnFindTextBoxTextChanged"
                                              IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" />
-                                    <Button Click="OnFindPrevious" ToolTipService.ToolTip="Previous (Shift+Enter)" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0">
+                                    <Button Click="OnFindPrevious" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0">
                                         <FontIcon Glyph="&#xE70E;" FontSize="12" />
                                     </Button>
-                                    <Button Click="OnFindNext" ToolTipService.ToolTip="Next (Enter)" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0">
+                                    <Button Click="OnFindNext" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0">
                                         <FontIcon Glyph="&#xE70D;" FontSize="12" />
                                     </Button>
                                     <CheckBox x:Name="FindMatchCaseCheckBox" Content="Aa" FontSize="11" MinWidth="0" Padding="4,0"
-                                              ToolTipService.ToolTip="Match case" Unchecked="OnFindOptionChanged" Checked="OnFindOptionChanged" />
-                                    <ToggleButton x:Name="FindReplaceToggle" Click="OnFindReplaceToggle" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
-                                                  ToolTipService.ToolTip="Toggle Replace (Ctrl+H)">
+                                              Unchecked="OnFindOptionChanged" Checked="OnFindOptionChanged" />
+                                    <ToggleButton x:Name="FindReplaceToggle" Click="OnFindReplaceToggle" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0">
                                         <FontIcon Glyph="&#xE8AC;" FontSize="12" />
                                     </ToggleButton>
                                     <TextBlock x:Name="FindStatusText" VerticalAlignment="Center" FontSize="11" Opacity="0.6" Margin="4,0,0,0" />
-                                    <Button Click="OnCloseFindBar" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
-                                            ToolTipService.ToolTip="Close (Escape)">
+                                    <Button Click="OnCloseFindBar" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0">
                                         <FontIcon Glyph="&#xE711;" FontSize="12" />
                                     </Button>
                                 </StackPanel>
@@ -1208,15 +1200,14 @@
                                     <TextBox x:Name="ReplaceTextBox" PlaceholderText="Replace…" Width="220" FontSize="12"
                                              KeyDown="OnReplaceTextBoxKeyDown"
                                              IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" />
-                                    <Button x:Name="ReplaceOneButton" Click="OnReplaceOne" ToolTipService.ToolTip="Replace current match (Enter)" FontSize="12" Padding="8,4">
+                                    <Button x:Name="ReplaceOneButton" Click="OnReplaceOne" FontSize="12" Padding="8,4">
                                         <TextBlock Text="Replace" />
                                     </Button>
-                                    <Button x:Name="ReplaceAllButton" Click="OnReplaceAll" ToolTipService.ToolTip="Replace all in this file" FontSize="12" Padding="8,4">
+                                    <Button x:Name="ReplaceAllButton" Click="OnReplaceAll" FontSize="12" Padding="8,4">
                                         <TextBlock Text="All" />
                                     </Button>
                                     <Border Width="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="4,2" />
                                     <Button x:Name="ReplaceInFilesButton" Click="OnReplaceInAllFiles"
-                                            ToolTipService.ToolTip="Replace in all result files on disk"
                                             FontSize="12" Padding="8,4">
                                         <StackPanel Orientation="Horizontal" Spacing="4">
                                             <FontIcon Glyph="&#xE8AC;" FontSize="12" />
@@ -1316,21 +1307,18 @@
                                     <Button x:Name="SectionPrevButton" Click="OnSectionNavPrev"
                                             Style="{StaticResource AccentButtonStyle}"
                                             Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
-                                            CornerRadius="4"
-                                            ToolTipService.ToolTip="Previous match in file">
+                                            CornerRadius="4">
                                         <FontIcon Glyph="&#xE70E;" FontSize="12" />
                                     </Button>
                                     <Button x:Name="SectionNavNextButton" Click="OnSectionNavNext"
                                             Style="{StaticResource AccentButtonStyle}"
                                             Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
-                                            CornerRadius="4"
-                                            ToolTipService.ToolTip="Next match in file">
+                                            CornerRadius="4">
                                         <FontIcon Glyph="&#xE70D;" FontSize="12" />
                                     </Button>
                                     <Button Click="OnSectionNavDismiss"
                                             Width="24" Height="24" MinWidth="0" MinHeight="0" Padding="0"
-                                            CornerRadius="4"
-                                            ToolTipService.ToolTip="Hide (reappears on next navigation)">
+                                            CornerRadius="4">
                                         <FontIcon Glyph="&#xE711;" FontSize="10" />
                                     </Button>
                                 </StackPanel>

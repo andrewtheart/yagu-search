@@ -86,7 +86,6 @@ public sealed partial class MainWindow
                 {
                     Text = "Zoom in",
                     Icon = new SymbolIcon { Symbol = Symbol.ZoomIn },
-                    KeyboardAcceleratorTextOverride = "Ctrl + +",
                 };
                 zoomIn.Click += (_, _) => AdjustPreviewEditorZoom(+PreviewEditorZoomStep);
                 flyout.Items.Add(zoomIn);
@@ -95,7 +94,6 @@ public sealed partial class MainWindow
                 {
                     Text = "Zoom out",
                     Icon = new SymbolIcon { Symbol = Symbol.ZoomOut },
-                    KeyboardAcceleratorTextOverride = "Ctrl + -",
                 };
                 zoomOut.Click += (_, _) => AdjustPreviewEditorZoom(-PreviewEditorZoomStep);
                 flyout.Items.Add(zoomOut);
@@ -103,7 +101,6 @@ public sealed partial class MainWindow
                 var zoomReset = new MenuFlyoutItem
                 {
                     Text = "Reset zoom",
-                    KeyboardAcceleratorTextOverride = "Ctrl + 0",
                 };
                 zoomReset.Click += (_, _) => SetPreviewEditorZoom(100);
                 flyout.Items.Add(zoomReset);
@@ -722,6 +719,10 @@ public sealed partial class MainWindow
         int targetLineIndex = Math.Max(0, result.LineNumber - 1);
         int capturedStart = selectStart;
         int capturedLength = Math.Max(0, selectLength);
+        if (LogService.Instance.IsVerboseEnabled)
+        {
+            LogService.Instance.Verbose("PreviewEditor", $"ScrollEditorToMatch: file='{Path.GetFileName(result.FilePath)}', line={result.LineNumber}, matchColumn={result.MatchStartColumn}, matchLength={result.MatchLength}, charOffset={charOffset}, selectStart={capturedStart}, selectLength={capturedLength}, targetLineIndex={targetLineIndex}, wordWrap={PreviewEditor.WordWrap}");
+        }
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
             try
@@ -994,7 +995,12 @@ public sealed partial class MainWindow
 
     private void ApplyPreviewEditorWordWrap(bool wrap)
     {
+        bool before = PreviewEditor.WordWrap;
         PreviewEditor.WordWrap = wrap;
+        if (LogService.Instance.IsVerboseEnabled)
+        {
+            LogService.Instance.Verbose("PreviewEditor", $"ApplyPreviewEditorWordWrap: before={before}, requested={wrap}, after={PreviewEditor.WordWrap}, forced={_previewEditorForcedWrap}, setting={ViewModel.PreviewWordWrap}, visible={PreviewEditor.Visibility == Visibility.Visible}");
+        }
     }
 
     private void UpdatePreviewEditorChunkUi()
@@ -1131,6 +1137,8 @@ public sealed partial class MainWindow
 
     private void LoadPreviewEditorText(string text)
     {
+        if (LogService.Instance.IsVerboseEnabled)
+            LogService.Instance.Verbose("PreviewEditor", $"LoadPreviewEditorText: length={text.Length}, wordWrap={PreviewEditor.WordWrap}");
         PreviewEditor.LoadText(text, autodetectTabsSpaces: false);
         PreviewEditor.ClearUndoRedoHistory();
     }
@@ -1140,6 +1148,10 @@ public sealed partial class MainWindow
         int textLength = GetPreviewEditorTextLength();
         int clampedStart = Math.Clamp(start, 0, textLength);
         int clampedLength = Math.Clamp(length, 0, Math.Max(0, textLength - clampedStart));
+        if (LogService.Instance.IsVerboseEnabled)
+        {
+            LogService.Instance.Verbose("PreviewEditor", $"SelectPreviewEditorText: requestedStart={start}, requestedLength={length}, textLength={textLength}, clampedStart={clampedStart}, clampedLength={clampedLength}, wordWrap={PreviewEditor.WordWrap}, searchOpen={PreviewEditor.SearchIsOpen}");
+        }
         PreviewEditor.SetSelection(clampedStart, clampedLength);
     }
 

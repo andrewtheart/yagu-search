@@ -139,6 +139,9 @@ public sealed partial class MainWindow : Window
             _autoSearchOnLoad = !string.IsNullOrWhiteSpace(startupDirectory);
         }
         InitializeComponent();
+        TextControlBoxNS.TextControlBoxDiagnostics.VerboseLogger = (source, message) => LogService.Instance.Verbose(source, message);
+        TextControlBoxNS.TextControlBoxDiagnostics.IsVerboseEnabledProvider = () => LogService.Instance.IsVerboseEnabled;
+        SearchCancelButton.SizeChanged += (_, _) => AlignBrowseButtonToSearchButton();
         SyncLayoutToggles(ViewModel.PreviewModeIndex);
         Title = AppInfo.WindowTitle;
 
@@ -1160,7 +1163,6 @@ public sealed partial class MainWindow : Window
                 ExpandResultsIcon.Glyph = "\uE740"; // FullScreen
                 ToolTipService.SetToolTip(ExpandResultsButton, "Maximize file list / hide preview");
                 ExpandPreviewIcon.Glyph = "\uE740"; // FullScreen
-                ToolTipService.SetToolTip(ExpandPreviewButton, "Maximize preview / hide file list");
                 break;
             case SplitLayoutMode.ResultsMaximized:
                 ResultsPanelBorder.Visibility = Visibility.Visible;
@@ -1175,7 +1177,6 @@ public sealed partial class MainWindow : Window
                 ExpandResultsIcon.Glyph = "\uE73F"; // BackToWindow
                 ToolTipService.SetToolTip(ExpandResultsButton, "Restore split view");
                 ExpandPreviewIcon.Glyph = "\uE740";
-                ToolTipService.SetToolTip(ExpandPreviewButton, "Maximize preview / hide file list");
                 break;
             case SplitLayoutMode.PreviewMaximized:
                 ResultsPanelBorder.Visibility = Visibility.Collapsed;
@@ -1190,7 +1191,6 @@ public sealed partial class MainWindow : Window
                 ExpandResultsIcon.Glyph = "\uE740";
                 ToolTipService.SetToolTip(ExpandResultsButton, "Maximize file list / hide preview");
                 ExpandPreviewIcon.Glyph = "\uE740"; // FullScreen
-                ToolTipService.SetToolTip(ExpandPreviewButton, "Extend preview to top");
                 break;
             case SplitLayoutMode.PreviewTopExpanded:
                 ApplyTopExpandedPreviewLayout();
@@ -1251,7 +1251,6 @@ public sealed partial class MainWindow : Window
         ExpandResultsIcon.Glyph = "\uE740";
         ToolTipService.SetToolTip(ExpandResultsButton, "Maximize file list / hide preview");
         ExpandPreviewIcon.Glyph = "\uE70E"; // ChevronUp
-        ToolTipService.SetToolTip(ExpandPreviewButton, "Restore split view");
 
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, UpdateTopExpandedPreviewMeasurements);
     }
@@ -5713,6 +5712,7 @@ public sealed partial class MainWindow : Window
     private async void OnContentLoaded(object sender, RoutedEventArgs e)
     {
         ((FrameworkElement)sender).Loaded -= OnContentLoaded;
+        AlignBrowseButtonToSearchButton();
         ApplyWordWrap(ViewModel.PreviewWordWrap);
         ApplyPreviewColors();
         if (_launcherMode) PositionLauncherWindow();
@@ -5750,6 +5750,12 @@ public sealed partial class MainWindow : Window
         {
             FocusSearchBox();
         }
+    }
+
+    private void AlignBrowseButtonToSearchButton()
+    {
+        if (SearchCancelButton.ActualWidth <= 0) return;
+        BrowseDirectoryButton.Width = SearchCancelButton.ActualWidth;
     }
 
     private void FocusSearchBox(bool suppressSuggestions = false)
