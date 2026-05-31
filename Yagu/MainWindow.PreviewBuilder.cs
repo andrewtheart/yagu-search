@@ -1225,6 +1225,7 @@ public sealed partial class MainWindow
         HideMatchNavPanel();
         // Restore outer horizontal scroll for single-file block view.
         ApplyPreviewHorizontalScrollForWrap(PreviewScrollViewer, ViewModel.PreviewWordWrap);
+        HideStickyHorizontalScrollBar();
     }
 
     private void ShowPreviewSectionsSurface()
@@ -1240,6 +1241,7 @@ public sealed partial class MainWindow
         HideMatchNavPanel();
         // Sections have their own per-section horizontal scroll; outer viewer stays vertical-only.
         SetHorizontalPreviewScroll(PreviewScrollViewer, enabled: false);
+        HideStickyHorizontalScrollBar();
     }
 
     private void ShowPreviewLoading(string message = "Loading preview…")
@@ -1356,9 +1358,20 @@ public sealed partial class MainWindow
         {
             Content = content,
             HorizontalScrollMode = ViewModel.PreviewWordWrap ? ScrollMode.Disabled : ScrollMode.Enabled,
-            HorizontalScrollBarVisibility = ViewModel.PreviewWordWrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Visible,
+            // Hidden (not Visible): the native bar would render at the bottom of the
+            // section's full content height — far below the viewport. The shared
+            // StickyHorizontalScrollBar overlay (driven from code-behind) surfaces
+            // the actual horizontal extent within the viewport. Mode stays Enabled
+            // so keyboard / programmatic scrolling continues to work.
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
         };
+        sectionScroller.ViewChanged += OnSectionScrollerViewChanged;
+        // ViewChanged alone misses initial layout (offset stays at 0). SizeChanged
+        // on the scroller (viewport) and its content (extent) covers content first
+        // appearing, font changes, wrap-mode toggles, and parent-resize cases.
+        sectionScroller.SizeChanged += OnSectionScrollerSizeChanged;
+        content.SizeChanged += OnSectionScrollerSizeChanged;
 
         // Two-column grid: fixed gutter (line numbers) + scrollable content.
         var sectionGrid = new Grid();
@@ -1408,10 +1421,11 @@ public sealed partial class MainWindow
                     var wrap = ViewModel.PreviewWordWrap;
                     b.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
                     if (exp.Content is Grid eg && eg.Children.OfType<ScrollViewer>().FirstOrDefault() is ScrollViewer scroller)
-                        ApplyPreviewHorizontalScrollForWrap(scroller, wrap);
+                        ApplyPreviewHorizontalScrollForWrapSection(scroller, wrap);
                     else if (exp.Content is ScrollViewer scroller2)
-                        ApplyPreviewHorizontalScrollForWrap(scroller2, wrap);
+                        ApplyPreviewHorizontalScrollForWrapSection(scroller2, wrap);
                     ActivateSectionForBlock(b);
+                    UpdateStickyHorizontalScrollBar();
                 }
             }
             catch (Exception ex)

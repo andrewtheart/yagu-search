@@ -1928,6 +1928,7 @@ public sealed partial class MainWindow
             _activeSectionNav = sn;
             HighlightActiveExpander();
             UpdateSectionNavOverlay();
+            UpdateStickyHorizontalScrollBar();
         }
     }
 

@@ -1246,6 +1246,20 @@
                             </Grid>
                         </ScrollViewer>
 
+                        <!-- Sticky horizontal scrollbar for multi-section preview mode.
+                             The per-section ScrollViewers host horizontal scrolling but their
+                             native scrollbars are anchored to the bottom of section content
+                             (often thousands of pixels below the viewport). This overlay bar
+                             is wired in code-behind to the currently-active section's scroller
+                             so horizontal overflow is reachable without arrow-keying blindly. -->
+                        <ScrollBar x:Name="StickyHorizontalScrollBar" Grid.Row="1"
+                                   Orientation="Horizontal"
+                                   HorizontalAlignment="Stretch" VerticalAlignment="Bottom"
+                                   Margin="16,0,16,2"
+                                   Visibility="Collapsed"
+                                   Canvas.ZIndex="30"
+                                   Scroll="OnStickyHorizontalScrollBarScroll" />
+
                         <!-- Sticky file header: shown when the actual file expander header
                              of the section currently in view has scrolled out the top.
                              Content is built dynamically from BuildPreviewSectionHeader so

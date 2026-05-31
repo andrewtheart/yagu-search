@@ -3487,6 +3487,18 @@ public sealed partial class MainWindow : Window
     private static void ApplyPreviewHorizontalScrollForWrap(ScrollViewer scrollViewer, bool wrap)
         => SetHorizontalPreviewScroll(scrollViewer, enabled: !wrap);
 
+    /// <summary>
+    /// Section-scoped variant: keeps the native horizontal scrollbar hidden
+    /// (it would be anchored at the bottom of huge section content, off-screen).
+    /// The shared <c>StickyHorizontalScrollBar</c> overlay surfaces the horizontal
+    /// extent within the viewport instead.
+    /// </summary>
+    private static void ApplyPreviewHorizontalScrollForWrapSection(ScrollViewer scrollViewer, bool wrap)
+    {
+        scrollViewer.HorizontalScrollMode = wrap ? ScrollMode.Disabled : ScrollMode.Enabled;
+        scrollViewer.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Hidden;
+    }
+
     // Synchronous variant retained for callers that already run inside an async preview
     // refresh (e.g. ShowSingleFilePreviewAsync). Only safe when the number of preview
     // sections is small or known. Prefer ApplyWrapModeAsync for user-initiated toggles.
@@ -3510,10 +3522,11 @@ public sealed partial class MainWindow : Window
         foreach (var expander in PreviewSectionsPanel.Children.OfType<Expander>())
         {
             if (expander.Content is Grid g && g.Children.OfType<ScrollViewer>().FirstOrDefault() is ScrollViewer sv)
-                ApplyPreviewHorizontalScrollForWrap(sv, wrap);
+                ApplyPreviewHorizontalScrollForWrapSection(sv, wrap);
             else if (expander.Content is ScrollViewer sv2)
-                ApplyPreviewHorizontalScrollForWrap(sv2, wrap);
+                ApplyPreviewHorizontalScrollForWrapSection(sv2, wrap);
         }
+        UpdateStickyHorizontalScrollBar();
     }
 
     private bool _applyingWordWrap;
@@ -3552,9 +3565,9 @@ public sealed partial class MainWindow : Window
             {
                 // Always toggle the per-section scrollbar (cheap, doesn't relayout the text).
                 if (expander.Content is Grid g && g.Children.OfType<ScrollViewer>().FirstOrDefault() is ScrollViewer sv)
-                    ApplyPreviewHorizontalScrollForWrap(sv, wrap);
+                    ApplyPreviewHorizontalScrollForWrapSection(sv, wrap);
                 else if (expander.Content is ScrollViewer sv2)
-                    ApplyPreviewHorizontalScrollForWrap(sv2, wrap);
+                    ApplyPreviewHorizontalScrollForWrapSection(sv2, wrap);
 
                 // Only re-measure expanded sections; collapsed ones are not visible and
                 // will pick up the current wrap state when re-expanded (see Expanding
@@ -5103,10 +5116,19 @@ public sealed partial class MainWindow : Window
                     if (pEnd.Offset <= startOff) continue;
                     if (pStart.Offset >= endOff) break;
 
-                    string lineText = ExtractParagraphContent(para, hasInlineGutter);
-                    int lineNum = ResolveParagraphLineNumber(para, hasInlineGutter);
                     bool cwtHit = s_paragraphLineNumbers.TryGetValue(para, out var rawTag);
                     bool contTag = s_paragraphIsContinuation.TryGetValue(para, out _);
+
+                    // In the multi-section (separate-gutter) view, structural paragraphs
+                    // (──── Line N ──── separators, AddGapIndicator content spacers,
+                    // truncation notices, etc.) are appended to the content block directly
+                    // and never tagged in either CWT. Skip them so the copied text only
+                    // contains real source lines.
+                    if (!hasInlineGutter && !cwtHit && !contTag)
+                        continue;
+
+                    string lineText = ExtractParagraphContent(para, hasInlineGutter);
+                    int lineNum = ResolveParagraphLineNumber(para, hasInlineGutter);
                     bool isContinuation = contTag
                                           || (lineNum > 0 && lineNum == lastEmittedLineNum);
                     paraCount++;
@@ -5164,6 +5186,15 @@ public sealed partial class MainWindow : Window
                     if (pStart is null || pEnd is null) continue;
                     if (pEnd.Offset <= startOff) continue;
                     if (pStart.Offset >= endOff) break;
+
+                    // Skip structural paragraphs (separators, gap spacers) in the
+                    // multi-section view; they aren't real source lines.
+                    if (!hasInlineGutter
+                        && !s_paragraphLineNumbers.TryGetValue(para, out _)
+                        && !s_paragraphIsContinuation.TryGetValue(para, out _))
+                    {
+                        continue;
+                    }
 
                     string lineText = ExtractParagraphContent(para, hasInlineGutter);
                     if (!first) sb.AppendLine();
@@ -6533,6 +6564,21 @@ public sealed partial class MainWindow : Window
         {
             e.Handled = true;
             OpenFindBar(showReplace: true);
+        }
+        else if (e.Key == Windows.System.VirtualKey.G && ctrl && !shift)
+        {
+            var src = e.OriginalSource as DependencyObject;
+            if (PreviewEditor.Visibility == Visibility.Visible
+                && (src is null || IsElementWithin(src, PreviewEditor)))
+            {
+                e.Handled = true;
+                _ = ShowGoToLineDialogForEditorAsync();
+            }
+            else if (HasNavigablePreviewSurfaceForGoToLine())
+            {
+                e.Handled = true;
+                _ = ShowGoToLineDialogForPreviewAsync();
+            }
         }
         else if (e.Key == Windows.System.VirtualKey.Enter
             && !ctrl
