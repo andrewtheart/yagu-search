@@ -3453,7 +3453,7 @@ public sealed partial class MainWindow : Window
     private static void SetHorizontalPreviewScroll(ScrollViewer scrollViewer, bool enabled)
     {
         scrollViewer.HorizontalScrollMode = enabled ? ScrollMode.Enabled : ScrollMode.Disabled;
-        scrollViewer.HorizontalScrollBarVisibility = enabled ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled;
+        scrollViewer.HorizontalScrollBarVisibility = enabled ? ScrollBarVisibility.Visible : ScrollBarVisibility.Disabled;
     }
 
     private static void ApplyPreviewHorizontalScrollForWrap(ScrollViewer scrollViewer, bool wrap)
@@ -3679,7 +3679,7 @@ public sealed partial class MainWindow : Window
     private async void OnOpenInEditor(object sender, RoutedEventArgs e)
     {
         if (_previewResult is null) return;
-        await ShowFullFileEditorAsync(_previewResult);
+        await ShowFullFileEditorAsync(_previewResult, scrollToMatch: false);
     }
 
     private async void OnExpandAllSections(object sender, RoutedEventArgs e)
@@ -5625,12 +5625,16 @@ public sealed partial class MainWindow : Window
         {
             AdvancedOptionsExpander.InvalidateMeasure();
             RootGrid.UpdateLayout();
+            UpdateTopExpandedPreviewMeasurements();
         }
 
         debounce.Tick += (t, a) =>
         {
             debounce.Stop();
             Microsoft.UI.Xaml.Media.CompositionTarget.Rendering -= handler;
+            AdvancedOptionsExpander.InvalidateMeasure();
+            RootGrid.UpdateLayout();
+            UpdateTopExpandedPreviewMeasurements();
         };
 
         Microsoft.UI.Xaml.Media.CompositionTarget.Rendering += handler;

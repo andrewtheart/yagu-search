@@ -489,6 +489,16 @@ internal class TextRenderer
 
     public float GetWrappedLineHitTestYFromPointY(int lineIndex, double y)
     {
+        if (IsVirtualizedWrappedLine && lineIndex == NumberOfStartLine)
+        {
+            return CalculateWrappedLineHitTestYFromPointY(
+                y,
+                0,
+                SingleLineHeight,
+                scrollManager.DefaultVerticalScrollSensitivity,
+                Math.Max(1, VirtualizedWrappedRowsToRender));
+        }
+
         return CalculateWrappedLineHitTestYFromPointY(
             y,
             GetLineTopY(lineIndex),

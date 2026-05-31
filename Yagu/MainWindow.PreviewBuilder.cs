@@ -1332,7 +1332,7 @@ public sealed partial class MainWindow
         {
             Content = content,
             HorizontalScrollMode = ViewModel.PreviewWordWrap ? ScrollMode.Disabled : ScrollMode.Enabled,
-            HorizontalScrollBarVisibility = ViewModel.PreviewWordWrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ViewModel.PreviewWordWrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Visible,
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
         };
 
@@ -1530,7 +1530,7 @@ public sealed partial class MainWindow
                 .FirstOrDefault(g => string.Equals(g.FilePath, path, StringComparison.OrdinalIgnoreCase))
                 ?.FirstOrDefault();
             if (result is not null)
-                await ShowFullFileEditorAsync(result);
+                await ShowFullFileEditorAsync(result, scrollToMatch: false);
         };
         buttonPanel.Children.Add(editorBtn);
 
@@ -2289,6 +2289,7 @@ public sealed partial class MainWindow
         bool continuationGutter = false)
     {
         var window = TruncatePreviewLineAroundResult(line, result, rx);
+        _sectionGutterBlocks.TryGetValue(section, out var gutterBlock);
         Paragraph? firstParagraph = null;
         bool addedMatchEntries = false;
         paragraphsAdded = 0;
@@ -2296,7 +2297,8 @@ public sealed partial class MainWindow
 
         foreach (var segment in EnumeratePreviewLineLayoutSegments(window.Text))
         {
-            var para = MakePreviewParagraph(segment, lineNum, isMatchLine: true, result, rx, truncate: false, continuationGutter: continuationGutter || firstParagraph is not null);
+            bool isContinuation = firstParagraph is not null || (gutterBlock is null && continuationGutter);
+            var para = MakePreviewParagraph(segment, lineNum, isMatchLine: true, result, rx, truncate: false, continuationGutter: isContinuation, gutterBlock: gutterBlock);
             section.Blocks.Add(para);
             firstParagraph ??= para;
             paragraphsAdded++;

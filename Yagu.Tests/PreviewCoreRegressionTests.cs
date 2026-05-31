@@ -962,6 +962,13 @@ public sealed class PreviewCoreRegressionTests
             "DrawTextOffsetY = IsVirtualizedWrappedLine",
             "DrawnTextLayout = textLayoutManager.CreateTextResource");
 
+        string hitTest = ExtractMethodWindow(textRenderer, "GetWrappedLineHitTestYFromPointY", window: 1600);
+        AssertContainsInOrder(hitTest,
+            "if (IsVirtualizedWrappedLine && lineIndex == NumberOfStartLine)",
+            "y,",
+            "0,",
+            "Math.Max(1, VirtualizedWrappedRowsToRender)");
+
         string lineNumbers = ExtractMethodWindow(lineNumberRenderer, "GenerateLineNumberText");
         AssertContainsInOrder(lineNumbers,
             "if (textRenderer.IsVirtualizedWrappedLine)",
@@ -1036,10 +1043,21 @@ public sealed class PreviewCoreRegressionTests
 
     private static string ReadTextControlBoxSource(params string[] pathParts)
     {
-        string textControlBoxRoot = Path.GetFullPath(Path.Combine(RepoRoot, "..", "src", "TextControlBox-WinUI", "TextControlBox"));
-        string path = Path.Combine(new[] { textControlBoxRoot }.Concat(pathParts).ToArray());
-        Assert.True(File.Exists(path), $"Expected TextControlBox source file at {path}");
-        return File.ReadAllText(path);
+        string[] textControlBoxRoots =
+        [
+            Path.Combine(RepoRoot, "vendor", "TextControlBox-WinUI", "TextControlBox"),
+            Path.GetFullPath(Path.Combine(RepoRoot, "..", "src", "TextControlBox-WinUI", "TextControlBox")),
+        ];
+
+        foreach (string root in textControlBoxRoots)
+        {
+            string path = Path.Combine(new[] { root }.Concat(pathParts).ToArray());
+            if (File.Exists(path))
+                return File.ReadAllText(path);
+        }
+
+        Assert.Fail($"Expected TextControlBox source file under one of: {string.Join(", ", textControlBoxRoots)}");
+        return string.Empty;
     }
 
     private static string FindRepoRoot()

@@ -106,7 +106,7 @@ public sealed partial class MainWindow
         {
             bool shift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
                              .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
-            if (shift) FindPrevious(); else FindNext();
+            if (shift) FindPrevious(focusEditor: false); else FindNext(focusEditor: false);
             e.Handled = true;
         }
     }
@@ -114,7 +114,7 @@ public sealed partial class MainWindow
     private void OnReplaceTextBoxKeyDown(object sender, KeyRoutedEventArgs e)
     {
         if (e.Key == VirtualKey.Escape) { CloseFindBar(); e.Handled = true; return; }
-        if (e.Key == VirtualKey.Enter) { ReplaceOne(); e.Handled = true; }
+        if (e.Key == VirtualKey.Enter) { ReplaceOne(focusEditor: false); e.Handled = true; }
     }
 
     private void OnFindTextBoxTextChanged(object sender, TextChangedEventArgs e)
@@ -234,7 +234,7 @@ public sealed partial class MainWindow
         }
     }
 
-    private void FindNext()
+    private void FindNext(bool focusEditor = true)
     {
         var needle = FindTextBox.Text;
         if (string.IsNullOrEmpty(needle))
@@ -273,11 +273,11 @@ public sealed partial class MainWindow
         LogFindVerbose($"FindNext: found, needle={DescribeFindText(needle)}, haystackLen={haystack.Length}, previousIndex={previousIndex}, startPos={startPos}, resultIndex={idx}, resultLine={GetFindLineNumber(haystack, idx)}, wrapped={wrapped}, {FindSurfaceDescription()}");
 
         _findIndex = idx;
-        SelectFindMatch(idx, needle.Length);
+        SelectFindMatch(idx, needle.Length, focusEditor);
         UpdateFindStatus();
     }
 
-    private void FindPrevious()
+    private void FindPrevious(bool focusEditor = true)
     {
         var needle = FindTextBox.Text;
         if (string.IsNullOrEmpty(needle))
@@ -316,17 +316,18 @@ public sealed partial class MainWindow
         LogFindVerbose($"FindPrevious: found, needle={DescribeFindText(needle)}, haystackLen={haystack.Length}, previousIndex={previousIndex}, startPos={startPos}, resultIndex={idx}, resultLine={GetFindLineNumber(haystack, idx)}, wrapped={wrapped}, {FindSurfaceDescription()}");
 
         _findIndex = idx;
-        SelectFindMatch(idx, needle.Length);
+        SelectFindMatch(idx, needle.Length, focusEditor);
         UpdateFindStatus();
     }
 
-    private void SelectFindMatch(int index, int length)
+    private void SelectFindMatch(int index, int length, bool focusEditor = true)
     {
         LogFindVerbose($"SelectFindMatch: index={index}, length={length}, before={FindSurfaceDescription()}");
         if (PreviewEditor.Visibility == Visibility.Visible)
         {
             SyncPreviewEditorFindHighlights();
-            PreviewEditor.Focus(FocusState.Programmatic);
+            if (focusEditor)
+                PreviewEditor.Focus(FocusState.Programmatic);
             SelectPreviewEditorText(index, length);
             int line = ScrollPreviewEditorMatchIntoView(index);
             QueuePreviewEditorActiveFindSelectionRefresh(index, length, line);
@@ -611,7 +612,7 @@ public sealed partial class MainWindow
         }
     }
 
-    private void ReplaceOne()
+    private void ReplaceOne(bool focusEditor = true)
     {
         if (PreviewEditor.Visibility != Visibility.Visible) return;
         var needle = FindTextBox.Text;
@@ -641,9 +642,9 @@ public sealed partial class MainWindow
         _previewEditorDirty = true;
         _findIndex = replaceAt;
         SyncPreviewEditorFindHighlights();
-        SelectFindMatch(replaceAt, replacement.Length);
+        SelectFindMatch(replaceAt, replacement.Length, focusEditor);
         UpdatePreviewEditorButtons();
-        FindNext();
+        FindNext(focusEditor);
         LogFindVerbose($"ReplaceOne: done, replacedAt={replaceAt}, replacementLen={replacement.Length}, {FindSurfaceDescription()}");
     }
 

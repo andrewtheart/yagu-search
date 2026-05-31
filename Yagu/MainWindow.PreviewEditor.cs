@@ -231,7 +231,7 @@ public sealed partial class MainWindow
             }
 
             e.Handled = true;
-            await ShowFullFileEditorAsync(target);
+            await ShowFullFileEditorAsync(target, scrollToMatch: true);
         }
         catch (Exception ex)
         {
@@ -288,9 +288,9 @@ public sealed partial class MainWindow
         return null;
     }
 
-    private async Task ShowFullFileEditorAsync(SearchResult result)
+    private async Task ShowFullFileEditorAsync(SearchResult result, bool scrollToMatch)
     {
-        LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: start file='{System.IO.Path.GetFileName(result.FilePath)}'");
+        LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: start file='{System.IO.Path.GetFileName(result.FilePath)}', scrollToMatch={scrollToMatch}");
         var editorSw = System.Diagnostics.Stopwatch.StartNew();
         if (PreviewEditor.Visibility == Visibility.Visible && HasRealEditorChanges())
         {
@@ -319,7 +319,7 @@ public sealed partial class MainWindow
                     {
                         if (ShouldUseChunkedPreviewEditor(fileInfo))
                         {
-                            await ShowChunkedPreviewEditorAsync(result, fileInfo, cts.Token).ConfigureAwait(true);
+                            await ShowChunkedPreviewEditorAsync(result, fileInfo, cts.Token, scrollToMatch).ConfigureAwait(true);
                             return;
                         }
                     }
@@ -374,6 +374,7 @@ public sealed partial class MainWindow
             var textSetSw = System.Diagnostics.Stopwatch.StartNew();
             _suppressPreviewEditorTextChanged = true;
             LoadPreviewEditorText(text);
+            ResetPreviewEditorCaretToTop();
             _previewEditorOriginalText = GetPreviewEditorText();
             _suppressPreviewEditorTextChanged = false;
             textSetSw.Stop();
@@ -389,11 +390,19 @@ public sealed partial class MainWindow
 
             PreviewEditor.Focus(FocusState.Programmatic);
 
-            // Scroll to the match line and highlight the matched text.
             var scrollSw = System.Diagnostics.Stopwatch.StartNew();
-            ScrollEditorToMatch(text, result);
-            scrollSw.Stop();
-            LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: scrolled to match line={result.LineNumber}, elapsed={scrollSw.ElapsedMilliseconds}ms");
+            if (scrollToMatch)
+            {
+                ScrollEditorToMatch(text, result);
+                scrollSw.Stop();
+                LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: scrolled to match line={result.LineNumber}, elapsed={scrollSw.ElapsedMilliseconds}ms");
+            }
+            else
+            {
+                QueuePreviewEditorScrollToTop();
+                scrollSw.Stop();
+                LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: queued scroll to top, elapsed={scrollSw.ElapsedMilliseconds}ms");
+            }
 
             // The editor may fire deferred TextChanged after a bulk text
             // load (line-ending normalisation, layout pass, etc.).  If that
@@ -455,7 +464,7 @@ public sealed partial class MainWindow
             || fileInfo.Length > PreviewEditorMaxTextLength
             || (PreviewEditorMaxLineLength > 0 && fileInfo.Length > PreviewEditorMaxLineLength);
 
-    private async Task ShowChunkedPreviewEditorAsync(SearchResult result, FileInfo fileInfo, CancellationToken cancellationToken)
+    private async Task ShowChunkedPreviewEditorAsync(SearchResult result, FileInfo fileInfo, CancellationToken cancellationToken, bool scrollToMatch)
     {
         var chunkSw = System.Diagnostics.Stopwatch.StartNew();
         var chunk = await LoadPreviewEditorChunkAsync(
@@ -481,6 +490,7 @@ public sealed partial class MainWindow
 
         _suppressPreviewEditorTextChanged = true;
         LoadPreviewEditorText(chunk.Text);
+        ResetPreviewEditorCaretToTop();
         _previewEditorOriginalText = null;
         _suppressPreviewEditorTextChanged = false;
         _previewEditorDirty = false;
@@ -488,7 +498,10 @@ public sealed partial class MainWindow
 
         SetPreviewEditorVisible(true);
         PreviewEditor.Focus(FocusState.Programmatic);
-        ScrollEditorToMatch(chunk.Text, result);
+        if (scrollToMatch)
+            ScrollEditorToMatch(chunk.Text, result);
+        else
+            QueuePreviewEditorScrollToTop();
         UpdatePreviewEditorChunkUi();
         HookPreviewEditorChunkScroll();
 
@@ -673,6 +686,37 @@ public sealed partial class MainWindow
     private static string BuildPreviewEditorLimitMessage(string filePath, string reason)
     {
         return $"Built-in editor skipped {Path.GetFileName(filePath)} because {reason}. Use Open or Show in Explorer for very large files.";
+    }
+
+    private void ResetPreviewEditorCaretToTop()
+    {
+        try
+        {
+            PreviewEditor.SetCursorPosition(0, 0, scrollIntoView: false);
+            PreviewEditor.ClearSelection();
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("Preview", $"ResetPreviewEditorCaretToTop failed: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private void QueuePreviewEditorScrollToTop()
+    {
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            try
+            {
+                if (PreviewEditor.Visibility != Visibility.Visible) return;
+                PreviewEditor.SetCursorPosition(0, 0, scrollIntoView: false);
+                PreviewEditor.ClearSelection();
+                PreviewEditor.ScrollTopIntoView();
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Warning("Preview", $"QueuePreviewEditorScrollToTop failed: {ex.GetType().Name}: {ex.Message}");
+            }
+        });
     }
 
     private void ScrollEditorToMatch(string text, SearchResult result)

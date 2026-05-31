@@ -231,68 +231,76 @@
                         </StackPanel>
 
                         <!-- Path filters -->
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="6">
                             <TextBlock Text="Path filters" Opacity="0.7"
-                                       VerticalAlignment="Center" Width="88" FontWeight="SemiBold" />
-                            <Grid Grid.Column="1" ColumnSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Grid>
-                                    <TextBox x:Name="IncludeFilterBox"
-                                             PlaceholderText="{x:Bind ViewModel.IncludeFilterPlaceholder, Mode=OneWay}"
-                                             Text="{x:Bind ViewModel.IncludeGlobs, Mode=TwoWay}"
-                                             Padding="72,4,112,4" FontStyle="Italic"
-                                             TextChanged="OnFilterBoxTextChanged"
-                                             GotFocus="OnFilterBoxGotFocus"
-                                             LostFocus="OnFilterBoxLostFocus" />
+                                       FontWeight="SemiBold" />
+                            <StackPanel Spacing="8">
+                                <Grid RowSpacing="4" ColumnSpacing="6">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
                                     <Border Background="#0078D4" CornerRadius="8" Padding="8,2"
-                                            VerticalAlignment="Center" HorizontalAlignment="Left"
-                                            Margin="6,0,0,0" IsHitTestVisible="True"
+                                            VerticalAlignment="Center"
                                             ToolTipService.ToolTip="Files to include. In Glob mode, use extensions, globs, or path segments. In Regex mode, match the normalized full path.">
                                         <TextBlock Text="Include" FontSize="11" Foreground="White"
                                                    FontWeight="SemiBold" />
                                     </Border>
-                                    <ComboBox SelectedIndex="{x:Bind ViewModel.IncludeFilterModeIndex, Mode=TwoWay}"
-                                              Width="104" Height="30" MinWidth="0" Padding="8,0"
-                                              FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                              Margin="0,0,4,0"
+                                    <ComboBox Grid.Column="2"
+                                              SelectedIndex="{x:Bind ViewModel.IncludeFilterModeIndex, Mode=TwoWay}"
+                                              Width="88" Height="30" MinWidth="0" Padding="8,0"
+                                              FontSize="12" VerticalAlignment="Center"
                                               ToolTipService.ToolTip="Include filter mode">
                                         <x:String>Glob</x:String>
                                         <x:String>Regex</x:String>
                                     </ComboBox>
-                                </Grid>
-                                <Grid Grid.Column="1">
-                                    <TextBox x:Name="ExcludeFilterBox"
-                                             PlaceholderText="{x:Bind ViewModel.ExcludeFilterPlaceholder, Mode=OneWay}"
-                                             Text="{x:Bind ViewModel.ExcludeGlobs, Mode=TwoWay}"
-                                             Padding="72,4,112,4" FontStyle="Italic"
+                                    <TextBox x:Name="IncludeFilterBox" Grid.Row="1" Grid.ColumnSpan="3"
+                                             PlaceholderText="{x:Bind ViewModel.IncludeFilterPlaceholder, Mode=OneWay}"
+                                             Text="{x:Bind ViewModel.IncludeGlobs, Mode=TwoWay}"
+                                             Padding="8,4" FontStyle="Italic"
                                              TextChanged="OnFilterBoxTextChanged"
                                              GotFocus="OnFilterBoxGotFocus"
                                              LostFocus="OnFilterBoxLostFocus" />
+                                </Grid>
+                                <Grid RowSpacing="4" ColumnSpacing="6">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
                                     <Border Background="#0078D4" CornerRadius="8" Padding="8,2"
-                                            VerticalAlignment="Center" HorizontalAlignment="Left"
-                                            Margin="6,0,0,0" IsHitTestVisible="True"
+                                            VerticalAlignment="Center"
                                             ToolTipService.ToolTip="Files to exclude. In Glob mode, use extensions, globs, or path segments. In Regex mode, match the normalized full path.">
                                         <TextBlock Text="Exclude" FontSize="11" Foreground="White"
                                                    FontWeight="SemiBold" />
                                     </Border>
-                                    <ComboBox SelectedIndex="{x:Bind ViewModel.ExcludeFilterModeIndex, Mode=TwoWay}"
-                                              Width="104" Height="30" MinWidth="0" Padding="8,0"
-                                              FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                              Margin="0,0,4,0"
+                                    <ComboBox Grid.Column="2"
+                                              SelectedIndex="{x:Bind ViewModel.ExcludeFilterModeIndex, Mode=TwoWay}"
+                                              Width="88" Height="30" MinWidth="0" Padding="8,0"
+                                              FontSize="12" VerticalAlignment="Center"
                                               ToolTipService.ToolTip="Exclude filter mode">
                                         <x:String>Glob</x:String>
                                         <x:String>Regex</x:String>
                                     </ComboBox>
+                                    <TextBox x:Name="ExcludeFilterBox" Grid.Row="1" Grid.ColumnSpan="3"
+                                             PlaceholderText="{x:Bind ViewModel.ExcludeFilterPlaceholder, Mode=OneWay}"
+                                             Text="{x:Bind ViewModel.ExcludeGlobs, Mode=TwoWay}"
+                                             Padding="8,4" FontStyle="Italic"
+                                             TextChanged="OnFilterBoxTextChanged"
+                                             GotFocus="OnFilterBoxGotFocus"
+                                             LostFocus="OnFilterBoxLostFocus" />
                                 </Grid>
-                            </Grid>
-                        </Grid>
+                            </StackPanel>
+                        </StackPanel>
 
                         <!-- File type filters -->
                         <StackPanel Orientation="Horizontal" Spacing="8">
@@ -448,61 +456,62 @@
                         </StackPanel>
 
                         <!-- Size & date constraints -->
-                        <Grid ColumnSpacing="6">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="8">
                             <TextBlock Text="Property filters" Opacity="0.7"
-                                       VerticalAlignment="Center" Width="88" FontWeight="SemiBold" />
-                            <StackPanel Grid.Column="1" Spacing="2" Width="100">
-                                <TextBlock Text="Min MB" FontSize="11" Opacity="0.75" />
-                                <NumberBox Value="{x:Bind ViewModel.MinFileSizeMB, Mode=TwoWay}"
-                                           Minimum="0"
-                                           SpinButtonPlacementMode="Hidden"
-                                           ToolTipService.ToolTip="Minimum file size in MB. Leave blank for no lower limit." />
-                            </StackPanel>
-                            <StackPanel Grid.Column="2" Spacing="2" Width="100">
-                                <TextBlock Text="Max MB" FontSize="11" Opacity="0.75" />
-                                <NumberBox Value="{x:Bind ViewModel.MaxFileSizeMB, Mode=TwoWay}"
-                                           Minimum="0"
-                                           SpinButtonPlacementMode="Hidden"
-                                           ToolTipService.ToolTip="Maximum file size in MB. Leave blank for no upper limit." />
-                            </StackPanel>
-                            <Border Grid.Column="3" Width="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
-                                    VerticalAlignment="Stretch" Margin="4,-2,4,-2" />
-                            <StackPanel Grid.Column="4" Spacing="2">
+                                       FontWeight="SemiBold" />
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="Min MB" FontSize="11" Opacity="0.75" />
+                                    <NumberBox Value="{x:Bind ViewModel.MinFileSizeMB, Mode=TwoWay}"
+                                               Minimum="0"
+                                               SpinButtonPlacementMode="Hidden"
+                                               ToolTipService.ToolTip="Minimum file size in MB. Leave blank for no lower limit." />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Spacing="2">
+                                    <TextBlock Text="Max MB" FontSize="11" Opacity="0.75" />
+                                    <NumberBox Value="{x:Bind ViewModel.MaxFileSizeMB, Mode=TwoWay}"
+                                               Minimum="0"
+                                               SpinButtonPlacementMode="Hidden"
+                                               ToolTipService.ToolTip="Maximum file size in MB. Leave blank for no upper limit." />
+                                </StackPanel>
+                            </Grid>
+                            <StackPanel Spacing="4">
                                 <TextBlock Text="Created Date" FontSize="11" Opacity="0.75" />
-                                <CalendarDatePicker Date="{x:Bind ViewModel.CreatedAfterDate, Mode=TwoWay}"
-                                                    PlaceholderText="From" HorizontalAlignment="Stretch"
-                                                    ToolTipService.ToolTip="Only include files created on or after this date." />
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <CalendarDatePicker Date="{x:Bind ViewModel.CreatedAfterDate, Mode=TwoWay}"
+                                                        PlaceholderText="From" HorizontalAlignment="Stretch"
+                                                        ToolTipService.ToolTip="Only include files created on or after this date." />
+                                    <CalendarDatePicker Grid.Column="1"
+                                                        Date="{x:Bind ViewModel.CreatedBeforeDate, Mode=TwoWay}"
+                                                        PlaceholderText="To" HorizontalAlignment="Stretch"
+                                                        ToolTipService.ToolTip="Only include files created on or before this date." />
+                                </Grid>
                             </StackPanel>
-                            <StackPanel Grid.Column="5" Spacing="2" VerticalAlignment="Bottom">
-                                <CalendarDatePicker Date="{x:Bind ViewModel.CreatedBeforeDate, Mode=TwoWay}"
-                                                    PlaceholderText="To" HorizontalAlignment="Stretch"
-                                                    ToolTipService.ToolTip="Only include files created on or before this date." />
-                            </StackPanel>
-                            <Border Grid.Column="6" Width="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
-                                    VerticalAlignment="Stretch" Margin="4,-2,4,-2" />
-                            <StackPanel Grid.Column="7" Spacing="2">
+                            <StackPanel Spacing="4">
                                 <TextBlock Text="Modified Date" FontSize="11" Opacity="0.75" />
-                                <CalendarDatePicker Date="{x:Bind ViewModel.ModifiedAfterDate, Mode=TwoWay}"
-                                                    PlaceholderText="From" HorizontalAlignment="Stretch"
-                                                    ToolTipService.ToolTip="Only include files modified on or after this date." />
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <CalendarDatePicker Date="{x:Bind ViewModel.ModifiedAfterDate, Mode=TwoWay}"
+                                                        PlaceholderText="From" HorizontalAlignment="Stretch"
+                                                        ToolTipService.ToolTip="Only include files modified on or after this date." />
+                                    <CalendarDatePicker Grid.Column="1"
+                                                        Date="{x:Bind ViewModel.ModifiedBeforeDate, Mode=TwoWay}"
+                                                        PlaceholderText="To" HorizontalAlignment="Stretch"
+                                                        ToolTipService.ToolTip="Only include files modified on or before this date." />
+                                </Grid>
                             </StackPanel>
-                            <StackPanel Grid.Column="8" Spacing="2" VerticalAlignment="Bottom">
-                                <CalendarDatePicker Date="{x:Bind ViewModel.ModifiedBeforeDate, Mode=TwoWay}"
-                                                    PlaceholderText="To" HorizontalAlignment="Stretch"
-                                                    ToolTipService.ToolTip="Only include files modified on or before this date." />
-                            </StackPanel>
-                        </Grid>
+                        </StackPanel>
                         <!-- Max search depth -->
                         <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
                             <TextBlock Text="Max depth" Opacity="0.7"
@@ -1208,7 +1217,7 @@
 
                         <ScrollViewer x:Name="PreviewScrollViewer" Grid.Row="1" Padding="16,12"
                                       HorizontalScrollMode="Enabled"
-                                      HorizontalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Visible"
                                       VerticalScrollBarVisibility="Auto">
                             <Grid>
                                 <StackPanel x:Name="PreviewMessagePanel">
@@ -1331,29 +1340,28 @@
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <FontIcon Grid.Column="0" Glyph="&#xE7C3;" FontSize="14" Opacity="0.8"
                                               VerticalAlignment="Center" />
                                     <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
                                         <TextBlock x:Name="PreviewEditorPathText" FontSize="12"
-                                               TextTrimming="CharacterEllipsis" />
-                                        <TextBlock x:Name="PreviewEditorChunkStatusText" Visibility="Collapsed"
-                                               FontSize="11" Opacity="0.65"
-                                               TextTrimming="CharacterEllipsis" />
-                                    </StackPanel>
-                                    <StackPanel x:Name="PreviewEditorChunkPanel" Grid.Column="2" Visibility="Collapsed"
-                                            Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                        <Button x:Name="LoadMorePreviewEditorChunkButton"
-                                                Click="OnLoadMorePreviewEditorChunk" FontSize="12" Padding="8,4"
-                                                ToolTipService.ToolTip="Load the next chunk of this large file into the editor">
-                                            <StackPanel Orientation="Horizontal" Spacing="4">
-                                                <FontIcon Glyph="&#xE70D;" FontSize="12" />
-                                                <TextBlock Text="Load More" />
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Left">
+                                            <TextBlock x:Name="PreviewEditorChunkStatusText" Visibility="Collapsed"
+                                                       FontSize="11" Opacity="0.65"
+                                                       VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <StackPanel x:Name="PreviewEditorChunkPanel" Visibility="Collapsed"
+                                                        Orientation="Horizontal" VerticalAlignment="Center">
+                                                <Button x:Name="LoadMorePreviewEditorChunkButton"
+                                                        Click="OnLoadMorePreviewEditorChunk" FontSize="11" Padding="6,2"
+                                                        ToolTipService.ToolTip="Load the next chunk of this large file into the editor">
+                                                    <TextBlock Text="Load More" />
+                                                </Button>
                                             </StackPanel>
-                                        </Button>
+                                        </StackPanel>
                                     </StackPanel>
-                                    <StackPanel x:Name="PreviewEditorToolbarPanel" Grid.Column="3" Orientation="Horizontal" Spacing="4"
+                                    <StackPanel x:Name="PreviewEditorToolbarPanel" Grid.Column="2" Orientation="Horizontal" Spacing="4"
                                                 VerticalAlignment="Center">
                                         <Button x:Name="EditorCopyPreviewFilePathButton" Click="OnCopyPreviewFilePath"
                                                 Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
@@ -1373,7 +1381,7 @@
                                             <FontIcon Glyph="&#xE721;" FontSize="12" />
                                         </Button>
                                     </StackPanel>
-                                    <StackPanel x:Name="EditorButtonsPanel" Grid.Column="4" Orientation="Horizontal" Spacing="6"
+                                    <StackPanel x:Name="EditorButtonsPanel" Grid.Column="3" Orientation="Horizontal" Spacing="6"
                                                 VerticalAlignment="Center" Visibility="Collapsed">
                                         <Button x:Name="SavePreviewEditButton" Click="OnSavePreviewEdit" FontSize="12" Padding="8,4"
                                                 IsEnabled="False" ToolTipService.ToolTip="Save editor changes to the file">
@@ -1390,7 +1398,7 @@
                                             </StackPanel>
                                         </Button>
                                     </StackPanel>
-                                    <Button x:Name="PreviewEditorExpandButton" Grid.Column="5"
+                                        <Button x:Name="PreviewEditorExpandButton" Grid.Column="4"
                                             Click="OnExpandPreviewPanel"
                                             Background="Transparent" BorderThickness="0"
                                             Padding="6,4" VerticalAlignment="Center" Margin="2,0,0,0"
