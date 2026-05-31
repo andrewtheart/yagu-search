@@ -2297,7 +2297,7 @@ public sealed partial class MainWindow
 
         foreach (var segment in EnumeratePreviewLineLayoutSegments(window.Text))
         {
-            bool isContinuation = firstParagraph is not null || (gutterBlock is null && continuationGutter);
+            bool isContinuation = firstParagraph is not null || continuationGutter;
             var para = MakePreviewParagraph(segment, lineNum, isMatchLine: true, result, rx, truncate: false, continuationGutter: isContinuation, gutterBlock: gutterBlock);
             section.Blocks.Add(para);
             firstParagraph ??= para;

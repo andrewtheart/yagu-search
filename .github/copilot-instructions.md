@@ -7,6 +7,13 @@
 - Always build **both** Debug and Release: `dotnet build Yagu/Yagu.csproj -c Debug` and `dotnet build Yagu/Yagu.csproj -c Release`.
 - When launching the app, always launch the **Debug** build: `Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe`.
 
+## Native Crash & Profiling Rules
+
+- When investigating a `yagu_core.dll` native crash, WER crash dump, native stack, Rust FFI issue, or native search performance problem, build with the Rust profiling profile so the app output contains a symbol-rich native binary and PDB: `dotnet build Yagu/Yagu.csproj -c Debug -p:RustProfile=profiling` and `dotnet build Yagu/Yagu.csproj -c Release -p:RustProfile=profiling`.
+- After a profiling build, verify `yagu_core.dll` and `yagu_core.pdb` are present beside `Yagu.exe` under both `Yagu\bin\Debug\net10.0-windows10.0.19041.0\` and `Yagu\bin\Release\net10.0-windows10.0.19041.0\`.
+- For native crash reproduction, make sure Yagu-specific WER LocalDumps are enabled under `HKCU:\Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\Yagu.exe` with `DumpType=2`, `DumpCount=10`, and `DumpFolder=C:\src\Yagu\TestResults\CrashDumps`.
+- Yagu builds auto-increment `Yagu/Properties/build-version.txt` and `Yagu/Properties/AppInfo.g.cs`; revert that generated version churn after validation builds unless the user explicitly asked for a version bump.
+
 ## Test Run Rules
 
 - **Do NOT kill test runs prematurely.** The `Yagu.Tests` suite includes performance, ETW, and large-corpus benchmarks that can legitimately take **5–15+ minutes** to finish. A long-running `dotnet test` is almost always still working, not hung.

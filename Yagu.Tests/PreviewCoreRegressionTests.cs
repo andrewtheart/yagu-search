@@ -523,7 +523,11 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("paragraphsAdded < maxAdditionalBlocks", appendWindows);
         Assert.Contains("BuildMatchByLineForRanges", appendWindows);
         Assert.Contains("CountPrefixResultsThroughLine", appendWindows);
-        Assert.DoesNotContain("AddPreviewLineParagraphsAroundResult", appendWindows);
+        Assert.Contains("AddPreviewLineParagraphsAroundResult", appendWindows);
+        Assert.Contains("continuationGutter: true", appendWindows);
+
+        string aroundResult = ExtractMethodWindow(MainWindowSource, "AddPreviewLineParagraphsAroundResult");
+        Assert.Contains("firstParagraph is not null || continuationGutter", aroundResult);
 
         string expandChunk = ExtractMethodWindow(MainWindowSource, "ExpandSectionNextChunk");
         Assert.Contains("MaxPreviewBlocksPerExpandChunk", expandChunk);

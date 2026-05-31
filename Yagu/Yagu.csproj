@@ -155,9 +155,13 @@
   -->
   <PropertyGroup>
     <BuildRustCore Condition="'$(BuildRustCore)' == ''">true</BuildRustCore>
+    <RustProfile Condition="'$(RustProfile)' == ''">release</RustProfile>
+    <RustCargoProfileArgs Condition="'$(RustProfile)' == 'release'">--release</RustCargoProfileArgs>
+    <RustCargoProfileArgs Condition="'$(RustCargoProfileArgs)' == ''">--profile $(RustProfile)</RustCargoProfileArgs>
     <RustCoreDir>$(MSBuildThisFileDirectory)..\yagu-core\</RustCoreDir>
-    <RustTargetDir>$(RustCoreDir)target\release\</RustTargetDir>
+    <RustTargetDir>$(RustCoreDir)target\$(RustProfile)\</RustTargetDir>
     <RustDllPath>$(RustTargetDir)yagu_core.dll</RustDllPath>
+    <RustPdbPath>$(RustTargetDir)yagu_core.pdb</RustPdbPath>
     <CargoExe Condition="'$(CargoExe)' == '' And Exists('$(USERPROFILE)\.cargo\bin\cargo.exe')">$(USERPROFILE)\.cargo\bin\cargo.exe</CargoExe>
     <CargoExe Condition="'$(CargoExe)' == ''">cargo</CargoExe>
   </PropertyGroup>
@@ -165,7 +169,7 @@
   <Target Name="BuildYaguCore"
           BeforeTargets="BeforeBuild"
           Condition="'$(BuildRustCore)' == 'true' And Exists('$(RustCoreDir)Cargo.toml')">
-    <Exec Command="&quot;$(CargoExe)&quot; build --release --quiet"
+    <Exec Command="&quot;$(CargoExe)&quot; build $(RustCargoProfileArgs) --quiet"
           WorkingDirectory="$(RustCoreDir)"
           ConsoleToMSBuild="true"
           IgnoreStandardErrorWarningFormat="true"
@@ -174,9 +178,28 @@
              Text="yagu-core: Rust build did not produce $(RustDllPath); the app will fall back to the managed scanner. Install Rust from https://rustup.rs/ to enable the native fast path." />
   </Target>
 
+  <Target Name="CopyYaguCoreRuntimeFiles"
+          AfterTargets="BuildYaguCore"
+          Condition="'$(BuildRustCore)' == 'true' And Exists('$(RustDllPath)')">
+    <ItemGroup>
+      <_YaguCoreRuntimeFiles Include="$(RustDllPath)" />
+      <_YaguCoreRuntimeFiles Include="$(RustPdbPath)" Condition="Exists('$(RustPdbPath)')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_YaguCoreRuntimeFiles)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
   <ItemGroup Condition="Exists('$(RustDllPath)')">
     <None Include="$(RustDllPath)">
       <Link>yagu_core.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(RustPdbPath)')">
+    <None Include="$(RustPdbPath)">
+      <Link>yagu_core.pdb</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
