@@ -519,9 +519,12 @@ internal static class CliRunner
     {
         bool useColor = vtEnabled;
         bool exporting = !string.IsNullOrWhiteSpace(args.ExportPath);
+        bool replacing = args.ReplaceText is not null;
+        bool sorting = !string.IsNullOrWhiteSpace(args.SortBy);
+        bool needsCollection = exporting || replacing || sorting;
 
-        // When exporting, disable direct output so results are available via events
-        if (exporting)
+        // When collecting results, disable direct output so results are available via events
+        if (needsCollection)
         {
             options.DirectOutputStream = null;
             options.DirectOutputColor = false;
@@ -534,14 +537,14 @@ internal static class CliRunner
 
         // Direct output mode: bypass RipgrepWriter entirely — the DirectOutputSink
         // writes ripgrep-formatted UTF-8 directly from Rust's byte buffers.
-        if (!exporting)
+        if (!needsCollection)
         {
             options.DirectOutputStream = Console.OpenStandardOutput();
             options.DirectOutputColor = useColor;
         }
 
         var progress = vtEnabled ? new ProgressLine(useColor) : null;
-        var collectedResults = exporting ? new List<SearchResult>() : null;
+        var collectedResults = needsCollection ? new List<SearchResult>() : null;
         long filesScanned = 0;
         long bytesScanned = 0;
         DateTime searchStarted = DateTime.UtcNow;
@@ -581,15 +584,32 @@ internal static class CliRunner
                         bytesScanned = c.Summary.BytesScanned;
                         WriteCompletionSummary(c.Summary, useColor);
 
-                        if (exporting && collectedResults != null)
-                            await WriteExportFileAsync(args, collectedResults, options.Query, searchStarted, filesScanned, bytesScanned);
+                        if (needsCollection && collectedResults != null)
+                        {
+                            // Apply sort if requested
+                            var sortedResults = sorting
+                                ? SortResults(collectedResults, args.SortBy!, args.SortDescending)
+                                : collectedResults;
+
+                            // Replace in files
+                            if (replacing)
+                                await RunReplaceAsync(sortedResults, options.Query, args, useColor);
+
+                            // Write sorted output to stdout (when not replacing only, or when also exporting)
+                            if (sorting && !replacing)
+                                WriteSortedResults(sortedResults, useColor);
+
+                            // Export
+                            if (exporting)
+                                await WriteExportFileAsync(args, sortedResults.ToList(), options.Query, searchStarted, filesScanned, bytesScanned);
+                        }
 
                         if (c.Summary.Cancelled) return 130;
                         return c.Summary.TotalMatches > 0 ? 0 : 1;
                 }
 
-                // Collect results for export
-                if (exporting)
+                // Collect results for post-processing
+                if (needsCollection)
                 {
                     if (ev is SearchEvent.Match m)
                         collectedResults!.Add(m.Result);
@@ -734,6 +754,161 @@ internal static class CliRunner
     }
 
     // -----------------------------------------------------------------------
+    // Sort results
+    // -----------------------------------------------------------------------
+
+    private static IReadOnlyList<SearchResult> SortResults(List<SearchResult> results, string sortBy, bool descending)
+    {
+        // Group by file, sort groups, then flatten back
+        var groups = results.GroupBy(r => r.FilePath, StringComparer.OrdinalIgnoreCase).ToList();
+
+        IEnumerable<IGrouping<string, SearchResult>> sorted = sortBy switch
+        {
+            "matches" or "count" => descending
+                ? groups.OrderByDescending(g => g.Count())
+                : groups.OrderBy(g => g.Count()),
+            "date" or "modified" => descending
+                ? groups.OrderByDescending(g => GetFileModifiedSafe(g.Key))
+                : groups.OrderBy(g => GetFileModifiedSafe(g.Key)),
+            "size" => descending
+                ? groups.OrderByDescending(g => GetFileSizeSafe(g.Key))
+                : groups.OrderBy(g => GetFileSizeSafe(g.Key)),
+            "name" or "filename" => descending
+                ? groups.OrderByDescending(g => Path.GetFileName(g.Key), StringComparer.OrdinalIgnoreCase)
+                : groups.OrderBy(g => Path.GetFileName(g.Key), StringComparer.OrdinalIgnoreCase),
+            "path" => descending
+                ? groups.OrderByDescending(g => g.Key, StringComparer.OrdinalIgnoreCase)
+                : groups.OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase),
+            _ => groups.AsEnumerable(),
+        };
+
+        return sorted.SelectMany(g => g).ToList();
+    }
+
+    private static DateTime GetFileModifiedSafe(string path)
+    {
+        try { return File.GetLastWriteTimeUtc(path); }
+        catch { return DateTime.MinValue; }
+    }
+
+    private static long GetFileSizeSafe(string path)
+    {
+        try { return new FileInfo(path).Length; }
+        catch { return 0; }
+    }
+
+    private static void WriteSortedResults(IReadOnlyList<SearchResult> results, bool useColor)
+    {
+        var writer = new RipgrepWriter(Console.Out, useColor);
+        foreach (var result in results)
+            writer.Add(result);
+        writer.Flush();
+    }
+
+    // -----------------------------------------------------------------------
+    // Replace in files
+    // -----------------------------------------------------------------------
+
+    private static async Task RunReplaceAsync(IReadOnlyList<SearchResult> results, string needle, CliArgs args, bool useColor)
+    {
+        var replacement = args.ReplaceText!;
+        bool dryRun = args.ReplaceDryRun;
+        bool noBackup = args.ReplaceNoBackup;
+        var comparison = (args.CaseSensitive ?? false) ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+
+        // Group results by file path
+        var filePaths = results
+            .Select(r => r.FilePath)
+            .Where(p => !ZipArchiveSearcher.IsArchivePath(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (filePaths.Count == 0)
+        {
+            WriteError("No files to replace in.", useColor);
+            return;
+        }
+
+        int totalReplacements = 0;
+        int filesModified = 0;
+        int errors = 0;
+
+        foreach (var path in filePaths)
+        {
+            if (!File.Exists(path)) continue;
+
+            try
+            {
+                Encoding encoding;
+                string original;
+                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                           FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan))
+                {
+                    encoding = Helpers.EncodingDetector.DetectEncoding(stream);
+                    if (encoding is UTF8Encoding)
+                        encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
+                    using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true);
+                    original = await reader.ReadToEndAsync().ConfigureAwait(false);
+                    encoding = reader.CurrentEncoding;
+                }
+
+                var sb = new StringBuilder(original.Length);
+                int replaceCount = 0;
+                int pos = 0;
+                while (true)
+                {
+                    int idx = original.IndexOf(needle, pos, comparison);
+                    if (idx < 0) { sb.Append(original, pos, original.Length - pos); break; }
+                    sb.Append(original, pos, idx - pos);
+                    sb.Append(replacement);
+                    replaceCount++;
+                    pos = idx + needle.Length;
+                }
+
+                if (replaceCount == 0) continue;
+
+                var replaced = sb.ToString();
+                totalReplacements += replaceCount;
+                filesModified++;
+
+                if (dryRun)
+                {
+                    WriteError($"  {path}: {replaceCount} replacement(s) (dry run)", useColor);
+                    continue;
+                }
+
+                // Create backup unless --replace-no-backup
+                if (!noBackup)
+                {
+                    var bakPath = path + ".yagubak";
+                    if (!File.Exists(bakPath))
+                        File.Copy(path, bakPath, overwrite: false);
+                    else
+                    {
+                        int suffix = 2;
+                        while (File.Exists($"{path}.yagubak-{suffix}")) suffix++;
+                        File.Copy(path, $"{path}.yagubak-{suffix}", overwrite: false);
+                    }
+                }
+
+                await File.WriteAllTextAsync(path, replaced, encoding).ConfigureAwait(false);
+                WriteError($"  {path}: {replaceCount} replacement(s)", useColor);
+            }
+            catch (Exception ex)
+            {
+                errors++;
+                WriteError($"  error: {path}: {ex.Message}", useColor);
+            }
+        }
+
+        // Summary
+        var mode = dryRun ? " (dry run)" : "";
+        WriteError($"\nReplaced {totalReplacements:N0} occurrence(s) in {filesModified:N0} file(s){mode}.", useColor);
+        if (errors > 0)
+            WriteError($"  {errors} file(s) had errors.", useColor);
+    }
+
+    // -----------------------------------------------------------------------
     // Help text
     // -----------------------------------------------------------------------
 
@@ -828,6 +1003,17 @@ internal static class CliRunner
                   --export-no-markers     Omit <match></match> markers in JSON/CSV exports.
                   --export-csv-embed-context  Embed context as multi-line CSV fields (RFC 4180).
                   --export-csv-pipe-separator Use pipe ( | ) to separate context lines instead of newlines.
+
+            REPLACE:
+              -r, --replace <text>        Replace matched text with <text> in all matched files.
+                  --replace-no-backup     Do not create .yagubak backup files before replacing.
+                  --replace-dry-run       Show what would be replaced without modifying any files.
+                  --dry-run               Alias for --replace-dry-run.
+
+            SORT:
+                  --sort <key>            Sort results by: matches, date, size, name, path (default: unsorted).
+                  --sort-desc             Sort in descending order.
+                  --sort-asc              Sort in ascending order (default).
 
             SETTINGS FILE:
               If .yagu.json exists in the current working directory it is used as the
@@ -1109,6 +1295,15 @@ internal sealed class CliArgs
     public bool             ExportCsvEmbedContext { get; private set; }
     public bool             ExportCsvPipeSeparator { get; private set; }
 
+    // Replace options
+    public string?          ReplaceText { get; private set; }
+    public bool             ReplaceNoBackup { get; private set; }
+    public bool             ReplaceDryRun { get; private set; }
+
+    // Sort options
+    public string?          SortBy { get; private set; } // matches, date, size, name
+    public bool             SortDescending { get; private set; }
+
     private CliArgs() { }
 
     public static CliArgs Parse(string[] raw)
@@ -1209,6 +1404,16 @@ internal sealed class CliArgs
             if (Eq(tok, "--export-no-markers"))                          { a.ExportNoMarkers = true; i++; continue; }
             if (Eq(tok, "--export-csv-embed-context"))                   { a.ExportCsvEmbedContext = true; i++; continue; }
             if (Eq(tok, "--export-csv-pipe-separator"))                  { a.ExportCsvPipeSeparator = true; i++; continue; }
+
+            // Replace options
+            if (TryGetVal(raw, ref i, out v, "--replace", "-r"))        { a.ReplaceText = v; continue; }
+            if (Eq(tok, "--replace-no-backup"))                          { a.ReplaceNoBackup = true; i++; continue; }
+            if (Eq(tok, "--replace-dry-run", "--dry-run"))               { a.ReplaceDryRun = true; i++; continue; }
+
+            // Sort options
+            if (TryGetVal(raw, ref i, out v, "--sort"))                  { a.SortBy = v.ToLowerInvariant(); continue; }
+            if (Eq(tok, "--sort-desc", "--sort-descending"))              { a.SortDescending = true; i++; continue; }
+            if (Eq(tok, "--sort-asc", "--sort-ascending"))                { a.SortDescending = false; i++; continue; }
 
             // Positional: first non-flag is the pattern
             if (!tok.StartsWith('-') && a.Pattern is null)

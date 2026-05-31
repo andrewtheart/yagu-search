@@ -828,6 +828,62 @@ Yagu.exe --cli --directory <path> PATTERN [OPTIONS]
 | `--export-csv-embed-context` | Embed context as multi-line CSV fields (RFC 4180). |
 | `--export-csv-pipe-separator` | Use pipe ( \| ) to separate context lines instead of embedded newlines. Implies embed context. |
 
+### Replace (CLI)
+
+Search and replace text across all matched files directly from the command line. Mirrors the GUI's **Ctrl+H → Replace in All Files** feature.
+
+| Flag | Description |
+| --- | --- |
+| `-r`, `--replace <text>` | Replace all occurrences of the search pattern with `<text>` in matched files. |
+| `--replace-dry-run`, `--dry-run` | Show what would be replaced without modifying any files. |
+| `--replace-no-backup` | Do not create `.yagubak` backup files before replacing. |
+
+By default, each file is backed up to `{filename}.yagubak` before writing (numbered backups if one already exists). The replacement respects the `--case-sensitive` / `--ignore-case` flag for matching.
+
+**Example — dry run:**
+
+```
+Yagu.exe --cli --directory src "oldFunction" --replace "newFunction" --dry-run
+```
+
+**Example — replace with backup:**
+
+```
+Yagu.exe --cli --directory src "oldFunction" --replace "newFunction"
+```
+
+**Example — replace without backup:**
+
+```
+Yagu.exe --cli --directory src "oldFunction" --replace "newFunction" --replace-no-backup
+```
+
+> **Warning:** `--replace` writes to disk. Always use `--dry-run` first to preview changes. Use include/exclude filters to limit the scope.
+
+### Sort (CLI)
+
+Sort CLI output by file attributes. Useful for reviewing results in a specific order or combining with `--export`.
+
+| Flag | Description |
+| --- | --- |
+| `--sort <key>` | Sort results by: `matches`, `date`, `size`, `name`, `path`. Default: unsorted (arrival order). |
+| `--sort-desc` | Sort in descending order. |
+| `--sort-asc` | Sort in ascending order (default). |
+
+When `--sort` is specified, results are collected, sorted by file group, and then output in ripgrep format. This buffers all results before printing (unlike the default streaming mode).
+
+**Example — most matches first:**
+
+```
+Yagu.exe --cli --directory src "TODO" --sort matches --sort-desc
+```
+
+**Example — newest files first:**
+
+```
+Yagu.exe --cli --directory logs "error" --sort date --sort-desc
+```
+
 ### Help
 
 | Flag | Description |

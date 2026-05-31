@@ -2341,6 +2341,91 @@ newlines. Implies embed context.</td>
 </tr>
 </tbody>
 </table>
+<h3 id="replace-cli">Replace (CLI)</h3>
+<p>Search and replace text across all matched files directly from the
+command line. Mirrors the GUI’s <strong>Ctrl+H → Replace in All
+Files</strong> feature.</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-r</code>, <code>--replace &lt;text&gt;</code></td>
+<td>Replace all occurrences of the search pattern with
+<code>&lt;text&gt;</code> in matched files.</td>
+</tr>
+<tr>
+<td><code>--replace-dry-run</code>, <code>--dry-run</code></td>
+<td>Show what would be replaced without modifying any files.</td>
+</tr>
+<tr>
+<td><code>--replace-no-backup</code></td>
+<td>Do not create <code>.yagubak</code> backup files before
+replacing.</td>
+</tr>
+</tbody>
+</table>
+<p>By default, each file is backed up to <code>{filename}.yagubak</code>
+before writing (numbered backups if one already exists). The replacement
+respects the <code>--case-sensitive</code> / <code>--ignore-case</code>
+flag for matching.</p>
+<p><strong>Example — dry run:</strong></p>
+<pre><code>Yagu.exe --cli --directory src &quot;oldFunction&quot; --replace &quot;newFunction&quot; --dry-run</code></pre>
+<p><strong>Example — replace with backup:</strong></p>
+<pre><code>Yagu.exe --cli --directory src &quot;oldFunction&quot; --replace &quot;newFunction&quot;</code></pre>
+<p><strong>Example — replace without backup:</strong></p>
+<pre><code>Yagu.exe --cli --directory src &quot;oldFunction&quot; --replace &quot;newFunction&quot; --replace-no-backup</code></pre>
+<blockquote>
+<p><strong>Warning:</strong> <code>--replace</code> writes to disk.
+Always use <code>--dry-run</code> first to preview changes. Use
+include/exclude filters to limit the scope.</p>
+</blockquote>
+<h3 id="sort-cli">Sort (CLI)</h3>
+<p>Sort CLI output by file attributes. Useful for reviewing results in a
+specific order or combining with <code>--export</code>.</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--sort &lt;key&gt;</code></td>
+<td>Sort results by: <code>matches</code>, <code>date</code>,
+<code>size</code>, <code>name</code>, <code>path</code>. Default:
+unsorted (arrival order).</td>
+</tr>
+<tr>
+<td><code>--sort-desc</code></td>
+<td>Sort in descending order.</td>
+</tr>
+<tr>
+<td><code>--sort-asc</code></td>
+<td>Sort in ascending order (default).</td>
+</tr>
+</tbody>
+</table>
+<p>When <code>--sort</code> is specified, results are collected, sorted
+by file group, and then output in ripgrep format. This buffers all
+results before printing (unlike the default streaming mode).</p>
+<p><strong>Example — most matches first:</strong></p>
+<pre><code>Yagu.exe --cli --directory src &quot;TODO&quot; --sort matches --sort-desc</code></pre>
+<p><strong>Example — newest files first:</strong></p>
+<pre><code>Yagu.exe --cli --directory logs &quot;error&quot; --sort date --sort-desc</code></pre>
 <h3 id="help">Help</h3>
 <table>
 <thead>
