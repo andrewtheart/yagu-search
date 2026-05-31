@@ -331,6 +331,20 @@ Open Settings from the **gear** button in the title bar. Settings are saved to `
 | Selected section background | Background color for the active preview section. |
 | Unselected section background | Background color for inactive preview sections. |
 
+### Preview Colors Tab
+
+Customize the colors used in the preview pane's rendered content.
+
+| Setting | What It Controls | Default |
+| --- | --- | --- |
+| Gutter (context lines) | Line number color for non-matched lines in the gutter. | Grey (#505050) |
+| Gutter (matched lines) | Line number color for matched lines in the gutter. | Lime green (#32CD32) |
+| Match text | Foreground color of matched text within a line. | Gold (#FFD700) |
+| Active match overlay | Color of the overlay band highlighting the currently navigated match. | Orange-red (#FF4500) |
+| Matched line text | Foreground color of the full line containing a match. | White (#FFFFFF) |
+
+All colors are specified as ARGB hex strings (e.g. `#FFFFD700`). Use the color picker in Settings to choose custom values. Changes take effect on the next preview render.
+
 ### Editor Tab
 
 | Setting | What It Controls |
@@ -500,10 +514,38 @@ During a search, a real-time sparkline graph appears in the status area showing 
 
 ## Export and Reports
 
+### Export Report Dialog (GUI)
+
+Access via the Preview toolbar's **Export Report** button, or right-click a file section header → **Export**. The dialog offers:
+
+**Format:**
+
+| Format | Output |
+| --- | --- |
+| HTML report | Styled HTML with matches highlighted, line numbers, and context. |
+| JSON | Structured JSON with files, matches, optional context and metadata. |
+| CSV | One row per match, with optional multi-line context embedding. |
+
+**Options:**
+
+| Option | Effect |
+| --- | --- |
+| Include file sizes | Adds file size to each file entry (JSON/CSV). |
+| Include file modified dates | Adds last-modified timestamp (JSON/CSV). |
+| Include context lines | Exports N lines before/after each match. Adjustable count (0–50). |
+| Include `<match></match>` markers | Wraps matched text in markers (JSON/CSV only). |
+
+**CSV-specific options** (visible when CSV + context is selected):
+
+| Option | Effect |
+| --- | --- |
+| Embed context with RFC 4180 newlines | Context lines embedded as quoted multi-line fields using RFC 4180 standard. Maximum compatibility with Excel and database import tools. |
+| Separate lines with pipe ( \| ) | Context lines joined with pipe characters instead of embedded newlines. Better for tools that don't handle multi-line CSV fields. |
+
+### Other Export Actions
+
 | Feature | How to Access | Output |
 | --- | --- | --- |
-| Export HTML report (all results) | Preview toolbar → Export Report button | Styled HTML with matches, line numbers, and context |
-| Export HTML report (single section) | Right-click a file section header → Export | HTML report for just that file |
 | Copy selected file paths | Right-click file group → Copy Selected File Paths | Clipboard: one path per line |
 | Copy files with content | Right-click → Copy Selected Files With Content | Clipboard: paths + matched lines |
 | Save file paths to file | Right-click → Save Selected File Paths… | Text file |
@@ -772,6 +814,25 @@ Yagu.exe --cli --directory <path> PATTERN [OPTIONS]
 | --- | --- |
 | `--max-results <n>` | Stop after N matches (default: 50000). |
 | `--line-truncation <n>` | Truncate lines to N characters (0 = no limit). |
+
+### Export (CLI)
+
+| Flag | Description |
+| --- | --- |
+| `--export <path>` | Export results to a file (triggers export mode). |
+| `--export-format <fmt>` | Export format: `html`, `json`, `csv` (default: inferred from file extension). |
+| `--export-context <n>` | Context lines in exported report (default: 3, 0 = none). |
+| `--export-file-sizes` | Include file sizes in export. |
+| `--export-modified-dates` | Include file modified dates in export. |
+| `--export-no-markers` | Omit `<match></match>` markers in JSON/CSV exports. |
+| `--export-csv-embed-context` | Embed context as multi-line CSV fields (RFC 4180). |
+| `--export-csv-pipe-separator` | Use pipe ( \| ) to separate context lines instead of embedded newlines. Implies embed context. |
+
+### Help
+
+| Flag | Description |
+| --- | --- |
+| `--help`, `-h`, `-?` | Print usage information and exit. |
 
 ### Exit Codes
 

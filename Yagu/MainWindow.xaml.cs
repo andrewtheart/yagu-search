@@ -4141,7 +4141,7 @@ public sealed partial class MainWindow : Window
             var byFile = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
             foreach (var r in group)
             {
-                if (!r.IsSelected) continue;
+                if (!r.IsSelected || r.LineNumber == 0) continue;
                 if (!byFile.TryGetValue(r.FilePath, out var list))
                 {
                     list = new List<SearchResult>();
@@ -4182,7 +4182,7 @@ public sealed partial class MainWindow : Window
             {
                 foreach (var r in g)
                 {
-                    if (!r.IsSelected) continue;
+                    if (!r.IsSelected || r.LineNumber == 0) continue;
                     if (!byFile.TryGetValue(r.FilePath, out var list))
                     {
                         list = new List<SearchResult>();
@@ -4497,6 +4497,7 @@ public sealed partial class MainWindow : Window
         var byFile = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
         foreach (var result in results)
         {
+            if (result.LineNumber == 0) continue;
             if (!byFile.TryGetValue(result.FilePath, out var matches))
             {
                 matches = new List<SearchResult>();

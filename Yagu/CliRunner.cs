@@ -684,7 +684,8 @@ internal static class CliRunner
             IncludeContextLines = true,
             ContextLineCount = args.ExportContextLines ?? 3,
             IncludeMatchMarkers = !args.ExportNoMarkers,
-            CsvEmbedContext = args.ExportCsvEmbedContext,
+            CsvEmbedContext = args.ExportCsvEmbedContext || args.ExportCsvPipeSeparator,
+            CsvUsePipeSeparator = args.ExportCsvPipeSeparator,
         };
 
         var groups = results
@@ -826,6 +827,7 @@ internal static class CliRunner
                   --export-modified-dates Include file modified dates in export.
                   --export-no-markers     Omit <match></match> markers in JSON/CSV exports.
                   --export-csv-embed-context  Embed context as multi-line CSV fields (RFC 4180).
+                  --export-csv-pipe-separator Use pipe ( | ) to separate context lines instead of newlines.
 
             SETTINGS FILE:
               If .yagu.json exists in the current working directory it is used as the
@@ -1105,6 +1107,7 @@ internal sealed class CliArgs
     public bool             ExportModifiedDates { get; private set; }
     public bool             ExportNoMarkers { get; private set; }
     public bool             ExportCsvEmbedContext { get; private set; }
+    public bool             ExportCsvPipeSeparator { get; private set; }
 
     private CliArgs() { }
 
@@ -1205,6 +1208,7 @@ internal sealed class CliArgs
             if (Eq(tok, "--export-modified-dates"))                      { a.ExportModifiedDates = true; i++; continue; }
             if (Eq(tok, "--export-no-markers"))                          { a.ExportNoMarkers = true; i++; continue; }
             if (Eq(tok, "--export-csv-embed-context"))                   { a.ExportCsvEmbedContext = true; i++; continue; }
+            if (Eq(tok, "--export-csv-pipe-separator"))                  { a.ExportCsvPipeSeparator = true; i++; continue; }
 
             // Positional: first non-flag is the pattern
             if (!tok.StartsWith('-') && a.Pattern is null)

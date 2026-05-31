@@ -52,6 +52,12 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     public int HiddenMatchCount { get; private set; }
     public bool HasHiddenMatches => HiddenMatchCount > 0;
 
+    /// <summary>Number of filename-only matches (LineNumber == 0) in this group.</summary>
+    private int _fileNameMatchCount;
+
+    /// <summary>True when this group has content matches (LineNumber &gt; 0) alongside filename matches.</summary>
+    public bool HasContentMatches => (Count + _evictedOnlyCount) > _fileNameMatchCount;
+
     /// <summary>True when this group represents a file inside an archive.</summary>
     public bool IsArchiveEntry => ZipArchiveSearcher.IsArchivePath(FilePath);
 
@@ -98,6 +104,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
 
     /// <summary>Subset of items currently rendered in the UI. Populated lazily when the group expands.</summary>
     public BatchObservableCollection<SearchResult> VisibleResults { get; } = new();
+    private int _visibleSkipped; // filename matches skipped during ShowMore/ShowAll
 
     private volatile bool _cleaned;
 
@@ -119,6 +126,9 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
 
     protected override void InsertItem(int index, SearchResult item)
     {
+        if (item.LineNumber == 0)
+            _fileNameMatchCount++;
+
         if (Count >= MaxMatchesPerGroup)
         {
             HiddenMatchCount++;
@@ -320,6 +330,8 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     {
         _cleaned = true;
         _evictedOnlyCount = 0;
+        _fileNameMatchCount = 0;
+        _visibleSkipped = 0;
         _evictedStubPages = null;
         _evictedStubPageLengths = null;
         _nextEvictedStubPageBytes = MinEvictedStubPageBytes;
@@ -337,8 +349,26 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             bool addedToVisible = false;
             if (IsExpanded)
             {
+                bool skipFileNameMatches = HasContentMatches;
+                if (skipFileNameMatches)
+                {
+                    // Remove any filename matches that were added before content matches arrived.
+                    for (int i = VisibleResults.Count - 1; i >= 0; i--)
+                    {
+                        if (VisibleResults[i].LineNumber == 0)
+                        {
+                            VisibleResults.RemoveAt(i);
+                            _visibleSkipped++;
+                        }
+                    }
+                }
                 foreach (SearchResult item in e.NewItems)
                 {
+                    if (skipFileNameMatches && item.LineNumber == 0)
+                    {
+                        _visibleSkipped++;
+                        continue;
+                    }
                     if (VisibleResults.Count < PageSize && !item.IsEvicted)
                     {
                         _ = item.ShortPreview;
@@ -373,14 +403,15 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     // Iter 16: include unmaterialized evicted stubs in the "more" calculation so the
     // expand-evicted code path always finds work to do (and the UI's "Show more" text
     // reflects the true remaining count, not just the materialized Items count).
-    public bool HasMore => VisibleResults.Count < (Count + _evictedOnlyCount);
-    public int RemainingCount => (Count + _evictedOnlyCount) - VisibleResults.Count;
+    public bool HasMore => (VisibleResults.Count + _visibleSkipped) < (Count + _evictedOnlyCount);
+    public int RemainingCount => (Count + _evictedOnlyCount) - VisibleResults.Count - _visibleSkipped;
     public string ShowMoreText => $"Show more ({RemainingCount:N0} remaining)";
 
     public void ClearVisibleResults()
     {
-        if (VisibleResults.Count == 0) return;
+        if (VisibleResults.Count == 0 && _visibleSkipped == 0) return;
         VisibleResults.Clear();
+        _visibleSkipped = 0;
         NotifyMoreStateChanged();
     }
 
@@ -389,7 +420,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         if (maxItems <= 0)
             return 0;
 
-        int start = VisibleResults.Count;
+        int start = VisibleResults.Count + _visibleSkipped;
         int end = Math.Min(Count, start + maxItems);
         if (end <= start)
         {
@@ -397,11 +428,17 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             return 0;
         }
 
+        bool skipFileNameMatches = HasContentMatches;
         var batch = new List<SearchResult>(end - start);
         int evictedCount = 0;
         int emptyMatchCount = 0;
         for (int i = start; i < end; i++)
         {
+            if (skipFileNameMatches && this[i].LineNumber == 0)
+            {
+                _visibleSkipped++;
+                continue;
+            }
             _ = this[i].ShortPreview;
             if (this[i].IsEvicted) evictedCount++;
             if (this[i].MatchLine.Length == 0) emptyMatchCount++;
@@ -420,10 +457,16 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
 
     public void ShowAll()
     {
-        int start = VisibleResults.Count;
+        int start = VisibleResults.Count + _visibleSkipped;
+        bool skipFileNameMatches = HasContentMatches;
         var batch = new List<SearchResult>(Count - start);
         for (int i = start; i < Count; i++)
         {
+            if (skipFileNameMatches && this[i].LineNumber == 0)
+            {
+                _visibleSkipped++;
+                continue;
+            }
             _ = this[i].ShortPreview;
             batch.Add(this[i]);
         }
@@ -438,7 +481,17 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(ShowMoreText)));
     }
 
-    public int MatchCount => Count + HiddenMatchCount + _evictedOnlyCount;
+    public int MatchCount
+    {
+        get
+        {
+            int total = Count + HiddenMatchCount + _evictedOnlyCount;
+            // Don't count filename matches when there are also content matches.
+            if (_fileNameMatchCount > 0 && HasContentMatches)
+                total -= _fileNameMatchCount;
+            return total;
+        }
+    }
 
     public long FileSize { get; private set; }
     public DateTime LastModified { get; private set; }

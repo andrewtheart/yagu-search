@@ -1244,6 +1244,54 @@ MB).</td>
 </tr>
 </tbody>
 </table>
+<h3 id="preview-colors-tab">Preview Colors Tab</h3>
+<p>Customize the colors used in the preview pane’s rendered content.</p>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Setting</th>
+<th>What It Controls</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Gutter (context lines)</td>
+<td>Line number color for non-matched lines in the gutter.</td>
+<td>Grey (#505050)</td>
+</tr>
+<tr>
+<td>Gutter (matched lines)</td>
+<td>Line number color for matched lines in the gutter.</td>
+<td>Lime green (#32CD32)</td>
+</tr>
+<tr>
+<td>Match text</td>
+<td>Foreground color of matched text within a line.</td>
+<td>Gold (#FFD700)</td>
+</tr>
+<tr>
+<td>Active match overlay</td>
+<td>Color of the overlay band highlighting the currently navigated
+match.</td>
+<td>Orange-red (#FF4500)</td>
+</tr>
+<tr>
+<td>Matched line text</td>
+<td>Foreground color of the full line containing a match.</td>
+<td>White (#FFFFFF)</td>
+</tr>
+</tbody>
+</table>
+<p>All colors are specified as ARGB hex strings
+(e.g. <code>#FFFFD700</code>). Use the color picker in Settings to
+choose custom values. Changes take effect on the next preview
+render.</p>
 <h3 id="editor-tab">Editor Tab</h3>
 <table>
 <colgroup>
@@ -1571,6 +1619,99 @@ scanning and dims during idle periods. This helps identify bottlenecks
 file is being processed).</p>
 <hr />
 <h2 id="export-and-reports">Export and Reports</h2>
+<h3 id="export-report-dialog-gui">Export Report Dialog (GUI)</h3>
+<p>Access via the Preview toolbar’s <strong>Export Report</strong>
+button, or right-click a file section header → <strong>Export</strong>.
+The dialog offers:</p>
+<p><strong>Format:</strong></p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Format</th>
+<th>Output</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>HTML report</td>
+<td>Styled HTML with matches highlighted, line numbers, and
+context.</td>
+</tr>
+<tr>
+<td>JSON</td>
+<td>Structured JSON with files, matches, optional context and
+metadata.</td>
+</tr>
+<tr>
+<td>CSV</td>
+<td>One row per match, with optional multi-line context embedding.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Options:</strong></p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Option</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Include file sizes</td>
+<td>Adds file size to each file entry (JSON/CSV).</td>
+</tr>
+<tr>
+<td>Include file modified dates</td>
+<td>Adds last-modified timestamp (JSON/CSV).</td>
+</tr>
+<tr>
+<td>Include context lines</td>
+<td>Exports N lines before/after each match. Adjustable count
+(0–50).</td>
+</tr>
+<tr>
+<td>Include <code>&lt;match&gt;&lt;/match&gt;</code> markers</td>
+<td>Wraps matched text in markers (JSON/CSV only).</td>
+</tr>
+</tbody>
+</table>
+<p><strong>CSV-specific options</strong> (visible when CSV + context is
+selected):</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Option</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Embed context with RFC 4180 newlines</td>
+<td>Context lines embedded as quoted multi-line fields using RFC 4180
+standard. Maximum compatibility with Excel and database import
+tools.</td>
+</tr>
+<tr>
+<td>Separate lines with pipe ( | )</td>
+<td>Context lines joined with pipe characters instead of embedded
+newlines. Better for tools that don’t handle multi-line CSV fields.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="other-export-actions">Other Export Actions</h3>
 <table>
 <colgroup>
 <col style="width: 33%" />
@@ -1585,16 +1726,6 @@ file is being processed).</p>
 </tr>
 </thead>
 <tbody>
-<tr>
-<td>Export HTML report (all results)</td>
-<td>Preview toolbar → Export Report button</td>
-<td>Styled HTML with matches, line numbers, and context</td>
-</tr>
-<tr>
-<td>Export HTML report (single section)</td>
-<td>Right-click a file section header → Export</td>
-<td>HTML report for just that file</td>
-</tr>
 <tr>
 <td>Copy selected file paths</td>
 <td>Right-click file group → Copy Selected File Paths</td>
@@ -2157,6 +2288,71 @@ integration:</p>
 <tr>
 <td><code>--line-truncation &lt;n&gt;</code></td>
 <td>Truncate lines to N characters (0 = no limit).</td>
+</tr>
+</tbody>
+</table>
+<h3 id="export-cli">Export (CLI)</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--export &lt;path&gt;</code></td>
+<td>Export results to a file (triggers export mode).</td>
+</tr>
+<tr>
+<td><code>--export-format &lt;fmt&gt;</code></td>
+<td>Export format: <code>html</code>, <code>json</code>,
+<code>csv</code> (default: inferred from file extension).</td>
+</tr>
+<tr>
+<td><code>--export-context &lt;n&gt;</code></td>
+<td>Context lines in exported report (default: 3, 0 = none).</td>
+</tr>
+<tr>
+<td><code>--export-file-sizes</code></td>
+<td>Include file sizes in export.</td>
+</tr>
+<tr>
+<td><code>--export-modified-dates</code></td>
+<td>Include file modified dates in export.</td>
+</tr>
+<tr>
+<td><code>--export-no-markers</code></td>
+<td>Omit <code>&lt;match&gt;&lt;/match&gt;</code> markers in JSON/CSV
+exports.</td>
+</tr>
+<tr>
+<td><code>--export-csv-embed-context</code></td>
+<td>Embed context as multi-line CSV fields (RFC 4180).</td>
+</tr>
+<tr>
+<td><code>--export-csv-pipe-separator</code></td>
+<td>Use pipe ( | ) to separate context lines instead of embedded
+newlines. Implies embed context.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="help">Help</h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--help</code>, <code>-h</code>, <code>-?</code></td>
+<td>Print usage information and exit.</td>
 </tr>
 </tbody>
 </table>
