@@ -58,8 +58,24 @@ public sealed partial class MainWindow
     /// <summary>XAML paragraph chunk size for very long physical lines; all text is still rendered.</summary>
     private const int PreviewLineLayoutSegmentChars = 4096;
 
+    /// <summary>
+    /// Safety cap for NoWrap mode. Empirically, DirectWrite layout via RichTextBlock
+    /// with TextWrapping=NoWrap throws stowed COMException 0x80004005 (E_FAIL) from
+    /// Microsoft.UI.Xaml.dll well below the documented ~65535 character limit when
+    /// asked to lay out a single very long run on one visual line. 4096 matches the
+    /// Wrap-mode segment size and is empirically safe; long source lines will visually
+    /// fold into multiple paragraphs in NoWrap mode (compromising strict NoWrap
+    /// semantics) but every character is still rendered and no crash occurs.
+    /// </summary>
+    private const int PreviewLineLayoutSegmentCharsNoWrap = 4096;
+
     private bool ShouldTruncatePreviewLines()
-        => ViewModel.PreviewWordWrap;
+        => ViewModel.PreviewWrapModeIndex != (int)Models.PreviewWrapMode.NoWrap;
+
+    private int GetEffectiveSegmentSize()
+        => ViewModel.PreviewWrapModeIndex == (int)Models.PreviewWrapMode.NoWrap
+            ? PreviewLineLayoutSegmentCharsNoWrap
+            : PreviewLineLayoutSegmentChars;
 
     /// <summary>
     /// Maximum matches to render per file section before truncating.
@@ -1163,12 +1179,25 @@ public sealed partial class MainWindow
         _previewMutating = true;
         try
         {
+        // Clear stale match-nav state before clearing Blocks. Single-file
+        // preview doesn't repopulate _matchParagraphs, so leaving prior
+        // entries around leads to orphaned-Paragraph access later (E_FAIL
+        // in Microsoft.UI.Xaml.dll from GetCharacterRect on a removed run).
+        UnboxCurrentMatch();
+        _matchParagraphs.Clear();
+        _paragraphMatchRunCache.Clear();
+        InvalidateParagraphIndexCache();
+        _currentMatchIndex = -1;
         PreviewBlock.Blocks.Clear();
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
 
         int lineCount = 0;
         bool truncatePreviewLines = !fullFile && ShouldTruncatePreviewLines();
         var lines = GetPreviewLines(r, allLines, ViewModel.PreviewContextLines, fullFile);
+        int maxLineLen = 0;
+        foreach (var (l, _) in lines)
+            if (l is not null && l.Length > maxLineLen) maxLineLen = l.Length;
+        LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync rebuild: wrapMode={ViewModel.PreviewWrapModeIndex}, segmentCap={GetEffectiveSegmentSize()}, truncate={truncatePreviewLines}, lines={lines.Count}, maxLineLen={maxLineLen}");
         foreach (var (line, lineNum) in lines)
         {
             bool isMatchLine = lineNum == r.LineNumber;
@@ -2093,6 +2122,8 @@ public sealed partial class MainWindow
     private Windows.UI.Color _overlayColor = Microsoft.UI.Colors.OrangeRed;
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphLineNumbers = new();
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphPrimaryResults = new();
+    /// <summary>Marks paragraphs that are continuation segments of a long source line (no leading line number gutter).</summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphIsContinuation = new();
 
     private void ApplyPreviewColors()
     {
@@ -2512,7 +2543,7 @@ public sealed partial class MainWindow
         return addedMatchEntries;
     }
 
-    private static IEnumerable<string> EnumeratePreviewLineLayoutSegments(string line)
+    private IEnumerable<string> EnumeratePreviewLineLayoutSegments(string line)
     {
         if (line.Length == 0)
         {
@@ -2520,15 +2551,16 @@ public sealed partial class MainWindow
             yield break;
         }
 
-        if (line.Length <= PreviewLineLayoutSegmentChars)
+        int segmentSize = GetEffectiveSegmentSize();
+        if (line.Length <= segmentSize)
         {
             yield return line;
             yield break;
         }
 
-        for (int start = 0; start < line.Length; start += PreviewLineLayoutSegmentChars)
+        for (int start = 0; start < line.Length; start += segmentSize)
         {
-            int length = Math.Min(PreviewLineLayoutSegmentChars, line.Length - start);
+            int length = Math.Min(segmentSize, line.Length - start);
             yield return line.Substring(start, length);
         }
     }
@@ -2541,6 +2573,8 @@ public sealed partial class MainWindow
         var para = new Paragraph();
         s_paragraphLineNumbers.AddOrUpdate(para, lineNum);
         s_paragraphPrimaryResults.AddOrUpdate(para, r);
+        if (continuationGutter)
+            s_paragraphIsContinuation.AddOrUpdate(para, true);
 
         // Match indicator + line number gutter.
         // Use a glyph that Consolas renders at full cell width so match lines

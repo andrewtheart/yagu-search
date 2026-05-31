@@ -3417,18 +3417,39 @@ public sealed partial class MainWindow : Window
         LogService.Instance.Info("Preview", "OnShowFullFile: completed");
     }
 
-    private void OnWordWrapToggled(object sender, RoutedEventArgs e)
+    private void OnWrapModeOptionClicked(object sender, RoutedEventArgs e)
     {
-        if (sender is ToggleButton toggle && toggle.IsChecked is bool isChecked)
-        {
-            ViewModel.PreviewWordWrap = isChecked;
-            WordWrapToggle.IsChecked = isChecked;
-            EditorWordWrapToggle.IsChecked = isChecked;
-        }
+        int mode;
+        if (ReferenceEquals(sender, WrapModeWrap) || ReferenceEquals(sender, EditorWrapModeWrap))
+            mode = 0;
+        else if (ReferenceEquals(sender, WrapModePartial) || ReferenceEquals(sender, EditorWrapModePartial))
+            mode = 1;
+        else
+            mode = 2;
 
-        // Apply asynchronously / incrementally so the UI doesn't freeze when many large
-        // preview sections are loaded on the right panel.
-        _ = ApplyWordWrapAsync(ViewModel.PreviewWordWrap);
+        int previousMode = ViewModel.PreviewWrapModeIndex;
+        ViewModel.PreviewWrapModeIndex = mode;
+        ViewModel.PreviewWordWrap = mode == 0;
+        SyncWrapModeToggles(mode);
+
+        // Switching to/from NoWrap requires a full preview rebuild because the
+        // paragraph segmentation (4096-char chunks) is baked into the content.
+        bool needsRebuild = previousMode == (int)Models.PreviewWrapMode.NoWrap
+                         || mode == (int)Models.PreviewWrapMode.NoWrap;
+        if (needsRebuild)
+            RefreshCurrentPreview(preserveScroll: true);
+        else
+            _ = ApplyWrapModeAsync((Models.PreviewWrapMode)mode);
+    }
+
+    private void SyncWrapModeToggles(int mode)
+    {
+        WrapModeWrap.IsChecked = mode == 0;
+        WrapModePartial.IsChecked = mode == 1;
+        WrapModeNone.IsChecked = mode == 2;
+        EditorWrapModeWrap.IsChecked = mode == 0;
+        EditorWrapModePartial.IsChecked = mode == 1;
+        EditorWrapModeNone.IsChecked = mode == 2;
     }
 
     private async void OnPreviewModeChanged(object sender, SelectionChangedEventArgs e)
@@ -3468,7 +3489,7 @@ public sealed partial class MainWindow : Window
 
     // Synchronous variant retained for callers that already run inside an async preview
     // refresh (e.g. ShowSingleFilePreviewAsync). Only safe when the number of preview
-    // sections is small or known. Prefer ApplyWordWrapAsync for user-initiated toggles.
+    // sections is small or known. Prefer ApplyWrapModeAsync for user-initiated toggles.
     private void ApplyWordWrap(bool wrap)
     {
         var wrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
@@ -3497,16 +3518,17 @@ public sealed partial class MainWindow : Window
 
     private bool _applyingWordWrap;
 
-    private async Task ApplyWordWrapAsync(bool wrap)
+    private async Task ApplyWrapModeAsync(Models.PreviewWrapMode mode)
     {
         if (_applyingWordWrap) return;
         _applyingWordWrap = true;
         try
         {
-            WordWrapToggle.IsEnabled = false;
-            EditorWordWrapToggle.IsEnabled = false;
+            WordWrapDropDown.IsEnabled = false;
+            EditorWordWrapDropDown.IsEnabled = false;
+            bool wrap = mode == Models.PreviewWrapMode.Wrap;
             var wrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
-            LogService.Instance.Info("Preview", $"ApplyWordWrapAsync: start wrap={wrap}");
+            LogService.Instance.Info("Preview", $"ApplyWrapModeAsync: start mode={mode}");
 
             InvalidatePendingMatchScrolls();
             UnboxCurrentMatch();
@@ -3554,17 +3576,17 @@ public sealed partial class MainWindow : Window
             }
 
             ViewModel.StatusText = string.Empty;
-            LogService.Instance.Info("Preview", $"ApplyWordWrapAsync: done wrap={wrap}, sections={totalSections}, processedExpanded={processed}");
+            LogService.Instance.Info("Preview", $"ApplyWrapModeAsync: done mode={mode}, sections={totalSections}, processedExpanded={processed}");
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("Preview", $"ApplyWordWrapAsync failed: wrap={wrap}", ex);
+            LogService.Instance.Warning("Preview", $"ApplyWrapModeAsync failed: mode={mode}", ex);
             ViewModel.StatusText = "Could not apply word wrap to the current preview.";
         }
         finally
         {
-            WordWrapToggle.IsEnabled = true;
-            EditorWordWrapToggle.IsEnabled = true;
+            WordWrapDropDown.IsEnabled = true;
+            EditorWordWrapDropDown.IsEnabled = true;
             _applyingWordWrap = false;
         }
     }
@@ -3644,9 +3666,24 @@ public sealed partial class MainWindow : Window
 
         _currentMatchIndex = Math.Clamp(matchIndex, 0, _matchParagraphs.Count - 1);
         var (block, para, matchInPara) = _matchParagraphs[_currentMatchIndex];
-        BoxMatchRun(para, matchInPara);
-        MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
-        QueueActiveMatchOverlayRefresh();
+
+        // Guard against stale entries: if the paragraph has been removed from
+        // its parent block (e.g. by a preview rebuild that did not refresh
+        // _matchParagraphs), touching it crashes Microsoft.UI.Xaml.dll with
+        // COMException E_FAIL inside GetCharacterRect.
+        if (block is null || para is null || !block.Blocks.Contains(para))
+            return;
+
+        try
+        {
+            BoxMatchRun(para, matchInPara);
+            MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
+            QueueActiveMatchOverlayRefresh();
+        }
+        catch (System.Runtime.InteropServices.COMException ex)
+        {
+            LogService.Instance.Warning("Preview", "RestoreActiveMatchAfterPreviewRefresh: skipping due to stale paragraph", ex);
+        }
     }
 
     private async Task<bool> ClearPreviewPanelForNewSearchAsync()
@@ -4985,16 +5022,20 @@ public sealed partial class MainWindow : Window
 
         flyout.Items.Add(new MenuFlyoutSeparator());
 
-        var wrapItem = new ToggleMenuFlyoutItem { Text = "Wrap", Icon = new FontIcon { Glyph = "\uE8B3" } };
-        wrapItem.IsChecked = ViewModel.PreviewWordWrap;
-        wrapItem.Click += (_, _) =>
-        {
-            ViewModel.PreviewWordWrap = !ViewModel.PreviewWordWrap;
-            WordWrapToggle.IsChecked = ViewModel.PreviewWordWrap;
-            EditorWordWrapToggle.IsChecked = ViewModel.PreviewWordWrap;
-            OnWordWrapToggled(WordWrapToggle, new RoutedEventArgs());
-        };
-        flyout.Items.Add(wrapItem);
+        var wrapSubItem = new MenuFlyoutSubItem { Text = "Word wrap", Icon = new FontIcon { Glyph = "\uE8B3" } };
+        var ctxWrap = new ToggleMenuFlyoutItem { Text = "Word wrap" };
+        ctxWrap.IsChecked = ViewModel.PreviewWrapModeIndex == 0;
+        ctxWrap.Click += (_, _) => { OnWrapModeOptionClicked(WrapModeWrap, new RoutedEventArgs()); };
+        wrapSubItem.Items.Add(ctxWrap);
+        var ctxPartial = new ToggleMenuFlyoutItem { Text = "Partial word wrap" };
+        ctxPartial.IsChecked = ViewModel.PreviewWrapModeIndex == 1;
+        ctxPartial.Click += (_, _) => { OnWrapModeOptionClicked(WrapModePartial, new RoutedEventArgs()); };
+        wrapSubItem.Items.Add(ctxPartial);
+        var ctxNoWrap = new ToggleMenuFlyoutItem { Text = "No wrap" };
+        ctxNoWrap.IsChecked = ViewModel.PreviewWrapModeIndex == 2;
+        ctxNoWrap.Click += (_, _) => { OnWrapModeOptionClicked(WrapModeNone, new RoutedEventArgs()); };
+        wrapSubItem.Items.Add(ctxNoWrap);
+        flyout.Items.Add(wrapSubItem);
 
         flyout.Items.Add(new MenuFlyoutSeparator());
 
@@ -5009,7 +5050,9 @@ public sealed partial class MainWindow : Window
 
         flyout.Opening += (_, _) =>
         {
-            wrapItem.IsChecked = ViewModel.PreviewWordWrap;
+            ctxWrap.IsChecked = ViewModel.PreviewWrapModeIndex == 0;
+            ctxPartial.IsChecked = ViewModel.PreviewWrapModeIndex == 1;
+            ctxNoWrap.IsChecked = ViewModel.PreviewWrapModeIndex == 2;
             bool hasSelection = !string.IsNullOrEmpty(block.SelectedText);
             copyWithLines.IsEnabled = hasSelection;
             copyWithout.IsEnabled = hasSelection;
@@ -5017,17 +5060,90 @@ public sealed partial class MainWindow : Window
         block.ContextFlyout = flyout;
     }
 
-    private static void CopyPreviewSelection(RichTextBlock block, bool withLineNumbers)
+    private void CopyPreviewSelection(RichTextBlock block, bool withLineNumbers)
     {
         string selectedText = block.SelectedText;
         if (string.IsNullOrEmpty(selectedText)) return;
 
         string textToCopy;
+        // Detect whether the gutter (indicator + line number + separator) is rendered
+        // inline in each paragraph (single-file PreviewBlock) or in a separate gutter
+        // RichTextBlock (multi-section view). When inline, the first three Run inlines
+        // of each paragraph are gutter chrome and must be stripped before re-prefixing.
+        bool hasInlineGutter = !_sectionGutterBlocks.ContainsKey(block);
+        LogService.Instance.Info("Preview",
+            $"CopyPreviewSelection: withLineNumbers={withLineNumbers}, hasInlineGutter={hasInlineGutter}, " +
+            $"isPreviewBlock={ReferenceEquals(block, PreviewBlock)}, wrapMode={ViewModel.PreviewWrapModeIndex}, " +
+            $"selectedLen={selectedText.Length}, blockBlocks={block.Blocks.Count}");
+
         if (withLineNumbers)
         {
-            // The gutter is in a separate RichTextBlock for multi-section previews,
-            // so SelectedText doesn't include line numbers. Reconstruct them by
-            // walking selected paragraphs and prepending line numbers from metadata.
+            var selStart = block.SelectionStart;
+            var selEnd = block.SelectionEnd;
+            if (selStart is null || selEnd is null)
+            {
+                textToCopy = selectedText;
+            }
+            else
+            {
+                int startOff = selStart.Offset;
+                int endOff = selEnd.Offset;
+                var sb = new StringBuilder();
+                bool first = true;
+                int lastEmittedLineNum = -1;
+                int paraCount = 0;
+                int missingLineNumCount = 0;
+                int continuationCount = 0;
+                foreach (var b in block.Blocks)
+                {
+                    if (b is not Paragraph para) continue;
+                    var pStart = para.ContentStart;
+                    var pEnd = para.ContentEnd;
+                    if (pStart is null || pEnd is null) continue;
+                    if (pEnd.Offset <= startOff) continue;
+                    if (pStart.Offset >= endOff) break;
+
+                    string lineText = ExtractParagraphContent(para, hasInlineGutter);
+                    int lineNum = ResolveParagraphLineNumber(para, hasInlineGutter);
+                    bool cwtHit = s_paragraphLineNumbers.TryGetValue(para, out var rawTag);
+                    bool contTag = s_paragraphIsContinuation.TryGetValue(para, out _);
+                    bool isContinuation = contTag
+                                          || (lineNum > 0 && lineNum == lastEmittedLineNum);
+                    paraCount++;
+                    if (lineNum <= 0) missingLineNumCount++;
+                    if (isContinuation) continuationCount++;
+                    if (paraCount <= 5)
+                    {
+                        LogService.Instance.Info("Preview",
+                            $"  para[{paraCount - 1}]: lineNum={lineNum}, cwtHit={cwtHit}, " +
+                            $"cwtTagType={rawTag?.GetType().Name ?? "null"}, contTag={contTag}, " +
+                            $"isContinuation={isContinuation}, inlinesCount={para.Inlines.Count}");
+                    }
+
+                    if (!first) sb.AppendLine();
+                    first = false;
+
+                    if (lineNum > 0 && !isContinuation)
+                    {
+                        sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"{lineNum,5} \u2502 {lineText}");
+                        lastEmittedLineNum = lineNum;
+                    }
+                    else
+                    {
+                        // Blank gutter for continuation segments or unknown line numbers,
+                        // matching the visual style ("      \u2502 ").
+                        sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"      \u2502 {lineText}");
+                    }
+                }
+                LogService.Instance.Info("Preview",
+                    $"CopyPreviewSelection: emitted {paraCount} paragraphs, " +
+                    $"{missingLineNumCount} missing lineNum, {continuationCount} continuations.");
+                textToCopy = sb.ToString();
+            }
+        }
+        else
+        {
+            // No line numbers requested. Walk paragraphs and emit pure content.
             var selStart = block.SelectionStart;
             var selEnd = block.SelectionEnd;
             if (selStart is null || selEnd is null)
@@ -5049,55 +5165,70 @@ public sealed partial class MainWindow : Window
                     if (pEnd.Offset <= startOff) continue;
                     if (pStart.Offset >= endOff) break;
 
-                    // Extract text from paragraph inlines
-                    var paraText = new StringBuilder();
-                    foreach (var inline in para.Inlines)
-                    {
-                        if (inline is Run run)
-                            paraText.Append(run.Text);
-                    }
-
-                    string lineText = paraText.ToString();
+                    string lineText = ExtractParagraphContent(para, hasInlineGutter);
                     if (!first) sb.AppendLine();
                     first = false;
-
-                    if (s_paragraphLineNumbers.TryGetValue(para, out var tag) && tag is int lineNum && lineNum > 0)
-                        sb.Append($"{lineNum,5} │ {lineText}");
-                    else
-                        sb.Append($"      │ {lineText}");
+                    sb.Append(lineText);
                 }
                 textToCopy = sb.ToString();
             }
-        }
-        else
-        {
-            // Strip any inline gutter prefix (legacy path where gutter is in the same block).
-            // Pattern: indicator char + padded number + " │ "
-            var lines = selectedText.Split('\n');
-            var sb = new StringBuilder();
-            for (int i = 0; i < lines.Length; i++)
-            {
-                string line = lines[i].TrimEnd('\r');
-                int sepIdx = line.IndexOf("│ ", StringComparison.Ordinal);
-                if (sepIdx >= 0)
-                {
-                    int secondSep = line.IndexOf("│ ", sepIdx + 2, StringComparison.Ordinal);
-                    if (secondSep >= 0)
-                        line = line[(secondSep + 2)..];
-                    else
-                        line = line[(sepIdx + 2)..];
-                }
-                if (i < lines.Length - 1)
-                    sb.AppendLine(line);
-                else
-                    sb.Append(line);
-            }
-            textToCopy = sb.ToString();
         }
 
         var dataPackage = new DataPackage();
         dataPackage.SetText(textToCopy);
         Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
+    }
+
+    /// <summary>
+    /// Concatenates the text of all Run inlines in a paragraph, optionally skipping
+    /// the first three inlines which form the inline gutter chrome
+    /// (indicator + lineNum + separator) when the paragraph uses inline gutter mode.
+    /// </summary>
+    private static string ExtractParagraphContent(Paragraph para, bool hasInlineGutter)
+    {
+        var sb = new StringBuilder();
+        int skip = hasInlineGutter ? 3 : 0;
+        int idx = 0;
+        foreach (var inline in para.Inlines)
+        {
+            if (idx++ < skip) continue;
+            if (inline is Run run) sb.Append(run.Text);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Returns the source line number for a paragraph. Prefers the
+    /// <see cref="s_paragraphLineNumbers"/> CWT but falls back to parsing the
+    /// gutter Run (2nd inline) when present, so copy still works even if the
+    /// CWT registration was missed.
+    /// </summary>
+    private static int ResolveParagraphLineNumber(Paragraph para, bool hasInlineGutter)
+    {
+        if (s_paragraphLineNumbers.TryGetValue(para, out var tag) && tag is int lineNum && lineNum > 0)
+            return lineNum;
+
+        if (!hasInlineGutter) return -1;
+
+        // Inline gutter layout: [indicator][gutterRun ("{lineNum,5} " or "      ")][gutterSep]
+        int idx = 0;
+        foreach (var inline in para.Inlines)
+        {
+            if (idx == 1 && inline is Run gutter)
+            {
+                string text = gutter.Text;
+                if (!string.IsNullOrWhiteSpace(text)
+                    && int.TryParse(text.AsSpan().Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int parsed)
+                    && parsed > 0)
+                {
+                    return parsed;
+                }
+                return -1;
+            }
+            idx++;
+            if (idx > 1) break;
+        }
+        return -1;
     }
 
     private static int GetParagraphLineNumber(RichTextBlock block, Microsoft.UI.Xaml.Documents.TextPointer? pointer)
@@ -5781,6 +5912,7 @@ public sealed partial class MainWindow : Window
     {
         ((FrameworkElement)sender).Loaded -= OnContentLoaded;
         AlignBrowseButtonToSearchButton();
+        SyncWrapModeToggles(ViewModel.PreviewWrapModeIndex);
         ApplyWordWrap(ViewModel.PreviewWordWrap);
         ApplyPreviewColors();
         if (_launcherMode) PositionLauncherWindow();

@@ -1102,13 +1102,18 @@
                                     </MenuFlyout>
                                 </DropDownButton.Flyout>
                             </DropDownButton>
-                            <ToggleButton x:Name="WordWrapToggle" Width="28" Height="28" MinWidth="0" MinHeight="0"
+                            <Button x:Name="WordWrapDropDown" Width="28" Height="28" MinWidth="0" MinHeight="0"
                                           Padding="0"
-                                          IsChecked="{x:Bind ViewModel.PreviewWordWrap, Mode=TwoWay}"
-                                          Click="OnWordWrapToggled"
-                                          ToolTipService.ToolTip="Toggle word wrap in the preview and editor">
+                                          ToolTipService.ToolTip="Choose word wrap mode for the preview and editor">
                                 <FontIcon Glyph="&#xE8B3;" FontSize="12" />
-                            </ToggleButton>
+                                <Button.Flyout>
+                                    <MenuFlyout>
+                                        <ToggleMenuFlyoutItem x:Name="WrapModeWrap" Text="Word wrap" Click="OnWrapModeOptionClicked" />
+                                        <ToggleMenuFlyoutItem x:Name="WrapModePartial" Text="Partial word wrap" Click="OnWrapModeOptionClicked" />
+                                        <ToggleMenuFlyoutItem x:Name="WrapModeNone" Text="No wrap" Click="OnWrapModeOptionClicked" />
+                                    </MenuFlyout>
+                                </Button.Flyout>
+                            </Button>
                             <Button x:Name="FindReplaceButton" Click="OnOpenFindReplaceBar" Width="28" Height="28" MinWidth="0" MinHeight="0"
                                     Padding="0" ToolTipService.ToolTip="Find or replace text in the preview/editor">
                                 <FontIcon Glyph="&#xE721;" FontSize="12" />
@@ -1368,13 +1373,18 @@
                                                 ToolTipService.ToolTip="Copy the current editor file path">
                                             <FontIcon Glyph="&#xE8C8;" FontSize="12" />
                                         </Button>
-                                        <ToggleButton x:Name="EditorWordWrapToggle" Width="28" Height="28" MinWidth="0" MinHeight="0"
+                                        <Button x:Name="EditorWordWrapDropDown" Width="28" Height="28" MinWidth="0" MinHeight="0"
                                                       Padding="0"
-                                                      IsChecked="{x:Bind ViewModel.PreviewWordWrap, Mode=TwoWay}"
-                                                      Click="OnWordWrapToggled"
-                                                      ToolTipService.ToolTip="Toggle word wrap in the editor">
+                                                      ToolTipService.ToolTip="Choose word wrap mode for the editor">
                                             <FontIcon Glyph="&#xE8B3;" FontSize="12" />
-                                        </ToggleButton>
+                                            <Button.Flyout>
+                                                <MenuFlyout>
+                                                    <ToggleMenuFlyoutItem x:Name="EditorWrapModeWrap" Text="Word wrap" Click="OnWrapModeOptionClicked" />
+                                                    <ToggleMenuFlyoutItem x:Name="EditorWrapModePartial" Text="Partial word wrap" Click="OnWrapModeOptionClicked" />
+                                                    <ToggleMenuFlyoutItem x:Name="EditorWrapModeNone" Text="No wrap" Click="OnWrapModeOptionClicked" />
+                                                </MenuFlyout>
+                                            </Button.Flyout>
+                                        </Button>
                                         <Button x:Name="EditorFindReplaceButton" Click="OnOpenFindReplaceBar"
                                                 Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
                                                 ToolTipService.ToolTip="Find or replace text in the editor">

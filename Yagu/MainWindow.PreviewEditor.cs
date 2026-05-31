@@ -1014,7 +1014,7 @@ public sealed partial class MainWindow
         {
             PreviewEditorPathText.Text = _previewEditorPath ?? string.Empty;
             ToolTipService.SetToolTip(PreviewEditorPathBar, _previewEditorPath ?? string.Empty);
-            EditorWordWrapToggle.IsChecked = ViewModel.PreviewWordWrap;
+            SyncWrapModeToggles(ViewModel.PreviewWrapModeIndex);
             SyncPreviewEditorFindHighlights();
         }
         else

@@ -59,6 +59,7 @@ public sealed class AppSettings
     public string GlobalHotkeyKey { get; set; } = HotkeyService.DefaultStartKey.ToString();
     public int PreviewModeIndex { get; set; } = 1; // 0 = Concatenated, 1 = Multi-highlight
     public bool PreviewWordWrap { get; set; }
+    public int PreviewWrapModeIndex { get; set; } = 1; // 0 = Wrap, 1 = PartialWrap, 2 = NoWrap
     public string SelectedPreviewContentBackgroundColor { get; set; } = DefaultSelectedPreviewContentBackgroundColor;
     public string UnselectedPreviewContentBackgroundColor { get; set; } = DefaultUnselectedPreviewContentBackgroundColor;
     public string PreviewGutterContextColor { get; set; } = DefaultPreviewGutterContextColor;

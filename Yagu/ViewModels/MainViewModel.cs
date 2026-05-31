@@ -113,7 +113,9 @@ public sealed partial class MainViewModel : ObservableObject
         MaxResults = _settings.MaxResults <= 0 ? 0 : Math.Min(_settings.MaxResults, SearchOptions.MaxResultsCeiling);
         EditorCommand = _settings.EditorCommand;
         PreviewModeIndex = _settings.PreviewModeIndex;
-        PreviewWordWrap = _settings.PreviewWordWrap;
+        // Migrate legacy bool → new tri-state: if user had wrap ON and new index is still at default (PartialWrap), upgrade to Wrap.
+        PreviewWrapModeIndex = _settings.PreviewWordWrap && _settings.PreviewWrapModeIndex == 1 ? 0 : _settings.PreviewWrapModeIndex;
+        PreviewWordWrap = PreviewWrapModeIndex == 0;
         PreviewAutoLoadMatches = _settings.PreviewAutoLoadMatches;
         SelectedPreviewContentBackgroundColor = ColorStringHelper.Normalize(
             _settings.SelectedPreviewContentBackgroundColor,
@@ -362,6 +364,7 @@ public sealed partial class MainViewModel : ObservableObject
     }
     [ObservableProperty] public partial int PreviewModeIndex { get; set; } = 1; // 0 = Concatenated, 1 = Multi-highlight
     [ObservableProperty] public partial bool PreviewWordWrap { get; set; }
+    [ObservableProperty] public partial int PreviewWrapModeIndex { get; set; } = 1; // 0 = Wrap, 1 = PartialWrap, 2 = NoWrap
     [ObservableProperty] public partial int PreviewAutoLoadMatches { get; set; } = 50;
     [ObservableProperty] public partial string SelectedPreviewContentBackgroundColor { get; set; } = AppSettings.DefaultSelectedPreviewContentBackgroundColor;
     [ObservableProperty] public partial string UnselectedPreviewContentBackgroundColor { get; set; } = AppSettings.DefaultUnselectedPreviewContentBackgroundColor;
@@ -2114,6 +2117,7 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.EditorCommand = EditorCommand;
         _settings.PreviewModeIndex = PreviewModeIndex;
         _settings.PreviewWordWrap = PreviewWordWrap;
+        _settings.PreviewWrapModeIndex = PreviewWrapModeIndex;
         _settings.PreviewAutoLoadMatches = PreviewAutoLoadMatches;
         _settings.SelectedPreviewContentBackgroundColor = ColorStringHelper.Normalize(
             SelectedPreviewContentBackgroundColor,
