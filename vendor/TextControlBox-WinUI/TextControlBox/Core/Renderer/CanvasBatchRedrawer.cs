@@ -2,13 +2,12 @@
 using Microsoft.UI.Dispatching;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace TextControlBoxNS.Core.Renderer
 {
     internal class CanvasBatchRedrawer
     {
-        private readonly HashSet<CanvasControl> _redrawRequests = new();
+        private readonly List<CanvasControl> _redrawRequests = new();
         private readonly DispatcherQueueTimer _timer;
 
         public CanvasBatchRedrawer(int batchIntervalMs = 16)
@@ -28,6 +27,7 @@ namespace TextControlBoxNS.Core.Renderer
 
         public void RequestRedraw(CanvasControl canvas)
         {
+            _redrawRequests.Remove(canvas);
             _redrawRequests.Add(canvas);
 
             if (!_timer.IsRunning)

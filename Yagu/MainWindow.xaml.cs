@@ -1163,6 +1163,8 @@ public sealed partial class MainWindow : Window
                 ExpandResultsIcon.Glyph = "\uE740"; // FullScreen
                 ToolTipService.SetToolTip(ExpandResultsButton, "Maximize file list / hide preview");
                 ExpandPreviewIcon.Glyph = "\uE740"; // FullScreen
+                PreviewEditorExpandIcon.Glyph = "\uE740"; // FullScreen
+                ToolTipService.SetToolTip(PreviewEditorExpandButton, "Maximize editor / hide results");
                 break;
             case SplitLayoutMode.ResultsMaximized:
                 ResultsPanelBorder.Visibility = Visibility.Visible;
@@ -1177,6 +1179,8 @@ public sealed partial class MainWindow : Window
                 ExpandResultsIcon.Glyph = "\uE73F"; // BackToWindow
                 ToolTipService.SetToolTip(ExpandResultsButton, "Restore split view");
                 ExpandPreviewIcon.Glyph = "\uE740";
+                PreviewEditorExpandIcon.Glyph = "\uE740";
+                ToolTipService.SetToolTip(PreviewEditorExpandButton, "Maximize editor / hide results");
                 break;
             case SplitLayoutMode.PreviewMaximized:
                 ResultsPanelBorder.Visibility = Visibility.Collapsed;
@@ -1191,6 +1195,8 @@ public sealed partial class MainWindow : Window
                 ExpandResultsIcon.Glyph = "\uE740";
                 ToolTipService.SetToolTip(ExpandResultsButton, "Maximize file list / hide preview");
                 ExpandPreviewIcon.Glyph = "\uE740"; // FullScreen
+                PreviewEditorExpandIcon.Glyph = "\uE740"; // FullScreen
+                ToolTipService.SetToolTip(PreviewEditorExpandButton, "Expand editor across the top");
                 break;
             case SplitLayoutMode.PreviewTopExpanded:
                 ApplyTopExpandedPreviewLayout();
@@ -1251,6 +1257,8 @@ public sealed partial class MainWindow : Window
         ExpandResultsIcon.Glyph = "\uE740";
         ToolTipService.SetToolTip(ExpandResultsButton, "Maximize file list / hide preview");
         ExpandPreviewIcon.Glyph = "\uE70E"; // ChevronUp
+        PreviewEditorExpandIcon.Glyph = "\uE70E"; // ChevronUp
+        ToolTipService.SetToolTip(PreviewEditorExpandButton, "Restore split preview layout");
 
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, UpdateTopExpandedPreviewMeasurements);
     }
@@ -3404,6 +3412,13 @@ public sealed partial class MainWindow : Window
 
     private void OnWordWrapToggled(object sender, RoutedEventArgs e)
     {
+        if (sender is ToggleButton toggle && toggle.IsChecked is bool isChecked)
+        {
+            ViewModel.PreviewWordWrap = isChecked;
+            WordWrapToggle.IsChecked = isChecked;
+            EditorWordWrapToggle.IsChecked = isChecked;
+        }
+
         // Apply asynchronously / incrementally so the UI doesn't freeze when many large
         // preview sections are loaded on the right panel.
         _ = ApplyWordWrapAsync(ViewModel.PreviewWordWrap);
@@ -3483,6 +3498,7 @@ public sealed partial class MainWindow : Window
         try
         {
             WordWrapToggle.IsEnabled = false;
+            EditorWordWrapToggle.IsEnabled = false;
             var wrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
             LogService.Instance.Info("Preview", $"ApplyWordWrapAsync: start wrap={wrap}");
 
@@ -3543,6 +3559,7 @@ public sealed partial class MainWindow : Window
         finally
         {
             WordWrapToggle.IsEnabled = true;
+            EditorWordWrapToggle.IsEnabled = true;
             _applyingWordWrap = false;
         }
     }
@@ -4969,6 +4986,7 @@ public sealed partial class MainWindow : Window
         {
             ViewModel.PreviewWordWrap = !ViewModel.PreviewWordWrap;
             WordWrapToggle.IsChecked = ViewModel.PreviewWordWrap;
+            EditorWordWrapToggle.IsChecked = ViewModel.PreviewWordWrap;
             OnWordWrapToggled(WordWrapToggle, new RoutedEventArgs());
         };
         flyout.Items.Add(wrapItem);

@@ -28,6 +28,7 @@ internal class SelectionManager
     public bool IsSelectingOverLinenumbers { get; set; } = false;
     public bool IsSelecting { get; set; } = false;
     public bool HasSelection { get; set; } = false;
+    public bool CurrentSelectionIsActiveSearchMatch { get; set; }
     
     public SelectionManager()
     {
@@ -55,6 +56,7 @@ internal class SelectionManager
     }
     public void SetSelection(int startLine, int startChar, int endLine, int endChar)
     {
+        CurrentSelectionIsActiveSearchMatch = false;
         IsSelecting = true;
         selectionStart.SetChangeValues(startLine, startChar);
         selectionEnd.SetChangeValues(endLine, endChar);
@@ -68,6 +70,7 @@ internal class SelectionManager
 
     public void SetSelection(CursorPosition startPosition, CursorPosition endPosition)
     {
+        CurrentSelectionIsActiveSearchMatch = false;
         IsSelecting = true;
         selectionStart.SetChangeValues(startPosition);
         selectionEnd.SetChangeValues(endPosition);
@@ -77,6 +80,7 @@ internal class SelectionManager
     }
     public void SetSelectionStart(CursorPosition startPosition)
     {
+        CurrentSelectionIsActiveSearchMatch = false;
         IsSelecting = true;
         selectionStart.SetChangeValues(startPosition);
 
@@ -89,6 +93,7 @@ internal class SelectionManager
     }
     public void SetSelectionEnd(CursorPosition endPosition)
     {
+        CurrentSelectionIsActiveSearchMatch = false;
         IsSelecting = true;
         selectionEnd.SetChangeValues(endPosition);
 
@@ -97,6 +102,7 @@ internal class SelectionManager
     }
     public void SetSelectionStart(int startPos, int characterPos)
     {
+        CurrentSelectionIsActiveSearchMatch = false;
         selectionStart.CharacterPosition = characterPos;
         selectionStart.LineNumber = startPos;
         selectionStart.IsNull = false;
@@ -108,6 +114,7 @@ internal class SelectionManager
     }
     public void SetSelectionEnd(int endPos, int characterPos)
     {
+        CurrentSelectionIsActiveSearchMatch = false;
         selectionEnd.CharacterPosition = characterPos;
         selectionEnd.LineNumber = endPos;
         selectionEnd.IsNull = false;
@@ -117,6 +124,7 @@ internal class SelectionManager
 
     public void ClearSelection()
     {
+        CurrentSelectionIsActiveSearchMatch = false;
         HasSelection = false;
         IsSelecting = false;
         selectionEnd.IsNull = true;

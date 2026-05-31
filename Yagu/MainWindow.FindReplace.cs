@@ -21,6 +21,8 @@ public sealed partial class MainWindow
 {
     private string? _previewEditorFindHighlightNeedle;
     private bool _previewEditorFindHighlightMatchCase;
+    private int _previewEditorActiveFindSelectionVersion;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _previewEditorActiveFindSelectionRetryTimer;
 
     private void OnOpenFindReplaceBar(object sender, RoutedEventArgs e)
     {
@@ -58,6 +60,7 @@ public sealed partial class MainWindow
     private void CloseFindBar()
     {
         LogFindVerbose($"CloseFindBar: previousIndex={_findIndex}, {FindSurfaceDescription()}");
+        CancelPreviewEditorActiveFindSelectionRefresh();
         FindBar.Visibility = Visibility.Collapsed;
         ReplaceRow.Visibility = Visibility.Collapsed;
         FindReplaceToggle.IsChecked = false;
@@ -75,6 +78,13 @@ public sealed partial class MainWindow
         // Return focus to the editor or preview
         if (PreviewEditor.Visibility == Visibility.Visible)
             PreviewEditor.Focus(FocusState.Programmatic);
+    }
+
+    private void CancelPreviewEditorActiveFindSelectionRefresh()
+    {
+        _previewEditorActiveFindSelectionVersion++;
+        _previewEditorActiveFindSelectionRetryTimer?.Stop();
+        _previewEditorActiveFindSelectionRetryTimer = null;
     }
 
     private void OnFindReplaceToggle(object sender, RoutedEventArgs e)
@@ -318,7 +328,8 @@ public sealed partial class MainWindow
             SyncPreviewEditorFindHighlights();
             PreviewEditor.Focus(FocusState.Programmatic);
             SelectPreviewEditorText(index, length);
-            ScrollPreviewEditorMatchIntoView(index);
+            int line = ScrollPreviewEditorMatchIntoView(index);
+            QueuePreviewEditorActiveFindSelectionRefresh(index, length, line);
             LogFindVerbose($"SelectFindMatch: editor selected, index={index}, length={length}, after={FindSurfaceDescription()}");
         }
         else
@@ -332,24 +343,74 @@ public sealed partial class MainWindow
     /// TextControlBox's <c>SetSelection</c> does not auto-scroll, so navigation through
     /// matches would otherwise leave the next match off-screen.
     /// </summary>
-    private void ScrollPreviewEditorMatchIntoView(int index)
+    private int ScrollPreviewEditorMatchIntoView(int index)
     {
         try
         {
-            var text = GetPreviewEditorText();
-            int clamped = Math.Clamp(index, 0, text.Length);
-            int line = 0;
-            for (int i = 0; i < clamped; i++)
-            {
-                if (text[i] == '\n') line++;
-            }
+            int line = GetPreviewEditorLineForIndex(index);
             PreviewEditor.ScrollLineToCenter(line);
-            LogFindVerbose($"ScrollPreviewEditorMatchIntoView: index={index}, clamped={clamped}, line={line}, wordWrap={PreviewEditor.WordWrap}");
+            LogFindVerbose($"ScrollPreviewEditorMatchIntoView: index={index}, line={line}, wordWrap={PreviewEditor.WordWrap}");
+            return line;
         }
         catch (Exception ex)
         {
             LogFindVerbose($"ScrollPreviewEditorMatchIntoView failed: index={index}, error={ex.GetType().Name}: {ex.Message}");
+            return 0;
         }
+    }
+
+    private int GetPreviewEditorLineForIndex(int index)
+    {
+        var text = GetPreviewEditorText();
+        int clamped = Math.Clamp(index, 0, text.Length);
+        int line = 0;
+        for (int i = 0; i < clamped; i++)
+        {
+            if (text[i] == '\n') line++;
+        }
+        return line;
+    }
+
+    private void QueuePreviewEditorActiveFindSelectionRefresh(int index, int length, int line)
+    {
+        int version = ++_previewEditorActiveFindSelectionVersion;
+
+        void Refresh(string source)
+        {
+            if (version != _previewEditorActiveFindSelectionVersion)
+                return;
+            if (PreviewEditor.Visibility != Visibility.Visible || FindBar.Visibility != Visibility.Visible)
+                return;
+            if (_findIndex != index)
+                return;
+
+            try
+            {
+                PreviewEditor.ScrollLineToCenter(line);
+                SelectPreviewEditorText(index, length);
+                LogFindVerbose($"RefreshActiveEditorFindSelection: source={source}, index={index}, length={length}, line={line}, {FindSurfaceDescription()}");
+            }
+            catch (Exception ex)
+            {
+                LogFindVerbose($"RefreshActiveEditorFindSelection failed: source={source}, index={index}, error={ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => Refresh("dispatcher"));
+
+        _previewEditorActiveFindSelectionRetryTimer?.Stop();
+        var timer = DispatcherQueue.CreateTimer();
+        _previewEditorActiveFindSelectionRetryTimer = timer;
+        timer.Interval = TimeSpan.FromMilliseconds(75);
+        timer.IsRepeating = false;
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            if (ReferenceEquals(_previewEditorActiveFindSelectionRetryTimer, timer))
+                _previewEditorActiveFindSelectionRetryTimer = null;
+            Refresh("timer");
+        };
+        timer.Start();
     }
 
     /// <summary>

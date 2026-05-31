@@ -2214,8 +2214,14 @@ public sealed partial class MainWindow
             return new PreviewLineWindow(LineTruncator.Truncate(line), 0, line.Length);
         }
 
-        int start = Math.Max(0, matchStart);
+        int safeMatchLength = Math.Min(matchLength, line.Length - matchStart);
+        int visibleMatchLength = Math.Min(safeMatchLength, LineTruncator.TruncatedLength);
+        int contextChars = Math.Max(0, (LineTruncator.TruncatedLength - visibleMatchLength) / 2);
+
+        int start = Math.Max(0, matchStart - contextChars);
         int end = Math.Min(line.Length, start + LineTruncator.TruncatedLength);
+        if (end - start < LineTruncator.TruncatedLength)
+            start = Math.Max(0, end - LineTruncator.TruncatedLength);
 
         string prefix = start > 0 ? LineTruncator.Ellipsis : string.Empty;
         string suffix = end < line.Length ? LineTruncator.Ellipsis : string.Empty;

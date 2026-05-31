@@ -23,7 +23,6 @@ namespace TextControlBoxNS.Core.Renderer
         private ZoomManager zoomManager;
         private DesignHelper designHelper;
         private TextManager textManager;
-        private SearchManager searchManager;
         private const byte MaximumReadableOverlayAlpha = 110;
         private const byte ActiveSearchSelectionOverlayAlpha = 145;
         private const float ActiveSearchSelectionBorderWidth = 2f;
@@ -44,8 +43,7 @@ namespace TextControlBoxNS.Core.Renderer
             ScrollManager scrollManager,
             ZoomManager zoomManager,
             DesignHelper designHelper,
-            TextManager textManager,
-            SearchManager searchManager
+            TextManager textManager
             )
         {
             this.selectionManager = selectionManager;
@@ -55,7 +53,6 @@ namespace TextControlBoxNS.Core.Renderer
             this.zoomManager = zoomManager;
             this.designHelper = designHelper;
             this.textManager = textManager;
-            this.searchManager = searchManager;
         }
 
         public void DrawSelection(
@@ -229,7 +226,7 @@ namespace TextControlBoxNS.Core.Renderer
             using CanvasCommandList canvasCommandList = new CanvasCommandList(args.DrawingSession);
             using (var ccls = canvasCommandList.CreateDrawingSession())
             {
-                bool isActiveSearchMatch = IsActiveSearchMatchSelection();
+                bool isActiveSearchMatch = selectionManager.CurrentSelectionIsActiveSearchMatch;
                 Color readableSelectionColor = isActiveSearchMatch
                     ? GetActiveSearchSelectionOverlayColor(selectionColor)
                     : GetReadableOverlayColor(selectionColor);
@@ -262,34 +259,6 @@ namespace TextControlBoxNS.Core.Renderer
 
             selectionManager.currentTextSelection.renderedIndex = renderedSelectionStart;
             selectionManager.currentTextSelection.renderedLength = renderedSelectionLength;
-        }
-
-        private bool IsActiveSearchMatchSelection()
-        {
-            if (searchManager?.IsSearchOpen != true || string.IsNullOrEmpty(searchManager.searchParameter?.Word))
-                return false;
-
-            var selection = selectionManager.OrderTextSelectionSeparated();
-            if (selection.startNull || selection.endNull || selection.startLine != selection.endLine)
-                return false;
-
-            int selectionLength = selection.endChar - selection.startChar;
-            string searchWord = searchManager.searchParameter.Word;
-            if (selectionLength != searchWord.Length)
-                return false;
-
-            if (selection.startLine < 0 || selection.startLine >= textManager.LinesCount)
-                return false;
-
-            string line = textManager.GetLineText(selection.startLine);
-            if (selection.startChar < 0 || selection.endChar > line.Length)
-                return false;
-
-            string selectedText = line.Substring(selection.startChar, selectionLength);
-            StringComparison comparison = searchManager.searchParameter.MatchCase
-                ? StringComparison.Ordinal
-                : StringComparison.OrdinalIgnoreCase;
-            return string.Equals(selectedText, searchWord, comparison);
         }
 
         private static Color GetActiveSearchSelectionOverlayColor(Color selectionColor)
@@ -347,9 +316,7 @@ namespace TextControlBoxNS.Core.Renderer
                     textRenderer.DrawnTextLayout,
                     args,
                     textRenderer.IsWordWrapEnabled ? 0 : textRenderer.HorizontalOffset,
-                    textRenderer.IsWordWrapEnabled
-                        ? (textRenderer.SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity) - (textRenderer.WrappedStartRowOffset * textRenderer.SingleLineHeight)
-                        : textRenderer.SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity,
+                    GetSelectionTopMargin(),
                     textRenderer.NumberOfStartLine,
                     textRenderer.NumberOfRenderedLines,
                     zoomManager.ZoomedFontSize,
@@ -364,6 +331,17 @@ namespace TextControlBoxNS.Core.Renderer
                 selectionManager.OldTextSelection.StartPosition.SetChangeValues(selectionManager.currentTextSelection.StartPosition);
                 eventsManager.CallSelectionChanged();
             }
+        }
+
+        private float GetSelectionTopMargin()
+        {
+            float topInset = textRenderer.SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity;
+            if (!textRenderer.IsWordWrapEnabled)
+                return topInset;
+
+            return textRenderer.IsVirtualizedWrappedLine
+                ? topInset
+                : topInset - (textRenderer.WrappedStartRowOffset * textRenderer.SingleLineHeight);
         }
     }
 }

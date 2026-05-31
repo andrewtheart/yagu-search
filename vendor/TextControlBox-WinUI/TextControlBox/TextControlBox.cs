@@ -226,6 +226,16 @@ public partial class TextControlBox : UserControl
     }
 
     /// <summary>
+    /// Sets the current active search selection in the textbox starting from the specified index.
+    /// </summary>
+    /// <param name="start">The index of the first character of the selection.</param>
+    /// <param name="length">The length of the selection in number of characters.</param>
+    public void SetActiveSearchSelection(int start, int length)
+    {
+        coreTextBox.SetActiveSearchSelection(start, length);
+    }
+
+    /// <summary>
     /// Selects all the text in the textbox.
     /// </summary>
     public void SelectAll()

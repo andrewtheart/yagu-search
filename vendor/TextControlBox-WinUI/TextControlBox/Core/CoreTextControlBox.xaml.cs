@@ -121,7 +121,7 @@ internal sealed partial class CoreTextControlBox : UserControl
         cursorManager.Init(textManager, currentLineManager);
         selectionManager.Init(textManager, cursorManager, eventsManager);
         undoRedo.Init(textManager, selectionManager, cursorManager, eventsManager, tabSpaceManager);
-        selectionRenderer.Init(selectionManager, textRenderer, eventsManager, scrollManager, zoomManager, designHelper, textManager, searchManager);
+        selectionRenderer.Init(selectionManager, textRenderer, eventsManager, scrollManager, zoomManager, designHelper, textManager);
         flyoutHelper.Init(this);
         canvasUpdateManager.Init(this);
         textActionManager.Init(this, textRenderer, undoRedo, currentLineManager, longestLineManager, canvasUpdateManager, textManager, selectionRenderer, cursorManager, scrollManager, eventsManager, stringManager, selectionManager, autoIndentionManager);
@@ -710,6 +710,12 @@ internal sealed partial class CoreTextControlBox : UserControl
     }
 
     public void SetSelection(int start, int length)
+        => SetSelection(start, length, isActiveSearchMatch: false);
+
+    public void SetActiveSearchSelection(int start, int length)
+        => SetSelection(start, length, isActiveSearchMatch: true);
+
+    private void SetSelection(int start, int length, bool isActiveSearchMatch)
     {
         int characterCount = CharacterCount();
         var result = selectionManager.GetSelectionFromPosition(start, length, characterCount);
@@ -717,8 +723,13 @@ internal sealed partial class CoreTextControlBox : UserControl
         if (result != null)
         {
             selectionManager.SetSelection(result.StartPosition, result.EndPosition);
+            selectionManager.CurrentSelectionIsActiveSearchMatch = isActiveSearchMatch;
             if (!result.EndPosition.IsNull)
                 CursorPosition.SetChangeValues(result.EndPosition);
+        }
+        else
+        {
+            selectionManager.CurrentSelectionIsActiveSearchMatch = false;
         }
 
         canvasUpdateManager.UpdateSelection();

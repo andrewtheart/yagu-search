@@ -952,6 +952,7 @@ public sealed partial class MainWindow
         PreviewEditorContainer.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         PreviewEditor.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         PreviewScrollViewer.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
+        PreviewHeaderBar.Visibility = visible ? Visibility.Collapsed : Visibility.Visible;
 
         if (visible)
         {
@@ -969,11 +970,16 @@ public sealed partial class MainWindow
         {
             PreviewEditorPathText.Text = _previewEditorPath ?? string.Empty;
             ToolTipService.SetToolTip(PreviewEditorPathBar, _previewEditorPath ?? string.Empty);
+            EditorWordWrapToggle.IsChecked = ViewModel.PreviewWordWrap;
             SyncPreviewEditorFindHighlights();
         }
         else
         {
-            ClearPreviewEditorFindHighlights();
+            CancelPreviewEditorActiveFindSelectionRefresh();
+            if (FindBar.Visibility == Visibility.Visible)
+                CloseFindBar();
+            else
+                ClearPreviewEditorFindHighlights();
         }
 
         // Editor-mode group (now in its own Grid.Column="1" panel)
@@ -1007,15 +1013,17 @@ public sealed partial class MainWindow
     {
         if (!_previewEditorChunked || _previewEditorTotalByteLength <= 0)
         {
+            PreviewEditorChunkStatusText.Visibility = Visibility.Collapsed;
             PreviewEditorChunkPanel.Visibility = Visibility.Collapsed;
             return;
         }
 
         bool fullyLoaded = _previewEditorLoadedByteLength >= _previewEditorTotalByteLength;
-        PreviewEditorChunkPanel.Visibility = Visibility.Visible;
+        PreviewEditorChunkStatusText.Visibility = Visibility.Visible;
         PreviewEditorChunkStatusText.Text = fullyLoaded
             ? $"Loaded {FormatBytes(_previewEditorTotalByteLength)}"
             : $"Loaded {FormatBytes(_previewEditorLoadedByteLength)} of {FormatBytes(_previewEditorTotalByteLength)}";
+        PreviewEditorChunkPanel.Visibility = fullyLoaded ? Visibility.Collapsed : Visibility.Visible;
         LoadMorePreviewEditorChunkButton.IsEnabled = !fullyLoaded && !_previewEditorChunkLoadInFlight && !_previewEditorDirty;
         LoadMorePreviewEditorChunkButton.Visibility = fullyLoaded ? Visibility.Collapsed : Visibility.Visible;
     }
@@ -1072,6 +1080,7 @@ public sealed partial class MainWindow
         if (clearUi)
         {
             PreviewEditorChunkStatusText.Text = string.Empty;
+            PreviewEditorChunkStatusText.Visibility = Visibility.Collapsed;
             PreviewEditorChunkPanel.Visibility = Visibility.Collapsed;
             LoadMorePreviewEditorChunkButton.IsEnabled = true;
             LoadMorePreviewEditorChunkButton.Visibility = Visibility.Visible;
@@ -1152,7 +1161,7 @@ public sealed partial class MainWindow
         {
             LogService.Instance.Verbose("PreviewEditor", $"SelectPreviewEditorText: requestedStart={start}, requestedLength={length}, textLength={textLength}, clampedStart={clampedStart}, clampedLength={clampedLength}, wordWrap={PreviewEditor.WordWrap}, searchOpen={PreviewEditor.SearchIsOpen}");
         }
-        PreviewEditor.SetSelection(clampedStart, clampedLength);
+        PreviewEditor.SetActiveSearchSelection(clampedStart, clampedLength);
     }
 
     private void UpdatePreviewEditorButtons()
