@@ -60,7 +60,7 @@ internal class CursorHelper
         float y = textRenderer.IsWordWrapEnabled
             ? textRenderer.GetWrappedLineHitTestYFromPointY(cursorPos.LineNumber, point.Y)
             : 0;
-        float marginLeft = textRenderer.IsWordWrapEnabled ? 0 : (float)-scrollManager.HorizontalScroll;
+        float marginLeft = textRenderer.IsWordWrapEnabled ? 0 : (float)-scrollManager.HorizontalScroll + textRenderer.HorizontalSlicePixelOffset;
         int renderedCharacterPosition = GetCharacterPositionFromPoint(currentLineManager, textRenderer.CurrentLineTextLayout, point, marginLeft, y);
         cursorPos.CharacterPosition = textRenderer.GetDocumentCharacterIndexFromRenderedIndex(cursorPos.LineNumber, renderedCharacterPosition);
     }

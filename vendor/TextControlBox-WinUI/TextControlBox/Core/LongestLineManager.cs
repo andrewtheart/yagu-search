@@ -88,7 +88,17 @@ internal class LongestLineManager
         longestLineLength = textManager.totalLines[_longestIndex].Length;
         if (textRenderer.TextFormat != null)
         {
-            longestLineWidth = Utils.MeasureLineLenght(CanvasDevice.GetSharedDevice(), textManager.totalLines[longestIndex], textRenderer.TextFormat);
+            // For extremely long lines, estimating width from char count and font size
+            // avoids creating a multi-MB CanvasTextLayout just for measurement.
+            if (longestLineLength > 50_000)
+            {
+                float charWidth = textRenderer.TextFormat.FontSize * 0.6f;
+                longestLineWidth = new Size(longestLineLength * charWidth, textRenderer.TextFormat.LineSpacing);
+            }
+            else
+            {
+                longestLineWidth = Utils.MeasureLineLenght(CanvasDevice.GetSharedDevice(), textManager.totalLines[longestIndex], textRenderer.TextFormat);
+            }
         }
     }
 

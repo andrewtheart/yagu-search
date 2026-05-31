@@ -104,7 +104,7 @@ internal class CursorRenderer
             RenderCursor(
                 textRenderer.CurrentLineTextLayout,
                 renderedCharacterPos,
-                textRenderer.IsWordWrapEnabled ? 0 : (float)-scrollManager.HorizontalScroll,
+                textRenderer.IsWordWrapEnabled ? 0 : (float)-scrollManager.HorizontalScroll + textRenderer.HorizontalSlicePixelOffset,
                 renderPosY,
                 zoomManager.ZoomedFontSize,
                 _CursorSize,

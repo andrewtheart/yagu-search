@@ -2115,6 +2115,7 @@ public sealed partial class MainWindow
     private SolidColorBrush _matchLineBrush = new(Microsoft.UI.Colors.White);
     private Windows.UI.Color _overlayColor = Microsoft.UI.Colors.OrangeRed;
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphLineNumbers = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphPrimaryResults = new();
 
     private void ApplyPreviewColors()
     {
@@ -2149,7 +2150,7 @@ public sealed partial class MainWindow
     {
         line ??= string.Empty;
         if (truncate)
-            line = TruncatePreviewLine(line, rx);
+            line = isMatchLine ? TruncatePreviewLineAroundResult(line, result, rx).Text : TruncatePreviewLine(line, rx);
 
         _sectionGutterBlocks.TryGetValue(section, out var gutterBlock);
 
@@ -2415,11 +2416,43 @@ public sealed partial class MainWindow
 
         if (ranges.Count == 0)
         {
-            // All pending results are on lines already rendered (likely truncated).
-            // Don't consume them — the caller's overflow tracking keeps the match
-            // total accurate for the navigation label.
-            consumedResults = 0;
-            return 0;
+            // All pending results are on lines already rendered (usually multiple
+            // selected matches on one very long/truncated line). Add separate
+            // windows around each result so navigation/highlighting stays one
+            // entry per selected match instead of collapsing by line number.
+            int maxResults = Math.Min(anchorLimit, pendingResults.Count);
+            for (int i = 0; i < maxResults; i++)
+            {
+                if (addedMatchEntries >= maxAdditionalMatchEntries || paragraphsAdded >= maxAdditionalBlocks)
+                    break;
+
+                var result = pendingResults[i];
+                int lineIndex = result.LineNumber - 1;
+                if (lineIndex < 0 || lineIndex >= allLines.Length)
+                    continue;
+
+                if (paragraphsAdded >= maxAdditionalBlocks)
+                    break;
+
+                AddPreviewLineParagraphsAroundResult(
+                    section,
+                    allLines[lineIndex],
+                    result.LineNumber,
+                    result,
+                    rx,
+                    _matchParagraphs,
+                    sectionNav,
+                    out int addedParagraphs,
+                    out int matchEntriesAdded,
+                    continuationGutter: true);
+
+                paragraphsAdded += addedParagraphs;
+                addedMatchEntries += matchEntriesAdded;
+                consumedResults++;
+                lastRenderedLine = Math.Max(lastRenderedLine, result.LineNumber);
+            }
+
+            return addedMatchEntries;
         }
 
         var matchByLine = BuildMatchByLineForRanges(pendingResults, ranges);
@@ -2505,6 +2538,7 @@ public sealed partial class MainWindow
             line = TruncatePreviewLine(line, rx);
         var para = new Paragraph();
         s_paragraphLineNumbers.AddOrUpdate(para, lineNum);
+        s_paragraphPrimaryResults.AddOrUpdate(para, r);
 
         // Match indicator + line number gutter.
         // Use a glyph that Consolas renders at full cell width so match lines

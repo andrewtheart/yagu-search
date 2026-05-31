@@ -2068,13 +2068,11 @@ public sealed partial class MainWindow : Window
                     string line = (lineIndex >= 0 && lineIndex < ov.AllLines.Length)
                         ? ov.AllLines[lineIndex] : string.Empty;
 
-                    AddGapIndicator(section);
-                    blocksAdded++;
-
                     AddPreviewLineParagraphsAroundResult(
                         section, line, r.LineNumber, r, ov.Rx,
                         _matchParagraphs, sn,
-                        out int addedParagraphs, out _);
+                        out int addedParagraphs, out _,
+                        continuationGutter: true);
                     blocksAdded += addedParagraphs;
                     consumed++;
                 }
@@ -2976,22 +2974,47 @@ public sealed partial class MainWindow : Window
 
         var lines = GetPreviewLines(result, allLines, previewLines, fullFile: false);
 
+        bool appendedExistingLineWindow = false;
+
         // In highlight mode, remove lines that are already rendered to avoid duplicates.
         if (isHighlight && lastRenderedLine > 0)
         {
             var renderedLineNumbers = GetRenderedLineNumbers(section);
+            bool targetLineAlreadyRendered = renderedLineNumbers.Contains(result.LineNumber);
             lines = lines.Where(l => !renderedLineNumbers.Contains(l.lineNum)).ToList();
             if (lines.Count == 0)
             {
-                return;
+                if (!targetLineAlreadyRendered)
+                    return;
+
+                string lineForWindow = (allLines != null && result.LineNumber >= 1 && result.LineNumber <= allLines.Length)
+                    ? allLines[result.LineNumber - 1]
+                    : result.MatchLine;
+
+                AddPreviewLineParagraphsAroundResult(
+                    section,
+                    lineForWindow,
+                    result.LineNumber,
+                    result,
+                    rx,
+                    _matchParagraphs,
+                    sectionNav,
+                    out _,
+                    out int matchEntriesAdded,
+                    continuationGutter: true);
+
+                if (matchEntriesAdded == 0)
+                    return;
+
+                appendedExistingLineWindow = true;
             }
         }
 
         // Determine whether the new content should be prepended (all new lines before existing content).
-        bool shouldPrepend = isHighlight && firstRenderedLine > 0 && lines.Count > 0
+        bool shouldPrepend = !appendedExistingLineWindow && isHighlight && firstRenderedLine > 0 && lines.Count > 0
             && lines.Max(l => l.lineNum) < firstRenderedLine;
 
-        if (section.Blocks.Count > 0)
+        if (!appendedExistingLineWindow && section.Blocks.Count > 0)
         {
             if (isHighlight)
             {
@@ -3051,7 +3074,7 @@ public sealed partial class MainWindow : Window
         }
 
         // Append lines (skipped for prepend path which already added them above).
-        if (!shouldPrepend)
+        if (!appendedExistingLineWindow && !shouldPrepend)
         {
             foreach (var (line, lineNum) in lines)
             {
@@ -3115,6 +3138,9 @@ public sealed partial class MainWindow : Window
         if (existingPara is null)
             return false;
 
+        if (IsMatchParagraphRegistered(section, existingPara))
+            return false;
+
         // Promote content paragraph: clear context foreground from text runs.
         foreach (var inline in existingPara.Inlines)
         {
@@ -3157,6 +3183,18 @@ public sealed partial class MainWindow : Window
         if (sectionNav is not null)
             sectionNav.IndexByMatch = null;
         return true;
+    }
+
+    private bool IsMatchParagraphRegistered(RichTextBlock section, Paragraph paragraph)
+    {
+        if (_sectionMatchNavs.TryGetValue(section, out var sectionNav)
+            && sectionNav.Matches.Any(match => ReferenceEquals(match.para, paragraph)))
+        {
+            return true;
+        }
+
+        return _matchParagraphs.Any(match => ReferenceEquals(match.block, section)
+            && ReferenceEquals(match.para, paragraph));
     }
 
     /// <summary>
@@ -3229,35 +3267,99 @@ public sealed partial class MainWindow : Window
         out Paragraph paragraph,
         out int matchInPara)
     {
-        if (_sectionMatchNavs.TryGetValue(section, out var sectionNav))
-        {
-            foreach (var match in sectionNav.Matches)
-            {
-                if (TryGetPreviewParagraphLineNumber(match.para, out int lineNumber)
-                    && lineNumber == result.LineNumber)
-                {
-                    paragraph = match.para;
-                    matchInPara = match.matchInPara;
-                    return true;
-                }
-            }
-        }
+        (Paragraph paragraph, int matchInPara)? exact = null;
+        (Paragraph paragraph, int matchInPara)? fallback = null;
 
-        foreach (var match in _matchParagraphs)
+        void ConsiderCandidate(Paragraph candidateParagraph, int candidateMatchInPara)
         {
-            if (ReferenceEquals(match.block, section)
-                && TryGetPreviewParagraphLineNumber(match.para, out int lineNumber)
-                && lineNumber == result.LineNumber)
+            if (!TryGetPreviewParagraphLineNumber(candidateParagraph, out int lineNumber)
+                || lineNumber != result.LineNumber)
             {
-                paragraph = match.para;
-                matchInPara = match.matchInPara;
-                return true;
+                return;
             }
+
+            if (IsPreviewParagraphForResult(candidateParagraph, result))
+            {
+                exact ??= (candidateParagraph, candidateMatchInPara);
+                return;
+            }
+
+            fallback ??= (candidateParagraph, candidateMatchInPara);
         }
 
         paragraph = null!;
         matchInPara = 0;
+
+        if (_sectionMatchNavs.TryGetValue(section, out var sectionNav))
+        {
+            foreach (var match in sectionNav.Matches)
+            {
+                ConsiderCandidate(match.para, match.matchInPara);
+                if (exact is not null)
+                    break;
+            }
+        }
+
+        if (exact is null)
+        {
+            foreach (var match in _matchParagraphs)
+            {
+                if (!ReferenceEquals(match.block, section))
+                    continue;
+
+                ConsiderCandidate(match.para, match.matchInPara);
+                if (exact is not null)
+                    break;
+            }
+        }
+
+        if (exact is { } found)
+        {
+            paragraph = found.paragraph;
+            matchInPara = found.matchInPara;
+            return true;
+        }
+
+        if (fallback is { } candidate && !HasMultipleSelectedResultsOnLine(result))
+        {
+            paragraph = candidate.paragraph;
+            matchInPara = candidate.matchInPara;
+            return true;
+        }
+
         return false;
+    }
+
+    private bool HasMultipleSelectedResultsOnLine(SearchResult result)
+    {
+        int count = 0;
+        foreach (var selected in ViewModel.GetAllSelectedResults())
+        {
+            if (selected.LineNumber == result.LineNumber
+                && string.Equals(selected.FilePath, result.FilePath, StringComparison.OrdinalIgnoreCase)
+                && ++count > 1)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsPreviewParagraphForResult(Paragraph paragraph, SearchResult result)
+    {
+        return s_paragraphPrimaryResults.TryGetValue(paragraph, out var stored)
+            && stored is SearchResult paragraphResult
+            && (ReferenceEquals(paragraphResult, result) || IsSameResultTarget(paragraphResult, result));
+    }
+
+    private static bool IsSameResultTarget(SearchResult left, SearchResult right)
+    {
+        return left.LineNumber == right.LineNumber
+            && left.MatchStartColumn == right.MatchStartColumn
+            && left.MatchLength == right.MatchLength
+            && string.Equals(left.FilePath, right.FilePath, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(left.MatchLine, right.MatchLine, StringComparison.Ordinal);
     }
 
     private static bool TryGetPreviewParagraphLineNumber(Paragraph paragraph, out int lineNumber)

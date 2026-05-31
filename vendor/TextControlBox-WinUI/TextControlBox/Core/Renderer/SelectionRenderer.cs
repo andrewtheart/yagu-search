@@ -153,6 +153,13 @@ namespace TextControlBoxNS.Core.Renderer
 
                 selStartIndex = characterPosStart + lenghtToLine;
                 selEndIndex = characterPosEnd + lenghtToLine;
+
+                // Adjust for horizontal virtualization slice offset
+                if (textRenderer.IsHorizontallyVirtualized)
+                {
+                    selStartIndex -= textRenderer.HorizontalSliceStart;
+                    selEndIndex -= textRenderer.HorizontalSliceStart;
+                }
             }
             else
             {
@@ -181,6 +188,20 @@ namespace TextControlBoxNS.Core.Renderer
             renderedSelectionLength = selEndIndex > selStartIndex ?
                 selEndIndex - selStartIndex :
                 selStartIndex - selEndIndex;
+
+            // Clamp to slice bounds when horizontally virtualized
+            if (textRenderer.IsHorizontallyVirtualized && textLayout != null)
+            {
+                int layoutLen = textRenderer.RenderedText.Length;
+                if (renderedSelectionStart >= layoutLen)
+                {
+                    selectionManager.currentTextSelection.renderedIndex = 0;
+                    selectionManager.currentTextSelection.renderedLength = 0;
+                    return;
+                }
+                if (renderedSelectionStart + renderedSelectionLength > layoutLen)
+                    renderedSelectionLength = layoutLen - renderedSelectionStart;
+            }
 
             //no selection can be rendered. 
             //GetCharacterRegions(0,0) still returns a "ghost" region, so stop rendering here

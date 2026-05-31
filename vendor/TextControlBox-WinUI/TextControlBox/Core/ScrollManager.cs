@@ -236,11 +236,29 @@ internal class ScrollManager
             return false;
         }
 
-        float curPosInLine = CursorHelper.GetCursorPositionInLine(
-            textRenderer.CurrentLineTextLayout,
-            cursorManager.currentCursorPosition,
-            0
-        );
+        int charPosForLayout = cursorManager.currentCursorPosition.CharacterPosition;
+        if (textRenderer.IsHorizontallyVirtualized)
+            charPosForLayout -= textRenderer.HorizontalSliceStart;
+
+        float curPosInLine;
+        if (textRenderer.IsHorizontallyVirtualized && (charPosForLayout < 0 || textRenderer.CurrentLineTextLayout == null))
+        {
+            // Cursor is before the slice or layout unavailable; estimate absolute position
+            curPosInLine = cursorManager.currentCursorPosition.CharacterPosition * textRenderer.CachedCharWidth;
+        }
+        else if (textRenderer.IsHorizontallyVirtualized && charPosForLayout > textRenderer.RenderedText.Length)
+        {
+            // Cursor is beyond the slice; estimate absolute position
+            curPosInLine = cursorManager.currentCursorPosition.CharacterPosition * textRenderer.CachedCharWidth;
+        }
+        else
+        {
+            curPosInLine = CursorHelper.GetCursorPositionInLine(
+                textRenderer.CurrentLineTextLayout,
+                new CursorPosition(charPosForLayout, cursorManager.currentCursorPosition.LineNumber),
+                textRenderer.HorizontalSlicePixelOffset
+            );
+        }
 
         if (curPosInLine == OldHorizontalScrollValue)
             return false;

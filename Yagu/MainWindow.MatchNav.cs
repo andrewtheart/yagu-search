@@ -2534,7 +2534,6 @@ public sealed partial class MainWindow
                     int lineIndex = r.LineNumber - 1;
                     if (lineIndex < 0 || lineIndex >= ov.AllLines.Length) continue;
 
-                    AddGapIndicator(section);
                     AddPreviewLineParagraphsAroundResult(
                         section,
                         ov.AllLines[lineIndex],
@@ -2544,7 +2543,8 @@ public sealed partial class MainWindow
                         _matchParagraphs,
                         sn,
                         out _,
-                        out _);
+                        out _,
+                        continuationGutter: true);
                     consumed++;
                 }
             }

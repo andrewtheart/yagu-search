@@ -22,7 +22,7 @@ internal class TextRenderer
     public bool NeedsUpdateTextLayout = true;
     public bool NeedsTextFormatUpdate = true;
     public float SingleLineHeight { get => TextFormat == null ? 0 : TextFormat.LineSpacing; }
-    public float HorizontalOffset => (float)-scrollManager.HorizontalScroll;
+    public float HorizontalOffset => (float)-scrollManager.HorizontalScroll + HorizontalSlicePixelOffset;
     public int NumberOfStartLine = 0;
     public int NumberOfRenderedLines = 0;
     public string RenderedText = "";
@@ -57,6 +57,23 @@ internal class TextRenderer
     private bool wrapMetricsDirty = true;
     private const int LongWrappedLineVirtualizationThreshold = 100_000;
     private const int VirtualizedWrappedLinePaddingRows = 2;
+
+    // ── Horizontal virtualization (non-wrap, very long lines) ──
+    private const int HorizontalVirtualizationThreshold = 50_000;
+    /// <summary>Character index where the horizontal slice starts within the original rendered text.</summary>
+    public int HorizontalSliceStart { get; private set; }
+    /// <summary>True when horizontal virtualization is active (lines were sliced for perf).</summary>
+    public bool IsHorizontallyVirtualized { get; private set; }
+    /// <summary>Cached measured width of a single character in the current font (monospace assumption).</summary>
+    private float _cachedCharWidth;
+    internal float CachedCharWidth => _cachedCharWidth > 0 ? _cachedCharWidth : Math.Max(1, zoomManager.ZoomedFontSize * 0.6f);
+    /// <summary>The visible char range covered by the current slice [start, end). If scroll stays within, reuse layout.</summary>
+    private int _hSliceVisibleStart;
+    private int _hSliceVisibleEnd;
+    /// <summary>Pixel offset of the horizontal slice start (for cursor hit-testing).</summary>
+    public float HorizontalSlicePixelOffset => IsHorizontallyVirtualized
+        ? HorizontalSliceStart * (_cachedCharWidth > 0 ? _cachedCharWidth : Math.Max(1, zoomManager.ZoomedFontSize * 0.6f))
+        : 0;
 
     public float DrawTextOffsetX { get; private set; }
     public float DrawTextOffsetY { get; private set; }
@@ -168,6 +185,21 @@ internal class TextRenderer
         }
 
         string lineText = textManager.GetLineText(cursorManager.LineNumber) + "|";
+
+        // Apply same horizontal slicing for cursor layout to avoid creating a huge layout
+        if (IsHorizontallyVirtualized && !IsWordWrapEnabled && lineText.Length > HorizontalVirtualizationThreshold)
+        {
+            float charWidth = _cachedCharWidth > 0 ? _cachedCharWidth : Math.Max(1, zoomManager.ZoomedFontSize * 0.6f);
+            float viewportWidth = (float)canvasText.Size.Width;
+            float hScroll = (float)scrollManager.HorizontalScroll;
+            int visibleStartChar = Math.Max(0, (int)(hScroll / charWidth) - 200);
+            int visibleChars = (int)(viewportWidth / charWidth) + 400;
+            int bufferChars = visibleChars * 3;
+            int sliceStart = Math.Max(0, visibleStartChar - bufferChars);
+            int sliceEnd = Math.Min(lineText.Length, visibleStartChar + visibleChars + bufferChars);
+            lineText = lineText[sliceStart..sliceEnd];
+        }
+
         var layoutSize = IsWordWrapEnabled
             ? new Size(GetWrapWidth(canvasText), Math.Max(canvasText.Size.Height, (GetWrappedRowCount(cursorManager.LineNumber) + 1) * Math.Max(1, SingleLineHeight)))
             : canvasText.Size;
@@ -239,7 +271,12 @@ internal class TextRenderer
     public int GetRenderedCharacterIndexForDocumentCharacter(int lineIndex, int characterPosition)
     {
         if (!IsVirtualizedWrappedLine || lineIndex != NumberOfStartLine || VirtualizedLineCharsPerRow <= 0)
+        {
+            // Account for horizontal virtualization slice offset
+            if (IsHorizontallyVirtualized)
+                return characterPosition - HorizontalSliceStart;
             return characterPosition;
+        }
 
         int relative = characterPosition - VirtualizedLineSliceStart;
         if (relative < 0)
@@ -257,7 +294,12 @@ internal class TextRenderer
     public int GetDocumentCharacterIndexFromRenderedIndex(int lineIndex, int renderedIndex)
     {
         if (!IsVirtualizedWrappedLine || lineIndex != NumberOfStartLine || VirtualizedLineCharsPerRow <= 0)
+        {
+            // Account for horizontal virtualization slice offset
+            if (IsHorizontallyVirtualized)
+                return renderedIndex + HorizontalSliceStart;
             return renderedIndex;
+        }
 
         int rowStride = VirtualizedLineCharsPerRow + textManager.NewLineCharacter.Length;
         int row = Math.Max(0, renderedIndex / rowStride);
@@ -606,6 +648,12 @@ internal class TextRenderer
             designHelper.CreateColorResources(args.DrawingSession);
             NeedsTextFormatUpdate = false;
             InvalidateWrapMetrics();
+
+            // Measure actual character width for horizontal virtualization offset calculation.
+            using (var measureLayout = new CanvasTextLayout(args.DrawingSession, "M", TextFormat, 0, 0))
+            {
+                _cachedCharWidth = Math.Max(1, (float)measureLayout.DrawBounds.Width);
+            }
         }
 
         UpdateRenderedLineRange(canvasText);
@@ -616,7 +664,54 @@ internal class TextRenderer
                 ? BuildVirtualizedWrappedLineRenderData(canvasText, NumberOfStartLine)
                 : textManager.GetLinesForRendering(NumberOfStartLine, NumberOfRenderedLines);
         RenderedText = renderTextData.Text;
-        DrawTextOffsetX = IsWordWrapEnabled ? 0 : (float)-scrollManager.HorizontalScroll;
+
+        // ── Horizontal virtualization: slice very long lines to visible window ──
+        if (!IsWordWrapEnabled && RenderedText.Length > HorizontalVirtualizationThreshold && NumberOfRenderedLines == 1)
+        {
+            float charWidth = _cachedCharWidth > 0 ? _cachedCharWidth : Math.Max(1, zoomManager.ZoomedFontSize * 0.6f);
+            float viewportWidth = (float)canvasText.Size.Width;
+            float hScroll = (float)scrollManager.HorizontalScroll;
+
+            int visibleStartChar = Math.Max(0, (int)(hScroll / charWidth) - 50);
+            int visibleEndChar = visibleStartChar + (int)(viewportWidth / charWidth) + 100;
+
+            // Only re-slice if current viewport falls outside the previously cached slice
+            if (IsHorizontallyVirtualized
+                && visibleStartChar >= _hSliceVisibleStart && visibleEndChar <= _hSliceVisibleEnd
+                && OldRenderedText != null && !NeedsUpdateTextLayout)
+            {
+                // Reuse existing slice — just set flags and continue
+                RenderedText = OldRenderedText;
+                // HorizontalSliceStart is still valid from last slice
+            }
+            else
+            {
+                // Compute new slice with generous buffer for smooth scrolling
+                int visibleChars = visibleEndChar - visibleStartChar;
+                int bufferChars = visibleChars * 3;
+                int sliceStart = Math.Max(0, visibleStartChar - bufferChars);
+                int sliceEnd = Math.Min(RenderedText.Length, visibleEndChar + bufferChars);
+
+                RenderedText = RenderedText[sliceStart..sliceEnd];
+                HorizontalSliceStart = sliceStart;
+                IsHorizontallyVirtualized = true;
+                _hSliceVisibleStart = visibleStartChar;
+                _hSliceVisibleEnd = visibleEndChar + bufferChars; // inner safe zone
+                NeedsUpdateTextLayout = true; // force layout recreation for new slice
+            }
+        }
+        else
+        {
+            IsHorizontallyVirtualized = false;
+            HorizontalSliceStart = 0;
+            _hSliceVisibleStart = 0;
+            _hSliceVisibleEnd = 0;
+        }
+
+        float hSlicePixelOffset = IsHorizontallyVirtualized
+            ? HorizontalSliceStart * (_cachedCharWidth > 0 ? _cachedCharWidth : Math.Max(1, zoomManager.ZoomedFontSize * 0.6f))
+            : 0;
+        DrawTextOffsetX = IsWordWrapEnabled ? 0 : (float)-scrollManager.HorizontalScroll + hSlicePixelOffset;
         DrawTextOffsetY = IsVirtualizedWrappedLine
             ? SingleLineHeight
             : (IsWordWrapEnabled ? SingleLineHeight - (WrappedStartRowOffset * SingleLineHeight) : SingleLineHeight);
@@ -682,7 +777,7 @@ internal class TextRenderer
 
                 ccls.DrawTextLayout(DrawnTextLayout, DrawTextOffsetX, DrawTextOffsetY, designHelper.TextColorBrush);
 
-                invisibleCharactersRenderer.DrawTabsAndSpaces(args, ccls, RenderedText, DrawnTextLayout, DrawTextOffsetY);
+                invisibleCharactersRenderer.DrawTabsAndSpaces(args, ccls, RenderedText, DrawnTextLayout, DrawTextOffsetY, HorizontalSlicePixelOffset);
             }
         }
         args.DrawingSession.DrawImage(canvasCommandList);

@@ -48,7 +48,8 @@ internal class WhitespaceCharactersRenderer
         CanvasDrawingSession drawingSession,
         string renderedText, 
         CanvasTextLayout drawnTextLayout, 
-        float topRenderingOffset
+        float topRenderingOffset,
+        float horizontalOffset = 0
         )
     {
         if (!whitespaceCharactersManager.ShowWhitespaceCharacters)
@@ -67,7 +68,7 @@ internal class WhitespaceCharactersRenderer
             if (c == ' ' || c == '\t')
             {
                 var caretPos = drawnTextLayout.GetCaretPosition(i, false);
-                x = caretPos.X - (float)scrollManager.HorizontalScroll;
+                x = caretPos.X - (float)scrollManager.HorizontalScroll + horizontalOffset;
                 y = caretPos.Y + (topRenderingOffset + zoomManager.ZoomedFontSize - zoomManager.ZoomedFontSize / 8);
 
                 if (c == ' ')

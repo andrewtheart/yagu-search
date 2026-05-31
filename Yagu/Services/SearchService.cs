@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Channels;
 using Yagu.Helpers;
@@ -1929,10 +1930,19 @@ public sealed class SearchService
                 if (lineBytes <= maxDisplayBytes)
                 {
                     matchLineUtf8 = new ReadOnlySpan<byte>(view.LinePtr, lineBytes);
-                    // For pre-evicted results the char offsets are only needed if hydrated later,
-                    // so use byte-approximate values (corrected on hydration).
-                    charMatchStart = matchStartBytes;
-                    charMatchLen = matchLenBytes;
+                    // Convert byte offsets to char offsets so highlighting is correct after hydration.
+                    int safeStart = Math.Min(matchStartBytes, lineBytes);
+                    int safeLen = Math.Min(matchLenBytes, lineBytes - safeStart);
+                    if (System.Text.Ascii.IsValid(matchLineUtf8[..Math.Min(safeStart + safeLen, lineBytes)]))
+                    {
+                        charMatchStart = safeStart;
+                        charMatchLen = safeLen;
+                    }
+                    else
+                    {
+                        charMatchStart = Encoding.UTF8.GetCharCount(view.LinePtr, safeStart);
+                        charMatchLen = Encoding.UTF8.GetCharCount(view.LinePtr + safeStart, safeLen);
+                    }
                 }
                 else
                 {
@@ -1951,8 +1961,19 @@ public sealed class SearchService
                     while (windowEnd > windowStart && windowEnd < lineBytes && (view.LinePtr[windowEnd] & 0xC0) == 0x80)
                         windowEnd--;
                     matchLineUtf8 = new ReadOnlySpan<byte>(view.LinePtr + windowStart, windowEnd - windowStart);
-                    charMatchStart = Math.Max(0, matchStartBytes - windowStart);
-                    charMatchLen = matchLenBytes;
+                    // Convert byte offsets within the window to char offsets.
+                    int matchBytesFromWindow = Math.Max(0, matchStartBytes - windowStart);
+                    int safeLenW = Math.Min(matchLenBytes, matchLineUtf8.Length - matchBytesFromWindow);
+                    if (System.Text.Ascii.IsValid(matchLineUtf8[..Math.Min(matchBytesFromWindow + safeLenW, matchLineUtf8.Length)]))
+                    {
+                        charMatchStart = matchBytesFromWindow;
+                        charMatchLen = safeLenW;
+                    }
+                    else
+                    {
+                        charMatchStart = Encoding.UTF8.GetCharCount(view.LinePtr + windowStart, matchBytesFromWindow);
+                        charMatchLen = Encoding.UTF8.GetCharCount(view.LinePtr + matchStartBytes, safeLenW);
+                    }
                 }
 
                 long offset = _resultStore.WriteRawUtf8(
