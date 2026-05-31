@@ -44,6 +44,23 @@
   </Target>
 
   <!--
+    Debug-only: ensure Windows Error Reporting LocalDumps are configured for Yagu.exe so
+    any native crash (CFG / access violation / BEX64) drops a full minidump under
+    TestResults\CrashDumps. The script writes to HKCU so no elevation is required and is
+    idempotent (safe to run on every build).
+  -->
+  <Target Name="EnsureWerLocalDumps"
+          BeforeTargets="BeforeBuild"
+          Condition="'$(Configuration)' == 'Debug' And '$(DesignTimeBuild)' != 'true'">
+    <PropertyGroup>
+      <YaguCrashDumpFolder>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\TestResults\CrashDumps'))</YaguCrashDumpFolder>
+    </PropertyGroup>
+    <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\scripts\ensure-wer-localdumps.ps1&quot; -DumpFolder &quot;$(YaguCrashDumpFolder)&quot;"
+          IgnoreExitCode="true"
+          ContinueOnError="WarnAndContinue" />
+  </Target>
+
+  <!--
     Convert HELP.md to HELP.html using pandoc on every build.
     If pandoc is not installed, skip silently and use whatever HELP.html exists.
   -->

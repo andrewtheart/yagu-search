@@ -157,8 +157,7 @@ public sealed record SearchResult(
         Volatile.Write(ref _diskOffset, InMemoryOffset);
 
         // Notify UI so OneWay bindings on context lines refresh after hydration.
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NumberedBefore)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NumberedAfter)));
+        RaiseHydrationPropertyChanged();
     }
 
     /// <summary>Restore full payload from pre-read data (batch hydration path).</summary>
@@ -170,9 +169,38 @@ public sealed record SearchResult(
         ContextAfter = contextAfter;
         _shortPreview = null;
         Volatile.Write(ref _diskOffset, InMemoryOffset);
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NumberedBefore)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NumberedAfter)));
+        RaiseHydrationPropertyChanged();
     }
+
+    private void RaiseHydrationPropertyChanged()
+    {
+        var handler = PropertyChanged;
+        if (handler is null) return;
+
+        // x:Bind setters for NumberedBefore/NumberedAfter end up calling
+        // ItemsControl.set_ItemsSource, which is a UI-thread-only operation.
+        // If hydration runs on a worker thread (e.g. SaveSessionAsync or a
+        // background prefetch), marshal back to the dispatcher first to avoid
+        // 0x8001010E (RPC_E_WRONG_THREAD) and the subsequent native AV in WinUI.
+        var dispatcher = App.UIDispatcher;
+        if (dispatcher is null || dispatcher.HasThreadAccess)
+        {
+            handler(this, BeforeArgs);
+            handler(this, AfterArgs);
+            return;
+        }
+
+        dispatcher.TryEnqueue(() =>
+        {
+            var h = PropertyChanged;
+            if (h is null) return;
+            h(this, BeforeArgs);
+            h(this, AfterArgs);
+        });
+    }
+
+    private static readonly PropertyChangedEventArgs BeforeArgs = new(nameof(NumberedBefore));
+    private static readonly PropertyChangedEventArgs AfterArgs = new(nameof(NumberedAfter));
 
     private bool _isSelected;
     public bool IsSelected

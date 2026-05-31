@@ -17,6 +17,12 @@ public partial class App : Application
     public static Mutex? InstanceMutex { get; set; }
     public static string CrashLogPath { get; } = Path.Combine(
         Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory, "yagu-crash.log");
+
+    /// <summary>UI thread dispatcher. Captured during <see cref="OnLaunched"/>; null until then.
+    /// Models (e.g. SearchResult) use this to marshal PropertyChanged events that drive
+    /// x:Bind setters which must run on the UI thread.</summary>
+    public static Microsoft.UI.Dispatching.DispatcherQueue? UIDispatcher { get; private set; }
+
     private MainWindow? _window;
     private int _isShowingUnhandledExceptionDialog;
 
@@ -46,6 +52,7 @@ public partial class App : Application
             if (StartupDirectory is null)
                 StartupDirectory = ParseDirArg(System.Environment.GetCommandLineArgs());
             _window = new MainWindow(StartupDirectory, StartupQuery, StartupWindowFocusBehavior);
+            UIDispatcher = _window.DispatcherQueue;
             _window.Activate();
             _window.FocusSearchOnLaunch();
         }
