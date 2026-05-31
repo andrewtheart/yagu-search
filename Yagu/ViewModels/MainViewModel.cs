@@ -54,6 +54,10 @@ public sealed partial class MainViewModel : ObservableObject
     private TimeSpan _lastSearchElapsed;
     private long _lastSearchSortRefreshTicks;
     private bool _searchSortRefreshQueued;
+    // Adaptive backoff multiplier (in seconds) for the in-search periodic sort/regroup
+    // refresh. Starts at the base interval (2s) and doubles up to a 30s cap whenever a
+    // refresh exceeds the slow-budget threshold, then halves on a fast pass.
+    private double _searchSortRefreshIntervalSec = 2.0;
     private long _bytesScanned;
     private long _prevBytesScanned;
     private int _prevFilesScanned;
@@ -64,8 +68,9 @@ public sealed partial class MainViewModel : ObservableObject
     private static int s_postEvictionCompactingGcInFlight;
     private static long s_lastPostEvictionCompactingGcTicks;
     private static readonly TimeSpan PostEvictionCompactingGcCooldown = TimeSpan.FromSeconds(15);
-    private static readonly long SearchSortRefreshIntervalTicks = System.Diagnostics.Stopwatch.Frequency * 2;
-    private const int InSearchSortRefreshMaxGroups = 5000;
+    private const double SearchSortRefreshIntervalBaseSec = 2.0;
+    private const double SearchSortRefreshIntervalMaxSec = 30.0;
+    private const long SearchSortRefreshSlowBudgetMs = 500;
 
     public MainViewModel() : this(new SearchService(), new SettingsService(), new EditorLauncher(),
                                    DispatcherQueue.GetForCurrentThread())
@@ -167,6 +172,7 @@ public sealed partial class MainViewModel : ObservableObject
         LimitParallelismOnHdd = _settings.LimitParallelismOnHdd;
         BackupBeforeSave = _settings.BackupBeforeSave;
         WindowFocusBehavior = _settings.WindowFocusBehavior;
+        StartInLauncherMode = _settings.StartInLauncherMode;
         CloseToTray = _settings.CloseToTray;
         MaximizeOnStartup = _settings.MaximizeOnStartup;
         FileHeaderCheckAddsToPreview = _settings.FileHeaderCheckAddsToPreview;
@@ -512,7 +518,8 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial bool HasChosenSearchResultTempDirectory { get; set; }
     [ObservableProperty] public partial bool LimitParallelismOnHdd { get; set; } = true;
     [ObservableProperty] public partial bool BackupBeforeSave { get; set; } = true;
-    [ObservableProperty] public partial int WindowFocusBehavior { get; set; } // 0 = MinimizeToTray, 1 = StayOpen, 2 = AlwaysOnTop, 3 = FullWindow
+    [ObservableProperty] public partial int WindowFocusBehavior { get; set; } = 1; // 0 = MinimizeToTray, 1 = StayOpen (default), 2 = AlwaysOnTop
+    [ObservableProperty] public partial bool StartInLauncherMode { get; set; } = true;
     [ObservableProperty] public partial bool CloseToTray { get; set; } = true;
     [ObservableProperty] public partial bool MaximizeOnStartup { get; set; }
     [ObservableProperty] public partial bool FileHeaderCheckAddsToPreview { get; set; } = true;
@@ -839,6 +846,14 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] public partial string? FallbackReason { get; set; }
     [ObservableProperty] public partial int FilesScanned { get; set; }
     [ObservableProperty] public partial int TotalFiles { get; set; }
+
+    // .yagu-session save/load progress (0.0..1.0 while busy).
+    [ObservableProperty] public partial bool IsSessionBusy { get; set; }
+    [ObservableProperty] public partial double SessionProgressPercent { get; set; }
+    [ObservableProperty] public partial string SessionProgressText { get; set; } = string.Empty;
+
+    public bool IsSessionIdle => !IsSessionBusy;
+    partial void OnIsSessionBusyChanged(bool value) => OnPropertyChanged(nameof(IsSessionIdle));
 
     public string ProgressTooltip
     {
@@ -1347,6 +1362,7 @@ public sealed partial class MainViewModel : ObservableObject
         _cts = null;
         _lastSearchSortRefreshTicks = 0;
         _searchSortRefreshQueued = false;
+        _searchSortRefreshIntervalSec = SearchSortRefreshIntervalBaseSec;
 
         // Cancel pending metadata tasks first so fire-and-forget closures
         // release their FileGroup references promptly.
@@ -1646,31 +1662,49 @@ public sealed partial class MainViewModel : ObservableObject
     private void QueueSearchSortRefreshIfDue()
     {
         int groupCount = _resultCollection.AllGroups.Count;
-        if (!IsSearching || Degraded || _searchSortRefreshQueued || groupCount < 2 || groupCount > InSearchSortRefreshMaxGroups)
+        // Note: intentionally allow refresh while Degraded (memory-pressure paging mode).
+        // Adaptive backoff below handles cost on slow passes; skipping outright would
+        // freeze the visible sort/group ordering for the remainder of large searches.
+        if (!IsSearching || _searchSortRefreshQueued || groupCount < 2)
             return;
 
         long now = System.Diagnostics.Stopwatch.GetTimestamp();
-        if (_lastSearchSortRefreshTicks != 0 && now - _lastSearchSortRefreshTicks < SearchSortRefreshIntervalTicks)
+        long intervalTicks = (long)(System.Diagnostics.Stopwatch.Frequency * _searchSortRefreshIntervalSec);
+        if (_lastSearchSortRefreshTicks != 0 && now - _lastSearchSortRefreshTicks < intervalTicks)
             return;
 
         _searchSortRefreshQueued = true;
         _lastSearchSortRefreshTicks = now;
 
-        if (!_dispatcher.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        if (!_dispatcher.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal, () =>
         {
             _searchSortRefreshQueued = false;
             int currentGroupCount = _resultCollection.AllGroups.Count;
-            if (!IsSearching || Degraded || currentGroupCount < 2 || currentGroupCount > InSearchSortRefreshMaxGroups)
+            if (!IsSearching || currentGroupCount < 2)
                 return;
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            ApplySortAndFilter();
-            sw.Stop();
-
-            if (sw.ElapsedMilliseconds >= 200)
+            try
             {
-                LogService.Instance.Warning("ViewModel",
-                    $"Periodic in-search sort refresh took {sw.ElapsedMilliseconds}ms for {currentGroupCount:N0} group(s)");
+                ApplySortAndFilter();
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Warning("ViewModel", $"Periodic in-search sort refresh threw: {ex.GetType().Name}: {ex.Message}");
+                return;
+            }
+            sw.Stop();
+            LogService.Instance.Verbose("ViewModel",
+                $"Periodic in-search sort refresh: {currentGroupCount:N0} group(s) in {sw.ElapsedMilliseconds}ms (degraded={Degraded}, nextInterval={_searchSortRefreshIntervalSec:F1}s)");
+
+            // Adaptive backoff: if the pass was slow, double the interval (capped); if fast, halve it back toward base.
+            if (sw.ElapsedMilliseconds >= SearchSortRefreshSlowBudgetMs)
+            {
+                _searchSortRefreshIntervalSec = Math.Min(SearchSortRefreshIntervalMaxSec, _searchSortRefreshIntervalSec * 2.0);
+            }
+            else if (sw.ElapsedMilliseconds < SearchSortRefreshSlowBudgetMs / 2 && _searchSortRefreshIntervalSec > SearchSortRefreshIntervalBaseSec)
+            {
+                _searchSortRefreshIntervalSec = Math.Max(SearchSortRefreshIntervalBaseSec, _searchSortRefreshIntervalSec / 2.0);
             }
         }))
         {
@@ -2132,6 +2166,7 @@ public sealed partial class MainViewModel : ObservableObject
         _settings.LimitParallelismOnHdd = LimitParallelismOnHdd;
         _settings.BackupBeforeSave = BackupBeforeSave;
         _settings.WindowFocusBehavior = WindowFocusBehavior;
+        _settings.StartInLauncherMode = StartInLauncherMode;
         _settings.CloseToTray = CloseToTray;
         _settings.MaximizeOnStartup = MaximizeOnStartup;
         _settings.FileHeaderCheckAddsToPreview = FileHeaderCheckAddsToPreview;
@@ -2168,56 +2203,111 @@ public sealed partial class MainViewModel : ObservableObject
 
     /// <summary>
     /// Save the current results plus search query / stats to a <c>.yagu-session</c>
-    /// file. Evicted results are hydrated first so the file contains full payloads.
+    /// file. Evicted results are hydrated one group at a time and re-evicted after
+    /// writing to avoid holding all payloads in memory simultaneously.
     /// </summary>
     public async Task<int> SaveSessionAsync(string path, CancellationToken cancellationToken = default)
     {
-        // Snapshot the group list off the UI thread's mutation pattern. EvictAll
-        // already uses this approach safely.
-        var groupsSnapshot = _resultCollection.AllGroups.ToArray();
-        var all = new List<SearchResult>(MatchesFound);
-
-        foreach (var g in groupsSnapshot)
+        BeginSessionProgress($"Preparing to save {Path.GetFileName(path)}…");
+        try
         {
-            // In degraded/streaming mode each FileGroup keeps evicted matches as
-            // compact stubs that are NOT exposed via Count / indexer until the
-            // group is expanded. Force materialization so we can enumerate every
-            // match — the user asked for "all matches", not just selected/visible.
-            g.MaterializeEvictedStubs();
+            // Snapshot the group list so we can iterate without UI-thread mutation interference.
+            var groupsSnapshot = _resultCollection.AllGroups.ToArray();
+            int totalGroups = groupsSnapshot.Length;
 
-            int count = g.Count;
-            for (int i = 0; i < count; i++)
+            // Pre-count total results (materializing evicted stubs so Count is accurate)
+            // without hydrating payloads — this is cheap (just expands compact stub pages).
+            int totalResults = 0;
+            for (int gi = 0; gi < totalGroups; gi++)
             {
-                var r = g[i];
-                if (r.IsEvicted)
-                    HydrateResult(r);
-                all.Add(r);
+                groupsSnapshot[gi].MaterializeEvictedStubs();
+                totalResults += groupsSnapshot[gi].Count;
             }
+
+            ReportSessionProgress(0.05, $"Writing {totalResults:N0} match(es) to {Path.GetFileName(path)} (streaming)…");
+
+            var stats = new SessionFileService.SessionStats(
+                _searchStartedUtc,
+                _lastSearchElapsed,
+                FilesScanned,
+                _bytesScanned,
+                MatchesFound);
+
+            await using var fs = new FileStream(
+                path, FileMode.Create, FileAccess.Write, FileShare.None,
+                bufferSize: 64 * 1024, useAsync: true);
+
+            var store = _resultStore;
+
+            await SessionFileService.WriteStreamingAsync(
+                fs,
+                Query ?? string.Empty,
+                Directory ?? string.Empty,
+                stats,
+                totalResults,
+                totalGroups,
+                prepareGroup: gi =>
+                {
+                    var g = groupsSnapshot[gi];
+                    int count = g.Count;
+                    // Hydrate evicted results for this group so WriteResult sees full payloads.
+                    if (store is not null)
+                    {
+                        for (int i = 0; i < count; i++)
+                        {
+                            var r = g[i];
+                            if (r.IsEvicted)
+                                HydrateResult(r);
+                        }
+                    }
+                    // Return a lightweight wrapper that indexes into the group directly.
+                    return new FileGroupResultList(g);
+                },
+                releaseGroup: gi =>
+                {
+                    // Re-evict the group's results back to disk so memory is freed
+                    // before we hydrate the next group.
+                    if (store is null) return;
+                    var g = groupsSnapshot[gi];
+                    int count = g.Count;
+                    for (int i = 0; i < count; i++)
+                    {
+                        var r = g[i];
+                        if (!r.IsEvicted)
+                            r.Evict(store);
+                    }
+                },
+                progress: new Progress<double>(p =>
+                    ReportSessionProgress(0.05 + 0.95 * p,
+                        $"Writing session: {p * 100:N0}% ({totalResults:N0} match(es))")),
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            var savedStatus = $"Saved session: {totalResults:N0} match(es) → {Path.GetFileName(path)}";
+            if (!_dispatcher.TryEnqueue(() => StatusText = savedStatus))
+                StatusText = savedStatus;
+            return totalResults;
         }
+        finally
+        {
+            EndSessionProgress();
+        }
+    }
 
-        var stats = new SessionFileService.SessionStats(
-            _searchStartedUtc,
-            _lastSearchElapsed,
-            FilesScanned,
-            _bytesScanned,
-            MatchesFound);
-
-        await using var fs = new FileStream(
-            path, FileMode.Create, FileAccess.Write, FileShare.None,
-            bufferSize: 64 * 1024, useAsync: true);
-
-        await SessionFileService.WriteAsync(
-            fs,
-            Query ?? string.Empty,
-            Directory ?? string.Empty,
-            stats,
-            all,
-            cancellationToken).ConfigureAwait(false);
-
-        var savedStatus = $"Saved session: {all.Count:N0} match(es) → {Path.GetFileName(path)}";
-        if (!_dispatcher.TryEnqueue(() => StatusText = savedStatus))
-            StatusText = savedStatus;
-        return all.Count;
+    /// <summary>
+    /// Lightweight <see cref="IReadOnlyList{SearchResult}"/> wrapper around a
+    /// <see cref="FileGroup"/> so we don't allocate a copy of its items array
+    /// just to pass it to the streaming writer.
+    /// </summary>
+    private sealed class FileGroupResultList(FileGroup group) : IReadOnlyList<SearchResult>
+    {
+        public SearchResult this[int index] => group[index];
+        public int Count => group.Count;
+        public IEnumerator<SearchResult> GetEnumerator()
+        {
+            for (int i = 0; i < group.Count; i++)
+                yield return group[i];
+        }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     /// <summary>
@@ -2230,104 +2320,153 @@ public sealed partial class MainViewModel : ObservableObject
         if (IsSearching)
             await CancelAsync().ConfigureAwait(true);
 
-        _resultCollection.Clear();
-        FileMetadataCache.Clear();
-        _resultStore?.Dispose();
-        _resultStore = null;
+        BeginSessionProgress($"Opening {Path.GetFileName(path)}…");
+        try
+        {
+            _resultCollection.Clear();
+            FileMetadataCache.Clear();
+            _resultStore?.Dispose();
+            _resultStore = null;
 
-        ErrorText = null;
-        FallbackReason = null;
-        FilesScanned = 0;
-        TotalFiles = 0;
-        MatchesFound = 0;
-        FilesSkipped = 0;
-        AccessDeniedCount = 0;
-        Truncated = false;
-        Degraded = false;
-        DegradedNoticeText = string.Empty;
-        FilesPerSecondText = string.Empty;
-        ThroughputSamples.Clear();
+            ErrorText = null;
+            FallbackReason = null;
+            FilesScanned = 0;
+            TotalFiles = 0;
+            MatchesFound = 0;
+            FilesSkipped = 0;
+            AccessDeniedCount = 0;
+            Truncated = false;
+            Degraded = false;
+            DegradedNoticeText = string.Empty;
+            FilesPerSecondText = string.Empty;
+            ThroughputSamples.Clear();
 
-        bool firstBatch = true;
-        int loadedCount = 0;
+            bool firstBatch = true;
+            int loadedCount = 0;
+            string fileName = Path.GetFileName(path);
 
-        await using var fs = new FileStream(
-            path, FileMode.Open, FileAccess.Read, FileShare.Read,
-            bufferSize: 64 * 1024, useAsync: true);
+            await using var fs = new FileStream(
+                path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                bufferSize: 64 * 1024, useAsync: true);
 
-        var header = await SessionFileService.ReadAsync(
-            fs,
-            h =>
-            {
-                void apply()
+            var readProgress = new Progress<double>(p =>
+                ReportSessionProgress(p, $"Loading {fileName}: {p * 100:N0}%"));
+
+            var header = await SessionFileService.ReadAsync(
+                fs,
+                h =>
                 {
-                    Query = h.Query ?? string.Empty;
-                    if (!string.IsNullOrWhiteSpace(h.SearchRoot))
-                        Directory = h.SearchRoot;
-                    _searchStartedUtc = h.Stats.StartedUtc;
-                    _lastSearchElapsed = h.Stats.Elapsed;
-                    FilesScanned = h.Stats.FilesScanned;
-                    _bytesScanned = h.Stats.BytesScanned;
-                }
-                if (!_dispatcher.TryEnqueue(apply))
-                    apply();
-            },
-            async batch =>
-            {
-                // Hop to UI thread for the collection mutation.
-                var tcs = new TaskCompletionSource();
-                bool enqueued = _dispatcher.TryEnqueue(() =>
-                {
-                    try
+                    void apply()
                     {
-                        bool resultAvailabilityChanged = _resultCollection.AddRange(
-                            batch,
-                            InitializeResultGroup,
-                            evictNewResults: false,
-                            resultStore: null);
+                        Query = h.Query ?? string.Empty;
+                        if (!string.IsNullOrWhiteSpace(h.SearchRoot))
+                            Directory = h.SearchRoot;
+                        _searchStartedUtc = h.Stats.StartedUtc;
+                        _lastSearchElapsed = h.Stats.Elapsed;
+                        FilesScanned = h.Stats.FilesScanned;
+                        _bytesScanned = h.Stats.BytesScanned;
+                    }
+                    if (!_dispatcher.TryEnqueue(apply))
+                        apply();
+                },
+                async batch =>
+                {
+                    // Hop to UI thread for the collection mutation.
+                    var tcs = new TaskCompletionSource();
+                    bool enqueued = _dispatcher.TryEnqueue(() =>
+                    {
+                        try
+                        {
+                            bool resultAvailabilityChanged = _resultCollection.AddRange(
+                                batch,
+                                InitializeResultGroup,
+                                evictNewResults: false,
+                                resultStore: null);
 
+                            loadedCount += batch.Count;
+                            MatchesFound = loadedCount;
+
+                            if (firstBatch || resultAvailabilityChanged)
+                            {
+                                firstBatch = false;
+                                NotifyResultAvailabilityChanged();
+                            }
+                        }
+                        finally
+                        {
+                            tcs.SetResult();
+                        }
+                    });
+
+                    if (!enqueued)
+                    {
+                        // Dispatcher unavailable (e.g. tests without a UI thread) —
+                        // fall back to a direct call.
+                        _resultCollection.AddRange(batch, InitializeResultGroup, evictNewResults: false, resultStore: null);
                         loadedCount += batch.Count;
                         MatchesFound = loadedCount;
-
-                        if (firstBatch || resultAvailabilityChanged)
-                        {
-                            firstBatch = false;
-                            NotifyResultAvailabilityChanged();
-                        }
+                        return;
                     }
-                    finally
-                    {
-                        tcs.SetResult();
-                    }
-                });
 
-                if (!enqueued)
-                {
-                    // Dispatcher unavailable (e.g. tests without a UI thread) —
-                    // fall back to a direct call.
-                    _resultCollection.AddRange(batch, InitializeResultGroup, evictNewResults: false, resultStore: null);
-                    loadedCount += batch.Count;
-                    MatchesFound = loadedCount;
-                    return;
-                }
+                    await tcs.Task.ConfigureAwait(false);
+                },
+                readProgress,
+                cancellationToken).ConfigureAwait(false);
 
-                await tcs.Task.ConfigureAwait(false);
-            },
-            cancellationToken).ConfigureAwait(false);
+            var loadedStatus = $"Loaded session: {loadedCount:N0} match(es) from {fileName}";
+            void finish()
+            {
+                ApplySortAndFilter();
+                NotifyResultAvailabilityChanged();
+                StatusText = loadedStatus;
+                OnPropertyChanged(nameof(HasResults));
+                OnPropertyChanged(nameof(ShowEmptyState));
+            }
+            if (!_dispatcher.TryEnqueue(finish))
+                finish();
 
-        var loadedStatus = $"Loaded session: {loadedCount:N0} match(es) from {Path.GetFileName(path)}";
-        void finish()
-        {
-            ApplySortAndFilter();
-            NotifyResultAvailabilityChanged();
-            StatusText = loadedStatus;
-            OnPropertyChanged(nameof(HasResults));
-            OnPropertyChanged(nameof(ShowEmptyState));
+            return header;
         }
-        if (!_dispatcher.TryEnqueue(finish))
-            finish();
+        finally
+        {
+            EndSessionProgress();
+        }
+    }
 
-        return header;
+    private void BeginSessionProgress(string initialText)
+    {
+        void apply()
+        {
+            IsSessionBusy = true;
+            SessionProgressPercent = 0;
+            SessionProgressText = initialText;
+        }
+        if (!_dispatcher.TryEnqueue(apply))
+            apply();
+    }
+
+    private void ReportSessionProgress(double fraction, string text)
+    {
+        double pct = Math.Clamp(fraction, 0.0, 1.0) * 100.0;
+        void apply()
+        {
+            SessionProgressPercent = pct;
+            SessionProgressText = text;
+        }
+        if (!_dispatcher.TryEnqueue(apply))
+            apply();
+    }
+
+    private void EndSessionProgress()
+    {
+        void apply()
+        {
+            IsSessionBusy = false;
+            SessionProgressPercent = 0;
+            SessionProgressText = string.Empty;
+        }
+        if (!_dispatcher.TryEnqueue(apply))
+            apply();
     }
 
     public void SetDirectoryFromArgs(string? dir)

@@ -659,27 +659,31 @@ internal class TextRenderer
             linkRenderer.HighlightLinks();
         }
 
+        var clipRect = new Rect(0, 0, canvasText.Size.Width, canvasText.Size.Height);
         using (var ccls = canvasCommandList.CreateDrawingSession())
         {
-            //Only update the textformat when the text changes:
-            //render the search highlights
-            if (searchManager.IsSearchOpen)
-                SearchHighlightsRenderer.RenderHighlights(
-                    args,
-                    ccls,
-                    DrawnTextLayout,
-                    RenderedText,
-                    searchManager.MatchingSearchLines,
-                    searchManager.searchParameter.SearchExpression,
-                    DrawTextOffsetX,
-                    IsWordWrapEnabled ? DrawTextOffsetY - SingleLineHeight + (SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity) : SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity,
-                    designHelper._Design.SearchHighlightColor,
-                    coreTextbox.MaxSearchHighlightsPerRender
-                    );
+            using (ccls.CreateLayer(1.0f, clipRect))
+            {
+                //Only update the textformat when the text changes:
+                //render the search highlights
+                if (searchManager.IsSearchOpen)
+                    SearchHighlightsRenderer.RenderHighlights(
+                        args,
+                        ccls,
+                        DrawnTextLayout,
+                        RenderedText,
+                        searchManager.MatchingSearchLines,
+                        searchManager.searchParameter.SearchExpression,
+                        DrawTextOffsetX,
+                        IsWordWrapEnabled ? DrawTextOffsetY - SingleLineHeight + (SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity) : SingleLineHeight / scrollManager.DefaultVerticalScrollSensitivity,
+                        designHelper._Design.SearchHighlightColor,
+                        coreTextbox.MaxSearchHighlightsPerRender
+                        );
 
-            ccls.DrawTextLayout(DrawnTextLayout, DrawTextOffsetX, DrawTextOffsetY, designHelper.TextColorBrush);
+                ccls.DrawTextLayout(DrawnTextLayout, DrawTextOffsetX, DrawTextOffsetY, designHelper.TextColorBrush);
 
-            invisibleCharactersRenderer.DrawTabsAndSpaces(args, ccls, RenderedText, DrawnTextLayout, DrawTextOffsetY);
+                invisibleCharactersRenderer.DrawTabsAndSpaces(args, ccls, RenderedText, DrawnTextLayout, DrawTextOffsetY);
+            }
         }
         args.DrawingSession.DrawImage(canvasCommandList);
 

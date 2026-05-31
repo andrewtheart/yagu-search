@@ -132,8 +132,23 @@ public sealed class AppSettings
     public bool LimitParallelismOnHdd { get; set; } = true;
     /// <summary>When true, back up the file to .yagubak before saving in the built-in editor. Default true.</summary>
     public bool BackupBeforeSave { get; set; } = true;
-    /// <summary>Default window focus behavior in launcher mode. 0 = Minimize to tray, 1 = Stay open, 2 = Always on top, 3 = Traditional window.</summary>
-    public int WindowFocusBehavior { get; set; } = 3; // 3 = Traditional window (default)
+    /// <summary>When true (default), Yagu starts in the compact launcher window (single search bar,
+    /// no results pane). When false, Yagu starts in the traditional full window with title bar and
+    /// results pane visible.</summary>
+    public bool StartInLauncherMode { get; set; } = true;
+    /// <summary>Migration marker: once true, legacy installs have been split between
+    /// <see cref="StartInLauncherMode"/> and <see cref="WindowFocusBehavior"/> (which previously
+    /// conflated the two concepts via the deprecated value 3 = Traditional window).</summary>
+    public bool StartInLauncherModeMigrated { get; set; }
+    /// <summary>What the compact launcher does when it loses focus.
+    /// 0 = Minimize to system tray, 1 = Stay open (default), 2 = Always on top.
+    /// Value 3 (Traditional window startup) is deprecated — use <see cref="StartInLauncherMode"/>
+    /// instead.</summary>
+    public int WindowFocusBehavior { get; set; } = 1; // 1 = Stay open (default)
+    /// <summary>Migration marker: once true, the user's <see cref="WindowFocusBehavior"/> has been
+    /// rebased onto a modern default at least once. Kept for backwards compatibility with installs
+    /// migrated by an earlier build; the new migration uses <see cref="StartInLauncherModeMigrated"/>.</summary>
+    public bool WindowFocusBehaviorMigratedFromLegacyDefault { get; set; }
     /// <summary>When true (default), closing the window docks to system tray instead of exiting.</summary>
     public bool CloseToTray { get; set; } = true;
     /// <summary>Whether the user has been informed that closing docks to the system tray.</summary>
@@ -214,6 +229,7 @@ public sealed class SettingsService
                 settings.BinaryExtensions = AppSettings.DefaultBinaryExtensions;
                 settings.SkipExtensions = MergeExtensionLists(settings.SkipExtensions, AppSettings.DefaultSkipExtensions);
             }
+            MigrateLegacyWindowFocusBehavior(settings);
             return settings;
         }
         catch (Exception ex) { LogService.Instance.Warning("Settings", $"Failed to load settings from {_path}", ex); return new AppSettings(); }
@@ -241,9 +257,41 @@ public sealed class SettingsService
                 settings.BinaryExtensions = AppSettings.DefaultBinaryExtensions;
                 settings.SkipExtensions = MergeExtensionLists(settings.SkipExtensions, AppSettings.DefaultSkipExtensions);
             }
+            MigrateLegacyWindowFocusBehavior(settings);
             return settings;
         }
         catch (Exception ex) { LogService.Instance.Warning("Settings", $"Failed to load settings from {_path}", ex); return new AppSettings(); }
+    }
+
+    // Earlier Yagu versions stored the startup window mode (launcher vs traditional) and the
+    // launcher's focus-loss behavior in a single setting (WindowFocusBehavior 0..3 where 3 meant
+    // "Traditional window"). We've since split those into StartInLauncherMode + WindowFocusBehavior
+    // (0=MinimizeToTray, 1=StayOpen, 2=AlwaysOnTop). Migrate legacy installs once.
+    private static void MigrateLegacyWindowFocusBehavior(AppSettings settings)
+    {
+        if (settings.StartInLauncherModeMigrated) return;
+
+        switch (settings.WindowFocusBehavior)
+        {
+            case 3:
+                // Legacy "Traditional window" → start in traditional window, stay-open in launcher when invoked manually.
+                settings.StartInLauncherMode = false;
+                settings.WindowFocusBehavior = 1;
+                break;
+            case 0 when !settings.WindowFocusBehaviorMigratedFromLegacyDefault:
+                // Original Yagu default (Minimize to tray) — flip to the new Stay-open default.
+                settings.WindowFocusBehavior = 1;
+                settings.StartInLauncherMode = true;
+                break;
+            default:
+                // 1 (StayOpen) and 2 (AlwaysOnTop) are still valid; keep them.
+                if (settings.WindowFocusBehavior < 0 || settings.WindowFocusBehavior > 2)
+                    settings.WindowFocusBehavior = 1;
+                break;
+        }
+
+        settings.StartInLauncherModeMigrated = true;
+        settings.WindowFocusBehaviorMigratedFromLegacyDefault = true;
     }
 
     private static bool IsLegacyDefaultSkipExtensions(string skipExtensions) =>

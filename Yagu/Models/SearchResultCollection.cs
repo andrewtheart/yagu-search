@@ -303,8 +303,7 @@ public sealed class SearchResultCollection
             }
         }
 
-        VisibleGroups.Clear();
-        VisibleGroups.AddRange(sortedList);
+        VisibleGroups.ReplaceAll(sortedList);
     }
 
     public List<SearchResult> GetAllSelectedResults()

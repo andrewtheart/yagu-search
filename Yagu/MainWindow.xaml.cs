@@ -70,6 +70,7 @@ public sealed partial class MainWindow : Window
     private bool _previewEditorDirty;
     private string? _previewEditorOriginalText;
     private bool _suppressPreviewEditorTextChanged;
+    private volatile bool _previewMutating;
     private readonly HotkeyService _hotkeyService = new();
     private SubclassProc? _hotkeySubclassProc;
     private IntPtr _hwnd;
@@ -118,7 +119,19 @@ public sealed partial class MainWindow : Window
     {
         ViewModel = new MainViewModel();
         if (startupWindowFocusBehavior is >= 0 and <= 3)
-            ViewModel.WindowFocusBehavior = startupWindowFocusBehavior.Value;
+        {
+            // Legacy CLI: value 3 meant "Traditional window" \u2014 honour it by skipping launcher mode.
+            // Other values map directly onto the deactivation-only WindowFocusBehavior setting.
+            if (startupWindowFocusBehavior.Value == 3)
+            {
+                ViewModel.StartInLauncherMode = false;
+                ViewModel.WindowFocusBehavior = 1;
+            }
+            else
+            {
+                ViewModel.WindowFocusBehavior = startupWindowFocusBehavior.Value;
+            }
+        }
         ViewModel.SetDirectoryFromArgs(startupDirectory);
         if (!string.IsNullOrWhiteSpace(startupQuery))
         {
@@ -136,6 +149,7 @@ public sealed partial class MainWindow : Window
             new Microsoft.UI.Xaml.Input.DoubleTappedEventHandler(OnPreviewBlockDoubleTapped),
             handledEventsToo: true);
         AttachPreviewBlockContextFlyout(PreviewBlock);
+        InitializePreviewEditorZoom();
         PreviewScrollViewer.SizeChanged += OnPreviewViewportSizeChanged;
 
         // Extend content into the title bar for a modern Windows 11 look
@@ -202,9 +216,10 @@ public sealed partial class MainWindow : Window
 
         ((FrameworkElement)Content).Loaded += OnContentLoaded;
 
-        // Start in compact "launcher" mode unless we have a query to auto-run.
+        // Start in compact "launcher" mode unless we have a query to auto-run or the user has
+        // opted out via Settings \u2192 Window \u2192 "Start in compact launcher mode".
         // A CLI window-mode override is explicit, so apply it even for auto-search launches.
-        if (!_autoSearchOnLoad || startupWindowFocusBehavior.HasValue)
+        if ((!_autoSearchOnLoad || startupWindowFocusBehavior.HasValue) && ViewModel.StartInLauncherMode)
         {
             EnterLauncherMode();
         }
@@ -1107,6 +1122,10 @@ public sealed partial class MainWindow : Window
 
     private enum SplitLayoutMode { Split, ResultsMaximized, PreviewMaximized, PreviewTopExpanded }
     private SplitLayoutMode _splitLayoutMode = SplitLayoutMode.ResultsMaximized;
+    // Remembers the layout to restore when toggling out of ResultsMaximized so that
+    // collapsing the maximized results panel returns to whatever split mode was active
+    // before (e.g. PreviewTopExpanded), not always plain Split.
+    private SplitLayoutMode _splitLayoutBeforeResultsMaximized = SplitLayoutMode.Split;
 
     private void EnsurePreviewPanelVisible()
     {
@@ -1276,11 +1295,19 @@ public sealed partial class MainWindow : Window
 
     private void OnExpandResultsPanel(object sender, RoutedEventArgs e)
     {
-        // Toggle: maximize results <-> split view (always restore split when not currently maximized).
+        // Toggle: maximize results <-> previous split layout. Remember the prior mode
+        // so we restore to PreviewTopExpanded (etc.) instead of always plain Split.
         if (_splitLayoutMode == SplitLayoutMode.ResultsMaximized)
-            ApplySplitLayout(SplitLayoutMode.Split);
+        {
+            var restore = _splitLayoutBeforeResultsMaximized;
+            if (restore == SplitLayoutMode.ResultsMaximized) restore = SplitLayoutMode.Split;
+            ApplySplitLayout(restore);
+        }
         else
+        {
+            _splitLayoutBeforeResultsMaximized = _splitLayoutMode;
             ApplySplitLayout(SplitLayoutMode.ResultsMaximized);
+        }
     }
 
     private void OnExpandPreviewPanel(object sender, RoutedEventArgs e)
@@ -1316,10 +1343,45 @@ public sealed partial class MainWindow : Window
         if (!args.InRecycleQueue)
         {
             ApplyResultsCompactState(args.ItemContainer, _resultsCompactMode);
+            SyncFileGroupCheckBoxState(args.ItemContainer, args.Item as FileGroup);
 
             if (args.Item is FileGroup g && g.IsExpanded)
                 _ = EnsureVisibleResultsForExpandedGroupAsync(g);
         }
+    }
+
+    /// <summary>
+    /// Walks the recycled container's visual tree to find the file-group
+    /// CheckBox and explicitly re-asserts its <c>IsChecked</c> from the bound
+    /// <see cref="FileGroup.AllSelected"/>. Works around a WinUI 3 quirk where
+    /// the CheckBox visual state can persist as Indeterminate (rendered as a
+    /// horizontal dash) after the container is reused, even though
+    /// <c>IsThreeState="False"</c> is set in XAML.
+    /// </summary>
+    private static void SyncFileGroupCheckBoxState(FrameworkElement container, FileGroup? group)
+    {
+        if (group is null) return;
+        var checkBox = FindFileGroupCheckBox(container);
+        if (checkBox is null) return;
+        bool desired = group.AllSelected;
+        if (checkBox.IsChecked != desired)
+            checkBox.IsChecked = desired;
+    }
+
+    private static CheckBox? FindFileGroupCheckBox(Microsoft.UI.Xaml.DependencyObject parent)
+    {
+        int count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(parent);
+        for (int i = 0; i < count; i++)
+        {
+            var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(parent, i);
+            if (child is CheckBox cb
+                && string.Equals(Microsoft.UI.Xaml.Automation.AutomationProperties.GetAutomationId(cb),
+                    "FileGroupCheckBox", StringComparison.Ordinal))
+                return cb;
+            var nested = FindFileGroupCheckBox(child);
+            if (nested is not null) return nested;
+        }
+        return null;
     }
 
     private static void ApplyResultsCompactState(FrameworkElement container, bool compact)
@@ -2801,6 +2863,20 @@ public sealed partial class MainWindow : Window
                     await UpdateMultiSelectPreviewAsync();
                 else if (selected.Count == 1)
                     await ShowSingleFilePreviewAsync(selected[0], fullFile: false);
+                else
+                {
+                    // No matches selected — clear the preview panel.
+                    _previewResult = null;
+                    SetPreviewFileLabel(string.Empty);
+                    ShowPreviewBlockSurface();
+                    PreviewBlock.Blocks.Clear();
+                    PreviewSectionsPanel.Children.Clear();
+                    PreviewToolbarContent.Visibility = Visibility.Collapsed;
+                    _matchParagraphs.Clear();
+                    InvalidateParagraphIndexCache();
+                    _currentMatchIndex = -1;
+                    HideMatchNavPanel();
+                }
             }
         }
     }
@@ -2878,6 +2954,9 @@ public sealed partial class MainWindow : Window
                 $"AppendCheckedMatchContextAsync: using stored context for '{result.FilePath}' line {result.LineNumber}: {ex.GetType().Name}: {ex.Message}");
         }
 
+        _previewMutating = true;
+        try
+        {
         bool isHighlight = ViewModel.PreviewModeIndex == 1;
         _sectionMatchNavs.TryGetValue(section, out var sectionNav);
 
@@ -2997,6 +3076,11 @@ public sealed partial class MainWindow : Window
         UpdateMatchNavPanel();
         UpdateSectionMatchNavPanels();
         UpdateExpandAllButtonVisibility();
+        }
+        finally
+        {
+            _previewMutating = false;
+        }
     }
 
     /// <summary>
@@ -3566,14 +3650,12 @@ public sealed partial class MainWindow : Window
         try
         {
             int count = await ViewModel.SaveSessionAsync(file.Path);
-            DispatcherQueue.TryEnqueue(() =>
-                ViewModel.StatusText = $"Saved session ({count:N0} matches) to {file.Path}");
+            ViewModel.StatusText = $"Saved session ({count:N0} matches) to {file.Path}";
         }
         catch (Exception ex)
         {
             LogService.Instance.Warning("MainWindow", $"Save session failed: {file.Path}", ex);
-            DispatcherQueue.TryEnqueue(() =>
-                ViewModel.ErrorText = $"Save session failed: {ex.Message}");
+            ViewModel.ErrorText = $"Save session failed: {ex.Message}";
         }
     }
 
@@ -3612,8 +3694,7 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             LogService.Instance.Warning("MainWindow", $"Load session failed: {file.Path}", ex);
-            DispatcherQueue.TryEnqueue(() =>
-                ViewModel.ErrorText = $"Load session failed: {ex.Message}");
+            ViewModel.ErrorText = $"Load session failed: {ex.Message}";
         }
     }
 

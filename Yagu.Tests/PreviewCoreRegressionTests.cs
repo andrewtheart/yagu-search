@@ -280,13 +280,17 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("DoubleTapped=\"OnFileGroupHeaderDoubleTapped\"", headerGrid);
 
         string headerLayout = ExtractXamlWindow("DoubleTapped=\"OnFileGroupHeaderDoubleTapped\"", 4000);
+        // Filename column is a fixed width so directory paths line up vertically across
+        // every file row; the directory column takes the remaining * width.
         AssertContainsInOrder(headerLayout,
+            "<ColumnDefinition Width=\"Auto\" />",
+            "<ColumnDefinition Width=\"Auto\" />",
+            "<ColumnDefinition Width=\"320\" />",
             "<ColumnDefinition Width=\"*\" />",
-            "<ColumnDefinition Width=\"Auto\" MaxWidth=\"360\" />");
-        Assert.Contains("MaxWidth=\"360\"", headerLayout);
+            "<ColumnDefinition Width=\"Auto\" />");
         string wideDirectory = ExtractXamlWindow("Tag=\"WideDir\"", 600);
-        Assert.Contains("MaxWidth=\"360\"", wideDirectory);
         Assert.Contains("TextTrimming=\"CharacterEllipsis\"", wideDirectory);
+        Assert.Contains("Grid.Column=\"3\"", wideDirectory);
         Assert.Contains("private const double ResultsCompactThreshold = 760;", MainWindowSource);
         Assert.DoesNotContain("<ColumnDefinition Width=\"Auto\" MaxWidth=\"650\" />", headerLayout);
         Assert.DoesNotContain("private const double ResultsCompactThreshold = 550;", MainWindowSource);

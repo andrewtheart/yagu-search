@@ -63,7 +63,8 @@ internal class ScrollManager
 
     internal void HorizontalScrollBar_Scroll(object sender, ScrollEventArgs e)
     {
-        canvasHelper.UpdateAll();
+        canvasHelper.UpdateText();
+        canvasHelper.UpdateSelection();
     }
 
     public void UpdateWhenScrolled()

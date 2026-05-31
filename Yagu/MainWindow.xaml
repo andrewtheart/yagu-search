@@ -527,6 +527,21 @@
                 Value="{x:Bind ViewModel.FilesScanned, Mode=OneWay}"
                 IsIndeterminate="False" CornerRadius="3" Height="6"
                 ToolTipService.ToolTip="{x:Bind ViewModel.ProgressTooltip, Mode=OneWay}" />
+            <Grid Visibility="{x:Bind ViewModel.IsSessionBusy, Mode=OneWay}" ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <ProgressBar Grid.Column="0"
+                             Minimum="0" Maximum="100"
+                             Value="{x:Bind ViewModel.SessionProgressPercent, Mode=OneWay}"
+                             IsIndeterminate="False" CornerRadius="3" Height="6"
+                             ToolTipService.ToolTip="{x:Bind ViewModel.SessionProgressText, Mode=OneWay}" />
+                <TextBlock Grid.Column="1"
+                           VerticalAlignment="Center"
+                           FontSize="11"
+                           Text="{x:Bind ViewModel.SessionProgressText, Mode=OneWay}" />
+            </Grid>
             <TextBlock Foreground="OrangeRed"
                        Visibility="{x:Bind ViewModel.HasFallbackReason, Mode=OneWay}"
                        Text="{x:Bind ViewModel.FallbackReason, Mode=OneWay}" />
@@ -713,19 +728,21 @@
                             <NumberBox Value="{x:Bind ViewModel.ContextLines, Mode=TwoWay}" Minimum="0" Maximum="20"
                                        SpinButtonPlacementMode="Compact" MinWidth="64" Width="64" FontSize="12" />
                             <Button Click="OnClearResults" Background="Transparent" BorderThickness="0"
-                                    Padding="6,4" VerticalAlignment="Center"
+                                    Padding="8,6" VerticalAlignment="Center"
                                     ToolTipService.ToolTip="Clear all results (Ctrl+Shift+Delete)">
-                                <FontIcon Glyph="&#xE74D;" FontSize="12" />
+                                <FontIcon Glyph="&#xE74D;" FontSize="14" />
                             </Button>
                             <Button x:Name="SaveSessionButton" Click="OnSaveSession" Background="Transparent" BorderThickness="0"
-                                    Padding="6,4" VerticalAlignment="Center"
+                                    Padding="8,6" VerticalAlignment="Center"
+                                    IsEnabled="{x:Bind ViewModel.IsSessionIdle, Mode=OneWay}"
                                     ToolTipService.ToolTip="Save current results to a .yagu-session file">
-                                <FontIcon Glyph="&#xE74E;" FontSize="12" />
+                                <FontIcon Glyph="&#xE74E;" FontSize="14" />
                             </Button>
                             <Button x:Name="LoadSessionButton" Click="OnLoadSession" Background="Transparent" BorderThickness="0"
-                                    Padding="6,4" VerticalAlignment="Center"
+                                    Padding="8,6" VerticalAlignment="Center"
+                                    IsEnabled="{x:Bind ViewModel.IsSessionIdle, Mode=OneWay}"
                                     ToolTipService.ToolTip="Load a previously saved .yagu-session file">
-                                <FontIcon Glyph="&#xE8E5;" FontSize="12" />
+                                <FontIcon Glyph="&#xE8E5;" FontSize="14" />
                             </Button>
                         </StackPanel>
                         </StackPanel>
@@ -872,7 +889,8 @@
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="Auto" />
-                                                <ColumnDefinition Width="*" />
+                                                <!-- Fixed-width filename column so directory paths line up vertically across rows. -->
+                                                <ColumnDefinition Width="320" />
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
@@ -899,7 +917,7 @@
                                                 </TextBlock>
                                             </StackPanel>
                                         </StackPanel>
-                                        <!-- Directory path right-aligned (hidden when panel is narrow) -->
+                                        <!-- Directory path takes the remaining row width, sitting immediately after the filename block. -->
                                         <TextBlock Grid.Column="3" Text="{x:Bind DirectoryName}" Tag="WideDir"
                                                    ToolTipService.ToolTip="{x:Bind DirectoryName}"
                                                    Opacity="0.45" FontSize="11" VerticalAlignment="Center"
@@ -1385,7 +1403,7 @@
             <TextBlock Text="{x:Bind ViewModel.FilesPerSecondText, Mode=OneWay}"
                      Visibility="{x:Bind ViewModel.StatsForNerdsVisibility, Mode=OneWay}"
                      Opacity="0.6" FontSize="12" FontFamily="Consolas" />
-            <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Opacity="0.8" FontSize="12" />
+            <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Opacity="0.8" FontSize="12" FontFamily="Consolas" />
             <Grid Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Stretch" Height="20"
                 Visibility="{x:Bind ViewModel.StatsForNerdsVisibility, Mode=OneWay}">
                 <!-- Background utilization gauge -->

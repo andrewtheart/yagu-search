@@ -1148,14 +1148,23 @@ public sealed partial class MainWindow
         var singleSw = System.Diagnostics.Stopwatch.StartNew();
         ShowPreviewBlockSurface();
         PreviewBlock.Tag = r.FilePath;
-        PreviewBlock.Blocks.Clear();
-        Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+
+        ViewModel.HydrateResult(r);
 
         string[]? allLines = null;
-        if (fullFile)
+        // Read the file for context lines so we always show the configured PreviewContextLines
+        // amount, not just whatever the SearchResult stored (which may be fewer or empty after eviction).
+        try { allLines = await ReadAllLinesWithEncodingAsync(r.FilePath); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            try { allLines = await ReadAllLinesWithEncodingAsync(r.FilePath); } catch (Exception ex) { LogService.Instance.Warning("Preview", $"Cannot read file for single-file preview: {r.FilePath}", ex); }
+            LogService.Instance.Verbose("Preview", $"ShowSingleFilePreviewAsync: cannot read file '{r.FilePath}', using stored context: {ex.GetType().Name}");
         }
+
+        _previewMutating = true;
+        try
+        {
+        PreviewBlock.Blocks.Clear();
+        Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
 
         int lineCount = 0;
         var lines = GetPreviewLines(r, allLines, ViewModel.PreviewContextLines, fullFile);
@@ -1173,6 +1182,11 @@ public sealed partial class MainWindow
         {
             PreviewBlock.TextWrapping = TextWrapping.Wrap;
             ApplyPreviewHorizontalScrollForWrap(PreviewScrollViewer, wrap: true);
+        }
+        }
+        finally
+        {
+            _previewMutating = false;
         }
     }
 
@@ -1308,6 +1322,7 @@ public sealed partial class MainWindow
         block.AddHandler(UIElement.DoubleTappedEvent,
             new Microsoft.UI.Xaml.Input.DoubleTappedEventHandler(async (s, e) =>
             {
+                if (_previewMutating) return;
                 if (s is RichTextBlock rtb)
                     await EnterPreviewEditorAtPointAsync(rtb, e, capturedSectionPath);
             }),
@@ -1823,6 +1838,7 @@ public sealed partial class MainWindow
 
     private async void OnPreviewBlockDoubleTapped(object sender, Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e)
     {
+        if (_previewMutating) return;
         if (sender is RichTextBlock rtb)
             await EnterPreviewEditorAtPointAsync(rtb, e, _previewResult?.FilePath);
     }

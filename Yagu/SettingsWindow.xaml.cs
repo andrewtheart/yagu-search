@@ -4,6 +4,7 @@ using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media.Animation;
 using Windows.Graphics;
 using Yagu.Helpers;
 using Yagu.Services;
@@ -102,6 +103,22 @@ public sealed partial class SettingsWindow : Window
     {
         _ = _viewModel.PersistSettingsAsync();
         Close();
+    }
+
+    private void RootGrid_Loaded(object sender, RoutedEventArgs e)
+    {
+        var fadeIn = new DoubleAnimation
+        {
+            From = 0,
+            To = 1,
+            Duration = new Duration(TimeSpan.FromMilliseconds(200)),
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+        };
+        Storyboard.SetTarget(fadeIn, RootGrid);
+        Storyboard.SetTargetProperty(fadeIn, "Opacity");
+        var sb = new Storyboard();
+        sb.Children.Add(fadeIn);
+        sb.Begin();
     }
 
     private void OnCancelClick(object sender, RoutedEventArgs e)
@@ -759,16 +776,25 @@ public sealed partial class SettingsWindow : Window
         {
             var g = AddTab("Window");
 
-            g.Children.Add(new TextBlock { Text = "Default window focus behavior (launcher mode):" });
+            g.Children.Add(new TextBlock { Text = "Startup", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 4) });
+            var startInLauncher = new CheckBox { Content = "Start in compact launcher mode", IsChecked = _viewModel.StartInLauncherMode };
+            startInLauncher.Checked += (_, _) => _viewModel.StartInLauncherMode = true;
+            startInLauncher.Unchecked += (_, _) => _viewModel.StartInLauncherMode = false;
+            g.Children.Add(startInLauncher);
+            g.Children.Add(new TextBlock { Text = "When enabled (default), Yagu launches as a small search bar (like Spotlight/Alfred). When disabled, Yagu launches as a traditional window with title bar and results pane.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) });
+
+            g.Children.Add(new TextBlock { Text = "Launcher focus-loss behavior:" });
             var focusBehavior = new ComboBox();
-            focusBehavior.Items.Add("Minimize to system tray (default)");
-            focusBehavior.Items.Add("Stay open (don't minimize on focus loss)");
+            focusBehavior.Items.Add("Minimize to system tray");
+            focusBehavior.Items.Add("Stay open (default)");
             focusBehavior.Items.Add("Always on top (stay above all windows)");
-            focusBehavior.Items.Add("Traditional window (full window with title bar)");
-            focusBehavior.SelectedIndex = _viewModel.WindowFocusBehavior;
+            // Clamp legacy/out-of-range values onto the new 0..2 range (3 = old Traditional window).
+            focusBehavior.SelectedIndex = _viewModel.WindowFocusBehavior is >= 0 and <= 2
+                ? _viewModel.WindowFocusBehavior
+                : 1;
             focusBehavior.SelectionChanged += (_, _) => _viewModel.WindowFocusBehavior = focusBehavior.SelectedIndex;
             g.Children.Add(focusBehavior);
-            g.Children.Add(new TextBlock { Text = "Controls what happens when the launcher window loses focus. This sets the default; you can override per-session using the pin button next to Browse.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            g.Children.Add(new TextBlock { Text = "Controls what happens when the compact launcher window loses focus. You can override per-session using the pin button next to Browse.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             var closeToTray = new CheckBox { Content = "Dock to system tray when closed (instead of exiting)", IsChecked = _viewModel.CloseToTray };
             closeToTray.Checked += (_, _) => _viewModel.CloseToTray = true;

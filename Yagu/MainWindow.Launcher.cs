@@ -16,10 +16,12 @@ public sealed partial class MainWindow
 {
     private const double MinimumLauncherHeightDip = 190;
 
-    /// <summary>Window pin state: MinimizeToTray (default), StayOpen, AlwaysOnTop, FullWindow.</summary>
+    /// <summary>Window pin state inside the compact launcher: how the window reacts to losing focus.
+    /// Default is <see cref="StayOpen"/>. <see cref="FullWindow"/> is the in-session escape hatch
+    /// from launcher mode and is also reached via the <c>Start in compact launcher mode</c> setting.</summary>
     private enum PinState { MinimizeToTray, StayOpen, AlwaysOnTop, FullWindow }
 
-    private PinState _pinState = PinState.MinimizeToTray;
+    private PinState _pinState = PinState.StayOpen;
 
     /// <summary>
     /// Compact "launcher" mode: hides the results panel and status bar,
@@ -58,13 +60,14 @@ public sealed partial class MainWindow
         catch { }
         SetNativeCaptionButtonsVisible(false);
 
-        // Apply saved window-focus behaviour as the initial pin state.
+        // Apply saved window-focus behaviour as the initial pin state. WindowFocusBehavior only
+        // governs the launcher's response to focus loss; launcher-vs-traditional startup is
+        // controlled by the separate StartInLauncherMode setting.
         _pinState = ViewModel.WindowFocusBehavior switch
         {
-            1 => PinState.StayOpen,
+            0 => PinState.MinimizeToTray,
             2 => PinState.AlwaysOnTop,
-            3 => PinState.FullWindow,
-            _ => PinState.MinimizeToTray,
+            _ => PinState.StayOpen,
         };
         ApplyPinState();
     }

@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
+using Microsoft.UI.Xaml.Input;
+using Windows.System;
 using Yagu.Helpers;
 using Yagu.Models;
 using Yagu.Services;
@@ -62,6 +64,100 @@ public sealed partial class MainWindow
         UpdatePreviewEditorButtons();
     }
 
+    private const int PreviewEditorZoomStep = 10;
+    private const int PreviewEditorZoomMin = 30;
+    private const int PreviewEditorZoomMax = 400;
+
+    /// <summary>
+    /// Appends Zoom in / Zoom out / Reset zoom items to the inline editor's
+    /// built-in right-click flyout and wires Ctrl+'+' / Ctrl+'-' / Ctrl+0
+    /// keyboard accelerators. Called once from the MainWindow constructor.
+    /// </summary>
+    private void InitializePreviewEditorZoom()
+    {
+        try
+        {
+            var flyout = PreviewEditor.ContextFlyout;
+            if (flyout is not null)
+            {
+                flyout.Items.Add(new MenuFlyoutSeparator());
+
+                var zoomIn = new MenuFlyoutItem
+                {
+                    Text = "Zoom in",
+                    Icon = new SymbolIcon { Symbol = Symbol.ZoomIn },
+                    KeyboardAcceleratorTextOverride = "Ctrl + +",
+                };
+                zoomIn.Click += (_, _) => AdjustPreviewEditorZoom(+PreviewEditorZoomStep);
+                flyout.Items.Add(zoomIn);
+
+                var zoomOut = new MenuFlyoutItem
+                {
+                    Text = "Zoom out",
+                    Icon = new SymbolIcon { Symbol = Symbol.ZoomOut },
+                    KeyboardAcceleratorTextOverride = "Ctrl + -",
+                };
+                zoomOut.Click += (_, _) => AdjustPreviewEditorZoom(-PreviewEditorZoomStep);
+                flyout.Items.Add(zoomOut);
+
+                var zoomReset = new MenuFlyoutItem
+                {
+                    Text = "Reset zoom",
+                    KeyboardAcceleratorTextOverride = "Ctrl + 0",
+                };
+                zoomReset.Click += (_, _) => SetPreviewEditorZoom(100);
+                flyout.Items.Add(zoomReset);
+            }
+
+            AddPreviewEditorZoomAccelerator(VirtualKey.Add, +PreviewEditorZoomStep);
+            // OEM '=' / '+' key (top row) — KeyboardAccelerator fires on the
+            // physical key regardless of shift, so Ctrl+= also zooms in.
+            AddPreviewEditorZoomAccelerator((VirtualKey)0xBB, +PreviewEditorZoomStep);
+            AddPreviewEditorZoomAccelerator(VirtualKey.Subtract, -PreviewEditorZoomStep);
+            // OEM '-'.
+            AddPreviewEditorZoomAccelerator((VirtualKey)0xBD, -PreviewEditorZoomStep);
+            AddPreviewEditorZoomAccelerator(VirtualKey.Number0, 0);
+            AddPreviewEditorZoomAccelerator(VirtualKey.NumberPad0, 0);
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("PreviewEditor", "InitializePreviewEditorZoom failed: " + ex.Message);
+        }
+    }
+
+    private void AddPreviewEditorZoomAccelerator(VirtualKey key, int deltaPercent)
+    {
+        var accelerator = new KeyboardAccelerator
+        {
+            Key = key,
+            Modifiers = VirtualKeyModifiers.Control,
+        };
+        accelerator.Invoked += (_, args) =>
+        {
+            if (PreviewEditor.Visibility != Visibility.Visible) return;
+            if (deltaPercent == 0) SetPreviewEditorZoom(100);
+            else AdjustPreviewEditorZoom(deltaPercent);
+            args.Handled = true;
+        };
+        PreviewEditor.KeyboardAccelerators.Add(accelerator);
+    }
+
+    private void AdjustPreviewEditorZoom(int deltaPercent)
+    {
+        SetPreviewEditorZoom(PreviewEditor.ZoomFactor + deltaPercent);
+    }
+
+    private void SetPreviewEditorZoom(int percent)
+    {
+        if (percent < PreviewEditorZoomMin) percent = PreviewEditorZoomMin;
+        else if (percent > PreviewEditorZoomMax) percent = PreviewEditorZoomMax;
+        try { PreviewEditor.ZoomFactor = percent; }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("PreviewEditor", $"SetPreviewEditorZoom({percent}) failed: {ex.Message}");
+        }
+    }
+
     /// <summary>
     /// Handles a double-tap inside a preview <see cref="RichTextBlock"/> by opening
     /// the inline editor for the file and placing the caret on the clicked line.
@@ -74,6 +170,12 @@ public sealed partial class MainWindow
         try
         {
             if (filePath is null) return;
+
+            // Abort if the section layout is still animating/oscillating — calling
+            // GetPositionFromPoint while the native text layout engine is mid-reflow
+            // can trigger an access violation in Microsoft.UI.Xaml.dll.
+            if (!IsPreviewSectionBodySettledForActiveOverlay(block, out _))
+                return;
 
             var pt = e.GetPosition(block);
             TextPointer? tp;

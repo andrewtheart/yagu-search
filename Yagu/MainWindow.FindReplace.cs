@@ -214,11 +214,33 @@ public sealed partial class MainWindow
             SyncPreviewEditorFindHighlights();
             PreviewEditor.Focus(FocusState.Programmatic);
             SelectPreviewEditorText(index, length);
+            ScrollPreviewEditorMatchIntoView(index);
         }
         else
         {
             HighlightFindMatchInPreviewBlock(index, length);
         }
+    }
+
+    /// <summary>
+    /// Centers the editor viewport on the line containing the given character index.
+    /// TextControlBox's <c>SetSelection</c> does not auto-scroll, so navigation through
+    /// matches would otherwise leave the next match off-screen.
+    /// </summary>
+    private void ScrollPreviewEditorMatchIntoView(int index)
+    {
+        try
+        {
+            var text = GetPreviewEditorText();
+            int clamped = Math.Clamp(index, 0, text.Length);
+            int line = 0;
+            for (int i = 0; i < clamped; i++)
+            {
+                if (text[i] == '\n') line++;
+            }
+            PreviewEditor.ScrollLineToCenter(line);
+        }
+        catch { /* editor not ready or empty */ }
     }
 
     /// <summary>
@@ -342,7 +364,9 @@ public sealed partial class MainWindow
         {
             var transform = block.TransformToVisual(PreviewScrollViewer);
             var point = transform.TransformPoint(new Windows.Foundation.Point(0, 0));
-            double targetOffset = PreviewScrollViewer.VerticalOffset + point.Y - PreviewScrollViewer.ViewportHeight / 3;
+            // Center the block in the viewport rather than parking it 1/3 from the top.
+            double targetOffset = PreviewScrollViewer.VerticalOffset + point.Y
+                                  - (PreviewScrollViewer.ViewportHeight - block.ActualHeight) / 2;
             targetOffset = Math.Max(0, Math.Min(targetOffset, PreviewScrollViewer.ScrollableHeight));
             PreviewScrollViewer.ChangeView(null, targetOffset, null, disableAnimation: false);
         }

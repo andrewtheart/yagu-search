@@ -9,7 +9,7 @@
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-    <Grid x:Name="RootGrid" RowSpacing="0">
+    <Grid x:Name="RootGrid" RowSpacing="0" Opacity="0" Loaded="RootGrid_Loaded">
         <Grid.RowDefinitions>
             <RowDefinition Height="48" />  <!-- Title bar -->
             <RowDefinition Height="*" />   <!-- Content -->
