@@ -717,6 +717,16 @@
                                     ToolTipService.ToolTip="Clear all results (Ctrl+Shift+Delete)">
                                 <FontIcon Glyph="&#xE74D;" FontSize="12" />
                             </Button>
+                            <Button x:Name="SaveSessionButton" Click="OnSaveSession" Background="Transparent" BorderThickness="0"
+                                    Padding="6,4" VerticalAlignment="Center"
+                                    ToolTipService.ToolTip="Save current results to a .yagu-session file">
+                                <FontIcon Glyph="&#xE74E;" FontSize="12" />
+                            </Button>
+                            <Button x:Name="LoadSessionButton" Click="OnLoadSession" Background="Transparent" BorderThickness="0"
+                                    Padding="6,4" VerticalAlignment="Center"
+                                    ToolTipService.ToolTip="Load a previously saved .yagu-session file">
+                                <FontIcon Glyph="&#xE8E5;" FontSize="12" />
+                            </Button>
                         </StackPanel>
                         </StackPanel>
                         <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.DegradedNoticeText, Mode=OneWay}"

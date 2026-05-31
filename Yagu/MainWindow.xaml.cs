@@ -3550,6 +3550,82 @@ public sealed partial class MainWindow : Window
         await ViewModel.ClearResultsAsync();
     }
 
+    private async void OnSaveSession(object sender, RoutedEventArgs e)
+    {
+        var picker = new Windows.Storage.Pickers.FileSavePicker();
+        picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
+        picker.FileTypeChoices.Add("Yagu Session", new List<string> { Services.SessionFileService.FileExtension });
+        picker.SuggestedFileName = BuildSessionFileSuggestedName(ViewModel.Query);
+
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+
+        var file = await picker.PickSaveFileAsync();
+        if (file is null) return;
+
+        try
+        {
+            int count = await ViewModel.SaveSessionAsync(file.Path);
+            DispatcherQueue.TryEnqueue(() =>
+                ViewModel.StatusText = $"Saved session ({count:N0} matches) to {file.Path}");
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("MainWindow", $"Save session failed: {file.Path}", ex);
+            DispatcherQueue.TryEnqueue(() =>
+                ViewModel.ErrorText = $"Save session failed: {ex.Message}");
+        }
+    }
+
+    private async void OnLoadSession(object sender, RoutedEventArgs e)
+    {
+        var picker = new Windows.Storage.Pickers.FileOpenPicker();
+        picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
+        picker.FileTypeFilter.Add(Services.SessionFileService.FileExtension);
+        picker.FileTypeFilter.Add("*");
+
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+
+        var file = await picker.PickSingleFileAsync();
+        if (file is null) return;
+
+        // Clear preview pane state — the previously-selected result no longer applies.
+        _previewResult = null;
+        SetPreviewFileLabel(string.Empty);
+        ClosePreviewEditor();
+        ShowPreviewBlockSurface();
+        PreviewBlock.Blocks.Clear();
+        PreviewSectionsPanel.Children.Clear();
+        PreviewToolbarContent.Visibility = Visibility.Collapsed;
+        _matchParagraphs.Clear();
+        InvalidateParagraphIndexCache();
+        _currentMatchIndex = -1;
+        HideMatchNavPanel();
+
+        try
+        {
+            var header = await ViewModel.LoadSessionAsync(file.Path);
+            LogService.Instance.Info("MainWindow",
+                $"Loaded session: {header.ResultCount:N0} declared results, query='{header.Query}', root='{header.SearchRoot}'");
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("MainWindow", $"Load session failed: {file.Path}", ex);
+            DispatcherQueue.TryEnqueue(() =>
+                ViewModel.ErrorText = $"Load session failed: {ex.Message}");
+        }
+    }
+
+    private static string BuildSessionFileSuggestedName(string query)
+    {
+        var safeQuery = string.IsNullOrWhiteSpace(query)
+            ? "yagu-session"
+            : new string(query.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '_').ToArray());
+        if (safeQuery.Length > 40) safeQuery = safeQuery[..40];
+        return $"{safeQuery}-{DateTime.Now:yyyyMMdd-HHmmss}";
+    }
+
     private void OnShowInExplorer(object sender, RoutedEventArgs e)
     {
         if (_previewResult is null) return;
@@ -3713,7 +3789,10 @@ public sealed partial class MainWindow : Window
         {
             if (isShift && currentIndex >= 0)
             {
-                for (int i = 0; i <= currentIndex; i++)
+                int anchor = _lastCheckedGroupIndex >= 0 ? _lastCheckedGroupIndex : currentIndex;
+                int lo = Math.Min(anchor, currentIndex);
+                int hi = Math.Max(anchor, currentIndex);
+                for (int i = lo; i <= hi; i++)
                 {
                     if (shouldSelect)
                     {
@@ -3762,9 +3841,18 @@ public sealed partial class MainWindow : Window
         else if (!shouldSelect)
         {
             // Remove preview sections for deselected file groups.
-            var deselectedGroups = isShift && currentIndex >= 0
-                ? ViewModel.ResultGroups.Take(currentIndex + 1)
-                : new[] { group };
+            IEnumerable<FileGroup> deselectedGroups;
+            if (isShift && currentIndex >= 0)
+            {
+                int anchor = _lastCheckedGroupIndex >= 0 ? _lastCheckedGroupIndex : currentIndex;
+                int lo = Math.Min(anchor, currentIndex);
+                int hi = Math.Max(anchor, currentIndex);
+                deselectedGroups = ViewModel.ResultGroups.Skip(lo).Take(hi - lo + 1);
+            }
+            else
+            {
+                deselectedGroups = new[] { group };
+            }
 
             foreach (var g in deselectedGroups)
             {
@@ -3818,7 +3906,7 @@ public sealed partial class MainWindow : Window
             int currentIndex = ViewModel.ResultGroups.IndexOf(g);
             LogService.Instance.Info("Preview", $"OnSelectAllChecked: file='{g.FilePath}', matchCount={g.Count}, index={currentIndex}");
 
-            // Shift+Click: check all from top of list to clicked item
+            // Shift+Click: check all from previous anchor to clicked item
             bool isShift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
                            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
             if (isShift && currentIndex >= 0)
@@ -3826,7 +3914,10 @@ public sealed partial class MainWindow : Window
                 _suppressPreviewUpdate = true;
                 try
                 {
-                    for (int i = 0; i <= currentIndex; i++)
+                    int anchor = _lastCheckedGroupIndex >= 0 ? _lastCheckedGroupIndex : currentIndex;
+                    int lo = Math.Min(anchor, currentIndex);
+                    int hi = Math.Max(anchor, currentIndex);
+                    for (int i = lo; i <= hi; i++)
                         ViewModel.ResultGroups[i].SelectAll();
                 }
                 finally { _suppressPreviewUpdate = false; }
@@ -3863,7 +3954,7 @@ public sealed partial class MainWindow : Window
             int currentIndex = ViewModel.ResultGroups.IndexOf(g);
             LogService.Instance.Info("Preview", $"OnSelectAllUnchecked: file='{g.FilePath}', index={currentIndex}");
 
-            // Shift+Click: uncheck all from top of list to clicked item
+            // Shift+Click: uncheck all from previous anchor to clicked item
             bool isShift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
                            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
             if (isShift && currentIndex >= 0)
@@ -3871,7 +3962,10 @@ public sealed partial class MainWindow : Window
                 _suppressPreviewUpdate = true;
                 try
                 {
-                    for (int i = 0; i <= currentIndex; i++)
+                    int anchor = _lastCheckedGroupIndex >= 0 ? _lastCheckedGroupIndex : currentIndex;
+                    int lo = Math.Min(anchor, currentIndex);
+                    int hi = Math.Max(anchor, currentIndex);
+                    for (int i = lo; i <= hi; i++)
                         ViewModel.ResultGroups[i].DeselectAll();
                 }
                 finally { _suppressPreviewUpdate = false; }

@@ -82,6 +82,11 @@ internal static class CliRunner
             return 0;
         }
 
+        // --load-session short-circuits the entire search pipeline: just
+        // read the file and re-emit results in ripgrep-compatible format.
+        if (!string.IsNullOrWhiteSpace(args.LoadSessionPath))
+            return RunLoadSession(args.LoadSessionPath!, vtEnabled);
+
         if (string.IsNullOrWhiteSpace(args.Directory))
         {
             WriteError("error: --directory is required when using --cli.");
@@ -521,7 +526,8 @@ internal static class CliRunner
         bool exporting = !string.IsNullOrWhiteSpace(args.ExportPath);
         bool replacing = args.ReplaceText is not null;
         bool sorting = !string.IsNullOrWhiteSpace(args.SortBy);
-        bool needsCollection = exporting || replacing || sorting;
+        bool savingSession = !string.IsNullOrWhiteSpace(args.SaveSessionPath);
+        bool needsCollection = exporting || replacing || sorting || savingSession;
 
         // When collecting results, disable direct output so results are available via events
         if (needsCollection)
@@ -602,6 +608,20 @@ internal static class CliRunner
                             // Export
                             if (exporting)
                                 await WriteExportFileAsync(args, sortedResults.ToList(), options.Query, searchStarted, filesScanned, bytesScanned);
+
+                            // Save session
+                            if (savingSession)
+                                await WriteSessionFileAsync(
+                                    args.SaveSessionPath!,
+                                    sortedResults,
+                                    options.Query,
+                                    options.Directory,
+                                    searchStarted,
+                                    c.Summary.Elapsed,
+                                    (int)filesScanned,
+                                    bytesScanned,
+                                    c.Summary.TotalMatches,
+                                    useColor);
                         }
 
                         if (c.Summary.Cancelled) return 130;
@@ -751,6 +771,102 @@ internal static class CliRunner
             ".csv"  => ReportFormat.Csv,
             _ => ReportFormat.Html,
         };
+    }
+
+    // -----------------------------------------------------------------------
+    // .yagu-session save / load
+    // -----------------------------------------------------------------------
+
+    private static async Task WriteSessionFileAsync(
+        string path,
+        IReadOnlyList<SearchResult> results,
+        string query,
+        string searchRoot,
+        DateTime searchStarted,
+        TimeSpan elapsed,
+        int filesScanned,
+        long bytesScanned,
+        int matchesFound,
+        bool useColor)
+    {
+        try
+        {
+            var stats = new SessionFileService.SessionStats(
+                searchStarted, elapsed, filesScanned, bytesScanned, matchesFound);
+
+            await using var fs = new FileStream(
+                path, FileMode.Create, FileAccess.Write, FileShare.None,
+                bufferSize: 64 * 1024, useAsync: true);
+
+            await SessionFileService.WriteAsync(
+                fs, query ?? string.Empty, searchRoot ?? string.Empty, stats, results).ConfigureAwait(false);
+
+            WriteError($"Saved session ({results.Count:N0} matches) to {path}", useColor);
+        }
+        catch (Exception ex)
+        {
+            WriteError($"error: failed to save session to {path}: {ex.Message}", useColor);
+        }
+    }
+
+    private static int RunLoadSession(string path, bool vtEnabled)
+    {
+        bool useColor = vtEnabled;
+
+        if (!File.Exists(path))
+        {
+            WriteError($"error: session file not found: {path}", useColor);
+            return 2;
+        }
+
+        SessionFileService.SessionHeader? header = null;
+        var writer = new RipgrepWriter(Console.Out, useColor);
+        int emitted = 0;
+
+        try
+        {
+            using var fs = new FileStream(
+                path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                bufferSize: 64 * 1024, useAsync: false);
+
+            // ReadAsync streams batches; we just need to walk them synchronously.
+            SessionFileService.ReadAsync(
+                fs,
+                h => header = h,
+                batch =>
+                {
+                    foreach (var r in batch)
+                    {
+                        writer.Add(r);
+                        emitted++;
+                    }
+                    return Task.CompletedTask;
+                }).GetAwaiter().GetResult();
+
+            writer.Flush();
+        }
+        catch (InvalidDataException ex)
+        {
+            WriteError($"error: {ex.Message}", useColor);
+            return 2;
+        }
+        catch (Exception ex)
+        {
+            WriteError($"error: failed to load session: {ex.Message}", useColor);
+            return 2;
+        }
+
+        var query = header?.Query ?? string.Empty;
+        var root = header?.SearchRoot ?? string.Empty;
+        var savedUtc = header?.SavedUtc ?? DateTime.UtcNow;
+        WriteError($"\nLoaded {emitted:N0} match(es) from session '{Path.GetFileName(path)}'", useColor);
+        if (!string.IsNullOrEmpty(query))
+            WriteError($"  query: {query}", useColor);
+        if (!string.IsNullOrEmpty(root))
+            WriteError($"  root:  {root}", useColor);
+        WriteError($"  saved: {savedUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss}", useColor);
+
+        return emitted > 0 ? 0 : 1;
     }
 
     // -----------------------------------------------------------------------
@@ -1014,6 +1130,14 @@ internal static class CliRunner
                   --sort <key>            Sort results by: matches, date, size, name, path (default: unsorted).
                   --sort-desc             Sort in descending order.
                   --sort-asc              Sort in ascending order (default).
+
+            SESSIONS (.yagu-session):
+                  --save-session <path>   After a search completes, save its results to
+                                          <path> as a .yagu-session file (rehydrate later).
+                  --load-session <path>   Skip searching entirely; load a previously saved
+                                          .yagu-session file and emit its results in
+                                          ripgrep-compatible format. --directory and
+                                          PATTERN are not required when loading a session.
 
             SETTINGS FILE:
               If .yagu.json exists in the current working directory it is used as the
@@ -1304,6 +1428,10 @@ internal sealed class CliArgs
     public string?          SortBy { get; private set; } // matches, date, size, name
     public bool             SortDescending { get; private set; }
 
+    // Session (.yagu-session) file options
+    public string?          LoadSessionPath { get; private set; }
+    public string?          SaveSessionPath { get; private set; }
+
     private CliArgs() { }
 
     public static CliArgs Parse(string[] raw)
@@ -1414,6 +1542,10 @@ internal sealed class CliArgs
             if (TryGetVal(raw, ref i, out v, "--sort"))                  { a.SortBy = v.ToLowerInvariant(); continue; }
             if (Eq(tok, "--sort-desc", "--sort-descending"))              { a.SortDescending = true; i++; continue; }
             if (Eq(tok, "--sort-asc", "--sort-ascending"))                { a.SortDescending = false; i++; continue; }
+
+            // Session file options
+            if (TryGetVal(raw, ref i, out v, "--load-session"))           { a.LoadSessionPath = v.Trim('"'); continue; }
+            if (TryGetVal(raw, ref i, out v, "--save-session"))           { a.SaveSessionPath = v.Trim('"'); continue; }
 
             // Positional: first non-flag is the pattern
             if (!tok.StartsWith('-') && a.Pattern is null)

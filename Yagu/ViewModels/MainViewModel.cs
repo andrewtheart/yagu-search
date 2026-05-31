@@ -2161,6 +2161,175 @@ public sealed partial class MainViewModel : ObservableObject
         return _resultCollection.GetAllSelectedResults();
     }
 
+    // -----------------------------------------------------------------------
+    // .yagu-session save/load — round-trips the visible result graph to disk
+    // without re-running the search.
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Save the current results plus search query / stats to a <c>.yagu-session</c>
+    /// file. Evicted results are hydrated first so the file contains full payloads.
+    /// </summary>
+    public async Task<int> SaveSessionAsync(string path, CancellationToken cancellationToken = default)
+    {
+        // Snapshot the group list off the UI thread's mutation pattern. EvictAll
+        // already uses this approach safely.
+        var groupsSnapshot = _resultCollection.AllGroups.ToArray();
+        var all = new List<SearchResult>(MatchesFound);
+
+        foreach (var g in groupsSnapshot)
+        {
+            // In degraded/streaming mode each FileGroup keeps evicted matches as
+            // compact stubs that are NOT exposed via Count / indexer until the
+            // group is expanded. Force materialization so we can enumerate every
+            // match — the user asked for "all matches", not just selected/visible.
+            g.MaterializeEvictedStubs();
+
+            int count = g.Count;
+            for (int i = 0; i < count; i++)
+            {
+                var r = g[i];
+                if (r.IsEvicted)
+                    HydrateResult(r);
+                all.Add(r);
+            }
+        }
+
+        var stats = new SessionFileService.SessionStats(
+            _searchStartedUtc,
+            _lastSearchElapsed,
+            FilesScanned,
+            _bytesScanned,
+            MatchesFound);
+
+        await using var fs = new FileStream(
+            path, FileMode.Create, FileAccess.Write, FileShare.None,
+            bufferSize: 64 * 1024, useAsync: true);
+
+        await SessionFileService.WriteAsync(
+            fs,
+            Query ?? string.Empty,
+            Directory ?? string.Empty,
+            stats,
+            all,
+            cancellationToken).ConfigureAwait(false);
+
+        var savedStatus = $"Saved session: {all.Count:N0} match(es) → {Path.GetFileName(path)}";
+        if (!_dispatcher.TryEnqueue(() => StatusText = savedStatus))
+            StatusText = savedStatus;
+        return all.Count;
+    }
+
+    /// <summary>
+    /// Load a <c>.yagu-session</c> file into the result list. Cancels any
+    /// in-progress search, clears existing state, then streams results into
+    /// the collection in batches so very large sessions don't block the UI.
+    /// </summary>
+    public async Task<SessionFileService.SessionHeader> LoadSessionAsync(string path, CancellationToken cancellationToken = default)
+    {
+        if (IsSearching)
+            await CancelAsync().ConfigureAwait(true);
+
+        _resultCollection.Clear();
+        FileMetadataCache.Clear();
+        _resultStore?.Dispose();
+        _resultStore = null;
+
+        ErrorText = null;
+        FallbackReason = null;
+        FilesScanned = 0;
+        TotalFiles = 0;
+        MatchesFound = 0;
+        FilesSkipped = 0;
+        AccessDeniedCount = 0;
+        Truncated = false;
+        Degraded = false;
+        DegradedNoticeText = string.Empty;
+        FilesPerSecondText = string.Empty;
+        ThroughputSamples.Clear();
+
+        bool firstBatch = true;
+        int loadedCount = 0;
+
+        await using var fs = new FileStream(
+            path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            bufferSize: 64 * 1024, useAsync: true);
+
+        var header = await SessionFileService.ReadAsync(
+            fs,
+            h =>
+            {
+                void apply()
+                {
+                    Query = h.Query ?? string.Empty;
+                    if (!string.IsNullOrWhiteSpace(h.SearchRoot))
+                        Directory = h.SearchRoot;
+                    _searchStartedUtc = h.Stats.StartedUtc;
+                    _lastSearchElapsed = h.Stats.Elapsed;
+                    FilesScanned = h.Stats.FilesScanned;
+                    _bytesScanned = h.Stats.BytesScanned;
+                }
+                if (!_dispatcher.TryEnqueue(apply))
+                    apply();
+            },
+            async batch =>
+            {
+                // Hop to UI thread for the collection mutation.
+                var tcs = new TaskCompletionSource();
+                bool enqueued = _dispatcher.TryEnqueue(() =>
+                {
+                    try
+                    {
+                        bool resultAvailabilityChanged = _resultCollection.AddRange(
+                            batch,
+                            InitializeResultGroup,
+                            evictNewResults: false,
+                            resultStore: null);
+
+                        loadedCount += batch.Count;
+                        MatchesFound = loadedCount;
+
+                        if (firstBatch || resultAvailabilityChanged)
+                        {
+                            firstBatch = false;
+                            NotifyResultAvailabilityChanged();
+                        }
+                    }
+                    finally
+                    {
+                        tcs.SetResult();
+                    }
+                });
+
+                if (!enqueued)
+                {
+                    // Dispatcher unavailable (e.g. tests without a UI thread) —
+                    // fall back to a direct call.
+                    _resultCollection.AddRange(batch, InitializeResultGroup, evictNewResults: false, resultStore: null);
+                    loadedCount += batch.Count;
+                    MatchesFound = loadedCount;
+                    return;
+                }
+
+                await tcs.Task.ConfigureAwait(false);
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        var loadedStatus = $"Loaded session: {loadedCount:N0} match(es) from {Path.GetFileName(path)}";
+        void finish()
+        {
+            ApplySortAndFilter();
+            NotifyResultAvailabilityChanged();
+            StatusText = loadedStatus;
+            OnPropertyChanged(nameof(HasResults));
+            OnPropertyChanged(nameof(ShowEmptyState));
+        }
+        if (!_dispatcher.TryEnqueue(finish))
+            finish();
+
+        return header;
+    }
+
     public void SetDirectoryFromArgs(string? dir)
     {
         if (string.IsNullOrWhiteSpace(dir)) return;
