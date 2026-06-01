@@ -58,6 +58,7 @@ public sealed partial class MainWindow : Window
     private const double OverflowPrefetchBufferViewports = 4.0;
     private const int AutoLoadOverflowMaxMatchesPerFrame = 20;
     private bool _querySuggestionsDetached;
+    private bool _querySuggestionsUserOpened;
     private long _hideSuggestionsTick;
     private long _suppressQuerySuggestionsUntilTick;
     private DispatcherTimer? _autoScrollTimer;
@@ -578,14 +579,14 @@ public sealed partial class MainWindow : Window
                  && !AreQuerySuggestionsSuppressed()
                  && ViewModel.SearchHistory.Count > 0)
         {
-            RestoreQuerySuggestions();
-            QueryBox.IsSuggestionListOpen = true;
+            ApplyQuerySuggestions(QueryBox, open: true);
         }
     }
 
     private void HideQuerySuggestions(AutoSuggestBox? box = null)
     {
         var target = box ?? QueryBox;
+        _querySuggestionsUserOpened = false;
         _querySuggestionsDetached = true;
         _hideSuggestionsTick = Environment.TickCount64;
         target.IsSuggestionListOpen = false;
@@ -656,13 +657,45 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (!_querySuggestionsDetached) return;
-        // After a deliberate hide (Enter to search), suppress re-attach briefly
-        // so the AutoSuggestBox's spurious TextChanged events don't reopen the popup.
-        if (Environment.TickCount64 - _hideSuggestionsTick < 400) return;
-        _querySuggestionsDetached = false;
-        target.ItemsSource = ViewModel.SearchHistory;
-        target.IsSuggestionListOpen = false;
+        ApplyQuerySuggestions(target, open: false);
+    }
+
+    private void ApplyQuerySuggestions(AutoSuggestBox target, bool open)
+    {
+        if (AreQuerySuggestionsSuppressed())
+        {
+            target.IsSuggestionListOpen = false;
+            return;
+        }
+
+        if (_querySuggestionsDetached)
+        {
+            if (Environment.TickCount64 - _hideSuggestionsTick < 400)
+            {
+                target.IsSuggestionListOpen = false;
+                return;
+            }
+
+            _querySuggestionsDetached = false;
+        }
+
+        if (open)
+            _querySuggestionsUserOpened = true;
+
+        var suggestions = BuildQuerySuggestions(target.Text);
+        target.ItemsSource = suggestions;
+        target.IsSuggestionListOpen = open && suggestions.Count > 0;
+    }
+
+    private List<string> BuildQuerySuggestions(string? queryText)
+    {
+        string filter = queryText?.Trim() ?? string.Empty;
+        if (filter.Length == 0)
+            return ViewModel.SearchHistory.ToList();
+
+        return ViewModel.SearchHistory
+            .Where(entry => entry.Contains(filter, StringComparison.OrdinalIgnoreCase))
+            .ToList();
     }
 
     private bool AreQuerySuggestionsSuppressed()
@@ -680,7 +713,7 @@ public sealed partial class MainWindow : Window
     private void OnQueryTextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
     {
         if (args.Reason == AutoSuggestionBoxTextChangeReason.UserInput && !AreQuerySuggestionsSuppressed())
-            RestoreQuerySuggestions(sender);
+            ApplyQuerySuggestions(sender, open: sender.IsSuggestionListOpen || _querySuggestionsUserOpened);
     }
 
     private void OnQueryBoxPointerPressed(object sender, PointerRoutedEventArgs e)
@@ -700,14 +733,13 @@ public sealed partial class MainWindow : Window
         if (AreQuerySuggestionsSuppressed() || ViewModel.SearchHistory.Count == 0)
             return;
 
-        _querySuggestionsDetached = false;
-        QueryBox.ItemsSource = ViewModel.SearchHistory;
-        QueryBox.IsSuggestionListOpen = true;
+        ApplyQuerySuggestions(QueryBox, open: true);
         QueryBox.Focus(FocusState.Pointer);
     }
 
     private void OnQueryLostFocus(object sender, RoutedEventArgs e)
     {
+        _querySuggestionsUserOpened = false;
         if (!AreQuerySuggestionsSuppressed())
             RestoreQuerySuggestions(sender as AutoSuggestBox);
     }
