@@ -82,7 +82,7 @@ public sealed class ScreenshotCaptureService
 
     public sealed record WindowPixelCapture(int Width, int Height, uint Dpi, byte[] Pixels);
 
-    public WindowPixelCapture CaptureWindow(IntPtr hwnd)
+    public static WindowPixelCapture CaptureWindow(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero)
             throw new InvalidOperationException("Window handle was not initialized.");
@@ -153,7 +153,7 @@ public sealed class ScreenshotCaptureService
             if (memoryDc != IntPtr.Zero)
                 DeleteDC(memoryDc);
             if (screenDc != IntPtr.Zero)
-                ReleaseDC(IntPtr.Zero, screenDc);
+                _ = ReleaseDC(IntPtr.Zero, screenDc);
         }
     }
 

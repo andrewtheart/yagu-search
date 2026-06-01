@@ -14,7 +14,9 @@ public sealed class EditorLauncher
     public string Command { get; set; } = DefaultCommand;
 
     /// <summary>Test seam: when set, replaces Process.Start calls.</summary>
+#pragma warning disable CS0649
     internal static Action<ProcessStartInfo>? TestProcessLauncher;
+#pragma warning restore CS0649
 
 
     private static void LaunchProcess(ProcessStartInfo psi)
@@ -41,7 +43,7 @@ public sealed class EditorLauncher
             }
         }
 
-        var rendered = Command.Replace("{file}", actualPath).Replace("{line}", line.ToString());
+        var rendered = Command.Replace("{file}", actualPath).Replace("{line}", line.ToString(System.Globalization.CultureInfo.InvariantCulture));
         var (exe, args) = Split(rendered);
         try
         {

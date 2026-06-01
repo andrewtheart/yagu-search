@@ -46,7 +46,7 @@ public sealed class ExcludedMethodTests_ContentSearcher : IDisposable
         var ch = Channel.CreateUnbounded<SearchResult>();
         int count = await ContentSearcher.SearchStreamAsync(
             path, null, "alpha", StringComparison.OrdinalIgnoreCase,
-            Opts("alpha"), ch.Writer, CancellationToken.None, default);
+            Opts("alpha"), ch.Writer, default, CancellationToken.None);
         ch.Writer.Complete();
         Assert.Equal(2, count);
         var results = new List<SearchResult>();
@@ -62,7 +62,7 @@ public sealed class ExcludedMethodTests_ContentSearcher : IDisposable
         var ch = Channel.CreateUnbounded<SearchResult>();
         int count = await ContentSearcher.SearchMappedAsync(
             path, fileLength, null, "find me", StringComparison.OrdinalIgnoreCase,
-            Opts("find me"), ch.Writer, CancellationToken.None, default);
+            Opts("find me"), ch.Writer, default, CancellationToken.None);
         ch.Writer.Complete();
         Assert.Equal(1, count);
     }
@@ -90,7 +90,7 @@ public sealed class ExcludedMethodTests_ContentSearcher : IDisposable
         };
         int count = await ContentSearcher.SearchStreamAsync(
             path, null, "test", StringComparison.OrdinalIgnoreCase,
-            opts, ch.Writer, CancellationToken.None, default);
+            opts, ch.Writer, default, CancellationToken.None);
         ch.Writer.Complete();
         // SearchStreamAsync doesn't do binary detection itself (that's in SearchFileAsync)
         // but it should still function on the file

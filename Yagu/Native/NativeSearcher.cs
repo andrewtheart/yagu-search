@@ -306,7 +306,7 @@ internal static partial class NativeSearcher
             fixed (char* pPath = filePath)
             fixed (byte* pPattern = patternBytes)
             {
-                QgSearchFileStream(
+                _ = QgSearchFileStream(
                     pPath, (nuint)filePath.Length,
                     pPattern, (nuint)patternBytes.Length,
                     &ffiOptions,
@@ -417,7 +417,7 @@ internal static partial class NativeSearcher
         {
             fixed (char* pPath = filePath)
             {
-                QgSessionSearchFileStream(
+                _ = QgSessionSearchFileStream(
                     session.Handle,
                     pPath, (nuint)filePath.Length,
                     cancelFlag,

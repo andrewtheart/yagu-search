@@ -126,7 +126,7 @@ internal sealed class TrayIcon : IDisposable
     {
         if (msg == WM_TRAYICON)
         {
-            int lp = (int)lParam;
+            int lp = checked((int)lParam);
             if (lp == WM_LBUTTONDBLCLK)
             {
                 OpenExistingRequested?.Invoke();
@@ -141,7 +141,7 @@ internal sealed class TrayIcon : IDisposable
 
         if (msg == WM_COMMAND)
         {
-            int cmd = (int)wParam & 0xFFFF;
+            int cmd = checked((int)wParam) & 0xFFFF;
             switch (cmd)
             {
                 case CMD_OPEN_RESET: OpenResetRequested?.Invoke(); break;

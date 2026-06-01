@@ -192,9 +192,13 @@ public sealed class FileLister : IFileLister
 
     // Lazily evaluated once per process. Process elevation cannot change at runtime.
 
+#pragma warning disable CS0649
     internal static Func<bool>? ElevationOverride; // test seam
+#pragma warning restore CS0649
     internal static bool SdkAvailable { get => _sdkAvailable; set => _sdkAvailable = value; } // test seam
+#pragma warning disable CS0649
     internal static Func<List<string>>? GetEverythingInstallDirsOverride; // test seam
+#pragma warning restore CS0649
     [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
     internal static bool CheckIsElevated()
     {

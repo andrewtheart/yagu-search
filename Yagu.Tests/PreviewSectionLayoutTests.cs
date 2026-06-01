@@ -8,7 +8,7 @@ namespace Yagu.Tests;
 public class PreviewSectionLayoutTests
 {
     private static readonly string MainWindowSource = File.ReadAllText(
-        Path.Combine(FindRepoRoot(), "Yagu", "MainWindow.xaml.cs"));
+        Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewSections.cs"));
 
     [Fact]
     public void AddPreviewSection_Expander_HasHorizontalContentAlignmentStretch()

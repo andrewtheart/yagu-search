@@ -29,6 +29,8 @@ public sealed record SearchResult(
     private const int ShortPreviewLength = 120;
     private ShortPreviewInfo? _shortPreview;
 
+    internal static Action<Action>? HydrationDispatcher { get; set; }
+
     /// <summary>Short preview kept in memory even when evicted, centered around the match when possible.
     /// Lazily created on first access to avoid allocating the string for non-visible items.</summary>
     public string ShortPreview => EnsureShortPreview().Text;
@@ -182,15 +184,15 @@ public sealed record SearchResult(
         // If hydration runs on a worker thread (e.g. SaveSessionAsync or a
         // background prefetch), marshal back to the dispatcher first to avoid
         // 0x8001010E (RPC_E_WRONG_THREAD) and the subsequent native AV in WinUI.
-        var dispatcher = App.UIDispatcher;
-        if (dispatcher is null || dispatcher.HasThreadAccess)
+        var dispatcher = HydrationDispatcher;
+        if (dispatcher is null)
         {
             handler(this, BeforeArgs);
             handler(this, AfterArgs);
             return;
         }
 
-        dispatcher.TryEnqueue(() =>
+        dispatcher(() =>
         {
             var h = PropertyChanged;
             if (h is null) return;

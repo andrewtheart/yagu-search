@@ -268,7 +268,7 @@ public class SearchServiceTests : IDisposable
         bool error = false;
         await foreach (var evt in svc.SearchAsync(opts, default))
         {
-            if (evt is SearchEvent.Error) error = true;
+            if (evt is SearchEvent.SearchError) error = true;
         }
         Assert.True(error);
     }
@@ -1349,7 +1349,7 @@ public class SearchEventCoverageTests
     [Fact]
     public void Error_Properties()
     {
-        var e = new SearchEvent.Error("bad regex");
+        var e = new SearchEvent.SearchError("bad regex");
         Assert.Equal("bad regex", e.Message);
     }
 
@@ -1408,7 +1408,7 @@ public class SearchEventCoverageTests
             new SearchEvent.Match(new SearchResult("f", 1, "l", 0, 1, Array.Empty<string>(), Array.Empty<string>())),
             new SearchEvent.MatchBatch(Array.Empty<SearchResult>()),
             new SearchEvent.Progress(new SearchProgress(0, 0, 0, 0, 0, 0, TimeSpan.Zero)),
-            new SearchEvent.Error("e"),
+            new SearchEvent.SearchError("e"),
             new SearchEvent.Completed(new SearchSummary(0, 0, 0, 0, 0, 0, TimeSpan.Zero, false, false, false, null)),
             new SearchEvent.MemoryPressure(_ => { }),
             new SearchEvent.MemoryPressureRelieved(),

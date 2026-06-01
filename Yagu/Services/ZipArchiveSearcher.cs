@@ -73,7 +73,7 @@ public static class ZipArchiveSearcher
     /// meaning it refers to a file inside a zip archive.
     /// </summary>
     public static bool IsArchivePath(string filePath) =>
-        filePath.IndexOf(ArchiveSeparator) >= 0;
+        filePath.Contains(ArchiveSeparator);
 
     /// <summary>
     /// Splits an archive path into (outerArchivePath, innerEntryPath).
@@ -185,7 +185,7 @@ public static class ZipArchiveSearcher
         {
             using var fs = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan | FileOptions.Asynchronous);
             (matchCount, entriesScanned) = await SearchArchiveStreamAutoAsync(
-                fs, archivePath, regex, literal, literalComparison, options, writer, cancellationToken, nestingDepth).ConfigureAwait(false);
+                fs, archivePath, regex, literal, literalComparison, options, writer, nestingDepth, cancellationToken).ConfigureAwait(false);
         }
         catch (InvalidDataException ex)
         {
@@ -236,8 +236,8 @@ public static class ZipArchiveSearcher
         StringComparison literalComparison,
         SearchOptions options,
         ChannelWriter<SearchResult> writer,
-        CancellationToken cancellationToken,
-        int nestingDepth)
+        int nestingDepth,
+        CancellationToken cancellationToken)
     {
         if (nestingDepth > MaxNestingDepth) return Task.FromResult((0, 0));
 
@@ -247,8 +247,8 @@ public static class ZipArchiveSearcher
 
         return kind switch
         {
-            ArchiveKind.Zip => SearchArchiveStreamAsync(archiveStream, archiveDisplayPath, regex, literal, literalComparison, options, writer, cancellationToken, nestingDepth),
-            ArchiveKind.SevenZip => SearchSevenZipArchiveStreamAsync(archiveStream, archiveDisplayPath, regex, literal, literalComparison, options, writer, cancellationToken, nestingDepth),
+            ArchiveKind.Zip => SearchArchiveStreamAsync(archiveStream, archiveDisplayPath, regex, literal, literalComparison, options, writer, nestingDepth, cancellationToken),
+            ArchiveKind.SevenZip => SearchSevenZipArchiveStreamAsync(archiveStream, archiveDisplayPath, regex, literal, literalComparison, options, writer, nestingDepth, cancellationToken),
             _ => Task.FromResult((0, 0)),
         };
     }
@@ -264,8 +264,8 @@ public static class ZipArchiveSearcher
         StringComparison literalComparison,
         SearchOptions options,
         ChannelWriter<SearchResult> writer,
-        CancellationToken cancellationToken,
-        int nestingDepth)
+        int nestingDepth,
+        CancellationToken cancellationToken)
     {
         int totalMatches = 0;
         int entriesScanned = 0;
@@ -392,10 +392,10 @@ public static class ZipArchiveSearcher
                             return isNestedSevenZip
                                 ? await SearchSevenZipArchiveStreamAsync(
                                     ms, nestedArchivePath, regex, literal, literalComparison,
-                                    options, writer, cancellationToken, nestingDepth + 1).ConfigureAwait(false)
+                                    options, writer, nestingDepth + 1, cancellationToken).ConfigureAwait(false)
                                 : await SearchArchiveStreamAsync(
                                     ms, nestedArchivePath, regex, literal, literalComparison,
-                                    options, writer, cancellationToken, nestingDepth + 1).ConfigureAwait(false);
+                                    options, writer, nestingDepth + 1, cancellationToken).ConfigureAwait(false);
                         }
                     }, cancellationToken));
                     continue;
@@ -440,8 +440,8 @@ public static class ZipArchiveSearcher
         StringComparison literalComparison,
         SearchOptions options,
         ChannelWriter<SearchResult> writer,
-        CancellationToken cancellationToken,
-        int nestingDepth)
+        int nestingDepth,
+        CancellationToken cancellationToken)
     {
         if (nestingDepth > MaxNestingDepth) return (0, 0);
 
@@ -563,10 +563,10 @@ public static class ZipArchiveSearcher
                             return isNestedSevenZip
                                 ? await SearchSevenZipArchiveStreamAsync(
                                     ms, nestedArchivePath, regex, literal, literalComparison,
-                                    options, writer, cancellationToken, nestingDepth + 1).ConfigureAwait(false)
+                                    options, writer, nestingDepth + 1, cancellationToken).ConfigureAwait(false)
                                 : await SearchArchiveStreamAsync(
                                     ms, nestedArchivePath, regex, literal, literalComparison,
-                                    options, writer, cancellationToken, nestingDepth + 1).ConfigureAwait(false);
+                                    options, writer, nestingDepth + 1, cancellationToken).ConfigureAwait(false);
                         }
                     }, cancellationToken));
                     continue;

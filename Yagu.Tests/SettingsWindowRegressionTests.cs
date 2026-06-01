@@ -10,11 +10,11 @@ public sealed class SettingsWindowRegressionTests
 {
     private static readonly string RepoRoot = FindRepoRoot();
     private static readonly string MainWindowSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "MainWindow.xaml.cs"));
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdminSettings.cs"));
     private static readonly string SettingsWindowSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "SettingsWindow.xaml.cs"));
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
     private static readonly string SettingsWindowXaml = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "SettingsWindow.xaml"));
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml"));
     private static readonly string SelectionRendererSource = File.ReadAllText(
         Path.Combine(RepoRoot, "vendor", "TextControlBox-WinUI", "TextControlBox",
             "Core", "Renderer", "SelectionRenderer.cs"));

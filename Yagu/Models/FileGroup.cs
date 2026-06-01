@@ -498,7 +498,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     public DateTime Created { get; private set; }
     public DateTime ModifiedOrCreated => LaterOf(LastModified, Created);
     public string FormattedSize => FormatSize(FileSize);
-    public string FormattedDate => LastModified == default ? string.Empty : LastModified.ToString("yyyy-MM-dd HH:mm");
+    public string FormattedDate => LastModified == default ? string.Empty : LastModified.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture);
 
     private string? _groupHeaderText;
     public string? GroupHeaderText
@@ -550,7 +550,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     /// FileInfo syscall per result group on huge searches. The <paramref name="dispatch"/>
     /// delegate is responsible for marshalling its action onto the UI thread.
     /// </summary>
-    public void BeginLoadMetadata(Action<Action> dispatch, CancellationToken cancellationToken = default, Action<FileGroup>? metadataApplied = null)
+    public void BeginLoadMetadata(Action<Action> dispatch, Action<FileGroup>? metadataApplied = null, CancellationToken cancellationToken = default)
     {
         // For archive entries, resolve to the outermost file on disk
         string physicalPath = IsArchiveEntry ? ZipArchiveSearcher.SplitArchivePath(FilePath).ArchivePath : FilePath;
@@ -591,8 +591,11 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
                     metadataApplied?.Invoke(this);
                 }
             });
-        });
+        }, cancellationToken);
     }
+
+    public void BeginLoadMetadata(Action<Action> dispatch, CancellationToken cancellationToken)
+        => BeginLoadMetadata(dispatch, metadataApplied: null, cancellationToken);
 
     private void ApplyMetadata(long size, DateTime modified, DateTime created)
     {

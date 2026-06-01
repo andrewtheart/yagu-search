@@ -79,7 +79,7 @@ public class SyntaxHighlighterTests
     {
         var line = "var x = \"hello world\";";
         var tokens = SyntaxHighlighter.Tokenize(line, ".cs").ToList();
-        Assert.Contains(tokens, t => t.Kind == TokenKind.String && line.Substring(t.Start, t.Length) == "\"hello world\"");
+        Assert.Contains(tokens, t => t.Kind == TokenKind.StringLiteral && line.Substring(t.Start, t.Length) == "\"hello world\"");
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class SyntaxHighlighterTests
     {
         var line = "x = 'hello'";
         var tokens = SyntaxHighlighter.Tokenize(line, ".py").ToList();
-        Assert.Contains(tokens, t => t.Kind == TokenKind.String && line.Substring(t.Start, t.Length) == "'hello'");
+        Assert.Contains(tokens, t => t.Kind == TokenKind.StringLiteral && line.Substring(t.Start, t.Length) == "'hello'");
     }
 
     [Fact]
@@ -95,7 +95,7 @@ public class SyntaxHighlighterTests
     {
         var line = "var x = \"he\\\"llo\";";
         var tokens = SyntaxHighlighter.Tokenize(line, ".cs").ToList();
-        Assert.Contains(tokens, t => t.Kind == TokenKind.String);
+        Assert.Contains(tokens, t => t.Kind == TokenKind.StringLiteral);
     }
 
     [Fact]

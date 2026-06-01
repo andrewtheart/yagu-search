@@ -100,7 +100,7 @@ internal static class Program
 
                 EnumWindows((hWnd, _) =>
                 {
-                    GetWindowThreadProcessId(hWnd, out uint pid);
+                    uint _threadId = GetWindowThreadProcessId(hWnd, out uint pid);
                     if (pid == targetPid && IsWindowVisible(hWnd))
                     {
                         targetHwnd = hWnd;

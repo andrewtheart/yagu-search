@@ -218,8 +218,8 @@ public sealed class SettingsEffectTests : IDisposable
 
         var (results, _) = await RunSearch(Opts(contextLines: 50));
         Assert.Single(results);
-        Assert.Equal(1, results[0].ContextBefore.Count);
-        Assert.Equal(1, results[0].ContextAfter.Count);
+        Assert.Single(results[0].ContextBefore);
+        Assert.Single(results[0].ContextAfter);
     }
 
     // ════════════════════════════════════════════════

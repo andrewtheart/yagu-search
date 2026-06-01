@@ -10,6 +10,7 @@
     <Platforms>AnyCPU;x64;x86;arm64</Platforms>
     <RuntimeIdentifiers>win-x64;win-x86;win-arm64</RuntimeIdentifiers>
     <UseWinUI>true</UseWinUI>
+    <Win2DWarnNoPlatform>false</Win2DWarnNoPlatform>
     <EnableMsixTooling>false</EnableMsixTooling>
     <WindowsPackageType>None</WindowsPackageType>
     <Nullable>enable</Nullable>

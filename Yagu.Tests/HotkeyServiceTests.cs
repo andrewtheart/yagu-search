@@ -251,7 +251,7 @@ public class HotkeyServiceTests : IDisposable
         if (!HasTestWindow) return;
 
         // MOD_ALT + letter — OS may accept it, but LetterFromVirtualKey returns null
-        var result = _sut.Register(_testHwnd, HotkeyService.MOD_ALT, 0x41);
+        var result = _sut.Register(_testHwnd, HotkeyService.ModAlt, 0x41);
         if (result)
             Assert.Null(_sut.RegisteredKey);
     }

@@ -8,6 +8,7 @@ namespace Yagu.Models;
 /// Maintains the grouped result collections that back the search results UI.
 /// Kept free of WinUI dependencies so large-result UI performance can be tested directly.
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Naming", "CA1711:Identifiers should not have incorrect suffix", Justification = "Existing internal model name is widely used by tests and view-model code.")]
 public sealed class SearchResultCollection
 {
     internal const int EvictionBatchSize = 2048;

@@ -209,8 +209,9 @@ The installer creates a Start Menu shortcut, optional desktop icon, optional Exp
 | [Yagu.sln](Yagu.sln) | Current solution for the app, tests, and benchmarks. |
 | [Yagu](Yagu/) | Main WinUI 3 application: XAML UI, view model, services, models, and native wrappers. |
 | [Yagu/Yagu.csproj](Yagu/Yagu.csproj) | App project, package references, WinUI settings, and Rust build integration. |
-| [Yagu/MainWindow.xaml](Yagu/MainWindow.xaml) | Main search UI layout. |
-| [Yagu/MainWindow.xaml.cs](Yagu/MainWindow.xaml.cs) | UI event handlers, preview rendering/editing, Everything install/start prompts, hotkey hook. |
+| [Yagu/UI/Windows/MainWindow](Yagu/UI/Windows/MainWindow/) | Main search window XAML and partial code-behind files. |
+| [Yagu/UI/Windows/Settings](Yagu/UI/Windows/Settings/) | Settings window XAML and code-behind. |
+| [Yagu/UI/Windows/Help](Yagu/UI/Windows/Help/) | Help window XAML and code-behind. |
 | [Yagu/ViewModels/MainViewModel.cs](Yagu/ViewModels/MainViewModel.cs) | MVVM search state, settings binding, result grouping, commands, memory-pressure handling. |
 | [Yagu/Models](Yagu/Models/) | Search options, results, grouped result collection, progress summaries, and file groups. |
 | [Yagu/Services](Yagu/Services/) | File discovery, content scanning, settings, logging, editor launch, hotkeys, result export, disk-backed result store. |

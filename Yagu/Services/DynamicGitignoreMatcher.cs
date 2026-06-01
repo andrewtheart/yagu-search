@@ -273,7 +273,7 @@ internal sealed class ParsedGitignore
             if (line.Length == 0) continue;
 
             // "*.ext" → extension exclusion.
-            if (line.StartsWith("*.") && !line.Contains('/') && !line.Contains('\\'))
+            if (line.StartsWith("*.", StringComparison.Ordinal) && !line.Contains('/') && !line.Contains('\\'))
             {
                 var ext = line[2..];
                 if (ext.Length > 0 && ext.All(c => char.IsLetterOrDigit(c) || c == '_' || c == '-'))

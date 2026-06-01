@@ -9,7 +9,7 @@ using Yagu.Services;
 
 namespace Yagu;
 
-public partial class App : Application
+public sealed partial class App : Application, IDisposable
 {
     public static string? StartupDirectory { get; set; }
     public static string? StartupQuery { get; set; }
@@ -53,6 +53,14 @@ public partial class App : Application
                 StartupDirectory = ParseDirArg(System.Environment.GetCommandLineArgs());
             _window = new MainWindow(StartupDirectory, StartupQuery, StartupWindowFocusBehavior);
             UIDispatcher = _window.DispatcherQueue;
+            Models.SearchResult.HydrationDispatcher = action =>
+            {
+                var dispatcher = UIDispatcher;
+                if (dispatcher is null || dispatcher.HasThreadAccess)
+                    action();
+                else
+                    dispatcher.TryEnqueue(() => action());
+            };
             _window.Activate();
             _window.FocusSearchOnLaunch();
         }
@@ -62,6 +70,17 @@ public partial class App : Application
             ShowUnhandledExceptionMessageBox("OnLaunched", ex);
             throw;
         }
+    }
+
+    public void Dispose()
+    {
+        UnhandledException -= OnUnhandledException;
+        System.Threading.Tasks.TaskScheduler.UnobservedTaskException -= OnUnobservedTaskException;
+        AppDomain.CurrentDomain.UnhandledException -= OnDomainUnhandledException;
+        Models.SearchResult.HydrationDispatcher = null;
+        _window?.Dispose();
+        _window = null;
+        GC.SuppressFinalize(this);
     }
 
     private void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
@@ -180,9 +199,9 @@ public partial class App : Application
             exceptionText = exceptionText[..maxExceptionChars] + Environment.NewLine + "... truncated; see the crash log for the full exception.";
 
         var details = new StringBuilder();
-        details.AppendLine($"Source: {source}");
-        details.AppendLine($"Time (UTC): {DateTime.UtcNow:O}");
-        details.AppendLine($"Crash log: {CrashLogPath}");
+        details.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"Source: {source}");
+        details.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"Time (UTC): {DateTime.UtcNow:O}");
+        details.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"Crash log: {CrashLogPath}");
         details.AppendLine();
         details.AppendLine(exceptionText);
         return details.ToString();

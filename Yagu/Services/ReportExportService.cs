@@ -272,7 +272,7 @@ public static class ReportExportService
         }
 
         public override void Flush() => _writer.Flush();
-        public override Task FlushAsync(CancellationToken cancellationToken) => _writer.FlushAsync();
+        public override Task FlushAsync(CancellationToken cancellationToken) => _writer.FlushAsync(cancellationToken);
 
         public override bool CanRead => false;
         public override bool CanSeek => false;

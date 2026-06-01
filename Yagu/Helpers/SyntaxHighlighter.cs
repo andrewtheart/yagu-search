@@ -7,7 +7,7 @@ namespace Yagu.Helpers;
 /// </summary>
 public static class SyntaxHighlighter
 {
-    public enum TokenKind { Plain, Keyword, String, Comment, Number }
+    public enum TokenKind { Plain, Keyword, StringLiteral, Comment, Number }
 
     public readonly record struct Token(int Start, int Length, TokenKind Kind);
 
@@ -39,7 +39,7 @@ public static class SyntaxHighlighter
         foreach (Match m in StringRe.Matches(line))
         {
             if (occupied[m.Index]) continue;
-            yield return new Token(m.Index, m.Length, TokenKind.String);
+            yield return new Token(m.Index, m.Length, TokenKind.StringLiteral);
             for (int i = 0; i < m.Length; i++) occupied[m.Index + i] = true;
         }
         foreach (Match m in NumberRe.Matches(line))

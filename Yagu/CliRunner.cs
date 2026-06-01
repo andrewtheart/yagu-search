@@ -565,7 +565,7 @@ internal static class CliRunner
                         progress?.Update(p.Snapshot);
                         break;
 
-                    case SearchEvent.Error e:
+                    case SearchEvent.SearchError e:
                         progress?.Hide();
                         WriteError($"error: {e.Message}", useColor);
                         progress?.Show();
@@ -779,7 +779,7 @@ internal static class CliRunner
 
     private static async Task WriteSessionFileAsync(
         string path,
-        IReadOnlyList<SearchResult> results,
+        List<SearchResult> results,
         string query,
         string searchRoot,
         DateTime searchStarted,
@@ -873,7 +873,7 @@ internal static class CliRunner
     // Sort results
     // -----------------------------------------------------------------------
 
-    private static IReadOnlyList<SearchResult> SortResults(List<SearchResult> results, string sortBy, bool descending)
+    private static List<SearchResult> SortResults(List<SearchResult> results, string sortBy, bool descending)
     {
         // Group by file, sort groups, then flatten back
         var groups = results.GroupBy(r => r.FilePath, StringComparer.OrdinalIgnoreCase).ToList();

@@ -126,7 +126,7 @@ internal static class GitignoreService
             // Classify the pattern.
 
             // "*.ext" → extension exclusion (global, not path-relative).
-            if (line.StartsWith("*.") && !line.Contains('/') && !line.Contains('\\'))
+            if (line.StartsWith("*.", StringComparison.Ordinal) && !line.Contains('/') && !line.Contains('\\'))
             {
                 var ext = line[2..];
                 if (ext.Length > 0 && ext.All(c => char.IsLetterOrDigit(c) || c == '_' || c == '-'))

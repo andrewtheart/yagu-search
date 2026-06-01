@@ -438,7 +438,7 @@ public sealed class ZipArchiveSearcherCoverageTests : IDisposable
         var ch = Channel.CreateUnbounded<SearchResult>();
         var opts = new SearchOptions { Directory = ".", Query = "x", ContextLines = 0, MaxFileSizeBytes = 0, MaxResults = 0 };
         var (matches, entries) = await ZipArchiveSearcher.SearchArchiveStreamAsync(
-            ms, "fake.zip", null, "x", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, CancellationToken.None, 0);
+            ms, "fake.zip", null, "x", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, 0, CancellationToken.None);
         Assert.Equal(0, matches);
         Assert.Equal(0, entries);
     }
@@ -705,7 +705,7 @@ public class SearchResultCollectionGapTests
         coll.SortModeIndex = 0; // default sort
         coll.ApplySortAndFilter();
         Assert.NotEmpty(coll.VisibleGroups);
-        Assert.True(coll.VisibleGroups.Any(g => g.GroupHeaderText != null));
+        Assert.Contains(coll.VisibleGroups, g => g.GroupHeaderText != null);
     }
 
     [Fact]
@@ -1169,7 +1169,7 @@ public sealed class ContentSearcherCoverageTests : IDisposable
     [Fact]
     public void Cancel_NoToken_ReturnsEmitted()
     {
-        Assert.Equal(42, ContentSearcher.Cancel(CancellationToken.None, 42));
+        Assert.Equal(42, ContentSearcher.Cancel(42, CancellationToken.None));
     }
 
     [Fact]
@@ -1177,7 +1177,7 @@ public sealed class ContentSearcherCoverageTests : IDisposable
     {
         using var cts = new CancellationTokenSource();
         cts.Cancel();
-        Assert.Throws<OperationCanceledException>(() => ContentSearcher.Cancel(cts.Token, 0));
+        Assert.Throws<OperationCanceledException>(() => ContentSearcher.Cancel(0, cts.Token));
     }
 
     [Fact]
@@ -2054,7 +2054,7 @@ public sealed class ZipArchiveSearcherCatchTests : IDisposable
         try
         {
             await ZipArchiveSearcher.SearchArchiveStreamAsync(
-                fileStream, path, null, "Line", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, CancellationToken.None, 0);
+                fileStream, path, null, "Line", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, 0, CancellationToken.None);
         }
         catch (InvalidDataException)
         {
@@ -2820,7 +2820,7 @@ public sealed class ZipArchiveSearcherBranchTests : IDisposable
         var ch = Channel.CreateUnbounded<SearchResult>();
         var opts = Opt("findme-nested");
         await ZipArchiveSearcher.SearchArchiveStreamAsync(
-            fileStream, path, null, "findme-nested", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, CancellationToken.None, 0);
+            fileStream, path, null, "findme-nested", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, 0, CancellationToken.None);
         ch.Writer.Complete();
         var results = new List<SearchResult>();
         await foreach (var r in ch.Reader.ReadAllAsync()) results.Add(r);
@@ -2854,7 +2854,7 @@ public sealed class ZipArchiveSearcherBranchTests : IDisposable
         var ch = Channel.CreateUnbounded<SearchResult>();
         var opts = Opt("findme-text", skipBinary: true);
         await ZipArchiveSearcher.SearchArchiveStreamAsync(
-            fileStream, path, null, "findme-text", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, CancellationToken.None, 0);
+            fileStream, path, null, "findme-text", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, 0, CancellationToken.None);
         ch.Writer.Complete();
         var results = new List<SearchResult>();
         await foreach (var r in ch.Reader.ReadAllAsync()) results.Add(r);
@@ -2877,7 +2877,7 @@ public sealed class ZipArchiveSearcherBranchTests : IDisposable
         var ch = Channel.CreateUnbounded<SearchResult>();
         var opts = Opt("findme", skipBinary: false);
         await ZipArchiveSearcher.SearchArchiveStreamAsync(
-            fileStream, path, null, "findme", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, CancellationToken.None, 0);
+            fileStream, path, null, "findme", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, 0, CancellationToken.None);
         ch.Writer.Complete();
         var results = new List<SearchResult>();
         await foreach (var r in ch.Reader.ReadAllAsync()) results.Add(r);
@@ -2903,7 +2903,7 @@ public sealed class ZipArchiveSearcherBranchTests : IDisposable
         var ch = Channel.CreateUnbounded<SearchResult>();
         var opts = Opt("findme", skipExts: skipExts);
         await ZipArchiveSearcher.SearchArchiveStreamAsync(
-            fileStream, path, null, "findme", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, CancellationToken.None, 0);
+            fileStream, path, null, "findme", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, 0, CancellationToken.None);
         ch.Writer.Complete();
         var results = new List<SearchResult>();
         await foreach (var r in ch.Reader.ReadAllAsync()) results.Add(r);
@@ -2928,7 +2928,7 @@ public sealed class ZipArchiveSearcherBranchTests : IDisposable
         var ch = Channel.CreateUnbounded<SearchResult>();
         var opts = Opt("findme-zero");
         await ZipArchiveSearcher.SearchArchiveStreamAsync(
-            fileStream, path, null, "findme-zero", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, CancellationToken.None, 0);
+            fileStream, path, null, "findme-zero", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, 0, CancellationToken.None);
         ch.Writer.Complete();
         var results = new List<SearchResult>();
         await foreach (var r in ch.Reader.ReadAllAsync()) results.Add(r);
@@ -3448,6 +3448,7 @@ public class FileGroupBranch2Tests
         // Allow the Task.Run to execute
         Thread.Sleep(500);
         // Even if file doesn't exist, the code runs without throwing
+        Assert.True(dispatched);
     }
 
     [Fact]
@@ -3517,7 +3518,7 @@ public sealed class ZipArchiveSearcherBranch2Tests : IDisposable
         var ch = Channel.CreateUnbounded<SearchResult>();
         var opts = Opt("test");
         var (matchCount, _) = await ZipArchiveSearcher.SearchArchiveStreamAsync(
-            ms, "short.zip", null, "test", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, CancellationToken.None, 0);
+            ms, "short.zip", null, "test", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, 0, CancellationToken.None);
         ch.Writer.Complete();
         Assert.Equal(0, matchCount);
     }
@@ -3529,7 +3530,7 @@ public sealed class ZipArchiveSearcherBranch2Tests : IDisposable
         var ch = Channel.CreateUnbounded<SearchResult>();
         var opts = Opt("test");
         var (matchCount, _) = await ZipArchiveSearcher.SearchArchiveStreamAsync(
-            ms, "empty.zip", null, "test", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, CancellationToken.None, 0);
+            ms, "empty.zip", null, "test", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, 0, CancellationToken.None);
         ch.Writer.Complete();
         Assert.Equal(0, matchCount);
     }
@@ -3551,7 +3552,7 @@ public sealed class ZipArchiveSearcherBranch2Tests : IDisposable
         var ch = Channel.CreateUnbounded<SearchResult>();
         var opts = Opt("findme");
         await ZipArchiveSearcher.SearchArchiveStreamAsync(
-            fileStream, path, null, "findme", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, CancellationToken.None, 0);
+            fileStream, path, null, "findme", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, 0, CancellationToken.None);
         ch.Writer.Complete();
         var results = new List<SearchResult>();
         await foreach (var r in ch.Reader.ReadAllAsync()) results.Add(r);
@@ -3587,7 +3588,7 @@ public sealed class ZipArchiveSearcherBranch2Tests : IDisposable
         var ch = Channel.CreateUnbounded<SearchResult>();
         var opts = Opt("findme-nested-binary", skipBinary: true);
         await ZipArchiveSearcher.SearchArchiveStreamAsync(
-            fileStream, path, null, "findme-nested-binary", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, CancellationToken.None, 0);
+            fileStream, path, null, "findme-nested-binary", StringComparison.OrdinalIgnoreCase, opts, ch.Writer, 0, CancellationToken.None);
         ch.Writer.Complete();
         var results = new List<SearchResult>();
         await foreach (var r in ch.Reader.ReadAllAsync()) results.Add(r);
@@ -3873,7 +3874,7 @@ public sealed class ZipArchiveSearcherBranch3Tests : IDisposable
         using var fileStream = new FileStream(path, FileMode.Open, FileAccess.Read);
         var ch = Channel.CreateUnbounded<SearchResult>();
         await ZipArchiveSearcher.SearchArchiveStreamAsync(
-            fileStream, path, null, "stored-findme", StringComparison.OrdinalIgnoreCase, Opt("stored-findme"), ch.Writer, CancellationToken.None, 0);
+            fileStream, path, null, "stored-findme", StringComparison.OrdinalIgnoreCase, Opt("stored-findme"), ch.Writer, 0, CancellationToken.None);
         ch.Writer.Complete();
         var results = new List<SearchResult>();
         await foreach (var r in ch.Reader.ReadAllAsync()) results.Add(r);
@@ -4031,7 +4032,7 @@ public sealed class ZipArchiveSearcherBranch5Tests : IDisposable
         var ch = Channel.CreateUnbounded<SearchResult>();
         var skipSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "dll" };
         await ZipArchiveSearcher.SearchArchiveStreamAsync(
-            fileStream, path, null, "findme", StringComparison.OrdinalIgnoreCase, Opt("findme", skipSet), ch.Writer, CancellationToken.None, 0);
+            fileStream, path, null, "findme", StringComparison.OrdinalIgnoreCase, Opt("findme", skipSet), ch.Writer, 0, CancellationToken.None);
         ch.Writer.Complete();
         var results = new List<SearchResult>();
         await foreach (var r in ch.Reader.ReadAllAsync()) results.Add(r);
@@ -4066,7 +4067,7 @@ public sealed class ZipArchiveSearcherBranch5Tests : IDisposable
         using var fileStream = new FileStream(outerPath, FileMode.Open, FileAccess.Read);
         var ch = Channel.CreateUnbounded<SearchResult>();
         await ZipArchiveSearcher.SearchArchiveStreamAsync(
-            fileStream, outerPath, null, "findme-nested-binary", StringComparison.OrdinalIgnoreCase, Opt("findme-nested-binary"), ch.Writer, CancellationToken.None, 0);
+            fileStream, outerPath, null, "findme-nested-binary", StringComparison.OrdinalIgnoreCase, Opt("findme-nested-binary"), ch.Writer, 0, CancellationToken.None);
         ch.Writer.Complete();
         var results = new List<SearchResult>();
         await foreach (var r in ch.Reader.ReadAllAsync()) results.Add(r);
@@ -4090,7 +4091,7 @@ public sealed class ZipArchiveSearcherBranch5Tests : IDisposable
         var ch = Channel.CreateUnbounded<SearchResult>();
         var skipSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "dll" };
         await ZipArchiveSearcher.SearchArchiveStreamAsync(
-            fileStream, path, null, "findme-noext", StringComparison.OrdinalIgnoreCase, Opt("findme-noext", skipSet), ch.Writer, CancellationToken.None, 0);
+            fileStream, path, null, "findme-noext", StringComparison.OrdinalIgnoreCase, Opt("findme-noext", skipSet), ch.Writer, 0, CancellationToken.None);
         ch.Writer.Complete();
         var results = new List<SearchResult>();
         await foreach (var r in ch.Reader.ReadAllAsync()) results.Add(r);

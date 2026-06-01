@@ -31,7 +31,7 @@ public readonly record struct HydrationPayload(
     IReadOnlyList<string> ContextBefore,
     IReadOnlyList<string> ContextAfter);
 
-public sealed partial class MainViewModel : ObservableObject
+public sealed partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly SearchService _search;
     private readonly SettingsService _settingsService;
@@ -65,6 +65,7 @@ public sealed partial class MainViewModel : ObservableObject
     internal readonly List<(double filesPerSec, double mbPerSec)> ThroughputSamples = new();
     private readonly DirectoryAutoCompleteService _dirAutoComplete = new();
     private CancellationTokenSource? _dirAutoCompleteCts;
+    private bool _disposed;
     private static int s_postEvictionCompactingGcInFlight;
     private static long s_lastPostEvictionCompactingGcTicks;
     private static readonly TimeSpan PostEvictionCompactingGcCooldown = TimeSpan.FromSeconds(15);
@@ -204,6 +205,22 @@ public sealed partial class MainViewModel : ObservableObject
         SyncSkipExtensionItems();
         SyncBinaryExtensionItems();
         SyncArchiveExtensionItems();
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        try { _cts?.Cancel(); } catch { }
+        try { _dirAutoCompleteCts?.Cancel(); } catch { }
+        try { _metadataCts.Cancel(); } catch { }
+        _cts?.Dispose();
+        _dirAutoCompleteCts?.Dispose();
+        _metadataCts.Dispose();
+        _searchLifecycleGate.Dispose();
+        _resultStore?.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     [ObservableProperty] public partial string Directory { get; set; } = string.Empty;
@@ -923,17 +940,17 @@ public sealed partial class MainViewModel : ObservableObject
             lines.AppendLine("Skipped files breakdown:");
             lines.AppendLine(ExtensionExclusionSkipNote);
             lines.AppendLine();
-            if (b.GlobExcluded > 0)   lines.AppendLine($"  🚫  Glob exclusions       {b.GlobExcluded,8:N0}");
-            if (b.GitignoreExcluded > 0) lines.AppendLine($"  🙈  .gitignore excluded   {b.GitignoreExcluded,8:N0}");
-            if (b.Binary > 0)         lines.AppendLine($"  🔒  Binary files          {b.Binary,8:N0}");
-            if (b.ByExtension > 0)    lines.AppendLine($"  📄  Scanner extension skips {b.ByExtension,8:N0}");
-            if (b.TooLarge > 0)       lines.AppendLine($"  📏  Too large             {b.TooLarge,8:N0}");
-            if (b.AccessDenied > 0)   lines.AppendLine($"  🔐  Access denied         {b.AccessDenied,8:N0}");
-            if (b.Directories > 0)    lines.AppendLine($"  📁  Inaccessible dirs     {b.Directories,8:N0}");
-            if (b.IOError > 0)        lines.AppendLine($"  ⚠️  I/O errors            {b.IOError,8:N0}");
-            if (b.NotFound > 0)       lines.AppendLine($"  ❓  Not found             {b.NotFound,8:N0}");
-            if (b.Encoding > 0)       lines.AppendLine($"  🔤  Encoding errors       {b.Encoding,8:N0}");
-            if (b.Other > 0)          lines.AppendLine($"  ❔  Other                 {b.Other,8:N0}");
+            if (b.GlobExcluded > 0)   lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  🚫  Glob exclusions       {b.GlobExcluded,8:N0}");
+            if (b.GitignoreExcluded > 0) lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  🙈  .gitignore excluded   {b.GitignoreExcluded,8:N0}");
+            if (b.Binary > 0)         lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  🔒  Binary files          {b.Binary,8:N0}");
+            if (b.ByExtension > 0)    lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  📄  Scanner extension skips {b.ByExtension,8:N0}");
+            if (b.TooLarge > 0)       lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  📏  Too large             {b.TooLarge,8:N0}");
+            if (b.AccessDenied > 0)   lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  🔐  Access denied         {b.AccessDenied,8:N0}");
+            if (b.Directories > 0)    lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  📁  Inaccessible dirs     {b.Directories,8:N0}");
+            if (b.IOError > 0)        lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  ⚠️  I/O errors            {b.IOError,8:N0}");
+            if (b.NotFound > 0)       lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  ❓  Not found             {b.NotFound,8:N0}");
+            if (b.Encoding > 0)       lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  🔤  Encoding errors       {b.Encoding,8:N0}");
+            if (b.Other > 0)          lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  ❔  Other                 {b.Other,8:N0}");
 
             return lines.ToString().TrimEnd();
         }
@@ -1241,7 +1258,7 @@ public sealed partial class MainViewModel : ObservableObject
                         UpdateSkipBreakdown(p.Snapshot.SkipReasons);
                         UpdateFilesPerSecond();
                         break;
-                    case SearchEvent.Error e:
+                    case SearchEvent.SearchError e:
                         ErrorText = e.Message;
                         break;
                     case SearchEvent.MemoryPressure mp:
@@ -1512,6 +1529,7 @@ public sealed partial class MainViewModel : ObservableObject
         _editor.Open(result.FilePath, result.LineNumber);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "RelayCommand source generator expects instance command methods.")]
     [RelayCommand]
     public void OpenContainingFolder(SearchResult? result)
     {
@@ -1519,6 +1537,7 @@ public sealed partial class MainViewModel : ObservableObject
         EditorLauncher.OpenContainingFolder(result.FilePath);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "RelayCommand source generator expects instance command methods.")]
     [RelayCommand]
     public void OpenTerminalHere(SearchResult? result)
     {
@@ -1526,6 +1545,7 @@ public sealed partial class MainViewModel : ObservableObject
         EditorLauncher.OpenTerminalAt(result.FilePath);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "RelayCommand source generator expects instance command methods.")]
     [RelayCommand]
     public void CopyFilePath(SearchResult? result)
     {
@@ -1533,6 +1553,7 @@ public sealed partial class MainViewModel : ObservableObject
         SetClipboard(result.FilePath);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "RelayCommand source generator expects instance command methods.")]
     [RelayCommand]
     public void CopyMatchLine(SearchResult? result)
     {
@@ -1637,7 +1658,7 @@ public sealed partial class MainViewModel : ObservableObject
         // Load metadata on a worker thread — the FileInfo syscall on the UI
         // dispatcher was a measurable stall on searches with thousands of
         // distinct files.
-        group.BeginLoadMetadata(action => _dispatcher.TryEnqueue(() => action()), _metadataCts.Token, OnResultGroupMetadataLoaded);
+        group.BeginLoadMetadata(action => _dispatcher.TryEnqueue(() => action()), OnResultGroupMetadataLoaded, _metadataCts.Token);
     }
 
     private void OnResultGroupMetadataLoaded(FileGroup group)

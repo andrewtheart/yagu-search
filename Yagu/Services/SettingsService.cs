@@ -312,7 +312,7 @@ public sealed class SettingsService
         return string.Join(';', merged);
     }
 
-    private static void AddExtensions(string value, ISet<string> seen, List<string> target)
+    private static void AddExtensions(string value, HashSet<string> seen, List<string> target)
     {
         if (string.IsNullOrWhiteSpace(value)) return;
         foreach (var extension in value.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))

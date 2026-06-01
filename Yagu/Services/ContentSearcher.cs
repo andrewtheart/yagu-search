@@ -85,6 +85,7 @@ public sealed class ContentSearcher
     /// Search a single file and write matches to <paramref name="writer"/>.
     /// Returns the number of matches written, or a negative SkipXxx code if skipped.
     /// </summary>
+    [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "Kept instance-shaped for injected test and service call sites.")]
     public Task<int> SearchFileAsync(
         string filePath,
         Regex? regex,
@@ -93,33 +94,33 @@ public sealed class ContentSearcher
         SearchOptions options,
         ChannelWriter<SearchResult> writer,
         CancellationToken cancellationToken)
-        => SearchFileAsync(filePath, regex, literal, literalComparison, options, writer, cancellationToken, session: null);
+        => SearchFileAsync(filePath, regex, literal, literalComparison, options, writer, session: null, cancellationToken);
 
     /// <summary>
     /// Search a single file using an optional pre-compiled native session for
     /// faster regex reuse across files. Falls back to the sessionless path
     /// when <paramref name="session"/> is null.
     /// </summary>
-    internal async Task<int> SearchFileAsync(
+    internal static async Task<int> SearchFileAsync(
         string filePath,
         Regex? regex,
         string? literal,
         StringComparison literalComparison,
         SearchOptions options,
         ChannelWriter<SearchResult> writer,
-        CancellationToken cancellationToken,
-        Native.NativeSession? session)
-        => (await SearchFileWithStatsAsync(filePath, regex, literal, literalComparison, options, writer, cancellationToken, session).ConfigureAwait(false)).MatchCount;
+        Native.NativeSession? session,
+        CancellationToken cancellationToken)
+        => (await SearchFileWithStatsAsync(filePath, regex, literal, literalComparison, options, writer, session, cancellationToken).ConfigureAwait(false)).MatchCount;
 
-    internal async Task<FileSearchOutcome> SearchFileWithStatsAsync(
+    internal static async Task<FileSearchOutcome> SearchFileWithStatsAsync(
         string filePath,
         Regex? regex,
         string? literal,
         StringComparison literalComparison,
         SearchOptions options,
         ChannelWriter<SearchResult> writer,
-        CancellationToken cancellationToken,
-        Native.NativeSession? session)
+        Native.NativeSession? session,
+        CancellationToken cancellationToken)
     {
         bool watched = FileWatchDiagnostics.IsWatched(filePath);
         var totalSw = watched ? System.Diagnostics.Stopwatch.StartNew() : null;
@@ -184,7 +185,7 @@ public sealed class ContentSearcher
                 {
                     archiveFs.Position = 0; // rewind — ZipArchive needs the full stream from the start
                     var archiveResult = await ZipArchiveSearcher.SearchArchiveStreamAsync(
-                        archiveFs, filePath, regex, literal, literalComparison, options, writer, cancellationToken, 0).ConfigureAwait(false);
+                        archiveFs, filePath, regex, literal, literalComparison, options, writer, 0, cancellationToken).ConfigureAwait(false);
                     if (watched) FileWatchDiagnostics.Checkpoint(filePath, "EXIT-ZIP", totalSw!.ElapsedMilliseconds, $"produced={archiveResult.MatchCount} entries={archiveResult.EntriesScanned}");
                     return new FileSearchOutcome(archiveResult.MatchCount, archiveResult.MatchCount >= 0 ? fileLength : 0, archiveResult.EntriesScanned);
                 }
@@ -203,7 +204,7 @@ public sealed class ContentSearcher
         // unusual streams, etc.).
         if (PreferNative && Native.NativeSearcher.IsAvailable)
         {
-            int produced = await TryNativeAsync(filePath, options, writer, cancellationToken, session, metadata).ConfigureAwait(false);
+            int produced = await TryNativeAsync(filePath, options, writer, session, metadata, cancellationToken).ConfigureAwait(false);
             if (produced != NativeFellThrough)
             {
                 if (watched) FileWatchDiagnostics.Checkpoint(filePath, "EXIT-NATIVE", totalSw!.ElapsedMilliseconds, $"produced={produced}");
@@ -218,14 +219,14 @@ public sealed class ContentSearcher
             if (fileLength >= MemoryMapThresholdBytes)
             {
                 // Large files: binary sniff still happens via the MMF view's first 8 KB.
-                result = await SearchMappedAsync(filePath, fileLength, regex, literal, literalComparison, options, writer, cancellationToken, metadata).ConfigureAwait(false);
+                result = await SearchMappedAsync(filePath, fileLength, regex, literal, literalComparison, options, writer, metadata, cancellationToken).ConfigureAwait(false);
             }
             else
             {
                 // Single-peek open: one FileStream, one 8 KB read for binary + encoding
                 // detection, then reuse the same stream for scanning. This eliminates the
                 // 2–3 CreateFile round-trips per file the old code path incurred.
-                result = await SearchStreamSinglePeekAsync(filePath, regex, literal, literalComparison, options, writer, cancellationToken, metadata).ConfigureAwait(false);
+                result = await SearchStreamSinglePeekAsync(filePath, regex, literal, literalComparison, options, writer, metadata, cancellationToken).ConfigureAwait(false);
             }
             if (watched) FileWatchDiagnostics.Checkpoint(filePath, "EXIT-MANAGED", totalSw!.ElapsedMilliseconds, $"produced={result} size={fileLength}");
             return new FileSearchOutcome(result, result >= 0 ? fileLength : 0);
@@ -243,13 +244,13 @@ public sealed class ContentSearcher
         StringComparison literalComparison,
         SearchOptions options,
         ChannelWriter<SearchResult> writer,
-        CancellationToken cancellationToken,
-        FileMetadata metadata)
+        FileMetadata metadata,
+        CancellationToken cancellationToken)
     {
         using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan | FileOptions.Asynchronous);
         var encoding = EncodingDetector.DetectEncoding(fs);
         using var reader = new StreamReader(fs, encoding, detectEncodingFromByteOrderMarks: true);
-        return await SearchLinesAsync(filePath, reader, regex, literal, literalComparison, options, writer, cancellationToken, metadata).ConfigureAwait(false);
+        return await SearchLinesAsync(filePath, reader, regex, literal, literalComparison, options, writer, metadata, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -265,8 +266,8 @@ public sealed class ContentSearcher
         StringComparison literalComparison,
         SearchOptions options,
         ChannelWriter<SearchResult> writer,
-        CancellationToken cancellationToken,
-        FileMetadata metadata)
+        FileMetadata metadata,
+        CancellationToken cancellationToken)
     {
         using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan | FileOptions.Asynchronous);
 
@@ -291,7 +292,7 @@ public sealed class ContentSearcher
         // Seek back to the start so StreamReader reads the full file.
         fs.Position = 0;
         using var reader = new StreamReader(fs, encoding, detectEncodingFromByteOrderMarks: true);
-        return await SearchLinesAsync(filePath, reader, regex, literal, literalComparison, options, writer, cancellationToken, metadata).ConfigureAwait(false);
+        return await SearchLinesAsync(filePath, reader, regex, literal, literalComparison, options, writer, metadata, cancellationToken).ConfigureAwait(false);
     }
 
 
@@ -303,8 +304,8 @@ public sealed class ContentSearcher
         StringComparison literalComparison,
         SearchOptions options,
         ChannelWriter<SearchResult> writer,
-        CancellationToken cancellationToken,
-        FileMetadata metadata)
+        FileMetadata metadata,
+        CancellationToken cancellationToken)
     {
         await s_mmfGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -332,7 +333,7 @@ public sealed class ContentSearcher
             var encoding = EncodingDetector.DetectEncoding(peek[..Math.Min(peekRead, 4)]);
             stream.Position = 0;
             using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true);
-            return await SearchLinesAsync(filePath, reader, regex, literal, literalComparison, options, writer, cancellationToken, metadata).ConfigureAwait(false);
+            return await SearchLinesAsync(filePath, reader, regex, literal, literalComparison, options, writer, metadata, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -348,8 +349,8 @@ public sealed class ContentSearcher
         StringComparison literalComparison,
         SearchOptions options,
         ChannelWriter<SearchResult> writer,
-        CancellationToken cancellationToken,
-        FileMetadata metadata)
+        FileMetadata metadata,
+        CancellationToken cancellationToken)
     {
         int contextLines = Math.Max(0, options.ContextLines);
         int perFileCap = options.MaxMatchesPerFile > 0 ? options.MaxMatchesPerFile : int.MaxValue;
@@ -529,9 +530,9 @@ public sealed class ContentSearcher
         string filePath,
         SearchOptions options,
         ChannelWriter<SearchResult> writer,
-        CancellationToken cancellationToken,
         Native.NativeSession? session,
-        FileMetadata metadata)
+        FileMetadata metadata,
+        CancellationToken cancellationToken)
     {
         bool watched = FileWatchDiagnostics.IsWatched(filePath);
         var gateSw = watched ? System.Diagnostics.Stopwatch.StartNew() : null;
@@ -554,7 +555,7 @@ public sealed class ContentSearcher
                     unsafe { System.Threading.Interlocked.Exchange(ref *(int*)(IntPtr)state!, 1); }
                 }, cancelPtr);
 
-                var sink = new StreamingSink(filePath, writer, cancellationToken, options.ContextLines, metadata);
+                var sink = new StreamingSink(filePath, writer, options.ContextLines, metadata, cancellationToken);
                 var scanSw = watched ? System.Diagnostics.Stopwatch.StartNew() : null;
                 if (watched) FileWatchDiagnostics.Checkpoint(filePath, "NATIVE-SCAN-START");
                 int status;
@@ -590,7 +591,7 @@ public sealed class ContentSearcher
                     Native.NativeSearcher.StatusBinarySkipped => LogBinaryAndReturn(filePath),
                     Native.NativeSearcher.StatusTooLarge => SkipTooLarge,
                     Native.NativeSearcher.StatusOpenFailed => SkipAccessDenied,
-                    Native.NativeSearcher.StatusCancelled => Cancel(cancellationToken, sink.Emitted),
+                    Native.NativeSearcher.StatusCancelled => Cancel(sink.Emitted, cancellationToken),
                     Native.NativeSearcher.StatusInvalidRegex => NativeFellThrough,
                     _ => NativeFellThrough,
                 };
@@ -602,7 +603,7 @@ public sealed class ContentSearcher
         }
     }
 
-    internal static int Cancel(CancellationToken ct, int emitted)
+    internal static int Cancel(int emitted, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         return emitted;
@@ -626,7 +627,7 @@ public sealed class ContentSearcher
         public Exception? CapturedException { get; set; }
         public string? ErrorMessage { get; set; }
 
-        public StreamingSink(string filePath, ChannelWriter<SearchResult> writer, CancellationToken ct, int contextLines, FileMetadata metadata)
+        public StreamingSink(string filePath, ChannelWriter<SearchResult> writer, int contextLines, FileMetadata metadata, CancellationToken ct)
         {
             _filePath = filePath;
             _writer = writer;

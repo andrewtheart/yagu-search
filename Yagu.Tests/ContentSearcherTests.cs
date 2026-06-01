@@ -814,7 +814,7 @@ public class ContentSearcherCancelTests
     [Fact]
     public void Cancel_NonCancelledToken_ReturnsEmitted()
     {
-        int result = ContentSearcher.Cancel(CancellationToken.None, 42);
+        int result = ContentSearcher.Cancel(42, CancellationToken.None);
         Assert.Equal(42, result);
     }
 
@@ -823,7 +823,7 @@ public class ContentSearcherCancelTests
     {
         using var cts = new CancellationTokenSource();
         cts.Cancel();
-        Assert.Throws<OperationCanceledException>(() => ContentSearcher.Cancel(cts.Token, 10));
+        Assert.Throws<OperationCanceledException>(() => ContentSearcher.Cancel(10, cts.Token));
     }
 }
 
@@ -906,9 +906,9 @@ public class SearchFileWithStatsTests : IDisposable
     private async Task<(FileSearchOutcome outcome, List<SearchResult> results)> Search(string path, SearchOptions opts)
     {
         var channel = Channel.CreateUnbounded<SearchResult>();
-        var outcome = await _searcher.SearchFileWithStatsAsync(
+        var outcome = await ContentSearcher.SearchFileWithStatsAsync(
             path, null, opts.Query, StringComparison.OrdinalIgnoreCase,
-            opts, channel.Writer, CancellationToken.None, null);
+            opts, channel.Writer, null, CancellationToken.None);
         channel.Writer.Complete();
         var results = new List<SearchResult>();
         await foreach (var r in channel.Reader.ReadAllAsync())
@@ -1007,9 +1007,9 @@ public class SearchFileWithStatsTests : IDisposable
             MaxFileSizeBytes = 0,
             SkipBinary = false,
         };
-        var outcome = await _searcher.SearchFileWithStatsAsync(
+        var outcome = await ContentSearcher.SearchFileWithStatsAsync(
             path, regex, null, StringComparison.Ordinal,
-            opts, channel.Writer, CancellationToken.None, null);
+            opts, channel.Writer, null, CancellationToken.None);
         channel.Writer.Complete();
         Assert.True(outcome.MatchCount >= 2);
     }

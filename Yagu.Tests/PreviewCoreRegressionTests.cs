@@ -12,11 +12,11 @@ public sealed class PreviewCoreRegressionTests
     private static readonly string RepoRoot = FindRepoRoot();
     private static readonly string MainWindowSource = ReadMainWindowSources();
     private static readonly string PreviewEditorSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "MainWindow.PreviewEditor.cs"));
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewEditor.cs"));
     private static readonly string SettingsWindowSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "SettingsWindow.xaml.cs"));
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
     private static readonly string MainWindowXaml = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "MainWindow.xaml"));
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
 
     [Fact]
     public void FileGroup_SelectAll_SelectsEveryMatch()
@@ -997,7 +997,7 @@ public sealed class PreviewCoreRegressionTests
 
     private static string ReadMainWindowSources()
     {
-        string yaguRoot = Path.Combine(RepoRoot, "Yagu");
+        string yaguRoot = Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow");
         var sources = Directory.GetFiles(yaguRoot, "MainWindow*.cs")
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .Select(File.ReadAllText);

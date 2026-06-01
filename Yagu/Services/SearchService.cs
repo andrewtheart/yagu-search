@@ -22,8 +22,6 @@ public sealed class SearchService
     private const long AutoProcessMemoryCapFallback = AutoProcessMemoryCapCeiling;
     private const int MemorySavingNativeBatchSize = 256;
     private const int FutileEvictionCooldownSeconds = 5;
-    private const int CriticalMemoryMultiplier = 4;
-    private const int MemoryThrottleMaxWaitMs = 2_000;
     private static readonly TimeSpan PeriodicMemoryPressureCheckInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan NativePartialBatchFlushDelay = TimeSpan.FromMilliseconds(100);
 
@@ -103,7 +101,7 @@ public sealed class SearchService
         }
         if (regexError is not null)
         {
-            yield return new SearchEvent.Error(regexError);
+            yield return new SearchEvent.SearchError(regexError);
             yield return new SearchEvent.Completed(new SearchSummary(0, 0, 0, 0, 0, 0, sw.Elapsed, false, false, false, null));
             yield break;
         }
@@ -409,40 +407,6 @@ public sealed class SearchService
             }
         }
 
-        // Blocks the calling worker thread when memory is critically over cap,
-        // giving eviction + GC time to reclaim before more results are produced.
-        void WaitForMemoryRelief(CancellationToken ct)
-        {
-            long ws = Environment.WorkingSet;
-            long cap = EffectiveProcessMemoryCap(options.MaxProcessMemoryBytes);
-            long criticalThreshold = cap * CriticalMemoryMultiplier;
-            if (ws <= criticalThreshold)
-                return;
-
-            LogService.Instance.Warning("SearchService",
-                $"Scanner throttled: working set {ws / (1024*1024)} MB exceeds {criticalThreshold / (1024*1024)} MB — waiting for relief");
-
-            // Request a non-blocking GC to free evicted strings without freezing I/O threads.
-            GC.Collect(2, GCCollectionMode.Optimized, blocking: false, compacting: false);
-            TrimProcessWorkingSet();
-
-            var deadline = Stopwatch.GetTimestamp() + (long)(MemoryThrottleMaxWaitMs / 1000.0 * Stopwatch.Frequency);
-            while (!ct.IsCancellationRequested && Stopwatch.GetTimestamp() < deadline)
-            {
-                Thread.Sleep(200);
-                ws = Environment.WorkingSet;
-                if (ws <= criticalThreshold)
-                {
-                    LogService.Instance.Info("SearchService",
-                        $"Scanner resumed: working set {ws / (1024*1024)} MB ≤ {criticalThreshold / (1024*1024)} MB");
-                    return;
-                }
-            }
-
-            LogService.Instance.Warning("SearchService",
-                $"Scanner throttle timeout after {MemoryThrottleMaxWaitMs}ms — resuming (WS={ws / (1024*1024)} MB)");
-        }
-
         // ── Discovery ──
         var discovery = Task.Run(async () =>
         {
@@ -647,9 +611,9 @@ public sealed class SearchService
                                     var effectiveOptions = Volatile.Read(ref degraded) != 0 ? degradedOptions : patternOptions;
                                     try
                                     {
-                                        var outcome = await _searcher.SearchFileWithStatsAsync(
+                                        var outcome = await ContentSearcher.SearchFileWithStatsAsync(
                                             zipFile, regex, literal, cmp, effectiveOptions,
-                                            contentResults.Writer, cancellationToken, session: null).ConfigureAwait(false);
+                                            contentResults.Writer, session: null, cancellationToken).ConfigureAwait(false);
                                         int produced = outcome.MatchCount;
                                         int fileCount = Math.Max(1, outcome.EntriesScanned);
                                         Interlocked.Add(ref filesScanned, fileCount);
@@ -947,7 +911,7 @@ public sealed class SearchService
                             int produced;
                             try
                             {
-                                outcome = await _searcher.SearchFileWithStatsAsync(file, regex, literal, cmp, effectiveOptions, contentResults.Writer, ct, sessionPool?.Value).ConfigureAwait(false);
+                                outcome = await ContentSearcher.SearchFileWithStatsAsync(file, regex, literal, cmp, effectiveOptions, contentResults.Writer, sessionPool?.Value, ct).ConfigureAwait(false);
                                 produced = outcome.MatchCount;
                             }
                             catch (OperationCanceledException) { throw; }
@@ -2096,7 +2060,7 @@ public abstract record SearchEvent
     /// millions of paths).</summary>
     public sealed record MatchBatch(IReadOnlyList<SearchResult> Results) : SearchEvent;
     public sealed record Progress(SearchProgress Snapshot) : SearchEvent;
-    public sealed record Error(string Message) : SearchEvent;
+    public sealed record SearchError(string Message) : SearchEvent;
     public sealed record Completed(SearchSummary Summary) : SearchEvent;
     /// <summary>Emitted when memory pressure triggers degradation. The consumer should evict heavy data to disk
     /// and then call <see cref="AcknowledgeEviction"/> with the count of results actually evicted. Workers keep

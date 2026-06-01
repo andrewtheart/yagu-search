@@ -113,7 +113,7 @@ public sealed class GlobMatcher
             }
 
             // "*.ext"
-            if (p.StartsWith("*.") && !p[2..].Contains('*') && !p[2..].Contains('/') && !p[2..].Contains('?'))
+            if (p.StartsWith("*.", StringComparison.Ordinal) && !p[2..].Contains('*') && !p[2..].Contains('/') && !p[2..].Contains('?'))
                 return new Pattern { PatternKind = Kind.Extension, Value = p[1..] };
 
             // path-free folder name -> segment match (e.g. "node_modules", "bin")
@@ -164,7 +164,7 @@ public sealed class GlobMatcher
                 }
                 else if (c == '*') { sb.Append("[^/]*"); i++; }
                 else if (c == '?') { sb.Append("[^/]"); i++; }
-                else if ("+().|^$[]{}\\".IndexOf(c) >= 0) { sb.Append('\\').Append(c); i++; }
+                else if ("+().|^$[]{}\\".Contains(c)) { sb.Append('\\').Append(c); i++; }
                 else { sb.Append(c); i++; }
             }
             sb.Append('$');
