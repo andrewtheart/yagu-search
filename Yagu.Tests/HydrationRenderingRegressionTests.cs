@@ -107,6 +107,35 @@ public class HydrationRenderingRegressionTests
         Assert.Equal(new[] { 1, 2, 3, 4, 5 }, collection);
     }
 
+    [Fact]
+    public void BatchCollectionChanging_FiresBeforeResetMutationIsVisible()
+    {
+        var collection = new BatchObservableCollection<int> { 1, 2 };
+        var observations = new List<string>();
+        collection.CollectionChanging += (_, _) => observations.Add($"changing:{string.Join(",", collection)}");
+        collection.CollectionChanged += (_, e) => observations.Add($"changed:{e.Action}:{string.Join(",", collection)}");
+
+        collection.ReplaceAll(new[] { 3, 4 });
+
+        Assert.Equal(new[]
+        {
+            "changing:1,2",
+            "changed:Reset:3,4",
+        }, observations);
+    }
+
+    [Fact]
+    public void BatchCollectionChanging_EmptyAddRangeRaisesNoNotification()
+    {
+        var collection = new BatchObservableCollection<int>();
+        int changingCount = 0;
+        collection.CollectionChanging += (_, _) => changingCount++;
+
+        collection.AddRange(Array.Empty<int>());
+
+        Assert.Equal(0, changingCount);
+    }
+
     // -----------------------------------------------------------------
     // SearchResult.HydrateFrom — restores payload and notifies UI bindings.
     // -----------------------------------------------------------------

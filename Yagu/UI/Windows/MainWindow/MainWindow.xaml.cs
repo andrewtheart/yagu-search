@@ -158,8 +158,10 @@ public sealed partial class MainWindow : Window, IDisposable
         PreviewBlock.AddHandler(UIElement.DoubleTappedEvent,
             new Microsoft.UI.Xaml.Input.DoubleTappedEventHandler(OnPreviewBlockDoubleTapped),
             handledEventsToo: true);
+        AttachPreviewSelectionAutoScroll(PreviewBlock);
         AttachPreviewBlockContextFlyout(PreviewBlock);
         InitializePreviewEditorZoom();
+        InitializeResultsListSmartScroll();
         PreviewScrollViewer.SizeChanged += OnPreviewViewportSizeChanged;
 
         // Extend content into the title bar for a modern Windows 11 look
@@ -342,6 +344,7 @@ public sealed partial class MainWindow : Window, IDisposable
         _autoScrollTimer?.Stop();
         _previewContextDebounceTimer?.Stop();
         _diskSparklineTimer?.Stop();
+        DisposeResultsListSmartScroll();
         _previewLoadCts?.Cancel();
         _previewLoadCts?.Dispose();
         _previewLoadCts = null;

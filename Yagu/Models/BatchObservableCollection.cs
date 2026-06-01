@@ -14,6 +14,12 @@ public class BatchObservableCollection<T> : ObservableCollection<T>
     private bool _suppressNotification;
 
     /// <summary>
+    /// Raised before the collection mutates, giving UI code a chance to capture
+    /// scroll anchors before bound controls process the later change event.
+    /// </summary>
+    public event EventHandler? CollectionChanging;
+
+    /// <summary>
     /// Add multiple items and raise a single <see cref="NotifyCollectionChangedAction.Reset"/>
     /// notification at the end, instead of one per item.
     /// </summary>
@@ -27,6 +33,7 @@ public class BatchObservableCollection<T> : ObservableCollection<T>
             return;
         }
 
+        OnCollectionChanging();
         _suppressNotification = true;
         try
         {
@@ -56,6 +63,7 @@ public class BatchObservableCollection<T> : ObservableCollection<T>
     /// </summary>
     public void ReplaceAll(IReadOnlyList<T> items)
     {
+        OnCollectionChanging();
         _suppressNotification = true;
         try
         {
@@ -79,4 +87,34 @@ public class BatchObservableCollection<T> : ObservableCollection<T>
         if (!_suppressNotification)
             base.OnCollectionChanged(e);
     }
+
+    protected override void InsertItem(int index, T item)
+    {
+        if (!_suppressNotification)
+            OnCollectionChanging();
+        base.InsertItem(index, item);
+    }
+
+    protected override void SetItem(int index, T item)
+    {
+        if (!_suppressNotification)
+            OnCollectionChanging();
+        base.SetItem(index, item);
+    }
+
+    protected override void RemoveItem(int index)
+    {
+        if (!_suppressNotification)
+            OnCollectionChanging();
+        base.RemoveItem(index);
+    }
+
+    protected override void ClearItems()
+    {
+        if (!_suppressNotification)
+            OnCollectionChanging();
+        base.ClearItems();
+    }
+
+    private void OnCollectionChanging() => CollectionChanging?.Invoke(this, EventArgs.Empty);
 }

@@ -83,6 +83,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settingsService = settingsService;
         _editor = editor;
         _dispatcher = dispatcher;
+        _resultCollection.VisibleGroups.CollectionChanging += OnVisibleResultGroupsChanging;
 
         _settings = _settingsService.Load();
         _editor.Command = _settings.EditorCommand;
@@ -905,6 +906,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>Disk-backed store for evicted results. Null before first search.</summary>
     public ResultStore? ActiveResultStore => _resultStore;
 
+    public event EventHandler? ResultGroupsChanging;
+
     public ObservableCollection<FileGroup> ResultGroups => _resultCollection.VisibleGroups;
     public ObservableCollection<string> RecentDirectories { get; } = [];
     public ObservableCollection<string> DirectorySuggestions { get; } = [];
@@ -923,6 +926,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         ShowStatsForNerds
             ? Microsoft.UI.Xaml.Visibility.Visible
             : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+    private void OnVisibleResultGroupsChanging(object? sender, EventArgs e)
+        => ResultGroupsChanging?.Invoke(this, EventArgs.Empty);
 
     private SkipBreakdown? _lastSkipBreakdown;
     private const string ExtensionExclusionSkipNote = "Files excluded by extension during discovery are filtered before counting and are not included in skipped counts.";

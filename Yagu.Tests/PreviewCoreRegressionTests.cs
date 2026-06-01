@@ -150,6 +150,97 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void NoWrapPreviewSelectionDrag_AutoScrollsHorizontally()
+    {
+        string ctor = ExtractMethodWindow(MainWindowSource, "MainWindow", window: 2200);
+        Assert.Contains("AttachPreviewSelectionAutoScroll(PreviewBlock);", ctor);
+
+        string addSection = ExtractMethodWindow(MainWindowSource, "AddPreviewSection", window: 8000);
+        Assert.Contains("AttachPreviewSelectionAutoScroll(block);", addSection);
+
+        string attach = ExtractMethodWindow(MainWindowSource, "AttachPreviewSelectionAutoScroll", window: 2600);
+        AssertContainsInOrder(attach,
+            "UIElement.PointerPressedEvent",
+            "OnPreviewSelectionAutoScrollPointerPressed",
+            "UIElement.PointerMovedEvent",
+            "OnPreviewSelectionAutoScrollPointerMoved",
+            "UIElement.PointerReleasedEvent",
+            "OnPreviewSelectionAutoScrollPointerEnded",
+            "UIElement.PointerCanceledEvent",
+            "OnPreviewSelectionAutoScrollPointerEnded");
+
+        string apply = ExtractMethodWindow(MainWindowSource, "ApplyPreviewSelectionAutoScroll", window: 3800);
+        AssertContainsInOrder(apply,
+            "block.TextWrapping != TextWrapping.NoWrap",
+            "scroller.HorizontalScrollMode != ScrollMode.Enabled",
+            "TryGetPreviewSelectionAutoScrollStep(scroller, _previewSelectionAutoScrollPointerX, out double step)",
+            "double targetX = Math.Clamp(scroller.HorizontalOffset + step, 0, scroller.ScrollableWidth);",
+            "scroller.ChangeView(targetX, null, null, disableAnimation: true);",
+            "UpdateStickyHorizontalScrollBar();");
+    }
+
+    [Fact]
+    public void ResultsListScroll_PreservesPinnedTopDuringLiveUpdates()
+    {
+        string ctor = ExtractMethodWindow(MainWindowSource, "MainWindow", window: 2600);
+        Assert.Contains("InitializeResultsListSmartScroll();", ctor);
+
+        string initialize = ExtractMethodWindow(MainWindowSource, "InitializeResultsListSmartScroll", window: 2200);
+        AssertContainsInOrder(initialize,
+            "ViewModel.ResultGroupsChanging += OnResultGroupsChanging;",
+            "ViewModel.ResultGroups.CollectionChanged += OnResultGroupsCollectionChanged;",
+            "ResultsList.Loaded +=",
+            "EnsureResultsListScrollViewerHooked();",
+            "CaptureResultsListScrollPosition();");
+
+        string changing = ExtractMethodWindow(MainWindowSource, "OnResultGroupsChanging", window: 1200);
+        AssertContainsInOrder(changing,
+            "CaptureResultsListScrollPosition();",
+            "ResultsListSmartScrollIntent intent = ResolveResultsListSmartScrollIntent();",
+            "ResultGroupsChanging: intent={intent}",
+            "QueueResultsListSmartScrollRestore(intent);");
+
+        string collectionChanged = ExtractMethodWindow(MainWindowSource, "OnResultGroupsCollectionChanged", window: 1800);
+        AssertContainsInOrder(collectionChanged,
+            "ResultsListSmartScrollIntent intent = ResolveResultsListSmartScrollIntent();",
+            "QueueResultsListSmartScrollRestore(intent);");
+
+        string resolve = ExtractMethodWindow(MainWindowSource, "ResolveResultsListSmartScrollIntent", window: 1200);
+        AssertContainsInOrder(resolve,
+            "if (_resultsListWasAtTop)",
+            "ResultsListSmartScrollIntent.KeepTop",
+            "if (_autoScrollEnabled)",
+            "ResultsListSmartScrollIntent.FollowBottom");
+
+        string capture = ExtractMethodWindow(MainWindowSource, "CaptureResultsListScrollPosition", window: 1400);
+        AssertContainsInOrder(capture,
+            "bool hasGroupsWithoutScroller = ViewModel.ResultGroups.Count > 0;",
+            "_resultsListWasAtTop = hasGroupsWithoutScroller;",
+            "_resultsListWasAtBottom = hasGroupsWithoutScroller;",
+            "bool hasVisibleGroups = ViewModel.ResultGroups.Count > 0;",
+            "_resultsListWasAtTop = hasVisibleGroups && (IsResultsListAtTop(scroller) || IsFirstResultGroupAtTop());",
+            "_resultsListWasAtBottom = hasVisibleGroups && IsResultsListAtBottom(scroller);");
+
+        string apply = ExtractMethodWindow(MainWindowSource, "ApplyResultsListSmartScrollIntent", window: 1700);
+        AssertContainsInOrder(apply,
+            "if (intent == ResultsListSmartScrollIntent.KeepTop)",
+            "ScrollResultsListToTop();",
+            "remainingPasses > 0",
+            "ApplyResultsListSmartScrollIntent(intent, remainingPasses - 1)");
+
+        string scrollTop = ExtractMethodWindow(MainWindowSource, "ScrollResultsListToTop", window: 1400);
+        AssertContainsInOrder(scrollTop,
+            "ResultsList.ScrollIntoView(ViewModel.ResultGroups[0], ScrollIntoViewAlignment.Leading);",
+            "_resultsListScrollViewer?.ChangeView(null, 0, null, disableAnimation: true);",
+            "ScrollResultsListToTop: groups={ViewModel.ResultGroups.Count}");
+
+        string autoScroll = ExtractMethodWindow(MainWindowSource, "OnAutoScrollTick", window: 600);
+        Assert.Contains("if (_resultsListTopRestoreInProgress) return;", autoScroll);
+        Assert.Contains("if (_resultsListWasAtTop) return;", autoScroll);
+        Assert.Contains("ScrollResultsListToBottom();", autoScroll);
+    }
+
+    [Fact]
     public void PreviewSectionContentBackgrounds_AreConfigurableAndDefaultSelectedToBlack()
     {
         string settingsSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "Services", "SettingsService.cs"));

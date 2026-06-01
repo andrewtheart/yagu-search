@@ -32,7 +32,9 @@ public sealed partial class MainWindow
     private void OnAutoScrollTick(object? sender, object e)
     {
         if (!_autoScrollEnabled || ViewModel.ResultGroups.Count == 0) return;
-        ResultsList.ScrollIntoView(ViewModel.ResultGroups[^1]);
+        if (_resultsListTopRestoreInProgress) return;
+        if (_resultsListWasAtTop) return;
+        ScrollResultsListToBottom();
     }
 
     private void UpdateSparkline()
@@ -95,7 +97,7 @@ public sealed partial class MainWindow
     {
         _autoScrollEnabled = AutoScrollResultsCheckBox.IsChecked == true;
         if (_autoScrollEnabled && ViewModel.ResultGroups.Count > 0)
-            ResultsList.ScrollIntoView(ViewModel.ResultGroups[^1]);
+            ScrollResultsListToBottom();
     }
 
     private void OnFilterBoxTextChanged(object sender, TextChangedEventArgs e)

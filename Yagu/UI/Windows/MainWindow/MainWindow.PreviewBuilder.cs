@@ -1455,6 +1455,7 @@ public sealed partial class MainWindow
             Block = block,
         };
         _sectionMatchNavs[block] = sectionNav;
+        AttachPreviewSelectionAutoScroll(block);
 
         var expander = new Expander
         {
