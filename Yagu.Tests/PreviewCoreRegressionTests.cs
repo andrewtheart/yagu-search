@@ -154,9 +154,11 @@ public sealed class PreviewCoreRegressionTests
     {
         string ctor = ExtractMethodWindow(MainWindowSource, "MainWindow", window: 2200);
         Assert.Contains("AttachPreviewSelectionAutoScroll(PreviewBlock);", ctor);
+        Assert.Contains("ConfigurePreviewSelectionMode(PreviewBlock);", ctor);
 
         string addSection = ExtractMethodWindow(MainWindowSource, "AddPreviewSection", window: 8000);
         Assert.Contains("AttachPreviewSelectionAutoScroll(block);", addSection);
+        Assert.Contains("IsTextSelectionEnabled = wrap,", addSection);
 
         string attach = ExtractMethodWindow(MainWindowSource, "AttachPreviewSelectionAutoScroll", window: 2600);
         AssertContainsInOrder(attach,
@@ -167,16 +169,51 @@ public sealed class PreviewCoreRegressionTests
             "UIElement.PointerReleasedEvent",
             "OnPreviewSelectionAutoScrollPointerEnded",
             "UIElement.PointerCanceledEvent",
+            "OnPreviewSelectionAutoScrollPointerEnded",
+            "UIElement.PointerCaptureLostEvent",
             "OnPreviewSelectionAutoScrollPointerEnded");
 
-        string apply = ExtractMethodWindow(MainWindowSource, "ApplyPreviewSelectionAutoScroll", window: 3800);
+        string apply = ExtractMethodWindow(MainWindowSource, "ApplyPreviewSelectionAutoScroll", window: 4600);
         AssertContainsInOrder(apply,
             "block.TextWrapping != TextWrapping.NoWrap",
             "scroller.HorizontalScrollMode != ScrollMode.Enabled",
-            "TryGetPreviewSelectionAutoScrollStep(scroller, _previewSelectionAutoScrollPointerX, out double step)",
+            "TryGetPreviewSelectionAutoScrollVelocity(scroller, _previewSelectionAutoScrollPointerX, out double velocity)",
+            "double step = velocity * elapsedSeconds;",
             "double targetX = Math.Clamp(scroller.HorizontalOffset + step, 0, scroller.ScrollableWidth);",
             "scroller.ChangeView(targetX, null, null, disableAnimation: true);",
-            "UpdateStickyHorizontalScrollBar();");
+            "UpdatePreviewCustomSelectionFromCurrentPointer();");
+
+        string timer = ExtractMethodWindow(MainWindowSource, "EnsurePreviewSelectionAutoScrollTimer", window: 2200);
+        AssertContainsInOrder(timer,
+            "_previewSelectionAutoScrollTimer ??= new Timer(",
+            "OnPreviewSelectionAutoScrollTimerElapsed",
+            "PreviewSelectionAutoScrollTimerIntervalMs",
+            "LogPreviewSelectionAutoScrollTimerState(\"high-timer-start\");");
+
+        string elapsed = ExtractMethodWindow(MainWindowSource, "OnPreviewSelectionAutoScrollTimerElapsed", window: 2200);
+        AssertContainsInOrder(elapsed,
+            "Interlocked.Exchange(ref _previewSelectionAutoScrollTickQueued, 1)",
+            "DispatcherQueuePriority.High",
+            "OnPreviewSelectionAutoScrollTimerTick();");
+
+        string press = ExtractMethodWindow(MainWindowSource, "OnPreviewSelectionAutoScrollPointerPressed", window: 1800);
+        Assert.Contains("block.CapturePointer(e.Pointer);", press);
+        Assert.Contains("BeginPreviewCustomSelection(block, scroller);", press);
+        Assert.Contains("e.Handled = true;", press);
+
+        string selectionMode = ExtractMethodWindow(MainWindowSource, "ConfigurePreviewSelectionMode", window: 900);
+        AssertContainsInOrder(selectionMode,
+            "block.TextWrapping == TextWrapping.Wrap",
+            "block.IsTextSelectionEnabled = useNativeSelection;");
+
+        string highlighter = ExtractMethodWindow(MainWindowSource, "UpdatePreviewCustomSelectionHighlighter", window: 2200);
+        AssertContainsInOrder(highlighter,
+            "new TextHighlighter",
+            "new TextRange",
+            "block.TextHighlighters.Add(_previewCustomSelectionHighlighter);");
+
+        string copy = ExtractMethodWindow(MainWindowSource, "CopyPreviewSelection", window: 1200);
+        Assert.Contains("TryBuildPreviewCustomSelectionText(block, withLineNumbers, out string customSelectedText)", copy);
     }
 
     [Fact]
@@ -264,6 +301,36 @@ public sealed class PreviewCoreRegressionTests
             "grid.Background = brush;",
             "scroller.Background = brush;",
             "contentBorder.Background = brush;");
+    }
+
+    [Fact]
+    public void GutterTextColors_AreConfigurableForPreviewAndEditor()
+    {
+        string settingsSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "Services", "SettingsService.cs"));
+        string viewModelSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
+        string textControlBoxSource = File.ReadAllText(Path.Combine(RepoRoot, "vendor", "TextControlBox-WinUI", "TextControlBox", "TextControlBox.cs"));
+
+        Assert.Contains("DefaultPreviewGutterColor = \"#FF9CDCFE\"", settingsSource);
+        Assert.Contains("PreviewEditorGutterColor", settingsSource);
+        Assert.Contains("MigrateLegacyPreviewGutterColors(settings);", settingsSource);
+
+        Assert.Contains("PreviewEditorGutterColor = ColorStringHelper.Normalize", viewModelSource);
+        Assert.Contains("_settings.PreviewEditorGutterColor = ColorStringHelper.Normalize", viewModelSource);
+
+        Assert.Contains("Preview gutter text:", SettingsWindowSource);
+        Assert.Contains("Matched preview gutter text:", SettingsWindowSource);
+        Assert.Contains("Editor gutter text:", SettingsWindowSource);
+        Assert.Contains("Width = 160", SettingsWindowSource);
+        Assert.Contains("MaxWidth = 180", SettingsWindowSource);
+
+        string applyColors = ExtractMethodWindow(MainWindowSource, "ApplyPreviewColors", window: 1800);
+        AssertContainsInOrder(applyColors,
+            "var previewGutterColor = ColorStringHelper.Parse(vm.PreviewGutterContextColor",
+            "s_contextGutterBrush.Color = previewGutterColor;",
+            "s_gutterSepBrush.Color = previewGutterColor;",
+            "PreviewEditor.LineNumberColor = ColorStringHelper.Parse(vm.PreviewEditorGutterColor");
+
+        Assert.Contains("public Windows.UI.Color LineNumberColor", textControlBoxSource);
     }
 
     [Fact]
@@ -668,6 +735,185 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void PreviewTruncationEllipses_AreBlueClickableShowMoreControls()
+    {
+        string previewBuilder = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewBuilder.cs"));
+        string selectionAutoScroll = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewSelectionAutoScroll.cs"));
+
+        Assert.Contains("private sealed class PreviewTruncatedLineState", previewBuilder);
+        Assert.Contains("private sealed record PreviewShowMoreAction", previewBuilder);
+        Assert.Contains("s_previewShowMoreEllipsisBrush = new(Microsoft.UI.Colors.DodgerBlue)", previewBuilder);
+        AssertContainsInOrder(previewBuilder,
+            "private int GetPreviewShowMoreMaxWindowLength()",
+            "GetEffectiveSegmentSize() - (2 * LineTruncator.Ellipsis.Length)",
+            "private int GetPreviewTruncatedLength()",
+            "return Math.Min(configuredLength, GetPreviewShowMoreMaxWindowLength());");
+        Assert.Contains("LogPreviewShowMoreDiagnostics(\"BuildHighlightSection\")", previewBuilder);
+
+        string addParagraphs = ExtractMethodWindow(previewBuilder, "AddPreviewLineParagraphs", window: 2600);
+        AssertContainsInOrder(addParagraphs,
+            "TruncatePreviewLineAroundResult(line, result, rx) : TruncatePreviewLineWindow(line, rx)",
+            "CreatePreviewTruncatedLineState(window, line, lineNum, isMatchLine, result, rx)",
+            "truncationState: isContinuation ? null : expansionState");
+
+        string textRuns = ExtractMethodWindow(previewBuilder, "AddPreviewTextRuns", window: 2600);
+        AssertContainsInOrder(textRuns,
+            "line.StartsWith(LineTruncator.Ellipsis, StringComparison.Ordinal)",
+            "CreatePreviewShowMoreInline(para, truncationState!, PreviewShowMoreEdge.Prefix)",
+            "AddPreviewTextSpanRuns(para, line[start..end], isMatchLine, rx)",
+            "CreatePreviewShowMoreInline(para, truncationState!, PreviewShowMoreEdge.Suffix)");
+
+        string inline = ExtractMethodWindow(previewBuilder, "CreatePreviewShowMoreInline", window: 2600);
+        Assert.Contains("private InlineUIContainer CreatePreviewShowMoreInline", inline);
+        Assert.Contains("var marker = new TextBlock", inline);
+        Assert.Contains("var markerHost = new Border", inline);
+        Assert.Contains("Background = _transparentBrush", inline);
+        Assert.Contains("Foreground = s_previewShowMoreEllipsisBrush", inline);
+        Assert.Contains("markerHost.PointerEntered", inline);
+        Assert.Contains("markerHost.PointerMoved", inline);
+        Assert.Contains("markerHost.PointerExited", inline);
+        Assert.Contains("marker.PointerEntered", inline);
+        Assert.Contains("marker.PointerMoved", inline);
+        Assert.Contains("marker.PointerExited", inline);
+        Assert.Contains("CancelPreviewShowMoreTooltipHide()", inline);
+        Assert.Contains("QueuePreviewShowMoreTooltipHide()", inline);
+        Assert.Contains("markerHost.Tapped", inline);
+        Assert.Contains("ExpandPreviewShowMoreFromInlineClick(action)", inline);
+        Assert.DoesNotContain("ShowPreviewShowMoreTooltip(action, e.GetPosition", inline);
+        Assert.Contains("_previewShowMoreMarkerCount++", inline);
+        Assert.Contains("var container = new InlineUIContainer", inline);
+        Assert.Contains("s_previewShowMoreActions.Add(markerHost, action);", inline);
+        Assert.Contains("s_previewShowMoreActions.Add(container, action);", inline);
+        Assert.Contains("s_previewShowMoreActions.Add(marker, action);", inline);
+        Assert.DoesNotContain("ToolTipService.SetToolTip", inline);
+
+        string inlineClick = ExtractMethodWindow(previewBuilder, "ExpandPreviewShowMoreFromInlineClick", window: 1200);
+        Assert.Contains("CancelPreviewSelectionAutoScrollForShowMore(\"show-more-inline-click\")", inlineClick);
+        Assert.Contains("HidePreviewShowMoreTooltip()", inlineClick);
+        Assert.Contains("QueuePreviewTruncatedLineExpansion(action, PreviewShowMoreExpandMode.More)", inlineClick);
+
+        string queueMethod = ExtractMethodWindow(previewBuilder, "QueuePreviewTruncatedLineExpansion", window: 2200);
+        Assert.Contains("DispatcherQueue.TryEnqueue", queueMethod);
+        Assert.Contains("DispatcherQueuePriority.Normal", queueMethod);
+        Assert.DoesNotContain("DispatcherQueuePriority.Low", queueMethod);
+        Assert.Contains("PreviewShowMoreExpandMode mode", queueMethod);
+        Assert.Contains("ExpandPreviewTruncatedLineSafely(action, mode)", queueMethod);
+
+        string safeMethod = ExtractMethodWindow(previewBuilder, "ExpandPreviewTruncatedLineSafely", window: 1600);
+        Assert.Contains("try", safeMethod);
+        Assert.Contains("Stopwatch.StartNew()", safeMethod);
+        Assert.Contains("expand complete", safeMethod);
+        Assert.Contains("LogService.Instance.Critical", safeMethod);
+
+        Assert.Contains("x:Name=\"PreviewShowMoreTooltipOverlay\"", MainWindowXaml);
+        Assert.Contains("Visibility=\"Collapsed\"", MainWindowXaml);
+        Assert.Contains("x:Name=\"PreviewShowMoreTooltipBubble\"", MainWindowXaml);
+        Assert.Contains("Background=\"#B8181818\"", MainWindowXaml);
+        Assert.Contains("x:Name=\"PreviewShowMoreTooltipContent\"", MainWindowXaml);
+        Assert.Contains("PreviewShowMoreTooltipCursorGapDip = 12", previewBuilder);
+        Assert.Contains("PreviewShowMoreTooltipLeftShiftRatio = 0.10", previewBuilder);
+
+        string tooltip = ExtractMethodWindow(previewBuilder, "ShowPreviewShowMoreTooltip", window: 3600);
+        Assert.Contains("PreviewShowMoreTooltipContent.Children.Clear()", tooltip);
+        Assert.Contains("Segoe MDL2 Assets", tooltip);
+        Assert.Contains("\\uE72B", tooltip);
+        AssertContainsInOrder(tooltip,
+            "edge == PreviewShowMoreEdge.Prefix",
+            "CreatePreviewShowMoreActionButton(\"\\uE72B\", \"Show more\"",
+            "CreatePreviewShowMoreActionButton(\"\\uE72B\", \"Show all\"");
+        AssertContainsInOrder(tooltip,
+            "else",
+            "CreatePreviewShowMoreActionButton(\"\\uE72A\", \"Show more\"",
+            "CreatePreviewShowMoreActionButton(\"\\uE72A\", \"Show all\"");
+        Assert.Contains("\\uE72A", tooltip);
+        Assert.Contains("Canvas.SetLeft", tooltip);
+        Assert.Contains("Canvas.SetTop", tooltip);
+        Assert.Contains("pointer.X + PreviewShowMoreTooltipCursorGapDip - (bubbleWidth * PreviewShowMoreTooltipLeftShiftRatio)", tooltip);
+        Assert.Contains("pointer.Y + PreviewShowMoreTooltipCursorGapDip", tooltip);
+        Assert.Contains("CancelPreviewSelectionAutoScrollForShowMore(\"show-more-tooltip\")", tooltip);
+        Assert.Contains("EnsurePreviewShowMoreTooltipHandlers()", tooltip);
+        Assert.Contains("CancelPreviewShowMoreTooltipHide()", tooltip);
+
+        string actionButton = ExtractMethodWindow(previewBuilder, "CreatePreviewShowMoreActionButton", window: 3600);
+        Assert.Contains("Button", actionButton);
+        Assert.Contains("button.PointerEntered", actionButton);
+        Assert.Contains("button.PointerMoved", actionButton);
+        Assert.Contains("button.PointerExited", actionButton);
+        Assert.Contains("_previewShowMorePointerOverPanel = true", actionButton);
+        Assert.Contains("CancelPreviewShowMoreTooltipHide()", actionButton);
+        Assert.Contains("CancelPreviewSelectionAutoScrollForShowMore($\"show-more-{mode}\")", actionButton);
+        Assert.Contains("QueuePreviewTruncatedLineExpansion(action, mode)", actionButton);
+        Assert.DoesNotContain("HidePreviewShowMoreTooltip()", actionButton);
+
+        string hitTest = ExtractMethodWindow(previewBuilder, "TryGetPreviewShowMoreActionFromPointer", window: 2200);
+        Assert.Contains("TryGetPreviewShowMoreAction(e.OriginalSource, out action)", hitTest);
+        Assert.Contains("VisualTreeHelper.FindElementsInHostCoordinates(point, block)", hitTest);
+        Assert.Contains("LogService.Instance.Verbose(\"PreviewShowMore\"", hitTest);
+
+        string delayedHide = ExtractMethodWindow(previewBuilder, "QueuePreviewShowMoreTooltipHide", window: 2400);
+        Assert.Contains("PreviewShowMoreTooltipHideDelayMs", delayedHide);
+        Assert.Contains("DispatcherQueue.CreateTimer()", delayedHide);
+        Assert.Contains("_previewShowMorePointerOverMarker || _previewShowMorePointerOverPanel", delayedHide);
+        Assert.Contains("HidePreviewShowMoreTooltip()", delayedHide);
+
+        string handlers = ExtractMethodWindow(previewBuilder, "EnsurePreviewShowMoreTooltipHandlers", window: 1800);
+        Assert.Contains("PreviewShowMoreTooltipOverlay.PointerPressed += OnPreviewShowMoreTooltipOverlayPointerPressed", handlers);
+
+        string overlayPointerPressed = ExtractMethodWindow(previewBuilder, "OnPreviewShowMoreTooltipOverlayPointerPressed", window: 1800);
+        Assert.Contains("IsElementWithin(source, PreviewShowMoreTooltipBubble)", overlayPointerPressed);
+        Assert.Contains("HidePreviewShowMoreTooltip()", overlayPointerPressed);
+        Assert.Contains("e.Handled = true", overlayPointerPressed);
+
+        string contentPointerPressed = ExtractMethodWindow(previewBuilder, "HidePreviewShowMoreTooltipForContentPointer", window: 900);
+        Assert.Contains("PreviewShowMoreTooltipOverlay.Visibility == Visibility.Visible", contentPointerPressed);
+        Assert.Contains("HidePreviewShowMoreTooltip()", contentPointerPressed);
+
+        string expand = ExtractMethodWindow(previewBuilder, "ExpandPreviewTruncatedLine", window: 3600);
+        AssertContainsInOrder(expand,
+            "mode == PreviewShowMoreExpandMode.All",
+            "newStart = 0",
+            "newEnd = lineLength",
+            "action.Edge == PreviewShowMoreEdge.Prefix",
+            "newStart = state.SourceStart - add",
+            "action.Edge == PreviewShowMoreEdge.Suffix",
+            "newEnd = state.SourceEnd + add",
+            "var scrollSnapshot = CapturePreviewShowMoreScrollPosition(action)",
+            "RebuildPreviewTruncatedLineParagraph(action.Paragraph, state)");
+        Assert.Contains("RestorePreviewShowMoreScrollPosition(scrollSnapshot)", expand);
+
+        string captureScroll = ExtractMethodWindow(previewBuilder, "CapturePreviewShowMoreScrollPosition", window: 1800);
+        Assert.Contains("PreviewScrollViewer.HorizontalOffset", captureScroll);
+        Assert.Contains("PreviewScrollViewer.VerticalOffset", captureScroll);
+        Assert.Contains("sectionScroller?.HorizontalOffset", captureScroll);
+
+        string restoreScroll = ExtractMethodWindow(previewBuilder, "RestorePreviewShowMoreScrollPosition", window: 2200);
+        Assert.Contains("ApplyPreviewShowMoreScrollPosition(snapshot)", restoreScroll);
+        Assert.Contains("DispatcherQueue.TryEnqueue", restoreScroll);
+        Assert.Contains("PreviewScrollViewer.UpdateLayout()", restoreScroll);
+        Assert.Contains("snapshot.SectionScroller?.UpdateLayout()", restoreScroll);
+
+        string applyScroll = ExtractMethodWindow(previewBuilder, "ApplyPreviewShowMoreScrollPosition", window: 1600);
+        Assert.Contains("RestoreScrollViewerOffsets(", applyScroll);
+        Assert.Contains("snapshot.SectionScroller", applyScroll);
+
+        string rebuild = ExtractMethodWindow(previewBuilder, "RebuildPreviewTruncatedLineParagraph", window: 2200);
+        Assert.Contains("AddPreviewFullLineSegmentRuns(paragraph, state)", rebuild);
+        string fullLine = ExtractMethodWindow(previewBuilder, "AddPreviewFullLineSegmentRuns", window: 2200);
+        Assert.Contains("paragraph.Inlines.Add(new LineBreak())", fullLine);
+        Assert.Contains("AddPreviewTextSpanRuns", fullLine);
+
+        Assert.Contains("IsPreviewShowMorePointerSource(e.OriginalSource)", selectionAutoScroll);
+        Assert.Contains("CancelPreviewSelectionAutoScrollForShowMore(\"show-more-pointer-pressed\")", selectionAutoScroll);
+        Assert.Contains("StopPreviewSelectionAutoScrollTimer(\"scroll-boundary-noop\")", selectionAutoScroll);
+        Assert.Contains("(!isNoOp && !accepted)", selectionAutoScroll);
+        Assert.Contains("HidePreviewShowMoreTooltipForContentPointer()", selectionAutoScroll);
+        Assert.Contains("OnPreviewShowMorePointerMoved", selectionAutoScroll);
+        Assert.Contains("TryGetPreviewShowMoreAction(originalSource, out _)", selectionAutoScroll);
+        Assert.Contains("s_previewShowMoreActions.TryGetValue(current, out var value)", selectionAutoScroll);
+        Assert.Contains("catch (ArgumentException)", selectionAutoScroll);
+    }
+
+    [Fact]
     public void WrappedPreviewGutter_RepeatsSeparatorForContinuationRows()
     {
         string sync = ExtractMethodWindow(MainWindowSource, "SyncGutterParagraphHeights", window: 2600);
@@ -694,7 +940,7 @@ public sealed class PreviewCoreRegressionTests
         string makeParagraph = ExtractMethodWindow(MainWindowSource, "MakePreviewParagraph");
         Assert.Contains("if (rx != null)", makeParagraph);
         Assert.DoesNotContain("if (rx != null && isMatchLine)", makeParagraph);
-        Assert.Contains("hit.Foreground = new SolidColorBrush(Microsoft.UI.Colors.Gold);", makeParagraph);
+        Assert.Contains("hit.Foreground = _matchTextBrush;", makeParagraph);
         Assert.Contains("if (!isMatchLine) before.Foreground = s_contextTextBrush;", makeParagraph);
         Assert.Contains("if (!isMatchLine) tail.Foreground = s_contextTextBrush;", makeParagraph);
 

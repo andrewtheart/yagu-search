@@ -1294,6 +1294,21 @@
                                 CornerRadius="2" />
                         </Canvas>
 
+                            <Canvas x:Name="PreviewShowMoreTooltipOverlay" Grid.Row="1"
+                                HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                                Canvas.ZIndex="35"
+                                IsHitTestVisible="True"
+                                Visibility="Collapsed">
+                                <Border x:Name="PreviewShowMoreTooltipBubble"
+                                    Background="#B8181818"
+                                    CornerRadius="4"
+                                    Padding="7,4">
+                                <StackPanel x:Name="PreviewShowMoreTooltipContent"
+                                        Orientation="Horizontal"
+                                        Spacing="6" />
+                                </Border>
+                            </Canvas>
+
                         <!-- Progress overlay for "Show all files" -->
                         <Grid x:Name="PreviewProgressOverlay" Grid.Row="1" Visibility="Collapsed">
                             <Border Background="{ThemeResource AcrylicBackgroundFillColorBaseBrush}"

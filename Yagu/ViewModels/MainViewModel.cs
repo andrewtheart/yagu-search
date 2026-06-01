@@ -127,10 +127,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             Windows.UI.Color.FromArgb(0x00, 0x00, 0x00, 0x00));
         PreviewGutterContextColor = ColorStringHelper.Normalize(
             _settings.PreviewGutterContextColor,
-            Windows.UI.Color.FromArgb(0xFF, 0x50, 0x50, 0x50));
+            Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE));
         PreviewGutterMatchColor = ColorStringHelper.Normalize(
             _settings.PreviewGutterMatchColor,
-            Windows.UI.Color.FromArgb(0xFF, 0x32, 0xCD, 0x32));
+            Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE));
+        PreviewEditorGutterColor = ColorStringHelper.Normalize(
+            _settings.PreviewEditorGutterColor,
+            Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE));
         PreviewMatchTextColor = ColorStringHelper.Normalize(
             _settings.PreviewMatchTextColor,
             Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00));
@@ -388,6 +391,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial string UnselectedPreviewContentBackgroundColor { get; set; } = AppSettings.DefaultUnselectedPreviewContentBackgroundColor;
     [ObservableProperty] public partial string PreviewGutterContextColor { get; set; } = AppSettings.DefaultPreviewGutterContextColor;
     [ObservableProperty] public partial string PreviewGutterMatchColor { get; set; } = AppSettings.DefaultPreviewGutterMatchColor;
+    [ObservableProperty] public partial string PreviewEditorGutterColor { get; set; } = AppSettings.DefaultPreviewEditorGutterColor;
     [ObservableProperty] public partial string PreviewMatchTextColor { get; set; } = AppSettings.DefaultPreviewMatchTextColor;
     [ObservableProperty] public partial string PreviewOverlayColor { get; set; } = AppSettings.DefaultPreviewOverlayColor;
     [ObservableProperty] public partial string PreviewMatchLineColor { get; set; } = AppSettings.DefaultPreviewMatchLineColor;
@@ -2154,10 +2158,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             Windows.UI.Color.FromArgb(0x00, 0x00, 0x00, 0x00));
         _settings.PreviewGutterContextColor = ColorStringHelper.Normalize(
             PreviewGutterContextColor,
-            Windows.UI.Color.FromArgb(0xFF, 0x50, 0x50, 0x50));
+            Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE));
         _settings.PreviewGutterMatchColor = ColorStringHelper.Normalize(
             PreviewGutterMatchColor,
-            Windows.UI.Color.FromArgb(0xFF, 0x32, 0xCD, 0x32));
+            Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE));
+        _settings.PreviewEditorGutterColor = ColorStringHelper.Normalize(
+            PreviewEditorGutterColor,
+            Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE));
         _settings.PreviewMatchTextColor = ColorStringHelper.Normalize(
             PreviewMatchTextColor,
             Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00));

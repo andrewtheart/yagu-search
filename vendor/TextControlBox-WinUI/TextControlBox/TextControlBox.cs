@@ -800,6 +800,15 @@ public partial class TextControlBox : UserControl
     }
 
     /// <summary>
+    /// Gets or sets the color of the line numbers in the editor gutter.
+    /// </summary>
+    public Windows.UI.Color LineNumberColor
+    {
+        get => coreTextBox.LineNumberColor;
+        set => coreTextBox.LineNumberColor = value;
+    }
+
+    /// <summary>
     /// Gets or sets a value indicating whether line numbers should be displayed in the textbox.
     /// </summary>
     public bool ShowLineNumbers

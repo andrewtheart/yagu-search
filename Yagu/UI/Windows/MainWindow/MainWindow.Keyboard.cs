@@ -58,6 +58,11 @@ public sealed partial class MainWindow
             e.Handled = true;
             OpenFindBar(showReplace: true);
         }
+        else if (e.Key == Windows.System.VirtualKey.C && ctrl
+            && TryCopyActivePreviewCustomSelection(e.OriginalSource as DependencyObject))
+        {
+            e.Handled = true;
+        }
         else if (e.Key == Windows.System.VirtualKey.G && ctrl && !shift)
         {
             var src = e.OriginalSource as DependencyObject;

@@ -159,6 +159,7 @@ public sealed partial class MainWindow : Window, IDisposable
             new Microsoft.UI.Xaml.Input.DoubleTappedEventHandler(OnPreviewBlockDoubleTapped),
             handledEventsToo: true);
         AttachPreviewSelectionAutoScroll(PreviewBlock);
+        ConfigurePreviewSelectionMode(PreviewBlock);
         AttachPreviewBlockContextFlyout(PreviewBlock);
         InitializePreviewEditorZoom();
         InitializeResultsListSmartScroll();
@@ -218,6 +219,7 @@ public sealed partial class MainWindow : Window, IDisposable
 
             if (e.PropertyName == nameof(ViewModel.PreviewGutterContextColor) ||
                 e.PropertyName == nameof(ViewModel.PreviewGutterMatchColor) ||
+                e.PropertyName == nameof(ViewModel.PreviewEditorGutterColor) ||
                 e.PropertyName == nameof(ViewModel.PreviewMatchTextColor) ||
                 e.PropertyName == nameof(ViewModel.PreviewOverlayColor) ||
                 e.PropertyName == nameof(ViewModel.PreviewMatchLineColor))
@@ -344,6 +346,7 @@ public sealed partial class MainWindow : Window, IDisposable
         _autoScrollTimer?.Stop();
         _previewContextDebounceTimer?.Stop();
         _diskSparklineTimer?.Stop();
+        DisposePreviewSelectionAutoScroll();
         DisposeResultsListSmartScroll();
         _previewLoadCts?.Cancel();
         _previewLoadCts?.Dispose();

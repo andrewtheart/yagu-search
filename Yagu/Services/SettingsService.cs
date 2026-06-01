@@ -20,8 +20,12 @@ public sealed class AppSettings
     public const string DefaultUnselectedPreviewContentBackgroundColor = "#00000000";
 
     // Preview editor font colors (ARGB hex strings)
-    public const string DefaultPreviewGutterContextColor = "#FF505050";
-    public const string DefaultPreviewGutterMatchColor = "#FF32CD32"; // LimeGreen
+    public const string LegacyDefaultPreviewGutterContextColor = "#FF505050";
+    public const string LegacyDefaultPreviewGutterMatchColor = "#FF32CD32";
+    public const string DefaultPreviewGutterColor = "#FF9CDCFE";
+    public const string DefaultPreviewGutterContextColor = DefaultPreviewGutterColor;
+    public const string DefaultPreviewGutterMatchColor = DefaultPreviewGutterColor;
+    public const string DefaultPreviewEditorGutterColor = DefaultPreviewGutterColor;
     public const string DefaultPreviewMatchTextColor = "#FFFFD700"; // Gold
     public const string DefaultPreviewOverlayColor = "#FFFF4500"; // OrangeRed
     public const string DefaultPreviewMatchLineColor = "#FFFFFFFF"; // White
@@ -64,6 +68,7 @@ public sealed class AppSettings
     public string UnselectedPreviewContentBackgroundColor { get; set; } = DefaultUnselectedPreviewContentBackgroundColor;
     public string PreviewGutterContextColor { get; set; } = DefaultPreviewGutterContextColor;
     public string PreviewGutterMatchColor { get; set; } = DefaultPreviewGutterMatchColor;
+    public string PreviewEditorGutterColor { get; set; } = DefaultPreviewEditorGutterColor;
     public string PreviewMatchTextColor { get; set; } = DefaultPreviewMatchTextColor;
     public string PreviewOverlayColor { get; set; } = DefaultPreviewOverlayColor;
     public string PreviewMatchLineColor { get; set; } = DefaultPreviewMatchLineColor;
@@ -230,6 +235,7 @@ public sealed class SettingsService
                 settings.BinaryExtensions = AppSettings.DefaultBinaryExtensions;
                 settings.SkipExtensions = MergeExtensionLists(settings.SkipExtensions, AppSettings.DefaultSkipExtensions);
             }
+            MigrateLegacyPreviewGutterColors(settings);
             MigrateLegacyWindowFocusBehavior(settings);
             return settings;
         }
@@ -258,6 +264,7 @@ public sealed class SettingsService
                 settings.BinaryExtensions = AppSettings.DefaultBinaryExtensions;
                 settings.SkipExtensions = MergeExtensionLists(settings.SkipExtensions, AppSettings.DefaultSkipExtensions);
             }
+            MigrateLegacyPreviewGutterColors(settings);
             MigrateLegacyWindowFocusBehavior(settings);
             return settings;
         }
@@ -299,6 +306,24 @@ public sealed class SettingsService
         string.Equals(skipExtensions, AppSettings.LegacyDefaultSkipExtensions, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(skipExtensions, AppSettings.LegacyExpandedBinaryPrefilterExtensions, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(skipExtensions, AppSettings.DefaultBinaryExtensions, StringComparison.OrdinalIgnoreCase);
+
+    private static void MigrateLegacyPreviewGutterColors(AppSettings settings)
+    {
+        if (string.IsNullOrWhiteSpace(settings.PreviewGutterContextColor)
+            || string.Equals(settings.PreviewGutterContextColor, AppSettings.LegacyDefaultPreviewGutterContextColor, StringComparison.OrdinalIgnoreCase))
+        {
+            settings.PreviewGutterContextColor = AppSettings.DefaultPreviewGutterContextColor;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.PreviewGutterMatchColor)
+            || string.Equals(settings.PreviewGutterMatchColor, AppSettings.LegacyDefaultPreviewGutterMatchColor, StringComparison.OrdinalIgnoreCase))
+        {
+            settings.PreviewGutterMatchColor = AppSettings.DefaultPreviewGutterMatchColor;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.PreviewEditorGutterColor))
+            settings.PreviewEditorGutterColor = AppSettings.DefaultPreviewEditorGutterColor;
+    }
 
     private static bool IsLegacyExpandedBinaryPrefilter(string binaryExtensions) =>
         string.Equals(binaryExtensions, AppSettings.LegacyExpandedBinaryPrefilterExtensions, StringComparison.OrdinalIgnoreCase);

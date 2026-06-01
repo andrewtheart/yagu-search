@@ -1152,6 +1152,21 @@ internal sealed partial class CoreTextControlBox : UserControl
         set => designHelper.Design = value;
     }
 
+    public Windows.UI.Color LineNumberColor
+    {
+        get => designHelper._Design.LineNumberColor;
+        set
+        {
+            if (designHelper._Design.LineNumberColor.Equals(value))
+                return;
+
+            designHelper._Design.LineNumberColor = value;
+            designHelper.ColorResourcesCreated = false;
+            lineNumberRenderer.NeedsUpdateLineNumbers();
+            canvasUpdateManager.UpdateAll();
+        }
+    }
+
     public bool ShowLineNumbers
     {
         get => lineNumberManager._ShowLineNumbers;

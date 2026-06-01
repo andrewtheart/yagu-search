@@ -272,6 +272,23 @@ public class SettingsServiceNewFieldTests
     }
 
     [Fact]
+    public void RoundTrip_PreviewEditorGutterColor()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-editor-gutter-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var svc = new SettingsService(tmp);
+            var settings = new AppSettings { PreviewEditorGutterColor = "#FF123456" };
+            svc.Save(settings);
+
+            var loaded = svc.Load();
+
+            Assert.Equal("#FF123456", loaded.PreviewEditorGutterColor);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
     public void AdvancedOption_SkipBinary_IsInstanceOnly()
     {
         var tmp = Path.Combine(Path.GetTempPath(), "qg-skipbin-" + Guid.NewGuid() + ".json");
@@ -340,6 +357,17 @@ public class SettingsServiceNewFieldTests
     }
 
     [Fact]
+    public void Defaults_GutterColors_UseSharedBlueDefault()
+    {
+        var settings = new AppSettings();
+
+        Assert.Equal("#FF9CDCFE", AppSettings.DefaultPreviewGutterColor);
+        Assert.Equal(AppSettings.DefaultPreviewGutterColor, settings.PreviewGutterContextColor);
+        Assert.Equal(AppSettings.DefaultPreviewGutterColor, settings.PreviewGutterMatchColor);
+        Assert.Equal(AppSettings.DefaultPreviewGutterColor, settings.PreviewEditorGutterColor);
+    }
+
+    [Fact]
     public void Defaults_FileAndDateFilters_AreUnrestricted()
     {
         var settings = new AppSettings();
@@ -399,6 +427,24 @@ public class SettingsServiceNewFieldTests
             var loaded = svc.Load();
 
             Assert.Equal(AppSettings.DefaultSkipExtensions, loaded.SkipExtensions);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
+    public void Load_LegacyPreviewGutterColors_MigrateToSharedBlueDefault()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-gutter-color-migration-" + Guid.NewGuid() + ".json");
+        try
+        {
+            File.WriteAllText(tmp, $$"""{"PreviewGutterContextColor":"{{AppSettings.LegacyDefaultPreviewGutterContextColor}}","PreviewGutterMatchColor":"{{AppSettings.LegacyDefaultPreviewGutterMatchColor}}","PreviewEditorGutterColor":""}""");
+            var svc = new SettingsService(tmp);
+
+            var loaded = svc.Load();
+
+            Assert.Equal(AppSettings.DefaultPreviewGutterColor, loaded.PreviewGutterContextColor);
+            Assert.Equal(AppSettings.DefaultPreviewGutterColor, loaded.PreviewGutterMatchColor);
+            Assert.Equal(AppSettings.DefaultPreviewGutterColor, loaded.PreviewEditorGutterColor);
         }
         finally { try { File.Delete(tmp); } catch { } }
     }

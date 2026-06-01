@@ -69,6 +69,60 @@ public sealed partial class MainWindow
     /// </summary>
     private const int PreviewLineLayoutSegmentCharsNoWrap = 4096;
 
+    private enum PreviewShowMoreEdge
+    {
+        Prefix,
+        Suffix,
+    }
+
+    private enum PreviewShowMoreExpandMode
+    {
+        More,
+        All,
+    }
+
+    private sealed class PreviewTruncatedLineState
+    {
+        public PreviewTruncatedLineState(
+            string sourceLine,
+            int sourceStart,
+            int sourceEnd,
+            int lineNumber,
+            bool isMatchLine,
+            SearchResult result,
+            Regex? regex)
+        {
+            SourceLine = sourceLine;
+            SourceStart = sourceStart;
+            SourceEnd = sourceEnd;
+            LineNumber = lineNumber;
+            IsMatchLine = isMatchLine;
+            Result = result;
+            Regex = regex;
+        }
+
+        public string SourceLine { get; }
+        public int SourceStart { get; set; }
+        public int SourceEnd { get; set; }
+        public int LineNumber { get; }
+        public bool IsMatchLine { get; }
+        public SearchResult Result { get; }
+        public Regex? Regex { get; }
+        public int ContentInlineStart { get; set; }
+    }
+
+    private sealed record PreviewShowMoreAction(
+        Paragraph Paragraph,
+        PreviewTruncatedLineState State,
+        PreviewShowMoreEdge Edge);
+
+    private sealed record PreviewShowMoreScrollSnapshot(
+        double PreviewHorizontalOffset,
+        double PreviewVerticalOffset,
+        ScrollViewer? SectionScroller,
+        double SectionHorizontalOffset,
+        double SectionVerticalOffset);
+
     private bool ShouldTruncatePreviewLines()
         => ViewModel.PreviewWrapModeIndex != (int)Models.PreviewWrapMode.NoWrap;
 
@@ -80,6 +134,18 @@ public sealed partial class MainWindow
         => ViewModel.PreviewWrapModeIndex == (int)Models.PreviewWrapMode.NoWrap
             ? PreviewLineLayoutSegmentCharsNoWrap
             : PreviewLineLayoutSegmentChars;
+
+    private int GetPreviewShowMoreMaxWindowLength()
+        => Math.Max(50, GetEffectiveSegmentSize() - (2 * LineTruncator.Ellipsis.Length));
+
+    private int GetPreviewTruncatedLength()
+    {
+        int configuredLength = LineTruncator.TruncatedLength;
+        if (configuredLength == 0)
+            return 0;
+
+        return Math.Min(configuredLength, GetPreviewShowMoreMaxWindowLength());
+    }
 
     /// <summary>
     /// Maximum matches to render per file section before truncating.
@@ -555,6 +621,7 @@ public sealed partial class MainWindow
         RichTextBlock section, List<SearchResult> results,
         string[]? allLines, int previewLines, Regex? rx)
     {
+        ResetPreviewShowMoreDiagnostics();
         var buildSw = System.Diagnostics.Stopwatch.StartNew();
         bool truncatePreviewLines = ShouldTruncatePreviewLines();
         int parasBuilt = 0;
@@ -616,6 +683,7 @@ public sealed partial class MainWindow
 
         buildSw.Stop();
         LogService.Instance.Info("Preview", $"BuildConcatenatedSection: results={results.Count}, rendered={renderedResults}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, activeSearch={ViewModel.IsSearching}, caps=(matches={maxMatches}, blocks={maxBlocks}), elapsed={buildSw.ElapsedMilliseconds}ms");
+        LogPreviewShowMoreDiagnostics("BuildConcatenatedSection");
     }
 
     // Yield to the UI dispatcher after this many paragraphs have been added during
@@ -627,6 +695,7 @@ public sealed partial class MainWindow
         RichTextBlock section, List<SearchResult> results,
         string[]? allLines, int previewLines, Regex? rx)
     {
+        ResetPreviewShowMoreDiagnostics();
         var buildSw = System.Diagnostics.Stopwatch.StartNew();
         bool truncatePreviewLines = ShouldTruncatePreviewLines();
         int parasBuilt = 0;
@@ -826,6 +895,7 @@ public sealed partial class MainWindow
 
         buildSw.Stop();
         LogService.Instance.Info("Preview", $"BuildHighlightSection: results={results.Count}, rendered={renderedCount}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, hasAllLines={allLines != null}, activeSearch={ViewModel.IsSearching}, caps=(matches={maxMatches}, blocks={maxBlocks}), yields={yieldCount}, elapsed={buildSw.ElapsedMilliseconds}ms");
+        LogPreviewShowMoreDiagnostics("BuildHighlightSection");
     }
 
     /// <summary>
@@ -1279,6 +1349,8 @@ public sealed partial class MainWindow
         PreviewScrollViewer.Padding = new Thickness(16, 12, 16, 12);
         PreviewSectionsPanel.Children.Clear();
         PreviewSectionsPanel.Visibility = Visibility.Collapsed;
+        PreviewBlock.TextWrapping = ViewModel.PreviewWordWrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
+        ConfigurePreviewSelectionMode(PreviewBlock);
         PreviewBlock.Visibility = Visibility.Visible;
         HidePreviewLoading();
         SetPerFileToolbarVisibility(Visibility.Visible);
@@ -1373,7 +1445,7 @@ public sealed partial class MainWindow
             TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap,
             LineHeight = 20,
             LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
-            IsTextSelectionEnabled = true,
+            IsTextSelectionEnabled = wrap,
             Tag = filePath,
         };
         AttachPreviewBlockContextFlyout(block);
@@ -1482,6 +1554,7 @@ public sealed partial class MainWindow
                     // ApplyWordWrapAsync to keep the toggle responsive for huge previews).
                     var wrap = ViewModel.PreviewWordWrap;
                     b.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
+                    ConfigurePreviewSelectionMode(b);
                     if (exp.Content is Grid eg && eg.Children.OfType<ScrollViewer>().FirstOrDefault() is ScrollViewer scroller)
                         ApplyPreviewHorizontalScrollForWrapSection(scroller, wrap);
                     else if (exp.Content is ScrollViewer scroller2)
@@ -2156,7 +2229,7 @@ public sealed partial class MainWindow
         }
     }
 
-    private SolidColorBrush s_matchGutterBrush = new(Microsoft.UI.Colors.LimeGreen);
+    private SolidColorBrush s_matchGutterBrush = new(Windows.UI.Color.FromArgb(255, 156, 220, 254));
 
     /// <summary>
     /// Returns the number of individual regex match occurrences on a line (minimum 1 for a match line).
@@ -2188,8 +2261,8 @@ public sealed partial class MainWindow
         }
     }
 
-    private SolidColorBrush s_contextGutterBrush = new(Windows.UI.Color.FromArgb(255, 80, 80, 80));
-    private static readonly SolidColorBrush s_gutterSepBrush = new(Windows.UI.Color.FromArgb(255, 60, 60, 60));
+    private SolidColorBrush s_contextGutterBrush = new(Windows.UI.Color.FromArgb(255, 156, 220, 254));
+    private static SolidColorBrush s_gutterSepBrush = new(Windows.UI.Color.FromArgb(255, 156, 220, 254));
     private SolidColorBrush s_contextTextBrush = new(Windows.UI.Color.FromArgb(255, 110, 110, 110));
     private SolidColorBrush s_matchAccentBrush = new(Windows.UI.Color.FromArgb(255, 70, 140, 70));
     private static readonly SolidColorBrush _transparentBrush = new(Microsoft.UI.Colors.Transparent);
@@ -2200,12 +2273,51 @@ public sealed partial class MainWindow
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphPrimaryResults = new();
     /// <summary>Marks paragraphs that are continuation segments of a long source line (no leading line number gutter).</summary>
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphIsContinuation = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DependencyObject, object> s_previewShowMoreActions = new();
+    private const int PreviewShowMoreTooltipHideDelayMs = 700;
+    private const double PreviewShowMoreTooltipCursorGapDip = 12;
+    private const double PreviewShowMoreTooltipLeftShiftRatio = 0.10;
+    private PreviewShowMoreAction? _previewShowMoreTooltipAction;
+    private PreviewShowMoreEdge? _previewShowMoreTooltipEdge;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _previewShowMoreTooltipHideTimer;
+    private bool _previewShowMoreTooltipHandlersAttached;
+    private bool _previewShowMorePointerOverMarker;
+    private bool _previewShowMorePointerOverPanel;
+    private int _previewShowMoreWindowCount;
+    private int _previewShowMoreMarkerCount;
+    private int _previewShowMorePrefixMarkerCount;
+    private int _previewShowMoreSuffixMarkerCount;
+    private int _previewShowMoreCappedWindowCount;
+    private string? _previewShowMoreSample;
+
+    private void ResetPreviewShowMoreDiagnostics()
+    {
+        _previewShowMoreWindowCount = 0;
+        _previewShowMoreMarkerCount = 0;
+        _previewShowMorePrefixMarkerCount = 0;
+        _previewShowMoreSuffixMarkerCount = 0;
+        _previewShowMoreCappedWindowCount = 0;
+        _previewShowMoreSample = null;
+    }
+
+    private void LogPreviewShowMoreDiagnostics(string scope)
+    {
+        if (!LogService.Instance.IsVerboseEnabled && _previewShowMoreMarkerCount == 0)
+            return;
+
+        LogService.Instance.Info(
+            "PreviewShowMore",
+            $"{scope}: windows={_previewShowMoreWindowCount}, markers={_previewShowMoreMarkerCount}, prefix={_previewShowMorePrefixMarkerCount}, suffix={_previewShowMoreSuffixMarkerCount}, capped={_previewShowMoreCappedWindowCount}, configuredTrunc={LineTruncator.TruncatedLength}, effectiveTrunc={GetPreviewTruncatedLength()}, segment={GetEffectiveSegmentSize()}, wrapMode={ViewModel.PreviewWrapModeIndex}, sample={_previewShowMoreSample ?? "none"}");
+    }
 
     private void ApplyPreviewColors()
     {
         var vm = ViewModel;
-        s_contextGutterBrush = new SolidColorBrush(ColorStringHelper.Parse(vm.PreviewGutterContextColor, Windows.UI.Color.FromArgb(0xFF, 0x50, 0x50, 0x50)));
-        s_matchGutterBrush = new SolidColorBrush(ColorStringHelper.Parse(vm.PreviewGutterMatchColor, Windows.UI.Color.FromArgb(0xFF, 0x32, 0xCD, 0x32)));
+        var previewGutterColor = ColorStringHelper.Parse(vm.PreviewGutterContextColor, Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE));
+        s_contextGutterBrush.Color = previewGutterColor;
+        s_gutterSepBrush.Color = previewGutterColor;
+        s_matchGutterBrush.Color = ColorStringHelper.Parse(vm.PreviewGutterMatchColor, Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE));
+        PreviewEditor.LineNumberColor = ColorStringHelper.Parse(vm.PreviewEditorGutterColor, Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE));
         var matchTextColor = ColorStringHelper.Parse(vm.PreviewMatchTextColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00));
         _matchTextBrush = new SolidColorBrush(matchTextColor);
         _overlayColor = ColorStringHelper.Parse(vm.PreviewOverlayColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x45, 0x00));
@@ -2233,8 +2345,10 @@ public sealed partial class MainWindow
         out int paragraphsAdded)
     {
         line ??= string.Empty;
-        if (truncate)
-            line = isMatchLine ? TruncatePreviewLineAroundResult(line, result, rx).Text : TruncatePreviewLine(line, rx);
+        var window = truncate
+            ? (isMatchLine ? TruncatePreviewLineAroundResult(line, result, rx) : TruncatePreviewLineWindow(line, rx))
+            : CreatePreviewLineWindow(line, 0, line.Length);
+        var expansionState = CreatePreviewTruncatedLineState(window, line, lineNum, isMatchLine, result, rx);
 
         _sectionGutterBlocks.TryGetValue(section, out var gutterBlock);
 
@@ -2242,10 +2356,10 @@ public sealed partial class MainWindow
         bool addedMatchEntries = false;
         paragraphsAdded = 0;
 
-        foreach (var segment in EnumeratePreviewLineLayoutSegments(line))
+        foreach (var segment in EnumeratePreviewLineLayoutSegments(window.Text))
         {
             bool isContinuation = firstParagraph is not null;
-            var para = MakePreviewParagraph(segment, lineNum, isMatchLine, result, rx, truncate: false, continuationGutter: isContinuation, gutterBlock: gutterBlock);
+            var para = MakePreviewParagraph(segment, lineNum, isMatchLine, result, rx, truncate: false, continuationGutter: isContinuation, gutterBlock: gutterBlock, truncationState: isContinuation ? null : expansionState);
             section.Blocks.Add(para);
             firstParagraph ??= para;
             paragraphsAdded++;
@@ -2274,7 +2388,63 @@ public sealed partial class MainWindow
 
     private readonly record struct PreviewLineWindow(string Text, int SourceStart, int SourceEnd);
 
-    private static PreviewLineWindow TruncatePreviewLineAroundResult(string? line, SearchResult result, Regex? rx)
+    private PreviewTruncatedLineState? CreatePreviewTruncatedLineState(
+        PreviewLineWindow window,
+        string sourceLine,
+        int lineNumber,
+        bool isMatchLine,
+        SearchResult result,
+        Regex? regex)
+    {
+        if (window.SourceStart <= 0 && window.SourceEnd >= sourceLine.Length)
+            return null;
+
+        _previewShowMoreWindowCount++;
+        if (LineTruncator.TruncatedLength > GetPreviewTruncatedLength())
+            _previewShowMoreCappedWindowCount++;
+
+        _previewShowMoreSample ??= $"line={lineNumber}, textLen={sourceLine.Length}, displayLen={window.Text.Length}, sourceStart={window.SourceStart}, sourceEnd={window.SourceEnd}, hiddenPrefix={window.SourceStart}, hiddenSuffix={sourceLine.Length - window.SourceEnd}";
+
+        return new PreviewTruncatedLineState(
+            sourceLine,
+            window.SourceStart,
+            window.SourceEnd,
+            lineNumber,
+            isMatchLine,
+            result,
+            regex);
+    }
+
+    private static PreviewLineWindow CreatePreviewLineWindow(string sourceLine, int sourceStart, int sourceEnd)
+    {
+        sourceLine ??= string.Empty;
+        sourceStart = Math.Clamp(sourceStart, 0, sourceLine.Length);
+        sourceEnd = Math.Clamp(sourceEnd, sourceStart, sourceLine.Length);
+
+        string prefix = sourceStart > 0 ? LineTruncator.Ellipsis : string.Empty;
+        string suffix = sourceEnd < sourceLine.Length ? LineTruncator.Ellipsis : string.Empty;
+        string text = string.Concat(prefix, sourceLine.AsSpan(sourceStart, sourceEnd - sourceStart), suffix);
+        return new PreviewLineWindow(text, sourceStart, sourceEnd);
+    }
+
+    private PreviewLineWindow TruncatePreviewLineWindow(string? line, Regex? rx)
+    {
+        line ??= string.Empty;
+        int truncatedLength = GetPreviewTruncatedLength();
+        if (truncatedLength == 0 || line.Length <= truncatedLength * 2)
+            return CreatePreviewLineWindow(line, 0, line.Length);
+
+        if (rx is not null)
+        {
+            var match = rx.Match(line);
+            if (match.Success && match.Length > 0)
+                return TruncatePreviewLineAroundSourceMatch(line, match.Index, match.Length);
+        }
+
+        return CreatePreviewLineWindow(line, 0, Math.Min(line.Length, truncatedLength));
+    }
+
+    private PreviewLineWindow TruncatePreviewLineAroundResult(string? line, SearchResult result, Regex? rx)
     {
         line ??= string.Empty;
         int matchStart = ResolveSourceMatchStart(line, result, rx);
@@ -2289,28 +2459,35 @@ public sealed partial class MainWindow
             }
         }
 
-        if (LineTruncator.TruncatedLength == 0
-            || line.Length <= LineTruncator.MaxDisplayLength
+        int truncatedLength = GetPreviewTruncatedLength();
+        if (truncatedLength == 0
+            || line.Length <= truncatedLength * 2
             || matchStart < 0
             || matchLength <= 0
             || matchStart >= line.Length)
         {
-            return new PreviewLineWindow(LineTruncator.Truncate(line), 0, line.Length);
+            return TruncatePreviewLineWindow(line, rx: null);
         }
 
+        return TruncatePreviewLineAroundSourceMatch(line, matchStart, matchLength);
+    }
+
+    private PreviewLineWindow TruncatePreviewLineAroundSourceMatch(string line, int matchStart, int matchLength)
+    {
+        int truncatedLength = GetPreviewTruncatedLength();
+        if (truncatedLength == 0)
+            return CreatePreviewLineWindow(line, 0, line.Length);
+
         int safeMatchLength = Math.Min(matchLength, line.Length - matchStart);
-        int visibleMatchLength = Math.Min(safeMatchLength, LineTruncator.TruncatedLength);
-        int contextChars = Math.Max(0, (LineTruncator.TruncatedLength - visibleMatchLength) / 2);
+        int visibleMatchLength = Math.Min(safeMatchLength, truncatedLength);
+        int contextChars = Math.Max(0, (truncatedLength - visibleMatchLength) / 2);
 
         int start = Math.Max(0, matchStart - contextChars);
-        int end = Math.Min(line.Length, start + LineTruncator.TruncatedLength);
-        if (end - start < LineTruncator.TruncatedLength)
-            start = Math.Max(0, end - LineTruncator.TruncatedLength);
+        int end = Math.Min(line.Length, start + truncatedLength);
+        if (end - start < truncatedLength)
+            start = Math.Max(0, end - truncatedLength);
 
-        string prefix = start > 0 ? LineTruncator.Ellipsis : string.Empty;
-        string suffix = end < line.Length ? LineTruncator.Ellipsis : string.Empty;
-        string text = string.Concat(prefix, line.AsSpan(start, end - start), suffix);
-        return new PreviewLineWindow(text, start, end);
+        return CreatePreviewLineWindow(line, start, end);
     }
 
     private static int ResolveSourceMatchStart(string line, SearchResult result, Regex? rx)
@@ -2377,6 +2554,7 @@ public sealed partial class MainWindow
         var window = truncate
             ? TruncatePreviewLineAroundResult(line, result, rx)
             : new PreviewLineWindow(line, 0, line.Length);
+        var expansionState = CreatePreviewTruncatedLineState(window, line, lineNum, isMatchLine: true, result, rx);
         _sectionGutterBlocks.TryGetValue(section, out var gutterBlock);
         Paragraph? firstParagraph = null;
         bool addedMatchEntries = false;
@@ -2386,7 +2564,7 @@ public sealed partial class MainWindow
         foreach (var segment in EnumeratePreviewLineLayoutSegments(window.Text))
         {
             bool isContinuation = firstParagraph is not null || continuationGutter;
-            var para = MakePreviewParagraph(segment, lineNum, isMatchLine: true, result, rx, truncate: false, continuationGutter: isContinuation, gutterBlock: gutterBlock);
+            var para = MakePreviewParagraph(segment, lineNum, isMatchLine: true, result, rx, truncate: false, continuationGutter: isContinuation, gutterBlock: gutterBlock, truncationState: isContinuation ? null : expansionState);
             section.Blocks.Add(para);
             firstParagraph ??= para;
             paragraphsAdded++;
@@ -2641,7 +2819,7 @@ public sealed partial class MainWindow
         }
     }
 
-    private Paragraph MakePreviewParagraph(string line, int lineNum, bool isMatchLine, SearchResult r, Regex? rx, bool truncate = true, bool continuationGutter = false, RichTextBlock? gutterBlock = null)
+    private Paragraph MakePreviewParagraph(string line, int lineNum, bool isMatchLine, SearchResult r, Regex? rx, bool truncate = true, bool continuationGutter = false, RichTextBlock? gutterBlock = null, PreviewTruncatedLineState? truncationState = null)
     {
         line ??= string.Empty;
         if (truncate)
@@ -2680,16 +2858,48 @@ public sealed partial class MainWindow
             para.Inlines.Add(gutterSep);
         }
 
+        if (truncationState is not null)
+            truncationState.ContentInlineStart = para.Inlines.Count;
+
+        AddPreviewTextRuns(para, line, isMatchLine, rx, truncationState);
+
+        return para;
+    }
+
+    private void AddPreviewTextRuns(Paragraph para, string line, bool isMatchLine, Regex? rx, PreviewTruncatedLineState? truncationState)
+    {
+        bool hasPrefixEllipsis = truncationState is not null
+            && truncationState.SourceStart > 0
+            && line.StartsWith(LineTruncator.Ellipsis, StringComparison.Ordinal);
+        bool hasSuffixEllipsis = truncationState is not null
+            && truncationState.SourceEnd < truncationState.SourceLine.Length
+            && line.EndsWith(LineTruncator.Ellipsis, StringComparison.Ordinal);
+
+        int start = hasPrefixEllipsis ? LineTruncator.Ellipsis.Length : 0;
+        int end = line.Length - (hasSuffixEllipsis ? LineTruncator.Ellipsis.Length : 0);
+
+        if (hasPrefixEllipsis)
+            para.Inlines.Add(CreatePreviewShowMoreInline(para, truncationState!, PreviewShowMoreEdge.Prefix));
+
+        if (end > start)
+            AddPreviewTextSpanRuns(para, line[start..end], isMatchLine, rx);
+
+        if (hasSuffixEllipsis)
+            para.Inlines.Add(CreatePreviewShowMoreInline(para, truncationState!, PreviewShowMoreEdge.Suffix));
+    }
+
+    private void AddPreviewTextSpanRuns(Paragraph para, string text, bool isMatchLine, Regex? rx)
+    {
         // Keep gutter/nav semantics tied to actual match lines, but color every
         // visible regex hit yellow so context lines don't show unhighlighted matches.
         if (rx != null)
         {
             int lastIdx = 0;
-            foreach (System.Text.RegularExpressions.Match m in rx.Matches(line))
+            foreach (System.Text.RegularExpressions.Match m in rx.Matches(text))
             {
                 if (m.Index > lastIdx)
                 {
-                    var before = new Run { Text = line[lastIdx..m.Index] };
+                    var before = new Run { Text = text[lastIdx..m.Index] };
                     if (!isMatchLine) before.Foreground = s_contextTextBrush;
                     else before.Foreground = _matchLineBrush;
                     para.Inlines.Add(before);
@@ -2700,9 +2910,9 @@ public sealed partial class MainWindow
                 para.Inlines.Add(hit);
                 lastIdx = m.Index + m.Length;
             }
-            if (lastIdx < line.Length)
+            if (lastIdx < text.Length)
             {
-                var tail = new Run { Text = line[lastIdx..] };
+                var tail = new Run { Text = text[lastIdx..] };
                 if (!isMatchLine) tail.Foreground = s_contextTextBrush;
                 else tail.Foreground = _matchLineBrush;
                 para.Inlines.Add(tail);
@@ -2710,25 +2920,595 @@ public sealed partial class MainWindow
         }
         else
         {
-            var plain = new Run { Text = line };
+            var plain = new Run { Text = text };
             if (!isMatchLine) plain.Foreground = s_contextTextBrush;
             else plain.Foreground = _matchLineBrush;
             para.Inlines.Add(plain);
         }
-
-        return para;
     }
 
-    private static string TruncatePreviewLine(string line, Regex? rx)
+    private static readonly SolidColorBrush s_previewShowMoreEllipsisBrush = new(Microsoft.UI.Colors.DodgerBlue);
+
+    private InlineUIContainer CreatePreviewShowMoreInline(
+        Paragraph paragraph,
+        PreviewTruncatedLineState state,
+        PreviewShowMoreEdge edge)
     {
-        if (rx is not null)
+        var action = new PreviewShowMoreAction(paragraph, state, edge);
+        var marker = new TextBlock
         {
-            var match = rx.Match(line);
-            if (match.Success && match.Length > 0)
-                return LineTruncator.TruncateAroundMatch(line, match.Index, match.Length).Text;
+            Text = LineTruncator.Ellipsis,
+            Foreground = s_previewShowMoreEllipsisBrush,
+            FontFamily = new FontFamily("Consolas"),
+            VerticalAlignment = VerticalAlignment.Center,
+            Padding = new Thickness(0),
+            Margin = new Thickness(0),
+            IsTextSelectionEnabled = false,
+        };
+        var markerHost = new Border
+        {
+            Child = marker,
+            Background = _transparentBrush,
+            MinWidth = 8,
+            MinHeight = 14,
+            Padding = new Thickness(0),
+            Margin = new Thickness(0),
+        };
+        void showFromPointer(object? _, PointerRoutedEventArgs e)
+        {
+            _previewShowMorePointerOverMarker = true;
+            CancelPreviewShowMoreTooltipHide();
+            ShowPreviewShowMoreTooltip(action, e.GetCurrentPoint(PreviewShowMoreTooltipOverlay).Position);
         }
 
-        return LineTruncator.Truncate(line);
+        void queueHideFromMarker(object? _, PointerRoutedEventArgs e)
+        {
+            _previewShowMorePointerOverMarker = false;
+            QueuePreviewShowMoreTooltipHide();
+        }
+
+        markerHost.PointerEntered += showFromPointer;
+        markerHost.PointerMoved += showFromPointer;
+        markerHost.PointerExited += queueHideFromMarker;
+        marker.PointerEntered += showFromPointer;
+        marker.PointerMoved += showFromPointer;
+        marker.PointerExited += queueHideFromMarker;
+        markerHost.Tapped += (_, e) =>
+        {
+            e.Handled = true;
+            ExpandPreviewShowMoreFromInlineClick(action);
+        };
+        var container = new InlineUIContainer { Child = markerHost };
+
+        _previewShowMoreMarkerCount++;
+        if (edge == PreviewShowMoreEdge.Prefix)
+            _previewShowMorePrefixMarkerCount++;
+        else
+            _previewShowMoreSuffixMarkerCount++;
+
+        s_previewShowMoreActions.Remove(container);
+        s_previewShowMoreActions.Add(container, action);
+        s_previewShowMoreActions.Remove(markerHost);
+        s_previewShowMoreActions.Add(markerHost, action);
+        s_previewShowMoreActions.Remove(marker);
+        s_previewShowMoreActions.Add(marker, action);
+
+        return container;
+    }
+
+    private void ExpandPreviewShowMoreFromInlineClick(PreviewShowMoreAction action)
+    {
+        CancelPreviewSelectionAutoScrollForShowMore("show-more-inline-click");
+        HidePreviewShowMoreTooltip();
+        QueuePreviewTruncatedLineExpansion(action, PreviewShowMoreExpandMode.More);
+    }
+
+    private void OnPreviewShowMorePointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is not RichTextBlock block
+            || !TryGetPreviewShowMoreActionFromPointer(block, e, out var action))
+        {
+            _previewShowMorePointerOverMarker = false;
+            QueuePreviewShowMoreTooltipHide();
+            return;
+        }
+
+        _previewShowMorePointerOverMarker = true;
+        CancelPreviewShowMoreTooltipHide();
+        var point = e.GetCurrentPoint(PreviewShowMoreTooltipOverlay).Position;
+        ShowPreviewShowMoreTooltip(action, point);
+    }
+
+    private void OnPreviewShowMorePointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        // Keep the action panel available when the pointer moves from the
+        // inline marker toward the panel buttons.
+    }
+
+    private void ShowPreviewShowMoreTooltip(PreviewShowMoreAction action, Windows.Foundation.Point pointer)
+    {
+        CancelPreviewSelectionAutoScrollForShowMore("show-more-tooltip");
+        EnsurePreviewShowMoreTooltipHandlers();
+        CancelPreviewShowMoreTooltipHide();
+
+        var edge = action.Edge;
+        bool rebuild = _previewShowMoreTooltipAction is null
+            || !ReferenceEquals(_previewShowMoreTooltipAction, action)
+            || _previewShowMoreTooltipEdge != edge;
+
+        if (rebuild)
+        {
+            PreviewShowMoreTooltipContent.Children.Clear();
+            var foreground = new SolidColorBrush(Microsoft.UI.Colors.White);
+            if (edge == PreviewShowMoreEdge.Prefix)
+            {
+                PreviewShowMoreTooltipContent.Children.Add(CreatePreviewShowMoreActionButton("\uE72B", "Show more", arrowFirst: true, action, PreviewShowMoreExpandMode.More, foreground));
+                PreviewShowMoreTooltipContent.Children.Add(CreatePreviewShowMoreActionButton("\uE72B", "Show all", arrowFirst: true, action, PreviewShowMoreExpandMode.All, foreground));
+            }
+            else
+            {
+                PreviewShowMoreTooltipContent.Children.Add(CreatePreviewShowMoreActionButton("\uE72A", "Show more", arrowFirst: false, action, PreviewShowMoreExpandMode.More, foreground));
+                PreviewShowMoreTooltipContent.Children.Add(CreatePreviewShowMoreActionButton("\uE72A", "Show all", arrowFirst: false, action, PreviewShowMoreExpandMode.All, foreground));
+            }
+
+            _previewShowMoreTooltipAction = action;
+            _previewShowMoreTooltipEdge = edge;
+        }
+
+        if (PreviewShowMoreTooltipOverlay.Visibility != Visibility.Visible)
+            PreviewShowMoreTooltipOverlay.Visibility = Visibility.Visible;
+
+        PreviewShowMoreTooltipBubble.UpdateLayout();
+        double bubbleWidth = Math.Max(190, PreviewShowMoreTooltipBubble.ActualWidth);
+        double bubbleHeight = Math.Max(32, PreviewShowMoreTooltipBubble.ActualHeight);
+        double maxLeft = Math.Max(4, PreviewShowMoreTooltipOverlay.ActualWidth - bubbleWidth - 4);
+        double maxTop = Math.Max(4, PreviewShowMoreTooltipOverlay.ActualHeight - bubbleHeight - 4);
+        double left = Math.Clamp(pointer.X + PreviewShowMoreTooltipCursorGapDip - (bubbleWidth * PreviewShowMoreTooltipLeftShiftRatio), 4, maxLeft);
+        double top = Math.Clamp(pointer.Y + PreviewShowMoreTooltipCursorGapDip, 4, maxTop);
+
+        Canvas.SetLeft(PreviewShowMoreTooltipBubble, left);
+        Canvas.SetTop(PreviewShowMoreTooltipBubble, top);
+    }
+
+    private Button CreatePreviewShowMoreActionButton(
+        string arrowGlyph,
+        string label,
+        bool arrowFirst,
+        PreviewShowMoreAction action,
+        PreviewShowMoreExpandMode mode,
+        Brush foreground)
+    {
+        var content = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 4,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var arrow = new TextBlock
+        {
+            Text = arrowGlyph,
+            Foreground = foreground,
+            FontFamily = new FontFamily("Segoe MDL2 Assets"),
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var text = new TextBlock
+        {
+            Text = label,
+            Foreground = foreground,
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        if (arrowFirst)
+        {
+            content.Children.Add(arrow);
+            content.Children.Add(text);
+        }
+        else
+        {
+            content.Children.Add(text);
+            content.Children.Add(arrow);
+        }
+
+        var button = new Button
+        {
+            Content = content,
+            MinWidth = 0,
+            MinHeight = 0,
+            Padding = new Thickness(7, 3, 7, 3),
+            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x35, 255, 255, 255)),
+            BorderBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(0x55, 255, 255, 255)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+        };
+        button.PointerEntered += (_, _) =>
+        {
+            _previewShowMorePointerOverPanel = true;
+            CancelPreviewShowMoreTooltipHide();
+        };
+        button.PointerMoved += (_, _) =>
+        {
+            _previewShowMorePointerOverPanel = true;
+            CancelPreviewShowMoreTooltipHide();
+        };
+        button.PointerExited += (_, _) =>
+        {
+            _previewShowMorePointerOverPanel = false;
+            QueuePreviewShowMoreTooltipHide();
+        };
+        button.Click += (_, _) =>
+        {
+            CancelPreviewSelectionAutoScrollForShowMore($"show-more-{mode}");
+            _previewShowMorePointerOverPanel = true;
+            CancelPreviewShowMoreTooltipHide();
+            QueuePreviewTruncatedLineExpansion(action, mode);
+        };
+        return button;
+    }
+
+    private static bool TryGetPreviewShowMoreActionFromPointer(
+        RichTextBlock block,
+        PointerRoutedEventArgs e,
+        out PreviewShowMoreAction action)
+    {
+        if (TryGetPreviewShowMoreAction(e.OriginalSource, out action))
+            return true;
+
+        try
+        {
+            var point = e.GetCurrentPoint(block).Position;
+            foreach (var element in VisualTreeHelper.FindElementsInHostCoordinates(point, block))
+            {
+                if (TryGetPreviewShowMoreAction(element, out action))
+                    return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            if (LogService.Instance.IsVerboseEnabled)
+                LogService.Instance.Verbose("PreviewShowMore", "Show-more hover hit-test failed", ex);
+        }
+
+        action = default!;
+        return false;
+    }
+
+    private void EnsurePreviewShowMoreTooltipHandlers()
+    {
+        if (_previewShowMoreTooltipHandlersAttached)
+            return;
+
+        _previewShowMoreTooltipHandlersAttached = true;
+        PreviewShowMoreTooltipOverlay.PointerPressed += OnPreviewShowMoreTooltipOverlayPointerPressed;
+        PreviewShowMoreTooltipBubble.PointerEntered += (_, _) =>
+        {
+            _previewShowMorePointerOverPanel = true;
+            CancelPreviewShowMoreTooltipHide();
+        };
+        PreviewShowMoreTooltipBubble.PointerMoved += (_, _) =>
+        {
+            _previewShowMorePointerOverPanel = true;
+            CancelPreviewShowMoreTooltipHide();
+        };
+        PreviewShowMoreTooltipBubble.PointerExited += (_, _) =>
+        {
+            _previewShowMorePointerOverPanel = false;
+            QueuePreviewShowMoreTooltipHide();
+        };
+    }
+
+    private void OnPreviewShowMoreTooltipOverlayPointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (e.OriginalSource is DependencyObject source
+            && IsElementWithin(source, PreviewShowMoreTooltipBubble))
+        {
+            _previewShowMorePointerOverPanel = true;
+            CancelPreviewShowMoreTooltipHide();
+            return;
+        }
+
+        HidePreviewShowMoreTooltip();
+        e.Handled = true;
+    }
+
+    private void HidePreviewShowMoreTooltipForContentPointer()
+    {
+        if (PreviewShowMoreTooltipOverlay.Visibility == Visibility.Visible)
+            HidePreviewShowMoreTooltip();
+    }
+
+    private void CancelPreviewShowMoreTooltipHide()
+    {
+        _previewShowMoreTooltipHideTimer?.Stop();
+    }
+
+    private void QueuePreviewShowMoreTooltipHide()
+    {
+        if (PreviewShowMoreTooltipOverlay.Visibility != Visibility.Visible)
+            return;
+        if (_previewShowMorePointerOverMarker || _previewShowMorePointerOverPanel)
+            return;
+
+        if (_previewShowMoreTooltipHideTimer is null)
+        {
+            _previewShowMoreTooltipHideTimer = DispatcherQueue.CreateTimer();
+            _previewShowMoreTooltipHideTimer.Interval = TimeSpan.FromMilliseconds(PreviewShowMoreTooltipHideDelayMs);
+            _previewShowMoreTooltipHideTimer.IsRepeating = false;
+            _previewShowMoreTooltipHideTimer.Tick += (_, _) =>
+            {
+                _previewShowMoreTooltipHideTimer?.Stop();
+                if (!_previewShowMorePointerOverMarker && !_previewShowMorePointerOverPanel)
+                    HidePreviewShowMoreTooltip();
+            };
+        }
+
+        _previewShowMoreTooltipHideTimer.Stop();
+        _previewShowMoreTooltipHideTimer.Start();
+    }
+
+    private void HidePreviewShowMoreTooltip()
+    {
+        if (PreviewShowMoreTooltipOverlay.Visibility == Visibility.Collapsed)
+            return;
+
+        CancelPreviewShowMoreTooltipHide();
+        PreviewShowMoreTooltipOverlay.Visibility = Visibility.Collapsed;
+        _previewShowMoreTooltipAction = null;
+        _previewShowMoreTooltipEdge = null;
+        _previewShowMorePointerOverMarker = false;
+        _previewShowMorePointerOverPanel = false;
+    }
+
+    private void QueuePreviewTruncatedLineExpansion(PreviewShowMoreAction action, PreviewShowMoreExpandMode mode)
+    {
+        var state = action.State;
+        LogService.Instance.Info(
+            "PreviewShowMore",
+            $"action mode={mode}, edge={action.Edge}, line={state.LineNumber}, window=({state.SourceStart},{state.SourceEnd}), lineLen={state.SourceLine.Length}, queued=True");
+
+        bool queued = DispatcherQueue.TryEnqueue(
+            Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal,
+            () => ExpandPreviewTruncatedLineSafely(action, mode));
+        if (!queued)
+        {
+            LogService.Instance.Warning(
+                "PreviewShowMore",
+                $"dispatcher enqueue failed; expanding inline for line={state.LineNumber}, edge={action.Edge}");
+            ExpandPreviewTruncatedLineSafely(action, mode);
+        }
+    }
+
+    private void ExpandPreviewTruncatedLineSafely(PreviewShowMoreAction action, PreviewShowMoreExpandMode mode)
+    {
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            ExpandPreviewTruncatedLine(action, mode);
+            sw.Stop();
+            LogService.Instance.Info(
+                "PreviewShowMore",
+                $"expand complete mode={mode}, line={action.State.LineNumber}, edge={action.Edge}, elapsedMs={sw.ElapsedMilliseconds}");
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            LogService.Instance.Critical(
+                "PreviewShowMore",
+                $"expand failed mode={mode}, line={action.State.LineNumber}, edge={action.Edge}, window=({action.State.SourceStart},{action.State.SourceEnd}), elapsedMs={sw.ElapsedMilliseconds}",
+                ex);
+        }
+    }
+
+    private void ExpandPreviewTruncatedLine(PreviewShowMoreAction action, PreviewShowMoreExpandMode mode)
+    {
+        var state = action.State;
+        int lineLength = state.SourceLine.Length;
+        int currentLength = Math.Max(0, state.SourceEnd - state.SourceStart);
+        int maxWindowLength = GetPreviewShowMoreMaxWindowLength();
+        int chunk = Math.Min(Math.Max(50, LineTruncator.TruncatedLength), maxWindowLength);
+
+        int newStart = state.SourceStart;
+        int newEnd = state.SourceEnd;
+        int oldStart = state.SourceStart;
+        int oldEnd = state.SourceEnd;
+
+        if (mode == PreviewShowMoreExpandMode.All)
+        {
+            newStart = 0;
+            newEnd = lineLength;
+        }
+        else if (action.Edge == PreviewShowMoreEdge.Prefix && state.SourceStart > 0)
+        {
+            int add = Math.Min(chunk, state.SourceStart);
+            if (currentLength + add <= maxWindowLength)
+            {
+                newStart = state.SourceStart - add;
+            }
+            else
+            {
+                newStart = Math.Max(0, state.SourceStart - add);
+                newEnd = Math.Min(lineLength, newStart + maxWindowLength);
+            }
+        }
+        else if (action.Edge == PreviewShowMoreEdge.Suffix && state.SourceEnd < lineLength)
+        {
+            int add = Math.Min(chunk, lineLength - state.SourceEnd);
+            if (currentLength + add <= maxWindowLength)
+            {
+                newEnd = state.SourceEnd + add;
+            }
+            else
+            {
+                newEnd = Math.Min(lineLength, state.SourceEnd + add);
+                newStart = Math.Max(0, newEnd - maxWindowLength);
+            }
+        }
+
+        if (newStart == state.SourceStart && newEnd == state.SourceEnd)
+            return;
+
+        LogService.Instance.Info(
+            "PreviewShowMore",
+            $"expand edge={action.Edge}, line={state.LineNumber}, old=({oldStart},{oldEnd}), new=({newStart},{newEnd}), lineLen={lineLength}, maxWindow={maxWindowLength}");
+        var scrollSnapshot = CapturePreviewShowMoreScrollPosition(action);
+        try
+        {
+            state.SourceStart = newStart;
+            state.SourceEnd = newEnd;
+            RebuildPreviewTruncatedLineParagraph(action.Paragraph, state);
+            RestorePreviewShowMoreScrollPosition(scrollSnapshot);
+        }
+        catch
+        {
+            state.SourceStart = oldStart;
+            state.SourceEnd = oldEnd;
+            throw;
+        }
+    }
+
+    private PreviewShowMoreScrollSnapshot CapturePreviewShowMoreScrollPosition(PreviewShowMoreAction action)
+    {
+        ScrollViewer? sectionScroller = TryGetPreviewShowMoreSectionScroller(action.Paragraph);
+        return new PreviewShowMoreScrollSnapshot(
+            PreviewScrollViewer.HorizontalOffset,
+            PreviewScrollViewer.VerticalOffset,
+            sectionScroller,
+            sectionScroller?.HorizontalOffset ?? 0,
+            sectionScroller?.VerticalOffset ?? 0);
+    }
+
+    private ScrollViewer? TryGetPreviewShowMoreSectionScroller(Paragraph paragraph)
+    {
+        if (TryFindPreviewBlockForParagraph(paragraph, out var block)
+            && _sectionMatchNavs.TryGetValue(block, out var sectionNav))
+        {
+            return sectionNav.Scroller;
+        }
+
+        return null;
+    }
+
+    private bool TryFindPreviewBlockForParagraph(Paragraph paragraph, out RichTextBlock block)
+    {
+        if (ContainsPreviewParagraph(PreviewBlock, paragraph))
+        {
+            block = PreviewBlock;
+            return true;
+        }
+
+        foreach (var candidate in _sectionMatchNavs.Keys)
+        {
+            if (ContainsPreviewParagraph(candidate, paragraph))
+            {
+                block = candidate;
+                return true;
+            }
+        }
+
+        block = default!;
+        return false;
+    }
+
+    private static bool ContainsPreviewParagraph(RichTextBlock block, Paragraph paragraph)
+    {
+        foreach (var candidate in block.Blocks)
+        {
+            if (ReferenceEquals(candidate, paragraph))
+                return true;
+        }
+
+        return false;
+    }
+
+    private void RestorePreviewShowMoreScrollPosition(PreviewShowMoreScrollSnapshot snapshot)
+    {
+        ApplyPreviewShowMoreScrollPosition(snapshot);
+
+        if (!DispatcherQueue.TryEnqueue(
+                Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal,
+                () =>
+                {
+                    PreviewScrollViewer.UpdateLayout();
+                    snapshot.SectionScroller?.UpdateLayout();
+                    ApplyPreviewShowMoreScrollPosition(snapshot);
+                }))
+        {
+            LogService.Instance.Warning("PreviewShowMore", "failed to queue deferred scroll restore after expansion");
+        }
+    }
+
+    private void ApplyPreviewShowMoreScrollPosition(PreviewShowMoreScrollSnapshot snapshot)
+    {
+        RestoreScrollViewerOffsets(
+            PreviewScrollViewer,
+            snapshot.PreviewHorizontalOffset,
+            snapshot.PreviewVerticalOffset);
+
+        if (snapshot.SectionScroller is not null)
+        {
+            RestoreScrollViewerOffsets(
+                snapshot.SectionScroller,
+                snapshot.SectionHorizontalOffset,
+                snapshot.SectionVerticalOffset);
+        }
+    }
+
+    private static void RestoreScrollViewerOffsets(ScrollViewer scroller, double horizontalOffset, double verticalOffset)
+    {
+        double targetX = ClampScrollOffset(horizontalOffset, scroller.ScrollableWidth);
+        double targetY = ClampScrollOffset(verticalOffset, scroller.ScrollableHeight);
+        scroller.ChangeView(targetX, targetY, null, disableAnimation: true);
+    }
+
+    private static double ClampScrollOffset(double offset, double scrollableLength)
+    {
+        if (double.IsNaN(offset) || double.IsInfinity(offset))
+            return 0;
+
+        double max = double.IsNaN(scrollableLength) || double.IsInfinity(scrollableLength)
+            ? 0
+            : Math.Max(0, scrollableLength);
+
+        return Math.Clamp(offset, 0, max);
+    }
+
+    private void RebuildPreviewTruncatedLineParagraph(Paragraph paragraph, PreviewTruncatedLineState state)
+    {
+        while (paragraph.Inlines.Count > state.ContentInlineStart)
+            paragraph.Inlines.RemoveAt(state.ContentInlineStart);
+
+        if (state.SourceStart <= 0 && state.SourceEnd >= state.SourceLine.Length && state.SourceLine.Length > GetEffectiveSegmentSize())
+        {
+            AddPreviewFullLineSegmentRuns(paragraph, state);
+            return;
+        }
+
+        var window = CreatePreviewLineWindow(state.SourceLine, state.SourceStart, state.SourceEnd);
+        AddPreviewTextRuns(paragraph, window.Text, state.IsMatchLine, state.Regex, state);
+    }
+
+    private void AddPreviewFullLineSegmentRuns(Paragraph paragraph, PreviewTruncatedLineState state)
+    {
+        int segmentLength = Math.Max(50, GetEffectiveSegmentSize() - (2 * LineTruncator.Ellipsis.Length));
+        bool firstSegment = true;
+        for (int index = 0; index < state.SourceLine.Length; index += segmentLength)
+        {
+            if (!firstSegment)
+                paragraph.Inlines.Add(new LineBreak());
+
+            int length = Math.Min(segmentLength, state.SourceLine.Length - index);
+            AddPreviewTextSpanRuns(paragraph, state.SourceLine.Substring(index, length), state.IsMatchLine, state.Regex);
+            firstSegment = false;
+        }
+
+        if (state.SourceLine.Length == 0)
+            AddPreviewTextSpanRuns(paragraph, string.Empty, state.IsMatchLine, state.Regex);
+    }
+
+    private string TruncatePreviewLine(string line, Regex? rx)
+    {
+        return TruncatePreviewLineWindow(line, rx).Text;
     }
 
 }

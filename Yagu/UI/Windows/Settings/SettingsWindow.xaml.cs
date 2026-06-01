@@ -445,8 +445,8 @@ public sealed partial class SettingsWindow : Window
         {
             Color = ColorStringHelper.Parse(currentHex, fallback),
             IsAlphaEnabled = true,
-            Width = 320,
-            MaxWidth = 360,
+            Width = 160,
+            MaxWidth = 180,
             HorizontalAlignment = HorizontalAlignment.Left,
         };
         picker.ColorChanged += (_, args) =>
@@ -935,19 +935,27 @@ public sealed partial class SettingsWindow : Window
 
             AddPreviewContentColorSetting(
                 g,
-                "Gutter line numbers (context lines):",
-                "Color of line numbers in the gutter for non-matched context lines. Default is grey.",
+                "Preview gutter text:",
+                "Color of line numbers and separator pipes in the preview content gutter.",
                 _viewModel.PreviewGutterContextColor,
-                Windows.UI.Color.FromArgb(0xFF, 0x50, 0x50, 0x50),
+                Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE),
                 value => _viewModel.PreviewGutterContextColor = value);
 
             AddPreviewContentColorSetting(
                 g,
-                "Gutter line numbers (matched lines):",
-                "Color of line numbers in the gutter for matched lines. Default is lime green.",
+                "Matched preview gutter text:",
+                "Color of line numbers in the preview gutter for matched lines.",
                 _viewModel.PreviewGutterMatchColor,
-                Windows.UI.Color.FromArgb(0xFF, 0x32, 0xCD, 0x32),
+                Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE),
                 value => _viewModel.PreviewGutterMatchColor = value);
+
+            AddPreviewContentColorSetting(
+                g,
+                "Editor gutter text:",
+                "Color of line numbers in the built-in editor gutter.",
+                _viewModel.PreviewEditorGutterColor,
+                Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE),
+                value => _viewModel.PreviewEditorGutterColor = value);
 
             AddPreviewContentColorSetting(
                 g,

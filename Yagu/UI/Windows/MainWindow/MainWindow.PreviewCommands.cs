@@ -139,11 +139,13 @@ public sealed partial class MainWindow
 
         if (PreviewBlock.TextWrapping != wrapping)
             PreviewBlock.TextWrapping = wrapping;
+        ConfigurePreviewSelectionMode(PreviewBlock);
         ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || wrap);
         foreach (var block in EnumeratePreviewSectionBlocks())
         {
             if (block.TextWrapping != wrapping)
                 block.TextWrapping = wrapping;
+            ConfigurePreviewSelectionMode(block);
         }
         if (PreviewSectionsPanel.Visibility != Visibility.Visible)
             ApplyPreviewHorizontalScrollForWrap(PreviewScrollViewer, wrap);
@@ -177,6 +179,7 @@ public sealed partial class MainWindow
             // Cheap, always-visible controls first.
             if (PreviewBlock.TextWrapping != wrapping)
                 PreviewBlock.TextWrapping = wrapping;
+            ConfigurePreviewSelectionMode(PreviewBlock);
             ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || wrap);
             if (PreviewSectionsPanel.Visibility != Visibility.Visible)
                 ApplyPreviewHorizontalScrollForWrap(PreviewScrollViewer, wrap);
@@ -204,6 +207,7 @@ public sealed partial class MainWindow
                 {
                     if (block.TextWrapping != wrapping)
                         block.TextWrapping = wrapping;
+                    ConfigurePreviewSelectionMode(block);
 
                     processed++;
                     // Yield to the UI thread between heavy sections so the toggle remains
@@ -1694,7 +1698,7 @@ public sealed partial class MainWindow
             ctxWrap.IsChecked = ViewModel.PreviewWrapModeIndex == 0;
             ctxPartial.IsChecked = ViewModel.PreviewWrapModeIndex == 1;
             ctxNoWrap.IsChecked = ViewModel.PreviewWrapModeIndex == 2;
-            bool hasSelection = !string.IsNullOrEmpty(block.SelectedText);
+            bool hasSelection = HasPreviewCustomSelection(block) || !string.IsNullOrEmpty(block.SelectedText);
             copyWithLines.IsEnabled = hasSelection;
             copyWithout.IsEnabled = hasSelection;
         };
@@ -1703,6 +1707,14 @@ public sealed partial class MainWindow
 
     private void CopyPreviewSelection(RichTextBlock block, bool withLineNumbers)
     {
+        if (TryBuildPreviewCustomSelectionText(block, withLineNumbers, out string customSelectedText))
+        {
+            var customDataPackage = new DataPackage();
+            customDataPackage.SetText(customSelectedText);
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(customDataPackage);
+            return;
+        }
+
         string selectedText = block.SelectedText;
         if (string.IsNullOrEmpty(selectedText)) return;
 
