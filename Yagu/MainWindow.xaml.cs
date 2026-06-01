@@ -53,7 +53,10 @@ public sealed partial class MainWindow : Window
     private StackPanel? _deferredButtonPanel;
     private bool _autoLoadMoreInFlight;
     private bool _autoLoadOverflowInFlight;
+    private long _lastPreviewManualScrollTick;
     private const int AutoLoadChunkSize = 5;
+    private const double OverflowPrefetchBufferViewports = 4.0;
+    private const int AutoLoadOverflowMaxMatchesPerFrame = 20;
     private bool _querySuggestionsDetached;
     private long _hideSuggestionsTick;
     private long _suppressQuerySuggestionsUntilTick;
@@ -141,6 +144,9 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         TextControlBoxNS.TextControlBoxDiagnostics.VerboseLogger = (source, message) => LogService.Instance.Verbose(source, message);
         TextControlBoxNS.TextControlBoxDiagnostics.IsVerboseEnabledProvider = () => LogService.Instance.IsVerboseEnabled;
+        QueryBox.AddHandler(UIElement.PointerPressedEvent,
+            new PointerEventHandler(OnQueryBoxPointerPressed),
+            handledEventsToo: true);
         SearchCancelButton.SizeChanged += (_, _) => AlignBrowseButtonToSearchButton();
         SyncLayoutToggles(ViewModel.PreviewModeIndex);
         Title = AppInfo.WindowTitle;
@@ -675,6 +681,29 @@ public sealed partial class MainWindow : Window
     {
         if (args.Reason == AutoSuggestionBoxTextChangeReason.UserInput && !AreQuerySuggestionsSuppressed())
             RestoreQuerySuggestions(sender);
+    }
+
+    private void OnQueryBoxPointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        var point = e.GetCurrentPoint(QueryBox);
+        if (!point.Properties.IsLeftButtonPressed)
+            return;
+
+        if (e.OriginalSource is DependencyObject source && IsInsideButton(source))
+            return;
+
+        DispatcherQueue.TryEnqueue(ShowQuerySuggestionsFromPointerFocus);
+    }
+
+    private void ShowQuerySuggestionsFromPointerFocus()
+    {
+        if (AreQuerySuggestionsSuppressed() || ViewModel.SearchHistory.Count == 0)
+            return;
+
+        _querySuggestionsDetached = false;
+        QueryBox.ItemsSource = ViewModel.SearchHistory;
+        QueryBox.IsSuggestionListOpen = true;
+        QueryBox.Focus(FocusState.Pointer);
     }
 
     private void OnQueryLostFocus(object sender, RoutedEventArgs e)
@@ -1678,12 +1707,19 @@ public sealed partial class MainWindow : Window
 
     private void NotePreviewManualScrollInput(string source)
     {
+        _lastPreviewManualScrollTick = Environment.TickCount64;
         _previewManualScrollVersion++;
         InvalidatePendingMatchScrolls();
         _activeMatchOverlayUpdateRequestId++;
         HideActiveMatchOverlay();
         if (LogService.Instance.IsVerboseEnabled)
             LogService.Instance.Verbose("MatchNav", $"Preview manual scroll input: source={source}, version={_previewManualScrollVersion}");
+    }
+
+    private bool IsPreviewManualScrollActive()
+    {
+        long lastTick = _lastPreviewManualScrollTick;
+        return lastTick != 0 && Environment.TickCount64 - lastTick < 400;
     }
 
     private static bool IsPreviewScrollKey(Windows.System.VirtualKey key)
@@ -1720,9 +1756,9 @@ public sealed partial class MainWindow : Window
     {
         QueueActiveMatchOverlayRefresh();
         UpdateStickyFileHeader();
-        if (e.IsIntermediate) return;
         TryAutoLoadMoreOnScroll();
         TryAutoLoadOverflowOnScroll();
+        if (e.IsIntermediate) return;
         if (_lazySections.Count == 0) return;
         if (_viewportMaterializePending) return;
         _viewportMaterializePending = true;
@@ -1953,7 +1989,7 @@ public sealed partial class MainWindow : Window
     private void TryAutoLoadOverflowOnScroll()
     {
         if (_autoLoadOverflowInFlight) return;
-        int autoLoadCount = ViewModel.PreviewAutoLoadMatches;
+        int autoLoadCount = Math.Min(ViewModel.PreviewAutoLoadMatches, AutoLoadOverflowMaxMatchesPerFrame);
         if (autoLoadCount <= 0) return;
         if (_sectionOverflow.Count == 0) return;
 
@@ -1962,8 +1998,12 @@ public sealed partial class MainWindow : Window
         if (vpH <= 0) return;
         double vpBottom = sv.VerticalOffset + vpH;
 
-        // Find any section whose truncation notice is within one viewport of
-        // the current scroll position (i.e. about to become visible).
+        double prefetchBuffer = vpH * OverflowPrefetchBufferViewports;
+
+        // Find any section whose truncation notice is within the prefetch buffer
+        // of the current scroll position. This runs even during intermediate
+        // scrolling so the next chunk is usually present before the user reaches
+        // the truncation boundary.
         foreach (var (section, ov) in _sectionOverflow)
         {
             if (ov.NoticePara is null) continue;
@@ -1975,11 +2015,11 @@ public sealed partial class MainWindow : Window
                 double sectionBottom = sectionTop + section.ActualHeight;
 
                 // Trigger when the bottom of the section (where the notice lives)
-                // is within one viewport height below the current view.
-                if (sectionBottom <= vpBottom + vpH && sectionBottom >= sv.VerticalOffset - vpH)
+                // is inside or near the current view.
+                if (sectionBottom <= vpBottom + prefetchBuffer && sectionBottom >= sv.VerticalOffset - vpH)
                 {
                     _autoLoadOverflowInFlight = true;
-                    DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+                    DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal, () =>
                     {
                         try
                         {
@@ -1989,12 +2029,29 @@ public sealed partial class MainWindow : Window
                         {
                             _autoLoadOverflowInFlight = false;
                         }
+
+                        ScheduleOverflowPrefetchContinuation();
                     });
                     return; // Only expand one section per scroll event.
                 }
             }
             catch { /* TransformToVisual can throw if not in tree */ }
         }
+    }
+
+    private void ScheduleOverflowPrefetchContinuation()
+    {
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+        EventHandler<object>? handler = null;
+        handler = (_, _) =>
+        {
+            timer.Stop();
+            if (handler is not null)
+                timer.Tick -= handler;
+            TryAutoLoadOverflowOnScroll();
+        };
+        timer.Tick += handler;
+        timer.Start();
     }
 
     /// <summary>
@@ -2004,6 +2061,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void ExpandOverflowChunk(RichTextBlock section, int matchCount)
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         if (!_sectionOverflow.TryGetValue(section, out var ov)) return;
         int chunkSize = Math.Min(matchCount, ov.RemainingResults.Count);
         if (chunkSize <= 0)
@@ -2153,7 +2211,8 @@ public sealed partial class MainWindow : Window
         UpdateMatchNavPanel();
         UpdateSectionMatchNavPanels();
 
-        LogService.Instance.Info("Preview", $"ExpandOverflowChunk(scroll): consumed={consumed}, addedEntries={addedCount}, renderedSoFar={ov.RenderedSoFar}, remaining={ov.RemainingResults.Count}");
+        sw.Stop();
+        LogService.Instance.Info("Preview", $"ExpandOverflowChunk(scroll): consumed={consumed}, addedEntries={addedCount}, renderedSoFar={ov.RenderedSoFar}, remaining={ov.RemainingResults.Count}, elapsed={sw.ElapsedMilliseconds}ms");
     }
 
     private void MaterializeVisibleLazySections()

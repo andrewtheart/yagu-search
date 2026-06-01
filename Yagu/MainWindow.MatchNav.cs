@@ -417,7 +417,7 @@ public sealed partial class MainWindow
 
     private void QueueActiveMatchOverlayRefresh()
     {
-        if (_activeMatchHighlight is null || _activeMatchOverlayRefreshPending)
+        if (_activeMatchHighlight is null || _activeMatchOverlayRefreshPending || IsPreviewManualScrollActive())
             return;
 
         _activeMatchOverlayRefreshPending = true;
@@ -430,6 +430,12 @@ public sealed partial class MainWindow
 
     private void RefreshActiveMatchOverlayPosition()
     {
+        if (IsPreviewManualScrollActive())
+        {
+            HideActiveMatchOverlay();
+            return;
+        }
+
         if (_activeMatchHighlight is not { para: var activePara, run: var activeRun })
         {
             HideActiveMatchOverlay();
@@ -2471,7 +2477,7 @@ public sealed partial class MainWindow
         UpdateSectionNavOverlay();
         var (para, matchInPara) = sn.Matches[sn.CurrentIndex];
         BoxMatchRun(para, matchInPara);
-        ScrollAfterMatchNavigation(sn.Block, para, justMaterialized: expandedOverflow, sameParagraph: !expandedOverflow && !wrappedToStart && ReferenceEquals(previousPara, para));
+        ScrollAfterMatchNavigation(sn.Block, para, justMaterialized: false, sameParagraph: !expandedOverflow && !wrappedToStart && ReferenceEquals(previousPara, para));
     }
 
     private void OnSectionPrevMatch(SectionMatchNav sn)
@@ -2597,7 +2603,7 @@ public sealed partial class MainWindow
         int renderedBefore = _matchParagraphs.Count;
         int expandedChunks = 0;
         int materializedSections = 0;
-        bool expandedDuringBulk = false;
+        bool materializedDuringBulk = false;
         int targetIndex = _currentMatchIndex + step;
 
         // Expand overflow / materialize lazy sections until we have enough matches.
@@ -2620,10 +2626,11 @@ public sealed partial class MainWindow
             {
                 expanded = await MaterializeNextLazySectionAsync(forward: true);
                 if (expanded)
+                {
                     materializedSections++;
+                    materializedDuringBulk = true;
+                }
             }
-
-            expandedDuringBulk |= expanded;
 
             if (!expanded) break;
         }
@@ -2640,7 +2647,7 @@ public sealed partial class MainWindow
             SetSectionCurrentMatch(sn, para, matchInPara);
         ActivateSectionForBlock(block);
         BoxMatchRun(para, matchInPara);
-        ScrollAfterMatchNavigation(block, para, justMaterialized: expandedDuringBulk, sameParagraph: false);
+        ScrollAfterMatchNavigation(block, para, justMaterialized: materializedDuringBulk, sameParagraph: false);
         navSw.Stop();
         LogService.Instance.Info("MatchNav", $"BulkNextMatch: step={step}, from={startIndex}, landed={_currentMatchIndex}, renderedBefore={renderedBefore}, renderedAfter={_matchParagraphs.Count}, expandedChunks={expandedChunks}, materializedSections={materializedSections}, elapsed={navSw.ElapsedMilliseconds}ms");
     }
@@ -2754,7 +2761,7 @@ public sealed partial class MainWindow
         BoxMatchRun(para, matchInPara);
         if (LogService.Instance.IsVerboseEnabled)
             LogService.Instance.Verbose("MatchNav", $"OnNextMatch: idx={_currentMatchIndex}, path={(justMaterialized ? "materialize" : "normal")}");
-        ScrollAfterMatchNavigation(block, para, justMaterialized || expandedOverflow, sameParagraph: !expandedOverflow && !wrappedToStart && ReferenceEquals(previousPara, para));
+        ScrollAfterMatchNavigation(block, para, justMaterialized, sameParagraph: !expandedOverflow && !wrappedToStart && ReferenceEquals(previousPara, para));
         navSw.Stop();
         if (LogService.Instance.IsVerboseEnabled)
             LogService.Instance.Verbose("Preview", $"GoToNextMatchAsync: index={_currentMatchIndex}, elapsed={navSw.ElapsedMilliseconds}ms");
@@ -2870,6 +2877,7 @@ public sealed partial class MainWindow
     /// </summary>
     private bool ExpandSectionNextChunk(RichTextBlock section)
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         if (!_sectionOverflow.TryGetValue(section, out var ov)) return false;
         int chunkSize = Math.Min(MaxMatchesPerExpandChunk, ov.RemainingResults.Count);
         if (chunkSize <= 0)
@@ -3026,7 +3034,8 @@ public sealed partial class MainWindow
             _sectionOverflow.Remove(section);
         }
 
-        LogService.Instance.Info("MatchNav", $"ExpandSectionNextChunk: results={consumed}, addedEntries={addedCount}, renderedSoFar={ov.RenderedSoFar}, remaining={ov.RemainingResults.Count}");
+        sw.Stop();
+        LogService.Instance.Info("MatchNav", $"ExpandSectionNextChunk: results={consumed}, addedEntries={addedCount}, renderedSoFar={ov.RenderedSoFar}, remaining={ov.RemainingResults.Count}, elapsed={sw.ElapsedMilliseconds}ms");
         return addedCount > 0;
     }
 }

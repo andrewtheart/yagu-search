@@ -86,12 +86,29 @@ public sealed partial class MainWindow
     private int EffectiveMaxMatchesPerSection => ViewModel.MaxMatchesPerSection > 0 ? ViewModel.MaxMatchesPerSection : DefaultMaxMatchesPerSection;
 
     /// <summary>
+    /// While search workers are still producing results, keep the first live preview
+    /// section small enough that WinUI can lay it out without making the window hang.
+    /// The section overflow loader can page the remaining matches in after the first
+    /// frame is responsive.
+    /// </summary>
+    private const int ActiveSearchMaxInitialMatchesPerSection = 100;
+    private const int ActiveSearchMaxInitialPreviewBlocksPerSection = 100;
+
+    private int EffectiveInitialMaxMatchesPerSection => ViewModel.IsSearching
+        ? Math.Min(EffectiveMaxMatchesPerSection, ActiveSearchMaxInitialMatchesPerSection)
+        : EffectiveMaxMatchesPerSection;
+
+    /// <summary>
     /// Maximum RichTextBlock blocks to build for an expanded preview section
     /// before registering overflow. WinUI lays these blocks out only after the
     /// section enters the visual tree, so a match cap alone is not enough for
     /// dense hits on a few very long lines.
     /// </summary>
     private const int MaxPreviewBlocksPerSection = 450;
+
+    private int EffectiveInitialMaxPreviewBlocksPerSection => ViewModel.IsSearching
+        ? Math.Min(MaxPreviewBlocksPerSection, ActiveSearchMaxInitialPreviewBlocksPerSection)
+        : MaxPreviewBlocksPerSection;
 
     /// <summary>
     /// Number of additional results to materialize per "Next match" click
@@ -505,10 +522,12 @@ public sealed partial class MainWindow
         int parasBuilt = 0;
         int renderedResults = 0;
         int startingBlocks = section.Blocks.Count;
-        int cap = Math.Min(results.Count, EffectiveMaxMatchesPerSection);
+        int maxMatches = EffectiveInitialMaxMatchesPerSection;
+        int maxBlocks = EffectiveInitialMaxPreviewBlocksPerSection;
+        int cap = Math.Min(results.Count, maxMatches);
         foreach (var r in results)
         {
-            if (renderedResults >= cap || section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
+            if (renderedResults >= cap || section.Blocks.Count - startingBlocks >= maxBlocks)
                 break;
 
             var sep = new Paragraph();
@@ -530,7 +549,7 @@ public sealed partial class MainWindow
             var lines = GetPreviewLines(r, allLines, previewLines, fullFile: false);
             foreach (var (line, lineNum) in lines)
             {
-                if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
+                if (section.Blocks.Count - startingBlocks >= maxBlocks)
                     break;
 
                 bool isMatchLine = lineNum == r.LineNumber;
@@ -558,7 +577,7 @@ public sealed partial class MainWindow
         }
 
         buildSw.Stop();
-        LogService.Instance.Info("Preview", $"BuildConcatenatedSection: results={results.Count}, rendered={renderedResults}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, elapsed={buildSw.ElapsedMilliseconds}ms");
+        LogService.Instance.Info("Preview", $"BuildConcatenatedSection: results={results.Count}, rendered={renderedResults}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, activeSearch={ViewModel.IsSearching}, caps=(matches={maxMatches}, blocks={maxBlocks}), elapsed={buildSw.ElapsedMilliseconds}ms");
     }
 
     // Yield to the UI dispatcher after this many paragraphs have been added during
@@ -577,8 +596,10 @@ public sealed partial class MainWindow
         int yieldCount = 0;
         int sectionMatchStart = _matchParagraphs.Count;
         int startingBlocks = section.Blocks.Count;
-        bool initiallyCapped = results.Count > EffectiveMaxMatchesPerSection;
-        var cappedResults = initiallyCapped ? results.GetRange(0, EffectiveMaxMatchesPerSection) : results;
+        int maxMatches = EffectiveInitialMaxMatchesPerSection;
+        int maxBlocks = EffectiveInitialMaxPreviewBlocksPerSection;
+        bool initiallyCapped = results.Count > maxMatches;
+        var cappedResults = initiallyCapped ? results.GetRange(0, maxMatches) : results;
         int lastRenderedLine1 = 0;
 
         if (allLines != null)
@@ -648,7 +669,7 @@ public sealed partial class MainWindow
             bool firstRange = true;
             foreach (var (start, end) in merged)
             {
-                if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
+                if (section.Blocks.Count - startingBlocks >= maxBlocks)
                     break;
 
                 if (!firstRange)
@@ -658,7 +679,7 @@ public sealed partial class MainWindow
                 firstRange = false;
                 for (int i = start; i <= end; i++)
                 {
-                    if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
+                    if (section.Blocks.Count - startingBlocks >= maxBlocks)
                         break;
 
                     int lineNum = i + 1;
@@ -684,13 +705,13 @@ public sealed partial class MainWindow
             var matchLineNums = new HashSet<int>(cappedResults.Select(r => r.LineNumber));
             foreach (var r in cappedResults)
             {
-                if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
+                if (section.Blocks.Count - startingBlocks >= maxBlocks)
                     break;
 
                 var lines = GetPreviewLines(r, null, previewLines, fullFile: false);
                 foreach (var (line, lineNum) in lines)
                 {
-                    if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
+                    if (section.Blocks.Count - startingBlocks >= maxBlocks)
                         break;
 
                     bool isMatchLine = matchLineNums.Contains(lineNum);
@@ -718,8 +739,8 @@ public sealed partial class MainWindow
         // and the match-nav total reflects reality (e.g. single-line minified JSON).
         if (allLines != null && renderedCount > actualMatchEntries && actualMatchEntries < results.Count)
             renderedCount = actualMatchEntries;
-        int remainingBlockBudget = Math.Max(0, MaxPreviewBlocksPerSection - (section.Blocks.Count - startingBlocks));
-        if (allLines != null && remainingBlockBudget > 0 && renderedCount < Math.Min(EffectiveMaxMatchesPerSection, results.Count))
+        int remainingBlockBudget = Math.Max(0, maxBlocks - (section.Blocks.Count - startingBlocks));
+        if (allLines != null && remainingBlockBudget > 0 && renderedCount < Math.Min(maxMatches, results.Count))
         {
             _sectionMatchNavs.TryGetValue(section, out var sn);
             var pending = results.Skip(renderedCount).ToList();
@@ -730,8 +751,8 @@ public sealed partial class MainWindow
                 rx,
                 sn,
                 previewLines,
-                EffectiveMaxMatchesPerSection - renderedCount,
-                EffectiveMaxMatchesPerSection - renderedCount,
+                maxMatches - renderedCount,
+                maxMatches - renderedCount,
                 remainingBlockBudget,
                 out int consumed,
                 out int addedParagraphs,
@@ -745,7 +766,7 @@ public sealed partial class MainWindow
         }
         else if (allLines == null && renderedCount == 0)
         {
-            renderedCount = Math.Min(EffectiveMaxMatchesPerSection, results.Count);
+            renderedCount = Math.Min(maxMatches, results.Count);
         }
 
         var remaining = results.Skip(renderedCount).ToList();
@@ -766,7 +787,7 @@ public sealed partial class MainWindow
         }
 
         buildSw.Stop();
-        LogService.Instance.Info("Preview", $"BuildHighlightSection: results={results.Count}, rendered={cappedResults.Count}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, hasAllLines={allLines != null}, yields={yieldCount}, elapsed={buildSw.ElapsedMilliseconds}ms");
+        LogService.Instance.Info("Preview", $"BuildHighlightSection: results={results.Count}, rendered={renderedCount}, paragraphs={parasBuilt}, blocks={section.Blocks.Count}, hasAllLines={allLines != null}, activeSearch={ViewModel.IsSearching}, caps=(matches={maxMatches}, blocks={maxBlocks}), yields={yieldCount}, elapsed={buildSw.ElapsedMilliseconds}ms");
     }
 
     /// <summary>
