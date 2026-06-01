@@ -713,138 +713,151 @@ public sealed class SearchService
 
                                     if (!streamingFailed)
                                     {
-                                    try
-                                    {
-                                        // Feed paths from discovery channel to the streaming scanner.
-                                        // Push in small batches to amortize FFI overhead while keeping
-                                        // the pipeline fed continuously.
-                                        const int PushBatchSize = 64;
-                                        var pushBatch = new List<string>(PushBatchSize);
-                                        var zipTasks = new List<Task>();
-                                        int fileIndexCounter = 0;
-                                        long lastLogTicks = Stopwatch.GetTimestamp();
-                                        const long LogIntervalSec = 10;
-
-                                        while (Volatile.Read(ref truncated) == 0)
+                                        bool scannerFinished = false;
+                                        try
                                         {
-                                            // Drain available items from the channel
-                                            while (pushBatch.Count < PushBatchSize && pending.Reader.TryRead(out var file))
+                                            // Feed paths from discovery channel to the streaming scanner.
+                                            // Push in small batches to amortize FFI overhead while keeping
+                                            // the pipeline fed continuously.
+                                            const int PushBatchSize = 64;
+                                            var pushBatch = new List<string>(PushBatchSize);
+                                            var zipTasks = new List<Task>();
+                                            int fileIndexCounter = 0;
+                                            long lastLogTicks = Stopwatch.GetTimestamp();
+                                            const long LogIntervalSec = 10;
+
+                                            while (Volatile.Read(ref truncated) == 0)
                                             {
-                                                if (options.SearchInsideArchives && ZipArchiveSearcher.HasArchiveExtension(file, options.ArchiveExtensions))
+                                                // Drain available items from the channel
+                                                while (pushBatch.Count < PushBatchSize && pending.Reader.TryRead(out var file))
                                                 {
-                                                    zipTasks.Add(ScanZipViaManagedAsync(file));
-                                                }
-                                                else
-                                                {
-                                                    pushBatch.Add(file);
-                                                }
-                                            }
-
-                                            if (pushBatch.Count > 0)
-                                            {
-                                                // Add paths to the shared list (sink uses these for callbacks)
-                                                for (int pi = 0; pi < pushBatch.Count; pi++)
-                                                    pathsByIndex.Add(pushBatch[pi]);
-
-                                                Native.NativeSearcher.PushPaths(scanner, pushBatch, fileIndexCounter);
-                                                fileIndexCounter += pushBatch.Count;
-                                                Interlocked.Increment(ref nativeBatchesProcessed);
-                                                pushBatch.Clear();
-
-                                                // Periodic progress log
-                                                long now = Stopwatch.GetTimestamp();
-                                                if ((now - lastLogTicks) >= Stopwatch.Frequency * LogIntervalSec)
-                                                {
-                                                    lastLogTicks = now;
-                                                    string memDiag = GetMemoryDiagnostics();
-                                                    LogService.Instance.Warning("Workers",
-                                                        $"Streaming: pushed={fileIndexCounter:N0} | " +
-                                                        $"scanned={CurrentFilesScanned():N0}, matches={Volatile.Read(ref totalMatches):N0}, " +
-                                                        $"withMatches={Volatile.Read(ref filesWithMatches):N0}, skipped={Volatile.Read(ref filesSkipped):N0}, " +
-                                                        $"degraded={Volatile.Read(ref degraded) != 0}, parallelism={parallelism}, " +
-                                                        $"elapsed={sw.Elapsed.TotalSeconds:F1}s, {memDiag}");
-                                                }
-                                                continue;
-                                            }
-
-                                            // No items available — wait for more
-                                            if (!await pending.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
-                                                break;
-                                        }
-
-                                        // Signal Rust workers: no more paths coming. Blocks until all drain.
-                                        Native.NativeSearcher.FinishStreamingScanner(scanner);
-
-                                        // Wait for any in-flight ZIP searches
-                                        if (zipTasks.Count > 0)
-                                        {
-                                            try { await Task.WhenAll(zipTasks).ConfigureAwait(false); }
-                                            catch (OperationCanceledException) { }
-                                        }
-
-                                        // Reconcile per-file stats from the sink
-                                        if (directSink != null)
-                                        {
-                                            // DirectOutputSink tracks all stats internally
-                                            directSink.Flush();
-                                            Interlocked.Add(ref totalMatches, directSink.TotalMatches);
-                                            Interlocked.Add(ref filesWithMatches, directSink.FilesWithMatches);
-                                            Interlocked.Add(ref bytesScanned, directSink.BytesScanned);
-                                            Interlocked.Add(ref filesSkipped, directSink.FilesSkipped);
-                                            Interlocked.Add(ref skipBinary, directSink.SkipBinary);
-                                            Interlocked.Add(ref skipAccessDenied, directSink.SkipAccessDenied);
-                                            Interlocked.Add(ref skipTooLarge, directSink.SkipTooLarge);
-                                            Interlocked.Add(ref skipNotFound, directSink.SkipNotFound);
-                                            Interlocked.Add(ref skipOther, directSink.SkipOther);
-                                            if (directSink.Truncated)
-                                                Volatile.Write(ref truncated, 1);
-                                        }
-                                        else if (streamingSink != null)
-                                        {
-                                            // totalMatches already updated atomically via _totalMatchesPtr during scan
-                                            if (streamingSink.Truncated)
-                                                Volatile.Write(ref truncated, 1);
-
-                                            for (int i = 0; i < Math.Min(fileIndexCounter, pathsByIndex.Count); i++)
-                                            {
-                                                int status = streamingSink.GetStatus(i);
-                                                int emitted = streamingSink.GetEmitted(i);
-
-                                                if (status != Native.NativeSearcher.StatusOk)
-                                                {
-                                                    Interlocked.Increment(ref filesSkipped);
-                                                    switch (status)
+                                                    if (options.SearchInsideArchives && ZipArchiveSearcher.HasArchiveExtension(file, options.ArchiveExtensions))
                                                     {
-                                                        case Native.NativeSearcher.StatusBinarySkipped:
-                                                            Interlocked.Increment(ref skipBinary);
-                                                            break;
-                                                        case Native.NativeSearcher.StatusOpenFailed:
-                                                            Interlocked.Increment(ref skipAccessDenied);
-                                                            break;
-                                                        case Native.NativeSearcher.StatusTooLarge:
-                                                            Interlocked.Increment(ref skipTooLarge);
-                                                            break;
-                                                        case Native.NativeSearcher.StatusInvalidPath:
-                                                            Interlocked.Increment(ref skipNotFound);
-                                                            break;
-                                                        default:
-                                                            Interlocked.Increment(ref skipOther);
-                                                            break;
+                                                        zipTasks.Add(ScanZipViaManagedAsync(file));
+                                                    }
+                                                    else
+                                                    {
+                                                        pushBatch.Add(file);
                                                     }
                                                 }
-                                                else if (emitted > 0)
+
+                                                if (pushBatch.Count > 0)
                                                 {
-                                                    // filesWithMatches already updated atomically via _filesWithMatchesPtr during scan
-                                                    Interlocked.Add(ref bytesScanned, streamingSink.GetFileLength(i));
+                                                    // Add paths to the shared list (sink uses these for callbacks)
+                                                    for (int pi = 0; pi < pushBatch.Count; pi++)
+                                                        pathsByIndex.Add(pushBatch[pi]);
+
+                                                    Native.NativeSearcher.PushPaths(scanner, pushBatch, fileIndexCounter);
+                                                    fileIndexCounter += pushBatch.Count;
+                                                    Interlocked.Increment(ref nativeBatchesProcessed);
+                                                    pushBatch.Clear();
+
+                                                    // Periodic progress log
+                                                    long now = Stopwatch.GetTimestamp();
+                                                    if ((now - lastLogTicks) >= Stopwatch.Frequency * LogIntervalSec)
+                                                    {
+                                                        lastLogTicks = now;
+                                                        string memDiag = GetMemoryDiagnostics();
+                                                        LogService.Instance.Warning("Workers",
+                                                            $"Streaming: pushed={fileIndexCounter:N0} | " +
+                                                            $"scanned={CurrentFilesScanned():N0}, matches={Volatile.Read(ref totalMatches):N0}, " +
+                                                            $"withMatches={Volatile.Read(ref filesWithMatches):N0}, skipped={Volatile.Read(ref filesSkipped):N0}, " +
+                                                            $"degraded={Volatile.Read(ref degraded) != 0}, parallelism={parallelism}, " +
+                                                            $"elapsed={sw.Elapsed.TotalSeconds:F1}s, {memDiag}");
+                                                    }
+                                                    continue;
+                                                }
+
+                                                // No items available — wait for more
+                                                if (!await pending.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+                                                    break;
+                                            }
+
+                                            // Signal Rust workers: no more paths coming. Blocks until all drain.
+                                            Native.NativeSearcher.FinishStreamingScanner(scanner);
+                                            scannerFinished = true;
+
+                                            // Wait for any in-flight ZIP searches
+                                            if (zipTasks.Count > 0)
+                                            {
+                                                try { await Task.WhenAll(zipTasks).ConfigureAwait(false); }
+                                                catch (OperationCanceledException) { }
+                                            }
+
+                                            // Reconcile per-file stats from the sink
+                                            if (directSink != null)
+                                            {
+                                                // DirectOutputSink tracks all stats internally
+                                                directSink.Flush();
+                                                Interlocked.Add(ref totalMatches, directSink.TotalMatches);
+                                                Interlocked.Add(ref filesWithMatches, directSink.FilesWithMatches);
+                                                Interlocked.Add(ref bytesScanned, directSink.BytesScanned);
+                                                Interlocked.Add(ref filesSkipped, directSink.FilesSkipped);
+                                                Interlocked.Add(ref skipBinary, directSink.SkipBinary);
+                                                Interlocked.Add(ref skipAccessDenied, directSink.SkipAccessDenied);
+                                                Interlocked.Add(ref skipTooLarge, directSink.SkipTooLarge);
+                                                Interlocked.Add(ref skipNotFound, directSink.SkipNotFound);
+                                                Interlocked.Add(ref skipOther, directSink.SkipOther);
+                                                if (directSink.Truncated)
+                                                    Volatile.Write(ref truncated, 1);
+                                            }
+                                            else if (streamingSink != null)
+                                            {
+                                                // totalMatches already updated atomically via _totalMatchesPtr during scan
+                                                if (streamingSink.Truncated)
+                                                    Volatile.Write(ref truncated, 1);
+
+                                                for (int i = 0; i < Math.Min(fileIndexCounter, pathsByIndex.Count); i++)
+                                                {
+                                                    int status = streamingSink.GetStatus(i);
+                                                    int emitted = streamingSink.GetEmitted(i);
+
+                                                    if (status != Native.NativeSearcher.StatusOk)
+                                                    {
+                                                        Interlocked.Increment(ref filesSkipped);
+                                                        switch (status)
+                                                        {
+                                                            case Native.NativeSearcher.StatusBinarySkipped:
+                                                                Interlocked.Increment(ref skipBinary);
+                                                                break;
+                                                            case Native.NativeSearcher.StatusOpenFailed:
+                                                                Interlocked.Increment(ref skipAccessDenied);
+                                                                break;
+                                                            case Native.NativeSearcher.StatusTooLarge:
+                                                                Interlocked.Increment(ref skipTooLarge);
+                                                                break;
+                                                            case Native.NativeSearcher.StatusInvalidPath:
+                                                                Interlocked.Increment(ref skipNotFound);
+                                                                break;
+                                                            default:
+                                                                Interlocked.Increment(ref skipOther);
+                                                                break;
+                                                        }
+                                                    }
+                                                    else if (emitted > 0)
+                                                    {
+                                                        // filesWithMatches already updated atomically via _filesWithMatchesPtr during scan
+                                                        Interlocked.Add(ref bytesScanned, streamingSink.GetFileLength(i));
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
-                                    finally
-                                    {
-                                        Native.NativeSearcher.DestroyStreamingScanner(scanner);
-                                        if (sinkHandle.IsAllocated) sinkHandle.Free();
-                                    }
+                                        finally
+                                        {
+                                            if (!scannerFinished)
+                                            {
+                                                try
+                                                {
+                                                    Native.NativeSearcher.FinishStreamingScanner(scanner);
+                                                }
+                                                catch (Exception ex)
+                                                {
+                                                    LogService.Instance.Warning("SearchService", "Streaming scanner finish during cleanup failed", ex);
+                                                }
+                                            }
+                                            Native.NativeSearcher.DestroyStreamingScanner(scanner);
+                                            if (sinkHandle.IsAllocated) sinkHandle.Free();
+                                        }
                                     } // if (!streamingFailed)
 
                                     directSink?.Dispose();

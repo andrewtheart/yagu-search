@@ -72,6 +72,10 @@ public sealed partial class MainWindow
     private bool ShouldTruncatePreviewLines()
         => ViewModel.PreviewWrapModeIndex != (int)Models.PreviewWrapMode.NoWrap;
 
+    private bool ShouldTruncateOverflowPreviewLines()
+        => ShouldTruncatePreviewLines()
+           || ViewModel.PreviewWrapModeIndex == (int)Models.PreviewWrapMode.NoWrap;
+
     private int GetEffectiveSegmentSize()
         => ViewModel.PreviewWrapModeIndex == (int)Models.PreviewWrapMode.NoWrap
             ? PreviewLineLayoutSegmentCharsNoWrap
@@ -137,8 +141,8 @@ public sealed partial class MainWindow
     // lines while the gutter paragraph stays at 1, causing progressive drift.
     //
     // After layout we measure each content paragraph's rendered height via
-    // TextPointer.GetCharacterRect and pad the corresponding gutter paragraph's
-    // bottom margin to compensate.
+    // TextPointer.GetCharacterRect and add explicit gutter continuation rows so
+    // wrapped visual lines keep the same separator pipe as normal lines.
 
     private readonly HashSet<RichTextBlock> _gutterSyncPending = new();
 
@@ -177,7 +181,9 @@ public sealed partial class MainWindow
                     var startRect = cp.ContentStart.GetCharacterRect(LogicalDirection.Forward);
                     var endRect = cp.ContentEnd.GetCharacterRect(LogicalDirection.Backward);
                     double contentHeight = Math.Max(lineHeight, endRect.Bottom - startRect.Top);
-                    targetBottom = contentHeight - lineHeight + cp.Margin.Bottom;
+                    int visualLineCount = Math.Max(1, (int)Math.Ceiling(Math.Max(0, contentHeight - 0.5) / lineHeight));
+                    SetGutterWrappedContinuationRows(gp, visualLineCount);
+                    targetBottom = cp.Margin.Bottom + Math.Max(0, contentHeight - visualLineCount * lineHeight);
                 }
                 catch
                 {
@@ -186,13 +192,45 @@ public sealed partial class MainWindow
             }
             else
             {
-                // Word wrap off → gutter bottom margin should match content's.
+                // Word wrap off: remove any rows added while wrap was enabled.
+                SetGutterWrappedContinuationRows(gp, visualLineCount: 1);
                 targetBottom = cp.Margin.Bottom;
             }
 
             if (Math.Abs(gp.Margin.Bottom - targetBottom) > 0.5)
                 gp.Margin = new Thickness(gp.Margin.Left, gp.Margin.Top, gp.Margin.Right, targetBottom);
         }
+    }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_gutterWrappedContinuationCounts = new();
+
+    private static void SetGutterWrappedContinuationRows(Paragraph gutterParagraph, int visualLineCount)
+    {
+        int targetContinuationRows = Math.Max(0, visualLineCount - 1);
+        int currentContinuationRows = 0;
+        if (s_gutterWrappedContinuationCounts.TryGetValue(gutterParagraph, out var raw)
+            && raw is int storedRows
+            && storedRows > 0)
+        {
+            currentContinuationRows = storedRows;
+        }
+
+        while (currentContinuationRows > 0 && gutterParagraph.Inlines.Count >= 2)
+        {
+            gutterParagraph.Inlines.RemoveAt(gutterParagraph.Inlines.Count - 1);
+            gutterParagraph.Inlines.RemoveAt(gutterParagraph.Inlines.Count - 1);
+            currentContinuationRows--;
+        }
+
+        for (int i = 0; i < targetContinuationRows; i++)
+        {
+            gutterParagraph.Inlines.Add(new LineBreak());
+            gutterParagraph.Inlines.Add(new Run { Text = "       │ ", Foreground = s_gutterSepBrush });
+        }
+
+        s_gutterWrappedContinuationCounts.Remove(gutterParagraph);
+        if (targetContinuationRows > 0)
+            s_gutterWrappedContinuationCounts.Add(gutterParagraph, targetContinuationRows);
     }
 
     /// <summary>Adds a spacer paragraph to the gutter block to keep it aligned with non-line paragraphs in the content.</summary>

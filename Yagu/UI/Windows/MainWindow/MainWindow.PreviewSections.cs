@@ -1078,7 +1078,7 @@ public sealed partial class MainWindow
 
         _sectionMatchNavs.TryGetValue(section, out var sn);
         int beforeCount = _matchParagraphs.Count;
-        bool truncatePreviewLines = ShouldTruncatePreviewLines();
+        bool truncatePreviewLines = ShouldTruncateOverflowPreviewLines();
 
         int consumed = 0;
         if (ov.IsHighlightMode && ov.AllLines != null)

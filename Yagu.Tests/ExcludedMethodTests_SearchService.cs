@@ -23,6 +23,21 @@ public sealed class ExcludedMethodTests_SearchService
     }
 
     [Fact]
+    public void StreamingScannerCancellationCleanup_FinishesBeforeDestroyingCallbacks()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "SearchService.cs"));
+        string cleanup = source[source.IndexOf("bool scannerFinished = false;", StringComparison.Ordinal)..];
+
+        Assert.Contains("bool scannerFinished = false;", cleanup);
+        Assert.Contains("scannerFinished = true;", cleanup);
+        AssertContainsInOrder(cleanup,
+            "if (!scannerFinished)",
+            "Native.NativeSearcher.FinishStreamingScanner(scanner);",
+            "Native.NativeSearcher.DestroyStreamingScanner(scanner);",
+            "if (sinkHandle.IsAllocated) sinkHandle.Free();");
+    }
+
+    [Fact]
     public void IsMemoryPressureHigh_ReturnsBoolean()
     {
         // Exercise with no cap — should not throw
@@ -102,6 +117,17 @@ public sealed class ExcludedMethodTests_SearchService
             }
 
             search = index + needle.Length;
+        }
+    }
+
+    private static void AssertContainsInOrder(string text, params string[] expected)
+    {
+        int cursor = 0;
+        foreach (string value in expected)
+        {
+            int index = text.IndexOf(value, cursor, StringComparison.Ordinal);
+            Assert.True(index >= 0, $"Expected to find '{value}' after offset {cursor}.");
+            cursor = index + value.Length;
         }
     }
 

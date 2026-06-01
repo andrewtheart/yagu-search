@@ -507,7 +507,8 @@ public sealed class PreviewCoreRegressionTests
             "truncate: truncatePreviewLines",
             "fall through to AppendHighlightMatchWindows");
         Assert.Contains("bool truncatePreviewLines = ShouldTruncatePreviewLines()", highlight);
-        Assert.Contains("=> ViewModel.PreviewWordWrap", MainWindowSource);
+        string previewLineTruncation = ExtractMethodWindow(MainWindowSource, "ShouldTruncatePreviewLines", window: 400);
+        Assert.Contains("PreviewWrapMode.NoWrap", previewLineTruncation);
         Assert.DoesNotContain("allLines is { Length: 1 }", MainWindowSource);
         Assert.DoesNotContain("_singleLineSections", MainWindowSource);
 
@@ -517,8 +518,10 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("renderedCount = actualMatchEntries", multiHighlight);
 
         string concatenated = ExtractMethodWindow(MainWindowSource, "BuildConcatenatedSection");
-        Assert.Contains("cap = Math.Min(results.Count, EffectiveMaxMatchesPerSection)", concatenated);
-        Assert.Contains("section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection", concatenated);
+        Assert.Contains("int maxMatches = EffectiveInitialMaxMatchesPerSection", concatenated);
+        Assert.Contains("cap = Math.Min(results.Count, maxMatches)", concatenated);
+        Assert.Contains("int maxBlocks = EffectiveInitialMaxPreviewBlocksPerSection", concatenated);
+        Assert.Contains("section.Blocks.Count - startingBlocks >= maxBlocks", concatenated);
         Assert.Contains("remainingResults: results.GetRange(renderedResults, results.Count - renderedResults)", concatenated);
         Assert.Contains("RegisterSectionOverflow", concatenated);
 
@@ -531,6 +534,10 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("continuationGutter: true", appendWindows);
         Assert.Contains("if (!truncatePreviewLines)", appendWindows);
 
+        string overflowTruncation = ExtractMethodWindow(MainWindowSource, "ShouldTruncateOverflowPreviewLines", window: 900);
+        Assert.Contains("ShouldTruncatePreviewLines()", overflowTruncation);
+        Assert.Contains("PreviewWrapMode.NoWrap", overflowTruncation);
+
         string aroundResult = ExtractMethodWindow(MainWindowSource, "AddPreviewLineParagraphsAroundResult");
         Assert.Contains("bool truncate = true", aroundResult);
         Assert.Contains("firstParagraph is not null || continuationGutter", aroundResult);
@@ -541,7 +548,11 @@ public sealed class PreviewCoreRegressionTests
 
         string expandChunk = ExtractMethodWindow(MainWindowSource, "ExpandSectionNextChunk");
         Assert.Contains("MaxPreviewBlocksPerExpandChunk", expandChunk);
+        Assert.Contains("bool truncatePreviewLines = ShouldTruncateOverflowPreviewLines()", expandChunk);
         Assert.Contains("truncatePreviewLines && consumed == 0", expandChunk);
+
+        string expandScrollChunk = ExtractMethodWindow(MainWindowSource, "ExpandOverflowChunk");
+        Assert.Contains("bool truncatePreviewLines = ShouldTruncateOverflowPreviewLines()", expandScrollChunk);
     }
 
     [Fact]
@@ -563,6 +574,23 @@ public sealed class PreviewCoreRegressionTests
         string matchAt = ExtractMethodWindow(MainWindowSource, "IsSourceMatchAt");
         Assert.Contains("rx.Match(line, start)", matchAt);
         Assert.Contains("match.Success && match.Index == start", matchAt);
+    }
+
+    [Fact]
+    public void WrappedPreviewGutter_RepeatsSeparatorForContinuationRows()
+    {
+        string sync = ExtractMethodWindow(MainWindowSource, "SyncGutterParagraphHeights", window: 2600);
+        AssertContainsInOrder(sync,
+            "int visualLineCount = Math.Max(1",
+            "SetGutterWrappedContinuationRows(gp, visualLineCount);",
+            "targetBottom = cp.Margin.Bottom + Math.Max(0, contentHeight - visualLineCount * lineHeight)",
+            "SetGutterWrappedContinuationRows(gp, visualLineCount: 1)");
+
+        string helper = ExtractMethodWindow(MainWindowSource, "SetGutterWrappedContinuationRows", window: 2200);
+        Assert.Contains("new LineBreak()", helper);
+        Assert.Contains("Text = \"       │ \"", helper);
+        Assert.Contains("Foreground = s_gutterSepBrush", helper);
+        Assert.Contains("s_gutterWrappedContinuationCounts.Remove(gutterParagraph);", helper);
     }
 
     [Fact]
@@ -684,6 +712,28 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(goToNext,
             "BoxMatchRun(para, matchInPara);",
             "ScrollAfterMatchNavigation(block, para");
+    }
+
+    [Fact]
+    public void GoToLine_CentersPreviewUsingActualParagraphCoordinatesBeforeEstimates()
+    {
+        string goToLine = ExtractMethodWindow(MainWindowSource, "ShowGoToLineDialogForPreviewAsync", window: 1800);
+        Assert.Contains("ScrollPreviewToLine(block, targetPara, forceCenter: true);", goToLine);
+
+        string scroll = ExtractMethodWindow(MainWindowSource, "TryScrollPreviewToLine", window: 5200);
+        AssertContainsInOrder(scroll,
+            "TryGetPreviewParagraphTargetVerticalOffset(block, targetPara",
+            "PreviewScrollViewer.ChangeView(null, paragraphOffset, null, disableAnimation: true)",
+            "mode=actual-paragraph",
+            "double lineHeight = EstimatePreviewLineHeight(block)");
+
+        string actual = ExtractMethodWindow(MainWindowSource, "TryGetPreviewParagraphTargetVerticalOffset", window: 2800);
+        AssertContainsInOrder(actual,
+            "GetPreviewWrapTextWidth(block)",
+            "block.Measure(new Windows.Foundation.Size(measureWidth, double.PositiveInfinity));",
+            "TryGetPreviewParagraphLineRect(targetPara",
+            "targetLineTop + markerHeight / 2 - viewportHeight / 2",
+            "Math.Clamp(candidate, 0, PreviewScrollViewer.ScrollableHeight)");
     }
 
     [Fact]

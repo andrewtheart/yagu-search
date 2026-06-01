@@ -1475,6 +1475,15 @@ pub struct QgStreamingScanner {
     workers: Vec<std::thread::JoinHandle<()>>,
 }
 
+fn finish_streaming_scanner(sc: &mut QgStreamingScanner) {
+    sc.work.finished.store(true, Ordering::Release);
+    sc.work.available.notify_all();
+
+    for handle in sc.workers.drain(..) {
+        let _ = handle.join();
+    }
+}
+
 /// Create a streaming scanner. Worker threads are spawned immediately and
 /// begin waiting for paths. Use `qg_scanner_push_paths` to feed work,
 /// `qg_scanner_finish` to signal completion and join workers.
@@ -1825,20 +1834,13 @@ pub unsafe extern "C" fn qg_scanner_finish(scanner: *mut QgStreamingScanner) -> 
         return STATUS_OK;
     }
     let sc = &mut *scanner;
-
-    // Signal workers that no more work is coming
-    sc.work.finished.store(true, Ordering::Release);
-    sc.work.available.notify_all();
-
-    // Join all workers
-    for handle in sc.workers.drain(..) {
-        let _ = handle.join();
-    }
+    finish_streaming_scanner(sc);
 
     STATUS_OK
 }
 
-/// Destroy a streaming scanner. Must be called after `qg_scanner_finish`.
+/// Destroy a streaming scanner. Safe to call even if `qg_scanner_finish` was
+/// skipped by cancellation or an exceptional managed cleanup path.
 ///
 /// # Safety
 /// `scanner` must be a pointer returned by `qg_create_streaming_scanner`
@@ -1846,7 +1848,8 @@ pub unsafe extern "C" fn qg_scanner_finish(scanner: *mut QgStreamingScanner) -> 
 #[no_mangle]
 pub unsafe extern "C" fn qg_scanner_destroy(scanner: *mut QgStreamingScanner) {
     if !scanner.is_null() {
-        drop(Box::from_raw(scanner));
+        let mut sc = Box::from_raw(scanner);
+        finish_streaming_scanner(&mut sc);
     }
 }
 
@@ -1946,6 +1949,61 @@ mod tests {
         unsafe {
             // A non-null ptr with len=0 should be treated as no-op
             qg_free_buffer(std::ptr::dangling_mut::<u8>(), 0);
+        }
+    }
+
+    unsafe extern "C" fn test_streaming_match_callback(
+        _ctx: *mut c_void,
+        _file_index: c_uint,
+        _m: *const QgMatchView,
+    ) -> c_int {
+        0
+    }
+
+    unsafe extern "C" fn test_streaming_done_callback(
+        _ctx: *mut c_void,
+        _file_index: c_uint,
+        _status: c_int,
+        _file_len: c_ulonglong,
+        _last_modified: c_ulonglong,
+    ) {
+    }
+
+    #[test]
+    fn streaming_scanner_destroy_joins_workers_without_explicit_finish() {
+        unsafe {
+            let opts = default_opts();
+            let pattern = b"needle";
+            let session = qg_create_session(
+                pattern.as_ptr(),
+                pattern.len(),
+                &opts,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            assert!(!session.is_null());
+
+            let mut cancel = 0i32;
+            let scanner = qg_create_streaming_scanner(
+                session,
+                2,
+                &mut cancel,
+                test_streaming_match_callback,
+                test_streaming_done_callback,
+                std::ptr::null_mut(),
+            );
+            assert!(!scanner.is_null());
+
+            let (_dir, path) = temp_file("streaming-destroy.txt", b"needle\n");
+            let path_utf16 = to_utf16(&path);
+            let path_len = path_utf16.len() as c_uint;
+            assert_eq!(
+                qg_scanner_push_paths(scanner, path_utf16.as_ptr(), &path_len, 1, 0),
+                STATUS_OK
+            );
+
+            qg_scanner_destroy(scanner);
+            qg_free_session(session);
         }
     }
 

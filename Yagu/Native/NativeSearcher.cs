@@ -613,7 +613,8 @@ internal static partial class NativeSearcher
     }
 
     /// <summary>
-    /// Destroy a streaming scanner (must be called after Finish).
+    /// Destroy a streaming scanner. The native side also joins workers as a
+    /// last line of defense for cancellation cleanup paths.
     /// </summary>
     public static unsafe void DestroyStreamingScanner(IntPtr scanner)
     {

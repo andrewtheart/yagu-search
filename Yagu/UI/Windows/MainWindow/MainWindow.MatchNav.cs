@@ -520,6 +520,21 @@ public sealed partial class MainWindow
                 return true;
             }
 
+            if (forceCenter
+                && TryGetPreviewParagraphTargetVerticalOffset(block, targetPara, out double paragraphOffset, out string paragraphOffsetSource))
+            {
+                double beforeParagraphVerticalOffset = PreviewScrollViewer.VerticalOffset;
+                bool requestedParagraph = Math.Abs(paragraphOffset - beforeParagraphVerticalOffset) > 1;
+                bool acceptedParagraph = requestedParagraph && PreviewScrollViewer.ChangeView(null, paragraphOffset, null, disableAnimation: true);
+
+                if (LogService.Instance.IsVerboseEnabled)
+                    LogService.Instance.Verbose("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, mode=actual-paragraph, source={paragraphOffsetSource}, forceCenter=True, requested={requestedParagraph}, accepted={acceptedParagraph}, fromY={beforeParagraphVerticalOffset:N1}, targetY={paragraphOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}");
+
+                ScrollMatchHorizontallyIntoView(block, targetPara);
+                QueueActiveMatchOverlayUpdate(block, targetPara, paragraphOffset);
+                return true;
+            }
+
             double lineHeight = EstimatePreviewLineHeight(block);
 
             int paragraphIndex = GetParagraphIndex(block, targetPara);
@@ -576,6 +591,92 @@ public sealed partial class MainWindow
             HideActiveMatchOverlay();
             return false;
         }
+    }
+
+    private bool TryGetPreviewParagraphTargetVerticalOffset(
+        RichTextBlock block,
+        Paragraph targetPara,
+        out double targetVerticalOffset,
+        out string source)
+    {
+        targetVerticalOffset = 0;
+        source = "unavailable";
+
+        double viewportHeight = PreviewScrollViewer.ViewportHeight;
+        if (viewportHeight <= 0)
+            viewportHeight = Math.Max(0, PreviewScrollViewer.ActualHeight - PreviewScrollViewer.Padding.Top - PreviewScrollViewer.Padding.Bottom);
+        if (viewportHeight <= 0)
+            return false;
+
+        try
+        {
+            double measureWidth = ViewModel.PreviewWordWrap ? GetPreviewWrapTextWidth(block) : block.ActualWidth;
+            if (measureWidth > 0)
+                block.Measure(new Windows.Foundation.Size(measureWidth, double.PositiveInfinity));
+            block.UpdateLayout();
+            PreviewScrollViewer.UpdateLayout();
+        }
+        catch { }
+
+        if (!TryGetPreviewParagraphLineRect(targetPara, out var rect, out source))
+            return false;
+
+        try
+        {
+            var point = block.TransformToVisual(PreviewScrollViewer)
+                .TransformPoint(new Windows.Foundation.Point(rect.X, rect.Y));
+            double markerHeight = Math.Max(EstimatePreviewLineHeight(block), rect.Height);
+            double targetLineTop = PreviewScrollViewer.VerticalOffset + point.Y - PreviewScrollViewer.Padding.Top;
+            double candidate = targetLineTop + markerHeight / 2 - viewportHeight / 2;
+            if (double.IsNaN(candidate) || double.IsInfinity(candidate))
+                return false;
+
+            targetVerticalOffset = Math.Clamp(candidate, 0, PreviewScrollViewer.ScrollableHeight);
+            return true;
+        }
+        catch
+        {
+            source = "transform-failed";
+            return false;
+        }
+    }
+
+    private static bool TryGetPreviewParagraphLineRect(
+        Paragraph targetPara,
+        out Windows.Foundation.Rect rect,
+        out string source)
+    {
+        try
+        {
+            rect = targetPara.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+            if (IsUsableTextRect(rect))
+            {
+                source = "paragraph-start";
+                return true;
+            }
+        }
+        catch { }
+
+        foreach (var run in targetPara.Inlines.OfType<Run>())
+        {
+            if (string.IsNullOrEmpty(run.Text))
+                continue;
+
+            try
+            {
+                rect = run.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+                if (IsUsableTextRect(rect))
+                {
+                    source = "run-start";
+                    return true;
+                }
+            }
+            catch { }
+        }
+
+        rect = default;
+        source = "rect-unavailable";
+        return false;
     }
 
     private void QueueActiveMatchOverlayUpdate(RichTextBlock block, Paragraph targetPara, double? expectedVerticalOffset = null)
@@ -2909,7 +3010,7 @@ public sealed partial class MainWindow
 
         _sectionMatchNavs.TryGetValue(section, out var sn);
         int beforeCount = _matchParagraphs.Count;
-        bool truncatePreviewLines = ShouldTruncatePreviewLines();
+        bool truncatePreviewLines = ShouldTruncateOverflowPreviewLines();
 
         // Stop early once we've added enough match entries to keep the UI
         // responsive — dense lines can produce 20×+ match entries per result.
