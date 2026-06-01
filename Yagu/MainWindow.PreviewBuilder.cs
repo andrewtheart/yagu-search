@@ -1307,10 +1307,11 @@ public sealed partial class MainWindow
     private (RichTextBlock block, Expander expander) AddPreviewSection(string filePath, string? detail = null, List<SearchResult>? results = null, bool isExpanded = true, bool addToPanel = true)
     {
         LogService.Instance.Verbose("Preview", $"AddPreviewSection: file='{System.IO.Path.GetFileName(filePath)}', detail='{detail}', expanded={isExpanded}, addToPanel={addToPanel}");
+        bool wrap = ViewModel.PreviewWrapModeIndex == (int)Models.PreviewWrapMode.Wrap;
         var block = new RichTextBlock
         {
             FontFamily = new FontFamily("Consolas"),
-            TextWrapping = ViewModel.PreviewWordWrap ? TextWrapping.Wrap : TextWrapping.NoWrap,
+            TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap,
             LineHeight = 20,
             LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
             IsTextSelectionEnabled = true,
@@ -1358,13 +1359,13 @@ public sealed partial class MainWindow
         var sectionScroller = new ScrollViewer
         {
             Content = content,
-            HorizontalScrollMode = ViewModel.PreviewWordWrap ? ScrollMode.Disabled : ScrollMode.Enabled,
+            HorizontalScrollMode = wrap ? ScrollMode.Disabled : ScrollMode.Enabled,
             // Hidden (not Visible): the native bar would render at the bottom of the
             // section's full content height — far below the viewport. The shared
             // StickyHorizontalScrollBar overlay (driven from code-behind) surfaces
             // the actual horizontal extent within the viewport. Mode stays Enabled
             // so keyboard / programmatic scrolling continues to work.
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
+            HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Hidden,
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
         };
         sectionScroller.ViewChanged += OnSectionScrollerViewChanged;

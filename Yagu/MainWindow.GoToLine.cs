@@ -55,16 +55,30 @@ public sealed partial class MainWindow
         if (_goToLineDialogOpen) return;
 
         var block = ResolveGoToLinePreviewBlock();
-        if (block is null) return;
+        if (block is null)
+        {
+            LogService.Instance.Warning("GoToLine", "ResolveGoToLinePreviewBlock returned null");
+            return;
+        }
 
         int maxLine = ComputeMaxPreviewLineNumber(block);
-        if (maxLine <= 0) return;
+        if (maxLine <= 0)
+        {
+            LogService.Instance.Warning("GoToLine", $"ComputeMaxPreviewLineNumber returned {maxLine}");
+            return;
+        }
 
         int? entered = await ShowGoToLineDialogAsync(maxLine);
         if (entered is not int target) return;
 
         var targetPara = FindParagraphForLine(block, target);
-        if (targetPara is null) return;
+        if (targetPara is null)
+        {
+            LogService.Instance.Warning("GoToLine", $"FindParagraphForLine returned null for line {target} in block with {block.Blocks.Count} paragraphs");
+            return;
+        }
+
+        LogService.Instance.Info("GoToLine", $"Scrolling to line {target}, block.Blocks.Count={block.Blocks.Count}, scrollableHeight={PreviewScrollViewer.ScrollableHeight:N1}, viewportHeight={PreviewScrollViewer.ViewportHeight:N1}, currentOffset={PreviewScrollViewer.VerticalOffset:N1}");
 
         try
         {
@@ -191,11 +205,12 @@ public sealed partial class MainWindow
             };
 
             // Submit on Enter from inside the NumberBox.
-            numberBox.KeyDown += (_, args) =>
+            // We must NOT set args.Handled = true here because the NumberBox
+            // needs to process the Enter key to commit its text to .Value.
+            numberBox.KeyUp += (_, args) =>
             {
                 if (args.Key == VirtualKey.Enter)
                 {
-                    args.Handled = true;
                     dialog.Hide();
                     _dialogEnterAccepted = true;
                 }

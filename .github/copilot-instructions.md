@@ -4,7 +4,7 @@
 
 ## Build & Launch Rules
 
-- Always build **both** Debug and Release: `dotnet build Yagu/Yagu.csproj -c Debug` and `dotnet build Yagu/Yagu.csproj -c Release`.
+- Always build **both** Debug and Release with the Rust profiling profile so that `yagu_core.dll` always has symbols for crash analysis: `dotnet build Yagu/Yagu.csproj -c Debug -p:RustProfile=profiling` and `dotnet build Yagu/Yagu.csproj -c Release -p:RustProfile=profiling`.
 - When launching the app, always launch the **Debug** build: `Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe`.
 
 ## Native Crash & Profiling Rules

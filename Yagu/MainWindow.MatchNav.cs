@@ -670,13 +670,36 @@ public sealed partial class MainWindow
         {
             double charWidth = Math.Max(GetPreviewCharWidth(block, targetPara), rect.Width > 0 ? rect.Width : 0);
             double markerWidth = Math.Max(12, (activeRun.Text?.Length ?? 1) * charWidth);
-            var endRect = activeRun.ContentEnd.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Backward);
-            double rowTolerance = Math.Max(4, markerHeight * 0.6);
-            if (IsUsableTextRect(endRect) && Math.Abs(endRect.Y - rect.Y) > rowTolerance)
+            bool usedEstimatedPoint = false;
+            if (_activeMatchHighlight is { para: var activeParaForWrap, column: var activeColumn }
+                && ReferenceEquals(activeParaForWrap, targetPara)
+                && TryGetEstimatedWrappedMatchPoint(
+                    block,
+                    targetPara,
+                    activeColumn,
+                    markerHeight,
+                    viewportWidth,
+                    markerWidth,
+                    point,
+                    out var estimatedPoint,
+                    out _)
+                && ShouldUseEstimatedWrappedMatchPoint(block, point, estimatedPoint, markerWidth, markerHeight, viewportWidth, out _))
             {
-                var endPoint = TransformRunRectToOverlay(block, targetPara, endRect);
-                point = new Windows.Foundation.Point(ClampOverlayMarkerLeft(endPoint.X - markerWidth, markerWidth, viewportWidth), endPoint.Y);
-                source = "end";
+                point = estimatedPoint;
+                source = "estimated-wrap";
+                usedEstimatedPoint = true;
+            }
+
+            if (!usedEstimatedPoint)
+            {
+                var endRect = activeRun.ContentEnd.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Backward);
+                double rowTolerance = Math.Max(4, markerHeight * 0.6);
+                if (IsUsableTextRect(endRect) && Math.Abs(endRect.Y - rect.Y) > rowTolerance)
+                {
+                    var endPoint = TransformRunRectToOverlay(block, targetPara, endRect);
+                    point = new Windows.Foundation.Point(ClampOverlayMarkerLeft(endPoint.X - markerWidth, markerWidth, viewportWidth), endPoint.Y);
+                    source = "end";
+                }
             }
         }
 
@@ -732,11 +755,13 @@ public sealed partial class MainWindow
                 ActiveMatchOverlay.Visibility = Visibility.Visible;
             try
             {
-                // Force text layout reflow at the current actual width.
+                // Force text layout reflow at the current wrap width.
                 // RichTextBlock.UpdateLayout() alone may not re-wrap text;
                 // an explicit Measure ensures GetCharacterRect returns positions
                 // consistent with the current block width.
-                block.Measure(new Windows.Foundation.Size(block.ActualWidth, double.PositiveInfinity));
+                double measureWidth = ViewModel.PreviewWordWrap ? GetPreviewWrapTextWidth(block) : block.ActualWidth;
+                if (measureWidth > 0)
+                    block.Measure(new Windows.Foundation.Size(measureWidth, double.PositiveInfinity));
                 block.UpdateLayout();
                 PreviewScrollViewer.UpdateLayout();
             }
@@ -748,19 +773,71 @@ public sealed partial class MainWindow
 
             var endRect = targetRun.ContentEnd.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Backward);
             var point = TransformRunRectToOverlay(block, targetPara, rect);
+            var rawPoint = point;
             double markerHeight = Math.Max(12, rect.Height);
             double charWidth = Math.Max(GetPreviewCharWidth(block, targetPara), rect.Width > 0 ? rect.Width : 0);
             double markerWidth = Math.Max(12, (targetRun.Text?.Length ?? 1) * charWidth);
 
             bool usedEndRect = false;
             bool usedWrappedEstimate = false;
+            bool usedWrappedPointEstimate = false;
+            Windows.Foundation.Point? estimatedPointForLog = null;
+            string estimateReasonForLog = "not-evaluated";
             List<Windows.Foundation.Rect>? wrappedMarkerRects = null;
             string wrappedMarkerDetails = string.Empty;
             if (ViewModel.PreviewWordWrap)
             {
+                bool hasEstimatedPoint = TryGetEstimatedWrappedMatchPoint(
+                        block,
+                        targetPara,
+                        activeColumn,
+                        markerHeight,
+                        viewportWidth,
+                        markerWidth,
+                        point,
+                        out var estimatedPoint,
+                        out var estimatedDetails);
+                if (hasEstimatedPoint)
+                {
+                    estimatedPointForLog = estimatedPoint;
+                }
+                else
+                {
+                    estimateReasonForLog = "estimate-unavailable";
+                }
+
+                if (hasEstimatedPoint
+                    && ShouldUseEstimatedWrappedMatchPoint(block, point, estimatedPoint, markerWidth, markerHeight, viewportWidth, out estimateReasonForLog))
+                {
+                    point = estimatedPoint;
+                    usedWrappedPointEstimate = true;
+                    wrappedMarkerDetails = estimatedDetails;
+                }
+                else if (hasEstimatedPoint)
+                {
+                    if (string.IsNullOrEmpty(estimateReasonForLog))
+                        estimateReasonForLog = "estimate-rejected";
+                }
+
                 double rowTolerance = Math.Max(4, markerHeight * 0.6);
                 bool measuredEndSameRow = IsUsableTextRect(endRect) && Math.Abs(endRect.Y - rect.Y) <= rowTolerance;
-                if (TryBuildMeasuredWrappedActiveMatchMarkerRects(
+                if (usedWrappedPointEstimate && TryBuildWrappedActiveMatchMarkerRects(
+                        block,
+                        targetPara,
+                        activeColumn,
+                        targetRun.Text?.Length ?? 0,
+                        markerHeight,
+                        viewportWidth,
+                        out var estimatedMarkerRectsFromPoint,
+                        out var estimatedMarkerDetailsFromPoint))
+                {
+                    wrappedMarkerRects = estimatedMarkerRectsFromPoint;
+                    usedWrappedEstimate = true;
+                    wrappedMarkerDetails = estimatedMarkerDetailsFromPoint;
+                    point = new Windows.Foundation.Point(wrappedMarkerRects[0].X, wrappedMarkerRects[0].Y);
+                    markerWidth = wrappedMarkerRects[0].Width;
+                }
+                else if (!usedWrappedPointEstimate && TryBuildMeasuredWrappedActiveMatchMarkerRects(
                         block,
                         targetPara,
                         point,
@@ -871,6 +948,42 @@ public sealed partial class MainWindow
                 if (Math.Abs(correctiveTarget - currentVerticalOffset) > 1)
                 {
                     bool accepted = PreviewScrollViewer.ChangeView(null, correctiveTarget, null, disableAnimation: true);
+                    LogWordWrapOverlayDiagnostic(
+                        "edge-correction",
+                        block,
+                        targetPara,
+                        targetRun,
+                        activeColumn,
+                        matchInPara,
+                        rect,
+                        endRect,
+                        rawPoint,
+                        estimatedPointForLog,
+                        point,
+                        markerWidth,
+                        markerHeight,
+                        charWidth,
+                        viewportTop,
+                        viewportBottom,
+                        viewportHeight,
+                        viewportWidth,
+                        currentVerticalOffset,
+                        expectedVerticalOffset,
+                        effectiveVerticalOffset,
+                        overlayTop,
+                        actualRunTop,
+                        point.X,
+                        markerWidth,
+                        0,
+                        viewportWidth,
+                        usedEndRect,
+                        usedWrappedPointEstimate,
+                        usedWrappedEstimate,
+                        centeredFromActualRun,
+                        actualCenterAccepted,
+                        estimateReasonForLog,
+                        wrappedMarkerDetails,
+                        effectiveWrappedMarkerRects);
                     if (LogService.Instance.IsVerboseEnabled)
                     {
                         int paragraphIndex = GetParagraphIndex(block, targetPara);
@@ -882,6 +995,42 @@ public sealed partial class MainWindow
 
             if (overlayTop < viewportTop || overlayTop + markerHeight > viewportBottom)
             {
+                LogWordWrapOverlayDiagnostic(
+                    "reject-offscreen",
+                    block,
+                    targetPara,
+                    targetRun,
+                    activeColumn,
+                    matchInPara,
+                    rect,
+                    endRect,
+                    rawPoint,
+                    estimatedPointForLog,
+                    point,
+                    markerWidth,
+                    markerHeight,
+                    charWidth,
+                    viewportTop,
+                    viewportBottom,
+                    viewportHeight,
+                    viewportWidth,
+                    currentVerticalOffset,
+                    expectedVerticalOffset,
+                    effectiveVerticalOffset,
+                    overlayTop,
+                    actualRunTop,
+                    point.X,
+                    markerWidth,
+                    0,
+                    viewportWidth,
+                    usedEndRect,
+                    usedWrappedPointEstimate,
+                    usedWrappedEstimate,
+                    centeredFromActualRun,
+                    actualCenterAccepted,
+                    estimateReasonForLog,
+                    wrappedMarkerDetails,
+                    effectiveWrappedMarkerRects);
                 if (LogService.Instance.IsVerboseEnabled)
                 {
                     int paragraphIndex = GetParagraphIndex(block, targetPara);
@@ -890,8 +1039,8 @@ public sealed partial class MainWindow
                 return false;
             }
 
-            bool markerHorizontallyOutside = point.X < 0 || point.X + markerWidth > viewportWidth;
-            if (!ViewModel.PreviewWordWrap && markerHorizontallyOutside)
+            bool markerFullyOutside = point.X + markerWidth <= 0 || point.X >= viewportWidth;
+            if (!ViewModel.PreviewWordWrap && markerFullyOutside)
             {
                 if (retryIfCenterRejected)
                     ScrollMatchHorizontallyIntoView(block, targetPara);
@@ -905,13 +1054,36 @@ public sealed partial class MainWindow
             }
 
             ClearActiveMatchExtraWordMarkers();
-            double markerLeft = ClampOverlayMarkerLeft(point.X, markerWidth, viewportWidth);
-            double visibleMarkerWidth = Math.Min(markerWidth, Math.Max(12, viewportWidth - markerLeft));
+
+            // Compute the content area's left edge (after the gutter) so the band
+            // doesn't extend underneath the line-number gutter.
+            double bandLeft = 0;
+            double bandWidth = viewportWidth;
+            if (_sectionMatchNavs.TryGetValue(block, out var navForBand))
+            {
+                try
+                {
+                    var scrollerOrigin = navForBand.Scroller.TransformToVisual(ActiveMatchOverlay)
+                        .TransformPoint(new Windows.Foundation.Point(0, 0));
+                    if (scrollerOrigin.X > 0)
+                    {
+                        bandLeft = scrollerOrigin.X;
+                        bandWidth = Math.Max(0, viewportWidth - bandLeft);
+                    }
+                }
+                catch { }
+            }
+
+            // Clip the word marker to the visible content area (between gutter and right edge).
+            double clippedMarkerLeft = Math.Max(point.X, bandLeft);
+            double clippedMarkerRight = Math.Min(point.X + markerWidth, viewportWidth);
+            double visibleMarkerWidth = Math.Max(0, clippedMarkerRight - clippedMarkerLeft);
+            double markerLeft = clippedMarkerLeft;
 
             ActiveMatchBand.Height = markerHeight;
-            ActiveMatchBand.Width = viewportWidth;
+            ActiveMatchBand.Width = bandWidth;
             Canvas.SetTop(ActiveMatchBand, overlayTop);
-            Canvas.SetLeft(ActiveMatchBand, 0);
+            Canvas.SetLeft(ActiveMatchBand, bandLeft);
 
             if (effectiveWrappedMarkerRects is { Count: > 1 })
             {
@@ -926,18 +1098,62 @@ public sealed partial class MainWindow
             }
             else
             {
-                ActiveMatchWordMarker.Height = markerHeight;
-                ActiveMatchWordMarker.Width = visibleMarkerWidth;
-                Canvas.SetTop(ActiveMatchWordMarker, overlayTop);
-                Canvas.SetLeft(ActiveMatchWordMarker, markerLeft);
+                if (visibleMarkerWidth > 0)
+                {
+                    ActiveMatchWordMarker.Height = markerHeight;
+                    ActiveMatchWordMarker.Width = visibleMarkerWidth;
+                    Canvas.SetTop(ActiveMatchWordMarker, overlayTop);
+                    Canvas.SetLeft(ActiveMatchWordMarker, markerLeft);
+                }
+                else
+                {
+                    ActiveMatchWordMarker.Width = 0;
+                    ActiveMatchWordMarker.Height = 0;
+                }
             }
 
             ActiveMatchOverlay.Visibility = Visibility.Visible;
+            LogWordWrapOverlayDiagnostic(
+                "applied",
+                block,
+                targetPara,
+                targetRun,
+                activeColumn,
+                matchInPara,
+                rect,
+                endRect,
+                rawPoint,
+                estimatedPointForLog,
+                point,
+                markerWidth,
+                markerHeight,
+                charWidth,
+                viewportTop,
+                viewportBottom,
+                viewportHeight,
+                viewportWidth,
+                currentVerticalOffset,
+                expectedVerticalOffset,
+                effectiveVerticalOffset,
+                overlayTop,
+                actualRunTop,
+                markerLeft,
+                visibleMarkerWidth,
+                bandLeft,
+                bandWidth,
+                usedEndRect,
+                usedWrappedPointEstimate,
+                usedWrappedEstimate,
+                centeredFromActualRun,
+                actualCenterAccepted,
+                estimateReasonForLog,
+                wrappedMarkerDetails,
+                effectiveWrappedMarkerRects);
             if (LogService.Instance.IsVerboseEnabled)
             {
                 int paragraphIndex = GetParagraphIndex(block, targetPara);
                 string expectedScroll = expectedVerticalOffset.HasValue ? expectedVerticalOffset.Value.ToString("N1") : "actual";
-                LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, rect=({rect.X:N1},{rect.Y:N1},{rect.Width:N1},{rect.Height:N1}), endRect=({endRect.X:N1},{endRect.Y:N1},{endRect.Width:N1},{endRect.Height:N1}), point=({point.X:N1},{point.Y:N1}), scrollY={currentVerticalOffset:N1}, expectedScrollY={expectedScroll}, effectiveScrollY={effectiveVerticalOffset:N1}, centeredActual={centeredFromActualRun}, centerAccepted={actualCenterAccepted}, endRectUsed={usedEndRect}, wrapEstimateUsed={usedWrappedEstimate}, wrapSegments={effectiveWrappedMarkerRects?.Count ?? 0} {wrappedMarkerDetails}, marker=({markerLeft:N1},{overlayTop:N1},{visibleMarkerWidth:N1},{markerHeight:N1}), unclampedMarkerW={markerWidth:N1}, text='{targetRun.Text}'");
+                LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, rect=({rect.X:N1},{rect.Y:N1},{rect.Width:N1},{rect.Height:N1}), endRect=({endRect.X:N1},{endRect.Y:N1},{endRect.Width:N1},{endRect.Height:N1}), point=({point.X:N1},{point.Y:N1}), scrollY={currentVerticalOffset:N1}, expectedScrollY={expectedScroll}, effectiveScrollY={effectiveVerticalOffset:N1}, centeredActual={centeredFromActualRun}, centerAccepted={actualCenterAccepted}, endRectUsed={usedEndRect}, wrapPointEstimateUsed={usedWrappedPointEstimate}, wrapEstimateUsed={usedWrappedEstimate}, wrapSegments={effectiveWrappedMarkerRects?.Count ?? 0} {wrappedMarkerDetails}, marker=({markerLeft:N1},{overlayTop:N1},{visibleMarkerWidth:N1},{markerHeight:N1}), unclampedMarkerW={markerWidth:N1}, text='{targetRun.Text}'");
             }
             return true;
         }
@@ -1226,6 +1442,193 @@ public sealed partial class MainWindow
         return true;
     }
 
+    private bool ShouldUseEstimatedWrappedMatchPoint(
+        RichTextBlock block,
+        Windows.Foundation.Point actualPoint,
+        Windows.Foundation.Point estimatedPoint,
+        double markerWidth,
+        double markerHeight,
+        double viewportWidth,
+        out string reason)
+    {
+        reason = "not-needed";
+        if (!ViewModel.PreviewWordWrap || viewportWidth <= 0)
+        {
+            reason = "wrap-off-or-no-viewport";
+            return false;
+        }
+
+        if (double.IsNaN(actualPoint.X) || double.IsInfinity(actualPoint.X)
+            || double.IsNaN(actualPoint.Y) || double.IsInfinity(actualPoint.Y)
+            || double.IsNaN(estimatedPoint.X) || double.IsInfinity(estimatedPoint.X)
+            || double.IsNaN(estimatedPoint.Y) || double.IsInfinity(estimatedPoint.Y))
+        {
+            reason = "invalid-point";
+            return false;
+        }
+
+        GetPreviewTextOverlayBounds(block, viewportWidth, out double textLeft, out double textRight);
+        double tolerance = Math.Max(8, markerHeight * 0.75);
+        if (actualPoint.X < textLeft - tolerance || actualPoint.X > textRight + tolerance)
+        {
+            reason = $"actual-x-outside-text-bounds textLeft={textLeft:N1}, textRight={textRight:N1}, tolerance={tolerance:N1}";
+            return true;
+        }
+
+        double horizontalDelta = Math.Abs(actualPoint.X - estimatedPoint.X);
+        double verticalDelta = Math.Abs(actualPoint.Y - estimatedPoint.Y);
+        bool useEstimate = horizontalDelta > Math.Max(markerWidth, 80) && verticalDelta > markerHeight * 2;
+        reason = useEstimate
+            ? $"large-delta dx={horizontalDelta:N1}, dy={verticalDelta:N1}"
+            : $"actual-within-bounds dx={horizontalDelta:N1}, dy={verticalDelta:N1}, textLeft={textLeft:N1}, textRight={textRight:N1}";
+        return useEstimate;
+    }
+
+    private void GetPreviewTextOverlayBounds(RichTextBlock block, double viewportWidth, out double textLeft, out double textRight)
+    {
+        textLeft = 0;
+        textRight = Math.Max(0, viewportWidth);
+        if (viewportWidth <= 0)
+            return;
+
+        if (_sectionMatchNavs.TryGetValue(block, out var sectionNav))
+        {
+            try
+            {
+                var scrollerOrigin = sectionNav.Scroller.TransformToVisual(ActiveMatchOverlay)
+                    .TransformPoint(new Windows.Foundation.Point(0, 0));
+                double width = sectionNav.Scroller.ViewportWidth > 0
+                    ? sectionNav.Scroller.ViewportWidth
+                    : sectionNav.Scroller.ActualWidth;
+                if (width > 0)
+                {
+                    textLeft = Math.Clamp(scrollerOrigin.X, 0, viewportWidth);
+                    textRight = Math.Clamp(scrollerOrigin.X + width, textLeft, viewportWidth);
+                }
+            }
+            catch { }
+        }
+    }
+
+    private void LogWordWrapOverlayDiagnostic(
+        string stage,
+        RichTextBlock block,
+        Paragraph targetPara,
+        Run targetRun,
+        int activeColumn,
+        int matchInPara,
+        Windows.Foundation.Rect startRect,
+        Windows.Foundation.Rect endRect,
+        Windows.Foundation.Point rawPoint,
+        Windows.Foundation.Point? estimatedPoint,
+        Windows.Foundation.Point finalPoint,
+        double markerWidth,
+        double markerHeight,
+        double charWidth,
+        double viewportTop,
+        double viewportBottom,
+        double viewportHeight,
+        double viewportWidth,
+        double currentVerticalOffset,
+        double? expectedVerticalOffset,
+        double effectiveVerticalOffset,
+        double overlayTop,
+        double actualRunTop,
+        double markerLeft,
+        double visibleMarkerWidth,
+        double bandLeft,
+        double bandWidth,
+        bool usedEndRect,
+        bool usedWrappedPointEstimate,
+        bool usedWrappedEstimate,
+        bool centeredFromActualRun,
+        bool actualCenterAccepted,
+        string estimateReason,
+        string wrappedMarkerDetails,
+        IReadOnlyList<Windows.Foundation.Rect>? markerRects)
+    {
+        if (!ViewModel.PreviewWordWrap)
+            return;
+
+        try
+        {
+            int paragraphIndex = GetParagraphIndex(block, targetPara);
+            double wrapWidth = GetPreviewWrapTextWidth(block);
+            int charsPerLine = GetPreviewWrappedCharsPerLine(block, targetPara, charWidth);
+            GetPreviewTextOverlayBounds(block, viewportWidth, out double textLeft, out double textRight);
+
+            var blockOverlayOrigin = block.TransformToVisual(ActiveMatchOverlay)
+                .TransformPoint(new Windows.Foundation.Point(0, 0));
+            var blockPreviewOrigin = block.TransformToVisual(PreviewScrollViewer)
+                .TransformPoint(new Windows.Foundation.Point(0, 0));
+
+            string sectionDetails = "section=none";
+            if (_sectionMatchNavs.TryGetValue(block, out var sectionNav))
+            {
+                try
+                {
+                    var scrollerOverlayOrigin = sectionNav.Scroller.TransformToVisual(ActiveMatchOverlay)
+                        .TransformPoint(new Windows.Foundation.Point(0, 0));
+                    sectionDetails = $"section=present, scrollerOrigin=({scrollerOverlayOrigin.X:N1},{scrollerOverlayOrigin.Y:N1}), " +
+                        $"scrollerActual=({sectionNav.Scroller.ActualWidth:N1},{sectionNav.Scroller.ActualHeight:N1}), " +
+                        $"scrollerViewport=({sectionNav.Scroller.ViewportWidth:N1},{sectionNav.Scroller.ViewportHeight:N1}), " +
+                        $"scrollerOffset=({sectionNav.Scroller.HorizontalOffset:N1},{sectionNav.Scroller.VerticalOffset:N1}), " +
+                        $"scrollerScrollable=({sectionNav.Scroller.ScrollableWidth:N1},{sectionNav.Scroller.ScrollableHeight:N1})";
+                }
+                catch (Exception ex)
+                {
+                    sectionDetails = $"section=present, scrollerError={ex.GetType().Name}";
+                }
+            }
+
+            string file = block.Tag as string ?? string.Empty;
+            string text = targetRun.Text ?? string.Empty;
+            text = text.Replace("\r", "\\r").Replace("\n", "\\n");
+            if (text.Length > 100)
+                text = string.Concat(text.AsSpan(0, 100), "...");
+
+            string expectedScroll = expectedVerticalOffset.HasValue ? expectedVerticalOffset.Value.ToString("N1") : "actual";
+            string estimatedText = estimatedPoint.HasValue ? FormatPoint(estimatedPoint.Value) : "none";
+            string markerRectsText = FormatMarkerRects(markerRects);
+
+            LogService.Instance.Warning("MatchNav",
+                $"WrapOverlayDiag stage={stage}, idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, " +
+                $"column={activeColumn}, text='{text}', file='{file}', " +
+                $"viewport=(w={viewportWidth:N1}, h={viewportHeight:N1}, top={viewportTop:N1}, bottom={viewportBottom:N1}, scrollY={currentVerticalOffset:N1}, expectedScrollY={expectedScroll}, effectiveScrollY={effectiveVerticalOffset:N1}), " +
+                $"overlaySize=({ActiveMatchOverlay.ActualWidth:N1},{ActiveMatchOverlay.ActualHeight:N1}), previewActual=({PreviewScrollViewer.ActualWidth:N1},{PreviewScrollViewer.ActualHeight:N1}), previewViewport=({PreviewScrollViewer.ViewportWidth:N1},{PreviewScrollViewer.ViewportHeight:N1}), " +
+                $"blockActual=({block.ActualWidth:N1},{block.ActualHeight:N1}), blockDesired=({block.DesiredSize.Width:N1},{block.DesiredSize.Height:N1}), blockOriginOverlay={FormatPoint(blockOverlayOrigin)}, blockOriginPreview={FormatPoint(blockPreviewOrigin)}, " +
+                $"wrap=(width={wrapWidth:N1}, charW={charWidth:N1}, charsPerLine={charsPerLine}), textBounds=({textLeft:N1},{textRight:N1}), {sectionDetails}, " +
+                $"rect={FormatRect(startRect)}, endRect={FormatRect(endRect)}, rawPoint={FormatPoint(rawPoint)}, estimatedPoint={estimatedText}, finalPoint={FormatPoint(finalPoint)}, " +
+                $"actualRunTop={actualRunTop:N1}, overlayTop={overlayTop:N1}, marker=(left={markerLeft:N1}, visibleW={visibleMarkerWidth:N1}, markerW={markerWidth:N1}, markerH={markerHeight:N1}), band=(left={bandLeft:N1}, width={bandWidth:N1}), " +
+                $"flags=(usedEndRect={usedEndRect}, usedWrappedPointEstimate={usedWrappedPointEstimate}, usedWrappedEstimate={usedWrappedEstimate}, centeredActual={centeredFromActualRun}, centerAccepted={actualCenterAccepted}), " +
+                $"estimateReason='{estimateReason}', wrapDetails='{wrappedMarkerDetails}', markerRects={markerRectsText}");
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("MatchNav", $"WrapOverlayDiag failed stage={stage}: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private static string FormatPoint(Windows.Foundation.Point point)
+        => $"({point.X:N1},{point.Y:N1})";
+
+    private static string FormatRect(Windows.Foundation.Rect rect)
+        => $"({rect.X:N1},{rect.Y:N1},{rect.Width:N1},{rect.Height:N1})";
+
+    private static string FormatMarkerRects(IReadOnlyList<Windows.Foundation.Rect>? rects)
+    {
+        if (rects is null || rects.Count == 0)
+            return "none";
+
+        int count = Math.Min(rects.Count, 4);
+        var parts = new string[count];
+        for (int index = 0; index < count; index++)
+            parts[index] = FormatRect(rects[index]);
+
+        string suffix = rects.Count > count ? $" +{rects.Count - count} more" : string.Empty;
+        return string.Join(";", parts) + suffix;
+    }
+
     private static double ClampOverlayMarkerLeft(double left, double markerWidth, double viewportWidth)
     {
         if (double.IsNaN(left) || double.IsInfinity(left))
@@ -1412,11 +1815,11 @@ public sealed partial class MainWindow
 
     private double GetPreviewWrapTextWidth(RichTextBlock block)
     {
-        if (block.ActualWidth > 0)
-            return block.ActualWidth;
-
         if (_sectionMatchNavs.TryGetValue(block, out var sectionNav) && sectionNav.Scroller.ViewportWidth > 0)
             return sectionNav.Scroller.ViewportWidth;
+
+        if (block.ActualWidth > 0)
+            return block.ActualWidth;
 
         return Math.Max(1, PreviewScrollViewer.ViewportWidth);
     }

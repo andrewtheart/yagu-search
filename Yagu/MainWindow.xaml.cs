@@ -3334,8 +3334,39 @@ public sealed partial class MainWindow : Window
             return true;
         }
 
-        if (fallback is { } candidate && !HasMultipleSelectedResultsOnLine(result))
+        if (fallback is { } candidate)
         {
+            if (!HasMultipleSelectedResultsOnLine(result))
+            {
+                paragraph = candidate.paragraph;
+                matchInPara = candidate.matchInPara;
+                return true;
+            }
+
+            // Multiple selected results on the same line share one paragraph.
+            // Determine the correct matchInPara by matching the result's column
+            // against the match runs in the paragraph.
+            var runs = GetMatchRunsForParagraph(candidate.paragraph);
+            if (runs.Count > 0 && result.MatchStartColumn >= 0)
+            {
+                // Find the match run whose column best matches this result's position.
+                int bestIndex = 0;
+                int bestDist = int.MaxValue;
+                for (int i = 0; i < runs.Count; i++)
+                {
+                    int dist = Math.Abs(runs[i].column - result.MatchStartColumn);
+                    if (dist < bestDist)
+                    {
+                        bestDist = dist;
+                        bestIndex = i;
+                    }
+                }
+                paragraph = candidate.paragraph;
+                matchInPara = bestIndex;
+                return true;
+            }
+
+            // Fallback: can't determine column, use first match in paragraph.
             paragraph = candidate.paragraph;
             matchInPara = candidate.matchInPara;
             return true;
