@@ -184,7 +184,7 @@ public sealed partial class MainWindow
         if (_sectionGutterBlocks.TryGetValue(section, out var gb))
         {
             var spacer = new Paragraph { Margin = margin };
-            spacer.Inlines.Add(new Run { Text = " " });
+            spacer.Inlines.Add(new Run { Text = "       │ ", Foreground = s_gutterSepBrush });
             gb.Blocks.Add(spacer);
         }
     }
@@ -202,6 +202,7 @@ public sealed partial class MainWindow
             var gutterGapRun = new Run { Text = "      \u22EE" };
             gutterGapRun.Foreground = new SolidColorBrush(Microsoft.UI.Colors.DimGray);
             gutterGap.Inlines.Add(gutterGapRun);
+            gutterGap.Inlines.Add(new Run { Text = "│ ", Foreground = s_gutterSepBrush });
             gb.Blocks.Add(gutterGap);
 
             var contentSpacer = new Paragraph();
@@ -522,7 +523,7 @@ public sealed partial class MainWindow
             if (_sectionGutterBlocks.TryGetValue(section, out var gb))
             {
                 var gutterSep = new Paragraph { Margin = new Thickness(0, 8, 0, 4) };
-                gutterSep.Inlines.Add(new Run { Text = " " });
+                gutterSep.Inlines.Add(new Run { Text = "       │ ", Foreground = s_gutterSepBrush });
                 gb.Blocks.Add(gutterSep);
             }
 
@@ -2598,7 +2599,7 @@ public sealed partial class MainWindow
 
         var gutterRun = new Run { Text = continuationGutter ? "      " : $"{lineNum,5} " };
         gutterRun.Foreground = continuationGutter ? s_contextGutterBrush : (isMatchLine ? s_matchGutterBrush : s_contextGutterBrush);
-        var gutterSep = new Run { Text = continuationGutter ? "  " : "│ " };
+        var gutterSep = new Run { Text = "│ " };
         gutterSep.Foreground = s_gutterSepBrush;
 
         if (gutterBlock is not null)

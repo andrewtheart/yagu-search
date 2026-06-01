@@ -32,20 +32,32 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <!-- Vertical tab list -->
-            <ListView x:Name="TabList" Grid.Column="0"
-                      Padding="8,8,0,8"
-                      SelectionMode="Single"
-                      SelectionChanged="OnTabSelectionChanged">
-                <ListView.ItemContainerStyle>
-                    <Style TargetType="ListViewItem">
-                        <Setter Property="Padding" Value="12,8,12,8" />
-                        <Setter Property="Margin" Value="0,1,0,1" />
-                        <Setter Property="CornerRadius" Value="6" />
-                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                    </Style>
-                </ListView.ItemContainerStyle>
-            </ListView>
+            <!-- Left panel: search box + vertical tab list -->
+            <Grid Grid.Column="0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <TextBox x:Name="SearchBox" Grid.Row="0"
+                         PlaceholderText="Search settings..."
+                         Margin="8,8,8,4"
+                         TextChanged="OnSearchTextChanged" />
+
+                <ListView x:Name="TabList" Grid.Row="1"
+                          Padding="8,4,0,8"
+                          SelectionMode="Single"
+                          SelectionChanged="OnTabSelectionChanged">
+                    <ListView.ItemContainerStyle>
+                        <Style TargetType="ListViewItem">
+                            <Setter Property="Padding" Value="12,8,12,8" />
+                            <Setter Property="Margin" Value="0,1,0,1" />
+                            <Setter Property="CornerRadius" Value="6" />
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        </Style>
+                    </ListView.ItemContainerStyle>
+                </ListView>
+            </Grid>
 
             <!-- Separator line -->
             <Border Grid.Column="1"

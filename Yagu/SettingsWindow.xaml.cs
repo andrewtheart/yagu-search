@@ -21,6 +21,26 @@ public sealed partial class SettingsWindow : Window
     private readonly Action? _applyPreviewSectionBackgrounds;
     private readonly List<UIElement> _tabPages = new();
 
+    /// <summary>Flat registry of every setting built during BuildSettingsContent for search filtering.</summary>
+    private readonly List<SettingEntry> _settingEntries = new();
+
+    /// <summary>Represents a single setting item with searchable text and its UI elements.</summary>
+    private sealed class SettingEntry
+    {
+        public required string TabHeader { get; init; }
+        public required string Label { get; init; }
+        public string? Description { get; init; }
+        /// <summary>Factory that recreates the setting UI elements for display in search results.</summary>
+        public required Func<IEnumerable<UIElement>> BuildElements { get; init; }
+
+        public bool Matches(string query)
+        {
+            return Label.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || (Description is not null && Description.Contains(query, StringComparison.OrdinalIgnoreCase))
+                || TabHeader.Contains(query, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
     public SettingsWindow(MainViewModel viewModel, HotkeyService hotkeyService, IntPtr mainHwnd, Action<bool>? applyWordWrap, Action? applyPreviewSectionBackgrounds)
     {
         _viewModel = viewModel;
@@ -48,6 +68,7 @@ public sealed partial class SettingsWindow : Window
             appWindow.SetIcon(icoPath);
 
         BuildSettingsContent();
+        ExtractSearchableEntries();
         TabList.SelectedIndex = 0;
     }
 
@@ -133,10 +154,233 @@ public sealed partial class SettingsWindow : Window
 
     private void OnTabSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_isSearchActive) return;
         int idx = TabList.SelectedIndex;
         SettingsContent.Children.Clear();
         if (idx >= 0 && idx < _tabPages.Count)
             SettingsContent.Children.Add(_tabPages[idx]);
+    }
+
+    private bool _isSearchActive;
+
+    private void OnSearchTextChanged(object sender, TextChangedEventArgs e)
+    {
+        var query = SearchBox.Text.Trim();
+        if (string.IsNullOrEmpty(query))
+        {
+            // Restore normal tab view.
+            _isSearchActive = false;
+            TabList.Visibility = Visibility.Visible;
+
+            // Detach any elements currently in the search results panel.
+            SettingsContent.Children.Clear();
+
+            // Re-parent all elements back to their owning tab pages.
+            RestoreTabPageElements();
+
+            int idx = TabList.SelectedIndex;
+            if (idx >= 0 && idx < _tabPages.Count)
+                SettingsContent.Children.Add(_tabPages[idx]);
+            return;
+        }
+
+        _isSearchActive = true;
+        TabList.Visibility = Visibility.Collapsed;
+        SettingsContent.Children.Clear();
+
+        // Detach all elements from their tab page parents so they can be re-parented.
+        DetachAllTabPageElements();
+
+        string? lastHeader = null;
+        foreach (var entry in _settingEntries)
+        {
+            if (!entry.Matches(query))
+                continue;
+
+            // Show tab header as a group header when it changes.
+            if (!string.Equals(lastHeader, entry.TabHeader, StringComparison.Ordinal))
+            {
+                lastHeader = entry.TabHeader;
+                SettingsContent.Children.Add(new TextBlock
+                {
+                    Text = entry.TabHeader,
+                    FontWeight = Microsoft.UI.Text.FontWeights.Bold,
+                    FontSize = 16,
+                    Margin = new Thickness(0, 12, 0, 4),
+                    Opacity = 0.9,
+                });
+            }
+
+            // Add the setting's UI elements.
+            var container = new StackPanel { Spacing = 4, Margin = new Thickness(0, 4, 0, 8) };
+            foreach (var element in entry.BuildElements())
+            {
+                if (element is FrameworkElement fe && fe.Parent is Panel p)
+                    p.Children.Remove(element);
+                container.Children.Add(element);
+            }
+            SettingsContent.Children.Add(container);
+        }
+
+        if (lastHeader is null)
+        {
+            SettingsContent.Children.Add(new TextBlock
+            {
+                Text = "No matching settings found.",
+                Opacity = 0.6,
+                Margin = new Thickness(0, 20, 0, 0),
+            });
+        }
+    }
+
+    private void DetachAllTabPageElements()
+    {
+        foreach (var page in _tabPages)
+        {
+            if (page is StackPanel sp)
+                sp.Children.Clear();
+        }
+    }
+
+    private void RestoreTabPageElements()
+    {
+        // Rebuild each tab page's children from the setting entries.
+        var tabHeaders = new[] { "Search Defaults", "Search Limits", "Performance", "Display", "Editor", "Window", "UI Behaviors", "Developer Options", "General" };
+        for (int t = 0; t < _tabPages.Count && t < tabHeaders.Length; t++)
+        {
+            if (_tabPages[t] is not StackPanel sp) continue;
+            sp.Children.Clear();
+        }
+
+        foreach (var entry in _settingEntries)
+        {
+            int tabIdx = Array.IndexOf(
+                new[] { "Search Defaults", "Search Limits", "Performance", "Display", "Editor", "Window", "UI Behaviors", "Developer Options", "General" },
+                entry.TabHeader);
+            if (tabIdx < 0 || tabIdx >= _tabPages.Count) continue;
+            if (_tabPages[tabIdx] is not StackPanel sp) continue;
+
+            foreach (var element in entry.BuildElements())
+            {
+                // Detach from any current parent first.
+                if (element is FrameworkElement fe && fe.Parent is Panel parentPanel)
+                    parentPanel.Children.Remove(element);
+                sp.Children.Add(element);
+            }
+        }
+    }
+
+    /// <summary>
+    /// After all tabs are built, walks each tab page to extract searchable setting entries.
+    /// Groups children into logical entries: a label/heading element followed by its
+    /// control(s) and optional description text until the next label/heading.
+    /// </summary>
+    private void ExtractSearchableEntries()
+    {
+        var tabHeaders = new[] { "Search Defaults", "Search Limits", "Performance", "Display", "Editor", "Window", "UI Behaviors", "Developer Options", "General" };
+        for (int t = 0; t < _tabPages.Count && t < tabHeaders.Length; t++)
+        {
+            string tabHeader = tabHeaders[t];
+            if (_tabPages[t] is not StackPanel page) continue;
+
+            var entryElements = new List<UIElement>();
+            string? entryLabel = null;
+            string? entryDescription = null;
+
+            for (int i = 0; i < page.Children.Count; i++)
+            {
+                var child = page.Children[i];
+                string? text = ExtractText(child);
+                bool isLabel = IsLabelElement(child);
+
+                if (isLabel && entryElements.Count > 0 && entryLabel is not null)
+                {
+                    // Flush previous entry.
+                    var captured = new List<UIElement>(entryElements);
+                    string capturedLabel = entryLabel;
+                    string? capturedDesc = entryDescription;
+                    string capturedTab = tabHeader;
+                    _settingEntries.Add(new SettingEntry
+                    {
+                        TabHeader = capturedTab,
+                        Label = capturedLabel,
+                        Description = capturedDesc,
+                        BuildElements = () => captured,
+                    });
+                    entryElements.Clear();
+                    entryDescription = null;
+                }
+
+                if (isLabel)
+                    entryLabel = text ?? "Setting";
+
+                entryElements.Add(child);
+
+                // Capture description text (small font TextBlock that follows a control).
+                if (!isLabel && child is TextBlock tb && tb.FontSize <= 12 && tb.Opacity < 1.0)
+                    entryDescription = (entryDescription is null ? "" : entryDescription + " ") + (text ?? "");
+            }
+
+            // Flush last entry.
+            if (entryElements.Count > 0 && entryLabel is not null)
+            {
+                var captured = new List<UIElement>(entryElements);
+                string capturedLabel = entryLabel;
+                string? capturedDesc = entryDescription;
+                string capturedTab = tabHeader;
+                _settingEntries.Add(new SettingEntry
+                {
+                    TabHeader = capturedTab,
+                    Label = capturedLabel,
+                    Description = capturedDesc,
+                    BuildElements = () => captured,
+                });
+            }
+        }
+    }
+
+    private static bool IsLabelElement(UIElement element)
+    {
+        if (element is TextBlock tb && tb.FontSize >= 13 && tb.Opacity >= 0.9)
+            return true;
+        if (element is StackPanel sp && sp.Orientation == Orientation.Horizontal)
+        {
+            // NextSearchLabel pattern: horizontal StackPanel with TextBlock + icon.
+            foreach (var c in sp.Children)
+                if (c is TextBlock) return true;
+        }
+        return false;
+    }
+
+    private static string? ExtractText(UIElement element)
+    {
+        if (element is TextBlock tb)
+            return tb.Text;
+        if (element is CheckBox cb)
+            return ExtractContentText(cb.Content);
+        if (element is ToggleSwitch ts)
+            return (ExtractContentText(ts.OnContent) ?? "") + " " + (ExtractContentText(ts.OffContent) ?? "");
+        if (element is StackPanel sp)
+        {
+            // NextSearchLabel or similar composite label.
+            foreach (var c in sp.Children)
+            {
+                if (c is TextBlock innerTb) return innerTb.Text;
+            }
+        }
+        return null;
+    }
+
+    private static string? ExtractContentText(object? content)
+    {
+        if (content is string s) return s;
+        if (content is TextBlock tb) return tb.Text;
+        if (content is StackPanel sp)
+        {
+            foreach (var c in sp.Children)
+                if (c is TextBlock innerTb) return innerTb.Text;
+        }
+        return content?.ToString();
     }
 
     private StackPanel AddTab(string header)
