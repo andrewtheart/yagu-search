@@ -188,6 +188,7 @@ public static class SessionFileService
         writer.WriteNumber("ln", r.LineNumber);
         writer.WriteString("ml", r.MatchLine ?? string.Empty);
         writer.WriteNumber("mc", r.MatchStartColumn);
+        writer.WriteNumber("sc", r.SourceMatchStartColumn);
         writer.WriteNumber("mlen", r.MatchLength);
 
         WriteStringArray(writer, "b", r.ContextBefore);
@@ -319,12 +320,14 @@ public static class SessionFileService
         int lineNumber = el.TryGetProperty("ln", out var ln) && ln.TryGetInt32(out var lnv) ? lnv : 0;
         string matchLine = el.TryGetProperty("ml", out var ml) ? (ml.GetString() ?? string.Empty) : string.Empty;
         int matchStart = el.TryGetProperty("mc", out var mc) && mc.TryGetInt32(out var mcv) ? mcv : 0;
+        int sourceMatchStart = el.TryGetProperty("sc", out var sc) && sc.TryGetInt32(out var scv) ? scv : matchStart;
         int matchLength = el.TryGetProperty("mlen", out var mlen) && mlen.TryGetInt32(out var mlenv) ? mlenv : 0;
 
         var contextBefore = ReadStringArray(el, "b");
         var contextAfter = ReadStringArray(el, "a");
 
-        return new SearchResult(filePath, lineNumber, matchLine, matchStart, matchLength, contextBefore, contextAfter);
+        return new SearchResult(filePath, lineNumber, matchLine, matchStart, matchLength, contextBefore, contextAfter)
+        { SourceMatchStartColumn = sourceMatchStart };
     }
 
     private static string[] ReadStringArray(JsonElement parent, string name)

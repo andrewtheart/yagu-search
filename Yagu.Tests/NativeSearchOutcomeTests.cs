@@ -166,12 +166,13 @@ public class NativeSearchOutcomeFromBufferTests
     [Fact]
     public unsafe void SingleMatch_NoContext_ParsesCorrectly()
     {
-        // Protocol: U32 count, per match: U64 lineNumber, U32 matchStart, U32 matchLen,
+        // Protocol: U32 count, per match: U64 lineNumber, U32 matchStart, U32 sourceMatchStart, U32 matchLen,
         //           U32 lineLen, UTF8[lineLen], U32 beforeCount, U32 afterCount
         var buf = new List<byte>();
         WriteU32(buf, 1);          // count = 1
         WriteU64(buf, 5);          // lineNumber = 5
         WriteU32(buf, 2);          // matchStart = 2
+        WriteU32(buf, 2);          // sourceMatchStart = 2
         WriteU32(buf, 3);          // matchLen = 3
         var lineBytes = Encoding.UTF8.GetBytes("hello world");
         WriteU32(buf, (uint)lineBytes.Length);
@@ -205,6 +206,7 @@ public class NativeSearchOutcomeFromBufferTests
         WriteU32(buf, 1);          // count = 1
         WriteU64(buf, 10);         // lineNumber = 10
         WriteU32(buf, 0);          // matchStart = 0
+        WriteU32(buf, 0);          // sourceMatchStart = 0
         WriteU32(buf, 5);          // matchLen = 5
         var lineBytes = Encoding.UTF8.GetBytes("match");
         WriteU32(buf, (uint)lineBytes.Length);
@@ -400,6 +402,7 @@ public class NativeSearchOutcomeFromBufferEdgeTests
     {
         WriteU64(buf, lineNum);
         WriteU32(buf, matchStart);
+        WriteU32(buf, matchStart);
         WriteU32(buf, matchLen);
         var lb = Encoding.UTF8.GetBytes(line);
         WriteU32(buf, (uint)lb.Length);
@@ -471,6 +474,7 @@ public class NativeSearchOutcomeFromBufferEdgeTests
         WriteU32(buf, 1);           // count
         WriteU64(buf, 1);           // lineNumber
         WriteU32(buf, 0);           // matchStart
+        WriteU32(buf, 0);           // sourceMatchStart
         WriteU32(buf, 1);           // matchLen
         var lb = Encoding.UTF8.GetBytes("line");
         WriteU32(buf, (uint)lb.Length);
@@ -497,6 +501,7 @@ public class NativeSearchOutcomeFromBufferEdgeTests
         WriteU32(buf, 1);           // count
         WriteU64(buf, 1);           // lineNumber
         WriteU32(buf, 0);           // matchStart
+        WriteU32(buf, 0);           // sourceMatchStart
         WriteU32(buf, 1);           // matchLen
         var lb = Encoding.UTF8.GetBytes("line");
         WriteU32(buf, (uint)lb.Length);

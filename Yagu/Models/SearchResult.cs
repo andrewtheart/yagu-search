@@ -25,6 +25,7 @@ public sealed record SearchResult(
     public string MatchLine { get; internal set; } = MatchLine;
     public IReadOnlyList<string> ContextBefore { get; internal set; } = ContextBefore;
     public IReadOnlyList<string> ContextAfter { get; internal set; } = ContextAfter;
+    internal int SourceMatchStartColumn { get; set; } = MatchStartColumn;
 
     private const int ShortPreviewLength = 120;
     private ShortPreviewInfo? _shortPreview;
@@ -64,7 +65,7 @@ public sealed record SearchResult(
     /// Used in degraded mode to avoid allocating full strings that will be immediately evicted.
     /// The result has empty MatchLine and contexts — FileGroup will not retain it visually.
     /// </summary>
-    internal static SearchResult CreatePreEvicted(string filePath, int lineNumber, int matchStartColumn, int matchLength, long diskOffset)
+    internal static SearchResult CreatePreEvicted(string filePath, int lineNumber, int matchStartColumn, int matchLength, long diskOffset, int? sourceMatchStartColumn = null)
     {
         var result = new SearchResult(
             FilePath: filePath,
@@ -74,6 +75,7 @@ public sealed record SearchResult(
             MatchLength: matchLength,
             ContextBefore: Array.Empty<string>(),
             ContextAfter: Array.Empty<string>());
+        result.SourceMatchStartColumn = sourceMatchStartColumn ?? matchStartColumn;
         Volatile.Write(ref result._diskOffset, diskOffset);
         return result;
     }

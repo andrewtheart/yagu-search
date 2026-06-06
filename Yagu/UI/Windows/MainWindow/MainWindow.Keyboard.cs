@@ -63,6 +63,11 @@ public sealed partial class MainWindow
         {
             e.Handled = true;
         }
+        else if (e.Key == Windows.System.VirtualKey.A && ctrl
+            && TrySelectAllPreviewContent(e.OriginalSource as DependencyObject))
+        {
+            e.Handled = true;
+        }
         else if (e.Key == Windows.System.VirtualKey.G && ctrl && !shift)
         {
             var src = e.OriginalSource as DependencyObject;

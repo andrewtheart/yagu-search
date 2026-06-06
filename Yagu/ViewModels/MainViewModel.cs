@@ -1993,7 +1993,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                     MatchStartColumn: displayLine.MatchStart,
                     MatchLength: length,
                     ContextBefore: before,
-                    ContextAfter: after));
+                    ContextAfter: after)
+                { SourceMatchStartColumn = start });
             }
         }
 

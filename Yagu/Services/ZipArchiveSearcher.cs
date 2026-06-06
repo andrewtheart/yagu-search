@@ -681,7 +681,8 @@ public static class ZipArchiveSearcher
                         MatchStartColumn: displayLine.MatchStart,
                         MatchLength: length,
                         ContextBefore: before,
-                        ContextAfter: Array.Empty<string>());
+                        ContextAfter: Array.Empty<string>())
+                    { SourceMatchStartColumn = start };
                     if (contextLines == 0)
                     {
                         await writer.WriteAsync(partial, cancellationToken).ConfigureAwait(false);

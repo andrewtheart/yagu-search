@@ -157,7 +157,9 @@ public class NativeParityTests : IDisposable
         var managedHit = Assert.Single(managed);
         Assert.Contains("THE_NEEDLE", nativeHit.MatchLine);
         Assert.Equal(nativeHit.MatchLine.IndexOf("THE_NEEDLE", StringComparison.Ordinal), nativeHit.MatchStartColumn);
-        Assert.Equal(managedHit.MatchLine, nativeHit.MatchLine);
-        Assert.Equal(managedHit.MatchStartColumn, nativeHit.MatchStartColumn);
+        Assert.Equal(2500, nativeHit.SourceMatchStartColumn);
+        Assert.Equal(managedHit.SourceMatchStartColumn, nativeHit.SourceMatchStartColumn);
+        Assert.Contains("THE_NEEDLE", managedHit.MatchLine);
+        Assert.Equal(managedHit.MatchLine.IndexOf("THE_NEEDLE", StringComparison.Ordinal), managedHit.MatchStartColumn);
     }
 }

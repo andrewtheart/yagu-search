@@ -630,10 +630,18 @@ public sealed partial class MainWindow
         int maxMatches = EffectiveInitialMaxMatchesPerSection;
         int maxBlocks = EffectiveInitialMaxPreviewBlocksPerSection;
         int cap = Math.Min(results.Count, maxMatches);
+        var renderedLineNumbers = new HashSet<int>();
         foreach (var r in results)
         {
             if (renderedResults >= cap || section.Blocks.Count - startingBlocks >= maxBlocks)
                 break;
+
+            // Skip results whose line was already rendered (multiple matches on same line).
+            if (!renderedLineNumbers.Add(r.LineNumber))
+            {
+                renderedResults++;
+                continue;
+            }
 
             var sep = new Paragraph();
             var label = $"\u00A0Line\u00A0{r.LineNumber}\u00A0";
@@ -2492,8 +2500,13 @@ public sealed partial class MainWindow
 
     private static int ResolveSourceMatchStart(string line, SearchResult result, Regex? rx)
     {
-        int candidate = result.MatchStartColumn;
+        int candidate = result.SourceMatchStartColumn;
         if (IsSourceMatchAt(line, candidate, result.MatchLength, rx))
+            return candidate;
+
+        candidate = result.MatchStartColumn;
+        if (candidate != result.SourceMatchStartColumn
+            && IsSourceMatchAt(line, candidate, result.MatchLength, rx))
             return candidate;
 
         string displayLine = result.MatchLine ?? string.Empty;
@@ -2645,6 +2658,17 @@ public sealed partial class MainWindow
         return count;
     }
 
+    private static int CapConsumedResultsToVisibleEntriesForTruncatedWindow(
+        int consumedResults,
+        int addedMatchEntries,
+        bool truncatePreviewLines)
+    {
+        if (!truncatePreviewLines || consumedResults <= addedMatchEntries)
+            return consumedResults;
+
+        return Math.Max(0, addedMatchEntries);
+    }
+
     private int AppendHighlightMatchWindows(
         RichTextBlock section,
         List<SearchResult> pendingResults,
@@ -2691,10 +2715,9 @@ public sealed partial class MainWindow
 
         if (ranges.Count == 0)
         {
-            // All pending results are on lines already rendered (usually multiple
-            // selected matches on one very long/truncated line). Add separate
-            // windows around each result so navigation/highlighting stays one
-            // entry per selected match instead of collapsing by line number.
+            // All pending results are on lines already rendered. Deduplicate by
+            // line number — render one truncated window per unique line and consume
+            // all results on that line to avoid showing the same content repeatedly.
             int maxResults = Math.Min(anchorLimit, pendingResults.Count);
             if (!truncatePreviewLines)
             {
@@ -2707,6 +2730,7 @@ public sealed partial class MainWindow
             AddGapIndicator(section);
             paragraphsAdded++;
 
+            var renderedFallbackLines = new HashSet<int>();
             for (int i = 0; i < maxResults; i++)
             {
                 if (addedMatchEntries >= maxAdditionalMatchEntries || paragraphsAdded >= maxAdditionalBlocks)
@@ -2716,6 +2740,14 @@ public sealed partial class MainWindow
                 int lineIndex = result.LineNumber - 1;
                 if (lineIndex < 0 || lineIndex >= allLines.Length)
                     continue;
+
+                // Skip results whose line was already rendered in this chunk.
+                if (!renderedFallbackLines.Add(result.LineNumber))
+                {
+                    consumedResults++;
+                    lastRenderedLine = Math.Max(lastRenderedLine, result.LineNumber);
+                    continue;
+                }
 
                 if (paragraphsAdded >= maxAdditionalBlocks)
                     break;
@@ -2793,6 +2825,10 @@ public sealed partial class MainWindow
         }
 
         consumedResults = CountPrefixResultsThroughLine(pendingResults, lastRenderedLine, allLines.Length);
+        consumedResults = CapConsumedResultsToVisibleEntriesForTruncatedWindow(
+            consumedResults,
+            addedMatchEntries,
+            truncatePreviewLines);
 
         return addedMatchEntries;
     }

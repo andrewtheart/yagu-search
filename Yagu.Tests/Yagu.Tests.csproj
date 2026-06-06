@@ -9,6 +9,12 @@
     <IsPackable>false</IsPackable>
     <RootNamespace>Yagu.Tests</RootNamespace>
     <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <RustProfile Condition="'$(RustProfile)' == '' And '$(Configuration)' == 'Debug'">profiling</RustProfile>
+    <RustProfile Condition="'$(RustProfile)' == ''">release</RustProfile>
+    <RustCoreDir>$(MSBuildThisFileDirectory)..\yagu-core\</RustCoreDir>
+    <RustTargetDir>$(RustCoreDir)target\$(RustProfile)\</RustTargetDir>
+    <RustDllPath>$(RustTargetDir)yagu_core.dll</RustDllPath>
+    <RustPdbPath>$(RustTargetDir)yagu_core.pdb</RustPdbPath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -74,9 +80,16 @@
   <!-- Copy the Rust cdylib next to the test assembly so the native fast-path
        is exercised under `dotnet test`. The build is gated on Cargo.toml
        existing; missing DLLs fall back to the managed path. -->
-  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)..\yagu-core\target\release\yagu_core.dll')">
-    <None Include="$(MSBuildThisFileDirectory)..\yagu-core\target\release\yagu_core.dll">
+  <ItemGroup Condition="Exists('$(RustDllPath)')">
+    <None Include="$(RustDllPath)">
       <Link>yagu_core.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(RustPdbPath)')">
+    <None Include="$(RustPdbPath)">
+      <Link>yagu_core.pdb</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

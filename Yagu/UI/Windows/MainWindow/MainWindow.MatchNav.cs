@@ -256,7 +256,7 @@ public sealed partial class MainWindow
                         rescrolls++;
                         idleStopwatch.Restart();
                         consecutiveOnScreen = 0;
-                        bool accepted2 = PreviewScrollViewer.ChangeView(null, target, null, disableAnimation: true);
+                        bool accepted2 = ChangePreviewViewForMatchNavigation(null, target);
                         LogService.Instance.Info("MatchNav",
                             $"ScrollAfterMaterialization: detach-rescue idx={idxAtAttach}, snapshot={snapshot}, fromY={vpTop2:N1}, toY={target:N1}, accepted={accepted2}, rescrolls={rescrolls}, total={hardCapStopwatch.ElapsedMilliseconds}ms (staying attached)");
                         return; // do NOT detach \u2014 keep watching
@@ -292,7 +292,7 @@ public sealed partial class MainWindow
                             {
                                 rescrolls++;
                                 idleStopwatch.Restart();
-                                bool accepted = PreviewScrollViewer.ChangeView(null, target, null, disableAnimation: true);
+                                bool accepted = ChangePreviewViewForMatchNavigation(null, target);
                                 LogService.Instance.Info("MatchNav",
                                     $"ScrollAfterMaterialization: post-layout re-center #{rescrolls} idx={_currentMatchIndex}, runY={runY:N1}, vpTop={vpTop:N1}, vpH={vpH:N1}, toY={target:N1}, accepted={accepted}, total={hardCapStopwatch.ElapsedMilliseconds}ms");
                             }
@@ -370,7 +370,7 @@ public sealed partial class MainWindow
                                 rescrolls++;
                                 idleStopwatch.Restart();
                                 consecutiveOnScreen = 0;
-                                bool accepted = PreviewScrollViewer.ChangeView(null, target, null, disableAnimation: true);
+                                bool accepted = ChangePreviewViewForMatchNavigation(null, target);
                                 LogService.Instance.Info("MatchNav",
                                     $"ScrollAfterMaterialization: poll re-center #{rescrolls} idx={_currentMatchIndex}, runY={runY:N1}, vpTop={vpTop:N1}, vpH={vpH:N1}, toY={target:N1}, accepted={accepted}, total={hardCapStopwatch.ElapsedMilliseconds}ms");
                             }
@@ -407,6 +407,12 @@ public sealed partial class MainWindow
     private void InvalidatePendingMatchScrolls()
     {
         _matchScrollRequestId++;
+    }
+
+    private bool ChangePreviewViewForMatchNavigation(double? horizontalOffset, double? verticalOffset, float? zoomFactor = null, bool disableAnimation = true)
+    {
+        SuppressOverflowAutoLoadForMatchNavigation();
+        return PreviewScrollViewer.ChangeView(horizontalOffset, verticalOffset, zoomFactor, disableAnimation);
     }
 
     private void OnPreviewViewportSizeChanged(object sender, SizeChangedEventArgs e)
@@ -486,7 +492,7 @@ public sealed partial class MainWindow
                 {
                     double beforeActualVerticalOffset = PreviewScrollViewer.VerticalOffset;
                     bool requested = Math.Abs(actualOffset - beforeActualVerticalOffset) > 1;
-                    bool accepted = requested && PreviewScrollViewer.ChangeView(null, actualOffset, null, disableAnimation: true);
+                    bool accepted = requested && ChangePreviewViewForMatchNavigation(null, actualOffset);
 
                     if (LogService.Instance.IsVerboseEnabled)
                         LogService.Instance.Verbose("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, mode=actual-run, source={actualSource}, forceCenter=True, requested={requested}, accepted={accepted}, fromY={beforeActualVerticalOffset:N1}, targetY={actualOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}");
@@ -510,7 +516,7 @@ public sealed partial class MainWindow
 
                 double beforeEstimatedVerticalOffset = PreviewScrollViewer.VerticalOffset;
                 bool requestedEstimated = Math.Abs(estimatedOffset - beforeEstimatedVerticalOffset) > 1;
-                bool acceptedEstimated = requestedEstimated && PreviewScrollViewer.ChangeView(null, estimatedOffset, null, disableAnimation: true);
+                bool acceptedEstimated = requestedEstimated && ChangePreviewViewForMatchNavigation(null, estimatedOffset);
 
                 if (LogService.Instance.IsVerboseEnabled)
                     LogService.Instance.Verbose("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, mode=estimated-active, forceCenter=True, requested={requestedEstimated}, accepted={acceptedEstimated}, fromY={beforeEstimatedVerticalOffset:N1}, targetY={estimatedOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}");
@@ -525,7 +531,7 @@ public sealed partial class MainWindow
             {
                 double beforeParagraphVerticalOffset = PreviewScrollViewer.VerticalOffset;
                 bool requestedParagraph = Math.Abs(paragraphOffset - beforeParagraphVerticalOffset) > 1;
-                bool acceptedParagraph = requestedParagraph && PreviewScrollViewer.ChangeView(null, paragraphOffset, null, disableAnimation: true);
+                bool acceptedParagraph = requestedParagraph && ChangePreviewViewForMatchNavigation(null, paragraphOffset);
 
                 if (LogService.Instance.IsVerboseEnabled)
                     LogService.Instance.Verbose("MatchNav", $"ScrollPreviewToLine: idx={_currentMatchIndex}, mode=actual-paragraph, source={paragraphOffsetSource}, forceCenter=True, requested={requestedParagraph}, accepted={acceptedParagraph}, fromY={beforeParagraphVerticalOffset:N1}, targetY={paragraphOffset:N1}, viewportH={PreviewScrollViewer.ViewportHeight:N1}");
@@ -568,7 +574,7 @@ public sealed partial class MainWindow
             double overlayVerticalOffset = beforeVerticalOffset;
             if (verticalScrollRequested)
             {
-                verticalScrollAccepted = PreviewScrollViewer.ChangeView(null, targetVerticalOffset, null, disableAnimation: true);
+                verticalScrollAccepted = ChangePreviewViewForMatchNavigation(null, targetVerticalOffset);
                 if (verticalScrollAccepted)
                     overlayVerticalOffset = targetVerticalOffset;
             }
@@ -995,7 +1001,7 @@ public sealed partial class MainWindow
                 centeredFromActualRun = true;
                 bool actualCenterNeeded = Math.Abs(actualTargetVerticalOffset - currentVerticalOffset) > 1;
                 if (actualCenterNeeded)
-                    actualCenterAccepted = PreviewScrollViewer.ChangeView(null, actualTargetVerticalOffset, null, disableAnimation: true);
+                    actualCenterAccepted = ChangePreviewViewForMatchNavigation(null, actualTargetVerticalOffset);
 
                 if (actualCenterAccepted)
                 {
@@ -1054,7 +1060,7 @@ public sealed partial class MainWindow
                 correctiveTarget = Math.Clamp(correctiveTarget, 0, PreviewScrollViewer.ScrollableHeight);
                 if (Math.Abs(correctiveTarget - currentVerticalOffset) > 1)
                 {
-                    bool accepted = PreviewScrollViewer.ChangeView(null, correctiveTarget, null, disableAnimation: true);
+                    bool accepted = ChangePreviewViewForMatchNavigation(null, correctiveTarget);
                     LogWordWrapOverlayDiagnostic(
                         "edge-correction",
                         block,
@@ -1869,7 +1875,7 @@ public sealed partial class MainWindow
                             VerifyActiveMatchVisibleAfterScroll(block, targetPara, paragraphIndex, nextAttempt, capturedParaY);
                         };
                         PreviewScrollViewer.ViewChanged += handler;
-                        bool accepted = PreviewScrollViewer.ChangeView(null, correctedTarget, null, disableAnimation: true);
+                        bool accepted = ChangePreviewViewForMatchNavigation(null, correctedTarget);
                         LogService.Instance.Info("MatchNav",
                             $"VerifyActiveMatch: corrective scroll idx={navIdx}, attempt={nextAttempt}/{kHardCap}, layoutMoved={layoutMoved}, fromY={vpTop:N1}, toY={correctedTarget:N1}, accepted={accepted}");
                         if (!accepted)
@@ -2561,7 +2567,7 @@ public sealed partial class MainWindow
         int nextIndex = sn.CurrentIndex + 1;
         if (nextIndex >= sn.Matches.Count)
         {
-            if (_sectionOverflow.ContainsKey(sn.Block) && ExpandSectionNextChunk(sn.Block))
+            if (_sectionOverflow.ContainsKey(sn.Block) && ExpandSectionNextChunk(sn.Block, SingleStepOverflowExpandMatches))
             {
                 nextIndex = sn.CurrentIndex + 1;
                 expandedOverflow = true;
@@ -2578,7 +2584,7 @@ public sealed partial class MainWindow
         UpdateSectionNavOverlay();
         var (para, matchInPara) = sn.Matches[sn.CurrentIndex];
         BoxMatchRun(para, matchInPara);
-        ScrollAfterMatchNavigation(sn.Block, para, justMaterialized: false, sameParagraph: !expandedOverflow && !wrappedToStart && ReferenceEquals(previousPara, para));
+        ScrollAfterMatchNavigation(sn.Block, para, justMaterialized: expandedOverflow, sameParagraph: !expandedOverflow && !wrappedToStart && ReferenceEquals(previousPara, para));
     }
 
     private void OnSectionPrevMatch(SectionMatchNav sn)
@@ -2597,6 +2603,8 @@ public sealed partial class MainWindow
 
     private void ScrollAfterMatchNavigation(RichTextBlock block, Paragraph para, bool justMaterialized, bool sameParagraph)
     {
+        SuppressOverflowAutoLoadForMatchNavigation();
+
         if (justMaterialized)
         {
             ScrollAfterMaterialization(block, para);
@@ -2781,6 +2789,7 @@ public sealed partial class MainWindow
         else
             BoxMatchRun(para, matchInPara);
 
+        SuppressOverflowAutoLoadForMatchNavigation();
         ScrollPreviewToLine(block, para, forceCenter: true);
         navSw.Stop();
         LogService.Instance.Info("MatchNav", $"BulkPrevMatch: step={step}, from={startIndex}, landed={_currentMatchIndex}, hitBoundary={hitBoundary}, rendered={_matchParagraphs.Count}, elapsed={navSw.ElapsedMilliseconds}ms");
@@ -2826,7 +2835,7 @@ public sealed partial class MainWindow
             bool atSectionEnd = _currentMatchIndex == _matchParagraphs.Count - 1
                 || !ReferenceEquals(_matchParagraphs[_currentMatchIndex + 1].block, curBlock);
             if (atSectionEnd && _sectionOverflow.ContainsKey(curBlock))
-                expandedOverflow = ExpandSectionNextChunk(curBlock);
+                expandedOverflow = ExpandSectionNextChunk(curBlock, SingleStepOverflowExpandMatches);
         }
 
         bool justMaterialized = false;
@@ -2862,7 +2871,7 @@ public sealed partial class MainWindow
         BoxMatchRun(para, matchInPara);
         if (LogService.Instance.IsVerboseEnabled)
             LogService.Instance.Verbose("MatchNav", $"OnNextMatch: idx={_currentMatchIndex}, path={(justMaterialized ? "materialize" : "normal")}");
-        ScrollAfterMatchNavigation(block, para, justMaterialized, sameParagraph: !expandedOverflow && !wrappedToStart && ReferenceEquals(previousPara, para));
+        ScrollAfterMatchNavigation(block, para, justMaterialized || expandedOverflow, sameParagraph: !expandedOverflow && !wrappedToStart && ReferenceEquals(previousPara, para));
         navSw.Stop();
         if (LogService.Instance.IsVerboseEnabled)
             LogService.Instance.Verbose("Preview", $"GoToNextMatchAsync: index={_currentMatchIndex}, elapsed={navSw.ElapsedMilliseconds}ms");
@@ -2976,11 +2985,12 @@ public sealed partial class MainWindow
     /// navigation when the user reaches the end of the rendered range and
     /// the section still has overflow. Returns true if any matches were added.
     /// </summary>
-    private bool ExpandSectionNextChunk(RichTextBlock section)
+    private bool ExpandSectionNextChunk(RichTextBlock section, int? maxResultsToExpand = null)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         if (!_sectionOverflow.TryGetValue(section, out var ov)) return false;
-        int chunkSize = Math.Min(MaxMatchesPerExpandChunk, ov.RemainingResults.Count);
+        int requestedChunkSize = maxResultsToExpand is > 0 ? maxResultsToExpand.Value : MaxMatchesPerExpandChunk;
+        int chunkSize = Math.Min(requestedChunkSize, ov.RemainingResults.Count);
         if (chunkSize <= 0)
         {
             _sectionOverflow.Remove(section);
@@ -3034,21 +3044,35 @@ public sealed partial class MainWindow
                 truncatePreviewLines);
             ov.LastRenderedLine = Math.Max(ov.LastRenderedLine, lastRenderedLine);
 
-            // Fallback: all remaining results are on already-rendered but truncated
-            // lines (e.g. single-line minified JSON with 100K+ matches). Render
-            // additional truncation windows centered around each next result so the
-            // user can progressively navigate through all matches on the line.
+            // Fallback: all remaining results are on already-rendered lines.
+            // Render one window per unique line (across all expansion calls) to
+            // avoid showing duplicate content repeatedly as user navigates matches.
             if (truncatePreviewLines && consumed == 0 && ov.RemainingResults.Count > 0)
             {
-                AddGapIndicator(section);
+                ov.FallbackRenderedLines ??= new HashSet<int>();
                 int entriesBefore = _matchParagraphs.Count;
                 int maxResults = Math.Min(chunkSize, ov.RemainingResults.Count);
+                bool addedGap = false;
                 for (int ri = 0; ri < maxResults; ri++)
                 {
                     if (_matchParagraphs.Count - entriesBefore >= MaxMatchEntriesPerExpandChunk)
                         break;
 
                     var r = ov.RemainingResults[ri];
+
+                    // Skip results whose line was already rendered in any previous fallback.
+                    if (!ov.FallbackRenderedLines.Add(r.LineNumber))
+                    {
+                        consumed++;
+                        continue;
+                    }
+
+                    if (!addedGap)
+                    {
+                        AddGapIndicator(section);
+                        addedGap = true;
+                    }
+
                     int lineIndex = r.LineNumber - 1;
                     if (lineIndex < 0 || lineIndex >= ov.AllLines.Length) continue;
 

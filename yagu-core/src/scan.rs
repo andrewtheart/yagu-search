@@ -11,6 +11,7 @@ use std::collections::VecDeque;
 pub struct MatchRecord {
     pub line_number: u64,
     pub match_start: u32,
+    pub source_match_start: u32,
     pub match_len: u32,
     pub line: Vec<u8>,
     pub context_before: Vec<Vec<u8>>,
@@ -30,6 +31,7 @@ pub struct MatchRecord {
 pub struct MatchView<'a> {
     pub line_number: u64,
     pub match_start: u32,
+    pub source_match_start: u32,
     pub match_len: u32,
     pub line: &'a [u8],
     /// Context-before lines, oldest first. Borrowed from the scanner's
@@ -206,6 +208,7 @@ pub fn scan_bytes_with_matcher_ex(
                     let rec = MatchRecord {
                         line_number,
                         match_start: display_start,
+                        source_match_start: start.min(u32::MAX as usize) as u32,
                         match_len: len as u32,
                         line: match_line,
                         context_before: before.iter().cloned().collect(),
@@ -268,6 +271,7 @@ pub fn scan_bytes_with_matcher_ex(
 struct PendingMatchOwned {
     line_number: u64,
     match_start: u32,
+    source_match_start: u32,
     match_len: u32,
     line: Vec<u8>,
     context_before: Vec<Vec<u8>>,
@@ -385,6 +389,7 @@ where
                         let view = MatchView {
                             line_number,
                             match_start: display_start,
+                            source_match_start: start.min(u32::MAX as usize) as u32,
                             match_len: len as u32,
                             line: display_line,
                             context_before: &before_view,
@@ -406,6 +411,7 @@ where
                         pending.push_back(PendingMatchOwned {
                             line_number,
                             match_start: display_start,
+                            source_match_start: start.min(u32::MAX as usize) as u32,
                             match_len: len as u32,
                             line: match_line,
                             context_before,
@@ -456,6 +462,7 @@ where
     let view = MatchView {
         line_number: rec.line_number,
         match_start: rec.match_start,
+        source_match_start: rec.source_match_start,
         match_len: rec.match_len,
         line: &rec.line,
         context_before: &before_view,
@@ -1526,6 +1533,7 @@ mod tests {
         let r = MatchRecord {
             line_number: 1,
             match_start: 0,
+            source_match_start: 0,
             match_len: 3,
             line: b"foo".to_vec(),
             context_before: vec![],

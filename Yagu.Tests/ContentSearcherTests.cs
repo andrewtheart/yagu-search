@@ -115,6 +115,7 @@ public class ContentSearcherTests : IDisposable
             var result = Assert.Single(results);
             Assert.Contains("NEEDLE", result.MatchLine);
             Assert.Equal(result.MatchLine.IndexOf("NEEDLE", StringComparison.Ordinal), result.MatchStartColumn);
+            Assert.Equal(1500, result.SourceMatchStartColumn);
             Assert.StartsWith(LineTruncator.Ellipsis, result.MatchLine);
             Assert.EndsWith(LineTruncator.Ellipsis, result.MatchLine);
         }

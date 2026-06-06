@@ -22,7 +22,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     /// <see cref="FilePath"/>). Stubs are varint-encoded into byte pages while the group is
     /// collapsed and materialized into <see cref="Items"/> on demand when the group expands.
     /// </summary>
-    internal readonly record struct EvictedStub(int LineNumber, int MatchStartColumn, int MatchLength, long DiskOffset);
+    internal readonly record struct EvictedStub(int LineNumber, int MatchStartColumn, int MatchLength, int SourceMatchStartColumn, long DiskOffset);
 
     /// <summary>
     /// Compact paged stub storage for collapsed groups. Byte pages stay below the LOH threshold
@@ -30,7 +30,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     /// </summary>
     private const int MinEvictedStubPageBytes = 128;
     private const int MaxEvictedStubPageBytes = 64 * 1024;
-    private const int MaxEncodedEvictedStubBytes = 25;
+    private const int MaxEncodedEvictedStubBytes = 30;
     private List<byte[]>? _evictedStubPages;
     private List<int>? _evictedStubPageLengths;
     private int _nextEvictedStubPageBytes = MinEvictedStubPageBytes;
@@ -154,7 +154,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             // The SearchResult is recreated lazily via MaterializeEvictedStubs() on expand.
             if (item.IsEvicted)
             {
-                AddEvictedStub(new EvictedStub(item.LineNumber, item.MatchStartColumn, item.MatchLength, item.DiskOffset));
+                AddEvictedStub(new EvictedStub(item.LineNumber, item.MatchStartColumn, item.MatchLength, item.SourceMatchStartColumn, item.DiskOffset));
                 _evictedOnlyCount++;
                 int totalStub = Items.Count + _evictedOnlyCount;
                 bool notifyStub = totalStub == PageSize + 1
@@ -211,6 +211,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         offset += WriteVarUInt(destination[offset..], EncodeSignedVarInt(stub.LineNumber));
         offset += WriteVarUInt(destination[offset..], EncodeSignedVarInt(stub.MatchStartColumn));
         offset += WriteVarUInt(destination[offset..], EncodeSignedVarInt(stub.MatchLength));
+        offset += WriteVarUInt(destination[offset..], EncodeSignedVarInt(stub.SourceMatchStartColumn));
         offset += WriteVarULong(destination[offset..], (ulong)stub.DiskOffset);
         return offset;
     }
@@ -220,8 +221,9 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         int lineNumber = DecodeSignedVarInt(ReadVarUInt(source, ref offset));
         int matchStartColumn = DecodeSignedVarInt(ReadVarUInt(source, ref offset));
         int matchLength = DecodeSignedVarInt(ReadVarUInt(source, ref offset));
+        int sourceMatchStartColumn = DecodeSignedVarInt(ReadVarUInt(source, ref offset));
         long diskOffset = (long)ReadVarULong(source, ref offset);
-        return new EvictedStub(lineNumber, matchStartColumn, matchLength, diskOffset);
+        return new EvictedStub(lineNumber, matchStartColumn, matchLength, sourceMatchStartColumn, diskOffset);
     }
 
     private static uint EncodeSignedVarInt(int value) => (uint)((value << 1) ^ (value >> 31));
@@ -310,7 +312,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             while (remaining > 0 && offset < page.Length)
             {
                 var s = ReadEvictedStub(page, ref offset);
-                Items.Add(SearchResult.CreatePreEvicted(FilePath, s.LineNumber, s.MatchStartColumn, s.MatchLength, s.DiskOffset));
+                Items.Add(SearchResult.CreatePreEvicted(FilePath, s.LineNumber, s.MatchStartColumn, s.MatchLength, s.DiskOffset, s.SourceMatchStartColumn));
                 remaining--;
             }
         }

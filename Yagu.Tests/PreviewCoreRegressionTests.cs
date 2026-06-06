@@ -688,9 +688,13 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("paragraphsAdded < maxAdditionalBlocks", appendWindows);
         Assert.Contains("BuildMatchByLineForRanges", appendWindows);
         Assert.Contains("CountPrefixResultsThroughLine", appendWindows);
+        Assert.Contains("CapConsumedResultsToVisibleEntriesForTruncatedWindow", appendWindows);
         Assert.Contains("AddPreviewLineParagraphsAroundResult", appendWindows);
         Assert.Contains("continuationGutter: true", appendWindows);
         Assert.Contains("if (!truncatePreviewLines)", appendWindows);
+        AssertContainsInOrder(appendWindows,
+            "consumedResults = CountPrefixResultsThroughLine",
+            "consumedResults = CapConsumedResultsToVisibleEntriesForTruncatedWindow");
 
         string overflowTruncation = ExtractMethodWindow(MainWindowSource, "ShouldTruncateOverflowPreviewLines", window: 900);
         Assert.Contains("ShouldTruncatePreviewLines()", overflowTruncation);
@@ -708,9 +712,33 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("MaxPreviewBlocksPerExpandChunk", expandChunk);
         Assert.Contains("bool truncatePreviewLines = ShouldTruncateOverflowPreviewLines()", expandChunk);
         Assert.Contains("truncatePreviewLines && consumed == 0", expandChunk);
+        Assert.Contains("int? maxResultsToExpand = null", expandChunk);
+        Assert.Contains("requestedChunkSize", expandChunk);
 
         string expandScrollChunk = ExtractMethodWindow(MainWindowSource, "ExpandOverflowChunk");
         Assert.Contains("bool truncatePreviewLines = ShouldTruncateOverflowPreviewLines()", expandScrollChunk);
+
+        string autoOverflow = ExtractMethodWindow(MainWindowSource, "TryAutoLoadOverflowOnScroll", window: 2200);
+        Assert.Contains("IsOverflowAutoLoadSuppressedForMatchNavigation()", autoOverflow);
+
+        string scrollAfterMatch = ExtractMethodWindow(MainWindowSource, "ScrollAfterMatchNavigation", window: 1200);
+        Assert.Contains("SuppressOverflowAutoLoadForMatchNavigation();", scrollAfterMatch);
+
+        string changePreviewView = ExtractMethodWindow(MainWindowSource, "ChangePreviewViewForMatchNavigation", window: 700);
+        AssertContainsInOrder(changePreviewView,
+            "SuppressOverflowAutoLoadForMatchNavigation();",
+            "PreviewScrollViewer.ChangeView");
+
+        Assert.Contains("actualCenterAccepted = ChangePreviewViewForMatchNavigation", MainWindowSource);
+        Assert.Contains("bool accepted = ChangePreviewViewForMatchNavigation(null, correctiveTarget)", MainWindowSource);
+        Assert.DoesNotContain("actualCenterAccepted = PreviewScrollViewer.ChangeView", MainWindowSource);
+
+        string goToNext = ExtractMethodWindow(MainWindowSource, "GoToNextMatchAsync", window: 3600);
+        Assert.Contains("ExpandSectionNextChunk(curBlock, SingleStepOverflowExpandMatches)", goToNext);
+        Assert.Contains("ScrollAfterMatchNavigation(block, para, justMaterialized || expandedOverflow", goToNext);
+
+        string sectionNext = ExtractMethodWindow(MainWindowSource, "OnSectionNextMatch", window: 1800);
+        Assert.Contains("ScrollAfterMatchNavigation(sn.Block, para, justMaterialized: expandedOverflow", sectionNext);
     }
 
     [Fact]
@@ -720,9 +748,13 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("ResolveSourceMatchStart(line, result, rx)", truncateAroundResult);
 
         string resolver = ExtractMethodWindow(MainWindowSource, "ResolveSourceMatchStart", window: 2400);
+        Assert.Contains("int candidate = result.SourceMatchStartColumn;", resolver);
         Assert.Contains("result.MatchLine", resolver);
         Assert.Contains("displayLine.StartsWith(LineTruncator.Ellipsis, StringComparison.Ordinal)", resolver);
         Assert.Contains("displayLine.EndsWith(LineTruncator.Ellipsis, StringComparison.Ordinal)", resolver);
+        AssertContainsInOrder(resolver,
+            "int candidate = result.SourceMatchStartColumn;",
+            "candidate = result.MatchStartColumn;");
         AssertContainsInOrder(resolver,
             "line.IndexOf(core, StringComparison.Ordinal)",
             "int resolved = coreIndex + offsetInCore;",

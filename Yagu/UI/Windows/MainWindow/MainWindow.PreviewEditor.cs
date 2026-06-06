@@ -225,9 +225,10 @@ public sealed partial class MainWindow
                     }
                 }
                 target = existing is not null
-                    ? existing with { LineNumber = lineNum, MatchStartColumn = col, MatchLength = len, MatchLine = matchLine }
+                    ? existing with { LineNumber = lineNum, MatchStartColumn = col, SourceMatchStartColumn = col, MatchLength = len, MatchLine = matchLine }
                     : new SearchResult(filePath, lineNum, matchLine, col, len,
-                        Array.Empty<string>(), Array.Empty<string>());
+                        Array.Empty<string>(), Array.Empty<string>())
+                    { SourceMatchStartColumn = col };
             }
 
             e.Handled = true;

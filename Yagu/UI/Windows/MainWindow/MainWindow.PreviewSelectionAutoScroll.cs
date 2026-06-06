@@ -54,6 +54,8 @@ public sealed partial class MainWindow
     private double _previewSelectionAutoScrollMaxLagDip;
     private double _previewSelectionAutoScrollTotalRequestedDip;
     private double _previewSelectionAutoScrollLastRequestedX = double.NaN;
+    private double _previewSelectionAutoScrollPrevBeforeX = double.NaN;
+    private int _previewSelectionAutoScrollStuckFrameCount;
 
     private void AttachPreviewSelectionAutoScroll(RichTextBlock block)
     {
@@ -331,6 +333,29 @@ public sealed partial class MainWindow
         else
             _previewSelectionAutoScrollChangeViewRejectedCount++;
         _previewSelectionAutoScrollLastRequestedX = targetX;
+
+        // Detect stuck scroller: ChangeView accepted but offset didn't move.
+        if (!double.IsNaN(_previewSelectionAutoScrollPrevBeforeX)
+            && Math.Abs(beforeX - _previewSelectionAutoScrollPrevBeforeX) <= 0.5
+            && accepted)
+        {
+            _previewSelectionAutoScrollStuckFrameCount++;
+            if (_previewSelectionAutoScrollStuckFrameCount >= 5)
+            {
+                if (_previewCustomSelectionDragging)
+                    UpdatePreviewCustomSelectionFromCurrentPointer();
+                MaybeLogPreviewSelectionAutoScrollSample(scroller, velocity, step, beforeX, targetX, accepted, frameMs, rawFrameMs, "frame");
+                StopPreviewSelectionAutoScrollTimer("stuck-scroller");
+                _previewSelectionAutoScrollPrevBeforeX = beforeX;
+                return;
+            }
+        }
+        else
+        {
+            _previewSelectionAutoScrollStuckFrameCount = 0;
+        }
+        _previewSelectionAutoScrollPrevBeforeX = beforeX;
+
         if (_previewCustomSelectionDragging)
             UpdatePreviewCustomSelectionFromCurrentPointer();
         MaybeLogPreviewSelectionAutoScrollSample(scroller, velocity, step, beforeX, targetX, accepted, frameMs, rawFrameMs, "frame");
@@ -611,6 +636,85 @@ public sealed partial class MainWindow
         return true;
     }
 
+    private bool TrySelectAllPreviewContent(DependencyObject? source)
+    {
+        if (source is not null && !IsElementWithin(source, PreviewScrollViewer))
+            return false;
+
+        // Find the target RichTextBlock: either PreviewBlock (single-block mode)
+        // or the block that already has a custom selection, or the first visible section block.
+        RichTextBlock? block = null;
+        if (_previewCustomSelectionBlock is not null
+            && IsElementWithin(_previewCustomSelectionBlock, PreviewScrollViewer))
+        {
+            block = _previewCustomSelectionBlock;
+        }
+        else if (PreviewBlock.Visibility == Visibility.Visible)
+        {
+            block = PreviewBlock;
+        }
+        else if (PreviewSectionsPanel.Visibility == Visibility.Visible)
+        {
+            // Use the first section content block.
+            foreach (var child in PreviewSectionsPanel.Children)
+            {
+                if (child is FrameworkElement fe && fe.Visibility == Visibility.Visible)
+                {
+                    var rtb = FindFirstRichTextBlock(fe);
+                    if (rtb is not null)
+                    {
+                        block = rtb;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (block is null)
+            return false;
+
+        int totalLength = GetBlockTotalTextLength(block);
+        if (totalLength <= 0)
+            return false;
+
+        _previewCustomSelectionBlock = block;
+        _previewCustomSelectionAnchorIndex = 0;
+        _previewCustomSelectionCurrentIndex = totalLength;
+        UpdatePreviewCustomSelectionHighlighter();
+        return true;
+    }
+
+    private static int GetBlockTotalTextLength(RichTextBlock block)
+    {
+        int total = 0;
+        bool first = true;
+        foreach (var textBlock in block.Blocks)
+        {
+            if (textBlock is not Paragraph paragraph)
+                continue;
+            if (!first)
+                total += 1; // paragraph separator
+            first = false;
+            total += GetParagraphTextLength(paragraph);
+        }
+        return total;
+    }
+
+    private static RichTextBlock? FindFirstRichTextBlock(DependencyObject parent)
+    {
+        if (parent is RichTextBlock rtb)
+            return rtb;
+        int count = VisualTreeHelper.GetChildrenCount(parent);
+        for (int i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            var found = FindFirstRichTextBlock(child);
+            if (found is not null)
+                return found;
+        }
+        return null;
+    }
+
     private void StopPreviewSelectionAutoScroll(string reason)
     {
         StopPreviewSelectionAutoScrollTimer(reason);
@@ -652,6 +756,8 @@ public sealed partial class MainWindow
         _previewSelectionAutoScrollMaxLagDip = 0;
         _previewSelectionAutoScrollTotalRequestedDip = 0;
         _previewSelectionAutoScrollLastRequestedX = double.NaN;
+        _previewSelectionAutoScrollPrevBeforeX = double.NaN;
+        _previewSelectionAutoScrollStuckFrameCount = 0;
     }
 
     private void LogPreviewSelectionAutoScrollStart(RichTextBlock block, ScrollViewer scroller, bool pointerCaptured)

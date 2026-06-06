@@ -416,7 +416,8 @@ public sealed class ContentSearcher
                         MatchStartColumn: displayLine.MatchStart,
                         MatchLength: length,
                         ContextBefore: before,
-                        ContextAfter: Array.Empty<string>());
+                        ContextAfter: Array.Empty<string>())
+                    { SourceMatchStartColumn = start };
                     if (contextLines == 0)
                     {
                         await writer.WriteAsync(partial, cancellationToken).ConfigureAwait(false);
@@ -643,8 +644,9 @@ public sealed class ContentSearcher
             var view = *m;
             int lineBytes = view.LineLen > (nuint)int.MaxValue ? int.MaxValue : (int)view.LineLen;
             int matchStartBytes = view.MatchStart > int.MaxValue ? lineBytes : (int)view.MatchStart;
+            int sourceMatchStartBytes = view.SourceMatchStart > int.MaxValue ? matchStartBytes : (int)view.SourceMatchStart;
             int matchLenBytes = view.MatchLen > int.MaxValue ? 0 : (int)view.MatchLen;
-            var matchLine = DecodeMatchLine(view.LinePtr, lineBytes, matchStartBytes, matchLenBytes);
+            var matchLine = DecodeMatchLine(view.LinePtr, lineBytes, matchStartBytes, matchLenBytes, sourceMatchStartBytes);
 
             var before = UnpackLinesTruncated(view.CtxBeforePtr, view.CtxBeforeBytes, view.CtxBeforeCount);
             var after = UnpackLinesTruncated(view.CtxAfterPtr, view.CtxAfterBytes, view.CtxAfterCount);
@@ -658,7 +660,8 @@ public sealed class ContentSearcher
                 MatchStartColumn: matchLine.MatchStart,
                 MatchLength: matchLine.MatchLength,
                 ContextBefore: before,
-                ContextAfter: after);
+                ContextAfter: after)
+            { SourceMatchStartColumn = matchLine.SourceMatchStart };
 
             if (!_metadataCached)
             {
@@ -695,8 +698,8 @@ public sealed class ContentSearcher
             return false;
         }
 
-        private static unsafe (string Line, int MatchStart, int MatchLength) DecodeMatchLine(byte* ptr, int len, int matchStartBytes, int matchLenBytes)
-            => NativeMatchDecoder.DecodeMatchLine(ptr, len, matchStartBytes, matchLenBytes);
+        private static unsafe NativeMatchDecoder.DecodedMatchLine DecodeMatchLine(byte* ptr, int len, int matchStartBytes, int matchLenBytes, int? sourceMatchStartBytes = null)
+            => NativeMatchDecoder.DecodeMatchLine(ptr, len, matchStartBytes, matchLenBytes, sourceMatchStartBytes);
 
         private static unsafe IReadOnlyList<string> UnpackLinesTruncated(byte* ptr, nuint totalBytes, uint count)
             => NativeMatchDecoder.UnpackLinesTruncated(ptr, totalBytes, count);
@@ -710,12 +713,25 @@ public sealed class ContentSearcher
 
     internal static class NativeMatchDecoder
     {
-        internal static unsafe (string Line, int MatchStart, int MatchLength) DecodeMatchLine(byte* ptr, int len, int matchStartBytes, int matchLenBytes)
+        internal readonly record struct DecodedMatchLine(string Line, int MatchStart, int MatchLength, int SourceMatchStart)
         {
-            if (ptr == null || len <= 0) return (string.Empty, 0, 0);
+            public void Deconstruct(out string line, out int matchStart, out int matchLength)
+            {
+                line = Line;
+                matchStart = MatchStart;
+                matchLength = MatchLength;
+            }
+        }
+
+        internal static unsafe DecodedMatchLine DecodeMatchLine(byte* ptr, int len, int matchStartBytes, int matchLenBytes, int? sourceMatchStartBytes = null)
+        {
+            if (ptr == null || len <= 0) return new DecodedMatchLine(string.Empty, 0, 0, 0);
 
             int safeStartBytes = Math.Clamp(matchStartBytes, 0, len);
             int safeLengthBytes = Math.Clamp(matchLenBytes, 0, len - safeStartBytes);
+            int sourceMatchStart = sourceMatchStartBytes.HasValue
+                ? Math.Max(0, sourceMatchStartBytes.Value)
+                : -1;
 
             if (LineTruncator.TruncatedLength == 0 || len <= LineTruncator.MaxDisplayLength * 4)
             {
@@ -734,7 +750,14 @@ public sealed class ContentSearcher
 
                 var fullLine = Encoding.UTF8.GetString(ptr, len);
                 var fullDisplayLine = LineTruncator.TruncateAroundMatch(fullLine, fullMatchStart, fullMatchLength);
-                return (fullDisplayLine.Text, fullDisplayLine.MatchStart, fullMatchLength);
+                return new DecodedMatchLine(fullDisplayLine.Text, fullDisplayLine.MatchStart, fullMatchLength, sourceMatchStart >= 0 ? sourceMatchStart : fullMatchStart);
+            }
+
+            if (sourceMatchStart < 0)
+            {
+                sourceMatchStart = IsAsciiRegion(ptr, safeStartBytes)
+                ? safeStartBytes
+                : Encoding.UTF8.GetCharCount(ptr, safeStartBytes);
             }
 
             int windowBytes = Math.Max(safeLengthBytes, LineTruncator.TruncatedLength + 2);
@@ -770,7 +793,7 @@ public sealed class ContentSearcher
             var window = Encoding.UTF8.GetString(ptr + windowStart, windowEnd - windowStart);
             var prefix = windowStart > 0 ? LineTruncator.Ellipsis : string.Empty;
             var suffix = windowEnd < len ? LineTruncator.Ellipsis : string.Empty;
-            return (string.Concat(prefix, window, suffix), matchStart + prefix.Length, matchLength);
+            return new DecodedMatchLine(string.Concat(prefix, window, suffix), matchStart + prefix.Length, matchLength, sourceMatchStart);
         }
 
         private static unsafe int AlignUtf8Start(byte* ptr, int start, int totalLength)

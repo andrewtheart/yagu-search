@@ -119,6 +119,10 @@ public sealed partial class MainWindow
         /// highlight mode to clip overlapping context windows so expansion
         /// continues directly from the last rendered line.</summary>
         public int LastRenderedLine;
+        /// <summary>Lines already rendered in the highlight-mode fallback path
+        /// (results on already-rendered lines). Prevents rendering the same
+        /// line content repeatedly across successive overflow expansions.</summary>
+        public HashSet<int>? FallbackRenderedLines;
     }
     private readonly Dictionary<RichTextBlock, SectionOverflow> _sectionOverflow = new();
 
@@ -974,6 +978,7 @@ public sealed partial class MainWindow
     private void TryAutoLoadOverflowOnScroll()
     {
         if (_autoLoadOverflowInFlight) return;
+        if (IsOverflowAutoLoadSuppressedForMatchNavigation()) return;
         int autoLoadCount = Math.Min(ViewModel.PreviewAutoLoadMatches, AutoLoadOverflowMaxMatchesPerFrame);
         if (autoLoadCount <= 0) return;
         if (_sectionOverflow.Count == 0) return;
@@ -1023,6 +1028,12 @@ public sealed partial class MainWindow
             catch { /* TransformToVisual can throw if not in tree */ }
         }
     }
+
+    private void SuppressOverflowAutoLoadForMatchNavigation()
+        => _suppressOverflowAutoLoadUntilTick = Environment.TickCount64 + MatchNavigationOverflowAutoLoadSuppressMs;
+
+    private bool IsOverflowAutoLoadSuppressedForMatchNavigation()
+        => Environment.TickCount64 < _suppressOverflowAutoLoadUntilTick;
 
     private void ScheduleOverflowPrefetchContinuation()
     {
@@ -1101,12 +1112,13 @@ public sealed partial class MainWindow
             ov.LastRenderedLine = Math.Max(ov.LastRenderedLine, lastRenderedLine);
 
             // Fallback for single-line files: all results are on an already-rendered
-            // line, so AppendHighlightMatchWindows returns 0. Render individual
-            // truncated windows centered on each match's column position.
+            // line, so AppendHighlightMatchWindows returns 0. Render one window
+            // per unique line (across all expansion calls) to avoid visual duplication.
             if (truncatePreviewLines && consumed == 0 && ov.RemainingResults.Count > 0)
             {
-                AddGapIndicator(section);
+                ov.FallbackRenderedLines ??= new HashSet<int>();
                 int blocksAdded = 0;
+                bool addedGap = false;
                 for (int ri = 0; ri < chunkSize && ri < ov.RemainingResults.Count; ri++)
                 {
                     if (blocksAdded >= MaxPreviewBlocksPerExpandChunk)
@@ -1115,6 +1127,20 @@ public sealed partial class MainWindow
                         break;
 
                     var r = ov.RemainingResults[ri];
+
+                    // Skip results whose line was already rendered in any previous fallback.
+                    if (!ov.FallbackRenderedLines.Add(r.LineNumber))
+                    {
+                        consumed++;
+                        continue;
+                    }
+
+                    if (!addedGap)
+                    {
+                        AddGapIndicator(section);
+                        addedGap = true;
+                    }
+
                     int lineIndex = r.LineNumber - 1;
                     string line = (lineIndex >= 0 && lineIndex < ov.AllLines.Length)
                         ? ov.AllLines[lineIndex] : string.Empty;
@@ -1133,6 +1159,7 @@ public sealed partial class MainWindow
         else
         {
             var matchLineNums = new HashSet<int>(ov.RemainingResults.Take(chunkSize).Select(r => r.LineNumber));
+            var renderedLineNumbers = new HashSet<int>();
             int blocksAdded = 0;
             for (int ri = 0; ri < chunkSize; ri++)
             {
@@ -1140,6 +1167,14 @@ public sealed partial class MainWindow
                     break;
 
                 var r = ov.RemainingResults[ri];
+
+                // Skip results whose line was already rendered (multiple matches on same line).
+                if (!renderedLineNumbers.Add(r.LineNumber))
+                {
+                    consumed++;
+                    continue;
+                }
+
                 var sep = new Paragraph { Margin = new Thickness(0, 8, 0, 4) };
                 var label = $"\u00A0Line\u00A0{r.LineNumber}\u00A0";
                 var sepRun = new Run { Text = $"{new string('\u2500', 6)}{label}{new string('\u2500', 6)}" };

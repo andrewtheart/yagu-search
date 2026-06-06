@@ -500,7 +500,8 @@ public sealed class SearchService
                                 (filenameBatch ??= new List<SearchResult>(FilenameBatchSize)).Add(new SearchResult(
                                     FilePath: path, LineNumber: 0, MatchLine: fileName,
                                     MatchStartColumn: fnMatchStart, MatchLength: fnMatchLen,
-                                    ContextBefore: [], ContextAfter: []));
+                                    ContextBefore: [], ContextAfter: [])
+                                { SourceMatchStartColumn = fnMatchStart });
                                 if (filenameBatch.Count >= FilenameBatchSize)
                                     await FlushFilenameBatchAsync().ConfigureAwait(false);
                                 if (!searchContent)
@@ -1716,9 +1717,10 @@ public sealed class SearchService
             var view = *m;
             int lineBytes = view.LineLen > (nuint)int.MaxValue ? int.MaxValue : (int)view.LineLen;
             int matchStartBytes = view.MatchStart > int.MaxValue ? lineBytes : (int)view.MatchStart;
+            int sourceMatchStartBytes = view.SourceMatchStart > int.MaxValue ? matchStartBytes : (int)view.SourceMatchStart;
             int matchLenBytes = view.MatchLen > int.MaxValue ? 0 : (int)view.MatchLen;
             var matchLine = ContentSearcher.NativeMatchDecoder.DecodeMatchLine(
-                view.LinePtr, lineBytes, matchStartBytes, matchLenBytes);
+                view.LinePtr, lineBytes, matchStartBytes, matchLenBytes, sourceMatchStartBytes);
             var before = ContentSearcher.NativeMatchDecoder.UnpackLinesTruncated(
                 view.CtxBeforePtr, view.CtxBeforeBytes, view.CtxBeforeCount);
             var after = ContentSearcher.NativeMatchDecoder.UnpackLinesTruncated(
@@ -1733,7 +1735,8 @@ public sealed class SearchService
                 MatchStartColumn: matchLine.MatchStart,
                 MatchLength: matchLine.MatchLength,
                 ContextBefore: before,
-                ContextAfter: after);
+                ContextAfter: after)
+            { SourceMatchStartColumn = matchLine.SourceMatchStart };
 
             if (!TryWriteWithBackpressure(result))
             {
@@ -1894,8 +1897,10 @@ public sealed class SearchService
             var view = *m;
             int lineBytes = view.LineLen > (nuint)int.MaxValue ? int.MaxValue : (int)view.LineLen;
             int matchStartBytes = view.MatchStart > int.MaxValue ? lineBytes : (int)view.MatchStart;
+            int sourceMatchStartBytes = view.SourceMatchStart > int.MaxValue ? matchStartBytes : (int)view.SourceMatchStart;
             int matchLenBytes = view.MatchLen > int.MaxValue ? 0 : (int)view.MatchLen;
             int lineNum = view.LineNumber > int.MaxValue ? int.MaxValue : (int)view.LineNumber;
+            int charSourceMatchStart = Math.Max(0, sourceMatchStartBytes);
 
             // ── Degraded fast-path: write raw UTF-8 directly to disk, skip String alloc ──
             if (Volatile.Read(ref _degraded) != 0 && _resultStore != null)
@@ -1958,7 +1963,7 @@ public sealed class SearchService
                     view.CtxBeforePtr, (int)view.CtxBeforeBytes, (int)view.CtxBeforeCount,
                     view.CtxAfterPtr, (int)view.CtxAfterBytes, (int)view.CtxAfterCount);
 
-                var result = SearchResult.CreatePreEvicted(filePath, lineNum, charMatchStart, charMatchLen, offset);
+                var result = SearchResult.CreatePreEvicted(filePath, lineNum, charMatchStart, charMatchLen, offset, charSourceMatchStart);
                 if (!TryWriteWithBackpressure(result))
                 {
                     _stopped = true;
@@ -1982,7 +1987,7 @@ public sealed class SearchService
 
             // ── Normal path: decode to managed strings ──
             var matchLine = ContentSearcher.NativeMatchDecoder.DecodeMatchLine(
-                view.LinePtr, lineBytes, matchStartBytes, matchLenBytes);
+                view.LinePtr, lineBytes, matchStartBytes, matchLenBytes, sourceMatchStartBytes);
             var before = ContentSearcher.NativeMatchDecoder.UnpackLinesTruncated(
                 view.CtxBeforePtr, view.CtxBeforeBytes, view.CtxBeforeCount);
             var after = ContentSearcher.NativeMatchDecoder.UnpackLinesTruncated(
@@ -1995,7 +2000,8 @@ public sealed class SearchService
                 MatchStartColumn: matchLine.MatchStart,
                 MatchLength: matchLine.MatchLength,
                 ContextBefore: before,
-                ContextAfter: after);
+                ContextAfter: after)
+            { SourceMatchStartColumn = matchLine.SourceMatchStart };
 
             if (!TryWriteWithBackpressure(normalResult))
             {

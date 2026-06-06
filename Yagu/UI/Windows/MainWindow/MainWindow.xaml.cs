@@ -53,10 +53,13 @@ public sealed partial class MainWindow : Window, IDisposable
     private StackPanel? _deferredButtonPanel;
     private bool _autoLoadMoreInFlight;
     private bool _autoLoadOverflowInFlight;
+    private long _suppressOverflowAutoLoadUntilTick;
     private long _lastPreviewManualScrollTick;
     private const int AutoLoadChunkSize = 5;
     private const double OverflowPrefetchBufferViewports = 4.0;
     private const int AutoLoadOverflowMaxMatchesPerFrame = 20;
+    private const int MatchNavigationOverflowAutoLoadSuppressMs = 2_000;
+    private const int SingleStepOverflowExpandMatches = 1;
     private bool _querySuggestionsDetached;
     private bool _querySuggestionsUserOpened;
     private long _hideSuggestionsTick;

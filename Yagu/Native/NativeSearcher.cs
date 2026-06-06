@@ -75,6 +75,7 @@ internal static partial class NativeSearcher
     {
         public ulong LineNumber;
         public uint MatchStart;
+        public uint SourceMatchStart;
         public uint MatchLen;
         public byte* LinePtr;
         public nuint LineLen;
@@ -756,6 +757,7 @@ internal sealed class NativeSearchOutcome
             {
                 if (!reader.TryReadU64(out ulong lineNumber)
                     || !reader.TryReadU32(out uint matchStart)
+                    || !reader.TryReadU32(out uint sourceMatchStart)
                     || !reader.TryReadU32(out uint matchLen)
                     || !reader.TryReadU32(out uint lineLen)
                     || !reader.TryReadUtf8String(lineLen, out string? line))
@@ -791,6 +793,7 @@ internal sealed class NativeSearchOutcome
                 // but UI/SearchResult are int. Negative values would crash callers.
                 int lineNum = lineNumber > int.MaxValue ? int.MaxValue : (int)lineNumber;
                 int col = matchStart > int.MaxValue ? 0 : (int)matchStart;
+                int sourceCol = sourceMatchStart > int.MaxValue ? col : (int)sourceMatchStart;
                 int mlen = matchLen > int.MaxValue ? 0 : (int)matchLen;
 
                 list.Add(new SearchResult(
@@ -800,7 +803,8 @@ internal sealed class NativeSearchOutcome
                     MatchStartColumn: col,
                     MatchLength: mlen,
                     ContextBefore: before,
-                    ContextAfter: after));
+                    ContextAfter: after)
+                { SourceMatchStartColumn = sourceCol });
             }
             return new NativeSearchOutcome(OutcomeKind.Matches, list, null);
         }

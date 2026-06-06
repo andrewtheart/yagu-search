@@ -87,6 +87,7 @@ pub struct QgResult {
 /// Packed match record layout (little-endian):
 ///   u64 line_number
 ///   u32 match_start
+///   u32 source_match_start
 ///   u32 match_len
 ///   u32 line_len            -> followed by line_len bytes
 ///   u32 ctx_before_count    -> for each: u32 len, then `len` bytes
@@ -524,6 +525,7 @@ pub unsafe extern "C" fn qg_search_file(
     for rec in &records {
         buf.extend_from_slice(&rec.line_number.to_le_bytes());
         buf.extend_from_slice(&rec.match_start.to_le_bytes());
+        buf.extend_from_slice(&rec.source_match_start.to_le_bytes());
         buf.extend_from_slice(&rec.match_len.to_le_bytes());
         buf.extend_from_slice(&(rec.line.len() as u32).to_le_bytes());
         buf.extend_from_slice(&rec.line);
@@ -589,6 +591,7 @@ pub extern "C" fn qg_abi_version() -> c_uint {
 pub struct QgMatchView {
     pub line_number: c_ulonglong,
     pub match_start: c_uint,
+    pub source_match_start: c_uint,
     pub match_len: c_uint,
     pub line_ptr: *const u8,
     pub line_len: usize,
@@ -748,6 +751,7 @@ pub unsafe extern "C" fn qg_search_file_stream(
         let qg_view = QgMatchView {
             line_number: view.line_number,
             match_start: view.match_start,
+            source_match_start: view.source_match_start,
             match_len: view.match_len,
             line_ptr: view.line.as_ptr(),
             line_len: view.line.len(),
@@ -985,6 +989,7 @@ pub unsafe extern "C" fn qg_session_search_file_stream(
             let qg_view = QgMatchView {
                 line_number: view.line_number,
                 match_start: view.match_start,
+                source_match_start: view.source_match_start,
                 match_len: view.match_len,
                 line_ptr: view.line.as_ptr(),
                 line_len: view.line.len(),
@@ -1155,6 +1160,7 @@ pub unsafe extern "C" fn qg_session_scan_paths_parallel_ex(
 struct BufferedMatchEntry {
     line_number: u64,
     match_start: u32,
+    source_match_start: u32,
     match_len: u32,
     line_offset: usize,
     line_len: usize,
@@ -1361,6 +1367,7 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                             match_buf.push(BufferedMatchEntry {
                                 line_number: view.line_number,
                                 match_start: view.match_start,
+                                source_match_start: view.source_match_start,
                                 match_len: view.match_len,
                                 line_offset,
                                 line_len,
@@ -1389,6 +1396,7 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                         let qg_view = QgMatchView {
                             line_number: entry.line_number,
                             match_start: entry.match_start,
+                            source_match_start: entry.source_match_start,
                             match_len: entry.match_len,
                             line_ptr: context_arena[entry.line_offset..].as_ptr(),
                             line_len: entry.line_len,
@@ -1670,6 +1678,7 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
                         match_buf.push(BufferedMatchEntry {
                             line_number: view.line_number,
                             match_start: view.match_start,
+                            source_match_start: view.source_match_start,
                             match_len: view.match_len,
                             line_offset,
                             line_len,
@@ -1698,6 +1707,7 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
                     let qg_view = QgMatchView {
                         line_number: entry.line_number,
                         match_start: entry.match_start,
+                        source_match_start: entry.source_match_start,
                         match_len: entry.match_len,
                         line_ptr: context_arena[entry.line_offset..].as_ptr(),
                         line_len: entry.line_len,
