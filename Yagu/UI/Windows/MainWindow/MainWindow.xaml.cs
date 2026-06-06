@@ -351,6 +351,7 @@ public sealed partial class MainWindow : Window, IDisposable
         _diskSparklineTimer?.Stop();
         DisposePreviewSelectionAutoScroll();
         DisposeResultsListSmartScroll();
+        DisposeTerminal();
         _previewLoadCts?.Cancel();
         _previewLoadCts?.Dispose();
         _previewLoadCts = null;

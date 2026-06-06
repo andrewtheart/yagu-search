@@ -22,6 +22,7 @@
             <RowDefinition x:Name="ProgressRow" Height="Auto" />  <!-- Status / progress -->
             <RowDefinition x:Name="SplitPaneRow" Height="*" />     <!-- Split pane -->
             <RowDefinition x:Name="StatusBarRow" Height="Auto" />  <!-- Status bar -->
+            <RowDefinition x:Name="TerminalRow" Height="0" />      <!-- Embedded terminal -->
         </Grid.RowDefinitions>
 
         <!-- Custom title bar -->
@@ -1470,6 +1471,7 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Text="{x:Bind ViewModel.FilesPerSecondText, Mode=OneWay}"
                      Visibility="{x:Bind ViewModel.StatsForNerdsVisibility, Mode=OneWay}"
@@ -1495,12 +1497,12 @@
             <TextBlock Grid.Column="4" Foreground="DarkOrange" FontSize="12"
                        Visibility="{x:Bind ViewModel.Truncated, Mode=OneWay}"
                        Text="Results truncated — refine your query" />
-            <Button x:Name="CollapseChevron" Grid.Column="5" Click="OnToggleResultsPane"
+            <Button x:Name="TerminalChevron" Grid.Column="5" Click="OnToggleTerminalPane"
                     Background="Transparent" BorderThickness="0" Padding="6,2"
                     VerticalAlignment="Center"
-                    ToolTipService.ToolTip="Collapse/expand results pane">
-                <FontIcon x:Name="CollapseChevronIcon" FontFamily="{StaticResource SymbolThemeFontFamily}"
-                          Glyph="&#xE70D;" FontSize="12" />
+                    ToolTipService.ToolTip="Toggle embedded terminal">
+                <FontIcon x:Name="TerminalChevronIcon" FontFamily="{StaticResource SymbolThemeFontFamily}"
+                          Glyph="&#xE70E;" FontSize="12" />
             </Button>
         </Grid>
 
@@ -1525,6 +1527,10 @@
                        FontFamily="Consolas" FontSize="12"
                        IsTextSelectionEnabled="True" />
         </Border>
+
+        <!-- Embedded terminal panel (ConPTY + xterm.js in WebView2) -->
+        <WebView2 x:Name="TerminalWebView" Grid.Row="6" Visibility="Collapsed"
+                  DefaultBackgroundColor="#1E1E1E" />
 
     </Grid>
 </Window>
