@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -257,6 +258,9 @@ public sealed partial class MainWindow
 
     private IntPtr HotkeyWindowProc(IntPtr hWnd, uint message, UIntPtr wParam, IntPtr lParam, UIntPtr subclassId, UIntPtr refData)
     {
+        if (message == WmGetMinMaxInfo && TryApplyMaximizedWorkArea(hWnd, lParam))
+            return IntPtr.Zero;
+
         if (message == HotkeyService.WmHotkey)
         {
             if (_hotkeyService.RegisteredKey == 'S' && GetForegroundWindow() == _hwnd)
@@ -270,6 +274,32 @@ public sealed partial class MainWindow
         }
 
         return DefSubclassProc(hWnd, message, wParam, lParam);
+    }
+
+    private static bool TryApplyMaximizedWorkArea(IntPtr hWnd, IntPtr lParam)
+    {
+        if (hWnd == IntPtr.Zero || lParam == IntPtr.Zero)
+            return false;
+
+        var monitorHandle = MonitorFromWindow(hWnd, MonitorDefaultToNearest);
+        if (monitorHandle == IntPtr.Zero)
+            return false;
+
+        var monitorInfo = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (!GetMonitorInfo(monitorHandle, ref monitorInfo))
+            return false;
+
+        var monitorRect = monitorInfo.rcMonitor;
+        var workRect = monitorInfo.rcWork;
+        var minMaxInfo = Marshal.PtrToStructure<MINMAXINFO>(lParam);
+        minMaxInfo.ptMaxPosition.X = workRect.Left - monitorRect.Left;
+        minMaxInfo.ptMaxPosition.Y = workRect.Top - monitorRect.Top;
+        minMaxInfo.ptMaxSize.X = workRect.Right - workRect.Left;
+        minMaxInfo.ptMaxSize.Y = workRect.Bottom - workRect.Top;
+        minMaxInfo.ptMaxTrackSize.X = minMaxInfo.ptMaxSize.X;
+        minMaxInfo.ptMaxTrackSize.Y = minMaxInfo.ptMaxSize.Y;
+        Marshal.StructureToPtr(minMaxInfo, lParam, fDeleteOld: false);
+        return true;
     }
 
     private void OnGlobalHotkeyPressed()

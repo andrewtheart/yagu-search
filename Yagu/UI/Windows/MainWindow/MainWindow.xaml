@@ -1179,17 +1179,20 @@
                                     BorderThickness="1" CornerRadius="6" Padding="6,4">
                                 <StackPanel Orientation="Horizontal" Spacing="4">
                                     <TextBlock x:Name="MatchNavLabel" FontSize="11" Opacity="0.8"
-                                               VerticalAlignment="Center" Margin="2,0" />
+                                               VerticalAlignment="Center" Margin="2,0"
+                                               ToolTipService.ToolTip="Occurrences count every highlighted hit, including multiple hits on the same source line. The results list on the left is paged, so this occurrence may not be visible there until more rows are loaded." />
                                     <Button x:Name="PrevMatchButton" Click="OnPrevMatch"
                                             Style="{StaticResource AccentButtonStyle}"
                                             Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
-                                            CornerRadius="4">
+                                            CornerRadius="4"
+                                            ToolTipService.ToolTip="Previous occurrence">
                                         <FontIcon Glyph="&#xE70E;" FontSize="12" />
                                     </Button>
                                     <Button x:Name="NextMatchButton" Click="OnNextMatch"
                                             Style="{StaticResource AccentButtonStyle}"
                                             Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
-                                            CornerRadius="4">
+                                            CornerRadius="4"
+                                            ToolTipService.ToolTip="Next occurrence">
                                         <FontIcon Glyph="&#xE70D;" FontSize="12" />
                                     </Button>
                                 </StackPanel>
@@ -1375,17 +1378,20 @@
                                     BorderThickness="1" CornerRadius="6" Padding="6,4">
                                 <StackPanel Orientation="Horizontal" Spacing="4">
                                     <TextBlock x:Name="SectionNavLabel" FontSize="11" Opacity="0.8"
-                                               VerticalAlignment="Center" Margin="2,0" />
+                                               VerticalAlignment="Center" Margin="2,0"
+                                               ToolTipService.ToolTip="Occurrences in the active preview section." />
                                     <Button x:Name="SectionPrevButton" Click="OnSectionNavPrev"
                                             Style="{StaticResource AccentButtonStyle}"
                                             Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
-                                            CornerRadius="4">
+                                            CornerRadius="4"
+                                            ToolTipService.ToolTip="Previous occurrence in this file">
                                         <FontIcon Glyph="&#xE70E;" FontSize="12" />
                                     </Button>
                                     <Button x:Name="SectionNavNextButton" Click="OnSectionNavNext"
                                             Style="{StaticResource AccentButtonStyle}"
                                             Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
-                                            CornerRadius="4">
+                                            CornerRadius="4"
+                                            ToolTipService.ToolTip="Next occurrence in this file">
                                         <FontIcon Glyph="&#xE70D;" FontSize="12" />
                                     </Button>
                                     <Button Click="OnSectionNavDismiss"

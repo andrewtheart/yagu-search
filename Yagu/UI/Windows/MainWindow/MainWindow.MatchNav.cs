@@ -2248,7 +2248,7 @@ public sealed partial class MainWindow
         var (deferredFiles, _) = GetDeferredCounts();
         int totalMatches = GetStableMatchNavTotal();
         int fileCount = GetStableMatchNavFileCount(deferredFiles);
-        return $"Match {index + 1} of {totalMatches} (across {fileCount} file{(fileCount != 1 ? "s" : "")})";
+        return $"Occurrence {index + 1:N0}/{totalMatches:N0} ({fileCount:N0} file{(fileCount != 1 ? "s" : "")})";
     }
 
     private void UpdateMatchNavPanel()
@@ -2528,7 +2528,7 @@ public sealed partial class MainWindow
             return;
         }
         SectionNavOverlay.Visibility = Visibility.Visible;
-        SectionNavLabel.Text = $"Match {_activeSectionNav.CurrentIndex + 1} of {total}";
+        SectionNavLabel.Text = $"Occurrence {_activeSectionNav.CurrentIndex + 1:N0}/{total:N0}";
     }
 
     private void OnSectionNavNext(object sender, RoutedEventArgs e)
@@ -3052,7 +3052,6 @@ public sealed partial class MainWindow
                 ov.FallbackRenderedLines ??= new HashSet<int>();
                 int entriesBefore = _matchParagraphs.Count;
                 int maxResults = Math.Min(chunkSize, ov.RemainingResults.Count);
-                bool addedGap = false;
                 for (int ri = 0; ri < maxResults; ri++)
                 {
                     if (_matchParagraphs.Count - entriesBefore >= MaxMatchEntriesPerExpandChunk)
@@ -3067,15 +3066,11 @@ public sealed partial class MainWindow
                         continue;
                     }
 
-                    if (!addedGap)
-                    {
-                        AddGapIndicator(section);
-                        addedGap = true;
-                    }
-
                     int lineIndex = r.LineNumber - 1;
                     if (lineIndex < 0 || lineIndex >= ov.AllLines.Length) continue;
 
+                    int contentStartIndex = section.Blocks.Count;
+                    int gutterStartIndex = GetGutterBlockCount(section);
                     AddPreviewLineParagraphsAroundResult(
                         section,
                         ov.AllLines[lineIndex],
@@ -3084,10 +3079,16 @@ public sealed partial class MainWindow
                         ov.Rx,
                         _matchParagraphs,
                         sn,
-                        out _,
+                        out int addedParagraphs,
                         out _,
                         truncate: truncatePreviewLines,
                         continuationGutter: true);
+                    MoveAppendedPreviewLineBesideExistingLine(
+                        section,
+                        r.LineNumber,
+                        contentStartIndex,
+                        gutterStartIndex,
+                        addedParagraphs);
                     consumed++;
                 }
             }

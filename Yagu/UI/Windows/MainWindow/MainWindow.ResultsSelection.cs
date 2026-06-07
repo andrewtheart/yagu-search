@@ -573,6 +573,8 @@ public sealed partial class MainWindow
                     ? allLines[result.LineNumber - 1]
                     : result.MatchLine;
 
+                int contentStartIndex = section.Blocks.Count;
+                int gutterStartIndex = GetGutterBlockCount(section);
                 AddPreviewLineParagraphsAroundResult(
                     section,
                     lineForWindow,
@@ -581,10 +583,16 @@ public sealed partial class MainWindow
                     rx,
                     _matchParagraphs,
                     sectionNav,
-                    out _,
+                    out int addedParagraphs,
                     out int matchEntriesAdded,
                     truncate: truncatePreviewLines,
                     continuationGutter: true);
+                MoveAppendedPreviewLineBesideExistingLine(
+                    section,
+                    result.LineNumber,
+                    contentStartIndex,
+                    gutterStartIndex,
+                    addedParagraphs);
 
                 if (matchEntriesAdded == 0)
                     return;

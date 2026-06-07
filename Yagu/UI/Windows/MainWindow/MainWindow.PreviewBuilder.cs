@@ -311,7 +311,7 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
-    /// Adds a gap indicator (⋮) between non-contiguous line ranges.
+    /// Adds a gap indicator between non-contiguous source-line ranges.
     /// When a gutter block exists, the indicator goes in the gutter and a
     /// blank spacer is added to the content block to keep them aligned.
     /// </summary>
@@ -320,24 +320,95 @@ public sealed partial class MainWindow
         if (_sectionGutterBlocks.TryGetValue(section, out var gb))
         {
             var gutterGap = new Paragraph();
-            var gutterGapRun = new Run { Text = "      \u22EE" };
+            var gutterGapRun = new Run { Text = "  gap " };
             gutterGapRun.Foreground = new SolidColorBrush(Microsoft.UI.Colors.DimGray);
             gutterGap.Inlines.Add(gutterGapRun);
             gutterGap.Inlines.Add(new Run { Text = "│ ", Foreground = s_gutterSepBrush });
             gb.Blocks.Add(gutterGap);
 
             var contentSpacer = new Paragraph();
-            contentSpacer.Inlines.Add(new Run { Text = "\u22EE", Foreground = _transparentBrush });
+            contentSpacer.Inlines.Add(new Run { Text = "gap", Foreground = _transparentBrush });
             section.Blocks.Add(contentSpacer);
         }
         else
         {
             var gap = new Paragraph();
-            var gapRun = new Run { Text = "  \u22EE" };
+            var gapRun = new Run { Text = "  gap" };
             gapRun.Foreground = new SolidColorBrush(Microsoft.UI.Colors.DimGray);
             gap.Inlines.Add(gapRun);
             section.Blocks.Add(gap);
         }
+    }
+
+    private int GetGutterBlockCount(RichTextBlock section)
+    {
+        return _sectionGutterBlocks.TryGetValue(section, out var gutterBlock)
+            ? gutterBlock.Blocks.Count
+            : -1;
+    }
+
+    private void MoveAppendedPreviewLineBesideExistingLine(
+        RichTextBlock section,
+        int lineNumber,
+        int contentStartIndex,
+        int gutterStartIndex,
+        int appendedBlockCount)
+    {
+        if (appendedBlockCount <= 0 || contentStartIndex <= 0)
+            return;
+
+        int targetContentIndex = FindInsertIndexAfterRenderedLine(section, lineNumber, contentStartIndex);
+        if (targetContentIndex < 0 || targetContentIndex >= contentStartIndex)
+            return;
+
+        MoveBlockRange(section.Blocks, contentStartIndex, appendedBlockCount, targetContentIndex);
+
+        if (_sectionGutterBlocks.TryGetValue(section, out var gutterBlock)
+            && gutterStartIndex >= 0
+            && gutterStartIndex + appendedBlockCount <= gutterBlock.Blocks.Count)
+        {
+            int targetGutterIndex = targetContentIndex + (gutterStartIndex - contentStartIndex);
+            MoveBlockRange(gutterBlock.Blocks, gutterStartIndex, appendedBlockCount, targetGutterIndex);
+        }
+    }
+
+    private static int FindInsertIndexAfterRenderedLine(RichTextBlock section, int lineNumber, int beforeIndex)
+    {
+        int limit = Math.Min(beforeIndex, section.Blocks.Count);
+        for (int i = limit - 1; i >= 0; i--)
+        {
+            if (section.Blocks[i] is Paragraph para
+                && s_paragraphLineNumbers.TryGetValue(para, out var rawLineNumber)
+                && rawLineNumber is int candidateLineNumber
+                && candidateLineNumber == lineNumber)
+            {
+                return i + 1;
+            }
+        }
+
+        return -1;
+    }
+
+    private static void MoveBlockRange(BlockCollection blocks, int startIndex, int count, int targetIndex)
+    {
+        if (count <= 0
+            || startIndex < 0
+            || startIndex + count > blocks.Count
+            || targetIndex < 0
+            || targetIndex >= startIndex)
+        {
+            return;
+        }
+
+        var movedBlocks = new List<Block>(count);
+        for (int i = 0; i < count; i++)
+            movedBlocks.Add(blocks[startIndex + i]);
+
+        for (int i = 0; i < count; i++)
+            blocks.RemoveAt(startIndex);
+
+        for (int i = 0; i < movedBlocks.Count; i++)
+            blocks.Insert(targetIndex + i, movedBlocks[i]);
     }
 
     /// <summary>Appends a notice paragraph when a section's matches were truncated.</summary>
@@ -2731,9 +2802,6 @@ public sealed partial class MainWindow
                 return 0;
             }
 
-            AddGapIndicator(section);
-            paragraphsAdded++;
-
             var renderedFallbackLines = new HashSet<int>();
             for (int i = 0; i < maxResults; i++)
             {
@@ -2756,6 +2824,8 @@ public sealed partial class MainWindow
                 if (paragraphsAdded >= maxAdditionalBlocks)
                     break;
 
+                int contentStartIndex = section.Blocks.Count;
+                int gutterStartIndex = GetGutterBlockCount(section);
                 AddPreviewLineParagraphsAroundResult(
                     section,
                     allLines[lineIndex],
@@ -2768,6 +2838,12 @@ public sealed partial class MainWindow
                     out int matchEntriesAdded,
                     truncate: truncatePreviewLines,
                     continuationGutter: true);
+                MoveAppendedPreviewLineBesideExistingLine(
+                    section,
+                    result.LineNumber,
+                    contentStartIndex,
+                    gutterStartIndex,
+                    addedParagraphs);
 
                 paragraphsAdded += addedParagraphs;
                 addedMatchEntries += matchEntriesAdded;
@@ -2873,10 +2949,10 @@ public sealed partial class MainWindow
         // Match indicator + line number gutter.
         // Use a glyph that Consolas renders at full cell width so match lines
         // align horizontally with context lines (which use a plain space).
-        var indicator = new Run { Text = continuationGutter ? " " : (isMatchLine ? "│" : " ") };
-        indicator.Foreground = isMatchLine ? s_matchAccentBrush : s_contextTextBrush;
+        var indicator = new Run { Text = continuationGutter ? "↳" : (isMatchLine ? "│" : " ") };
+        indicator.Foreground = continuationGutter ? s_contextGutterBrush : (isMatchLine ? s_matchAccentBrush : s_contextTextBrush);
 
-        var gutterRun = new Run { Text = continuationGutter ? "      " : $"{lineNum,5} " };
+        var gutterRun = new Run { Text = continuationGutter ? $"{lineNum,5}+" : $"{lineNum,5} " };
         gutterRun.Foreground = continuationGutter ? s_contextGutterBrush : (isMatchLine ? s_matchGutterBrush : s_contextGutterBrush);
         var gutterSep = new Run { Text = "│ " };
         gutterSep.Foreground = s_gutterSepBrush;

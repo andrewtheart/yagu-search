@@ -1131,7 +1131,6 @@ public sealed partial class MainWindow
             {
                 ov.FallbackRenderedLines ??= new HashSet<int>();
                 int blocksAdded = 0;
-                bool addedGap = false;
                 for (int ri = 0; ri < chunkSize && ri < ov.RemainingResults.Count; ri++)
                 {
                     if (blocksAdded >= MaxPreviewBlocksPerExpandChunk)
@@ -1148,22 +1147,24 @@ public sealed partial class MainWindow
                         continue;
                     }
 
-                    if (!addedGap)
-                    {
-                        AddGapIndicator(section);
-                        addedGap = true;
-                    }
-
                     int lineIndex = r.LineNumber - 1;
                     string line = (lineIndex >= 0 && lineIndex < ov.AllLines.Length)
                         ? ov.AllLines[lineIndex] : string.Empty;
 
+                    int contentStartIndex = section.Blocks.Count;
+                    int gutterStartIndex = GetGutterBlockCount(section);
                     AddPreviewLineParagraphsAroundResult(
                         section, line, r.LineNumber, r, ov.Rx,
                         _matchParagraphs, sn,
                         out int addedParagraphs, out _,
                         truncate: truncatePreviewLines,
                         continuationGutter: true);
+                    MoveAppendedPreviewLineBesideExistingLine(
+                        section,
+                        r.LineNumber,
+                        contentStartIndex,
+                        gutterStartIndex,
+                        addedParagraphs);
                     blocksAdded += addedParagraphs;
                     consumed++;
                 }

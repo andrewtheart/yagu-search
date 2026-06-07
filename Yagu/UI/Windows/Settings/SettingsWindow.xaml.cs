@@ -37,12 +37,15 @@ public sealed partial class SettingsWindow : Window
     /// <summary>Flat registry of every setting built during BuildSettingsContent for search filtering.</summary>
     private readonly List<SettingEntry> _settingEntries = new();
 
+    private readonly List<Panel> _searchResultContainers = new();
+
     /// <summary>Represents a single setting item with searchable text and its UI elements.</summary>
     private sealed class SettingEntry
     {
         public required string TabHeader { get; init; }
         public required string Label { get; init; }
         public string? Description { get; init; }
+        public string? ControlText { get; init; }
         /// <summary>Factory that recreates the setting UI elements for display in search results.</summary>
         public required Func<IEnumerable<UIElement>> BuildElements { get; init; }
 
@@ -50,6 +53,7 @@ public sealed partial class SettingsWindow : Window
         {
             return Label.Contains(query, StringComparison.OrdinalIgnoreCase)
                 || (Description is not null && Description.Contains(query, StringComparison.OrdinalIgnoreCase))
+                || (ControlText is not null && ControlText.Contains(query, StringComparison.OrdinalIgnoreCase))
                 || TabHeader.Contains(query, StringComparison.OrdinalIgnoreCase);
         }
     }
@@ -186,6 +190,7 @@ public sealed partial class SettingsWindow : Window
             TabList.Visibility = Visibility.Visible;
 
             // Detach any elements currently in the search results panel.
+            ClearSearchResultContainers();
             SettingsContent.Children.Clear();
 
             // Re-parent all elements back to their owning tab pages.
@@ -199,6 +204,7 @@ public sealed partial class SettingsWindow : Window
 
         _isSearchActive = true;
         TabList.Visibility = Visibility.Collapsed;
+        ClearSearchResultContainers();
         SettingsContent.Children.Clear();
 
         // Detach all elements from their tab page parents so they can be re-parented.
@@ -232,6 +238,7 @@ public sealed partial class SettingsWindow : Window
                     p.Children.Remove(element);
                 container.Children.Add(element);
             }
+            _searchResultContainers.Add(container);
             SettingsContent.Children.Add(container);
         }
 
@@ -253,6 +260,13 @@ public sealed partial class SettingsWindow : Window
             if (page is StackPanel sp)
                 sp.Children.Clear();
         }
+    }
+
+    private void ClearSearchResultContainers()
+    {
+        foreach (var container in _searchResultContainers)
+            container.Children.Clear();
+        _searchResultContainers.Clear();
     }
 
     private void RestoreTabPageElements()
@@ -311,12 +325,14 @@ public sealed partial class SettingsWindow : Window
                     var captured = new List<UIElement>(entryElements);
                     string capturedLabel = entryLabel;
                     string? capturedDesc = entryDescription;
+                    string capturedControlText = ExtractControlSearchText(captured);
                     string capturedTab = tabHeader;
                     _settingEntries.Add(new SettingEntry
                     {
                         TabHeader = capturedTab,
                         Label = capturedLabel,
                         Description = capturedDesc,
+                        ControlText = capturedControlText,
                         BuildElements = () => captured,
                     });
                     entryElements.Clear();
@@ -339,12 +355,14 @@ public sealed partial class SettingsWindow : Window
                 var captured = new List<UIElement>(entryElements);
                 string capturedLabel = entryLabel;
                 string? capturedDesc = entryDescription;
+                string capturedControlText = ExtractControlSearchText(captured);
                 string capturedTab = tabHeader;
                 _settingEntries.Add(new SettingEntry
                 {
                     TabHeader = capturedTab,
                     Label = capturedLabel,
                     Description = capturedDesc,
+                    ControlText = capturedControlText,
                     BuildElements = () => captured,
                 });
             }
@@ -381,6 +399,79 @@ public sealed partial class SettingsWindow : Window
             }
         }
         return null;
+    }
+
+    private static string ExtractControlSearchText(IEnumerable<UIElement> elements)
+    {
+        var parts = new List<string>();
+        foreach (var element in elements)
+            CollectControlSearchText(element, parts);
+
+        return string.Join(' ', parts);
+    }
+
+    private static void CollectControlSearchText(UIElement element, List<string> parts)
+    {
+        switch (element)
+        {
+            case TextBlock textBlock:
+                AddSearchTextPart(parts, textBlock.Text);
+                break;
+            case TextBox textBox:
+                AddSearchTextPart(parts, textBox.Text);
+                AddSearchTextPart(parts, textBox.PlaceholderText);
+                break;
+            case NumberBox numberBox:
+                AddSearchTextPart(parts, numberBox.Text);
+                AddSearchTextPart(parts, numberBox.PlaceholderText);
+                if (!double.IsNaN(numberBox.Value))
+                    AddSearchTextPart(parts, numberBox.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                break;
+            case ComboBox comboBox:
+                AddSearchTextPart(parts, comboBox.PlaceholderText);
+                CollectObjectSearchText(comboBox.SelectedItem, parts);
+                foreach (var item in comboBox.Items)
+                    CollectObjectSearchText(item, parts);
+                break;
+            case ToggleSwitch toggleSwitch:
+                CollectObjectSearchText(toggleSwitch.OnContent, parts);
+                CollectObjectSearchText(toggleSwitch.OffContent, parts);
+                break;
+            case ContentControl contentControl:
+                CollectObjectSearchText(contentControl.Content, parts);
+                break;
+            case Panel panel:
+                foreach (var child in panel.Children)
+                    CollectControlSearchText(child, parts);
+                break;
+        }
+    }
+
+    private static void CollectObjectSearchText(object? value, List<string> parts)
+    {
+        switch (value)
+        {
+            case null:
+                return;
+            case string text:
+                AddSearchTextPart(parts, text);
+                return;
+            case UIElement element:
+                CollectControlSearchText(element, parts);
+                return;
+            case char or bool or byte or sbyte or short or ushort or int or uint or long or ulong or float or double or decimal:
+                AddSearchTextPart(parts, Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture));
+                return;
+        }
+
+        if (value.GetType().IsEnum)
+            AddSearchTextPart(parts, value.ToString());
+    }
+
+    private static void AddSearchTextPart(List<string> parts, string? text)
+    {
+        if (!string.IsNullOrWhiteSpace(text))
+            parts.Add(text.Trim());
     }
 
     private static string? ExtractContentText(object? content)
@@ -1238,6 +1329,20 @@ public sealed partial class SettingsWindow : Window
             g.Children.Add(consoleLogRow);
 
             g.Children.Add(new TextBlock { Text = $"Log file: {LogService.DefaultLogPath()}", FontSize = 11, Opacity = 0.6 });
+
+            // Reset admin warning
+            if (_viewModel.SuppressAdminWarning)
+            {
+                var resetAdmin = new Button { Content = "Re-enable admin privilege warning", FontSize = 12, Padding = new Thickness(8, 4, 8, 4), Margin = new Thickness(0, 4, 0, 0) };
+                resetAdmin.Click += (_, _) =>
+                {
+                    _viewModel.SuppressAdminWarning = false;
+                    resetAdmin.Content = "Admin warning re-enabled ✓";
+                    resetAdmin.IsEnabled = false;
+                };
+                g.Children.Add(resetAdmin);
+                g.Children.Add(new TextBlock { Text = "The non-administrator warning was previously dismissed. Click to show it again on next launch.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            }
         }
 
         // ── General ──
@@ -1294,22 +1399,6 @@ public sealed partial class SettingsWindow : Window
             var recent = new NumberBox { Value = _viewModel.MaxRecentItems, Minimum = 1, Maximum = 100 };
             recent.ValueChanged += (_, args) => _viewModel.MaxRecentItems = (int)args.NewValue;
             g.Children.Add(recent);
-
-
-
-            // Reset admin warning
-            if (_viewModel.SuppressAdminWarning)
-            {
-                var resetAdmin = new Button { Content = "Re-enable admin privilege warning", FontSize = 12, Padding = new Thickness(8, 4, 8, 4), Margin = new Thickness(0, 4, 0, 0) };
-                resetAdmin.Click += (_, _) =>
-                {
-                    _viewModel.SuppressAdminWarning = false;
-                    resetAdmin.Content = "Admin warning re-enabled ✓";
-                    resetAdmin.IsEnabled = false;
-                };
-                g.Children.Add(resetAdmin);
-                g.Children.Add(new TextBlock { Text = "The non-administrator warning was previously dismissed. Click to show it again on next launch.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
-            }
         }
     }
 }
