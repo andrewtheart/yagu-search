@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -85,6 +86,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _editor = editor;
         _dispatcher = dispatcher;
         _resultCollection.VisibleGroups.CollectionChanging += OnVisibleResultGroupsChanging;
+        _resultCollection.VisibleGroups.CollectionChanged += OnVisibleResultGroupsChanged;
 
         _settings = _settingsService.Load();
         _editor.Command = _settings.EditorCommand;
@@ -160,6 +162,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         HasChosenSearchResultTempDirectory = _settings.HasChosenSearchResultTempDirectory;
         ShowMemoryPressureWarningLabel = _settings.ShowMemoryPressureWarningLabel;
         ShowStatsForNerds = _settings.ShowStatsForNerds;
+        ShowAutoScrollResultsCheckbox = _settings.ShowAutoScrollResultsCheckbox;
         SdkChannelBufferSize = _settings.SdkChannelBufferSize;
         MaxMatchesPerFile = _settings.MaxMatchesPerFile;
         ApplyMaxMatchesPerFile(MaxMatchesPerFile);
@@ -434,6 +437,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial int MemoryPressurePercent { get; set; } = 75;
     [ObservableProperty] public partial bool ShowMemoryPressureWarningLabel { get; set; } = true;
     [ObservableProperty] public partial bool ShowStatsForNerds { get; set; } = true;
+    [ObservableProperty] public partial bool ShowAutoScrollResultsCheckbox { get; set; }
     [ObservableProperty] public partial int SdkChannelBufferSize { get; set; } = 4096;
     [ObservableProperty] public partial int MaxMatchesPerFile { get; set; }
     [ObservableProperty] public partial double MaxSearchDepth { get; set; } = double.NaN;
@@ -941,6 +945,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public event EventHandler? ResultGroupsChanging;
 
     public ObservableCollection<FileGroup> ResultGroups => _resultCollection.VisibleGroups;
+    public BatchObservableCollection<object> ResultRows { get; } = new();
     public ObservableCollection<string> RecentDirectories { get; } = [];
     public ObservableCollection<string> DirectorySuggestions { get; } = [];
     public ObservableCollection<string> SearchHistory { get; } = [];
@@ -959,8 +964,50 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             ? Microsoft.UI.Xaml.Visibility.Visible
             : Microsoft.UI.Xaml.Visibility.Collapsed;
 
+    public Microsoft.UI.Xaml.Visibility AutoScrollResultsCheckboxVisibility =>
+        ShowAutoScrollResultsCheckbox
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
+
     private void OnVisibleResultGroupsChanging(object? sender, EventArgs e)
         => ResultGroupsChanging?.Invoke(this, EventArgs.Empty);
+
+    private void OnVisibleResultGroupsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (GroupMode != GroupMode.None)
+        {
+            RebuildResultRows();
+            return;
+        }
+
+        switch (e.Action)
+        {
+            case NotifyCollectionChangedAction.Add when e.NewItems is not null:
+                ResultRows.AppendRange(e.NewItems.Cast<object>().ToList());
+                break;
+            case NotifyCollectionChangedAction.Remove when e.OldItems is not null:
+                foreach (var item in e.OldItems)
+                    ResultRows.Remove(item);
+                break;
+            default:
+                RebuildResultRows();
+                break;
+        }
+    }
+
+    public void ToggleResultGroupExpansion(ResultGroupHeaderRow header)
+    {
+        _expandedResultGroupKeys[header.Key] = !header.IsExpanded;
+        RebuildResultRows();
+    }
+
+    private readonly Dictionary<string, bool> _expandedResultGroupKeys = new(StringComparer.Ordinal);
+
+    private void RebuildResultRows()
+    {
+        var rows = ResultRowProjection.BuildRows(ResultGroups, GroupMode, _expandedResultGroupKeys);
+        ResultRows.ReplaceAll(rows);
+    }
 
     private SkipBreakdown? _lastSkipBreakdown;
     private const string ExtensionExclusionSkipNote = "Files excluded by extension during discovery are filtered before counting and are not included in skipped counts.";
@@ -1005,6 +1052,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     partial void OnDegradedNoticeTextChanged(string value) => OnPropertyChanged(nameof(MemoryPressureWarningVisibility));
     partial void OnShowMemoryPressureWarningLabelChanged(bool value) => OnPropertyChanged(nameof(MemoryPressureWarningVisibility));
     partial void OnShowStatsForNerdsChanged(bool value) => OnPropertyChanged(nameof(StatsForNerdsVisibility));
+    partial void OnShowAutoScrollResultsCheckboxChanged(bool value) => OnPropertyChanged(nameof(AutoScrollResultsCheckboxVisibility));
     partial void OnFilesSkippedChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); }
     partial void OnAccessDeniedCountChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); }
     partial void OnSortModeIndexChanged(int value)
@@ -1428,7 +1476,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _metadataCts.Dispose();
         _metadataCts = new CancellationTokenSource();
 
+        _expandedResultGroupKeys.Clear();
         _resultCollection.Clear();
+        RebuildResultRows();
         FileMetadataCache.Clear();
 
         _resultStore?.Dispose();
@@ -2220,6 +2270,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.HasChosenSearchResultTempDirectory = HasChosenSearchResultTempDirectory;
         _settings.ShowMemoryPressureWarningLabel = ShowMemoryPressureWarningLabel;
         _settings.ShowStatsForNerds = ShowStatsForNerds;
+        _settings.ShowAutoScrollResultsCheckbox = ShowAutoScrollResultsCheckbox;
         _settings.SdkChannelBufferSize = SdkChannelBufferSize;
         _settings.MaxMatchesPerFile = MaxMatchesPerFile;
         _settings.SkipBinary = SkipBinary;

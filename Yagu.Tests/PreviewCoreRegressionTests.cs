@@ -438,6 +438,33 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void DeveloperOptions_ControlAutoScrollCheckboxVisibility()
+    {
+        string settingsSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "Services", "SettingsService.cs"));
+        Assert.Contains("public bool ShowAutoScrollResultsCheckbox { get; set; }", settingsSource);
+        Assert.DoesNotContain("ShowAutoScrollResultsCheckbox { get; set; } = true", settingsSource);
+
+        string viewModelSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
+        Assert.Contains("ShowAutoScrollResultsCheckbox = _settings.ShowAutoScrollResultsCheckbox;", viewModelSource);
+        Assert.Contains("_settings.ShowAutoScrollResultsCheckbox = ShowAutoScrollResultsCheckbox;", viewModelSource);
+        AssertContainsInOrder(viewModelSource,
+            "AutoScrollResultsCheckboxVisibility =>",
+            "ShowAutoScrollResultsCheckbox",
+            "Microsoft.UI.Xaml.Visibility.Visible",
+            "Microsoft.UI.Xaml.Visibility.Collapsed");
+        Assert.Contains("OnShowAutoScrollResultsCheckboxChanged", viewModelSource);
+
+        string toolbar = ExtractXamlWindow("x:Name=\"AutoScrollResultsCheckBox\"", 700);
+        Assert.Contains("Visibility=\"{x:Bind ViewModel.AutoScrollResultsCheckboxVisibility, Mode=OneWay}\"", toolbar);
+
+        Assert.Contains("Show Auto-scroll checkbox", SettingsWindowSource);
+        Assert.Contains("_viewModel.ShowAutoScrollResultsCheckbox = true", SettingsWindowSource);
+        Assert.Contains("_viewModel.ShowAutoScrollResultsCheckbox = false", SettingsWindowSource);
+
+        Assert.Contains("AutoScrollResultsCheckBox.Visibility == Visibility.Visible", MainWindowSource);
+    }
+
+    [Fact]
     public void SortFlyout_UsesInlineArrowButtonsForEachSortField()
     {
         string sortFlyout = ExtractXamlWindow("<Flyout x:Name=\"SortFlyout\"", 9000);
@@ -536,6 +563,39 @@ public sealed class PreviewCoreRegressionTests
             "ViewModel.ClearExtensionFilter();",
             "ViewModel.SetExtensionFilter(selectedExtensions);");
         Assert.DoesNotContain("ContentDialog", extensionToggle);
+    }
+
+    [Fact]
+    public void ResultsList_GroupHeadersUseExpandableMixedRows()
+    {
+        Assert.Contains("<DataTemplate x:Key=\"ResultGroupHeaderTemplate\" x:DataType=\"models:ResultGroupHeaderRow\">", MainWindowXaml);
+        Assert.Contains("Click=\"OnResultGroupHeaderClicked\"", MainWindowXaml);
+        Assert.Contains("Glyph=\"{x:Bind ChevronGlyph, Mode=OneWay}\"", MainWindowXaml);
+        Assert.Contains("Text=\"{x:Bind Title}\"", MainWindowXaml);
+        Assert.Contains("Text=\"{x:Bind SummaryText}\"", MainWindowXaml);
+        Assert.Contains("Glyph=\"{x:Bind ChevronGlyph, Mode=OneWay}\"", MainWindowXaml);
+        Assert.Contains("Text=\"{x:Bind SummaryText}\"", MainWindowXaml);
+        Assert.Contains("<DataTemplate x:Key=\"FileGroupResultTemplate\" x:DataType=\"models:FileGroup\">", MainWindowXaml);
+        AssertContainsInOrder(MainWindowXaml,
+            "<local:ResultListItemTemplateSelector x:Key=\"ResultListItemTemplateSelector\"",
+            "GroupHeaderTemplate=\"{StaticResource ResultGroupHeaderTemplate}\"",
+            "FileGroupTemplate=\"{StaticResource FileGroupResultTemplate}\"");
+        AssertContainsInOrder(MainWindowXaml,
+            "ItemsSource=\"{x:Bind ViewModel.ResultRows, Mode=OneWay}\"",
+            "ItemTemplateSelector=\"{StaticResource ResultListItemTemplateSelector}\"");
+        Assert.DoesNotContain("Text=\"{x:Bind GroupHeaderText", MainWindowXaml);
+
+        string viewModelSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
+        AssertContainsInOrder(viewModelSource,
+            "public BatchObservableCollection<object> ResultRows { get; } = new();",
+            "public void ToggleResultGroupExpansion(ResultGroupHeaderRow header)",
+            "private void RebuildResultRows()",
+            "ResultRows.ReplaceAll(rows);");
+
+        string scrollSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.ResultsListScroll.cs"));
+        Assert.Contains("ViewModel.ResultRows.CollectionChanging += OnResultGroupsChanging;", scrollSource);
+        Assert.Contains("ViewModel.ResultRows.CollectionChanged += OnResultGroupsCollectionChanged;", scrollSource);
+        Assert.DoesNotContain("ViewModel.ResultGroups.CollectionChanged += OnResultGroupsCollectionChanged;", scrollSource);
     }
 
     [Fact]

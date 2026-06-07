@@ -261,7 +261,8 @@ public sealed partial class MainWindow : Window, IDisposable
                 SearchCancelButton.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 255, 220, 220));
                 SearchCancelButton.BorderBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 216, 80, 80));
                 SearchCancelButton.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 120, 24, 24));
-                _autoScrollEnabled = AutoScrollResultsCheckBox.IsChecked == true;
+                _autoScrollEnabled = AutoScrollResultsCheckBox.Visibility == Visibility.Visible
+                    && AutoScrollResultsCheckBox.IsChecked == true;
                 _autoScrollTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
                 _autoScrollTimer.Tick += OnAutoScrollTick;
                 _autoScrollTimer.Start();

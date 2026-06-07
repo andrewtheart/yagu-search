@@ -34,8 +34,8 @@ public sealed partial class MainWindow
 
     private void InitializeResultsListSmartScroll()
     {
-        ViewModel.ResultGroupsChanging += OnResultGroupsChanging;
-        ViewModel.ResultGroups.CollectionChanged += OnResultGroupsCollectionChanged;
+        ViewModel.ResultRows.CollectionChanging += OnResultGroupsChanging;
+        ViewModel.ResultRows.CollectionChanged += OnResultGroupsCollectionChanged;
         ResultsList.Loaded += (_, _) =>
         {
             EnsureResultsListScrollViewerHooked();
@@ -50,8 +50,8 @@ public sealed partial class MainWindow
 
     private void DisposeResultsListSmartScroll()
     {
-        ViewModel.ResultGroupsChanging -= OnResultGroupsChanging;
-        ViewModel.ResultGroups.CollectionChanged -= OnResultGroupsCollectionChanged;
+        ViewModel.ResultRows.CollectionChanging -= OnResultGroupsChanging;
+        ViewModel.ResultRows.CollectionChanged -= OnResultGroupsCollectionChanged;
         if (_resultsListScrollViewer is not null)
             _resultsListScrollViewer.ViewChanged -= OnResultsListScrollViewerViewChanged;
         _resultsListScrollViewer = null;
@@ -82,13 +82,13 @@ public sealed partial class MainWindow
         var scroller = _resultsListScrollViewer;
         if (scroller is null)
         {
-            bool hasGroupsWithoutScroller = ViewModel.ResultGroups.Count > 0;
+            bool hasGroupsWithoutScroller = ViewModel.ResultRows.Count > 0;
             _resultsListWasAtTop = hasGroupsWithoutScroller;
             _resultsListWasAtBottom = hasGroupsWithoutScroller;
             return;
         }
 
-        bool hasVisibleGroups = ViewModel.ResultGroups.Count > 0;
+        bool hasVisibleGroups = ViewModel.ResultRows.Count > 0;
         _resultsListWasAtTop = hasVisibleGroups && IsResultsListAtTop(scroller);
         _resultsListWasAtBottom = hasVisibleGroups && IsResultsListAtBottom(scroller);
     }
@@ -155,7 +155,7 @@ public sealed partial class MainWindow
         if (LogService.Instance.IsVerboseEnabled && intent != ResultsListSmartScrollIntent.None)
         {
             LogService.Instance.Verbose("ResultsList",
-                $"ResultGroupsChanging: intent={intent}, atTop={_resultsListWasAtTop}, atBottom={_resultsListWasAtBottom}, groups={ViewModel.ResultGroups.Count}, autoScroll={_autoScrollEnabled}");
+                $"ResultRowsChanging: intent={intent}, atTop={_resultsListWasAtTop}, atBottom={_resultsListWasAtBottom}, rows={ViewModel.ResultRows.Count}, groups={ViewModel.ResultGroups.Count}, autoScroll={_autoScrollEnabled}");
         }
         if (intent != ResultsListSmartScrollIntent.None)
             QueueResultsListSmartScrollRestore(intent);
@@ -163,7 +163,7 @@ public sealed partial class MainWindow
 
     private void OnResultGroupsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        if (ViewModel.ResultGroups.Count == 0)
+        if (ViewModel.ResultRows.Count == 0)
         {
             CaptureResultsListScrollPosition();
             return;
@@ -217,7 +217,7 @@ public sealed partial class MainWindow
         var intent = _pendingResultsListSmartScrollIntent;
         _pendingResultsListSmartScrollIntent = ResultsListSmartScrollIntent.None;
 
-        if (ViewModel.ResultGroups.Count == 0)
+        if (ViewModel.ResultRows.Count == 0)
         {
             _resultsListTopRestoreInProgress = false;
             return;
@@ -228,7 +228,7 @@ public sealed partial class MainWindow
 
     private void ApplyResultsListSmartScrollIntent(ResultsListSmartScrollIntent intent, int remainingPasses)
     {
-        if (ViewModel.ResultGroups.Count == 0)
+        if (ViewModel.ResultRows.Count == 0)
         {
             _resultsListTopRestoreInProgress = false;
             return;
@@ -252,24 +252,24 @@ public sealed partial class MainWindow
 
     private void ScrollResultsListToTop()
     {
-        if (ViewModel.ResultGroups.Count == 0)
+        if (ViewModel.ResultRows.Count == 0)
             return;
 
         EnsureResultsListScrollViewerHooked();
-        ResultsList.ScrollIntoView(ViewModel.ResultGroups[0], ScrollIntoViewAlignment.Leading);
+        ResultsList.ScrollIntoView(ViewModel.ResultRows[0], ScrollIntoViewAlignment.Leading);
         _resultsListScrollViewer?.ChangeView(null, 0, null, disableAnimation: true);
         if (LogService.Instance.IsVerboseEnabled)
-            LogService.Instance.Verbose("ResultsList", $"ScrollResultsListToTop: groups={ViewModel.ResultGroups.Count}");
+            LogService.Instance.Verbose("ResultsList", $"ScrollResultsListToTop: rows={ViewModel.ResultRows.Count}, groups={ViewModel.ResultGroups.Count}");
         CaptureResultsListScrollPosition();
     }
 
     private void ScrollResultsListToBottom()
     {
-        if (ViewModel.ResultGroups.Count == 0)
+        if (ViewModel.ResultRows.Count == 0)
             return;
 
         EnsureResultsListScrollViewerHooked();
-        ResultsList.ScrollIntoView(ViewModel.ResultGroups[^1]);
+        ResultsList.ScrollIntoView(ViewModel.ResultRows[^1]);
         if (_resultsListScrollViewer is { } scroller)
             scroller.ChangeView(null, scroller.ScrollableHeight, null, disableAnimation: true);
         CaptureResultsListScrollPosition();

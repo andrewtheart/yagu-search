@@ -49,6 +49,8 @@
     <Compile Include="..\Yagu\Models\FileGroup.cs" Link="Source\Models\FileGroup.cs" />
     <Compile Include="..\Yagu\Models\GroupMode.cs" Link="Source\Models\GroupMode.cs" />
     <Compile Include="..\Yagu\Models\BatchObservableCollection.cs" Link="Source\Models\BatchObservableCollection.cs" />
+    <Compile Include="..\Yagu\Models\ResultGroupHeaderRow.cs" Link="Source\Models\ResultGroupHeaderRow.cs" />
+    <Compile Include="..\Yagu\Models\ResultRowProjection.cs" Link="Source\Models\ResultRowProjection.cs" />
     <Compile Include="..\Yagu\Helpers\BinaryDetector.cs" Link="Source\Helpers\BinaryDetector.cs" />
     <Compile Include="..\Yagu\Helpers\DiskTypeDetector.cs" Link="Source\Helpers\DiskTypeDetector.cs" />
     <Compile Include="..\Yagu\Helpers\GlobMatcher.cs" Link="Source\Helpers\GlobMatcher.cs" />

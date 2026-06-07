@@ -856,6 +856,39 @@ public class SearchResultCollectionGapTests
     }
 
     [Fact]
+    public void ResultRows_GroupHeadersCollapseAndExpandGroupedRows()
+    {
+        var collection = new SearchResultCollection { GroupMode = GroupMode.Folder };
+        collection.Add(MakeResult(@"C:\alpha\one.txt", "match"));
+        collection.Add(MakeResult(@"C:\zeta\two.txt", "match"));
+        collection.Add(MakeResult(@"C:\zeta\three.txt", "match"));
+        collection.ApplySortAndFilter();
+
+        var expandedGroups = new Dictionary<string, bool>(StringComparer.Ordinal);
+        var rows = ResultRowProjection.BuildRows(collection.VisibleGroups, GroupMode.Folder, expandedGroups);
+
+        Assert.Equal(5, rows.Count);
+        var headers = rows.OfType<ResultGroupHeaderRow>().ToArray();
+        Assert.Equal(new[] { @"C:\alpha", @"C:\zeta" }, headers.Select(header => header.Title).ToArray());
+        Assert.Equal("2 files | 2 matches", headers.Single(header => header.Title == @"C:\zeta").SummaryText);
+
+        expandedGroups[headers.Single(header => header.Title == @"C:\zeta").Key] = false;
+        rows = ResultRowProjection.BuildRows(collection.VisibleGroups, GroupMode.Folder, expandedGroups);
+
+        Assert.Equal(3, rows.Count);
+        var collapsedHeader = Assert.IsType<ResultGroupHeaderRow>(rows[2]);
+        Assert.Equal(@"C:\zeta", collapsedHeader.Title);
+        Assert.False(collapsedHeader.IsExpanded);
+        Assert.DoesNotContain(rows.OfType<FileGroup>(), group => group.DirectoryName == @"C:\zeta");
+
+        expandedGroups[collapsedHeader.Key] = true;
+        rows = ResultRowProjection.BuildRows(collection.VisibleGroups, GroupMode.Folder, expandedGroups);
+
+        Assert.Equal(5, rows.Count);
+        Assert.Equal(2, rows.OfType<FileGroup>().Count(group => group.DirectoryName == @"C:\zeta"));
+    }
+
+    [Fact]
     public void ApplySortAndFilter_GlobFilter()
     {
         var coll = new SearchResultCollection();

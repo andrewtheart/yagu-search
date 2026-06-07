@@ -548,6 +548,12 @@ public sealed partial class MainWindow
     private void OnGroupFileSizeSmallLarge(object sender, RoutedEventArgs e) { ViewModel.GroupModeIndex = (int)GroupMode.FileSize; ViewModel.GroupSortDirectionIndex = 0; }
     private void OnGroupFileSizeLargeSmall(object sender, RoutedEventArgs e) { ViewModel.GroupModeIndex = (int)GroupMode.FileSize; ViewModel.GroupSortDirectionIndex = 1; }
 
+    private void OnResultGroupHeaderClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: ResultGroupHeaderRow header })
+            ViewModel.ToggleResultGroupExpansion(header);
+    }
+
     // ── Sort menu handlers ────────────────────────────────────────
 
     private void OnSortFlyoutOpening(object sender, object e)

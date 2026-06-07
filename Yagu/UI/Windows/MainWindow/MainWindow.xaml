@@ -3,6 +3,7 @@
     x:Class="Yagu.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Yagu"
     xmlns:vm="using:Yagu.ViewModels"
     xmlns:models="using:Yagu.Models"
     xmlns:tcb="using:TextControlBoxNS"
@@ -12,9 +13,211 @@
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-        <Grid x:Name="RootGrid" AllowDrop="True" DragOver="OnDragOver" Drop="OnDrop"
-            SizeChanged="OnRootGridSizeChanged"
-          PreviewKeyDown="OnRootGridPreviewKeyDown">
+          <Grid x:Name="RootGrid" AllowDrop="True" DragOver="OnDragOver" Drop="OnDrop"
+              SizeChanged="OnRootGridSizeChanged"
+              PreviewKeyDown="OnRootGridPreviewKeyDown">
+                <Grid.Resources>
+        <DataTemplate x:Key="ResultGroupHeaderTemplate" x:DataType="models:ResultGroupHeaderRow">
+            <Button Click="OnResultGroupHeaderClicked"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Padding="4,8,4,2"
+                    MinHeight="0">
+                <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="10,7"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <FontIcon Glyph="{x:Bind ChevronGlyph, Mode=OneWay}"
+                                  FontSize="11"
+                                  Width="16"
+                                  VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1"
+                                   Text="{x:Bind Title}"
+                                   FontWeight="SemiBold"
+                                   FontSize="13"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center">
+                            <TextBlock.Foreground>
+                                <SolidColorBrush Color="{ThemeResource SystemAccentColor}" />
+                            </TextBlock.Foreground>
+                        </TextBlock>
+                        <TextBlock Grid.Column="2"
+                                   Text="{x:Bind SummaryText}"
+                                   FontSize="11"
+                                   Opacity="0.6"
+                                   VerticalAlignment="Center" />
+                    </Grid>
+                </Border>
+            </Button>
+        </DataTemplate>
+
+        <DataTemplate x:Key="FileGroupResultTemplate" x:DataType="models:FileGroup">
+            <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}" Expanding="OnFileGroupExpanding" Collapsed="OnFileGroupCollapsed">
+                <Expander.Header>
+                    <Grid PointerPressed="OnFileGroupHeaderPointerPressed" PointerReleased="OnFileGroupHeaderPointerReleased" DoubleTapped="OnFileGroupHeaderDoubleTapped" Tag="{x:Bind FilePath}" Background="Transparent">
+                        <Grid.ContextFlyout>
+                            <MenuFlyout Opening="OnFileHeaderContextMenuOpening">
+                                <MenuFlyoutItem Text="Preview" Click="OnPreviewSingleFile" Tag="{x:Bind FilePath}">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8A1;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem Text="Preview all selected" Click="OnPreviewSelectedFiles" Tag="{x:Bind FilePath}">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8A1;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutSeparator />
+                                <MenuFlyoutItem Text="Copy Full Path" Click="OnCopyFileGroupPath" Tag="{x:Bind FilePath}">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutSeparator />
+                                <MenuFlyoutItem Text="Copy Selected File Paths" Click="OnCopySelectedFilePaths">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem Text="Copy Selected Files With Content" Click="OnCopySelectedFilesWithContent">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutSeparator />
+                                <MenuFlyoutItem Text="Save Selected File Paths…" Click="OnSaveSelectedFilePaths">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem Text="Save Selected Files With Content…" Click="OnSaveSelectedFilesWithContent">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                            </MenuFlyout>
+                        </Grid.ContextFlyout>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="320" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
+                                  IsThreeState="False"
+                                  IsChecked="{x:Bind AllSelected, Mode=TwoWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
+                                  Click="OnFileGroupCheckBoxClicked" />
+                        <Border Grid.Column="1" Background="#1A6B5A" CornerRadius="4" Padding="8,2" VerticalAlignment="Center" Margin="0,0,10,0" MinWidth="105">
+                            <TextBlock VerticalAlignment="Center" HorizontalTextAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#B0E0D0">
+                                <Run Text="{x:Bind MatchCount}" /><Run Text=" matches" />
+                            </TextBlock>
+                        </Border>
+                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                            <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{x:Bind DirectoryName}" Tag="CompactDir"
+                                       ToolTipService.ToolTip="{x:Bind DirectoryName}"
+                                       FontSize="13" Opacity="0.55" TextTrimming="CharacterEllipsis"
+                                       Visibility="Collapsed" />
+                            <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,2,0,0">
+                                <TextBlock Opacity="0.45" FontSize="11">
+                                    <Run Text="Modified:" /><Run Text=" " /><Run Text="{x:Bind FormattedDate, Mode=OneWay}" /><Run Text=" | Size:" /><Run Text=" " /><Run Text="{x:Bind FormattedSize, Mode=OneWay}" />
+                                </TextBlock>
+                            </StackPanel>
+                        </StackPanel>
+                        <TextBlock Grid.Column="3" Text="{x:Bind DirectoryName}" Tag="WideDir"
+                                   ToolTipService.ToolTip="{x:Bind DirectoryName}"
+                                   Opacity="0.45" FontSize="11" VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"
+                                   HorizontalAlignment="Left" Margin="12,0,4,0" />
+                        <Button Grid.Column="4" Click="OnShowFileGroupInExplorer" Tag="{x:Bind FilePath}"
+                                Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
+                                Background="Transparent" BorderThickness="0"
+                                VerticalAlignment="Center" Margin="4,0,0,0"
+                                ToolTipService.ToolTip="Open containing folder in Explorer">
+                            <FontIcon Glyph="&#xED25;" FontSize="12" />
+                        </Button>
+                    </Grid>
+                </Expander.Header>
+                <StackPanel>
+                    <ItemsControl ItemsSource="{x:Bind VisibleResults}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="models:SearchResult">
+                                <StackPanel>
+                                    <ItemsControl ItemsSource="{x:Bind NumberedBefore, Mode=OneWay}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="models:ContextLine">
+                                                <Grid ColumnSpacing="3" Padding="4,0,8,0">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="34" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="{x:Bind LineNum}" FontFamily="Consolas" FontSize="11" Opacity="0.45"
+                                                               HorizontalAlignment="Right" Margin="0,0,6,0" />
+                                                    <TextBlock Grid.Column="1" Text="{x:Bind Text}" FontFamily="Consolas" FontSize="11" Opacity="0.45"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <Grid Padding="0,2,8,2" ColumnSpacing="3" Tapped="OnMatchLineTapped" Background="Transparent">
+                                        <Grid.ContextFlyout>
+                                            <MenuFlyout>
+                                                <MenuFlyoutItem Text="Copy Selected Lines" Click="OnCopySelectedLines">
+                                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
+                                                </MenuFlyoutItem>
+                                                <MenuFlyoutItem Text="Export Selected to File…" Click="OnExportSelectedLines">
+                                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
+                                                </MenuFlyoutItem>
+                                                <MenuFlyoutSeparator />
+                                                <MenuFlyoutItem Text="Copy This Line" Click="OnCopySingleLine" />
+                                            </MenuFlyout>
+                                        </Grid.ContextFlyout>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <ToggleButton Grid.Column="0" IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
+                                                      Click="OnMatchLineCheckBoxClicked"
+                                                      MinWidth="34" MinHeight="22" Padding="5,1" Margin="4,0,2,0"
+                                                      CornerRadius="4"
+                                                      VerticalAlignment="Center"
+                                                      HorizontalContentAlignment="Center">
+                                            <TextBlock Text="{x:Bind LineNumber}"
+                                                       FontFamily="Consolas"
+                                                       FontSize="12"
+                                                       FontWeight="SemiBold" />
+                                        </ToggleButton>
+                                        <RichTextBlock Grid.Column="1" TextTrimming="CharacterEllipsis" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="False" Loaded="OnMatchLineLoaded" VerticalAlignment="Center" />
+                                    </Grid>
+                                    <ItemsControl ItemsSource="{x:Bind NumberedAfter, Mode=OneWay}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="models:ContextLine">
+                                                <Grid ColumnSpacing="3" Padding="4,0,8,0">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="34" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="{x:Bind LineNum}" FontFamily="Consolas" FontSize="11" Opacity="0.45"
+                                                               HorizontalAlignment="Right" Margin="0,0,6,0" />
+                                                    <TextBlock Grid.Column="1" Text="{x:Bind Text}" FontFamily="Consolas" FontSize="11" Opacity="0.45"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <HyperlinkButton Content="{x:Bind ShowMoreText, Mode=OneWay}"
+                                     Visibility="{x:Bind HasMore, Mode=OneWay}"
+                                     Click="OnShowMoreClicked"
+                                     Tapped="OnShowMoreTapped"
+                                     Padding="4,4,0,2" FontSize="12" />
+                </StackPanel>
+            </Expander>
+        </DataTemplate>
+
+        <local:ResultListItemTemplateSelector x:Key="ResultListItemTemplateSelector"
+                                             GroupHeaderTemplate="{StaticResource ResultGroupHeaderTemplate}"
+                                             FileGroupTemplate="{StaticResource FileGroupResultTemplate}" />
+                </Grid.Resources>
         <Grid.RowDefinitions>
             <RowDefinition x:Name="TitleBarRow" Height="Auto" />  <!-- Custom title bar -->
             <RowDefinition Height="Auto" />  <!-- Admin banner -->
@@ -755,6 +958,7 @@
                                   MinWidth="0"
                                   MinHeight="0"
                                   Padding="4,0,0,0"
+                                  Visibility="{x:Bind ViewModel.AutoScrollResultsCheckboxVisibility, Mode=OneWay}"
                                   Checked="OnAutoScrollResultsChanged"
                                   Unchecked="OnAutoScrollResultsChanged"
                                   ToolTipService.ToolTip="Follow new results as they arrive" />
@@ -828,7 +1032,8 @@
                         KeyDown="OnResultsListKeyDown"
                         PointerPressed="OnResultsListPointerPressed"
                         RightTapped="OnResultsListRightTapped"
-                        ItemsSource="{x:Bind ViewModel.ResultGroups, Mode=OneWay}"
+                        ItemsSource="{x:Bind ViewModel.ResultRows, Mode=OneWay}"
+                        ItemTemplateSelector="{StaticResource ResultListItemTemplateSelector}"
                         SizeChanged="OnResultsListSizeChanged"
                         ContainerContentChanging="OnResultsListContainerContentChanging"
                         Padding="4,0">
@@ -856,175 +1061,6 @@
                                 </MenuFlyoutItem>
                             </MenuFlyout>
                         </ListView.ContextFlyout>
-                        <ListView.ItemTemplate>
-                            <DataTemplate x:DataType="models:FileGroup">
-                                <StackPanel>
-                                    <TextBlock Text="{x:Bind GroupHeaderText, Mode=OneWay}"
-                                               Visibility="{x:Bind HasGroupHeader, Mode=OneWay}"
-                                               FontWeight="Bold" FontSize="13" Padding="4,10,0,2"
-                                               Opacity="0.8">
-                                        <TextBlock.Foreground>
-                                            <SolidColorBrush Color="{ThemeResource SystemAccentColor}" />
-                                        </TextBlock.Foreground>
-                                    </TextBlock>
-                                    <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}" Expanding="OnFileGroupExpanding" Collapsed="OnFileGroupCollapsed">
-                                    <Expander.Header>
-                                        <Grid PointerPressed="OnFileGroupHeaderPointerPressed" PointerReleased="OnFileGroupHeaderPointerReleased" DoubleTapped="OnFileGroupHeaderDoubleTapped" Tag="{x:Bind FilePath}" Background="Transparent">
-                                            <Grid.ContextFlyout>
-                                                <MenuFlyout Opening="OnFileHeaderContextMenuOpening">
-                                                    <MenuFlyoutItem Text="Preview" Click="OnPreviewSingleFile" Tag="{x:Bind FilePath}">
-                                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8A1;" /></MenuFlyoutItem.Icon>
-                                                    </MenuFlyoutItem>
-                                                    <MenuFlyoutItem Text="Preview all selected" Click="OnPreviewSelectedFiles" Tag="{x:Bind FilePath}">
-                                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8A1;" /></MenuFlyoutItem.Icon>
-                                                    </MenuFlyoutItem>
-                                                    <MenuFlyoutSeparator />
-                                                    <MenuFlyoutItem Text="Copy Full Path" Click="OnCopyFileGroupPath" Tag="{x:Bind FilePath}">
-                                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
-                                                    </MenuFlyoutItem>
-                                                    <MenuFlyoutSeparator />
-                                                    <MenuFlyoutItem Text="Copy Selected File Paths" Click="OnCopySelectedFilePaths">
-                                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
-                                                    </MenuFlyoutItem>
-                                                    <MenuFlyoutItem Text="Copy Selected Files With Content" Click="OnCopySelectedFilesWithContent">
-                                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
-                                                    </MenuFlyoutItem>
-                                                    <MenuFlyoutSeparator />
-                                                    <MenuFlyoutItem Text="Save Selected File Paths…" Click="OnSaveSelectedFilePaths">
-                                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
-                                                    </MenuFlyoutItem>
-                                                    <MenuFlyoutItem Text="Save Selected Files With Content…" Click="OnSaveSelectedFilesWithContent">
-                                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
-                                                    </MenuFlyoutItem>
-                                                </MenuFlyout>
-                                            </Grid.ContextFlyout>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto" />
-                                                <ColumnDefinition Width="Auto" />
-                                                <!-- Fixed-width filename column so directory paths line up vertically across rows. -->
-                                                <ColumnDefinition Width="320" />
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-                                        <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
-                                                  IsThreeState="False"
-                                                  IsChecked="{x:Bind AllSelected, Mode=TwoWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
-                                                  Click="OnFileGroupCheckBoxClicked" />
-                                        <!-- Match count badge -->
-                                        <Border Grid.Column="1" Background="#1A6B5A" CornerRadius="4" Padding="8,2" VerticalAlignment="Center" Margin="0,0,10,0" MinWidth="105">
-                                            <TextBlock VerticalAlignment="Center" HorizontalTextAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#B0E0D0">
-                                                <Run Text="{x:Bind MatchCount}" /><Run Text=" matches" />
-                                            </TextBlock>
-                                        </Border>
-                                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
-                                            <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis" />
-                                            <!-- Directory shown stacked when panel is narrow -->
-                                            <TextBlock Text="{x:Bind DirectoryName}" Tag="CompactDir"
-                                                       ToolTipService.ToolTip="{x:Bind DirectoryName}"
-                                                       FontSize="13" Opacity="0.55" TextTrimming="CharacterEllipsis"
-                                                       Visibility="Collapsed" />
-                                            <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,2,0,0">
-                                                <TextBlock Opacity="0.45" FontSize="11">
-                                                    <Run Text="Modified:" /><Run Text=" " /><Run Text="{x:Bind FormattedDate, Mode=OneWay}" /><Run Text=" | Size:" /><Run Text=" " /><Run Text="{x:Bind FormattedSize, Mode=OneWay}" />
-                                                </TextBlock>
-                                            </StackPanel>
-                                        </StackPanel>
-                                        <!-- Directory path takes the remaining row width, sitting immediately after the filename block. -->
-                                        <TextBlock Grid.Column="3" Text="{x:Bind DirectoryName}" Tag="WideDir"
-                                                   ToolTipService.ToolTip="{x:Bind DirectoryName}"
-                                                   Opacity="0.45" FontSize="11" VerticalAlignment="Center"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   HorizontalAlignment="Left" Margin="12,0,4,0" />
-                                        <Button Grid.Column="4" Click="OnShowFileGroupInExplorer" Tag="{x:Bind FilePath}"
-                                                Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
-                                                Background="Transparent" BorderThickness="0"
-                                                VerticalAlignment="Center" Margin="4,0,0,0"
-                                                ToolTipService.ToolTip="Open containing folder in Explorer">
-                                            <FontIcon Glyph="&#xED25;" FontSize="12" />
-                                        </Button>
-                                        </Grid>
-                                    </Expander.Header>
-                                    <StackPanel>
-                                        <ItemsControl ItemsSource="{x:Bind VisibleResults}">
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate x:DataType="models:SearchResult">
-                                                    <StackPanel>
-                                                    <ItemsControl ItemsSource="{x:Bind NumberedBefore, Mode=OneWay}">
-                                                        <ItemsControl.ItemTemplate>
-                                                            <DataTemplate x:DataType="models:ContextLine">
-                                                                <Grid ColumnSpacing="3" Padding="4,0,8,0">
-                                                                    <Grid.ColumnDefinitions>
-                                                                        <ColumnDefinition Width="34" />
-                                                                        <ColumnDefinition Width="*" />
-                                                                    </Grid.ColumnDefinitions>
-                                                                    <TextBlock Text="{x:Bind LineNum}" FontFamily="Consolas" FontSize="11" Opacity="0.45"
-                                                                               HorizontalAlignment="Right" Margin="0,0,6,0" />
-                                                                    <TextBlock Grid.Column="1" Text="{x:Bind Text}" FontFamily="Consolas" FontSize="11" Opacity="0.45"
-                                                                               TextTrimming="CharacterEllipsis" />
-                                                                </Grid>
-                                                            </DataTemplate>
-                                                        </ItemsControl.ItemTemplate>
-                                                    </ItemsControl>
-                                                    <Grid Padding="0,2,8,2" ColumnSpacing="3" Tapped="OnMatchLineTapped" Background="Transparent">
-                                                        <Grid.ContextFlyout>
-                                                            <MenuFlyout>
-                                                                <MenuFlyoutItem Text="Copy Selected Lines" Click="OnCopySelectedLines">
-                                                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
-                                                                </MenuFlyoutItem>
-                                                                <MenuFlyoutItem Text="Export Selected to File…" Click="OnExportSelectedLines">
-                                                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
-                                                                </MenuFlyoutItem>
-                                                                <MenuFlyoutSeparator />
-                                                                <MenuFlyoutItem Text="Copy This Line" Click="OnCopySingleLine" />
-                                                            </MenuFlyout>
-                                                        </Grid.ContextFlyout>
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="Auto" />
-                                                            <ColumnDefinition Width="*" />
-                                                        </Grid.ColumnDefinitions>
-                                                        <ToggleButton Grid.Column="0" IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
-                                                                      Click="OnMatchLineCheckBoxClicked"
-                                                                      MinWidth="34" MinHeight="22" Padding="5,1" Margin="4,0,2,0"
-                                                                      CornerRadius="4"
-                                                                      VerticalAlignment="Center"
-                                                                      HorizontalContentAlignment="Center">
-                                                            <TextBlock Text="{x:Bind LineNumber}"
-                                                                       FontFamily="Consolas"
-                                                                       FontSize="12"
-                                                                       FontWeight="SemiBold" />
-                                                        </ToggleButton>
-                                                        <RichTextBlock Grid.Column="1" TextTrimming="CharacterEllipsis" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="False" Loaded="OnMatchLineLoaded" VerticalAlignment="Center" />
-                                                    </Grid>
-                                                    <ItemsControl ItemsSource="{x:Bind NumberedAfter, Mode=OneWay}">
-                                                        <ItemsControl.ItemTemplate>
-                                                            <DataTemplate x:DataType="models:ContextLine">
-                                                                <Grid ColumnSpacing="3" Padding="4,0,8,0">
-                                                                    <Grid.ColumnDefinitions>
-                                                                        <ColumnDefinition Width="34" />
-                                                                        <ColumnDefinition Width="*" />
-                                                                    </Grid.ColumnDefinitions>
-                                                                    <TextBlock Text="{x:Bind LineNum}" FontFamily="Consolas" FontSize="11" Opacity="0.45"
-                                                                               HorizontalAlignment="Right" Margin="0,0,6,0" />
-                                                                    <TextBlock Grid.Column="1" Text="{x:Bind Text}" FontFamily="Consolas" FontSize="11" Opacity="0.45"
-                                                                               TextTrimming="CharacterEllipsis" />
-                                                                </Grid>
-                                                            </DataTemplate>
-                                                        </ItemsControl.ItemTemplate>
-                                                    </ItemsControl>
-                                                    </StackPanel>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                        <HyperlinkButton Content="{x:Bind ShowMoreText, Mode=OneWay}"
-                                                         Visibility="{x:Bind HasMore, Mode=OneWay}"
-                                                         Click="OnShowMoreClicked"
-                                                         Tapped="OnShowMoreTapped"
-                                                         Padding="4,4,0,2" FontSize="12" />
-                                    </StackPanel>
-                                </Expander>
-                                </StackPanel>
-                            </DataTemplate>
-                        </ListView.ItemTemplate>
                     </ListView>
                 </Grid>
             </Border>

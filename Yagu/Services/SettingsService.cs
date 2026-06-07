@@ -90,6 +90,8 @@ public sealed class AppSettings
     public bool ShowMemoryPressureWarningLabel { get; set; } = true;
     /// <summary>When true, show throughput labels and disk utilization sparkline in the bottom status bar.</summary>
     public bool ShowStatsForNerds { get; set; } = true;
+    /// <summary>When true, show the Auto-scroll checkbox in the results toolbar. Hidden by default.</summary>
+    public bool ShowAutoScrollResultsCheckbox { get; set; }
     /// <summary>Bounded channel buffer size for the Everything SDK streaming path. Higher values use more memory but can improve throughput.</summary>
     public int SdkChannelBufferSize { get; set; } = 4096;
     /// <summary>Current directory recursion depth. 0 = unlimited. This is intentionally session-only.</summary>

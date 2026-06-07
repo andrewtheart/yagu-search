@@ -1133,6 +1133,22 @@ public sealed partial class SettingsWindow : Window
                 TextWrapping = TextWrapping.Wrap,
             });
 
+            var showAutoScrollResultsCheckbox = new CheckBox
+            {
+                Content = "Show Auto-scroll checkbox",
+                IsChecked = _viewModel.ShowAutoScrollResultsCheckbox,
+            };
+            showAutoScrollResultsCheckbox.Checked += (_, _) => _viewModel.ShowAutoScrollResultsCheckbox = true;
+            showAutoScrollResultsCheckbox.Unchecked += (_, _) => _viewModel.ShowAutoScrollResultsCheckbox = false;
+            g.Children.Add(showAutoScrollResultsCheckbox);
+            g.Children.Add(new TextBlock
+            {
+                Text = "Shows the results-toolbar Auto-scroll checkbox for testing searches that continuously append result rows. Hidden by default.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
             g.Children.Add(new TextBlock { Text = "File log level:", Margin = new Thickness(0, 12, 0, 0) });
             var fileLogRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
             var fileLogLevel = new ComboBox();

@@ -31,7 +31,7 @@ public sealed partial class MainWindow
 {
     private void OnAutoScrollTick(object? sender, object e)
     {
-        if (!_autoScrollEnabled || ViewModel.ResultGroups.Count == 0) return;
+        if (!_autoScrollEnabled || ViewModel.ResultRows.Count == 0) return;
         if (_resultsListTopRestoreInProgress) return;
         if (_resultsListShowMoreRestoreInProgress) return;
         if (_resultsListWasAtTop) return;
@@ -97,7 +97,7 @@ public sealed partial class MainWindow
     private void OnAutoScrollResultsChanged(object sender, RoutedEventArgs e)
     {
         _autoScrollEnabled = AutoScrollResultsCheckBox.IsChecked == true;
-        if (_autoScrollEnabled && ViewModel.ResultGroups.Count > 0)
+        if (_autoScrollEnabled && ViewModel.ResultRows.Count > 0)
             ScrollResultsListToBottom();
     }
 
