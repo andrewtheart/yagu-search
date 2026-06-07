@@ -163,6 +163,7 @@ public sealed partial class MainWindow : Window, IDisposable
         ConfigurePreviewSelectionMode(PreviewBlock);
         AttachPreviewBlockContextFlyout(PreviewBlock);
         InitializePreviewEditorZoom();
+        ApplyPreviewEditorFontSettings();
         InitializeResultsListSmartScroll();
         PreviewScrollViewer.SizeChanged += OnPreviewViewportSizeChanged;
 
@@ -226,6 +227,12 @@ public sealed partial class MainWindow : Window, IDisposable
                 e.PropertyName == nameof(ViewModel.PreviewMatchLineColor))
             {
                 ApplyPreviewColors();
+            }
+
+            if (e.PropertyName == nameof(ViewModel.PreviewEditorFontFamily) ||
+                e.PropertyName == nameof(ViewModel.PreviewEditorFontSize))
+            {
+                ApplyPreviewEditorFontSettings();
             }
         };
 

@@ -1450,7 +1450,6 @@
                                             <Button.Flyout>
                                                 <MenuFlyout>
                                                     <ToggleMenuFlyoutItem x:Name="EditorWrapModeWrap" Text="Word wrap" Click="OnWrapModeOptionClicked" />
-                                                    <ToggleMenuFlyoutItem x:Name="EditorWrapModePartial" Text="Partial word wrap" Click="OnWrapModeOptionClicked" />
                                                     <ToggleMenuFlyoutItem x:Name="EditorWrapModeNone" Text="No wrap" Click="OnWrapModeOptionClicked" />
                                                 </MenuFlyout>
                                             </Button.Flyout>

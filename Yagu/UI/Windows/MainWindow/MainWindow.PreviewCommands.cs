@@ -50,7 +50,7 @@ public sealed partial class MainWindow
         int mode;
         if (ReferenceEquals(sender, WrapModeWrap) || ReferenceEquals(sender, EditorWrapModeWrap))
             mode = 0;
-        else if (ReferenceEquals(sender, WrapModePartial) || ReferenceEquals(sender, EditorWrapModePartial))
+        else if (ReferenceEquals(sender, WrapModePartial))
             mode = 1;
         else
             mode = 2;
@@ -76,8 +76,7 @@ public sealed partial class MainWindow
         WrapModePartial.IsChecked = mode == 1;
         WrapModeNone.IsChecked = mode == 2;
         EditorWrapModeWrap.IsChecked = mode == 0;
-        EditorWrapModePartial.IsChecked = mode == 1;
-        EditorWrapModeNone.IsChecked = mode == 2;
+        EditorWrapModeNone.IsChecked = mode != 0;
     }
 
     private async void OnPreviewModeChanged(object sender, SelectionChangedEventArgs e)

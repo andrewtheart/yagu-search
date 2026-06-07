@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Windows.System;
 using Yagu.Helpers;
 using Yagu.Models;
@@ -37,6 +38,8 @@ public sealed partial class MainWindow
     private long _previewEditorTotalByteLength;
     private Encoding? _previewEditorChunkEncoding;
     private ScrollViewer? _previewEditorScrollViewer;
+    private int _previewEditorRevealVersion;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _previewEditorRevealRetryTimer;
 
     private async void OnSavePreviewEdit(object sender, RoutedEventArgs e)
     {
@@ -181,14 +184,18 @@ public sealed partial class MainWindow
             int lineNum = tp is null ? -1 : ResolveLineNumberAtPointer(block, tp);
             if (lineNum <= 0) return;
 
+            var clickedPara = FindParagraphAtOffset(block, tp!.Offset);
+            int clickedMatchIndex = clickedPara is null ? -1 : ResolveMatchIndexAtPointer(clickedPara, tp);
+
             // Reuse an existing SearchResult for this file when possible (it has
             // MatchLine/column data that ScrollEditorToMatch uses for highlighting).
-            // Prefer the result whose LineNumber matches the clicked line so the
-            // editor highlights the exact match the user double-clicked, not the
-            // first match in the file.
+            // Prefer the result whose LineNumber and match index match the clicked
+            // run so the editor highlights the word the user double-clicked, not
+            // just the first match on that line.
             var fileGroup = ViewModel.ResultGroups
                 .FirstOrDefault(g => string.Equals(g.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
-            SearchResult? existing = fileGroup?.FirstOrDefault(r => r.LineNumber == lineNum)
+            SearchResult? existing = ResolveSearchResultAtPreviewPoint(fileGroup, lineNum, clickedMatchIndex)
+                ?? fileGroup?.FirstOrDefault(r => r.LineNumber == lineNum)
                 ?? fileGroup?.FirstOrDefault();
             SearchResult target;
             if (existing is not null && existing.LineNumber == lineNum)
@@ -206,7 +213,6 @@ public sealed partial class MainWindow
                 if (rx is not null)
                 {
                     var paraText = new System.Text.StringBuilder();
-                    var clickedPara = FindParagraphAtOffset(block, tp!.Offset);
                     if (clickedPara is not null)
                     {
                         // In two-column layout, gutter runs are in a separate
@@ -217,8 +223,11 @@ public sealed partial class MainWindow
                             if (clickedPara.Inlines[pi] is Run pr) paraText.Append(pr.Text);
                     }
                     matchLine = paraText.ToString();
-                    var rxMatch = rx.Match(matchLine);
-                    if (rxMatch.Success)
+                    var rxMatches = rx.Matches(matchLine);
+                    var rxMatch = rxMatches.Count > 0
+                        ? rxMatches[Math.Clamp(clickedMatchIndex, 0, rxMatches.Count - 1)]
+                        : null;
+                    if (rxMatch is { Success: true })
                     {
                         col = rxMatch.Index;
                         len = rxMatch.Length;
@@ -239,6 +248,60 @@ public sealed partial class MainWindow
             LogService.Instance.Warning("Preview",
                 $"EnterPreviewEditorAtPointAsync threw: {ex.GetType().Name}: {ex.Message}");
         }
+    }
+
+    private static SearchResult? ResolveSearchResultAtPreviewPoint(FileGroup? fileGroup, int lineNum, int clickedMatchIndex)
+    {
+        if (fileGroup is null)
+            return null;
+
+        var lineResults = fileGroup
+            .Where(r => r.LineNumber == lineNum)
+            .OrderBy(r => r.SourceMatchStartColumn)
+            .ThenBy(r => r.MatchStartColumn)
+            .ThenBy(r => r.MatchLength)
+            .ToList();
+        if (lineResults.Count == 0)
+            return null;
+
+        if ((uint)clickedMatchIndex < (uint)lineResults.Count)
+            return lineResults[clickedMatchIndex];
+
+        return lineResults[0];
+    }
+
+    private int ResolveMatchIndexAtPointer(Paragraph para, TextPointer tp)
+    {
+        var matches = GetMatchRunsForParagraph(para);
+        if (matches.Count == 0)
+            return -1;
+
+        int localOffset = Math.Max(0, tp.Offset - para.ContentStart.Offset);
+        for (int i = 0; i < matches.Count; i++)
+        {
+            var (run, column) = matches[i];
+            int length = run.Text?.Length ?? 0;
+            if (localOffset >= column && localOffset <= column + length)
+                return i;
+        }
+
+        int bestIndex = 0;
+        int bestDistance = int.MaxValue;
+        for (int i = 0; i < matches.Count; i++)
+        {
+            var (run, column) = matches[i];
+            int length = run.Text?.Length ?? 0;
+            int startDistance = Math.Abs(localOffset - column);
+            int endDistance = Math.Abs(localOffset - (column + length));
+            int distance = Math.Min(startDistance, endDistance);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                bestIndex = i;
+            }
+        }
+
+        return bestIndex;
     }
 
     /// <summary>
@@ -722,72 +785,168 @@ public sealed partial class MainWindow
 
     private void ScrollEditorToMatch(string text, SearchResult result)
     {
-        // The editor's SetSelection counts each line break as exactly 1 character
-        // regardless of the actual line ending (CRLF/LF/CR).  Compute the offset
-        // using that same convention: add lineLength+1 per line traversed.
-        int charOffset = 0;
-        int currentLine = 1;
-        int i = 0;
-        while (i < text.Length && currentLine < result.LineNumber)
-        {
-            if (text[i] == '\r' && i + 1 < text.Length && text[i + 1] == '\n')
-            {
-                i += 2; // skip \r\n in the source
-            }
-            else if (text[i] == '\n' || text[i] == '\r')
-            {
-                i++;
-            }
-            else
-            {
-                charOffset++;
-                i++;
-                continue;
-            }
-            // Each newline counts as 1 in the editor's position model.
-            charOffset++;
-            currentLine++;
-        }
-
-        // charOffset is calculated against the text we loaded into the editor.
-        // Select the matched portion.
-        int selectStart = charOffset + result.MatchStartColumn;
-        int selectLength = result.MatchLength;
-
-        // Clamp to valid range.
-        if (selectStart > text.Length) selectStart = charOffset;
-        if (selectStart + selectLength > text.Length) selectLength = 0;
+        var selection = ResolvePreviewEditorMatchSelection(text, result);
 
         // Defer the scroll+select to a Low-priority callback so the editor
         // control has completed its layout pass and knows its line positions.
         // Without this, ScrollLineToCenter is a no-op on freshly-loaded text.
-        int targetLineIndex = Math.Max(0, result.LineNumber - 1);
-        int capturedStart = selectStart;
-        int capturedLength = Math.Max(0, selectLength);
+        int targetLineIndex = selection.TargetLineIndex;
+        int capturedStart = selection.Start;
+        int capturedLength = selection.Length;
         if (LogService.Instance.IsVerboseEnabled)
         {
-            LogService.Instance.Verbose("PreviewEditor", $"ScrollEditorToMatch: file='{Path.GetFileName(result.FilePath)}', line={result.LineNumber}, matchColumn={result.MatchStartColumn}, matchLength={result.MatchLength}, charOffset={charOffset}, selectStart={capturedStart}, selectLength={capturedLength}, targetLineIndex={targetLineIndex}, wordWrap={PreviewEditor.WordWrap}");
+            LogService.Instance.Verbose("PreviewEditor", $"ScrollEditorToMatch: file='{Path.GetFileName(result.FilePath)}', line={result.LineNumber}, matchColumn={result.MatchStartColumn}, sourceMatchColumn={result.SourceMatchStartColumn}, resolvedColumn={selection.Column}, matchLength={result.MatchLength}, selectStart={capturedStart}, selectLength={capturedLength}, targetLineIndex={targetLineIndex}, source={selection.Source}, wordWrap={PreviewEditor.WordWrap}");
         }
-        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+
+        int revealVersion = ++_previewEditorRevealVersion;
+        void RevealMatch(string source)
         {
             try
             {
+                if (revealVersion != _previewEditorRevealVersion) return;
                 if (PreviewEditor.Visibility != Visibility.Visible) return;
-                PreviewEditor.ScrollLineToCenter(targetLineIndex);
                 if (capturedLength > 0 && capturedStart >= 0)
                 {
                     int len = GetPreviewEditorTextLength();
                     int s = Math.Min(capturedStart, len);
                     int l = Math.Min(capturedLength, Math.Max(0, len - s));
                     SelectPreviewEditorText(s, l);
-                    PreviewEditor.ScrollLineToCenter(targetLineIndex);
                 }
+                PreviewEditor.ScrollLineToCenter(targetLineIndex);
+                PreviewEditor.ScrollIntoViewHorizontally();
+                if (LogService.Instance.IsVerboseEnabled)
+                    LogService.Instance.Verbose("PreviewEditor", $"RevealEditorMatch: source={source}, line={targetLineIndex}, start={capturedStart}, length={capturedLength}, wordWrap={PreviewEditor.WordWrap}");
             }
             catch (Exception ex)
             {
                 LogService.Instance.Warning("Preview", $"ScrollEditorToMatch deferred scroll failed: {ex.GetType().Name}: {ex.Message}");
             }
-        });
+        }
+
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => RevealMatch("dispatcher"));
+
+        _previewEditorRevealRetryTimer?.Stop();
+        var retryTimer = DispatcherQueue.CreateTimer();
+        _previewEditorRevealRetryTimer = retryTimer;
+        retryTimer.Interval = TimeSpan.FromMilliseconds(75);
+        retryTimer.IsRepeating = false;
+        retryTimer.Tick += (_, _) =>
+        {
+            retryTimer.Stop();
+            if (ReferenceEquals(_previewEditorRevealRetryTimer, retryTimer))
+                _previewEditorRevealRetryTimer = null;
+            RevealMatch("timer");
+        };
+        retryTimer.Start();
+    }
+
+    private readonly record struct PreviewEditorMatchSelection(
+        int Start,
+        int Length,
+        int Column,
+        int TargetLineIndex,
+        string Source);
+
+    private PreviewEditorMatchSelection ResolvePreviewEditorMatchSelection(string text, SearchResult result)
+    {
+        int targetLineIndex = Math.Max(0, result.LineNumber - 1);
+        if (!TryGetEditorLineInfo(text, result.LineNumber, out var lineText, out int lineEditorStart))
+        {
+            return new PreviewEditorMatchSelection(lineEditorStart, 0, 0, targetLineIndex, "line-missing");
+        }
+
+        int requestedColumn = Math.Clamp(Math.Max(result.SourceMatchStartColumn, result.MatchStartColumn), 0, lineText.Length);
+        int resolvedColumn = requestedColumn;
+        int resolvedLength = Math.Clamp(result.MatchLength, 0, Math.Max(0, lineText.Length - resolvedColumn));
+        string source = "result-column";
+
+        var rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+        if (rx is not null && TryFindNearestRegexMatch(lineText, rx, requestedColumn, out int regexColumn, out int regexLength))
+        {
+            resolvedColumn = regexColumn;
+            resolvedLength = regexLength;
+            source = "regex-line-match";
+        }
+
+        return new PreviewEditorMatchSelection(
+            lineEditorStart + resolvedColumn,
+            resolvedLength,
+            resolvedColumn,
+            targetLineIndex,
+            source);
+    }
+
+    private static bool TryGetEditorLineInfo(string text, int lineNumber, out string lineText, out int editorLineStart)
+    {
+        lineText = string.Empty;
+        editorLineStart = 0;
+        if (lineNumber <= 0) return false;
+
+        int currentLine = 1;
+        int sourceIndex = 0;
+        int editorIndex = 0;
+
+        while (sourceIndex < text.Length && currentLine < lineNumber)
+        {
+            int lineStart = sourceIndex;
+            while (sourceIndex < text.Length && text[sourceIndex] != '\r' && text[sourceIndex] != '\n')
+                sourceIndex++;
+
+            editorIndex += sourceIndex - lineStart;
+
+            if (sourceIndex >= text.Length)
+                return false;
+
+            if (text[sourceIndex] == '\r' && sourceIndex + 1 < text.Length && text[sourceIndex + 1] == '\n')
+                sourceIndex += 2;
+            else
+                sourceIndex++;
+
+            editorIndex++;
+            currentLine++;
+        }
+
+        if (currentLine != lineNumber)
+            return false;
+
+        editorLineStart = editorIndex;
+        int contentStart = sourceIndex;
+        while (sourceIndex < text.Length && text[sourceIndex] != '\r' && text[sourceIndex] != '\n')
+            sourceIndex++;
+
+        lineText = text[contentStart..sourceIndex];
+        return true;
+    }
+
+    private static bool TryFindNearestRegexMatch(string lineText, System.Text.RegularExpressions.Regex rx, int targetColumn, out int matchColumn, out int matchLength)
+    {
+        matchColumn = 0;
+        matchLength = 0;
+        System.Text.RegularExpressions.Match? best = null;
+        int bestDistance = int.MaxValue;
+
+        foreach (System.Text.RegularExpressions.Match match in rx.Matches(lineText))
+        {
+            if (!match.Success || match.Length <= 0)
+                continue;
+
+            int distance = targetColumn >= match.Index && targetColumn <= match.Index + match.Length
+                ? 0
+                : Math.Min(Math.Abs(match.Index - targetColumn), Math.Abs(match.Index + match.Length - targetColumn));
+
+            if (distance < bestDistance)
+            {
+                best = match;
+                bestDistance = distance;
+            }
+        }
+
+        if (best is null)
+            return false;
+
+        matchColumn = best.Index;
+        matchLength = best.Length;
+        return true;
     }
 
     private async Task<bool> SavePreviewEditAsync()
@@ -975,6 +1134,9 @@ public sealed partial class MainWindow
         }
 
         SetPreviewEditorVisible(false);
+        _previewEditorRevealVersion++;
+        _previewEditorRevealRetryTimer?.Stop();
+        _previewEditorRevealRetryTimer = null;
         _previewEditorPath = null;
         _previewEditorEncoding = null;
         _previewEditorDirty = false;
@@ -1051,6 +1213,27 @@ public sealed partial class MainWindow
         if (LogService.Instance.IsVerboseEnabled)
         {
             LogService.Instance.Verbose("PreviewEditor", $"ApplyPreviewEditorWordWrap: before={before}, requested={wrap}, after={PreviewEditor.WordWrap}, forced={_previewEditorForcedWrap}, setting={ViewModel.PreviewWordWrap}, visible={PreviewEditor.Visibility == Visibility.Visible}");
+        }
+    }
+
+    private void ApplyPreviewEditorFontSettings()
+    {
+        string family = string.IsNullOrWhiteSpace(ViewModel.PreviewEditorFontFamily)
+            ? AppSettings.DefaultPreviewEditorFontFamily
+            : ViewModel.PreviewEditorFontFamily.Trim();
+        int size = Math.Clamp(
+            ViewModel.PreviewEditorFontSize <= 0 ? AppSettings.DefaultPreviewEditorFontSize : ViewModel.PreviewEditorFontSize,
+            6,
+            72);
+
+        try
+        {
+            PreviewEditor.FontFamily = new FontFamily(family);
+            PreviewEditor.FontSize = size;
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("PreviewEditor", $"ApplyPreviewEditorFontSettings failed: {ex.GetType().Name}: {ex.Message}");
         }
     }
 

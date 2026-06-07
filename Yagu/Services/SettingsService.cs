@@ -29,6 +29,8 @@ public sealed class AppSettings
     public const string DefaultPreviewMatchTextColor = "#FFFFD700"; // Gold
     public const string DefaultPreviewOverlayColor = "#FFFF4500"; // OrangeRed
     public const string DefaultPreviewMatchLineColor = "#FFFFFFFF"; // White
+    public const string DefaultPreviewEditorFontFamily = "Consolas, Cascadia Mono, Segoe UI, Segoe UI Symbol, Segoe UI Emoji";
+    public const int DefaultPreviewEditorFontSize = 13;
 
     public string? LastDirectory { get; set; }
     public List<string> RecentDirectories { get; set; } = [];
@@ -72,6 +74,8 @@ public sealed class AppSettings
     public string PreviewMatchTextColor { get; set; } = DefaultPreviewMatchTextColor;
     public string PreviewOverlayColor { get; set; } = DefaultPreviewOverlayColor;
     public string PreviewMatchLineColor { get; set; } = DefaultPreviewMatchLineColor;
+    public string PreviewEditorFontFamily { get; set; } = DefaultPreviewEditorFontFamily;
+    public int PreviewEditorFontSize { get; set; } = DefaultPreviewEditorFontSize;
     public int LogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose (file logging)
     public int ConsoleLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     public int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
@@ -239,6 +243,7 @@ public sealed class SettingsService
             }
             MigrateLegacyPreviewGutterColors(settings);
             MigrateLegacyWindowFocusBehavior(settings);
+            NormalizePreviewEditorFontSettings(settings);
             return settings;
         }
         catch (Exception ex) { LogService.Instance.Warning("Settings", $"Failed to load settings from {_path}", ex); return new AppSettings(); }
@@ -268,6 +273,7 @@ public sealed class SettingsService
             }
             MigrateLegacyPreviewGutterColors(settings);
             MigrateLegacyWindowFocusBehavior(settings);
+            NormalizePreviewEditorFontSettings(settings);
             return settings;
         }
         catch (Exception ex) { LogService.Instance.Warning("Settings", $"Failed to load settings from {_path}", ex); return new AppSettings(); }
@@ -302,6 +308,17 @@ public sealed class SettingsService
 
         settings.StartInLauncherModeMigrated = true;
         settings.WindowFocusBehaviorMigratedFromLegacyDefault = true;
+    }
+
+    private static void NormalizePreviewEditorFontSettings(AppSettings settings)
+    {
+        if (string.IsNullOrWhiteSpace(settings.PreviewEditorFontFamily))
+            settings.PreviewEditorFontFamily = AppSettings.DefaultPreviewEditorFontFamily;
+
+        settings.PreviewEditorFontSize = Math.Clamp(
+            settings.PreviewEditorFontSize <= 0 ? AppSettings.DefaultPreviewEditorFontSize : settings.PreviewEditorFontSize,
+            6,
+            72);
     }
 
     private static bool IsLegacyDefaultSkipExtensions(string skipExtensions) =>

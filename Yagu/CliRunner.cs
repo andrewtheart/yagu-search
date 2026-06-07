@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
+using System.Text.RegularExpressions;
 using Yagu.Models;
 using Yagu.Services;
 
@@ -119,11 +120,6 @@ internal static class CliRunner
         if (args.LogLevelIndex.HasValue)         settings.LogLevelIndex = args.LogLevelIndex.Value;
         if (args.ConsoleLogLevelIndex.HasValue)  settings.ConsoleLogLevelIndex = args.ConsoleLogLevelIndex.Value;
         if (args.FileListerBackendIndex.HasValue) settings.FileListerBackendIndex = args.FileListerBackendIndex.Value;
-        if (args.LineTruncationLength.HasValue)  settings.LineTruncationLength = args.LineTruncationLength.Value;
-        if (args.PreviewContextLines.HasValue)   settings.PreviewContextLines = args.PreviewContextLines.Value;
-        if (args.PreviewModeIndex.HasValue)      settings.PreviewModeIndex = args.PreviewModeIndex.Value;
-        if (args.PreviewWordWrap.HasValue)       settings.PreviewWordWrap = args.PreviewWordWrap.Value;
-        if (args.EditorCommand != null)          settings.EditorCommand = args.EditorCommand;
 
         // Configure the file-lister backend from settings (same as App() constructor).
         FileLister.Backend = (FileListerBackend)settings.FileListerBackendIndex;
@@ -597,12 +593,13 @@ internal static class CliRunner
                                 ? SortResults(collectedResults, args.SortBy!, args.SortDescending)
                                 : collectedResults;
 
-                            // Replace in files
+                            // Replace in files (replace prints its own per-file summary).
                             if (replacing)
-                                await RunReplaceAsync(sortedResults, options.Query, args, useColor);
-
-                            // Write sorted output to stdout (when not replacing only, or when also exporting)
-                            if (sorting && !replacing)
+                                await RunReplaceAsync(sortedResults, options, args, useColor);
+                            else
+                                // Stream matches to stdout for every collection mode
+                                // (sort / export / save-session), matching the parity of
+                                // a plain streaming search. Pure replace suppresses this.
                                 WriteSortedResults(sortedResults, useColor);
 
                             // Export
@@ -925,19 +922,55 @@ internal static class CliRunner
     // Replace in files
     // -----------------------------------------------------------------------
 
-    private static async Task RunReplaceAsync(IReadOnlyList<SearchResult> results, string needle, CliArgs args, bool useColor)
+    private static async Task RunReplaceAsync(IReadOnlyList<SearchResult> results, SearchOptions options, CliArgs args, bool useColor)
     {
         var replacement = args.ReplaceText!;
         bool dryRun = args.ReplaceDryRun;
         bool noBackup = args.ReplaceNoBackup;
-        var comparison = (args.CaseSensitive ?? false) ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
-        // Group results by file path
-        var filePaths = results
+        // Build a matcher that mirrors the search semantics exactly so replace
+        // touches precisely what the search matched:
+        //   • regex mode      -> use the query as a regex
+        //   • literal mode    -> escaped literal; honours exact-match term splitting
+        //                        (non-exact splits on whitespace and matches any term)
+        //   • case sensitivity -> taken from the effective SearchOptions, not re-derived
+        string pattern = options.UseRegex
+            ? options.Query
+            : (SearchQueryParser.BuildLiteralRegexPattern(options.Query, options.ExactMatch)
+               ?? Regex.Escape(options.Query));
+
+        var regexOptions = RegexOptions.CultureInvariant;
+        if (!options.CaseSensitive) regexOptions |= RegexOptions.IgnoreCase;
+
+        Regex regex;
+        try
+        {
+            regex = new Regex(pattern, regexOptions);
+        }
+        catch (ArgumentException ex)
+        {
+            WriteError($"error: invalid replace pattern '{options.Query}': {ex.Message}", useColor);
+            return;
+        }
+
+        // The replacement is always literal text — return it verbatim from the
+        // evaluator so '$' groups in the replacement are not interpreted. This
+        // matches the UI's literal replace behaviour for both literal and regex.
+        string Eval(Match _) => replacement;
+
+        // Group results by file path; archive entries are read-only and excluded.
+        var distinctPaths = results
             .Select(r => r.FilePath)
-            .Where(p => !ZipArchiveSearcher.IsArchivePath(p))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        int archiveSkipped = distinctPaths.Count(ZipArchiveSearcher.IsArchivePath);
+        var filePaths = distinctPaths
+            .Where(p => !ZipArchiveSearcher.IsArchivePath(p))
+            .ToList();
+
+        if (archiveSkipped > 0)
+            WriteError($"note: {archiveSkipped:N0} archive file(s) skipped (archives are read-only).", useColor);
 
         if (filePaths.Count == 0)
         {
@@ -968,22 +1001,11 @@ internal static class CliRunner
                     encoding = reader.CurrentEncoding;
                 }
 
-                var sb = new StringBuilder(original.Length);
                 int replaceCount = 0;
-                int pos = 0;
-                while (true)
-                {
-                    int idx = original.IndexOf(needle, pos, comparison);
-                    if (idx < 0) { sb.Append(original, pos, original.Length - pos); break; }
-                    sb.Append(original, pos, idx - pos);
-                    sb.Append(replacement);
-                    replaceCount++;
-                    pos = idx + needle.Length;
-                }
+                var replaced = regex.Replace(original, m => { replaceCount++; return Eval(m); });
 
                 if (replaceCount == 0) continue;
 
-                var replaced = sb.ToString();
                 totalReplacements += replaceCount;
                 filesModified++;
 
@@ -1089,12 +1111,6 @@ internal static class CliRunner
                   --no-search-archives    Do not search inside archives (default).
                   --archive-extensions <e> Semicolon-separated archive extensions.
 
-            PREVIEW:
-                  --preview-context <n>   Preview context lines (default: 20).
-                  --preview-mode <n>      Preview mode: 0=Concatenated, 1=Multi-highlight.
-                  --preview-word-wrap     Enable word wrap in preview.
-                  --no-preview-word-wrap  Disable word wrap in preview.
-
             ADMIN / SECURITY:
                   --no-admin-warning      Suppress the non-administrator privilege warning.
                   --exclude-admin-paths   Skip admin-protected paths (default when non-admin).
@@ -1107,8 +1123,6 @@ internal static class CliRunner
 
             MISC:
                   --max-results <n>       Stop after N matches (default: 50000).
-                  --line-truncation <n>   Truncate printed lines to N characters (0 = no limit).
-                  --editor-command <cmd>  Editor launch command (e.g. "code -g {file}:{line}").
 
             EXPORT:
                   --export <path>         Export results to a file (triggers export mode).
@@ -1383,16 +1397,11 @@ internal sealed class CliArgs
     public int?             MemoryLimitMB { get; private set; }
     public int?             MemoryPressurePercent { get; private set; }
     public int?             SdkChannelBufferSize { get; private set; }
-    public int?             LineTruncationLength { get; private set; }
-    public int?             PreviewContextLines { get; private set; }
-    public int?             PreviewModeIndex { get; private set; }
-    public bool?            PreviewWordWrap { get; private set; }
     public int?             LogLevelIndex { get; private set; }
     public int?             ConsoleLogLevelIndex { get; private set; }
     public int?             FileListerBackendIndex { get; private set; }
     public bool?            SearchInsideArchives { get; private set; }
     public string?          ArchiveExtensions { get; private set; }
-    public string?          EditorCommand { get; private set; }
     public bool?            ExcludeAdminProtectedPaths { get; private set; }
     public string?          AdminProtectedPathSegments { get; private set; }
     public bool?            ObeyGitignore { get; private set; }
@@ -1451,8 +1460,6 @@ internal sealed class CliArgs
             if (Eq(tok, "--no-binary"))                    { a.SkipBinary = true; i++; continue; }
             if (Eq(tok, "--binary"))                       { a.SkipBinary = false; i++; continue; }
             if (Eq(tok, "--no-admin-warning"))             { a.SuppressAdminWarning = true; i++; continue; }
-            if (Eq(tok, "--preview-word-wrap"))              { a.PreviewWordWrap = true; i++; continue; }
-            if (Eq(tok, "--no-preview-word-wrap"))           { a.PreviewWordWrap = false; i++; continue; }
             if (Eq(tok, "--search-archives"))                { a.SearchInsideArchives = true; i++; continue; }
             if (Eq(tok, "--no-search-archives"))             { a.SearchInsideArchives = false; i++; continue; }
             if (Eq(tok, "--exclude-admin-paths"))            { a.ExcludeAdminProtectedPaths = true; i++; continue; }
@@ -1507,16 +1514,12 @@ internal sealed class CliArgs
             if (TryGetInt(raw, ref i, out n, "--memory-limit"))          { a.MemoryLimitMB = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--memory-pressure"))       { a.MemoryPressurePercent = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--sdk-channel-buffer"))    { a.SdkChannelBufferSize = n; continue; }
-            if (TryGetInt(raw, ref i, out n, "--line-truncation"))       { a.LineTruncationLength = n; continue; }
-            if (TryGetInt(raw, ref i, out n, "--preview-context"))       { a.PreviewContextLines = n; continue; }
-            if (TryGetInt(raw, ref i, out n, "--preview-mode"))          { a.PreviewModeIndex = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--log-level"))             { a.LogLevelIndex = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--console-log-level"))     { a.ConsoleLogLevelIndex = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--file-lister-backend"))   { a.FileListerBackendIndex = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--max-matches-per-file"))  { a.MaxMatchesPerFile = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--max-depth"))             { a.MaxSearchDepth = n; continue; }
             if (TryGetVal(raw, ref i, out v, "--archive-extensions"))    { a.ArchiveExtensions = v; continue; }
-            if (TryGetVal(raw, ref i, out v, "--editor-command"))        { a.EditorCommand = v; continue; }
             if (TryGetVal(raw, ref i, out v, "--admin-protected-paths")) { a.AdminProtectedPathSegments = v; continue; }
             if (TryGetVal(raw, ref i, out v, "--created-after"))         { if (DateTimeOffset.TryParse(v, out var d)) a.CreatedAfter = d; continue; }
             if (TryGetVal(raw, ref i, out v, "--created-before"))        { if (DateTimeOffset.TryParse(v, out var d)) a.CreatedBefore = d; continue; }
@@ -1539,7 +1542,19 @@ internal sealed class CliArgs
             if (Eq(tok, "--replace-dry-run", "--dry-run"))               { a.ReplaceDryRun = true; i++; continue; }
 
             // Sort options
-            if (TryGetVal(raw, ref i, out v, "--sort"))                  { a.SortBy = v.ToLowerInvariant(); continue; }
+            if (TryGetVal(raw, ref i, out v, "--sort"))
+            {
+                a.SortBy = v.ToLowerInvariant();
+                if (a.SortBy is not ("matches" or "count" or "date" or "modified"
+                    or "size" or "name" or "filename" or "path"))
+                {
+                    Console.Error.WriteLine(
+                        $"warning: unknown sort key '{v}' - results will be unsorted. " +
+                        "Valid keys: matches, date, size, name, path.");
+                    a.SortBy = null;
+                }
+                continue;
+            }
             if (Eq(tok, "--sort-desc", "--sort-descending"))              { a.SortDescending = true; i++; continue; }
             if (Eq(tok, "--sort-asc", "--sort-ascending"))                { a.SortDescending = false; i++; continue; }
 

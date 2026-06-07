@@ -1900,7 +1900,10 @@ public sealed class SearchService
             int sourceMatchStartBytes = view.SourceMatchStart > int.MaxValue ? matchStartBytes : (int)view.SourceMatchStart;
             int matchLenBytes = view.MatchLen > int.MaxValue ? 0 : (int)view.MatchLen;
             int lineNum = view.LineNumber > int.MaxValue ? int.MaxValue : (int)view.LineNumber;
-            int charSourceMatchStart = Math.Max(0, sourceMatchStartBytes);
+            int safeSourceStartBytes = Math.Clamp(sourceMatchStartBytes, 0, lineBytes);
+            int charSourceMatchStart = System.Text.Ascii.IsValid(new ReadOnlySpan<byte>(view.LinePtr, safeSourceStartBytes))
+                ? safeSourceStartBytes
+                : Encoding.UTF8.GetCharCount(view.LinePtr, safeSourceStartBytes);
 
             // ── Degraded fast-path: write raw UTF-8 directly to disk, skip String alloc ──
             if (Volatile.Read(ref _degraded) != 0 && _resultStore != null)

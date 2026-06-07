@@ -146,6 +146,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         PreviewMatchLineColor = ColorStringHelper.Normalize(
             _settings.PreviewMatchLineColor,
             Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF));
+        PreviewEditorFontFamily = string.IsNullOrWhiteSpace(_settings.PreviewEditorFontFamily)
+            ? AppSettings.DefaultPreviewEditorFontFamily
+            : _settings.PreviewEditorFontFamily;
+        PreviewEditorFontSize = Math.Clamp(
+            _settings.PreviewEditorFontSize <= 0 ? AppSettings.DefaultPreviewEditorFontSize : _settings.PreviewEditorFontSize,
+            6,
+            72);
         FileLogLevelIndex = _settings.LogLevelIndex;
         ConsoleLogLevelIndex = _settings.ConsoleLogLevelIndex;
         FileListerBackendIndex = _settings.FileListerBackendIndex;
@@ -426,6 +433,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial string PreviewMatchTextColor { get; set; } = AppSettings.DefaultPreviewMatchTextColor;
     [ObservableProperty] public partial string PreviewOverlayColor { get; set; } = AppSettings.DefaultPreviewOverlayColor;
     [ObservableProperty] public partial string PreviewMatchLineColor { get; set; } = AppSettings.DefaultPreviewMatchLineColor;
+    [ObservableProperty] public partial string PreviewEditorFontFamily { get; set; } = AppSettings.DefaultPreviewEditorFontFamily;
+    [ObservableProperty] public partial int PreviewEditorFontSize { get; set; } = AppSettings.DefaultPreviewEditorFontSize;
     [ObservableProperty] public partial int FileLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] public partial int ConsoleLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] public partial int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
@@ -2254,6 +2263,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.PreviewMatchLineColor = ColorStringHelper.Normalize(
             PreviewMatchLineColor,
             Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF));
+        _settings.PreviewEditorFontFamily = string.IsNullOrWhiteSpace(PreviewEditorFontFamily)
+            ? AppSettings.DefaultPreviewEditorFontFamily
+            : PreviewEditorFontFamily.Trim();
+        _settings.PreviewEditorFontSize = Math.Clamp(
+            PreviewEditorFontSize <= 0 ? AppSettings.DefaultPreviewEditorFontSize : PreviewEditorFontSize,
+            6,
+            72);
         _settings.LogLevelIndex = FileLogLevelIndex;
         _settings.ConsoleLogLevelIndex = ConsoleLogLevelIndex;
         _settings.FileListerBackendIndex = FileListerBackendIndex;

@@ -1022,6 +1022,50 @@ public sealed partial class SettingsWindow : Window
             g.Children.Add(backup);
             g.Children.Add(new TextBlock { Text = "When enabled, the original file is copied to <filename>.yagubak before saving changes from the built-in editor. If a .yagubak already exists, uses .yagubak-2, .yagubak-3, etc.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
+            g.Children.Add(new TextBlock { Text = "Built-in editor font", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 8, 0, 0) });
+
+            g.Children.Add(new TextBlock { Text = "Font family:" });
+            var editorFontFamily = new TextBox
+            {
+                Text = _viewModel.PreviewEditorFontFamily,
+                PlaceholderText = AppSettings.DefaultPreviewEditorFontFamily,
+                MaxWidth = 520,
+                HorizontalAlignment = HorizontalAlignment.Left,
+            };
+            editorFontFamily.TextChanged += (_, _) => _viewModel.PreviewEditorFontFamily = editorFontFamily.Text;
+            g.Children.Add(editorFontFamily);
+
+            g.Children.Add(new TextBlock { Text = "Font size:" });
+            var editorFontSize = new NumberBox
+            {
+                Value = _viewModel.PreviewEditorFontSize,
+                Minimum = 6,
+                Maximum = 72,
+                SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
+            };
+            editorFontSize.ValueChanged += (_, args) =>
+            {
+                if (!double.IsNaN(args.NewValue))
+                    _viewModel.PreviewEditorFontSize = (int)Math.Clamp(args.NewValue, 6, 72);
+            };
+            g.Children.Add(editorFontSize);
+
+            var resetEditorFont = new Button
+            {
+                Content = "Reset editor font",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+            };
+            resetEditorFont.Click += (_, _) =>
+            {
+                editorFontFamily.Text = AppSettings.DefaultPreviewEditorFontFamily;
+                editorFontSize.Value = AppSettings.DefaultPreviewEditorFontSize;
+                _viewModel.PreviewEditorFontFamily = AppSettings.DefaultPreviewEditorFontFamily;
+                _viewModel.PreviewEditorFontSize = AppSettings.DefaultPreviewEditorFontSize;
+            };
+            g.Children.Add(resetEditorFont);
+            g.Children.Add(new TextBlock { Text = "Used by the built-in editor for full-file editing. Zoom controls still scale from this base size.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
             g.Children.Add(new TextBlock { Text = "Built-in editor limits", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 8, 0, 0) });
             g.Children.Add(new TextBlock { Text = "Files exceeding any of these limits will not open in the built-in editor. Use the external editor or Show in Explorer for very large files.", FontSize = 11, Opacity = 0.7, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
 
