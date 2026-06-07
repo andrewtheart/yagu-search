@@ -12,6 +12,7 @@ namespace Yagu.Models;
 public sealed class FileGroup : ObservableCollection<SearchResult>
 {
     public const int PageSize = 200;
+    public const string NoExtensionLabel = "No extension";
     private const int HiddenNotificationInterval = PageSize;
 
     /// <summary>Count of evicted results that were not retained in the collection (disk-only).</summary>
@@ -93,11 +94,11 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         {
             int dotIndex = FilePath.LastIndexOf('.');
             if (dotIndex < 0 || dotIndex == FilePath.Length - 1)
-                return "No extension";
+                return NoExtensionLabel;
 
             var extension = FilePath[(dotIndex + 1)..];
             return extension.IndexOfAny(['\\', '/', '?']) >= 0
-                ? "No extension"
+                ? NoExtensionLabel
                 : extension.ToLowerInvariant();
         }
     }
@@ -452,7 +453,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
                 $"ShowMore: file='{System.IO.Path.GetFileName(FilePath)}', start={start}, end={end}, " +
                 $"batchSize={batch.Count}, stillEvicted={evictedCount}, emptyMatchLine={emptyMatchCount}");
         }
-        VisibleResults.AddRange(batch);
+        VisibleResults.AppendRange(batch);
         NotifyMoreStateChanged();
         return batch.Count;
     }

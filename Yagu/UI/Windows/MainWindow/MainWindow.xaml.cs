@@ -40,8 +40,6 @@ public sealed partial class MainWindow : Window, IDisposable
     private uint _ctrlFileHeaderGesturePointerId;
     private FileGroup? _lastResultsContextMenuGroup;
     private long _lastResultsContextMenuTick;
-    private string? _lastCtrlFileHeaderPreviewPath;
-    private long _lastCtrlFileHeaderPreviewTick;
     private bool _autoScrollEnabled;
     // Deferred-files state — for tail of newFiles past PreviewSectionPageSize.
     // The match-nav label includes deferred matches even though their sections

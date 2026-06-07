@@ -15,6 +15,7 @@ public sealed class SearchResultCollection
 
     private readonly List<FileGroup> _allGroups = [];
     private readonly Dictionary<string, FileGroup> _index = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _extensionFilters = new(StringComparer.OrdinalIgnoreCase);
     private GlobMatcher? _globMatcher;
 
     public IReadOnlyList<FileGroup> AllGroups => _allGroups;
@@ -32,6 +33,40 @@ public sealed class SearchResultCollection
     public GroupMode GroupMode { get; set; }
     public int GroupSortDirectionIndex { get; set; }
     public DateRangeFilter DateRangeFilter { get; set; }
+
+    public void SetExtensionFilters(IEnumerable<string> extensions)
+    {
+        _extensionFilters.Clear();
+        foreach (string extension in extensions)
+        {
+            string normalized = NormalizeExtensionFilter(extension);
+            if (!string.IsNullOrWhiteSpace(normalized))
+                _extensionFilters.Add(normalized);
+        }
+    }
+
+    public IReadOnlyList<ExtensionFilterOption> GetExtensionFilterOptions()
+    {
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var group in _allGroups)
+        {
+            if (!MatchesFilter(group, includeExtensionFilter: false))
+                continue;
+
+            counts.TryGetValue(group.Extension, out int currentCount);
+            counts[group.Extension] = currentCount + 1;
+        }
+
+        return counts
+            .Select(pair => new ExtensionFilterOption(
+                pair.Key,
+                FormatExtensionDisplayName(pair.Key),
+                pair.Value,
+                _extensionFilters.Contains(pair.Key)))
+            .OrderBy(option => string.Equals(option.Extension, FileGroup.NoExtensionLabel, StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+            .ThenBy(option => option.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
 
     public void SetSortCriteria(IEnumerable<SortCriterion> criteria)
     {
@@ -196,7 +231,7 @@ public sealed class SearchResultCollection
                 ExcludeFilterMode)
             : null;
 
-        var filtered = _allGroups.Where(MatchesFilter).ToList();
+        var filtered = _allGroups.Where(group => MatchesFilter(group)).ToList();
         var sortCriteria = GetEffectiveSortCriteria();
         bool groupAscending = GroupSortDirectionIndex == 0;
         bool groupByDirectory = GroupMode == GroupMode.Folder;
@@ -321,7 +356,7 @@ public sealed class SearchResultCollection
         return results;
     }
 
-    private bool MatchesFilter(FileGroup group)
+    private bool MatchesFilter(FileGroup group, bool includeExtensionFilter = true)
     {
         if (_globMatcher is not null && !_globMatcher.Matches(group.FilePath))
             return false;
@@ -336,8 +371,28 @@ public sealed class SearchResultCollection
         if (DateRangeFilter != DateRangeFilter.None && !MatchesDateRange(group.ModifiedOrCreated, DateRangeFilter))
             return false;
 
+        if (includeExtensionFilter && _extensionFilters.Count > 0 && !_extensionFilters.Contains(group.Extension))
+            return false;
+
         return true;
     }
+
+    internal static string NormalizeExtensionFilter(string extension)
+    {
+        string value = extension.Trim();
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        if (string.Equals(value, FileGroup.NoExtensionLabel, StringComparison.OrdinalIgnoreCase))
+            return FileGroup.NoExtensionLabel;
+
+        return value.TrimStart('.', '*').ToLowerInvariant();
+    }
+
+    internal static string FormatExtensionDisplayName(string extension)
+        => string.Equals(extension, FileGroup.NoExtensionLabel, StringComparison.OrdinalIgnoreCase)
+            ? FileGroup.NoExtensionLabel
+            : $".{extension}";
 
     private static void EvictNewResultIfNeeded(
         SearchResult result,
@@ -659,3 +714,9 @@ public sealed class SearchResultCollection
         return order;
     }
 }
+
+public readonly record struct ExtensionFilterOption(
+    string Extension,
+    string DisplayName,
+    int Count,
+    bool IsSelected);

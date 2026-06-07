@@ -2391,6 +2391,8 @@ public sealed partial class MainWindow
         if (isMatchLine && matchParagraphs is not null && !addedMatchEntries && firstParagraph is not null)
             AddMatchEntries(matchParagraphs, sectionNav, section, firstParagraph, string.Empty, rx: null);
 
+        ScheduleGutterSync(section);
+
         return firstParagraph ?? throw new InvalidOperationException("Preview line renderer did not create a paragraph.");
     }
 
@@ -2608,6 +2610,8 @@ public sealed partial class MainWindow
             AddMatchEntries(matchParagraphs, sectionNav, section, firstParagraph, string.Empty, rx: null);
             matchEntriesAdded += matchParagraphs.Count - beforeCount;
         }
+
+        ScheduleGutterSync(section);
 
         return firstParagraph ?? throw new InvalidOperationException("Preview line renderer did not create a paragraph.");
     }

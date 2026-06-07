@@ -55,6 +55,16 @@ public class BatchObservableCollection<T> : ObservableCollection<T>
     }
 
     /// <summary>
+    /// Append items with normal per-item Add notifications. Use this when an existing
+    /// bound list must not briefly clear/rebuild in response to a Reset notification.
+    /// </summary>
+    public void AppendRange(IReadOnlyList<T> items)
+    {
+        for (int i = 0; i < items.Count; i++)
+            Add(items[i]);
+    }
+
+    /// <summary>
     /// Atomically clears the collection and replaces it with <paramref name="items"/>,
     /// raising a single <see cref="NotifyCollectionChangedAction.Reset"/> notification.
     /// This avoids the double-Reset (Clear then AddRange) that can crash the native

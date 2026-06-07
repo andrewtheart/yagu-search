@@ -721,6 +721,32 @@
                                 </MenuFlyout>
                             </DropDownButton.Flyout>
                         </DropDownButton>
+                        <DropDownButton Height="30" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Filter results">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <FontIcon Glyph="&#xE71C;" FontSize="12" />
+                                <TextBlock Text="Filter" />
+                            </StackPanel>
+                            <DropDownButton.Flyout>
+                                <MenuFlyout Opening="OnFilterFlyoutOpening">
+                                    <MenuFlyoutSubItem Text="By date">
+                                        <MenuFlyoutItem Text="Any date" Click="OnDateFilterNone" />
+                                        <MenuFlyoutSeparator />
+                                        <MenuFlyoutItem Text="Last day" Click="OnDateFilterPastDay" />
+                                        <MenuFlyoutItem Text="Last week" Click="OnDateFilterPastWeek" />
+                                        <MenuFlyoutItem Text="Last 2 weeks" Click="OnDateFilterPastTwoWeeks" />
+                                        <MenuFlyoutItem Text="Last month" Click="OnDateFilterPastMonth" />
+                                        <MenuFlyoutItem Text="Last 3 months" Click="OnDateFilterPastThreeMonths" />
+                                        <MenuFlyoutItem Text="Last 6 months" Click="OnDateFilterPastSixMonths" />
+                                        <MenuFlyoutItem Text="Last 9 months" Click="OnDateFilterPastNineMonths" />
+                                        <MenuFlyoutItem Text="Last year" Click="OnDateFilterPastYear" />
+                                        <MenuFlyoutItem Text="Last 2 years" Click="OnDateFilterPastTwoYears" />
+                                        <MenuFlyoutItem Text="Last 3 years" Click="OnDateFilterPastThreeYears" />
+                                        <MenuFlyoutItem Text="Last 5 years" Click="OnDateFilterPastFiveYears" />
+                                    </MenuFlyoutSubItem>
+                                    <MenuFlyoutSubItem x:Name="ExtensionFilterSubMenu" Text="By extension" />
+                                </MenuFlyout>
+                            </DropDownButton.Flyout>
+                        </DropDownButton>
                         <CheckBox x:Name="AutoScrollResultsCheckBox"
                                   Content="Auto-scroll"
                                   IsChecked="False"
@@ -772,7 +798,6 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <CheckBox x:Name="SelectAllFilesCheckBox"
                                   ToolTipService.ToolTip="Select / deselect all files"
@@ -790,28 +815,6 @@
                                       HorizontalAlignment="Left" VerticalAlignment="Center"
                                       Margin="10,0,0,0" IsHitTestVisible="False" />
                         </Grid>
-                        <DropDownButton Grid.Column="2"
-                                        Content="{x:Bind ViewModel.DateRangeFilterLabel, Mode=OneWay}"
-                                        VerticalAlignment="Center" FontSize="12" Padding="8,4"
-                                        ToolTipService.ToolTip="Filter files by modified or created date">
-                            <DropDownButton.Flyout>
-                                <MenuFlyout>
-                                    <MenuFlyoutItem Text="Any date" Click="OnDateFilterNone" />
-                                    <MenuFlyoutSeparator />
-                                    <MenuFlyoutItem Text="Last day" Click="OnDateFilterPastDay" />
-                                    <MenuFlyoutItem Text="Last week" Click="OnDateFilterPastWeek" />
-                                    <MenuFlyoutItem Text="Last 2 weeks" Click="OnDateFilterPastTwoWeeks" />
-                                    <MenuFlyoutItem Text="Last month" Click="OnDateFilterPastMonth" />
-                                    <MenuFlyoutItem Text="Last 3 months" Click="OnDateFilterPastThreeMonths" />
-                                    <MenuFlyoutItem Text="Last 6 months" Click="OnDateFilterPastSixMonths" />
-                                    <MenuFlyoutItem Text="Last 9 months" Click="OnDateFilterPastNineMonths" />
-                                    <MenuFlyoutItem Text="Last year" Click="OnDateFilterPastYear" />
-                                    <MenuFlyoutItem Text="Last 2 years" Click="OnDateFilterPastTwoYears" />
-                                    <MenuFlyoutItem Text="Last 3 years" Click="OnDateFilterPastThreeYears" />
-                                    <MenuFlyoutItem Text="Last 5 years" Click="OnDateFilterPastFiveYears" />
-                                </MenuFlyout>
-                            </DropDownButton.Flyout>
-                        </DropDownButton>
                     </Grid>
 
                     <ListView
@@ -866,7 +869,7 @@
                                     </TextBlock>
                                     <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}" Expanding="OnFileGroupExpanding" Collapsed="OnFileGroupCollapsed">
                                     <Expander.Header>
-                                        <Grid PointerPressed="OnFileGroupHeaderPointerPressed" PointerReleased="OnFileGroupHeaderPointerReleased" Tapped="OnFileGroupHeaderTapped" DoubleTapped="OnFileGroupHeaderDoubleTapped" Tag="{x:Bind FilePath}" Background="Transparent">
+                                        <Grid PointerPressed="OnFileGroupHeaderPointerPressed" PointerReleased="OnFileGroupHeaderPointerReleased" DoubleTapped="OnFileGroupHeaderDoubleTapped" Tag="{x:Bind FilePath}" Background="Transparent">
                                             <Grid.ContextFlyout>
                                                 <MenuFlyout Opening="OnFileHeaderContextMenuOpening">
                                                     <MenuFlyoutItem Text="Preview" Click="OnPreviewSingleFile" Tag="{x:Bind FilePath}">
@@ -1015,6 +1018,7 @@
                                         <HyperlinkButton Content="{x:Bind ShowMoreText, Mode=OneWay}"
                                                          Visibility="{x:Bind HasMore, Mode=OneWay}"
                                                          Click="OnShowMoreClicked"
+                                                         Tapped="OnShowMoreTapped"
                                                          Padding="4,4,0,2" FontSize="12" />
                                     </StackPanel>
                                 </Expander>

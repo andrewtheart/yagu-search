@@ -244,6 +244,8 @@ public sealed class PreviewCoreRegressionTests
 
         string resolve = ExtractMethodWindow(MainWindowSource, "ResolveResultsListSmartScrollIntent", window: 1200);
         AssertContainsInOrder(resolve,
+            "if (_resultsListShowMoreRestoreInProgress)",
+            "return ResultsListSmartScrollIntent.None;",
             "if (_resultsListWasAtTop)",
             "ResultsListSmartScrollIntent.KeepTop",
             "if (_autoScrollEnabled)",
@@ -255,8 +257,9 @@ public sealed class PreviewCoreRegressionTests
             "_resultsListWasAtTop = hasGroupsWithoutScroller;",
             "_resultsListWasAtBottom = hasGroupsWithoutScroller;",
             "bool hasVisibleGroups = ViewModel.ResultGroups.Count > 0;",
-            "_resultsListWasAtTop = hasVisibleGroups && (IsResultsListAtTop(scroller) || IsFirstResultGroupAtTop());",
+            "_resultsListWasAtTop = hasVisibleGroups && IsResultsListAtTop(scroller);",
             "_resultsListWasAtBottom = hasVisibleGroups && IsResultsListAtBottom(scroller);");
+        Assert.DoesNotContain("IsFirstResultGroupAtTop", MainWindowSource);
 
         string apply = ExtractMethodWindow(MainWindowSource, "ApplyResultsListSmartScrollIntent", window: 1700);
         AssertContainsInOrder(apply,
@@ -273,8 +276,84 @@ public sealed class PreviewCoreRegressionTests
 
         string autoScroll = ExtractMethodWindow(MainWindowSource, "OnAutoScrollTick", window: 600);
         Assert.Contains("if (_resultsListTopRestoreInProgress) return;", autoScroll);
+        Assert.Contains("if (_resultsListShowMoreRestoreInProgress) return;", autoScroll);
         Assert.Contains("if (_resultsListWasAtTop) return;", autoScroll);
         Assert.Contains("ScrollResultsListToBottom();", autoScroll);
+
+        string showMore = ExtractMethodWindow(MainWindowSource, "OnShowMoreClicked", window: 2200);
+        AssertContainsInOrder(showMore,
+            "double? restoreVerticalOffset = CaptureResultsListVerticalOffset();",
+            "_resultsListShowMoreRestoreInProgress = restoreVerticalOffset.HasValue;",
+            "int shown = await ShowMoreVisibleResultsIncrementalAsync(g, FileGroup.PageSize, restoreVerticalOffset).ConfigureAwait(true);",
+            "QueueRestoreResultsListVerticalOffsetAfterShowMore(restoreVerticalOffset, g.FilePath);",
+            "_resultsListShowMoreRestoreInProgress = false;",
+            "CaptureResultsListScrollPosition();",
+            "catch (Exception ex)",
+            "_resultsListShowMoreRestoreInProgress = false;",
+            "OnShowMoreClicked failed");
+        Assert.DoesNotContain("QueueCenterNewlyShownResult", MainWindowSource);
+        Assert.DoesNotContain("CenterVisibleResultInResultsList", MainWindowSource);
+
+        string showMoreIncremental = ExtractMethodWindow(MainWindowSource, "ShowMoreVisibleResultsIncrementalAsync", window: 2600);
+        AssertContainsInOrder(showMoreIncremental,
+            "double? restoreVerticalOffset = null",
+            "int shown = group.ShowMore(end - start);",
+            "if (restoreVerticalOffset is double pinnedOffset)",
+            "ApplyResultsListVerticalOffsetAfterShowMore(pinnedOffset, group.FilePath, log: false);",
+            "if (remainingToShow > 0 && group.HasMore)",
+            "await Task.Yield();");
+
+        string showMoreRestore = ExtractMethodWindow(MainWindowSource, "RestoreResultsListVerticalOffsetAfterShowMore", window: 2200);
+        AssertContainsInOrder(showMoreRestore,
+            "ApplyResultsListVerticalOffsetAfterShowMore(targetOffset, filePath, log: remainingPasses == ResultsListSmartScrollRestorePasses + 2)",
+            "remainingPasses > 0",
+            "RestoreResultsListVerticalOffsetAfterShowMore(targetOffset, filePath, remainingPasses - 1)",
+            "_resultsListShowMoreRestoreInProgress = false;");
+
+        string showMoreApply = ExtractMethodWindow(MainWindowSource, "ApplyResultsListVerticalOffsetAfterShowMore", window: 1800);
+        AssertContainsInOrder(showMoreApply,
+            "double clampedOffset = Math.Clamp(targetOffset, 0, Math.Max(0, scroller.ScrollableHeight));",
+            "scroller.ChangeView(null, clampedOffset, null, disableAnimation: true);",
+            "CaptureResultsListScrollPosition();",
+            "return true;");
+
+        string showMoreXaml = ExtractXamlWindow("Click=\"OnShowMoreClicked\"", 300);
+        Assert.Contains("Tapped=\"OnShowMoreTapped\"", showMoreXaml);
+
+        string showMoreTapped = ExtractMethodWindow(MainWindowSource, "OnShowMoreTapped", window: 500);
+        Assert.Contains("e.Handled = true;", showMoreTapped);
+
+        string collapsed = ExtractMethodWindow(MainWindowSource, "OnFileGroupCollapsed", window: 1600);
+        AssertContainsInOrder(collapsed,
+            "DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low",
+            "if (!g.IsExpanded)",
+            "g.ClearVisibleResults();");
+
+        string expanding = ExtractMethodWindow(MainWindowSource, "OnFileGroupExpanding", window: 2200);
+        AssertContainsInOrder(expanding,
+            "g.MaterializeEvictedStubs();",
+            "await EnsureVisibleResultsForExpandedGroupSerializedAsync(g, \"expanding\").ConfigureAwait(true);",
+            "if (!ReferenceEquals(sender.DataContext, g))",
+            "InvalidateListViewItemContainer(sender);",
+            "sender.InvalidateMeasure();");
+        Assert.DoesNotContain("sender.UpdateLayout();", expanding);
+
+        string serializedEnsure = ExtractMethodWindow(MainWindowSource, "EnsureVisibleResultsForExpandedGroupSerializedAsync", window: 1600);
+        AssertContainsInOrder(serializedEnsure,
+            "if (!_visibleResultsEnsureInProgress.Add(group))",
+            "EnsureVisible skipped duplicate",
+            "await EnsureVisibleResultsForExpandedGroupAsync(group).ConfigureAwait(true);",
+            "_visibleResultsEnsureInProgress.Remove(group);");
+
+        string containerChanging = ExtractMethodWindow(MainWindowSource, "OnResultsListContainerContentChanging", window: 900);
+        Assert.Contains("EnsureVisibleResultsForExpandedGroupFromContainerAsync(g)", containerChanging);
+
+        string containerEnsure = ExtractMethodWindow(MainWindowSource, "EnsureVisibleResultsForExpandedGroupFromContainerAsync", window: 1200);
+        AssertContainsInOrder(containerEnsure,
+            "try",
+            "await EnsureVisibleResultsForExpandedGroupSerializedAsync(group, \"container\").ConfigureAwait(true);",
+            "catch (Exception ex)",
+            "EnsureVisibleResultsForExpandedGroupAsync failed");
     }
 
     [Fact]
@@ -421,6 +500,45 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void ResultsToolbar_FilterDropdownHostsDateAndExtensionFilters()
+    {
+        string toolbar = ExtractXamlWindow("ToolTipService.ToolTip=\"Filter results\"", 5200);
+        AssertContainsInOrder(toolbar,
+            "<FontIcon Glyph=\"&#xE71C;\"",
+            "<TextBlock Text=\"Filter\"",
+            "<MenuFlyout Opening=\"OnFilterFlyoutOpening\">",
+            "<MenuFlyoutSubItem Text=\"By date\">",
+            "<MenuFlyoutItem Text=\"Any date\" Click=\"OnDateFilterNone\" />",
+            "<MenuFlyoutItem Text=\"Last 5 years\" Click=\"OnDateFilterPastFiveYears\" />",
+            "<MenuFlyoutSubItem x:Name=\"ExtensionFilterSubMenu\" Text=\"By extension\" />");
+        Assert.DoesNotContain("OnFilterByExtension", toolbar);
+
+        string filterRow = ExtractXamlWindow("PlaceholderText=\"Filter files…\"", 1700);
+        Assert.DoesNotContain("Content=\"{x:Bind ViewModel.DateRangeFilterLabel", filterRow);
+
+        string extensionMenu = ExtractMethodWindow(MainWindowSource, "RebuildExtensionFilterSubMenu", window: 3200);
+        AssertContainsInOrder(extensionMenu,
+            "ExtensionFilterSubMenu.Items.Clear();",
+            "var options = ViewModel.GetExtensionFilterOptions();",
+            "Text = \"No extensions available\"",
+            "var clearItem = new MenuFlyoutItem { Text = \"All extensions\" };",
+            "new ToggleMenuFlyoutItem",
+            "item.Click += OnExtensionFilterItemClicked;",
+            "ExtensionFilterSubMenu.Items.Add(item);");
+        Assert.DoesNotContain("ContentDialog", extensionMenu);
+
+        string extensionToggle = ExtractMethodWindow(MainWindowSource, "OnExtensionFilterItemClicked", window: 2200);
+        AssertContainsInOrder(extensionToggle,
+            "var options = ViewModel.GetExtensionFilterOptions();",
+            ".ToHashSet(StringComparer.OrdinalIgnoreCase);",
+            "selectedExtensions.Add(extension);",
+            "selectedExtensions.Remove(extension);",
+            "ViewModel.ClearExtensionFilter();",
+            "ViewModel.SetExtensionFilter(selectedExtensions);");
+        Assert.DoesNotContain("ContentDialog", extensionToggle);
+    }
+
+    [Fact]
     public void FileHeaderControlClickAndDoubleClick_AreHeaderPreviewAddGestures()
     {
         Assert.Contains("AutomationProperties.AutomationId=\"FileGroupCheckBox\"", MainWindowXaml);
@@ -434,7 +552,7 @@ public sealed class PreviewCoreRegressionTests
 
         string headerGrid = ExtractXamlWindow("PointerPressed=\"OnFileGroupHeaderPointerPressed\"", 260);
         Assert.Contains("PointerReleased=\"OnFileGroupHeaderPointerReleased\"", headerGrid);
-        Assert.Contains("Tapped=\"OnFileGroupHeaderTapped\"", headerGrid);
+        Assert.DoesNotContain("Tapped=\"OnFileGroupHeaderTapped\"", headerGrid);
         Assert.Contains("DoubleTapped=\"OnFileGroupHeaderDoubleTapped\"", headerGrid);
 
         string headerLayout = ExtractXamlWindow("DoubleTapped=\"OnFileGroupHeaderDoubleTapped\"", 4000);
@@ -446,7 +564,8 @@ public sealed class PreviewCoreRegressionTests
             "<ColumnDefinition Width=\"320\" />",
             "<ColumnDefinition Width=\"*\" />",
             "<ColumnDefinition Width=\"Auto\" />");
-        string wideDirectory = ExtractXamlWindow("Tag=\"WideDir\"", 600);
+        string wideDirectory = ExtractXamlWindow("Grid.Column=\"3\" Text=\"{x:Bind DirectoryName}\"", 900);
+        Assert.Contains("Tag=\"WideDir\"", wideDirectory);
         Assert.Contains("TextTrimming=\"CharacterEllipsis\"", wideDirectory);
         Assert.Contains("Grid.Column=\"3\"", wideDirectory);
         Assert.Contains("private const double ResultsCompactThreshold = 760;", MainWindowSource);
@@ -463,20 +582,7 @@ public sealed class PreviewCoreRegressionTests
             "ClearCtrlFileHeaderGesture();",
             "await SelectFileGroupMatchesAndPreviewAsync(group, \"ctrl click\", preserveExpansionState: wasExpanded);");
 
-        string headerTap = ExtractMethodWindow(MainWindowSource, "OnFileGroupHeaderTapped");
-        AssertContainsInOrder(headerTap,
-            "if (IsInsideHeaderCommand(e.OriginalSource as DependencyObject, header))",
-            "return;",
-            "if (IsControlKeyDown())",
-            "e.Handled = true;",
-            "if (WasCtrlFileHeaderPreviewJustHandled(g))",
-            "return;",
-            "await SelectFileGroupMatchesAndPreviewAsync(g, \"ctrl click\", preserveExpansionState: wasExpanded);",
-            "if (g.IsExpanded)",
-            "collapse only",
-            "return;",
-            "expand only");
-        Assert.DoesNotContain("SelectFileGroupMatchesAndPreviewAsync(g, \"single click\")", headerTap);
+        Assert.DoesNotContain("Tapped=\"OnFileGroupHeaderTapped\"", MainWindowXaml);
 
         string doubleTap = ExtractMethodWindow(MainWindowSource, "OnFileGroupHeaderDoubleTapped");
         AssertContainsInOrder(doubleTap,
@@ -489,7 +595,8 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("SelectFileGroupMatches(group);", selectAndPreview);
         Assert.Contains("_initialMatchScrolled = false;", selectAndPreview);
         Assert.Contains("var results = group.Where(r => r.IsSelected).ToList();", selectAndPreview);
-        Assert.Contains("RecordCtrlFileHeaderPreview(group.FilePath);", selectAndPreview);
+        Assert.DoesNotContain("RecordCtrlFileHeaderPreview", MainWindowSource);
+        Assert.DoesNotContain("WasCtrlFileHeaderPreviewJustHandled", MainWindowSource);
         Assert.Contains("group.IsExpanded = targetState;", selectAndPreview);
         Assert.Contains("DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low", selectAndPreview);
         AssertContainsInOrder(selectAndPreview,
@@ -509,8 +616,8 @@ public sealed class PreviewCoreRegressionTests
         Assert.DoesNotContain("UpdatePreviewAsync(g[0])", itemClick);
         Assert.DoesNotContain("TryScrollToPreviewSection(g[0].FilePath)", itemClick);
 
-        string headerTap = ExtractMethodWindow(MainWindowSource, "OnFileGroupHeaderTapped");
-        Assert.DoesNotContain("SelectFileGroupMatchesAndPreviewAsync(g, \"single click\")", headerTap);
+        Assert.DoesNotContain("OnFileGroupHeaderTapped", MainWindowSource);
+        Assert.DoesNotContain("SelectFileGroupMatchesAndPreviewAsync(g, \"single click\")", MainWindowSource);
 
         string tapped = ExtractMethodWindow(MainWindowSource, "OnMatchLineTapped", window: 900);
         Assert.Contains("OnMatchLineTapped: no preview change", tapped);
@@ -703,6 +810,10 @@ public sealed class PreviewCoreRegressionTests
         string aroundResult = ExtractMethodWindow(MainWindowSource, "AddPreviewLineParagraphsAroundResult");
         Assert.Contains("bool truncate = true", aroundResult);
         Assert.Contains("firstParagraph is not null || continuationGutter", aroundResult);
+        Assert.Contains("ScheduleGutterSync(section);", aroundResult);
+
+        string addParagraphs = ExtractMethodWindow(MainWindowSource, "AddPreviewLineParagraphs");
+        Assert.Contains("ScheduleGutterSync(section);", addParagraphs);
 
         string getPreviewLines = ExtractMethodWindow(MainWindowSource, "GetPreviewLines");
         Assert.Contains("lines.Add((allLines[i], i + 1))", getPreviewLines);

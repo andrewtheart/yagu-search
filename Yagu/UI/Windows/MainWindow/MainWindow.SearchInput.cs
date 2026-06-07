@@ -33,6 +33,7 @@ public sealed partial class MainWindow
     {
         if (!_autoScrollEnabled || ViewModel.ResultGroups.Count == 0) return;
         if (_resultsListTopRestoreInProgress) return;
+        if (_resultsListShowMoreRestoreInProgress) return;
         if (_resultsListWasAtTop) return;
         ScrollResultsListToBottom();
     }

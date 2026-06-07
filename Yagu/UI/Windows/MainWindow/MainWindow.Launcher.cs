@@ -160,7 +160,6 @@ public sealed partial class MainWindow
         ProgressRow.Height = GridLength.Auto;
         SplitPaneGrid.Visibility = Visibility.Visible;
         _resultsPaneCollapsed = false;
-        CollapseChevronIcon.Glyph = "\uE70D";
         UpdateBottomStatusBarVisibility();
 
         try
@@ -343,7 +342,6 @@ public sealed partial class MainWindow
         ProgressRow.Height = GridLength.Auto;
         SplitPaneGrid.Visibility = Visibility.Visible;
         _resultsPaneCollapsed = false;
-        CollapseChevronIcon.Glyph = "\uE70D";
         UpdateBottomStatusBarVisibility();
 
         try

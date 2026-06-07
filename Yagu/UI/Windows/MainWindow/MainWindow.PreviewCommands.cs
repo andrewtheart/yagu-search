@@ -616,6 +616,64 @@ public sealed partial class MainWindow
     private void OnDateFilterPastThreeYears(object sender, RoutedEventArgs e) => ViewModel.DateRangeFilterIndex = (int)DateRangeFilter.PastThreeYears;
     private void OnDateFilterPastFiveYears(object sender, RoutedEventArgs e) => ViewModel.DateRangeFilterIndex = (int)DateRangeFilter.PastFiveYears;
 
+    private void OnFilterFlyoutOpening(object sender, object e) => RebuildExtensionFilterSubMenu();
+
+    private void RebuildExtensionFilterSubMenu()
+    {
+        ExtensionFilterSubMenu.Items.Clear();
+        var options = ViewModel.GetExtensionFilterOptions();
+        if (options.Count == 0)
+        {
+            ExtensionFilterSubMenu.Items.Add(new MenuFlyoutItem
+            {
+                Text = "No extensions available",
+                IsEnabled = false,
+            });
+            return;
+        }
+
+        var clearItem = new MenuFlyoutItem { Text = "All extensions" };
+        clearItem.Click += OnClearExtensionFilterClicked;
+        ExtensionFilterSubMenu.Items.Add(clearItem);
+        ExtensionFilterSubMenu.Items.Add(new MenuFlyoutSeparator());
+
+        foreach (var option in options)
+        {
+            var item = new ToggleMenuFlyoutItem
+            {
+                Text = $"{option.DisplayName} ({option.Count:N0})",
+                IsChecked = option.IsSelected,
+                Tag = option.Extension,
+            };
+            item.Click += OnExtensionFilterItemClicked;
+            ExtensionFilterSubMenu.Items.Add(item);
+        }
+    }
+
+    private void OnClearExtensionFilterClicked(object sender, RoutedEventArgs e) => ViewModel.ClearExtensionFilter();
+
+    private void OnExtensionFilterItemClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ToggleMenuFlyoutItem item || item.Tag is not string extension)
+            return;
+
+        var options = ViewModel.GetExtensionFilterOptions();
+        var selectedExtensions = options
+            .Where(option => option.IsSelected)
+            .Select(option => option.Extension)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (item.IsChecked)
+            selectedExtensions.Add(extension);
+        else
+            selectedExtensions.Remove(extension);
+
+        if (selectedExtensions.Count == 0 || selectedExtensions.Count == options.Count)
+            ViewModel.ClearExtensionFilter();
+        else
+            ViewModel.SetExtensionFilter(selectedExtensions);
+    }
+
     private void OnMatchLineLoaded(object sender, RoutedEventArgs e)
     {
         if (sender is not RichTextBlock rtb) return;
@@ -886,14 +944,33 @@ public sealed partial class MainWindow
 
     private async void OnShowMoreClicked(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement fe && fe.DataContext is FileGroup g)
+        if (sender is FrameworkElement { DataContext: FileGroup g })
         {
+            double? restoreVerticalOffset = CaptureResultsListVerticalOffset();
+            _resultsListShowMoreRestoreInProgress = restoreVerticalOffset.HasValue;
+
             if (sender is Control control)
                 control.IsEnabled = false;
 
             try
             {
-                await ShowMoreVisibleResultsIncrementalAsync(g, FileGroup.PageSize).ConfigureAwait(true);
+                int shown = await ShowMoreVisibleResultsIncrementalAsync(g, FileGroup.PageSize, restoreVerticalOffset).ConfigureAwait(true);
+                if (shown > 0)
+                {
+                    QueueRestoreResultsListVerticalOffsetAfterShowMore(restoreVerticalOffset, g.FilePath);
+                }
+                else
+                {
+                    _resultsListShowMoreRestoreInProgress = false;
+                    CaptureResultsListScrollPosition();
+                }
+            }
+            catch (Exception ex)
+            {
+                _resultsListShowMoreRestoreInProgress = false;
+                LogService.Instance.Warning("Results",
+                    $"OnShowMoreClicked failed for '{g.FilePath}': {ex.GetType().Name}: {ex.Message}");
+                ViewModel.StatusText = "Could not show more matches for this file.";
             }
             finally
             {
@@ -903,7 +980,12 @@ public sealed partial class MainWindow
         }
     }
 
-    private async Task ShowMoreVisibleResultsIncrementalAsync(FileGroup group, int requestedCount)
+    private void OnShowMoreTapped(object sender, TappedRoutedEventArgs e)
+    {
+        e.Handled = true;
+    }
+
+    private async Task<int> ShowMoreVisibleResultsIncrementalAsync(FileGroup group, int requestedCount, double? restoreVerticalOffset = null)
     {
         LogService.Instance.Info("FileGroup",
             $"ShowMoreIncremental START: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
@@ -914,10 +996,11 @@ public sealed partial class MainWindow
         {
             LogService.Instance.Info("FileGroup",
                 $"ShowMoreIncremental EARLY EXIT: requested={requestedCount}, HasMore={group.HasMore}");
-            return;
+            return 0;
         }
 
         int remainingToShow = Math.Min(requestedCount, group.RemainingCount);
+        int totalShown = 0;
         var sw = Stopwatch.StartNew();
 
         while (remainingToShow > 0 && group.HasMore)
@@ -933,6 +1016,10 @@ public sealed partial class MainWindow
             if (shown <= 0)
                 break;
 
+            if (restoreVerticalOffset is double pinnedOffset)
+                ApplyResultsListVerticalOffsetAfterShowMore(pinnedOffset, group.FilePath, log: false);
+
+            totalShown += shown;
             remainingToShow -= shown;
             if (remainingToShow > 0 && group.HasMore)
                 await Task.Yield();
@@ -944,6 +1031,8 @@ public sealed partial class MainWindow
             LogService.Instance.Info("Results",
                 $"ShowMoreVisibleResultsIncrementalAsync: file='{System.IO.Path.GetFileName(group.FilePath)}', requested={requestedCount:N0}, elapsed={sw.ElapsedMilliseconds}ms");
         }
+
+        return totalShown;
     }
 
     private void ShowMoreVisibleResultsIncremental(FileGroup group, int requestedCount)

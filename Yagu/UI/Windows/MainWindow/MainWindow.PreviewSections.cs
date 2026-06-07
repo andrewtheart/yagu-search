@@ -370,7 +370,20 @@ public sealed partial class MainWindow
             SyncFileGroupCheckBoxState(args.ItemContainer, args.Item as FileGroup);
 
             if (args.Item is FileGroup g && g.IsExpanded)
-                _ = EnsureVisibleResultsForExpandedGroupAsync(g);
+                _ = EnsureVisibleResultsForExpandedGroupFromContainerAsync(g);
+        }
+    }
+
+    private async Task EnsureVisibleResultsForExpandedGroupFromContainerAsync(FileGroup group)
+    {
+        try
+        {
+            await EnsureVisibleResultsForExpandedGroupSerializedAsync(group, "container").ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("FileGroup",
+                $"EnsureVisibleResultsForExpandedGroupAsync failed for '{group.FilePath}': {ex.GetType().Name}: {ex.Message}");
         }
     }
 

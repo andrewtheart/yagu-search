@@ -11,7 +11,7 @@ namespace Yagu.Tests;
 ///    <see cref="NotifyCollectionChangedAction.Reset"/> notification. WinUI
 ///    ItemsControl/ListView only honor the first NewItem in a multi-item
 ///    Add notification, which caused only one of many newly added match rows
-///    to be rendered when a drawer was expanded or Show More was clicked.
+///    to be rendered when a drawer was expanded.
 /// 2. <see cref="SearchResult.HydrateFrom(string, IReadOnlyList{string}, IReadOnlyList{string})"/>
 ///    must restore payload AND raise PropertyChanged for the context-line
 ///    collections. Because PropertyChanged drives XAML bindings, hydration
@@ -106,6 +106,44 @@ public class HydrationRenderingRegressionTests
         Assert.Equal(NotifyCollectionChangedAction.Reset, notifications[0].Action);
         Assert.Equal(new[] { 1, 2, 3, 4, 5 }, collection);
     }
+
+    [Fact]
+    public void BatchAppendRange_AppendsWithPerItemAddNotifications()
+    {
+        var collection = new BatchObservableCollection<int> { 1, 2 };
+        var notifications = new List<NotifyCollectionChangedEventArgs>();
+        collection.CollectionChanged += (_, e) => notifications.Add(e);
+
+        collection.AppendRange(new[] { 3, 4, 5 });
+
+        Assert.Equal(3, notifications.Count);
+        Assert.All(notifications, e => Assert.Equal(NotifyCollectionChangedAction.Add, e.Action));
+        Assert.Equal(new[] { 3, 4, 5 }, notifications.Select(e => Assert.Single(e.NewItems!.Cast<int>())).ToArray());
+        Assert.Equal(new[] { 1, 2, 3, 4, 5 }, collection);
+    }
+
+    [Fact]
+    public void FileGroupShowMore_AppendsVisibleResultsWithoutResettingExistingRows()
+    {
+        var group = new FileGroup(@"C:\temp\alpha.txt");
+        for (int i = 1; i <= 5; i++)
+            group.Add(CreateResult(@"C:\temp\alpha.txt", i));
+
+        group.ShowMore(2);
+        var notifications = new List<NotifyCollectionChangedEventArgs>();
+        group.VisibleResults.CollectionChanged += (_, e) => notifications.Add(e);
+
+        int shown = group.ShowMore(2);
+
+        Assert.Equal(2, shown);
+        Assert.Equal(2, notifications.Count);
+        Assert.All(notifications, e => Assert.Equal(NotifyCollectionChangedAction.Add, e.Action));
+        Assert.DoesNotContain(notifications, e => e.Action == NotifyCollectionChangedAction.Reset);
+        Assert.Equal(new[] { 1, 2, 3, 4 }, group.VisibleResults.Select(r => r.LineNumber).ToArray());
+    }
+
+    private static SearchResult CreateResult(string filePath, int lineNumber) =>
+        new(filePath, lineNumber, $"line {lineNumber} test", 5, 4, Array.Empty<string>(), Array.Empty<string>());
 
     [Fact]
     public void BatchCollectionChanging_FiresBeforeResetMutationIsVisible()

@@ -824,6 +824,38 @@ public class SearchResultCollectionGapTests
     }
 
     [Fact]
+    public void ApplySortAndFilter_ExtensionFilter()
+    {
+        var coll = new SearchResultCollection();
+        coll.Add(MakeResult(@"C:\src\main.cs", "match"));
+        coll.Add(MakeResult(@"C:\docs\readme.md", "match"));
+        coll.Add(MakeResult(@"C:\src\view.xaml", "match"));
+
+        coll.SetExtensionFilters(["cs", ".xaml"]);
+        coll.ApplySortAndFilter();
+
+        Assert.Equal(new[] { @"C:\src\main.cs", @"C:\src\view.xaml" }, coll.VisibleGroups.Select(g => g.FilePath).ToArray());
+    }
+
+    [Fact]
+    public void GetExtensionFilterOptions_IgnoresExtensionFilterButHonorsOtherFilters()
+    {
+        var coll = new SearchResultCollection();
+        coll.Add(MakeResult(@"C:\visible\main.cs", "match"));
+        coll.Add(MakeResult(@"C:\visible\readme.md", "match"));
+        coll.Add(MakeResult(@"C:\hidden\trace.log", "match"));
+        coll.FileNameFilter = "visible";
+        coll.SetExtensionFilters(["cs"]);
+        coll.ApplySortAndFilter();
+
+        var options = coll.GetExtensionFilterOptions();
+
+        Assert.Equal(new[] { ".cs", ".md" }, options.Select(option => option.DisplayName).ToArray());
+        Assert.True(options.Single(option => option.Extension == "cs").IsSelected);
+        Assert.False(options.Single(option => option.Extension == "md").IsSelected);
+    }
+
+    [Fact]
     public void ApplySortAndFilter_GlobFilter()
     {
         var coll = new SearchResultCollection();

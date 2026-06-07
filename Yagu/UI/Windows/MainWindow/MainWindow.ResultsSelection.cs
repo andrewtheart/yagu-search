@@ -30,7 +30,9 @@ namespace Yagu;
 /// </summary>
 public sealed partial class MainWindow
 {
-    private void OnFileGroupExpanding(Expander sender, ExpanderExpandingEventArgs args)
+    private readonly HashSet<FileGroup> _visibleResultsEnsureInProgress = new();
+
+    private async void OnFileGroupExpanding(Expander sender, ExpanderExpandingEventArgs args)
     {
         if (sender.DataContext is FileGroup g)
         {
@@ -40,13 +42,15 @@ public sealed partial class MainWindow
                 // before the EnsureVisible code path reads group.Count and indexes into
                 // the group via ShowMore.
                 g.MaterializeEvictedStubs();
-                EnsureVisibleResultsForExpandedGroup(g);
+                await EnsureVisibleResultsForExpandedGroupSerializedAsync(g, "expanding").ConfigureAwait(true);
+
+                if (!ReferenceEquals(sender.DataContext, g))
+                    return;
 
                 // Force the ListView's virtualizing panel to re-measure this item container
                 // after content was added, so it allocates the correct height.
                 InvalidateListViewItemContainer(sender);
                 sender.InvalidateMeasure();
-                sender.UpdateLayout();
 
                 LogService.Instance.Info("Preview", $"OnFileGroupExpanding: expand only file='{g.FilePath}', matchCount={g.Count}");
             }
@@ -80,7 +84,20 @@ public sealed partial class MainWindow
     private void OnFileGroupCollapsed(Expander sender, ExpanderCollapsedEventArgs args)
     {
         if (sender.DataContext is FileGroup g)
-            g.ClearVisibleResults();
+        {
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                if (!g.IsExpanded)
+                {
+                    LogService.Instance.Info("Preview", $"OnFileGroupCollapsed: clearing visible results file='{g.FilePath}', matchCount={g.Count}");
+                    g.ClearVisibleResults();
+                }
+                else if (LogService.Instance.IsVerboseEnabled)
+                {
+                    LogService.Instance.Verbose("Preview", $"OnFileGroupCollapsed: ignored transient collapse file='{g.FilePath}', matchCount={g.Count}");
+                }
+            });
+        }
     }
 
     private async Task EnsureVisibleResultsForExpandedGroupAsync(FileGroup group)
@@ -111,6 +128,25 @@ public sealed partial class MainWindow
         }
 
         await HydrateVisibleResultsAsync(group).ConfigureAwait(true);
+    }
+
+    private async Task EnsureVisibleResultsForExpandedGroupSerializedAsync(FileGroup group, string caller)
+    {
+        if (!_visibleResultsEnsureInProgress.Add(group))
+        {
+            LogService.Instance.Verbose("FileGroup",
+                $"EnsureVisible skipped duplicate caller={caller} file='{System.IO.Path.GetFileName(group.FilePath)}'");
+            return;
+        }
+
+        try
+        {
+            await EnsureVisibleResultsForExpandedGroupAsync(group).ConfigureAwait(true);
+        }
+        finally
+        {
+            _visibleResultsEnsureInProgress.Remove(group);
+        }
     }
 
     private void EnsureVisibleResultsForExpandedGroup(FileGroup group)
@@ -254,44 +290,6 @@ public sealed partial class MainWindow
         await SelectFileGroupMatchesAndPreviewAsync(group, "ctrl click", preserveExpansionState: wasExpanded);
     }
 
-    private async void OnFileGroupHeaderTapped(object sender, TappedRoutedEventArgs e)
-    {
-        if (sender is not FrameworkElement header
-            || header.DataContext is not FileGroup g
-            || g.Count == 0)
-        {
-            return;
-        }
-
-        if (IsInsideHeaderCommand(e.OriginalSource as DependencyObject, header))
-        {
-            LogService.Instance.Info("Preview", $"OnFileGroupHeaderTapped: command click ignored file='{g.FilePath}', isExpanded={g.IsExpanded}");
-            return;
-        }
-
-        if (IsControlKeyDown())
-        {
-            e.Handled = true;
-            if (WasCtrlFileHeaderPreviewJustHandled(g))
-                return;
-
-            bool wasExpanded = ReferenceEquals(g, _ctrlFileHeaderGestureGroup)
-                ? _ctrlFileHeaderGestureWasExpanded
-                : g.IsExpanded;
-            ClearCtrlFileHeaderGesture();
-            await SelectFileGroupMatchesAndPreviewAsync(g, "ctrl click", preserveExpansionState: wasExpanded);
-            return;
-        }
-
-        if (g.IsExpanded)
-        {
-            LogService.Instance.Info("Preview", $"OnFileGroupHeaderTapped: collapse only file='{g.FilePath}', matchCount={g.Count}");
-            return;
-        }
-
-        LogService.Instance.Info("Preview", $"OnFileGroupHeaderTapped: expand only file='{g.FilePath}', matchCount={g.Count}");
-    }
-
     private async void OnFileGroupHeaderDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
     {
         if (sender is not FrameworkElement header
@@ -317,9 +315,6 @@ public sealed partial class MainWindow
 
         if (preserveExpansionState.HasValue)
             group.IsExpanded = preserveExpansionState.Value;
-
-        if (reason == "ctrl click")
-            RecordCtrlFileHeaderPreview(group.FilePath);
 
         try
         {
@@ -357,23 +352,6 @@ public sealed partial class MainWindow
         _ctrlFileHeaderGestureGroup = null;
         _ctrlFileHeaderGestureWasExpanded = false;
         _ctrlFileHeaderGesturePointerId = 0;
-    }
-
-    private void RecordCtrlFileHeaderPreview(string filePath)
-    {
-        _lastCtrlFileHeaderPreviewPath = filePath;
-        _lastCtrlFileHeaderPreviewTick = Environment.TickCount64;
-    }
-
-    private bool WasCtrlFileHeaderPreviewJustHandled(FileGroup group)
-    {
-        if (_lastCtrlFileHeaderPreviewPath is null)
-            return false;
-
-        long elapsed = Environment.TickCount64 - _lastCtrlFileHeaderPreviewTick;
-        return elapsed >= 0
-            && elapsed < 750
-            && string.Equals(_lastCtrlFileHeaderPreviewPath, group.FilePath, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsControlKeyDown() =>

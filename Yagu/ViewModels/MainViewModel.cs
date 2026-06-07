@@ -48,6 +48,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private bool _metadataSortFilterRefreshQueued;
     private bool _clearedDefaultExcludeForRegexMode;
     private readonly List<SortCriterion> _sortCriteria = [new(1, 0)];
+    private readonly HashSet<string> _selectedExtensionFilters = new(StringComparer.OrdinalIgnoreCase);
     private bool _updatingSortCriteria;
     private System.Diagnostics.Stopwatch? _searchTimer;
     private DateTime _searchStartedUtc;
@@ -312,6 +313,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         DateRangeFilter.PastFiveYears => "Last 5 years",
         _ => "Any date",
     };
+    public bool HasExtensionFilter => _selectedExtensionFilters.Count > 0;
+    public string ExtensionFilterLabel => _selectedExtensionFilters.Count switch
+    {
+        0 => "All extensions",
+        1 => SearchResultCollection.FormatExtensionDisplayName(_selectedExtensionFilters.First()),
+        _ => $"{_selectedExtensionFilters.Count:N0} extensions",
+    };
 
     public IReadOnlyList<SortCriterion> SortCriteria => _sortCriteria;
 
@@ -354,6 +362,26 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(SortCriteria));
         ApplySortAndFilter();
     }
+
+    public IReadOnlyList<ExtensionFilterOption> GetExtensionFilterOptions() =>
+        _resultCollection.GetExtensionFilterOptions();
+
+    public void SetExtensionFilter(IEnumerable<string> extensions)
+    {
+        _selectedExtensionFilters.Clear();
+        foreach (string extension in extensions)
+        {
+            string normalized = SearchResultCollection.NormalizeExtensionFilter(extension);
+            if (!string.IsNullOrWhiteSpace(normalized))
+                _selectedExtensionFilters.Add(normalized);
+        }
+
+        OnPropertyChanged(nameof(HasExtensionFilter));
+        OnPropertyChanged(nameof(ExtensionFilterLabel));
+        ApplySortAndFilter();
+    }
+
+    public void ClearExtensionFilter() => SetExtensionFilter([]);
 
     private void SetSingleSortCriterion(int sortModeIndex, int sortDirectionIndex)
     {
@@ -2105,6 +2133,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _resultCollection.GroupMode = GroupMode;
         _resultCollection.GroupSortDirectionIndex = GroupSortDirectionIndex;
         _resultCollection.DateRangeFilter = DateRangeFilter;
+        _resultCollection.SetExtensionFilters(_selectedExtensionFilters);
         _resultCollection.ApplySortAndFilter();
 
         OnPropertyChanged(nameof(HasResults));

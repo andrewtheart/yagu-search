@@ -29,6 +29,7 @@ public sealed partial class MainWindow
     private bool _resultsListWasAtBottom = true;
     private bool _resultsListSmartScrollPending;
     private bool _resultsListTopRestoreInProgress;
+    private bool _resultsListShowMoreRestoreInProgress;
     private ResultsListSmartScrollIntent _pendingResultsListSmartScrollIntent;
 
     private void InitializeResultsListSmartScroll()
@@ -88,8 +89,63 @@ public sealed partial class MainWindow
         }
 
         bool hasVisibleGroups = ViewModel.ResultGroups.Count > 0;
-        _resultsListWasAtTop = hasVisibleGroups && (IsResultsListAtTop(scroller) || IsFirstResultGroupAtTop());
+        _resultsListWasAtTop = hasVisibleGroups && IsResultsListAtTop(scroller);
         _resultsListWasAtBottom = hasVisibleGroups && IsResultsListAtBottom(scroller);
+    }
+
+    private double? CaptureResultsListVerticalOffset()
+    {
+        EnsureResultsListScrollViewerHooked();
+        return _resultsListScrollViewer?.VerticalOffset;
+    }
+
+    private void QueueRestoreResultsListVerticalOffsetAfterShowMore(double? verticalOffset, string filePath)
+    {
+        if (verticalOffset is not double targetOffset || double.IsNaN(targetOffset) || double.IsInfinity(targetOffset))
+        {
+            _resultsListShowMoreRestoreInProgress = false;
+            CaptureResultsListScrollPosition();
+            return;
+        }
+
+        RestoreResultsListVerticalOffsetAfterShowMore(targetOffset, filePath, ResultsListSmartScrollRestorePasses + 2);
+    }
+
+    private bool ApplyResultsListVerticalOffsetAfterShowMore(double targetOffset, string filePath, bool log)
+    {
+        EnsureResultsListScrollViewerHooked();
+        if (_resultsListScrollViewer is not { } scroller)
+            return false;
+
+        double clampedOffset = Math.Clamp(targetOffset, 0, Math.Max(0, scroller.ScrollableHeight));
+        bool accepted = scroller.ChangeView(null, clampedOffset, null, disableAnimation: true);
+        if (log && LogService.Instance.IsVerboseEnabled)
+        {
+            LogService.Instance.Verbose("ResultsList",
+                $"RestoreResultsListVerticalOffsetAfterShowMore: file='{System.IO.Path.GetFileName(filePath)}', requested={targetOffset:N1}, clamped={clampedOffset:N1}, accepted={accepted}, current={scroller.VerticalOffset:N1}");
+        }
+
+        CaptureResultsListScrollPosition();
+        return true;
+    }
+
+    private void RestoreResultsListVerticalOffsetAfterShowMore(double targetOffset, string filePath, int remainingPasses)
+    {
+        if (!ApplyResultsListVerticalOffsetAfterShowMore(targetOffset, filePath, log: remainingPasses == ResultsListSmartScrollRestorePasses + 2))
+        {
+            _resultsListShowMoreRestoreInProgress = false;
+            CaptureResultsListScrollPosition();
+            return;
+        }
+
+        if (remainingPasses > 0)
+        {
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+                RestoreResultsListVerticalOffsetAfterShowMore(targetOffset, filePath, remainingPasses - 1));
+            return;
+        }
+
+        _resultsListShowMoreRestoreInProgress = false;
     }
 
     private void OnResultGroupsChanging(object? sender, EventArgs e)
@@ -120,6 +176,9 @@ public sealed partial class MainWindow
 
     private ResultsListSmartScrollIntent ResolveResultsListSmartScrollIntent()
     {
+        if (_resultsListShowMoreRestoreInProgress)
+            return ResultsListSmartScrollIntent.None;
+
         if (_resultsListWasAtTop)
             return ResultsListSmartScrollIntent.KeepTop;
         if (_autoScrollEnabled)
@@ -223,25 +282,6 @@ public sealed partial class MainWindow
         => scroller.ScrollableHeight <= ResultsListScrollEdgeEpsilon
            || scroller.ScrollableHeight - scroller.VerticalOffset <= ResultsListScrollEdgeEpsilon;
 
-    private bool IsFirstResultGroupAtTop()
-    {
-        if (ViewModel.ResultGroups.Count == 0)
-            return false;
-        if (ResultsList.ContainerFromIndex(0) is not FrameworkElement firstContainer)
-            return false;
-
-        try
-        {
-            var point = firstContainer.TransformToVisual(ResultsList)
-                .TransformPoint(new Windows.Foundation.Point(0, 0));
-            return point.Y >= -ResultsListScrollEdgeEpsilon;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
     private static T? FindVisualDescendant<T>(DependencyObject parent) where T : DependencyObject
     {
         int count = VisualTreeHelper.GetChildrenCount(parent);
@@ -258,4 +298,5 @@ public sealed partial class MainWindow
 
         return null;
     }
+
 }

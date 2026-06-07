@@ -170,14 +170,12 @@ public sealed partial class MainWindow
             SplitPaneRow.Height = new GridLength(0);
             ProgressRow.Height = new GridLength(0);
             SplitPaneGrid.Visibility = Visibility.Collapsed;
-            CollapseChevronIcon.Glyph = "\uE70E"; // ChevronUp
         }
         else
         {
             SplitPaneRow.Height = new GridLength(1, GridUnitType.Star);
             ProgressRow.Height = GridLength.Auto;
             SplitPaneGrid.Visibility = Visibility.Visible;
-            CollapseChevronIcon.Glyph = "\uE70D"; // ChevronDown
         }
 
         UpdateBottomStatusBarVisibility();
