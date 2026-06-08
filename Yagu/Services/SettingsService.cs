@@ -46,10 +46,10 @@ public sealed class AppSettings
     public bool GitignoreTakesPrecedence { get; set; } = true;
     public int ContextLines { get; set; } = 3;
     public int PreviewContextLines { get; set; } = 10;
-    [JsonIgnore] public string IncludeGlobs { get; set; } = string.Empty;
-    [JsonIgnore] public string ExcludeGlobs { get; set; } = DefaultExcludeGlobs;
-    [JsonIgnore] public int IncludeFilterModeIndex { get; set; }
-    [JsonIgnore] public int ExcludeFilterModeIndex { get; set; }
+    public string IncludeGlobs { get; set; } = string.Empty;
+    public string ExcludeGlobs { get; set; } = DefaultExcludeGlobs;
+    public int IncludeFilterModeIndex { get; set; }
+    public int ExcludeFilterModeIndex { get; set; }
     [JsonIgnore] public long MinFileSizeBytes { get; set; }
     [JsonIgnore] public long MaxFileSizeBytes { get; set; }
     [JsonIgnore] public DateTimeOffset? CreatedAfterDate { get; set; }
@@ -252,6 +252,7 @@ public sealed class SettingsService
             }
             MigrateLegacyPreviewGutterColors(settings);
             MigrateLegacyWindowFocusBehavior(settings);
+            NormalizeFilterModeSettings(settings);
             NormalizePreviewEditorFontSettings(settings);
             NormalizeResultListMatchTextSettings(settings);
             settings.TerminalDefaultWorkingDirectory ??= string.Empty;
@@ -284,6 +285,7 @@ public sealed class SettingsService
             }
             MigrateLegacyPreviewGutterColors(settings);
             MigrateLegacyWindowFocusBehavior(settings);
+            NormalizeFilterModeSettings(settings);
             NormalizePreviewEditorFontSettings(settings);
             NormalizeResultListMatchTextSettings(settings);
             settings.TerminalDefaultWorkingDirectory ??= string.Empty;
@@ -321,6 +323,14 @@ public sealed class SettingsService
 
         settings.StartInLauncherModeMigrated = true;
         settings.WindowFocusBehaviorMigratedFromLegacyDefault = true;
+    }
+
+    private static void NormalizeFilterModeSettings(AppSettings settings)
+    {
+        settings.IncludeFilterModeIndex = settings.IncludeFilterModeIndex == 1 ? 1 : 0;
+        settings.ExcludeFilterModeIndex = settings.ExcludeFilterModeIndex == 1 ? 1 : 0;
+        settings.IncludeGlobs ??= string.Empty;
+        settings.ExcludeGlobs ??= AppSettings.DefaultExcludeGlobs;
     }
 
     private static void NormalizePreviewEditorFontSettings(AppSettings settings)

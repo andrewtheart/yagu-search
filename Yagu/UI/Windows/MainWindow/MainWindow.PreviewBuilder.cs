@@ -694,7 +694,9 @@ public sealed partial class MainWindow
     {
         ResetPreviewShowMoreDiagnostics();
         var buildSw = System.Diagnostics.Stopwatch.StartNew();
-        bool truncatePreviewLines = ShouldTruncatePreviewLines();
+        bool truncatePreviewLines = ViewModel.IsSearching
+            ? ShouldTruncateOverflowPreviewLines()
+            : ShouldTruncatePreviewLines();
         int parasBuilt = 0;
         int renderedResults = 0;
         int startingBlocks = section.Blocks.Count;
@@ -795,7 +797,9 @@ public sealed partial class MainWindow
         results = results.Where(result => result.LineNumber > 0).ToList();
         ResetPreviewShowMoreDiagnostics();
         var buildSw = System.Diagnostics.Stopwatch.StartNew();
-        bool truncatePreviewLines = ShouldTruncatePreviewLines();
+        bool truncatePreviewLines = ViewModel.IsSearching
+            ? ShouldTruncateOverflowPreviewLines()
+            : ShouldTruncatePreviewLines();
         int parasBuilt = 0;
         int parasSinceYield = 0;
         int yieldCount = 0;
@@ -825,19 +829,41 @@ public sealed partial class MainWindow
 
                 for (int i = start; i <= end; i++)
                 {
+                    if (section.Blocks.Count - startingBlocks >= maxBlocks)
+                        break;
+
                     int lineNum = i + 1;
                     bool isMatchLine = lineNum == matchLineNumber;
-                    AddPreviewLineParagraphs(
-                        section,
-                        allLines[i],
-                        lineNum,
-                        isMatchLine,
-                        matchResult,
-                        rx,
-                        truncate: truncatePreviewLines,
-                        isMatchLine ? _matchParagraphs : null,
-                        singleLineSectionNav,
-                        out int addedParagraphs);
+                    int addedParagraphs;
+                    if (isMatchLine)
+                    {
+                        AddPreviewLineParagraphsAroundResult(
+                            section,
+                            allLines[i],
+                            lineNum,
+                            matchResult,
+                            rx,
+                            _matchParagraphs,
+                            singleLineSectionNav,
+                            out addedParagraphs,
+                            out _,
+                            truncate: truncatePreviewLines,
+                            targetOnlyMatchEntry: true);
+                    }
+                    else
+                    {
+                        AddPreviewLineParagraphs(
+                            section,
+                            allLines[i],
+                            lineNum,
+                            isMatchLine,
+                            matchResult,
+                            rx,
+                            truncate: truncatePreviewLines,
+                            null,
+                            singleLineSectionNav,
+                            out addedParagraphs);
+                    }
                     lastRenderedLine1 = lineNum;
                     parasBuilt += addedParagraphs;
                     parasSinceYield += addedParagraphs;
@@ -2773,7 +2799,7 @@ public sealed partial class MainWindow
         if (matchParagraphs is not null && !addedMatchEntries && firstParagraph is not null)
         {
             int beforeCount = matchParagraphs.Count;
-            AddMatchEntries(matchParagraphs, sectionNav, section, firstParagraph, window.Text, rx, minimumOne: rx is null);
+            AddMatchEntries(matchParagraphs, sectionNav, section, firstParagraph, window.Text, targetOnlyMatchEntry ? null : rx, minimumOne: true);
             matchEntriesAdded += matchParagraphs.Count - beforeCount;
         }
 

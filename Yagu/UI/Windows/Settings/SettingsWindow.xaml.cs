@@ -10,6 +10,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Windows.Graphics;
+using Windows.System;
 using Yagu.Helpers;
 using Yagu.Services;
 using Yagu.ViewModels;
@@ -40,6 +41,7 @@ public sealed partial class SettingsWindow : Window
     private readonly IntPtr _mainHwnd;
     private readonly Action<bool>? _applyWordWrap;
     private readonly Action? _applyPreviewSectionBackgrounds;
+    private readonly Action _openHelp;
     private readonly List<UIElement> _tabPages = new();
     private readonly List<List<UIElement>> _tabPageRootElements = new();
     private readonly HashSet<UIElement> _dirtyTrackedElements = new();
@@ -79,14 +81,17 @@ public sealed partial class SettingsWindow : Window
         public required int Index { get; init; }
     }
 
-    public SettingsWindow(MainViewModel viewModel, HotkeyService hotkeyService, IntPtr mainHwnd, Action<bool>? applyWordWrap, Action? applyPreviewSectionBackgrounds)
+    public SettingsWindow(MainViewModel viewModel, HotkeyService hotkeyService, IntPtr mainHwnd, Action<bool>? applyWordWrap, Action? applyPreviewSectionBackgrounds, Action openHelp)
     {
         _viewModel = viewModel;
         _hotkeyService = hotkeyService;
         _mainHwnd = mainHwnd;
         _applyWordWrap = applyWordWrap;
         _applyPreviewSectionBackgrounds = applyPreviewSectionBackgrounds;
+        _openHelp = openHelp;
         InitializeComponent();
+
+        InitializeHelpKeyboardShortcut();
 
         // Set up custom title bar
         ExtendsContentIntoTitleBar = true;
@@ -115,6 +120,27 @@ public sealed partial class SettingsWindow : Window
 
     public void BringInFrontOfMainWindow()
         => WindowForegroundHelper.BringOwnedWindowToFront(this, _mainHwnd);
+
+    private void InitializeHelpKeyboardShortcut()
+    {
+        RootGrid.KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden;
+        var helpAccelerator = new KeyboardAccelerator { Key = VirtualKey.F1 };
+        helpAccelerator.Invoked += (_, args) =>
+        {
+            args.Handled = true;
+            _openHelp();
+        };
+        RootGrid.KeyboardAccelerators.Add(helpAccelerator);
+    }
+
+    private void OnSettingsRootPreviewKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key != VirtualKey.F1)
+            return;
+
+        e.Handled = true;
+        _openHelp();
+    }
 
     /// <summary>Navigate to a specific tab by zero-based index.</summary>
     public void SelectTab(int index)
@@ -1216,14 +1242,60 @@ public sealed partial class SettingsWindow : Window
             prevCtx.ValueChanged += (_, args) => _viewModel.PreviewContextLines = (int)args.NewValue;
             g.Children.Add(prevCtx);
 
-            g.Children.Add(NextSearchLabel("Default include globs (comma/semicolon-separated):"));
-            var incGlobs = new TextBox { Text = _viewModel.IncludeGlobs, PlaceholderText = "e.g. *.cs;*.ts", MaxWidth = 300, HorizontalAlignment = HorizontalAlignment.Left };
+            var includeHeader = new Grid { ColumnSpacing = 8, HorizontalAlignment = HorizontalAlignment.Stretch, Width = 620 };
+            includeHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            includeHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            includeHeader.Children.Add(NextSearchLabel("Default include patterns (comma/semicolon-separated):"));
+            var incMode = new ComboBox
+            {
+                SelectedIndex = _viewModel.IncludeFilterModeIndex == 1 ? 1 : 0,
+                Width = 104,
+                MinWidth = 0,
+                Padding = new Thickness(8, 0, 8, 0),
+            };
+            incMode.Items.Add("Glob");
+            incMode.Items.Add("Regex");
+            ToolTipService.SetToolTip(incMode, "Interpret include patterns as globs or regular expressions");
+            Grid.SetColumn(incMode, 1);
+            includeHeader.Children.Add(incMode);
+            g.Children.Add(includeHeader);
+
+            var incGlobs = new TextBox { Text = _viewModel.IncludeGlobs, PlaceholderText = _viewModel.IncludeFilterPlaceholder, Width = 620, HorizontalAlignment = HorizontalAlignment.Stretch };
             incGlobs.TextChanged += (_, _) => _viewModel.IncludeGlobs = incGlobs.Text;
+            incMode.SelectionChanged += (_, _) =>
+            {
+                if (incMode.SelectedIndex >= 0)
+                    _viewModel.IncludeFilterModeIndex = incMode.SelectedIndex;
+                incGlobs.PlaceholderText = _viewModel.IncludeFilterPlaceholder;
+            };
             g.Children.Add(incGlobs);
 
-            g.Children.Add(NextSearchLabel("Default exclude globs (comma/semicolon-separated):"));
-            var excGlobs = new TextBox { Text = _viewModel.ExcludeGlobs, PlaceholderText = "e.g. node_modules;bin;obj;.git", MaxWidth = 300, HorizontalAlignment = HorizontalAlignment.Left };
+            var excludeHeader = new Grid { ColumnSpacing = 8, HorizontalAlignment = HorizontalAlignment.Stretch, Width = 620 };
+            excludeHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            excludeHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            excludeHeader.Children.Add(NextSearchLabel("Default exclude patterns (comma/semicolon-separated):"));
+            var excMode = new ComboBox
+            {
+                SelectedIndex = _viewModel.ExcludeFilterModeIndex == 1 ? 1 : 0,
+                Width = 104,
+                MinWidth = 0,
+                Padding = new Thickness(8, 0, 8, 0),
+            };
+            excMode.Items.Add("Glob");
+            excMode.Items.Add("Regex");
+            ToolTipService.SetToolTip(excMode, "Interpret exclude patterns as globs or regular expressions");
+            Grid.SetColumn(excMode, 1);
+            excludeHeader.Children.Add(excMode);
+            g.Children.Add(excludeHeader);
+
+            var excGlobs = new TextBox { Text = _viewModel.ExcludeGlobs, PlaceholderText = _viewModel.ExcludeFilterPlaceholder, Width = 620, HorizontalAlignment = HorizontalAlignment.Stretch };
             excGlobs.TextChanged += (_, _) => _viewModel.ExcludeGlobs = excGlobs.Text;
+            excMode.SelectionChanged += (_, _) =>
+            {
+                if (excMode.SelectedIndex >= 0)
+                    _viewModel.ExcludeFilterModeIndex = excMode.SelectedIndex;
+                excGlobs.PlaceholderText = _viewModel.ExcludeFilterPlaceholder;
+            };
             g.Children.Add(excGlobs);
         }
 

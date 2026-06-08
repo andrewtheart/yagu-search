@@ -38,6 +38,39 @@ public sealed class ExcludedMethodTests_SearchService
     }
 
     [Fact]
+    public void RoutineSearchTelemetry_LogsAtInfoLevel()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "SearchService.cs"));
+
+        Assert.Contains("LogService.Instance.Info(\"SearchService\", $\"Pipeline channels created:", source);
+        Assert.Contains("LogService.Instance.Info(\"Discovery\", $\"Progress:", source);
+        Assert.Contains("LogService.Instance.Info(\"SearchService\", $\"Discovery finished:", source);
+        Assert.Contains("LogService.Instance.Info(\"Workers\",", source);
+        Assert.Contains("$\"Streaming: pushed=", source);
+        Assert.Contains("LogService.Instance.Info(\"Forwarder\",", source);
+        Assert.Contains("$\"Throughput: forwarded=", source);
+        Assert.Contains("$\"Completed: forwarded=", source);
+        Assert.Contains("LogService.Instance.Info(\"SearchService\", $\"Search complete:", source);
+
+        Assert.DoesNotContain("LogService.Instance.Warning(\"Discovery\", $\"Progress:", source);
+        Assert.DoesNotContain("LogService.Instance.Warning(\"SearchService\", $\"Pipeline channels created:", source);
+        Assert.DoesNotContain("LogService.Instance.Warning(\"SearchService\", $\"Discovery finished:", source);
+        Assert.DoesNotContain("LogService.Instance.Warning(\"SearchService\", $\"Search complete:", source);
+
+        int backpressureIndex = source.IndexOf("$\"Backpressure:", StringComparison.Ordinal);
+        Assert.True(backpressureIndex >= 0, "Forwarder backpressure log not found.");
+        string backpressureWindow = source[Math.Max(0, backpressureIndex - 120)..Math.Min(source.Length, backpressureIndex + 220)];
+        Assert.Contains("LogService.Instance.Warning(\"Forwarder\",", backpressureWindow);
+        Assert.DoesNotContain("LogService.Instance.Info(\"Forwarder\",", backpressureWindow);
+
+        int throughputIndex = source.IndexOf("$\"Throughput:", StringComparison.Ordinal);
+        Assert.True(throughputIndex >= 0, "Forwarder throughput log not found.");
+        string throughputWindow = source[Math.Max(0, throughputIndex - 120)..Math.Min(source.Length, throughputIndex + 220)];
+        Assert.Contains("LogService.Instance.Info(\"Forwarder\",", throughputWindow);
+        Assert.DoesNotContain("LogService.Instance.Warning(\"Forwarder\",", throughputWindow);
+    }
+
+    [Fact]
     public void IsMemoryPressureHigh_ReturnsBoolean()
     {
         // Exercise with no cap — should not throw

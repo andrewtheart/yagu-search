@@ -873,7 +873,7 @@ public sealed partial class MainWindow
             if (PreviewSectionExists(fileGroup.FilePath))
                 continue;
 
-            var selectedResults = GetPreviewableResults(fileGroup.Where(result => result.IsSelected));
+            var selectedResults = GetPreviewableResults(fileGroup);
             if (selectedResults.Count > 0)
                 newFiles[fileGroup.FilePath] = selectedResults;
         }
@@ -1267,7 +1267,7 @@ public sealed partial class MainWindow
         {
             group.SelectAll();
             var byFile = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
-            foreach (var r in GetPreviewableResults(group.Where(result => result.IsSelected)))
+            foreach (var r in GetPreviewableResults(group))
             {
                 if (!byFile.TryGetValue(r.FilePath, out var list))
                 {
@@ -1307,7 +1307,7 @@ public sealed partial class MainWindow
             var byFile = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
             foreach (var g in selectedGroups)
             {
-                foreach (var r in GetPreviewableResults(g.Where(result => result.IsSelected)))
+                foreach (var r in GetPreviewableResults(g))
                 {
                     if (!byFile.TryGetValue(r.FilePath, out var list))
                     {
@@ -1373,6 +1373,28 @@ public sealed partial class MainWindow
         if (previewable.Any(result => result.LineNumber > 0))
             previewable.RemoveAll(result => result.LineNumber <= 0);
         return previewable;
+    }
+
+    private List<SearchResult> GetPreviewableResults(FileGroup group)
+    {
+        int limit = GetPreviewResultSnapshotLimit();
+        List<SearchResult> candidates = group.AllSelected
+            ? group.GetPreviewSnapshot(limit)
+            : limit == int.MaxValue
+                ? group.Where(result => result.IsSelected).ToList()
+                : group.Where(result => result.IsSelected).Take(limit).ToList();
+
+        return GetPreviewableResults(candidates);
+    }
+
+    private int GetPreviewResultSnapshotLimit()
+    {
+        if (!ViewModel.IsSearching)
+            return int.MaxValue;
+
+        return Math.Max(
+            EffectiveInitialMaxMatchesPerSection,
+            EffectiveInitialMaxMatchesPerSection + MaxMatchesPerExpandChunk);
     }
 
     private FileGroup? GetFileHeaderContextGroup(object? sender)

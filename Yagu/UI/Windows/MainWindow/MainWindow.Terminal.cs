@@ -95,6 +95,9 @@ public sealed partial class MainWindow
                 int rows = root.GetProperty("rows").GetInt32();
                 _terminalService?.Resize(cols, rows);
                 break;
+            case "openHelp":
+                OpenHelpWindow();
+                break;
         }
     }
 

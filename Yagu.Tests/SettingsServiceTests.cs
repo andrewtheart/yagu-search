@@ -26,6 +26,10 @@ public class SettingsServiceTests
                 UseRegex = true,
                 ContextLines = 7,
                 EditorCommand = "code --goto \"{file}:{line}\"",
+                IncludeGlobs = "*.cs;*.xaml",
+                ExcludeGlobs = "bin;obj",
+                IncludeFilterModeIndex = 1,
+                ExcludeFilterModeIndex = 1,
                 MinFileSizeBytes = 10,
                 MaxFileSizeBytes = 20,
                 DefaultMinFileSizeBytes = 30,
@@ -50,6 +54,10 @@ public class SettingsServiceTests
             Assert.False(loaded.UseRegex);
             Assert.DoesNotContain("CaseSensitive", json);
             Assert.DoesNotContain("UseRegex", json);
+            Assert.Contains("IncludeGlobs", json);
+            Assert.Contains("ExcludeGlobs", json);
+            Assert.Contains("IncludeFilterModeIndex", json);
+            Assert.Contains("ExcludeFilterModeIndex", json);
             Assert.DoesNotContain("\"MinFileSizeBytes\"", json);
             Assert.DoesNotContain("\"MaxFileSizeBytes\"", json);
             Assert.DoesNotContain("\"CreatedAfterDate\"", json);
@@ -74,6 +82,10 @@ public class SettingsServiceTests
             Assert.Equal(defaultCreatedBefore, loaded.DefaultCreatedBeforeDate);
             Assert.Equal(defaultModifiedAfter, loaded.DefaultModifiedAfterDate);
             Assert.Equal(defaultModifiedBefore, loaded.DefaultModifiedBeforeDate);
+            Assert.Equal("*.cs;*.xaml", loaded.IncludeGlobs);
+            Assert.Equal("bin;obj", loaded.ExcludeGlobs);
+            Assert.Equal(1, loaded.IncludeFilterModeIndex);
+            Assert.Equal(1, loaded.ExcludeFilterModeIndex);
             Assert.Equal(7, loaded.ContextLines);
             Assert.Single(loaded.RecentDirectories);
             Assert.Single(loaded.SearchHistory);

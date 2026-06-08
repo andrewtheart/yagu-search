@@ -685,32 +685,32 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         }
     }
 
-    public int SelectedCount => this.Count(r => r.IsSelected);
-    public string SelectedCountText => $"{SelectedCount}/{Count} selected";
+    private int TotalStoredCount => Count + _evictedOnlyCount;
+
+    public int SelectedCount => _allSelected ? TotalStoredCount : this.Count(r => r.IsSelected);
+    public string SelectedCountText => $"{SelectedCount}/{TotalStoredCount} selected";
 
     public void SelectAll()
     {
         _selectFutureResults = true;
-        // Iter 16: SelectAll on a collapsed evicted-only group needs the SearchResult
-        // instances to actually exist before we can flip IsSelected on them.
-        MaterializeEvictedStubs();
         foreach (var r in this) r.IsSelected = true;
         AllSelected = true;
-        NotifySelectionChanged();
+        NotifySelectedCountChanged();
     }
 
     public void DeselectAll()
     {
         _selectFutureResults = false;
-        MaterializeEvictedStubs();
         foreach (var r in this) r.IsSelected = false;
         AllSelected = false;
-        NotifySelectionChanged();
+        NotifySelectedCountChanged();
     }
 
     public void NotifySelectionChanged()
     {
-        AllSelected = Count > 0 && this.All(r => r.IsSelected);
+        AllSelected = TotalStoredCount > 0
+            && this.All(r => r.IsSelected)
+            && (_evictedOnlyCount == 0 || _selectFutureResults);
         NotifySelectedCountChanged();
     }
 
@@ -721,6 +721,60 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     }
 
     public IReadOnlyList<SearchResult> GetSelectedResults() => this.Where(r => r.IsSelected).ToList();
+
+    public List<SearchResult> GetPreviewSnapshot(int maxResults)
+    {
+        if (maxResults <= 0)
+            return [];
+
+        var results = new List<SearchResult>(Math.Min(maxResults, TotalStoredCount));
+        bool skipFileNameMatches = HasContentMatches;
+
+        foreach (var result in this)
+        {
+            if (skipFileNameMatches && result.LineNumber == 0)
+                continue;
+
+            results.Add(result);
+            if (results.Count >= maxResults)
+                return results;
+        }
+
+        AppendPreviewSnapshotFromEvictedStubs(results, maxResults, skipFileNameMatches);
+        return results;
+    }
+
+    private void AppendPreviewSnapshotFromEvictedStubs(List<SearchResult> results, int maxResults, bool skipFileNameMatches)
+    {
+        var pages = _evictedStubPages;
+        var pageLengths = _evictedStubPageLengths;
+        if (pages is null || pageLengths is null || _evictedStubCount == 0)
+            return;
+
+        int remaining = _evictedStubCount;
+        for (int pageIndex = 0; pageIndex < pages.Count && remaining > 0 && results.Count < maxResults; pageIndex++)
+        {
+            var page = pages[pageIndex].AsSpan(0, pageLengths[pageIndex]);
+            int offset = 0;
+            while (remaining > 0 && offset < page.Length && results.Count < maxResults)
+            {
+                var stub = ReadEvictedStub(page, ref offset);
+                remaining--;
+                if (skipFileNameMatches && stub.LineNumber == 0)
+                    continue;
+
+                var result = SearchResult.CreatePreEvicted(
+                    FilePath,
+                    stub.LineNumber,
+                    stub.MatchStartColumn,
+                    stub.MatchLength,
+                    stub.DiskOffset,
+                    stub.SourceMatchStartColumn);
+                ApplySelectionIntent(result);
+                results.Add(result);
+            }
+        }
+    }
 
     private static string FormatSize(long bytes)
     {

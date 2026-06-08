@@ -141,12 +141,40 @@ public class FileGroupTests
         group.SelectAll();
 
         group.Add(SearchResult.CreatePreEvicted(@"D:\file.txt", 2, 0, 5, diskOffset: 100));
+
+        Assert.Equal(1, group.Count);
+        Assert.True(group.AllSelected);
+        Assert.Equal(2, group.SelectedCount);
+        var snapshot = group.GetPreviewSnapshot(2);
+        Assert.Equal(2, snapshot.Count);
+        Assert.Equal(1, group.Count);
+        Assert.True(snapshot[1].IsEvicted);
+        Assert.True(snapshot[1].IsSelected);
+
         group.IsExpanded = true;
 
         Assert.Equal(2, group.Count);
         Assert.True(group[1].IsSelected);
         Assert.True(group.AllSelected);
         Assert.Equal(2, group.SelectedCount);
+    }
+
+    [Fact]
+    public void PreviewSnapshot_DecodesBoundedPreEvictedRowsWithoutMaterializingGroup()
+    {
+        var group = new FileGroup(@"D:\file.txt");
+        for (int i = 0; i < 10; i++)
+            group.Add(SearchResult.CreatePreEvicted(@"D:\file.txt", i + 1, i, 5, diskOffset: (i + 1) * 100L));
+
+        group.SelectAll();
+        var snapshot = group.GetPreviewSnapshot(3);
+
+        Assert.Equal(0, group.Count);
+        Assert.Equal(10, group.SelectedCount);
+        Assert.Equal(3, snapshot.Count);
+        Assert.All(snapshot, result => Assert.True(result.IsEvicted));
+        Assert.All(snapshot, result => Assert.True(result.IsSelected));
+        Assert.Equal([1, 2, 3], snapshot.Select(result => result.LineNumber).ToArray());
     }
 
     [Fact]

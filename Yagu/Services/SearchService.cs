@@ -217,7 +217,7 @@ public sealed class SearchService
             SingleWriter = false,
             FullMode = BoundedChannelFullMode.Wait,
         });
-        LogService.Instance.Warning("SearchService", $"Pipeline channels created: events={EventChannelCapacity}, pending=1024, contentResults={contentCap}");
+        LogService.Instance.Info("SearchService", $"Pipeline channels created: events={EventChannelCapacity}, pending=1024, contentResults={contentCap}");
 
         int filesScanned = 0;
         int filesSkipped = 0;
@@ -530,7 +530,7 @@ public sealed class SearchService
                     discoveryLogCounter++;
                     if (discoveryLogCounter % 100_000 == 0 || discoveryLogTimer.ElapsedMilliseconds >= 5000)
                     {
-                        LogService.Instance.Warning("Discovery", $"Progress: {discoveryLogCounter:N0} files enumerated, {Volatile.Read(ref totalDiscovered):N0} discovered, elapsed={sw.Elapsed.TotalSeconds:F1}s");
+                        LogService.Instance.Info("Discovery", $"Progress: {discoveryLogCounter:N0} files enumerated, {Volatile.Read(ref totalDiscovered):N0} discovered, elapsed={sw.Elapsed.TotalSeconds:F1}s");
                         discoveryLogTimer.Restart();
                     }
                 }
@@ -547,7 +547,7 @@ public sealed class SearchService
             catch (Exception ex) { LogService.Instance.Warning("SearchService", "Discovery failed", ex); }
             finally
             {
-                LogService.Instance.Warning("SearchService", $"Discovery finished: {Volatile.Read(ref totalDiscovered):N0} files discovered, total={CurrentTotalFiles():N0}, {sw.Elapsed.TotalSeconds:F2}s elapsed");
+                LogService.Instance.Info("SearchService", $"Discovery finished: {Volatile.Read(ref totalDiscovered):N0} files discovered, total={CurrentTotalFiles():N0}, {sw.Elapsed.TotalSeconds:F2}s elapsed");
                 pending.Writer.TryComplete();
             }
         }, CancellationToken.None);
@@ -759,7 +759,7 @@ public sealed class SearchService
                                                     {
                                                         lastLogTicks = now;
                                                         string memDiag = GetMemoryDiagnostics();
-                                                        LogService.Instance.Warning("Workers",
+                                                        LogService.Instance.Info("Workers",
                                                             $"Streaming: pushed={fileIndexCounter:N0} | " +
                                                             $"scanned={CurrentFilesScanned():N0}, matches={Volatile.Read(ref totalMatches):N0}, " +
                                                             $"withMatches={Volatile.Read(ref filesWithMatches):N0}, skipped={Volatile.Read(ref filesSkipped):N0}, " +
@@ -990,7 +990,7 @@ public sealed class SearchService
                 finally
                 {
                     string finishMemDiag = GetMemoryDiagnostics();
-                    LogService.Instance.Warning("SearchService",
+                    LogService.Instance.Info("SearchService",
                         $"Content workers finished: scanned={filesScanned:N0}, withMatches={filesWithMatches:N0}, " +
                         $"totalMatches={totalMatches:N0}, skipped={Volatile.Read(ref filesSkipped):N0}, " +
                         $"batches={Volatile.Read(ref nativeBatchesProcessed)}, pressureCycles={Volatile.Read(ref pressureCycles)}, " +
@@ -1043,7 +1043,7 @@ public sealed class SearchService
                     if ((now - fwdLogLastTicks) >= Stopwatch.Frequency * FwdLogIntervalSec)
                     {
                         fwdLogLastTicks = now;
-                        LogService.Instance.Warning("Forwarder",
+                        LogService.Instance.Info("Forwarder",
                             $"Throughput: forwarded={Volatile.Read(ref forwarderItemsForwarded):N0}, " +
                             $"batchesFlushed={fwdBatchesFlushed}, cumulativeStallMs={Volatile.Read(ref forwarderWriteStallMs)}, " +
                             $"elapsed={sw.Elapsed.TotalSeconds:F1}s");
@@ -1103,7 +1103,7 @@ public sealed class SearchService
                 }
 
                 await FlushContentBatchAsync().ConfigureAwait(false);
-                LogService.Instance.Warning("Forwarder",
+                LogService.Instance.Info("Forwarder",
                     $"Completed: forwarded={Volatile.Read(ref forwarderItemsForwarded):N0}, " +
                     $"batchesFlushed={fwdBatchesFlushed}, cumulativeStallMs={Volatile.Read(ref forwarderWriteStallMs)}, " +
                     $"elapsed={sw.Elapsed.TotalSeconds:F1}s");
@@ -1171,7 +1171,7 @@ public sealed class SearchService
         int totalSkipped = Volatile.Read(ref filesSkipped) + directorySkips + earlySkips;
         int nonAccessDeniedDirectorySkips = Math.Max(0, directorySkips - _fileLister.AccessDeniedDirectories);
         var skipReasons = new SkipBreakdown(skipBinary, accessDeniedSkips, skipIOError, skipTooLarge + earlyTooLargeSkips, skipNotFound, skipEncoding, skipOther, skipByExtension, nonAccessDeniedDirectorySkips, earlySkips + discoverySizeSkips, skipGlobExcluded, _fileLister.GitignoreSkipped);
-        LogService.Instance.Warning("SearchService", $"Search complete: {totalMatches} matches in {filesWithMatches} files, {filesScanned} scanned, {totalSkipped} skipped ({skipReasons}), earlyFiltered={earlySkips + discoverySizeSkips}, degraded={wasDegraded}, truncated={wasTruncated}, " +
+        LogService.Instance.Info("SearchService", $"Search complete: {totalMatches} matches in {filesWithMatches} files, {filesScanned} scanned, {totalSkipped} skipped ({skipReasons}), earlyFiltered={earlySkips + discoverySizeSkips}, degraded={wasDegraded}, truncated={wasTruncated}, " +
             $"batches={Volatile.Read(ref nativeBatchesProcessed)}, pressureCycles={pressureCycles}, forwarderItems={Volatile.Read(ref forwarderItemsForwarded):N0}, forwarderStallMs={Volatile.Read(ref forwarderWriteStallMs)}, {sw.Elapsed.TotalSeconds:F2}s");
         yield return new SearchEvent.Completed(new SearchSummary(
             TotalFiles: totalFiles,

@@ -33,6 +33,18 @@ public sealed partial class MainWindow
     private int _findIndex = -1; // last match start index in the editor text
     private RichTextBlock? _findHighlightBlock; // block with active find highlight
 
+    private void InitializeHelpKeyboardShortcut()
+    {
+        RootGrid.KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden;
+        var helpAccelerator = new KeyboardAccelerator { Key = VirtualKey.F1 };
+        helpAccelerator.Invoked += (_, args) =>
+        {
+            args.Handled = true;
+            OpenHelpWindow();
+        };
+        RootGrid.KeyboardAccelerators.Add(helpAccelerator);
+    }
+
     private void OnRootGridPreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
         bool ctrl = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);

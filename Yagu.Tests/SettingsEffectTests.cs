@@ -870,7 +870,7 @@ public sealed class SettingsEffectTests : IDisposable
     // ════════════════════════════════════════════════
 
     [Fact]
-    public void RuntimeOnlySettings_NotPersisted()
+    public void RuntimeOnlySettings_NotPersisted_WhileSearchDefaultsPersist()
     {
         var settings = new AppSettings
         {
@@ -878,6 +878,8 @@ public sealed class SettingsEffectTests : IDisposable
             UseRegex = true,
             IncludeGlobs = "*.cs",
             ExcludeGlobs = "bin;obj",
+            IncludeFilterModeIndex = 1,
+            ExcludeFilterModeIndex = 1,
             SkipBinary = false,
             SkipExtensions = "zip;rar",
             ArchiveExtensions = "docx;xlsx",
@@ -887,11 +889,13 @@ public sealed class SettingsEffectTests : IDisposable
         var json = System.Text.Json.JsonSerializer.Serialize(settings, AppSettingsJsonContext.Default.AppSettings);
         Assert.DoesNotContain("\"CaseSensitive\"", json);
         Assert.DoesNotContain("\"UseRegex\"", json);
-        Assert.DoesNotContain("\"IncludeGlobs\"", json);
-        Assert.DoesNotContain("\"ExcludeGlobs\"", json);
+        Assert.Contains("\"IncludeGlobs\"", json);
+        Assert.Contains("\"ExcludeGlobs\"", json);
+        Assert.Contains("\"IncludeFilterModeIndex\"", json);
+        Assert.Contains("\"ExcludeFilterModeIndex\"", json);
         Assert.DoesNotContain("\"SkipBinary\"", json);
-        Assert.DoesNotContain("\"SkipExtensions\"", json);
-        Assert.DoesNotContain("\"ArchiveExtensions\"", json);
+        Assert.Contains("\"SkipExtensions\"", json);
+        Assert.Contains("\"ArchiveExtensions\"", json);
         Assert.DoesNotContain("\"SearchInsideArchives\"", json);
     }
 

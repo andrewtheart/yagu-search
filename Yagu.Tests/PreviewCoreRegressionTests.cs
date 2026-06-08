@@ -801,11 +801,11 @@ public sealed class PreviewCoreRegressionTests
             "return previewable;");
 
         string previewSingle = ExtractMethodWindow(MainWindowSource, "OnPreviewSingleFile", window: 2400);
-        Assert.Contains("GetPreviewableResults(group.Where(result => result.IsSelected))", previewSingle);
+        Assert.Contains("GetPreviewableResults(group)", previewSingle);
         Assert.DoesNotContain("r.LineNumber == 0", previewSingle);
 
         string previewSelected = ExtractMethodWindow(MainWindowSource, "OnPreviewSelectedFiles", window: 3600);
-        Assert.Contains("GetPreviewableResults(g.Where(result => result.IsSelected))", previewSelected);
+        Assert.Contains("GetPreviewableResults(g)", previewSelected);
         Assert.DoesNotContain("r.LineNumber == 0", previewSelected);
 
         string singleFilePreview = ExtractMethodWindow(MainWindowSource, "ShowSingleFilePreviewAsync", window: 5200);
@@ -839,6 +839,10 @@ public sealed class PreviewCoreRegressionTests
 
         Assert.Contains("RegisterSectionMatchTotal(block, CountContentMatchResults(results));", MainWindowSource);
 
+        Assert.Contains("private List<SearchResult> GetPreviewableResults(FileGroup group)", MainWindowSource);
+        Assert.Contains("group.GetPreviewSnapshot(limit)", MainWindowSource);
+        Assert.Contains("GetPreviewResultSnapshotLimit()", MainWindowSource);
+
         string fullFileSection = ExtractMethodWindow(MainWindowSource, "AddFullFileSection", window: 900);
         Assert.Contains("RegisterSectionMatchTotal(block, CountContentMatchResults(target.Matches));", fullFileSection);
 
@@ -850,6 +854,27 @@ public sealed class PreviewCoreRegressionTests
 
         string blockSurface = ExtractMethodWindow(MainWindowSource, "ShowPreviewBlockSurface", window: 900);
         Assert.Contains("HideMatchNavPanel();", blockSurface);
+    }
+
+    [Fact]
+    public void ActiveSearchPreview_BoundsDenseSingleLineInitialRender()
+    {
+        string buildHighlight = ExtractMethodWindow(MainWindowSource, "BuildHighlightSectionAsync", window: 6000);
+
+        AssertContainsInOrder(buildHighlight,
+            "bool truncatePreviewLines = ViewModel.IsSearching",
+            "? ShouldTruncateOverflowPreviewLines()",
+            ": ShouldTruncatePreviewLines();");
+
+        AssertContainsInOrder(buildHighlight,
+            "if (distinctMatchLines.Length == 1)",
+            "if (section.Blocks.Count - startingBlocks >= maxBlocks)",
+            "AddPreviewLineParagraphsAroundResult(",
+            "targetOnlyMatchEntry: true);");
+
+        string aroundResult = ExtractMethodWindow(MainWindowSource, "AddPreviewLineParagraphsAroundResult", window: 3600);
+        Assert.Contains("targetOnlyMatchEntry ? null : rx", aroundResult);
+        Assert.Contains("minimumOne: true", aroundResult);
     }
 
     [Fact]
@@ -909,7 +934,7 @@ public sealed class PreviewCoreRegressionTests
         string selectAndPreview = ExtractMethodWindow(MainWindowSource, "SelectFileGroupMatchesAndPreviewAsync");
         Assert.Contains("SelectFileGroupMatches(group);", selectAndPreview);
         Assert.Contains("_initialMatchScrolled = false;", selectAndPreview);
-        Assert.Contains("var results = group.Where(r => r.IsSelected).ToList();", selectAndPreview);
+        Assert.Contains("var results = GetPreviewableResults(group);", selectAndPreview);
         Assert.DoesNotContain("RecordCtrlFileHeaderPreview", MainWindowSource);
         Assert.DoesNotContain("WasCtrlFileHeaderPreviewJustHandled", MainWindowSource);
         Assert.Contains("group.IsExpanded = targetState;", selectAndPreview);
@@ -963,7 +988,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("await EnsureFileGroupsInPreviewAsync(groupsToPreview, group.FilePath);", checkboxClicked);
 
         string ensureGroups = ExtractMethodWindow(MainWindowSource, "EnsureFileGroupsInPreviewAsync");
-        Assert.Contains("var selectedResults = GetPreviewableResults(fileGroup.Where(result => result.IsSelected));", ensureGroups);
+        Assert.Contains("var selectedResults = GetPreviewableResults(fileGroup);", ensureGroups);
         Assert.Contains("await PrependPreviewSectionsForFilesAsync(newFiles, scrollToFile);", ensureGroups);
     }
 

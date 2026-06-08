@@ -89,6 +89,9 @@ public static class ReportExportService
 
             foreach (var result in group.Results)
             {
+                if (IsGeneratedPreviewNoticeLine(result.MatchLine))
+                    continue;
+
                 jsonWriter.WriteStartObject();
                 jsonWriter.WriteString("filePath", group.FilePath);
                 jsonWriter.WriteString("fileName", group.FileName);
@@ -112,12 +115,18 @@ public static class ReportExportService
 
                     jsonWriter.WriteStartArray("contextBefore");
                     foreach (var line in ctxBefore)
-                        jsonWriter.WriteStringValue(line);
+                    {
+                        if (!IsGeneratedPreviewNoticeLine(line))
+                            jsonWriter.WriteStringValue(line);
+                    }
                     jsonWriter.WriteEndArray();
 
                     jsonWriter.WriteStartArray("contextAfter");
                     foreach (var line in ctxAfter)
-                        jsonWriter.WriteStringValue(line);
+                    {
+                        if (!IsGeneratedPreviewNoticeLine(line))
+                            jsonWriter.WriteStringValue(line);
+                    }
                     jsonWriter.WriteEndArray();
                 }
 
@@ -181,6 +190,9 @@ public static class ReportExportService
 
             foreach (var result in group.Results)
             {
+                if (IsGeneratedPreviewNoticeLine(result.MatchLine))
+                    continue;
+
                 var fields = new List<string>();
                 fields.Add(CsvEscape(group.FilePath));
                 fields.Add(CsvEscape(group.FileName));
@@ -202,8 +214,8 @@ public static class ReportExportService
                     string lineSep = options.CsvUsePipeSeparator ? " | " : "\n";
                     var ctxBefore = ResolveContextBefore(result, options.ContextLineCount, sourceContext);
                     var ctxAfter = ResolveContextAfter(result, options.ContextLineCount, sourceContext);
-                    fields.Add(CsvEscape(string.Join(lineSep, ctxBefore)));
-                    fields.Add(CsvEscape(string.Join(lineSep, ctxAfter)));
+                    fields.Add(CsvEscape(string.Join(lineSep, ctxBefore.Where(line => !IsGeneratedPreviewNoticeLine(line)))));
+                    fields.Add(CsvEscape(string.Join(lineSep, ctxAfter.Where(line => !IsGeneratedPreviewNoticeLine(line)))));
                 }
 
                 await writer.WriteLineAsync(string.Join(',', fields)).ConfigureAwait(false);
@@ -222,6 +234,18 @@ public static class ReportExportService
             return line;
         int safeLen = Math.Min(matchLength, line.Length - matchStart);
         return $"{line[..matchStart]}<match>{line.Substring(matchStart, safeLen)}</match>{line[(matchStart + safeLen)..]}";
+    }
+
+    internal static bool IsGeneratedPreviewNoticeLine(string? line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return false;
+
+        return line.Contains("Showing first ", StringComparison.Ordinal)
+               && line.Contains(" of ", StringComparison.Ordinal)
+               && line.Contains(" matches", StringComparison.Ordinal)
+            || line.Contains("(Next match)", StringComparison.Ordinal)
+               && line.Contains("open in editor to browse all", StringComparison.Ordinal);
     }
 
     private static IReadOnlyList<string> ResolveContextBefore(SearchResult result, int maxLines, SourceFileContext? sourceContext)

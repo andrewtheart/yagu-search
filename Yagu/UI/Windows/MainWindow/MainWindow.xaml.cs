@@ -88,6 +88,9 @@ public sealed partial class MainWindow : Window, IDisposable
 
     private static readonly UIntPtr HotkeySubclassId = new(0x5147484Bu);
     private const uint WmGetMinMaxInfo = 0x0024;
+    private const uint WmKeyDown = 0x0100;
+    private const uint WmSysKeyDown = 0x0104;
+    private const uint VkF1 = 0x70;
     private const uint MonitorDefaultToNearest = 0x00000002;
     private const int SW_RESTORE = 9;
     private const int SW_HIDE = 0;
@@ -193,6 +196,7 @@ public sealed partial class MainWindow : Window, IDisposable
         QueryBox.AddHandler(UIElement.PointerPressedEvent,
             new PointerEventHandler(OnQueryBoxPointerPressed),
             handledEventsToo: true);
+        InitializeHelpKeyboardShortcut();
         SearchCancelButton.SizeChanged += (_, _) => AlignBrowseButtonToSearchButton();
         SyncLayoutToggles(ViewModel.PreviewModeIndex);
         Title = AppInfo.WindowTitle;

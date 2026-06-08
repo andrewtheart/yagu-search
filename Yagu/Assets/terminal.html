@@ -82,6 +82,15 @@
     }
   });
 
+  // WebView2 owns keyboard focus while the terminal is active, so forward F1 to the host.
+  window.addEventListener('keydown', function(event) {
+    if (event.key === 'F1') {
+      event.preventDefault();
+      event.stopPropagation();
+      window.chrome.webview.postMessage(JSON.stringify({ type: 'openHelp' }));
+    }
+  }, true);
+
   // Handle window resize
   window.addEventListener('resize', function() {
     fitAddon.fit();

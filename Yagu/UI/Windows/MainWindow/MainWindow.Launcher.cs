@@ -261,6 +261,12 @@ public sealed partial class MainWindow
         if (message == WmGetMinMaxInfo && TryApplyMaximizedWorkArea(hWnd, lParam))
             return IntPtr.Zero;
 
+        if (IsHelpShortcutMessage(message, wParam))
+        {
+            OpenHelpWindow();
+            return IntPtr.Zero;
+        }
+
         if (message == HotkeyService.WmHotkey)
         {
             if (_hotkeyService.RegisteredKey == 'S' && GetForegroundWindow() == _hwnd)
@@ -275,6 +281,9 @@ public sealed partial class MainWindow
 
         return DefSubclassProc(hWnd, message, wParam, lParam);
     }
+
+    private static bool IsHelpShortcutMessage(uint message, UIntPtr wParam)
+        => message is WmKeyDown or WmSysKeyDown && wParam.ToUInt32() == VkF1;
 
     private static bool TryApplyMaximizedWorkArea(IntPtr hWnd, IntPtr lParam)
     {

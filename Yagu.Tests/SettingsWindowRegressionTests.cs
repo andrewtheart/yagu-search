@@ -17,6 +17,10 @@ public sealed class SettingsWindowRegressionTests
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
     private static readonly string MainWindowTerminalSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
+    private static readonly string MainWindowWindowSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml.cs"));
+    private static readonly string MainWindowKeyboardSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Keyboard.cs"));
     private static readonly string MainWindowXaml = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
     private static readonly string SettingsWindowSource = File.ReadAllText(
@@ -40,6 +44,8 @@ public sealed class SettingsWindowRegressionTests
     private static readonly string SelectionRendererSource = File.ReadAllText(
         Path.Combine(RepoRoot, "vendor", "TextControlBox-WinUI", "TextControlBox",
             "Core", "Renderer", "SelectionRenderer.cs"));
+    private static readonly string TerminalHtml = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "Assets", "terminal.html"));
 
     // ── SettingsWindow XAML structure ──
 
@@ -90,6 +96,7 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("HotkeyService hotkeyService", SettingsWindowSource);
         Assert.Contains("IntPtr mainHwnd", SettingsWindowSource);
         Assert.Contains("Action<bool>? applyWordWrap", SettingsWindowSource);
+        Assert.Contains("Action openHelp", SettingsWindowSource);
     }
 
     [Fact]
@@ -231,6 +238,33 @@ public sealed class SettingsWindowRegressionTests
         string method = ExtractMethod(SettingsWindowSource, "OnTabSelectionChanged");
         Assert.Contains("SettingsContent.Children.Clear()", method);
         Assert.Contains("_tabPages", method);
+    }
+
+    [Fact]
+    public void SearchDefaults_IncludeExcludePatternsUseWideTextBoxesAndModeSelectors()
+    {
+        Assert.Contains("Default include patterns (comma/semicolon-separated):", SettingsWindowSource);
+        Assert.Contains("Default exclude patterns (comma/semicolon-separated):", SettingsWindowSource);
+        Assert.Contains("var incMode = new ComboBox", SettingsWindowSource);
+        Assert.Contains("var excMode = new ComboBox", SettingsWindowSource);
+        Assert.Contains("_viewModel.IncludeFilterModeIndex = incMode.SelectedIndex;", SettingsWindowSource);
+        Assert.Contains("_viewModel.ExcludeFilterModeIndex = excMode.SelectedIndex;", SettingsWindowSource);
+        Assert.Contains("PlaceholderText = _viewModel.IncludeFilterPlaceholder, Width = 620", SettingsWindowSource);
+        Assert.Contains("PlaceholderText = _viewModel.ExcludeFilterPlaceholder, Width = 620", SettingsWindowSource);
+
+        Assert.Contains("public string IncludeGlobs", SettingsServiceSource);
+        Assert.Contains("public string ExcludeGlobs", SettingsServiceSource);
+        Assert.Contains("public int IncludeFilterModeIndex", SettingsServiceSource);
+        Assert.Contains("public int ExcludeFilterModeIndex", SettingsServiceSource);
+        Assert.DoesNotContain("[JsonIgnore] public string IncludeGlobs", SettingsServiceSource);
+        Assert.DoesNotContain("[JsonIgnore] public string ExcludeGlobs", SettingsServiceSource);
+
+        Assert.Contains("IncludeFilterModeIndex = _settings.IncludeFilterModeIndex", MainViewModelSource);
+        Assert.Contains("ExcludeFilterModeIndex = _settings.ExcludeFilterModeIndex", MainViewModelSource);
+        Assert.Contains("_settings.IncludeFilterModeIndex = IncludeFilterModeIndex", MainViewModelSource);
+        Assert.Contains("_settings.ExcludeFilterModeIndex = ExcludeFilterModeIndex", MainViewModelSource);
+        Assert.Contains("SelectedIndex=\"{x:Bind ViewModel.IncludeFilterModeIndex, Mode=TwoWay}\"", MainWindowXaml);
+        Assert.Contains("SelectedIndex=\"{x:Bind ViewModel.ExcludeFilterModeIndex, Mode=TwoWay}\"", MainWindowXaml);
     }
 
     [Fact]
@@ -419,6 +453,38 @@ public sealed class SettingsWindowRegressionTests
     public void MainWindowXaml_FilterFlyoutOpensBelowToolbarButton()
     {
         Assert.Contains("<MenuFlyout Placement=\"BottomEdgeAlignedLeft\" Opening=\"OnFilterFlyoutOpening\">", MainWindowXaml);
+    }
+
+    [Fact]
+    public void F1Shortcut_OpensHelpFromMainSettingsAndTerminalFocus()
+    {
+        Assert.Contains("PreviewKeyDown=\"OnRootGridPreviewKeyDown\"", MainWindowXaml);
+        Assert.Contains("InitializeHelpKeyboardShortcut();", MainWindowWindowSource);
+
+        string mainHelpAccelerator = ExtractMethod(MainWindowKeyboardSource, "InitializeHelpKeyboardShortcut", window: 1000);
+        Assert.Contains("Key = VirtualKey.F1", mainHelpAccelerator);
+        Assert.Contains("OpenHelpWindow();", mainHelpAccelerator);
+
+        string mainKeyPreview = ExtractMethod(MainWindowKeyboardSource, "OnRootGridPreviewKeyDown", window: 900);
+        Assert.Contains("VirtualKey.F1", mainKeyPreview);
+        Assert.Contains("OpenHelpWindow();", mainKeyPreview);
+
+        Assert.Contains("IsHelpShortcutMessage(message, wParam)", MainWindowLauncherSource);
+        Assert.Contains("message is WmKeyDown or WmSysKeyDown", MainWindowLauncherSource);
+        Assert.Contains("wParam.ToUInt32() == VkF1", MainWindowLauncherSource);
+        Assert.Contains("private const uint VkF1 = 0x70;", MainWindowWindowSource);
+
+        Assert.Contains("PreviewKeyDown=\"OnSettingsRootPreviewKeyDown\"", SettingsWindowXaml);
+        Assert.Contains("Action openHelp", SettingsWindowSource);
+        Assert.Contains("InitializeHelpKeyboardShortcut();", SettingsWindowSource);
+        Assert.Contains("Key = VirtualKey.F1", SettingsWindowSource);
+        Assert.Contains("_openHelp();", SettingsWindowSource);
+        Assert.Contains("OpenHelpWindow", MainWindowSource);
+
+        Assert.Contains("case \"openHelp\":", MainWindowTerminalSource);
+        Assert.Contains("OpenHelpWindow();", MainWindowTerminalSource);
+        Assert.Contains("event.key === 'F1'", TerminalHtml);
+        Assert.Contains("type: 'openHelp'", TerminalHtml);
     }
 
     [Fact]

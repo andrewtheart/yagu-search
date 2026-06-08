@@ -321,7 +321,7 @@ public sealed partial class MainWindow
             SelectFileGroupMatches(group);
             _initialMatchScrolled = false;
 
-            var results = group.Where(r => r.IsSelected).ToList();
+            var results = GetPreviewableResults(group);
             if (results.Count > 0)
             {
                 if (TryScrollToPreviewSection(group.FilePath))
