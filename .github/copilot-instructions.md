@@ -8,6 +8,12 @@
 - Build **Release** only when the user explicitly asks for a Release build. For Release builds, use the normal Release profile without Rust profiling: `dotnet build Yagu/Yagu.csproj -c Release`.
 - When launching the app, always launch the **Debug** build: `Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe`.
 
+## CLI Documentation Rules
+
+- When adding, changing, or removing user-facing features, update `HELP.md` so the help guide matches the current product behavior.
+- When changing CLI flags, adding CLI flags, or changing CLI command behavior, update the `Yagu.exe --help` output and example CLI commands in the CLI help section so the in-app/terminal help stays current.
+- On the same trigger, update `HELP.md` with the same CLI flag and example command information.
+
 ## Native Crash & Profiling Rules
 
 - When investigating a `yagu_core.dll` native crash, WER crash dump, native stack, Rust FFI issue, or native search performance problem, build **Debug** with the Rust profiling profile so the app output contains a symbol-rich native binary and PDB: `dotnet build Yagu/Yagu.csproj -c Debug -p:RustProfile=profiling`.
