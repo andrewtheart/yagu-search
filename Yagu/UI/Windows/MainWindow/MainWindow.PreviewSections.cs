@@ -457,6 +457,9 @@ public sealed partial class MainWindow
                         if (Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(tb) is Grid g
                             && g.ColumnDefinitions.Count > 3)
                         {
+                            g.ColumnDefinitions[2].Width = compact
+                                ? new GridLength(1, GridUnitType.Star)
+                                : new GridLength(320);
                             g.ColumnDefinitions[3].Width = compact
                                 ? new GridLength(0)
                                 : new GridLength(1, GridUnitType.Star);

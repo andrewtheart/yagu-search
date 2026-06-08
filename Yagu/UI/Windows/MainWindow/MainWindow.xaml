@@ -95,7 +95,7 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="320" />
+                            <ColumnDefinition Width="320" MinWidth="0" />
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
@@ -109,7 +109,7 @@
                                 <Run Text="{x:Bind MatchCount}" /><Run Text=" matches" />
                             </TextBlock>
                         </Border>
-                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                        <StackPanel Grid.Column="2" MinWidth="0" VerticalAlignment="Center">
                             <TextBlock Text="{x:Bind FileName}"
                                        ToolTipService.ToolTip="{x:Bind FileName}"
                                        FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis" />

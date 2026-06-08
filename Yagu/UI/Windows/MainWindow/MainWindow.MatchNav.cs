@@ -614,16 +614,6 @@ public sealed partial class MainWindow
         if (viewportHeight <= 0)
             return false;
 
-        try
-        {
-            double measureWidth = ViewModel.PreviewWordWrap ? GetPreviewWrapTextWidth(block) : block.ActualWidth;
-            if (measureWidth > 0)
-                block.Measure(new Windows.Foundation.Size(measureWidth, double.PositiveInfinity));
-            block.UpdateLayout();
-            PreviewScrollViewer.UpdateLayout();
-        }
-        catch { }
-
         if (!TryGetPreviewParagraphLineRect(targetPara, out var rect, out source))
             return false;
 
@@ -857,28 +847,14 @@ public sealed partial class MainWindow
                 return false;
             }
 
-            // Flush pending layout so TransformToVisual reflects any recent
-            // scroll offset changes (both vertical and horizontal).
-            // The canvas must be Visible before UpdateLayout so it receives a
-            // proper arrange pass — TransformToVisual against a Collapsed
-            // element returns unreliable coordinates.
-            // We also update the block itself to ensure word-wrap reflow has
-            // completed before querying character positions.
+            // Make the overlay visible, then let the queued retry run after
+            // WinUI's normal layout pass. Forcing layout here can synchronously
+            // reflow very large wrapped RichTextBlocks during match navigation.
             if (ActiveMatchOverlay.Visibility != Visibility.Visible)
-                ActiveMatchOverlay.Visibility = Visibility.Visible;
-            try
             {
-                // Force text layout reflow at the current wrap width.
-                // RichTextBlock.UpdateLayout() alone may not re-wrap text;
-                // an explicit Measure ensures GetCharacterRect returns positions
-                // consistent with the current block width.
-                double measureWidth = ViewModel.PreviewWordWrap ? GetPreviewWrapTextWidth(block) : block.ActualWidth;
-                if (measureWidth > 0)
-                    block.Measure(new Windows.Foundation.Size(measureWidth, double.PositiveInfinity));
-                block.UpdateLayout();
-                PreviewScrollViewer.UpdateLayout();
+                ActiveMatchOverlay.Visibility = Visibility.Visible;
+                return false;
             }
-            catch { }
 
             var rect = targetRun.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
             if (!IsUsableTextRect(rect))
@@ -1821,25 +1797,13 @@ public sealed partial class MainWindow
                 bool layoutMoved = !double.IsNaN(previousParaAbsY) && Math.Abs(paraY - previousParaAbsY) > 2.0;
                 int nextAttempt = layoutMoved ? correctionAttempt : correctionAttempt + 1;
 
-                // If the run hasn't been measured yet (runH == 0 or NaN), the layout
-                // pass hasn't reached this paragraph. Force an explicit UpdateLayout
-                // and re-enqueue verification so we try again after layout has had
-                // another tick. Without this we silently leave the user looking at
-                // the wrong content — and the only way to recover used to be moving
-                // the mouse over the preview panel (which forces realization).
+                // If the run hasn't been measured yet (runH == 0 or NaN), wait for
+                // the normal layout pass instead of forcing the whole preview tree
+                // through UpdateLayout on the UI thread.
                 if ((double.IsNaN(runH) || runH <= 0) && nextAttempt <= kHardCap)
                 {
-                    bool layoutForced = false;
-                    string layoutEx = "";
-                    try
-                    {
-                        block.UpdateLayout();
-                        PreviewScrollViewer.UpdateLayout();
-                        layoutForced = true;
-                    }
-                    catch (Exception ex) { layoutEx = ex.GetType().Name; }
                     LogService.Instance.Info("MatchNav",
-                        $"VerifyActiveMatch: run not yet measured (runH={runH:N1}), forcedLayout={layoutForced}{(layoutEx.Length > 0 ? $", layoutEx={layoutEx}" : "")}, re-enqueue verify idx={navIdx}, attempt={nextAttempt}/{kHardCap}");
+                        $"VerifyActiveMatch: run not yet measured (runH={runH:N1}), waiting for layout, re-enqueue verify idx={navIdx}, attempt={nextAttempt}/{kHardCap}");
                     VerifyActiveMatchVisibleAfterScroll(block, targetPara, paragraphIndex, nextAttempt, paraY);
                     return;
                 }

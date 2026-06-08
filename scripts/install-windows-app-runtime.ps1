@@ -1,10 +1,14 @@
 [CmdletBinding()]
 param(
-    [string]$RuntimeDir = (Join-Path $PSScriptRoot 'win10-x64')
+    [string]$RuntimeDir
 )
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+if ([string]::IsNullOrWhiteSpace($RuntimeDir)) {
+    $RuntimeDir = Join-Path $PSScriptRoot 'win10-x64'
+}
 
 function Get-MsixPackageIdentity {
     param([string]$MsixPath)

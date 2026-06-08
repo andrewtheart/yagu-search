@@ -45,6 +45,8 @@ public sealed class InstallerPackagingRegressionTests
 
         Assert.Contains("System.IO.Compression.ZipFile", installScript);
         Assert.Contains("AppxManifest.xml", installScript);
+        Assert.DoesNotContain("[string]$RuntimeDir = (Join-Path $PSScriptRoot", installScript);
+        Assert.Contains("if ([string]::IsNullOrWhiteSpace($RuntimeDir))", installScript);
         Assert.Contains("Get-AppxPackage -Name $Name -PackageTypeFilter Main,Framework", installScript);
         Assert.Contains("Add-AppxPackage -Path $msixPath -ErrorAction Stop", installScript);
     }
