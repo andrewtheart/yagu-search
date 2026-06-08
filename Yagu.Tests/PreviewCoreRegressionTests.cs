@@ -17,6 +17,8 @@ public sealed class PreviewCoreRegressionTests
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
     private static readonly string MainWindowXaml = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
+    private static readonly string TerminalHtml = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "Assets", "terminal.html"));
 
     [Fact]
     public void FileGroup_SelectAll_SelectsEveryMatch()
@@ -134,7 +136,7 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void PreviewContextMenus_OpenDisplaySettingsForPreviewFontsAndColors()
+    public void PreviewAndEditorContextMenus_OpenDisplaySettingsWithSurfaceSpecificLabels()
     {
         string previewFlyout = ExtractMethodWindow(MainWindowSource, "AttachPreviewBlockContextFlyout", 3400);
         AssertContainsInOrder(previewFlyout,
@@ -144,9 +146,10 @@ public sealed class PreviewCoreRegressionTests
 
         string editorFlyout = ExtractMethodWindow(PreviewEditorSource, "InitializePreviewEditorZoom", 2600);
         AssertContainsInOrder(editorFlyout,
-            "Text = \"Change preview fonts/colors...\"",
+            "Text = \"Change editor font/colors...\"",
             "OpenSettingsTab(SettingsDisplayTabIndex)",
             "flyout.Items.Add(displaySettingsItem);");
+        Assert.DoesNotContain("Change preview fonts/colors...", editorFlyout);
     }
 
     [Fact]
@@ -206,8 +209,10 @@ public sealed class PreviewCoreRegressionTests
     [Fact]
     public void QueryBox_ClearButtonVisibilityFollowsQueryTextEvenWithoutFocus()
     {
+        string inlineToggles = ExtractXamlWindow("x:Name=\"InlineSearchToggles\"", 300);
+        Assert.Contains("Margin=\"0,0,36,0\"", inlineToggles);
+
         string searchBar = ExtractXamlWindow("x:Name=\"QueryClearButton\"", 1100);
-        Assert.Contains("Margin=\"0,0,36,0\"", searchBar);
         Assert.Contains("Width=\"32\" Height=\"32\"", searchBar);
         Assert.Contains("Margin=\"0,0,4,0\"", searchBar);
         Assert.Contains("Visibility=\"{x:Bind ViewModel.HasQueryText, Mode=OneWay}\"", searchBar);
@@ -597,6 +602,32 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void ResultsToolbar_OptionsAreHostedInEllipsisFlyout()
+    {
+        string toolbar = ExtractXamlWindow("x:Name=\"AutoScrollResultsCheckBox\"", 5200);
+        Assert.Contains("x:Name=\"ResultsOptionsButton\"", toolbar);
+        Assert.Contains("Glyph=\"&#xE712;\"", toolbar);
+        Assert.Contains("ToolTipService.ToolTip=\"Results options\"", toolbar);
+        Assert.Contains("<Flyout Placement=\"BottomEdgeAlignedRight\">", toolbar);
+
+        AssertContainsInOrder(toolbar,
+            "x:Name=\"ResultsOptionsButton\"",
+            "<Button.Flyout>",
+            "Text=\"Context:\"",
+            "Value=\"{x:Bind ViewModel.ContextLines, Mode=TwoWay}\"",
+            "SpinButtonPlacementMode=\"Hidden\"",
+            "Click=\"OnClearResults\"",
+            "Text=\"Clear all results\"",
+            "x:Name=\"SaveSessionButton\"",
+            "Text=\"Save session\"",
+            "x:Name=\"LoadSessionButton\"",
+            "Text=\"Load session\"");
+
+        Assert.DoesNotContain("SpinButtonPlacementMode=\"Compact\"", toolbar);
+        Assert.DoesNotContain("ToolTipService.ToolTip=\"Clear all results (Ctrl+Shift+Delete)\">\r\n                                <FontIcon Glyph=\"&#xE74D;\"", toolbar);
+    }
+
+    [Fact]
     public void SortFlyout_UsesInlineArrowButtonsForEachSortField()
     {
         string sortFlyout = ExtractXamlWindow("<Flyout x:Name=\"SortFlyout\"", 9000);
@@ -709,6 +740,12 @@ public sealed class PreviewCoreRegressionTests
             "<!-- Bottom status bar -->",
             "<Grid Grid.Row=\"6\"");
         Assert.Contains("<WebView2 x:Name=\"TerminalWebView\" Grid.Row=\"5\"", MainWindowXaml);
+        AssertContainsInOrder(TerminalHtml,
+            "#terminal {",
+            "width: 100%;",
+            "height: 100%;",
+            "box-sizing: border-box;",
+            "padding: 8px 12px;");
     }
 
     [Fact]
@@ -742,6 +779,25 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("ViewModel.ResultRows.CollectionChanging += OnResultGroupsChanging;", scrollSource);
         Assert.Contains("ViewModel.ResultRows.CollectionChanged += OnResultGroupsCollectionChanged;", scrollSource);
         Assert.DoesNotContain("ViewModel.ResultGroups.CollectionChanged += OnResultGroupsCollectionChanged;", scrollSource);
+
+        string fileGroupTemplate = ExtractXamlWindow("<DataTemplate x:Key=\"FileGroupResultTemplate\"", 4200);
+        Assert.Contains("Visibility=\"{x:Bind HasContentMatches, Mode=OneWay}\"", fileGroupTemplate);
+    }
+
+    [Fact]
+    public void FileNameOnlyPreview_RendersFullFileWithoutMatchHighlightsOrNavigation()
+    {
+        string singleFilePreview = ExtractMethodWindow(MainWindowSource, "ShowSingleFilePreviewAsync", window: 5200);
+        AssertContainsInOrder(singleFilePreview,
+            "bool isFileNameOnlyPreview = r.LineNumber <= 0;",
+            "fullFile |= isFileNameOnlyPreview;",
+            "Regex? rx = isFileNameOnlyPreview",
+            "? null",
+            "var lines = GetPreviewLines(r, allLines, ViewModel.PreviewContextLines, fullFile);",
+            "bool isMatchLine = !isFileNameOnlyPreview && lineNum == r.LineNumber;");
+
+        string blockSurface = ExtractMethodWindow(MainWindowSource, "ShowPreviewBlockSurface", window: 900);
+        Assert.Contains("HideMatchNavPanel();", blockSurface);
     }
 
     [Fact]
@@ -822,7 +878,6 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("OnResultItemClick: no preview change", itemClick);
         Assert.DoesNotContain("UpdatePreviewAsync(g[0])", itemClick);
         Assert.DoesNotContain("TryScrollToPreviewSection(g[0].FilePath)", itemClick);
-
         Assert.DoesNotContain("OnFileGroupHeaderTapped", MainWindowSource);
         Assert.DoesNotContain("SelectFileGroupMatchesAndPreviewAsync(g, \"single click\")", MainWindowSource);
 

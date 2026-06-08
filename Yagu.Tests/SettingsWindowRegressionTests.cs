@@ -77,6 +77,7 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("Click=\"OnSaveClick\"", SettingsWindowXaml);
         Assert.Contains("Click=\"OnCancelClick\"", SettingsWindowXaml);
         Assert.Contains("Style=\"{ThemeResource AccentButtonStyle}\"", SettingsWindowXaml);
+        Assert.Contains("IsEnabled=\"False\"", SettingsWindowXaml);
     }
 
     // ── SettingsWindow code-behind structure ──
@@ -139,8 +140,47 @@ public sealed class SettingsWindowRegressionTests
     public void SettingsWindow_SavePersistsAndCloses()
     {
         string saveMethod = ExtractMethod(SettingsWindowSource, "OnSaveClick");
-        Assert.Contains("PersistSettingsAsync()", saveMethod);
+        Assert.Contains("SaveButton.IsEnabled = false;", saveMethod);
+        Assert.Contains("await _viewModel.PersistSettingsAsync();", saveMethod);
+        Assert.Contains("MarkSettingsClean();", saveMethod);
         Assert.Contains("Close()", saveMethod);
+    }
+
+    [Fact]
+    public void SettingsWindow_SaveButtonTracksDirtySettingChanges()
+    {
+        Assert.Contains("private bool _settingsDirty;", SettingsWindowSource);
+        Assert.Contains("private bool _settingDirtyTrackingEnabled;", SettingsWindowSource);
+        AssertContainsInOrder(SettingsWindowSource,
+            "BuildSettingsContent();",
+            "AttachSettingDirtyHandlers();",
+            "MarkSettingsClean();",
+            "ExtractSearchableEntries();");
+
+        string attachMethod = ExtractMethod(SettingsWindowSource, "AttachSettingDirtyHandlers", window: 3000);
+        Assert.Contains("textBox.TextChanged += (_, _) => MarkSettingsDirty();", attachMethod);
+        Assert.Contains("numberBox.ValueChanged += (_, _) => MarkSettingsDirty();", attachMethod);
+        Assert.Contains("comboBox.SelectionChanged += (_, _) => MarkSettingsDirty();", attachMethod);
+        Assert.Contains("checkBox.Checked += (_, _) => MarkSettingsDirty();", attachMethod);
+        Assert.Contains("toggleSwitch.Toggled += (_, _) => MarkSettingsDirty();", attachMethod);
+        Assert.Contains("calendarDatePicker.DateChanged += (_, _) => MarkSettingsDirty();", attachMethod);
+        Assert.Contains("colorPicker.ColorChanged += (_, _) => MarkSettingsDirty();", attachMethod);
+
+        string dirtyMethod = ExtractMethod(SettingsWindowSource, "MarkSettingsDirty", window: 900);
+        AssertContainsInOrder(dirtyMethod,
+            "if (!_settingDirtyTrackingEnabled || _settingsDirty)",
+            "_settingsDirty = true;",
+            "SaveButton.IsEnabled = true;");
+
+        string cleanMethod = ExtractMethod(SettingsWindowSource, "MarkSettingsClean", window: 500);
+        AssertContainsInOrder(cleanMethod,
+            "_settingsDirty = false;",
+            "SaveButton.IsEnabled = false;");
+
+        AssertContainsInOrder(SettingsWindowSource,
+            "_viewModel.SuppressAdminWarning = false;",
+            "MarkSettingsDirty();",
+            "resetAdmin.IsEnabled = false;");
     }
 
     [Fact]
@@ -238,6 +278,7 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("\"Terminal Emulator\"", SettingsWindowSource);
         Assert.Contains("Default working directory:", SettingsWindowSource);
         Assert.Contains("_viewModel.TerminalDefaultWorkingDirectory", SettingsWindowSource);
+        Assert.Contains("Width = 620", SettingsWindowSource);
         Assert.Contains("PickTerminalWorkingDirectoryAsync", SettingsWindowSource);
         Assert.Contains("App.LaunchWorkingDirectory", SettingsWindowSource);
 

@@ -114,7 +114,7 @@ public sealed partial class MainWindow
 
                 var displaySettingsItem = new MenuFlyoutItem
                 {
-                    Text = "Change preview fonts/colors...",
+                    Text = "Change editor font/colors...",
                     Icon = new SymbolIcon(Symbol.Setting),
                 };
                 displaySettingsItem.Click += (_, _) => OpenSettingsTab(SettingsDisplayTabIndex);

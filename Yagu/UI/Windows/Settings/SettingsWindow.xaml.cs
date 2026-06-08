@@ -41,6 +41,9 @@ public sealed partial class SettingsWindow : Window
     private readonly Action? _applyPreviewSectionBackgrounds;
     private readonly List<UIElement> _tabPages = new();
     private readonly List<List<UIElement>> _tabPageRootElements = new();
+    private readonly HashSet<UIElement> _dirtyTrackedElements = new();
+    private bool _settingsDirty;
+    private bool _settingDirtyTrackingEnabled;
 
     /// <summary>Flat registry of every setting built during BuildSettingsContent for search filtering.</summary>
     private readonly List<SettingEntry> _settingEntries = new();
@@ -102,6 +105,8 @@ public sealed partial class SettingsWindow : Window
             appWindow.SetIcon(icoPath);
 
         BuildSettingsContent();
+        AttachSettingDirtyHandlers();
+        MarkSettingsClean();
         ExtractSearchableEntries();
         TabList.SelectedIndex = 0;
     }
@@ -180,10 +185,73 @@ public sealed partial class SettingsWindow : Window
         appWindow.Move(new PointInt32(x, y));
     }
 
-    private void OnSaveClick(object sender, RoutedEventArgs e)
+    private async void OnSaveClick(object sender, RoutedEventArgs e)
     {
-        _ = _viewModel.PersistSettingsAsync();
+        SaveButton.IsEnabled = false;
+        await _viewModel.PersistSettingsAsync();
+        MarkSettingsClean();
         Close();
+    }
+
+    private void AttachSettingDirtyHandlers()
+    {
+        foreach (var page in _tabPages)
+            AttachSettingDirtyHandlers(page);
+
+        _settingDirtyTrackingEnabled = true;
+    }
+
+    private void AttachSettingDirtyHandlers(UIElement element)
+    {
+        if (!_dirtyTrackedElements.Add(element))
+            return;
+
+        switch (element)
+        {
+            case TextBox textBox:
+                textBox.TextChanged += (_, _) => MarkSettingsDirty();
+                break;
+            case NumberBox numberBox:
+                numberBox.ValueChanged += (_, _) => MarkSettingsDirty();
+                break;
+            case ComboBox comboBox:
+                comboBox.SelectionChanged += (_, _) => MarkSettingsDirty();
+                break;
+            case CheckBox checkBox:
+                checkBox.Checked += (_, _) => MarkSettingsDirty();
+                checkBox.Unchecked += (_, _) => MarkSettingsDirty();
+                break;
+            case ToggleSwitch toggleSwitch:
+                toggleSwitch.Toggled += (_, _) => MarkSettingsDirty();
+                break;
+            case CalendarDatePicker calendarDatePicker:
+                calendarDatePicker.DateChanged += (_, _) => MarkSettingsDirty();
+                break;
+            case ColorPicker colorPicker:
+                colorPicker.ColorChanged += (_, _) => MarkSettingsDirty();
+                break;
+        }
+
+        if (element is Border { Child: UIElement child })
+            AttachSettingDirtyHandlers(child);
+        else if (element is Panel panel)
+            foreach (var childElement in panel.Children)
+                AttachSettingDirtyHandlers(childElement);
+    }
+
+    private void MarkSettingsDirty()
+    {
+        if (!_settingDirtyTrackingEnabled || _settingsDirty)
+            return;
+
+        _settingsDirty = true;
+        SaveButton.IsEnabled = true;
+    }
+
+    private void MarkSettingsClean()
+    {
+        _settingsDirty = false;
+        SaveButton.IsEnabled = false;
     }
 
     private void RootGrid_Loaded(object sender, RoutedEventArgs e)
@@ -985,7 +1053,7 @@ public sealed partial class SettingsWindow : Window
         {
             Text = _viewModel.TerminalDefaultWorkingDirectory,
             PlaceholderText = App.LaunchWorkingDirectory,
-            MaxWidth = 520,
+            Width = 620,
             HorizontalAlignment = HorizontalAlignment.Left,
         };
         workingDirectory.TextChanged += (_, _) => _viewModel.TerminalDefaultWorkingDirectory = workingDirectory.Text;
@@ -1776,6 +1844,7 @@ public sealed partial class SettingsWindow : Window
                 resetAdmin.Click += (_, _) =>
                 {
                     _viewModel.SuppressAdminWarning = false;
+                    MarkSettingsDirty();
                     resetAdmin.Content = "Admin warning re-enabled ✓";
                     resetAdmin.IsEnabled = false;
                 };

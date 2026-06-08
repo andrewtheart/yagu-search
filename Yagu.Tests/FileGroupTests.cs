@@ -214,6 +214,27 @@ public class FileGroupTests
     }
 
     [Fact]
+    public void FileNameOnlyResults_DoNotCountAsContentMatchesUntilContentResultArrives()
+    {
+        var group = new FileGroup(@"D:\file.txt");
+        var changed = new List<string>();
+        ((System.ComponentModel.INotifyPropertyChanged)group).PropertyChanged += (_, args) => changed.Add(args.PropertyName ?? string.Empty);
+
+        group.Add(MakeResult(@"D:\file.txt", 0, "file.txt"));
+
+        Assert.False(group.HasContentMatches);
+        Assert.Equal(1, group.MatchCount);
+        Assert.DoesNotContain(nameof(FileGroup.HasContentMatches), changed);
+
+        group.Add(MakeResult(@"D:\file.txt", 12));
+
+        Assert.True(group.HasContentMatches);
+        Assert.Equal(1, group.MatchCount);
+        Assert.Contains(nameof(FileGroup.HasContentMatches), changed);
+        Assert.Contains(nameof(FileGroup.MatchCount), changed);
+    }
+
+    [Fact]
     public void FormatSize_Bytes()
     {
         var group = new FileGroup(@"D:\file.txt");

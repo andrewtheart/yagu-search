@@ -58,7 +58,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     private int _fileNameMatchCount;
 
     /// <summary>True when this group has content matches (LineNumber &gt; 0) alongside filename matches.</summary>
-    public bool HasContentMatches => (Count + _evictedOnlyCount) > _fileNameMatchCount;
+    public bool HasContentMatches => (Count + HiddenMatchCount + _evictedOnlyCount) > _fileNameMatchCount;
 
     /// <summary>True when this group represents a file inside an archive.</summary>
     public bool IsArchiveEntry => ZipArchiveSearcher.IsArchivePath(FilePath);
@@ -125,9 +125,12 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     // Cached event args (avoid per-insert allocation on the hot path).
     private static readonly System.ComponentModel.PropertyChangedEventArgs s_countChanged = new("Count");
     private static readonly System.ComponentModel.PropertyChangedEventArgs s_indexerChanged = new("Item[]");
+    private static readonly System.ComponentModel.PropertyChangedEventArgs s_hasContentMatchesChanged = new(nameof(HasContentMatches));
+    private static readonly System.ComponentModel.PropertyChangedEventArgs s_matchCountChanged = new(nameof(MatchCount));
 
     protected override void InsertItem(int index, SearchResult item)
     {
+        bool hadContentMatches = HasContentMatches;
         ApplySelectionIntent(item);
 
         if (item.LineNumber == 0)
@@ -143,6 +146,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
                 OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(HiddenMatchCount)));
                 OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(MatchCount)));
             }
+            NotifyContentMatchStateIfChanged(hadContentMatches);
             return;
         }
 
@@ -168,8 +172,9 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
                     OnPropertyChanged(s_countChanged);
                     OnPropertyChanged(s_indexerChanged);
                     NotifyMoreStateChanged();
-                    OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(MatchCount)));
+                    OnPropertyChanged(s_matchCountChanged);
                 }
+                NotifyContentMatchStateIfChanged(hadContentMatches);
                 return;
             }
 
@@ -187,12 +192,23 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
                 OnPropertyChanged(s_indexerChanged);
                 NotifyMoreStateChanged();
             }
+            NotifyContentMatchStateIfChanged(hadContentMatches);
             return;
         }
 
         base.InsertItem(index, item);
+        NotifyContentMatchStateIfChanged(hadContentMatches);
         if (item.IsSelected)
             NotifySelectedCountChanged();
+    }
+
+    private void NotifyContentMatchStateIfChanged(bool hadContentMatches)
+    {
+        if (hadContentMatches == HasContentMatches)
+            return;
+
+        OnPropertyChanged(s_hasContentMatchesChanged);
+        OnPropertyChanged(s_matchCountChanged);
     }
 
     private void ApplySelectionIntent(SearchResult item)

@@ -1370,6 +1370,8 @@ public sealed partial class MainWindow
     private async Task ShowSingleFilePreviewAsync(SearchResult r, bool fullFile)
     {
         LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync: file='{r.FilePath}', line={r.LineNumber}, fullFile={fullFile}");
+        bool isFileNameOnlyPreview = r.LineNumber <= 0;
+        fullFile |= isFileNameOnlyPreview;
         var singleSw = System.Diagnostics.Stopwatch.StartNew();
         BeginPreviewContentUpdate();
         ShowPreviewBlockSurface();
@@ -1399,7 +1401,9 @@ public sealed partial class MainWindow
         InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
         PreviewBlock.Blocks.Clear();
-        Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+        Regex? rx = isFileNameOnlyPreview
+            ? null
+            : BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
 
         int lineCount = 0;
         bool truncatePreviewLines = !fullFile && ShouldTruncatePreviewLines();
@@ -1410,7 +1414,7 @@ public sealed partial class MainWindow
         LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync rebuild: wrapMode={ViewModel.PreviewWrapModeIndex}, segmentCap={GetEffectiveSegmentSize()}, truncate={truncatePreviewLines}, lines={lines.Count}, maxLineLen={maxLineLen}");
         foreach (var (line, lineNum) in lines)
         {
-            bool isMatchLine = lineNum == r.LineNumber;
+            bool isMatchLine = !isFileNameOnlyPreview && lineNum == r.LineNumber;
             AddPreviewLineParagraphs(PreviewBlock, line, lineNum, isMatchLine, r, rx, truncate: truncatePreviewLines, null, null, out int addedParagraphs);
             lineCount += addedParagraphs;
         }

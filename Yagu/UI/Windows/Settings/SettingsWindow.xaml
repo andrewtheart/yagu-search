@@ -81,6 +81,7 @@
                 Padding="24,12,24,12">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
                 <Button x:Name="SaveButton" Content="Save" Style="{ThemeResource AccentButtonStyle}"
+                        IsEnabled="False"
                         Click="OnSaveClick" />
                 <Button Content="Cancel" Click="OnCancelClick" />
             </StackPanel>

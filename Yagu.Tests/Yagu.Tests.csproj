@@ -67,6 +67,8 @@
     <Compile Include="..\Yagu\Services\EditorLauncher.cs" Link="Source\Services\EditorLauncher.cs" />
     <Compile Include="..\Yagu\Services\ZipArchiveSearcher.cs" Link="Source\Services\ZipArchiveSearcher.cs" />
     <Compile Include="..\Yagu\Services\SelectedFileExportService.cs" Link="Source\Services\SelectedFileExportService.cs" />
+    <Compile Include="..\Yagu\Services\HtmlReportExportService.cs" Link="Source\Services\HtmlReportExportService.cs" />
+    <Compile Include="..\Yagu\Services\ReportExportService.cs" Link="Source\Services\ReportExportService.cs" />
     <Compile Include="..\Yagu\Services\LogService.cs" Link="Source\Services\LogService.cs" />
     <Compile Include="..\Yagu\Services\DirectoryAutoCompleteService.cs" Link="Source\Services\DirectoryAutoCompleteService.cs" />
     <Compile Include="..\Yagu\Services\GitignoreService.cs" Link="Source\Services\GitignoreService.cs" />

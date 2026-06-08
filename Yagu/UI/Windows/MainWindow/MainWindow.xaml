@@ -103,7 +103,8 @@
                                   IsThreeState="False"
                                   IsChecked="{x:Bind AllSelected, Mode=OneWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
                                   Click="OnFileGroupCheckBoxClicked" />
-                        <Border Grid.Column="1" Background="#1A6B5A" CornerRadius="4" Padding="8,2" VerticalAlignment="Center" Margin="0,0,10,0" MinWidth="105">
+                        <Border Grid.Column="1" Background="#1A6B5A" CornerRadius="4" Padding="8,2" VerticalAlignment="Center" Margin="0,0,10,0" MinWidth="105"
+                            Visibility="{x:Bind HasContentMatches, Mode=OneWay}">
                             <TextBlock VerticalAlignment="Center" HorizontalTextAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#B0E0D0">
                                 <Run Text="{x:Bind MatchCount}" /><Run Text=" matches" />
                             </TextBlock>
@@ -974,28 +975,53 @@
                                   Checked="OnAutoScrollResultsChanged"
                                   Unchecked="OnAutoScrollResultsChanged"
                                   ToolTipService.ToolTip="Follow new results as they arrive" />
-                        <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                            <TextBlock Text="Context:" VerticalAlignment="Center" FontSize="12" Opacity="0.7" />
-                            <NumberBox Value="{x:Bind ViewModel.ContextLines, Mode=TwoWay}" Minimum="0" Maximum="20"
-                                       SpinButtonPlacementMode="Compact" MinWidth="64" Width="64" FontSize="12" />
-                            <Button Click="OnClearResults" Background="Transparent" BorderThickness="0"
-                                    Padding="8,6" VerticalAlignment="Center"
-                                    ToolTipService.ToolTip="Clear all results (Ctrl+Shift+Delete)">
-                                <FontIcon Glyph="&#xE74D;" FontSize="14" />
-                            </Button>
-                            <Button x:Name="SaveSessionButton" Click="OnSaveSession" Background="Transparent" BorderThickness="0"
-                                    Padding="8,6" VerticalAlignment="Center"
-                                    IsEnabled="{x:Bind ViewModel.IsSessionIdle, Mode=OneWay}"
-                                    ToolTipService.ToolTip="Save current results to a .yagu-session file">
-                                <FontIcon Glyph="&#xE74E;" FontSize="14" />
-                            </Button>
-                            <Button x:Name="LoadSessionButton" Click="OnLoadSession" Background="Transparent" BorderThickness="0"
-                                    Padding="8,6" VerticalAlignment="Center"
-                                    IsEnabled="{x:Bind ViewModel.IsSessionIdle, Mode=OneWay}"
-                                    ToolTipService.ToolTip="Load a previously saved .yagu-session file">
-                                <FontIcon Glyph="&#xE8E5;" FontSize="14" />
-                            </Button>
-                        </StackPanel>
+                        <Button x:Name="ResultsOptionsButton"
+                                Width="28" Height="28" MinWidth="0" MinHeight="0"
+                                Padding="0" Background="#202020" BorderBrush="#404040" BorderThickness="1" CornerRadius="4"
+                                VerticalAlignment="Center" ToolTipService.ToolTip="Results options">
+                            <FontIcon Glyph="&#xE712;" FontSize="12" />
+                            <Button.Flyout>
+                                <Flyout Placement="BottomEdgeAlignedRight">
+                                    <StackPanel Width="220" Spacing="6" Padding="2">
+                                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                            <TextBlock Text="Context:" VerticalAlignment="Center" FontSize="12" Opacity="0.8" />
+                                            <NumberBox Value="{x:Bind ViewModel.ContextLines, Mode=TwoWay}" Minimum="0" Maximum="20"
+                                                       SpinButtonPlacementMode="Hidden" MinWidth="64" Width="64" FontSize="12"
+                                                       ToolTipService.ToolTip="Context lines included with each search result" />
+                                        </StackPanel>
+
+                                        <Border Height="1" Margin="0,2" Background="{ThemeResource CardStrokeColorDefaultBrush}" />
+
+                                        <Button Click="OnClearResults" Background="Transparent" BorderThickness="0"
+                                                Padding="8,6" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                                                ToolTipService.ToolTip="Clear all results (Ctrl+Shift+Delete)">
+                                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                                <FontIcon Glyph="&#xE74D;" FontSize="14" />
+                                                <TextBlock Text="Clear all results" FontSize="12" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button x:Name="SaveSessionButton" Click="OnSaveSession" Background="Transparent" BorderThickness="0"
+                                                Padding="8,6" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                                                IsEnabled="{x:Bind ViewModel.IsSessionIdle, Mode=OneWay}"
+                                                ToolTipService.ToolTip="Save current results to a .yagu-session file">
+                                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                                <FontIcon Glyph="&#xE74E;" FontSize="14" />
+                                                <TextBlock Text="Save session" FontSize="12" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button x:Name="LoadSessionButton" Click="OnLoadSession" Background="Transparent" BorderThickness="0"
+                                                Padding="8,6" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                                                IsEnabled="{x:Bind ViewModel.IsSessionIdle, Mode=OneWay}"
+                                                ToolTipService.ToolTip="Load a previously saved .yagu-session file">
+                                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                                <FontIcon Glyph="&#xE8E5;" FontSize="14" />
+                                                <TextBlock Text="Load session" FontSize="12" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
                         </StackPanel>
                         <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.DegradedNoticeText, Mode=OneWay}"
                                    Visibility="{x:Bind ViewModel.MemoryPressureWarningVisibility, Mode=OneWay}"

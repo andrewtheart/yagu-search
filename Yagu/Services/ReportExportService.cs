@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using Yagu.Helpers;
 using Yagu.Models;
 
 namespace Yagu.Services;
@@ -69,6 +70,7 @@ public static class ReportExportService
 
         foreach (var group in groups)
         {
+            var sourceContext = SourceFileContext.TryLoad(group.FilePath);
             long fileSize = 0;
             DateTime? modifiedDate = null;
             if (options.IncludeFileSizes || options.IncludeModifiedDates)
@@ -105,8 +107,8 @@ public static class ReportExportService
 
                 if (options.IncludeContextLines && options.ContextLineCount > 0)
                 {
-                    var ctxBefore = TrimContext(result.ContextBefore, options.ContextLineCount);
-                    var ctxAfter = TrimContext(result.ContextAfter, options.ContextLineCount);
+                    var ctxBefore = ResolveContextBefore(result, options.ContextLineCount, sourceContext);
+                    var ctxAfter = ResolveContextAfter(result, options.ContextLineCount, sourceContext);
 
                     jsonWriter.WriteStartArray("contextBefore");
                     foreach (var line in ctxBefore)
@@ -160,6 +162,7 @@ public static class ReportExportService
 
         foreach (var group in groups)
         {
+            var sourceContext = includeContext ? SourceFileContext.TryLoad(group.FilePath) : null;
             long fileSize = 0;
             DateTime? modifiedDate = null;
             if (options.IncludeFileSizes || options.IncludeModifiedDates)
@@ -197,8 +200,8 @@ public static class ReportExportService
                 if (includeContext)
                 {
                     string lineSep = options.CsvUsePipeSeparator ? " | " : "\n";
-                    var ctxBefore = TrimContext(result.ContextBefore, options.ContextLineCount);
-                    var ctxAfter = TrimContext(result.ContextAfter, options.ContextLineCount);
+                    var ctxBefore = ResolveContextBefore(result, options.ContextLineCount, sourceContext);
+                    var ctxAfter = ResolveContextAfter(result, options.ContextLineCount, sourceContext);
                     fields.Add(CsvEscape(string.Join(lineSep, ctxBefore)));
                     fields.Add(CsvEscape(string.Join(lineSep, ctxAfter)));
                 }
@@ -221,15 +224,93 @@ public static class ReportExportService
         return $"{line[..matchStart]}<match>{line.Substring(matchStart, safeLen)}</match>{line[(matchStart + safeLen)..]}";
     }
 
-    private static IReadOnlyList<string> TrimContext(IReadOnlyList<string> context, int maxLines)
+    private static IReadOnlyList<string> ResolveContextBefore(SearchResult result, int maxLines, SourceFileContext? sourceContext)
+    {
+        var captured = TrimContextBefore(result.ContextBefore, maxLines);
+        if (captured.Count >= maxLines || sourceContext is null)
+            return captured;
+
+        var fromSource = sourceContext.GetBefore(result.LineNumber, maxLines);
+        return fromSource.Count > captured.Count ? fromSource : captured;
+    }
+
+    private static IReadOnlyList<string> ResolveContextAfter(SearchResult result, int maxLines, SourceFileContext? sourceContext)
+    {
+        var captured = TrimContextAfter(result.ContextAfter, maxLines);
+        if (captured.Count >= maxLines || sourceContext is null)
+            return captured;
+
+        var fromSource = sourceContext.GetAfter(result.LineNumber, maxLines);
+        return fromSource.Count > captured.Count ? fromSource : captured;
+    }
+
+    private static IReadOnlyList<string> TrimContextBefore(IReadOnlyList<string> context, int maxLines)
     {
         if (context.Count <= maxLines) return context;
-        // Take the last N lines for before-context, first N for after-context
-        // But since we don't know direction here, just take up to maxLines from start
+
+        var trimmed = new List<string>(maxLines);
+        int start = context.Count - maxLines;
+        for (int i = start; i < context.Count; i++)
+            trimmed.Add(context[i]);
+        return trimmed;
+    }
+
+    private static IReadOnlyList<string> TrimContextAfter(IReadOnlyList<string> context, int maxLines)
+    {
+        if (context.Count <= maxLines) return context;
+
         var trimmed = new List<string>(maxLines);
         for (int i = 0; i < maxLines && i < context.Count; i++)
             trimmed.Add(context[i]);
         return trimmed;
+    }
+
+    private sealed class SourceFileContext
+    {
+        private readonly string[] _lines;
+
+        private SourceFileContext(string[] lines) => _lines = lines;
+
+        public static SourceFileContext? TryLoad(string filePath)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+                    return null;
+
+                return new SourceFileContext(File.ReadAllLines(filePath));
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        public IReadOnlyList<string> GetBefore(int lineNumber, int maxLines)
+        {
+            int matchIndex = lineNumber - 1;
+            if (maxLines <= 0 || matchIndex <= 0 || matchIndex > _lines.Length)
+                return Array.Empty<string>();
+
+            int start = Math.Max(0, matchIndex - maxLines);
+            var context = new List<string>(matchIndex - start);
+            for (int i = start; i < matchIndex; i++)
+                context.Add(LineTruncator.Truncate(_lines[i]));
+            return context;
+        }
+
+        public IReadOnlyList<string> GetAfter(int lineNumber, int maxLines)
+        {
+            int matchIndex = lineNumber - 1;
+            if (maxLines <= 0 || matchIndex < 0 || matchIndex >= _lines.Length - 1)
+                return Array.Empty<string>();
+
+            int end = Math.Min(_lines.Length - 1, matchIndex + maxLines);
+            var context = new List<string>(end - matchIndex);
+            for (int i = matchIndex + 1; i <= end; i++)
+                context.Add(LineTruncator.Truncate(_lines[i]));
+            return context;
+        }
     }
 
     private static string CsvEscape(string value)
