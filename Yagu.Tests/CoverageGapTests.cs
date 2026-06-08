@@ -824,6 +824,24 @@ public class SearchResultCollectionGapTests
     }
 
     [Fact]
+    public void AddRange_AppliesActiveFileNameFilterToIncomingGroups()
+    {
+        var coll = new SearchResultCollection { FileNameFilter = "visible" };
+        coll.ApplySortAndFilter();
+
+        coll.AddRange([
+            MakeResult(@"C:\hidden.log", "match"),
+            MakeResult(@"C:\visible.txt", "match"),
+            MakeResult(@"C:\also-visible.md", "match"),
+        ]);
+
+        Assert.Equal(3, coll.AllGroups.Count);
+        Assert.Equal(
+            [@"C:\visible.txt", @"C:\also-visible.md"],
+            coll.VisibleGroups.Select(group => group.FilePath).ToArray());
+    }
+
+    [Fact]
     public void ApplySortAndFilter_FileNameFilterMatchesFormattedFileSize()
     {
         string root = Path.Combine(Path.GetTempPath(), "yagu-filter-size-" + Guid.NewGuid().ToString("N"));

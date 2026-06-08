@@ -424,7 +424,11 @@ public sealed partial class MainWindow
                 if (!ViewModel.MatchLineCheckAddsToPreview) return;
                 try
                 {
-                    await EnsureCheckedMatchInPreviewAsync(result);
+                    var selected = ViewModel.GetAllSelectedResults();
+                    if (selected.Count > 1)
+                        await UpdateMultiSelectPreviewAsync(result);
+                    else
+                        await EnsureCheckedMatchInPreviewAsync(result);
                 }
                 catch (Exception ex)
                 {

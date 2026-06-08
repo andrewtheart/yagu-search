@@ -126,6 +126,29 @@ public class ContentSearcherTests : IDisposable
     }
 
     [Fact]
+    public async Task ManagedSearch_SplitsLinesLikePreview_WhenFileContainsLoneCarriageReturn()
+    {
+        var p = Write("lone-cr.txt", "first\rstill first\nNEEDLE here\nthird");
+        var oldPreferNative = ContentSearcher.PreferNative;
+        ContentSearcher.PreferNative = false;
+        try
+        {
+            var s = new ContentSearcher();
+            var results = await CollectAsync(s, p, Opt("NEEDLE", caseSensitive: true, context: 1));
+
+            var result = Assert.Single(results);
+            Assert.Equal(2, result.LineNumber);
+            Assert.Equal("NEEDLE here", result.MatchLine);
+            Assert.Equal(new[] { "first\rstill first" }, result.ContextBefore);
+            Assert.Equal(new[] { "third" }, result.ContextAfter);
+        }
+        finally
+        {
+            ContentSearcher.PreferNative = oldPreferNative;
+        }
+    }
+
+    [Fact]
     public async Task MaxFileSize_SkipsLargeFiles()
     {
         var p = Write("big.txt", new string('x', 1000));

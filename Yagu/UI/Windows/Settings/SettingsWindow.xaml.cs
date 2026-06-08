@@ -39,6 +39,7 @@ public sealed partial class SettingsWindow : Window
     private readonly MainViewModel _viewModel;
     private readonly HotkeyService _hotkeyService;
     private readonly IntPtr _mainHwnd;
+    private readonly AppWindow _appWindow;
     private readonly Action<bool>? _applyWordWrap;
     private readonly Action? _applyPreviewSectionBackgrounds;
     private readonly Action _openHelp;
@@ -102,9 +103,15 @@ public sealed partial class SettingsWindow : Window
         WindowForegroundHelper.ConfigureOwnedWindow(hwnd, mainHwnd);
         var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
         var appWindow = AppWindow.GetFromWindowId(windowId);
+        _appWindow = appWindow;
         const int w = 860, h = 820;
         appWindow.Resize(new SizeInt32(w, h));
         CenterOverOwner(appWindow, mainHwnd, w, h);
+
+        ApplySettingsTheme();
+        RootGrid.ActualThemeChanged += (_, _) => ApplySettingsTitleBarButtonTheme();
+        _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        Closed += (_, _) => _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
 
         // Set window icon to match the main Yagu window
         var icoPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "yagu.ico");
@@ -116,6 +123,29 @@ public sealed partial class SettingsWindow : Window
         MarkSettingsClean();
         ExtractSearchableEntries();
         TabList.SelectedIndex = 0;
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MainViewModel.ThemeModeIndex))
+            ApplySettingsTheme();
+    }
+
+    private void ApplySettingsTheme()
+    {
+        AppThemeService.ApplyRequestedTheme(RootGrid, _viewModel.ThemeModeIndex);
+        ApplySettingsTitleBarButtonTheme();
+    }
+
+    private void ApplySettingsTitleBarButtonTheme()
+    {
+        try
+        {
+            AppThemeService.ApplyTitleBarButtonTheme(
+                _appWindow,
+                AppThemeService.ResolveEffectiveTheme(RootGrid, _viewModel.ThemeModeIndex));
+        }
+        catch { }
     }
 
     public void BringInFrontOfMainWindow()
@@ -1884,6 +1914,21 @@ public sealed partial class SettingsWindow : Window
         // ── UI Behaviors ──
         {
             var g = AddTab("UI Behaviors");
+
+            g.Children.Add(new TextBlock { Text = "Appearance", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 8) });
+
+            g.Children.Add(new TextBlock { Text = "Theme:" });
+            var themeMode = new ComboBox { SelectedIndex = AppThemeService.NormalizeThemeModeIndex(_viewModel.ThemeModeIndex), MinWidth = 220 };
+            themeMode.Items.Add("Auto (system theme)");
+            themeMode.Items.Add("Dark mode");
+            themeMode.Items.Add("Light mode");
+            themeMode.SelectionChanged += (_, _) =>
+            {
+                if (themeMode.SelectedIndex >= 0)
+                    _viewModel.ThemeModeIndex = AppThemeService.NormalizeThemeModeIndex(themeMode.SelectedIndex);
+            };
+            g.Children.Add(themeMode);
+            g.Children.Add(new TextBlock { Text = "Auto follows the current Windows app theme. Dark and Light keep Yagu on that theme until changed.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
 
             g.Children.Add(new TextBlock { Text = "Selection → Preview Behaviors", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 8) });
 

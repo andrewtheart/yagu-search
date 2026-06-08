@@ -136,6 +136,23 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void MatchLineCheckbox_RebuildsMultiSelectPreviewForAdditionalCheckedMatches()
+    {
+        string handler = ExtractMethodWindow(MainWindowSource, "OnMatchLineCheckBoxClicked", 2400);
+
+        AssertContainsInOrder(handler,
+            "if (result.IsSelected)",
+            "var selected = ViewModel.GetAllSelectedResults();",
+            "if (selected.Count > 1)",
+            "await UpdateMultiSelectPreviewAsync(result);",
+            "else",
+            "await EnsureCheckedMatchInPreviewAsync(result);");
+
+        string updateMulti = ExtractMethodWindow(MainWindowSource, "UpdateMultiSelectPreviewAsync", 900);
+        Assert.Contains("SearchResult? scrollTarget", updateMulti);
+    }
+
+    [Fact]
     public void PreviewAndEditorContextMenus_OpenDisplaySettingsWithSurfaceSpecificLabels()
     {
         string previewFlyout = ExtractMethodWindow(MainWindowSource, "AttachPreviewBlockContextFlyout", 3400);
@@ -606,7 +623,10 @@ public sealed class PreviewCoreRegressionTests
     {
         string toolbar = ExtractXamlWindow("x:Name=\"AutoScrollResultsCheckBox\"", 5200);
         Assert.Contains("x:Name=\"ResultsOptionsButton\"", toolbar);
-        Assert.Contains("Glyph=\"&#xE712;\"", toolbar);
+        Assert.Contains("Glyph=\"&#xE700;\"", toolbar);
+        Assert.Contains("Background=\"Transparent\" BorderThickness=\"0\"", toolbar);
+        Assert.DoesNotContain("Background=\"#202020\"", toolbar);
+        Assert.DoesNotContain("BorderBrush=\"#404040\"", toolbar);
         Assert.Contains("ToolTipService.ToolTip=\"Results options\"", toolbar);
         Assert.Contains("<Flyout x:Name=\"ResultsOptionsFlyout\" Placement=\"BottomEdgeAlignedRight\">", toolbar);
 
@@ -1229,7 +1249,11 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(overlay,
             "int total = GetSectionMatchTotal(_activeSectionNav);",
             "int displayIndex = Math.Clamp(_activeSectionNav.CurrentIndex + 1, 1, total);",
-            "SectionNavLabel.Text = $\"Occurrence {displayIndex:N0}/{total:N0}\";");
+            "string matchWord = total == 1 ? \"match\" : \"matches\";",
+            "SectionNavLabel.Text = $\"Occurrence {displayIndex:N0}/{total:N0} ({total:N0} {matchWord} in file)\";");
+
+        string mainWindowXaml = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
+        Assert.Contains("Current occurrence and total matches in the active preview file.", mainWindowXaml);
     }
 
     [Fact]

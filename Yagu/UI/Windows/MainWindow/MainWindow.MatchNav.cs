@@ -2567,7 +2567,8 @@ public sealed partial class MainWindow
         }
         SectionNavOverlay.Visibility = Visibility.Visible;
         int displayIndex = Math.Clamp(_activeSectionNav.CurrentIndex + 1, 1, total);
-        SectionNavLabel.Text = $"Occurrence {displayIndex:N0}/{total:N0}";
+        string matchWord = total == 1 ? "match" : "matches";
+        SectionNavLabel.Text = $"Occurrence {displayIndex:N0}/{total:N0} ({total:N0} {matchWord} in file)";
     }
 
     private void OnSectionNavNext(object sender, RoutedEventArgs e)

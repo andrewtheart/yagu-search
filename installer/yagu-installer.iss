@@ -81,6 +81,39 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 Type: filesandordirs; Name: "{app}"
 
 [Code]
+function InstallWindowsAppRuntime(): Boolean;
+var
+  ResultCode: Integer;
+  RuntimeScript: String;
+  Params: String;
+begin
+  RuntimeScript := ExpandConstant('{app}\Prerequisites\WindowsAppRuntime\Install-WindowsAppRuntime.ps1');
+  if not FileExists(RuntimeScript) then
+  begin
+    MsgBox('Windows App Runtime prerequisite was not packaged:' + #13#10 + RuntimeScript, mbError, MB_OK);
+    Result := False;
+    exit;
+  end;
+
+  WizardForm.StatusLabel.Caption := 'Installing Windows App Runtime 1.8...';
+  Params := '-NoProfile -ExecutionPolicy Bypass -File "' + RuntimeScript + '"';
+  Result := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if Result and (ResultCode <> 0) then
+  begin
+    MsgBox('Windows App Runtime prerequisite installation failed with exit code ' + IntToStr(ResultCode) + '.', mbError, MB_OK);
+    Result := False;
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    if not InstallWindowsAppRuntime() then
+      Abort;
+  end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usPostUninstall then

@@ -79,7 +79,7 @@ public sealed class ReportExportServiceTests : IDisposable
         var html = htmlWriter.ToString();
         Assert.DoesNotContain("Showing first", html);
         Assert.DoesNotContain("Next match", html);
-        Assert.Contains("needle here", html);
+        Assert.Contains("<mark>needle</mark> here", html);
         Assert.Contains("safe before", html);
         Assert.Contains("safe after", html);
         Assert.Contains("1 match(es)", html);

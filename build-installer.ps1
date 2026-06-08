@@ -28,13 +28,22 @@ $installerDir = Join-Path $repoRoot 'installer'
 $stagingDir = Join-Path $installerDir 'staging'
 $outputDir = Join-Path $installerDir 'output'
 $issFile = Join-Path $installerDir 'yagu-installer.iss'
+$prereqHelper = Join-Path $repoRoot 'scripts\windows-app-runtime-prereq.ps1'
+if (-not (Test-Path -LiteralPath $prereqHelper)) {
+  throw "Windows App Runtime prerequisite helper not found: $prereqHelper"
+}
+. $prereqHelper
 
 # Read version from build-version.txt
 $versionFile = Join-Path $projectDir 'Properties\build-version.txt'
-$version = '1.0.0'
-if (Test-Path -LiteralPath $versionFile) {
-  $version = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+function Get-YaguBuildVersion {
+  if (Test-Path -LiteralPath $versionFile) {
+    return (Get-Content -LiteralPath $versionFile -Raw).Trim()
+  }
+
+  return '1.0.0'
 }
+$version = Get-YaguBuildVersion
 
 # Locate ISCC.exe
 if ([string]::IsNullOrWhiteSpace($InnoSetupPath)) {
@@ -57,7 +66,7 @@ if ([string]::IsNullOrWhiteSpace($InnoSetupPath) -or -not (Test-Path -LiteralPat
 }
 
 Write-Host "Using Inno Setup: $InnoSetupPath"
-Write-Host "App version: $version"
+Write-Host "Starting app version: $version"
 
 # Parse target framework from csproj
 $projectXml = [xml](Get-Content -LiteralPath $projectPath -Raw)
@@ -78,6 +87,9 @@ if (-not $SkipBuild) {
   Write-Host "Skipping build (using existing output)."
 }
 
+$version = Get-YaguBuildVersion
+Write-Host "Installer app version: $version"
+
 if (-not (Test-Path -LiteralPath $buildOutputDir)) {
   throw "Build output not found at: $buildOutputDir"
 }
@@ -91,6 +103,8 @@ New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
 
 # Copy all build output
 Copy-Item -Path "$buildOutputDir\*" -Destination $stagingDir -Recurse -Force
+
+Copy-YaguWindowsAppRuntimePrerequisite -ProjectXml $projectXml -RepoRoot $repoRoot -DestinationRoot $stagingDir
 
 Write-Host "Staged $(( Get-ChildItem -LiteralPath $stagingDir -File -Recurse ).Count) files."
 

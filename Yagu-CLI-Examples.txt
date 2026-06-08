@@ -1,0 +1,160 @@
+Yagu CLI Command Line Examples
+Generated: 2026-06-08
+
+Assume Yagu.exe is on PATH or you are running from the Yagu install directory.
+
+1. Basic recursive content + filename search:
+Yagu.exe --cli --directory "C:\customers" "enable"
+
+2. Explicit pattern flag:
+Yagu.exe --cli --directory "C:\customers" --pattern "enable"
+
+3. Case-insensitive whole-word content search:
+Yagu.exe --cli --directory "C:\customers" "enable" --ignore-case --exact-match --search-mode content
+
+4. Case-sensitive search:
+Yagu.exe --cli --directory "C:\src" "Enable" --case-sensitive
+
+5. Substring search, so enabled and preenable can match:
+Yagu.exe --cli --directory "C:\customers" "enable" --no-exact-match
+
+6. Regex search for enable or enabled:
+Yagu.exe --cli --directory "C:\customers" "enabled?" --regex --ignore-case
+
+7. Literal search even if pattern contains regex characters:
+Yagu.exe --cli --directory "C:\logs" "user.name*" --no-regex
+
+8. Search with no context lines:
+Yagu.exe --cli --directory "C:\customers" "enable" --context 0
+
+9. Search with 10 context lines:
+Yagu.exe --cli --directory "C:\customers" "enable" -C 10
+
+10. Search content only:
+Yagu.exe --cli --directory "C:\customers" "enable" --search-mode content
+
+11. Search filenames only:
+Yagu.exe --cli --directory "C:\customers" "enable" --search-mode filenames
+
+12. Search filenames first, then content:
+Yagu.exe --cli --directory "C:\customers" "enable" --search-mode filename-then-content
+
+13. Include only .cs files:
+Yagu.exe --cli --directory "C:\src\Yagu" "TODO" --glob "*.cs"
+
+14. Include multiple file types:
+Yagu.exe --cli --directory "C:\src\Yagu" "TODO" --glob "*.cs" --glob "*.xaml" --glob "*.ps1"
+
+15. Exclude build folders:
+Yagu.exe --cli --directory "C:\src\Yagu" "TODO" --exclude-glob "bin\*" --exclude-glob "obj\*"
+
+16. Include files by regex:
+Yagu.exe --cli --directory "C:\src\Yagu" "TODO" --include-regex --glob ".*\.(cs|xaml|ps1)$"
+
+17. Exclude files by regex:
+Yagu.exe --cli --directory "C:\src\Yagu" "TODO" --exclude-regex --exclude-glob ".*\\(bin|obj|target)\\.*"
+
+18. Force include/exclude patterns back to glob mode:
+Yagu.exe --cli --directory "C:\src\Yagu" "TODO" --include-glob --glob "*.cs" --exclude-glob-mode --exclude-glob "obj\*"
+
+19. Search files at least 1 MB:
+Yagu.exe --cli --directory "C:\customers" "enable" --min-filesize 1M
+
+20. Search files no larger than 10 MB:
+Yagu.exe --cli --directory "C:\customers" "enable" --max-filesize 10M
+
+21. Search files between 10 KB and 5 MB:
+Yagu.exe --cli --directory "C:\customers" "enable" --min-filesize 10K --max-filesize 5M
+
+22. Skip binary files explicitly:
+Yagu.exe --cli --directory "C:\customers" "enable" --no-binary
+
+23. Include binary files:
+Yagu.exe --cli --directory "C:\customers" "magic-bytes" --binary
+
+24. Skip noisy extensions:
+Yagu.exe --cli --directory "C:\customers" "enable" --skip-extensions "exe;dll;pdb;zip"
+
+25. Search files created after a date:
+Yagu.exe --cli --directory "C:\customers" "enable" --created-after "2026-01-01"
+
+26. Search files created before a date:
+Yagu.exe --cli --directory "C:\customers" "enable" --created-before "2026-06-01"
+
+27. Search files modified in a date range:
+Yagu.exe --cli --directory "C:\customers" "enable" --modified-after "2026-05-01" --modified-before "2026-06-01"
+
+28. Respect .gitignore:
+Yagu.exe --cli --directory "C:\src\Yagu" "TODO" --obey-gitignore
+
+29. Ignore .gitignore:
+Yagu.exe --cli --directory "C:\src\Yagu" "TODO" --no-obey-gitignore
+
+30. Let include filters win over .gitignore:
+Yagu.exe --cli --directory "C:\src\Yagu" "TODO" --obey-gitignore --no-gitignore-precedence --glob "*.cs"
+
+31. Use automatic worker thread count:
+Yagu.exe --cli --directory "C:\customers" "enable" --threads 0
+
+32. Limit to 8 worker threads:
+Yagu.exe --cli --directory "C:\customers" "enable" --threads 8
+
+33. Set a process memory cap:
+Yagu.exe --cli --directory "C:\customers" "enable" --memory-limit 2048
+
+34. Disable memory-pressure degradation:
+Yagu.exe --cli --directory "C:\customers" "enable" --memory-pressure 0
+
+35. Trigger memory-saving mode earlier:
+Yagu.exe --cli --directory "C:\customers" "enable" --memory-pressure 80
+
+36. Increase Everything SDK channel buffer:
+Yagu.exe --cli --directory "C:\customers" "enable" --sdk-channel-buffer 200000
+
+37. Force managed file lister:
+Yagu.exe --cli --directory "C:\customers" "enable" --file-lister-backend 3
+
+38. Force es.exe file lister:
+Yagu.exe --cli --directory "C:\customers" "enable" --file-lister-backend 2
+
+39. Cap matches per file:
+Yagu.exe --cli --directory "C:\customers" "enable" --max-matches-per-file 20
+
+40. Limit recursion depth:
+Yagu.exe --cli --directory "C:\customers" "enable" --max-depth 3
+
+41. Search inside .docx and .xlsx only:
+Yagu.exe --cli --directory "C:\customers" "enable" --ignore-case --exact-match --search-mode content --glob "*.docx" --glob "*.xlsx" --search-archives --archive-extensions "docx;xlsx" --max-results 0
+
+42. Search inside common ZIP-like archives:
+Yagu.exe --cli --directory "C:\packages" "connectionString" --search-archives --archive-extensions "zip;jar;war;ear;nupkg"
+
+43. Disable archive search explicitly:
+Yagu.exe --cli --directory "C:\customers" "enable" --no-search-archives
+
+44. Suppress non-admin warning and skip protected paths:
+Yagu.exe --cli --directory "C:\" "password" --no-admin-warning --exclude-admin-paths
+
+45. Include admin-protected paths:
+Yagu.exe --cli --directory "C:\" "password" --no-exclude-admin-paths --admin-protected-paths "Windows;Program Files;Program Files (x86)"
+
+46. Keep file logging quiet:
+Yagu.exe --cli --directory "C:\customers" "enable" --log-level -1
+
+47. Verbose file logging, but critical-only console logging:
+Yagu.exe --cli --directory "C:\customers" "enable" --log-level 3 --console-log-level 0
+
+48. Unlimited total matches:
+Yagu.exe --cli --directory "C:\customers" "enable" --max-results 0
+
+49. Export an HTML report with metadata:
+Yagu.exe --cli --directory "C:\customers" "enable" --ignore-case --export "C:\reports\enable-report.html" --export-format html --export-context 5 --export-file-sizes --export-modified-dates
+
+50. Save, load, replace, and sort workflows:
+Yagu.exe --cli --directory "C:\src\Yagu" "TODO" --sort matches --sort-desc --save-session "C:\reports\todos.yagu-session"
+Yagu.exe --cli --load-session "C:\reports\todos.yagu-session"
+Yagu.exe --cli --directory "C:\src\Yagu" "oldName" --replace "newName" --dry-run
+Yagu.exe --cli --directory "C:\src\Yagu" "oldName" --replace "newName" --replace-no-backup
+
+Replace note:
+Run the --dry-run replace command first. The non-dry-run replace command writes files. By default, replace creates .yagubak backups unless --replace-no-backup is used.

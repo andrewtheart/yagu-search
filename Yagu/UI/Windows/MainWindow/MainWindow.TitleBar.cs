@@ -84,23 +84,16 @@ public sealed partial class MainWindow
     {
         try
         {
-            var titleBar = AppWindow?.TitleBar;
-            if (titleBar is null) return;
-
-            var darkTitleBar = Microsoft.UI.ColorHelper.FromArgb(0xFF, 0x20, 0x20, 0x20);
-            titleBar.BackgroundColor = darkTitleBar;
-            titleBar.InactiveBackgroundColor = darkTitleBar;
-            titleBar.ForegroundColor = Microsoft.UI.Colors.White;
-            titleBar.InactiveForegroundColor = Microsoft.UI.ColorHelper.FromArgb(0x99, 0xFF, 0xFF, 0xFF);
-            titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
-            titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
-            titleBar.ButtonForegroundColor = Microsoft.UI.Colors.White;
-            titleBar.ButtonInactiveForegroundColor = Microsoft.UI.ColorHelper.FromArgb(0x99, 0xFF, 0xFF, 0xFF);
-            titleBar.ButtonHoverBackgroundColor = Microsoft.UI.ColorHelper.FromArgb(0x33, 0xFF, 0xFF, 0xFF);
-            titleBar.ButtonHoverForegroundColor = Microsoft.UI.Colors.White;
-            titleBar.ButtonPressedBackgroundColor = Microsoft.UI.ColorHelper.FromArgb(0x20, 0xFF, 0xFF, 0xFF);
-            titleBar.ButtonPressedForegroundColor = Microsoft.UI.Colors.White;
+            AppThemeService.ApplyTitleBarButtonTheme(
+                AppWindow,
+                AppThemeService.ResolveEffectiveTheme(RootGrid, ViewModel.ThemeModeIndex));
         }
         catch { }
+    }
+
+    private void ApplyAppTheme()
+    {
+        AppThemeService.ApplyRequestedTheme(RootGrid, ViewModel.ThemeModeIndex);
+        ApplyTitleBarButtonTheme();
     }
 }

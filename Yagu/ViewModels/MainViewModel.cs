@@ -118,6 +118,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         MaxResults = _settings.MaxResults <= 0 ? 0 : Math.Min(_settings.MaxResults, SearchOptions.MaxResultsCeiling);
         EditorCommand = _settings.EditorCommand;
         PreviewModeIndex = _settings.PreviewModeIndex;
+        ThemeModeIndex = AppThemeService.NormalizeThemeModeIndex(_settings.ThemeModeIndex);
         PreviewWrapModeIndex = NormalizePreviewWrapModeIndex(_settings.PreviewWordWrap, _settings.PreviewWrapModeIndex);
         PreviewWordWrap = PreviewWrapModeIndex == 0;
         PreviewAutoLoadMatches = _settings.PreviewAutoLoadMatches;
@@ -442,6 +443,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
     }
     [ObservableProperty] public partial int PreviewModeIndex { get; set; } = 1; // 0 = Concatenated, 1 = Multi-highlight
+    [ObservableProperty] public partial int ThemeModeIndex { get; set; } // 0 = Auto (system theme), 1 = Dark, 2 = Light
     [ObservableProperty] public partial bool PreviewWordWrap { get; set; }
     [ObservableProperty] public partial int PreviewWrapModeIndex { get; set; } = 2; // 0 = Wrap, 1 = legacy PartialWrap, 2 = NoWrap
     [ObservableProperty] public partial int PreviewAutoLoadMatches { get; set; } = 50;
@@ -2260,6 +2262,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.MaxResults = MaxResults;
         _settings.EditorCommand = EditorCommand;
         _settings.PreviewModeIndex = PreviewModeIndex;
+        _settings.ThemeModeIndex = AppThemeService.NormalizeThemeModeIndex(ThemeModeIndex);
         _settings.PreviewWordWrap = PreviewWordWrap;
         _settings.PreviewWrapModeIndex = PreviewWrapModeIndex;
         _settings.PreviewAutoLoadMatches = PreviewAutoLoadMatches;

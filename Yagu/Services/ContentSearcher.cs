@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.IO.MemoryMappedFiles;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
@@ -366,10 +367,68 @@ public sealed class ContentSearcher
         int matchCount = 0;
         bool metadataCached = false;
 
-        string? line;
-        while ((line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false)) is not null)
+        var buffer = ArrayPool<char>.Shared.Rent(16 * 1024);
+        var lineBuilder = new StringBuilder();
+        bool stoppedEarly = false;
+
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            while (!stoppedEarly)
+            {
+                int charsRead = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken).ConfigureAwait(false);
+                if (charsRead == 0)
+                    break;
+
+                for (int i = 0; i < charsRead; i++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    char ch = buffer[i];
+                    if (ch == '\n')
+                    {
+                        if (lineBuilder.Length > 0 && lineBuilder[^1] == '\r')
+                            lineBuilder.Length--;
+
+                        string line = lineBuilder.ToString();
+                        lineBuilder.Clear();
+                        if (!await ProcessLineAsync(line).ConfigureAwait(false))
+                        {
+                            stoppedEarly = true;
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        lineBuilder.Append(ch);
+                    }
+                }
+            }
+
+            if (!stoppedEarly && lineBuilder.Length > 0)
+            {
+                if (lineBuilder[^1] == '\r')
+                    lineBuilder.Length--;
+
+                await ProcessLineAsync(lineBuilder.ToString()).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            ArrayPool<char>.Shared.Return(buffer);
+        }
+
+        // Flush any partials that didn't get a full after-context.
+        while (pendingAfter.Count > 0)
+        {
+            var (partial, afterLines, _) = pendingAfter.Dequeue();
+            var finalAfter = afterLines.Count == 0 ? Array.Empty<string>() : afterLines.ToArray();
+            await writer.WriteAsync(partial with { ContextAfter = finalAfter }, cancellationToken).ConfigureAwait(false);
+        }
+
+        return matchCount;
+
+        async Task<bool> ProcessLineAsync(string line)
+        {
             lineNumber++;
 
             // Fill out queued context-after slots.
@@ -428,21 +487,12 @@ public sealed class ContentSearcher
                         pendingAfter.Enqueue((partial, bucket, contextLines));
                     }
                 }
-                if (matchCount >= perFileCap) break;
+                if (matchCount >= perFileCap) return false;
             }
 
             ring.Add(Truncate(line));
+            return true;
         }
-
-        // Flush any partials that didn't get a full after-context.
-        while (pendingAfter.Count > 0)
-        {
-            var (partial, afterLines, _) = pendingAfter.Dequeue();
-            var finalAfter = afterLines.Count == 0 ? Array.Empty<string>() : afterLines.ToArray();
-            await writer.WriteAsync(partial with { ContextAfter = finalAfter }, cancellationToken).ConfigureAwait(false);
-        }
-
-        return matchCount;
     }
 
     [ThreadStatic] private static List<(int Start, int Length)>? t_hits;

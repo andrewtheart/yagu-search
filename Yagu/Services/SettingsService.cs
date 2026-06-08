@@ -68,6 +68,7 @@ public sealed class AppSettings
     public bool GlobalHotkeyEnabled { get; set; }
     public string GlobalHotkeyKey { get; set; } = HotkeyService.DefaultStartKey.ToString();
     public int PreviewModeIndex { get; set; } = 1; // 0 = Concatenated, 1 = Multi-highlight
+    public int ThemeModeIndex { get; set; } // 0 = Auto (system theme), 1 = Dark, 2 = Light
     public bool PreviewWordWrap { get; set; }
     public int PreviewWrapModeIndex { get; set; } = 2; // 0 = Wrap, 1 = legacy PartialWrap, 2 = NoWrap
     public string SelectedPreviewContentBackgroundColor { get; set; } = DefaultSelectedPreviewContentBackgroundColor;
@@ -253,6 +254,7 @@ public sealed class SettingsService
             MigrateLegacyPreviewGutterColors(settings);
             MigrateLegacyWindowFocusBehavior(settings);
             NormalizeFilterModeSettings(settings);
+            NormalizeThemeSettings(settings);
             NormalizePreviewEditorFontSettings(settings);
             NormalizeResultListMatchTextSettings(settings);
             settings.TerminalDefaultWorkingDirectory ??= string.Empty;
@@ -286,6 +288,7 @@ public sealed class SettingsService
             MigrateLegacyPreviewGutterColors(settings);
             MigrateLegacyWindowFocusBehavior(settings);
             NormalizeFilterModeSettings(settings);
+            NormalizeThemeSettings(settings);
             NormalizePreviewEditorFontSettings(settings);
             NormalizeResultListMatchTextSettings(settings);
             settings.TerminalDefaultWorkingDirectory ??= string.Empty;
@@ -331,6 +334,11 @@ public sealed class SettingsService
         settings.ExcludeFilterModeIndex = settings.ExcludeFilterModeIndex == 1 ? 1 : 0;
         settings.IncludeGlobs ??= string.Empty;
         settings.ExcludeGlobs ??= AppSettings.DefaultExcludeGlobs;
+    }
+
+    private static void NormalizeThemeSettings(AppSettings settings)
+    {
+        settings.ThemeModeIndex = settings.ThemeModeIndex is >= 0 and <= 2 ? settings.ThemeModeIndex : 0;
     }
 
     private static void NormalizePreviewEditorFontSettings(AppSettings settings)

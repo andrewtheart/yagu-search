@@ -29,6 +29,8 @@ public sealed class SettingsWindowRegressionTests
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml"));
     private static readonly string SettingsServiceSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "Services", "SettingsService.cs"));
+    private static readonly string AppThemeServiceSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "Services", "AppThemeService.cs"));
     private static readonly string MainViewModelSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
     private static readonly string ConPtyTerminalServiceSource = File.ReadAllText(
@@ -151,6 +153,34 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("await _viewModel.PersistSettingsAsync();", saveMethod);
         Assert.Contains("MarkSettingsClean();", saveMethod);
         Assert.Contains("Close()", saveMethod);
+    }
+
+    [Fact]
+    public void ThemeMode_IsPersistedAndAppliedFromUiSettings()
+    {
+        Assert.Contains("public int ThemeModeIndex { get; set; } // 0 = Auto (system theme), 1 = Dark, 2 = Light", SettingsServiceSource);
+        Assert.Contains("NormalizeThemeSettings(settings);", SettingsServiceSource);
+        Assert.Contains("settings.ThemeModeIndex = settings.ThemeModeIndex is >= 0 and <= 2 ? settings.ThemeModeIndex : 0;", SettingsServiceSource);
+
+        Assert.Contains("[ObservableProperty] public partial int ThemeModeIndex { get; set; }", MainViewModelSource);
+        Assert.Contains("ThemeModeIndex = AppThemeService.NormalizeThemeModeIndex(_settings.ThemeModeIndex);", MainViewModelSource);
+        Assert.Contains("_settings.ThemeModeIndex = AppThemeService.NormalizeThemeModeIndex(ThemeModeIndex);", MainViewModelSource);
+
+        Assert.Contains("AppThemeMode", AppThemeServiceSource);
+        Assert.Contains("ElementTheme.Default", AppThemeServiceSource);
+        Assert.Contains("ElementTheme.Dark", AppThemeServiceSource);
+        Assert.Contains("ElementTheme.Light", AppThemeServiceSource);
+        Assert.Contains("ResolveEffectiveTheme", AppThemeServiceSource);
+
+        Assert.Contains("Auto (system theme)", SettingsWindowSource);
+        Assert.Contains("Dark mode", SettingsWindowSource);
+        Assert.Contains("Light mode", SettingsWindowSource);
+        Assert.Contains("_viewModel.ThemeModeIndex = AppThemeService.NormalizeThemeModeIndex(themeMode.SelectedIndex);", SettingsWindowSource);
+        Assert.Contains("RootGrid.ActualThemeChanged += (_, _) => ApplySettingsTitleBarButtonTheme();", SettingsWindowSource);
+
+        Assert.Contains("ApplyAppTheme();", MainWindowWindowSource);
+        Assert.Contains("RootGrid.ActualThemeChanged += (_, _) => ApplyTitleBarButtonTheme();", MainWindowWindowSource);
+        Assert.Contains("nameof(ViewModel.ThemeModeIndex)", MainWindowWindowSource);
     }
 
     [Fact]

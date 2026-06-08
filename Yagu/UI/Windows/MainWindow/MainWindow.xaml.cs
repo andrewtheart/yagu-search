@@ -191,6 +191,8 @@ public sealed partial class MainWindow : Window, IDisposable
             _autoSearchOnLoad = !string.IsNullOrWhiteSpace(startupDirectory);
         }
         InitializeComponent();
+        ApplyAppTheme();
+        RootGrid.ActualThemeChanged += (_, _) => ApplyTitleBarButtonTheme();
         TextControlBoxNS.TextControlBoxDiagnostics.VerboseLogger = (source, message) => LogService.Instance.Verbose(source, message);
         TextControlBoxNS.TextControlBoxDiagnostics.IsVerboseEnabledProvider = () => LogService.Instance.IsVerboseEnabled;
         QueryBox.AddHandler(UIElement.PointerPressedEvent,
@@ -254,6 +256,11 @@ public sealed partial class MainWindow : Window, IDisposable
                 }
                 _previewContextDebounceTimer.Stop();
                 _previewContextDebounceTimer.Start();
+            }
+
+            if (e.PropertyName == nameof(ViewModel.ThemeModeIndex))
+            {
+                ApplyAppTheme();
             }
 
             if (!_suppressHotkeySettingChange &&

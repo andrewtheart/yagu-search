@@ -1,0 +1,59 @@
+namespace Yagu.Tests;
+
+public sealed class InstallerPackagingRegressionTests
+{
+    [Fact]
+    public void InstallerBuild_StagesWindowsAppRuntimePrerequisite()
+    {
+        string root = FindRepoRoot();
+        string buildInstaller = File.ReadAllText(Path.Combine(root, "build-installer.ps1"));
+        string publishScript = File.ReadAllText(Path.Combine(root, "scripts", "publish-to-azure.ps1"));
+
+        Assert.Contains("windows-app-runtime-prereq.ps1", buildInstaller);
+        Assert.Contains("Copy-YaguWindowsAppRuntimePrerequisite -ProjectXml $projectXml -RepoRoot $repoRoot -DestinationRoot $stagingDir", buildInstaller);
+        Assert.Contains("Copy-YaguWindowsAppRuntimePrerequisite -ProjectXml $projectXml -RepoRoot $root -DestinationRoot $publishDir", publishScript);
+        Assert.Contains("Installer app version: $version", buildInstaller);
+        Assert.Contains("Packaging Yagu $version", publishScript);
+        Assert.Contains("Microsoft.WindowsAppRuntime.$majorMinor.msix", File.ReadAllText(Path.Combine(root, "scripts", "windows-app-runtime-prereq.ps1")));
+        Assert.Contains("Microsoft.WindowsAppRuntime.DDLM.$majorMinor.msix", File.ReadAllText(Path.Combine(root, "scripts", "windows-app-runtime-prereq.ps1")));
+    }
+
+    [Fact]
+    public void Installers_RunWindowsAppRuntimePrerequisiteBeforeLaunchOrCopy()
+    {
+        string root = FindRepoRoot();
+        string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+        string publishScript = File.ReadAllText(Path.Combine(root, "scripts", "publish-to-azure.ps1"));
+
+        Assert.Contains("InstallWindowsAppRuntime", inno);
+        Assert.Contains("Install-WindowsAppRuntime.ps1", inno);
+        Assert.Contains("if not InstallWindowsAppRuntime() then", inno);
+        Assert.Contains("Abort;", inno);
+
+        int runtimeInstaller = publishScript.IndexOf("$runtimeInstaller = Join-Path $sourceDir", StringComparison.Ordinal);
+        int copyFiles = publishScript.IndexOf("# Copy files", StringComparison.Ordinal);
+        Assert.True(runtimeInstaller >= 0, "Generated Install-Yagu.ps1 must invoke the runtime prerequisite installer.");
+        Assert.True(copyFiles >= 0, "Generated Install-Yagu.ps1 should still copy files.");
+        Assert.True(runtimeInstaller < copyFiles, "Generated Install-Yagu.ps1 should install prerequisites before copying files.");
+    }
+
+    [Fact]
+    public void RuntimePrerequisiteInstaller_UsesMsixManifestIdentity()
+    {
+        string root = FindRepoRoot();
+        string installScript = File.ReadAllText(Path.Combine(root, "scripts", "install-windows-app-runtime.ps1"));
+
+        Assert.Contains("System.IO.Compression.ZipFile", installScript);
+        Assert.Contains("AppxManifest.xml", installScript);
+        Assert.Contains("Get-AppxPackage -Name $Name -PackageTypeFilter Main,Framework", installScript);
+        Assert.Contains("Add-AppxPackage -Path $msixPath -ErrorAction Stop", installScript);
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+            dir = dir.Parent;
+        return dir?.FullName ?? Directory.GetCurrentDirectory();
+    }
+}
