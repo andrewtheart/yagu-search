@@ -608,11 +608,12 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("x:Name=\"ResultsOptionsButton\"", toolbar);
         Assert.Contains("Glyph=\"&#xE712;\"", toolbar);
         Assert.Contains("ToolTipService.ToolTip=\"Results options\"", toolbar);
-        Assert.Contains("<Flyout Placement=\"BottomEdgeAlignedRight\">", toolbar);
+        Assert.Contains("<Flyout x:Name=\"ResultsOptionsFlyout\" Placement=\"BottomEdgeAlignedRight\">", toolbar);
 
         AssertContainsInOrder(toolbar,
             "x:Name=\"ResultsOptionsButton\"",
             "<Button.Flyout>",
+            "x:Name=\"ResultsOptionsFlyout\"",
             "Text=\"Context:\"",
             "Value=\"{x:Bind ViewModel.ContextLines, Mode=TwoWay}\"",
             "SpinButtonPlacementMode=\"Hidden\"",
@@ -625,6 +626,11 @@ public sealed class PreviewCoreRegressionTests
 
         Assert.DoesNotContain("SpinButtonPlacementMode=\"Compact\"", toolbar);
         Assert.DoesNotContain("ToolTipService.ToolTip=\"Clear all results (Ctrl+Shift+Delete)\">\r\n                                <FontIcon Glyph=\"&#xE74D;\"", toolbar);
+
+        string clearResults = ExtractMethodWindow(MainWindowSource, "OnClearResults", 1400);
+        AssertContainsInOrder(clearResults,
+            "ResultsOptionsFlyout.Hide();",
+            "await ViewModel.ClearResultsAsync();");
     }
 
     [Fact]
@@ -787,6 +793,21 @@ public sealed class PreviewCoreRegressionTests
     [Fact]
     public void FileNameOnlyPreview_RendersFullFileWithoutMatchHighlightsOrNavigation()
     {
+        string previewable = ExtractMethodWindow(MainWindowSource, "GetPreviewableResults", window: 900);
+        AssertContainsInOrder(previewable,
+            "var previewable = results.ToList();",
+            "previewable.Any(result => result.LineNumber > 0)",
+            "previewable.RemoveAll(result => result.LineNumber <= 0)",
+            "return previewable;");
+
+        string previewSingle = ExtractMethodWindow(MainWindowSource, "OnPreviewSingleFile", window: 2400);
+        Assert.Contains("GetPreviewableResults(group.Where(result => result.IsSelected))", previewSingle);
+        Assert.DoesNotContain("r.LineNumber == 0", previewSingle);
+
+        string previewSelected = ExtractMethodWindow(MainWindowSource, "OnPreviewSelectedFiles", window: 3600);
+        Assert.Contains("GetPreviewableResults(g.Where(result => result.IsSelected))", previewSelected);
+        Assert.DoesNotContain("r.LineNumber == 0", previewSelected);
+
         string singleFilePreview = ExtractMethodWindow(MainWindowSource, "ShowSingleFilePreviewAsync", window: 5200);
         AssertContainsInOrder(singleFilePreview,
             "bool isFileNameOnlyPreview = r.LineNumber <= 0;",
@@ -795,6 +816,37 @@ public sealed class PreviewCoreRegressionTests
             "? null",
             "var lines = GetPreviewLines(r, allLines, ViewModel.PreviewContextLines, fullFile);",
             "bool isMatchLine = !isFileNameOnlyPreview && lineNum == r.LineNumber;");
+
+        string concatenated = ExtractMethodWindow(MainWindowSource, "BuildConcatenatedSection", window: 5200);
+        AssertContainsInOrder(concatenated,
+            "bool isFileNameOnlyPreview = r.LineNumber <= 0;",
+            "fullFile: isFileNameOnlyPreview",
+            "bool isMatchLine = !isFileNameOnlyPreview && lineNum == r.LineNumber;",
+            "isFileNameOnlyPreview ? null : rx",
+            "isMatchLine ? _matchParagraphs : null");
+
+        string highlight = ExtractMethodWindow(MainWindowSource, "BuildHighlightSectionAsync", window: 1000);
+        AssertContainsInOrder(highlight,
+            "if (results.All(result => result.LineNumber <= 0))",
+            "BuildConcatenatedSection(section, results, allLines, previewLines, rx: null);",
+            "return;");
+
+        string computeCount = ExtractMethodWindow(MainWindowSource, "ComputeMatchCount", window: 1000);
+        AssertContainsInOrder(computeCount,
+            "if (results.All(result => result.LineNumber <= 0))",
+            "return 0;",
+            "results = results.Where(result => result.LineNumber > 0).ToList();");
+
+        Assert.Contains("RegisterSectionMatchTotal(block, CountContentMatchResults(results));", MainWindowSource);
+
+        string fullFileSection = ExtractMethodWindow(MainWindowSource, "AddFullFileSection", window: 900);
+        Assert.Contains("RegisterSectionMatchTotal(block, CountContentMatchResults(target.Matches));", fullFileSection);
+
+        string multiHighlight = ExtractMethodWindow(MainWindowSource, "ShowMultiHighlightPreviewAsync", window: 3000);
+        AssertContainsInOrder(multiHighlight,
+            "if (results.All(result => result.LineNumber <= 0))",
+            "BuildConcatenatedSection(section, results, allLines, ViewModel.PreviewContextLines, rx: null);",
+            "continue;");
 
         string blockSurface = ExtractMethodWindow(MainWindowSource, "ShowPreviewBlockSurface", window: 900);
         Assert.Contains("HideMatchNavPanel();", blockSurface);
@@ -911,7 +963,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("await EnsureFileGroupsInPreviewAsync(groupsToPreview, group.FilePath);", checkboxClicked);
 
         string ensureGroups = ExtractMethodWindow(MainWindowSource, "EnsureFileGroupsInPreviewAsync");
-        Assert.Contains("var selectedResults = fileGroup.Where(result => result.IsSelected).ToList();", ensureGroups);
+        Assert.Contains("var selectedResults = GetPreviewableResults(fileGroup.Where(result => result.IsSelected));", ensureGroups);
         Assert.Contains("await PrependPreviewSectionsForFilesAsync(newFiles, scrollToFile);", ensureGroups);
     }
 
@@ -1133,6 +1185,26 @@ public sealed class PreviewCoreRegressionTests
         Assert.True(knownBranchStart >= 0 && fallbackStart > knownBranchStart);
         string knownBranch = stableTotal[knownBranchStart..fallbackStart];
         Assert.DoesNotContain("stableTotal", knownBranch);
+    }
+
+    [Fact]
+    public void SectionMatchPaginator_UsesRegisteredTotalsWithoutRenderedOverflowRatchet()
+    {
+        string sectionTotal = ExtractMethodWindow(MainWindowSource, "GetSectionMatchTotal", window: 1200);
+        AssertContainsInOrder(sectionTotal,
+            "int renderedTotal = sectionNav.Matches.Count;",
+            "if (_sectionOverflow.TryGetValue(sectionNav.Block, out var ov))",
+            "renderedTotal += CountOverflowRemainingMatches(ov);",
+            "if (_sectionTotalMatchCounts.TryGetValue(sectionNav.Block, out int total))",
+            "return total;",
+            "return renderedTotal;");
+        Assert.DoesNotContain("Math.Max(total, renderedTotal)", sectionTotal);
+
+        string overlay = ExtractMethodWindow(MainWindowSource, "UpdateSectionNavOverlay", window: 1000);
+        AssertContainsInOrder(overlay,
+            "int total = GetSectionMatchTotal(_activeSectionNav);",
+            "int displayIndex = Math.Clamp(_activeSectionNav.CurrentIndex + 1, 1, total);",
+            "SectionNavLabel.Text = $\"Occurrence {displayIndex:N0}/{total:N0}\";");
     }
 
     [Fact]

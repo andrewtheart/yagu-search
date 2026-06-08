@@ -2227,7 +2227,7 @@ public sealed partial class MainWindow
             renderedTotal += CountOverflowRemainingMatches(ov);
 
         if (_sectionTotalMatchCounts.TryGetValue(sectionNav.Block, out int total))
-            return Math.Max(total, renderedTotal);
+            return total;
 
         return renderedTotal;
     }
@@ -2566,7 +2566,8 @@ public sealed partial class MainWindow
             return;
         }
         SectionNavOverlay.Visibility = Visibility.Visible;
-        SectionNavLabel.Text = $"Occurrence {_activeSectionNav.CurrentIndex + 1:N0}/{total:N0}";
+        int displayIndex = Math.Clamp(_activeSectionNav.CurrentIndex + 1, 1, total);
+        SectionNavLabel.Text = $"Occurrence {displayIndex:N0}/{total:N0}";
     }
 
     private void OnSectionNavNext(object sender, RoutedEventArgs e)

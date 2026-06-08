@@ -423,6 +423,8 @@ public sealed partial class MainWindow
 
     private async void OnClearResults(object sender, RoutedEventArgs e)
     {
+        ResultsOptionsFlyout.Hide();
+
         // Clear preview pane
         _previewResult = null;
         SetPreviewFileLabel(string.Empty);
@@ -871,7 +873,7 @@ public sealed partial class MainWindow
             if (PreviewSectionExists(fileGroup.FilePath))
                 continue;
 
-            var selectedResults = fileGroup.Where(result => result.IsSelected).ToList();
+            var selectedResults = GetPreviewableResults(fileGroup.Where(result => result.IsSelected));
             if (selectedResults.Count > 0)
                 newFiles[fileGroup.FilePath] = selectedResults;
         }
@@ -1265,9 +1267,8 @@ public sealed partial class MainWindow
         {
             group.SelectAll();
             var byFile = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
-            foreach (var r in group)
+            foreach (var r in GetPreviewableResults(group.Where(result => result.IsSelected)))
             {
-                if (!r.IsSelected || r.LineNumber == 0) continue;
                 if (!byFile.TryGetValue(r.FilePath, out var list))
                 {
                     list = new List<SearchResult>();
@@ -1306,9 +1307,8 @@ public sealed partial class MainWindow
             var byFile = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
             foreach (var g in selectedGroups)
             {
-                foreach (var r in g)
+                foreach (var r in GetPreviewableResults(g.Where(result => result.IsSelected)))
                 {
-                    if (!r.IsSelected || r.LineNumber == 0) continue;
                     if (!byFile.TryGetValue(r.FilePath, out var list))
                     {
                         list = new List<SearchResult>();
@@ -1365,6 +1365,14 @@ public sealed partial class MainWindow
 
         var contextGroup = GetFileHeaderContextGroup(sender);
         return contextGroup is null ? checkedGroups : [contextGroup];
+    }
+
+    private static List<SearchResult> GetPreviewableResults(IEnumerable<SearchResult> results)
+    {
+        var previewable = results.ToList();
+        if (previewable.Any(result => result.LineNumber > 0))
+            previewable.RemoveAll(result => result.LineNumber <= 0);
+        return previewable;
     }
 
     private FileGroup? GetFileHeaderContextGroup(object? sender)
@@ -1623,7 +1631,6 @@ public sealed partial class MainWindow
         var byFile = new Dictionary<string, List<SearchResult>>(StringComparer.OrdinalIgnoreCase);
         foreach (var result in results)
         {
-            if (result.LineNumber == 0) continue;
             if (!byFile.TryGetValue(result.FilePath, out var matches))
             {
                 matches = new List<SearchResult>();
@@ -1634,7 +1641,11 @@ public sealed partial class MainWindow
 
         var targets = new List<FullFilePreviewTarget>(byFile.Count);
         foreach (var (filePath, matches) in byFile)
-            targets.Add(new FullFilePreviewTarget(filePath, matches));
+        {
+            var previewableMatches = GetPreviewableResults(matches);
+            if (previewableMatches.Count > 0)
+                targets.Add(new FullFilePreviewTarget(filePath, previewableMatches));
+        }
         return targets;
     }
 
@@ -2301,34 +2312,45 @@ public sealed partial class MainWindow
             int startingBlocks = section.Blocks.Count;
             int cap = Math.Min(results.Count, EffectiveMaxMatchesPerSection);
             var matchLineNums = new HashSet<int>(results.Select(r => r.LineNumber));
+            bool renderedFileNameOnlyPreview = false;
             foreach (var r in results)
             {
                 if (renderedResults >= cap || section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
                     break;
 
-                // Separator between matches in same file
-                var sep = new Paragraph();
-                var label = $"\u00A0Line\u00A0{r.LineNumber}\u00A0";
-                var lineChar = '\u2500'; // ─ box-drawing horizontal
-                const int shortLeft = 6;
-                const int shortRight = 6;
-                var sepRun = new Run { Text = $"{new string(lineChar, shortLeft)}{label}{new string(lineChar, shortRight)}" };
-                sepRun.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 60, 140, 60));
-                sep.Inlines.Add(sepRun);
-                sep.Margin = new Thickness(0, 8, 0, 4);
-                section.Blocks.Add(sep);
-                SyncGutterSpacer(section, sep.Margin);
+                bool isFileNameOnlyPreview = r.LineNumber <= 0;
+                if (isFileNameOnlyPreview && renderedFileNameOnlyPreview)
+                {
+                    renderedResults++;
+                    continue;
+                }
 
-                var lines = GetPreviewLines(r, allLines, previewLines, fullFile: false);
+                if (!isFileNameOnlyPreview)
+                {
+                    // Separator between matches in same file
+                    var sep = new Paragraph();
+                    var label = $"\u00A0Line\u00A0{r.LineNumber}\u00A0";
+                    var lineChar = '\u2500'; // ─ box-drawing horizontal
+                    const int shortLeft = 6;
+                    const int shortRight = 6;
+                    var sepRun = new Run { Text = $"{new string(lineChar, shortLeft)}{label}{new string(lineChar, shortRight)}" };
+                    sepRun.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 60, 140, 60));
+                    sep.Inlines.Add(sepRun);
+                    sep.Margin = new Thickness(0, 8, 0, 4);
+                    section.Blocks.Add(sep);
+                    SyncGutterSpacer(section, sep.Margin);
+                }
+
+                var lines = GetPreviewLines(r, allLines, previewLines, fullFile: isFileNameOnlyPreview);
                 foreach (var (line, lineNum) in lines)
                 {
                     if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
                         break;
 
-                    bool isMatchLine = matchLineNums.Contains(lineNum);
+                    bool isMatchLine = !isFileNameOnlyPreview && matchLineNums.Contains(lineNum);
                     _sectionMatchNavs.TryGetValue(section, out var sn);
-                    var firstPara = AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: truncatePreviewLines,
-                        lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs);
+                    var firstPara = AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, isFileNameOnlyPreview ? null : rx, truncate: !isFileNameOnlyPreview && truncatePreviewLines,
+                        isMatchLine ? _matchParagraphs : null, sn, out int addedParagraphs);
                     parasInFile += addedParagraphs;
 
                     if (scrollTarget is not null && lineNum == r.LineNumber
@@ -2341,6 +2363,7 @@ public sealed partial class MainWindow
                 }
 
                 renderedResults++;
+                renderedFileNameOnlyPreview |= isFileNameOnlyPreview;
             }
 
             if (results.Count > renderedResults)
@@ -2430,6 +2453,20 @@ public sealed partial class MainWindow
 
             fileContents.TryGetValue(filePath, out string[]? allLines);
             bool truncatePreviewLines = ShouldTruncatePreviewLines();
+            if (results.All(result => result.LineNumber <= 0))
+            {
+                BuildConcatenatedSection(section, results, allLines, ViewModel.PreviewContextLines, rx: null);
+                fileSw.Stop();
+                LogService.Instance.Verbose("Preview", $"ShowMultiHighlightPreviewAsync: filename-only file='{System.IO.Path.GetFileName(filePath)}', results={results.Count}, blocks={section.Blocks.Count}, elapsed={fileSw.ElapsedMilliseconds}ms");
+
+                if (++fileIndex % PreviewYieldBatchSize == 0)
+                {
+                    await YieldLowAsync();
+                    if (_previewUpdateGen != gen) return;
+                }
+
+                continue;
+            }
 
             bool initiallyCapped = results.Count > EffectiveMaxMatchesPerSection;
             var cappedResults = initiallyCapped ? results.GetRange(0, EffectiveMaxMatchesPerSection) : results;

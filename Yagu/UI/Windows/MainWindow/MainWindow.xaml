@@ -981,7 +981,7 @@
                                 VerticalAlignment="Center" ToolTipService.ToolTip="Results options">
                             <FontIcon Glyph="&#xE712;" FontSize="12" />
                             <Button.Flyout>
-                                <Flyout Placement="BottomEdgeAlignedRight">
+                                <Flyout x:Name="ResultsOptionsFlyout" Placement="BottomEdgeAlignedRight">
                                     <StackPanel Width="220" Spacing="6" Padding="2">
                                         <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                             <TextBlock Text="Context:" VerticalAlignment="Center" FontSize="12" Opacity="0.8" />

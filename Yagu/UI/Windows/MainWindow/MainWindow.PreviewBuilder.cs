@@ -702,48 +702,60 @@ public sealed partial class MainWindow
         int maxBlocks = EffectiveInitialMaxPreviewBlocksPerSection;
         int cap = Math.Min(results.Count, maxMatches);
         var renderedLineNumbers = new HashSet<int>();
+        bool renderedFileNameOnlyPreview = false;
         foreach (var r in results)
         {
             if (renderedResults >= cap || section.Blocks.Count - startingBlocks >= maxBlocks)
                 break;
 
-            // Skip results whose line was already rendered (multiple matches on same line).
-            if (!renderedLineNumbers.Add(r.LineNumber))
+            bool isFileNameOnlyPreview = r.LineNumber <= 0;
+            if (isFileNameOnlyPreview && renderedFileNameOnlyPreview)
             {
                 renderedResults++;
                 continue;
             }
 
-            var sep = new Paragraph();
-            var label = $"\u00A0Line\u00A0{r.LineNumber}\u00A0";
-            var sepRun = new Run { Text = $"{new string('\u2500', 6)}{label}{new string('\u2500', 6)}" };
-            sepRun.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 60, 140, 60));
-            sep.Inlines.Add(sepRun);
-            sep.Margin = new Thickness(0, 8, 0, 4);
-            section.Blocks.Add(sep);
-
-            // Keep gutter aligned with separator paragraph.
-            if (_sectionGutterBlocks.TryGetValue(section, out var gb))
+            // Skip results whose line was already rendered (multiple matches on same line).
+            if (!isFileNameOnlyPreview && !renderedLineNumbers.Add(r.LineNumber))
             {
-                var gutterSep = new Paragraph { Margin = new Thickness(0, 8, 0, 4) };
-                gutterSep.Inlines.Add(new Run { Text = "       │ ", Foreground = s_gutterSepBrush });
-                gb.Blocks.Add(gutterSep);
+                renderedResults++;
+                continue;
             }
 
-            var lines = GetPreviewLines(r, allLines, previewLines, fullFile: false);
+            if (!isFileNameOnlyPreview)
+            {
+                var sep = new Paragraph();
+                var label = $"\u00A0Line\u00A0{r.LineNumber}\u00A0";
+                var sepRun = new Run { Text = $"{new string('\u2500', 6)}{label}{new string('\u2500', 6)}" };
+                sepRun.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 60, 140, 60));
+                sep.Inlines.Add(sepRun);
+                sep.Margin = new Thickness(0, 8, 0, 4);
+                section.Blocks.Add(sep);
+
+                // Keep gutter aligned with separator paragraph.
+                if (_sectionGutterBlocks.TryGetValue(section, out var gb))
+                {
+                    var gutterSep = new Paragraph { Margin = new Thickness(0, 8, 0, 4) };
+                    gutterSep.Inlines.Add(new Run { Text = "       │ ", Foreground = s_gutterSepBrush });
+                    gb.Blocks.Add(gutterSep);
+                }
+            }
+
+            var lines = GetPreviewLines(r, allLines, previewLines, fullFile: isFileNameOnlyPreview);
             foreach (var (line, lineNum) in lines)
             {
                 if (section.Blocks.Count - startingBlocks >= maxBlocks)
                     break;
 
-                bool isMatchLine = lineNum == r.LineNumber;
+                bool isMatchLine = !isFileNameOnlyPreview && lineNum == r.LineNumber;
                 _sectionMatchNavs.TryGetValue(section, out var sn);
-                AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: truncatePreviewLines,
-                    lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs);
+                AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, isFileNameOnlyPreview ? null : rx, truncate: !isFileNameOnlyPreview && truncatePreviewLines,
+                    isMatchLine ? _matchParagraphs : null, sn, out int addedParagraphs);
                 parasBuilt += addedParagraphs;
             }
 
             renderedResults++;
+            renderedFileNameOnlyPreview |= isFileNameOnlyPreview;
         }
 
         if (results.Count > renderedResults)
@@ -774,6 +786,13 @@ public sealed partial class MainWindow
         RichTextBlock section, List<SearchResult> results,
         string[]? allLines, int previewLines, Regex? rx)
     {
+        if (results.All(result => result.LineNumber <= 0))
+        {
+            BuildConcatenatedSection(section, results, allLines, previewLines, rx: null);
+            return;
+        }
+
+        results = results.Where(result => result.LineNumber > 0).ToList();
         ResetPreviewShowMoreDiagnostics();
         var buildSw = System.Diagnostics.Stopwatch.StartNew();
         bool truncatePreviewLines = ShouldTruncatePreviewLines();
@@ -985,6 +1004,10 @@ public sealed partial class MainWindow
         List<SearchResult> results, string[]? allLines,
         bool isHighlight, int previewLines, Regex? rx)
     {
+        if (results.All(result => result.LineNumber <= 0))
+            return 0;
+
+        results = results.Where(result => result.LineNumber > 0).ToList();
         int total = 0;
         if (isHighlight && allLines != null)
         {
@@ -1257,7 +1280,10 @@ public sealed partial class MainWindow
         }
 
         var matchLines = new HashSet<int>(results.Select(r => r.LineNumber));
-        Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+        bool hasContentMatches = results.Any(result => result.LineNumber > 0);
+        Regex? rx = hasContentMatches
+            ? BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch)
+            : null;
 
         int insertionIndex = _matchParagraphs.FindIndex(m => ReferenceEquals(m.block, section));
         if (insertionIndex < 0)
@@ -1290,7 +1316,7 @@ public sealed partial class MainWindow
         for (int i = 0; i < allLines.Length; i++)
         {
             int lineNum = i + 1;
-            bool isMatch = matchLines.Contains(lineNum);
+            bool isMatch = hasContentMatches && matchLines.Contains(lineNum);
             var matchResult = isMatch
                 ? results.FirstOrDefault(r => r.LineNumber == lineNum) ?? results[0]
                 : results[0];
@@ -1701,7 +1727,7 @@ public sealed partial class MainWindow
         // setting it on the Expander itself would also show when hovering the
         // content body, which is noisy.
         if (results is not null)
-            RegisterSectionMatchTotal(block, results.Count);
+            RegisterSectionMatchTotal(block, CountContentMatchResults(results));
         _blockExpanderCache[block] = expander;
         _expanderFilePaths[expander] = filePath;
         _expanderHeaderArgs[expander] = (filePath, detail, block, results);
@@ -1715,6 +1741,9 @@ public sealed partial class MainWindow
         }
         return (block, expander);
     }
+
+    private static int CountContentMatchResults(IEnumerable<SearchResult> results)
+        => results.Count(result => result.LineNumber > 0);
 
     private Grid BuildPreviewSectionHeader(string filePath, string? detail, RichTextBlock? sectionBlock = null, List<SearchResult>? sectionResults = null)
     {
@@ -2060,7 +2089,7 @@ public sealed partial class MainWindow
     {
         var detail = byteLength.HasValue ? FormatBytes(byteLength.Value) : null;
         var block = AddPreviewSection(target.FilePath, detail).block;
-        RegisterSectionMatchTotal(block, target.Matches.Count);
+        RegisterSectionMatchTotal(block, CountContentMatchResults(target.Matches));
         return block;
     }
 

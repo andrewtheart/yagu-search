@@ -66,10 +66,13 @@
                     Background="{ThemeResource CardStrokeColorDefaultBrush}" />
 
             <!-- Scrollable content pane -->
-            <ScrollViewer Grid.Column="1"
+            <ScrollViewer x:Name="SettingsContentScrollViewer"
+                          Grid.Column="1"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
-                          Padding="0">
+                          Background="Transparent"
+                          Padding="0"
+                          PointerPressed="OnSettingsContentPointerPressed">
                 <StackPanel x:Name="SettingsContent" Spacing="10" Padding="20,12,20,16" />
             </ScrollViewer>
         </Grid>

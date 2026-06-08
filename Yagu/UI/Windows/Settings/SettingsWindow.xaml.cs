@@ -6,6 +6,7 @@ using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Windows.Graphics;
@@ -42,6 +43,7 @@ public sealed partial class SettingsWindow : Window
     private readonly List<UIElement> _tabPages = new();
     private readonly List<List<UIElement>> _tabPageRootElements = new();
     private readonly HashSet<UIElement> _dirtyTrackedElements = new();
+    private readonly Dictionary<UIElement, object?> _cleanSettingValues = new();
     private bool _settingsDirty;
     private bool _settingDirtyTrackingEnabled;
 
@@ -252,6 +254,100 @@ public sealed partial class SettingsWindow : Window
     {
         _settingsDirty = false;
         SaveButton.IsEnabled = false;
+        CaptureCleanSettingValues();
+    }
+
+    private void OnSettingsContentPointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (e.OriginalSource is DependencyObject source && IsInsideSettingEditor(source))
+            return;
+
+        SettingsContentScrollViewer.Focus(FocusState.Pointer);
+        SettingsContentScrollViewer.DispatcherQueue.TryEnqueue(
+            Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+            MarkSettingsDirtyIfCurrentValuesChanged);
+    }
+
+    private static bool IsInsideSettingEditor(DependencyObject source)
+    {
+        for (DependencyObject? current = source; current is not null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (current is TextBox
+                or NumberBox
+                or ComboBox
+                or CheckBox
+                or RadioButton
+                or ToggleSwitch
+                or CalendarDatePicker
+                or ColorPicker
+                or Slider
+                or Button
+                or HyperlinkButton)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void CaptureCleanSettingValues()
+    {
+        _cleanSettingValues.Clear();
+        foreach (var element in _dirtyTrackedElements)
+        {
+            if (TryGetSettingValue(element, out var value))
+                _cleanSettingValues[element] = value;
+        }
+    }
+
+    private void MarkSettingsDirtyIfCurrentValuesChanged()
+    {
+        if (!_settingDirtyTrackingEnabled || _settingsDirty)
+            return;
+
+        foreach (var element in _dirtyTrackedElements)
+        {
+            if (!TryGetSettingValue(element, out var currentValue))
+                continue;
+            if (!_cleanSettingValues.TryGetValue(element, out var cleanValue)
+                || !Equals(cleanValue, currentValue))
+            {
+                MarkSettingsDirty();
+                return;
+            }
+        }
+    }
+
+    private static bool TryGetSettingValue(UIElement element, out object? value)
+    {
+        switch (element)
+        {
+            case TextBox textBox:
+                value = textBox.Text ?? string.Empty;
+                return true;
+            case NumberBox numberBox:
+                value = (numberBox.Value, numberBox.Text ?? string.Empty);
+                return true;
+            case ComboBox comboBox:
+                value = comboBox.SelectedIndex;
+                return true;
+            case CheckBox checkBox:
+                value = checkBox.IsChecked;
+                return true;
+            case ToggleSwitch toggleSwitch:
+                value = toggleSwitch.IsOn;
+                return true;
+            case CalendarDatePicker calendarDatePicker:
+                value = calendarDatePicker.Date;
+                return true;
+            case ColorPicker colorPicker:
+                value = colorPicker.Color;
+                return true;
+            default:
+                value = null;
+                return false;
+        }
     }
 
     private void RootGrid_Loaded(object sender, RoutedEventArgs e)

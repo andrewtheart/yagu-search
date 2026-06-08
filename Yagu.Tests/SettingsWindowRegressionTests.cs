@@ -151,6 +151,10 @@ public sealed class SettingsWindowRegressionTests
     {
         Assert.Contains("private bool _settingsDirty;", SettingsWindowSource);
         Assert.Contains("private bool _settingDirtyTrackingEnabled;", SettingsWindowSource);
+        Assert.Contains("private readonly Dictionary<UIElement, object?> _cleanSettingValues = new();", SettingsWindowSource);
+        Assert.Contains("x:Name=\"SettingsContentScrollViewer\"", SettingsWindowXaml);
+        Assert.Contains("Background=\"Transparent\"", SettingsWindowXaml);
+        Assert.Contains("PointerPressed=\"OnSettingsContentPointerPressed\"", SettingsWindowXaml);
         AssertContainsInOrder(SettingsWindowSource,
             "BuildSettingsContent();",
             "AttachSettingDirtyHandlers();",
@@ -175,7 +179,25 @@ public sealed class SettingsWindowRegressionTests
         string cleanMethod = ExtractMethod(SettingsWindowSource, "MarkSettingsClean", window: 500);
         AssertContainsInOrder(cleanMethod,
             "_settingsDirty = false;",
-            "SaveButton.IsEnabled = false;");
+            "SaveButton.IsEnabled = false;",
+            "CaptureCleanSettingValues();");
+
+        string pointerMethod = ExtractMethod(SettingsWindowSource, "OnSettingsContentPointerPressed", window: 1200);
+        AssertContainsInOrder(pointerMethod,
+            "IsInsideSettingEditor(source)",
+            "SettingsContentScrollViewer.Focus(FocusState.Pointer);",
+            "MarkSettingsDirtyIfCurrentValuesChanged");
+
+        string valueCheckMethod = ExtractMethod(SettingsWindowSource, "MarkSettingsDirtyIfCurrentValuesChanged", window: 1400);
+        AssertContainsInOrder(valueCheckMethod,
+            "if (!_settingDirtyTrackingEnabled || _settingsDirty)",
+            "foreach (var element in _dirtyTrackedElements)",
+            "TryGetSettingValue(element, out var currentValue)",
+            "!Equals(cleanValue, currentValue)",
+            "MarkSettingsDirty();");
+
+        string settingValueMethod = ExtractMethod(SettingsWindowSource, "TryGetSettingValue", window: 1600);
+        Assert.Contains("value = (numberBox.Value, numberBox.Text ?? string.Empty);", settingValueMethod);
 
         AssertContainsInOrder(SettingsWindowSource,
             "_viewModel.SuppressAdminWarning = false;",
