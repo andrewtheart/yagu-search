@@ -289,6 +289,38 @@ public class SettingsServiceNewFieldTests
     }
 
     [Fact]
+    public void Load_ResultListMatchHighlightColor_NormalizesWithoutUiDependency()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-result-highlight-" + Guid.NewGuid() + ".json");
+        try
+        {
+            File.WriteAllText(tmp, """{"ResultListMatchHighlightColor":"123456"}""");
+            var svc = new SettingsService(tmp);
+
+            var loaded = svc.Load();
+
+            Assert.Equal("#FF123456", loaded.ResultListMatchHighlightColor);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
+    public void Load_InvalidResultListMatchHighlightColor_UsesDefault()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-result-highlight-invalid-" + Guid.NewGuid() + ".json");
+        try
+        {
+            File.WriteAllText(tmp, """{"ResultListMatchHighlightColor":"not-a-color"}""");
+            var svc = new SettingsService(tmp);
+
+            var loaded = svc.Load();
+
+            Assert.Equal(AppSettings.DefaultResultListMatchHighlightColor, loaded.ResultListMatchHighlightColor);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
     public void AdvancedOption_SkipBinary_IsInstanceOnly()
     {
         var tmp = Path.Combine(Path.GetTempPath(), "qg-skipbin-" + Guid.NewGuid() + ".json");

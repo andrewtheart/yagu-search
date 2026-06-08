@@ -48,6 +48,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     public static int MaxMatchesPerGroup { get; set; } = int.MaxValue;
 
     public string FilePath { get; }
+    private bool _selectFutureResults;
 
     /// <summary>Number of matches that were dropped due to <see cref="MaxMatchesPerGroup"/>.</summary>
     public int HiddenMatchCount { get; private set; }
@@ -127,6 +128,8 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
 
     protected override void InsertItem(int index, SearchResult item)
     {
+        ApplySelectionIntent(item);
+
         if (item.LineNumber == 0)
             _fileNameMatchCount++;
 
@@ -171,6 +174,8 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             }
 
             Items.Insert(index, item);
+            if (item.IsSelected)
+                NotifySelectedCountChanged();
             // Coalesced bookkeeping — same thresholds as the OnSelfChanged Add branch's
             // "hidden growth" notify. PageSize / HiddenNotificationInterval throttle.
             int count = Count;
@@ -186,6 +191,14 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         }
 
         base.InsertItem(index, item);
+        if (item.IsSelected)
+            NotifySelectedCountChanged();
+    }
+
+    private void ApplySelectionIntent(SearchResult item)
+    {
+        if (_selectFutureResults || _allSelected)
+            item.IsSelected = true;
     }
 
     private void AddEvictedStub(EvictedStub stub)
@@ -313,7 +326,9 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             while (remaining > 0 && offset < page.Length)
             {
                 var s = ReadEvictedStub(page, ref offset);
-                Items.Add(SearchResult.CreatePreEvicted(FilePath, s.LineNumber, s.MatchStartColumn, s.MatchLength, s.DiskOffset, s.SourceMatchStartColumn));
+                var result = SearchResult.CreatePreEvicted(FilePath, s.LineNumber, s.MatchStartColumn, s.MatchLength, s.DiskOffset, s.SourceMatchStartColumn);
+                ApplySelectionIntent(result);
+                Items.Add(result);
                 remaining--;
             }
         }
@@ -323,6 +338,8 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         OnPropertyChanged(s_indexerChanged);
         NotifyMoreStateChanged();
         OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(MatchCount)));
+        if (_selectFutureResults || _allSelected)
+            NotifySelectedCountChanged();
     }
 
     /// <summary>
@@ -645,6 +662,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         set
         {
             _allSelected = value;
+            _selectFutureResults = value;
             // Always raise PropertyChanged to re-sync the TwoWay-bound CheckBox,
             // which can diverge from the model after user clicks.
             OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(AllSelected)));
@@ -656,6 +674,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
 
     public void SelectAll()
     {
+        _selectFutureResults = true;
         // Iter 16: SelectAll on a collapsed evicted-only group needs the SearchResult
         // instances to actually exist before we can flip IsSelected on them.
         MaterializeEvictedStubs();
@@ -666,6 +685,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
 
     public void DeselectAll()
     {
+        _selectFutureResults = false;
         MaterializeEvictedStubs();
         foreach (var r in this) r.IsSelected = false;
         AllSelected = false;
@@ -675,6 +695,11 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     public void NotifySelectionChanged()
     {
         AllSelected = Count > 0 && this.All(r => r.IsSelected);
+        NotifySelectedCountChanged();
+    }
+
+    private void NotifySelectedCountChanged()
+    {
         OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(SelectedCount)));
         OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(SelectedCountText)));
     }

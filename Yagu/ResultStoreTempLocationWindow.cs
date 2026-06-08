@@ -9,6 +9,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
+using Yagu.Helpers;
 using Yagu.Services;
 
 namespace Yagu;
@@ -38,6 +39,7 @@ internal sealed class ResultStoreTempLocationWindow : Window
         Closed += OnClosed;
 
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        WindowForegroundHelper.ConfigureOwnedWindow(hwnd, _ownerHwnd);
         var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
         var appWindow = AppWindow.GetFromWindowId(windowId);
         appWindow.Title = Title;
@@ -76,6 +78,7 @@ internal sealed class ResultStoreTempLocationWindow : Window
             EnableWindow(_ownerHwnd, false);
 
         Activate();
+        WindowForegroundHelper.BringOwnedWindowToFront(this, _ownerHwnd);
         return _completion.Task;
     }
 

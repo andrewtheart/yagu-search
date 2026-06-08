@@ -105,7 +105,43 @@ public sealed partial class MainWindow
         _terminalService = new ConPtyTerminalService();
         _terminalService.OutputReceived += OnTerminalOutput;
         _terminalService.ProcessExited += OnTerminalProcessExited;
-        _terminalService.Start(cols: 120, rows: 24);
+        _terminalService.Start(cols: 120, rows: 24, workingDirectory: ResolveTerminalWorkingDirectory());
+    }
+
+    private string ResolveTerminalWorkingDirectory()
+    {
+        if (TryResolveExistingDirectory(ViewModel.TerminalDefaultWorkingDirectory, out string configuredDirectory))
+            return configuredDirectory;
+
+        if (TryResolveExistingDirectory(App.LaunchWorkingDirectory, out string launchDirectory))
+            return launchDirectory;
+
+        return AppContext.BaseDirectory;
+    }
+
+    private static bool TryResolveExistingDirectory(string? value, out string directory)
+    {
+        directory = string.Empty;
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        try
+        {
+            string expanded = Environment.ExpandEnvironmentVariables(value.Trim().Trim('"'));
+            if (string.IsNullOrWhiteSpace(expanded))
+                return false;
+
+            string fullPath = Path.GetFullPath(expanded);
+            if (!Directory.Exists(fullPath))
+                return false;
+
+            directory = fullPath;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private void OnTerminalOutput(string text)

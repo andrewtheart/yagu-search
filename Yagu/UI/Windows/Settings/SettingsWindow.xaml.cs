@@ -1,19 +1,25 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using Microsoft.Graphics.Canvas.Text;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Windows.Graphics;
 using Yagu.Helpers;
 using Yagu.Services;
 using Yagu.ViewModels;
+using XamlFontFamily = Microsoft.UI.Xaml.Media.FontFamily;
 
 namespace Yagu;
 
 public sealed partial class SettingsWindow : Window
 {
+    private static IReadOnlyList<string>? _systemFontFamilyNames;
+
     private static readonly string[] TabHeaders =
     [
         "Search Defaults",
@@ -23,6 +29,7 @@ public sealed partial class SettingsWindow : Window
         "Editor",
         "Window",
         "UI Behaviors",
+        "Terminal Emulator",
         "Developer Options",
         "General",
     ];
@@ -33,6 +40,7 @@ public sealed partial class SettingsWindow : Window
     private readonly Action<bool>? _applyWordWrap;
     private readonly Action? _applyPreviewSectionBackgrounds;
     private readonly List<UIElement> _tabPages = new();
+    private readonly List<List<UIElement>> _tabPageRootElements = new();
 
     /// <summary>Flat registry of every setting built during BuildSettingsContent for search filtering.</summary>
     private readonly List<SettingEntry> _settingEntries = new();
@@ -46,7 +54,8 @@ public sealed partial class SettingsWindow : Window
         public required string Label { get; init; }
         public string? Description { get; init; }
         public string? ControlText { get; init; }
-        /// <summary>Factory that recreates the setting UI elements for display in search results.</summary>
+        public required IReadOnlyList<ElementPlacement> OriginalPlacements { get; init; }
+        /// <summary>Factory that returns the setting UI elements for display in search results.</summary>
         public required Func<IEnumerable<UIElement>> BuildElements { get; init; }
 
         public bool Matches(string query)
@@ -56,6 +65,13 @@ public sealed partial class SettingsWindow : Window
                 || (ControlText is not null && ControlText.Contains(query, StringComparison.OrdinalIgnoreCase))
                 || TabHeader.Contains(query, StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    private sealed class ElementPlacement
+    {
+        public required UIElement Element { get; init; }
+        public required Panel Parent { get; init; }
+        public required int Index { get; init; }
     }
 
     public SettingsWindow(MainViewModel viewModel, HotkeyService hotkeyService, IntPtr mainHwnd, Action<bool>? applyWordWrap, Action? applyPreviewSectionBackgrounds)
@@ -73,6 +89,7 @@ public sealed partial class SettingsWindow : Window
 
         // Size and center over the owner window
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        WindowForegroundHelper.ConfigureOwnedWindow(hwnd, mainHwnd);
         var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
         var appWindow = AppWindow.GetFromWindowId(windowId);
         const int w = 860, h = 820;
@@ -89,11 +106,32 @@ public sealed partial class SettingsWindow : Window
         TabList.SelectedIndex = 0;
     }
 
+    public void BringInFrontOfMainWindow()
+        => WindowForegroundHelper.BringOwnedWindowToFront(this, _mainHwnd);
+
     /// <summary>Navigate to a specific tab by zero-based index.</summary>
     public void SelectTab(int index)
     {
-        if (index >= 0 && index < TabList.Items.Count)
-            TabList.SelectedIndex = index;
+        if (index < 0 || index >= TabList.Items.Count)
+            return;
+
+        bool restoreNormalTabView = _isSearchActive
+            || !string.IsNullOrWhiteSpace(SearchBox.Text)
+            || TabList.Visibility != Visibility.Visible;
+
+        if (restoreNormalTabView)
+        {
+            SearchBox.Text = string.Empty;
+            _isSearchActive = false;
+            TabList.Visibility = Visibility.Visible;
+            ClearSearchResultContainers();
+            RestoreTabPageElements();
+        }
+
+        TabList.SelectedIndex = index;
+        SettingsContent.Children.Clear();
+        if (index < _tabPages.Count)
+            SettingsContent.Children.Add(_tabPages[index]);
     }
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -271,29 +309,38 @@ public sealed partial class SettingsWindow : Window
 
     private void RestoreTabPageElements()
     {
-        // Rebuild each tab page's children from the setting entries.
-        for (int t = 0; t < _tabPages.Count && t < TabHeaders.Length; t++)
+        // Restore each tab's original root children first, including grouped panels.
+        for (int t = 0; t < _tabPages.Count; t++)
         {
             if (_tabPages[t] is not StackPanel sp) continue;
             sp.Children.Clear();
-        }
 
-        foreach (var entry in _settingEntries)
-        {
-            int tabIdx = Array.IndexOf(
-                TabHeaders,
-                entry.TabHeader);
-            if (tabIdx < 0 || tabIdx >= _tabPages.Count) continue;
-            if (_tabPages[tabIdx] is not StackPanel sp) continue;
-
-            foreach (var element in entry.BuildElements())
+            if (t >= _tabPageRootElements.Count) continue;
+            foreach (var element in _tabPageRootElements[t])
             {
-                // Detach from any current parent first.
-                if (element is FrameworkElement fe && fe.Parent is Panel parentPanel)
-                    parentPanel.Children.Remove(element);
+                DetachFromParent(element);
                 sp.Children.Add(element);
             }
         }
+
+        foreach (var entry in _settingEntries)
+            RestoreOriginalPlacements(entry.OriginalPlacements);
+    }
+
+    private static void RestoreOriginalPlacements(IEnumerable<ElementPlacement> placements)
+    {
+        foreach (var placement in placements.OrderBy(p => p.Index))
+        {
+            DetachFromParent(placement.Element);
+            int index = Math.Clamp(placement.Index, 0, placement.Parent.Children.Count);
+            placement.Parent.Children.Insert(index, placement.Element);
+        }
+    }
+
+    private static void DetachFromParent(UIElement element)
+    {
+        if (element is FrameworkElement fe && fe.Parent is Panel parentPanel)
+            parentPanel.Children.Remove(element);
     }
 
     /// <summary>
@@ -303,19 +350,21 @@ public sealed partial class SettingsWindow : Window
     /// </summary>
     private void ExtractSearchableEntries()
     {
-        var tabHeaders = new[] { "Search Defaults", "Search Limits", "Performance", "Display", "Editor", "Window", "UI Behaviors", "Developer Options", "General" };
-        for (int t = 0; t < _tabPages.Count && t < tabHeaders.Length; t++)
+        CaptureTabPageRootElements();
+
+        for (int t = 0; t < _tabPages.Count && t < TabHeaders.Length; t++)
         {
-            string tabHeader = tabHeaders[t];
+            string tabHeader = TabHeaders[t];
             if (_tabPages[t] is not StackPanel page) continue;
 
             var entryElements = new List<UIElement>();
             string? entryLabel = null;
             string? entryDescription = null;
 
-            for (int i = 0; i < page.Children.Count; i++)
+            var children = EnumerateSearchableChildren(page).ToList();
+            for (int i = 0; i < children.Count; i++)
             {
-                var child = page.Children[i];
+                var child = children[i];
                 string? text = ExtractText(child);
                 bool isLabel = IsLabelElement(child);
 
@@ -327,12 +376,14 @@ public sealed partial class SettingsWindow : Window
                     string? capturedDesc = entryDescription;
                     string capturedControlText = ExtractControlSearchText(captured);
                     string capturedTab = tabHeader;
+                    var capturedPlacements = CaptureOriginalPlacements(captured);
                     _settingEntries.Add(new SettingEntry
                     {
                         TabHeader = capturedTab,
                         Label = capturedLabel,
                         Description = capturedDesc,
                         ControlText = capturedControlText,
+                        OriginalPlacements = capturedPlacements,
                         BuildElements = () => captured,
                     });
                     entryElements.Clear();
@@ -357,16 +408,94 @@ public sealed partial class SettingsWindow : Window
                 string? capturedDesc = entryDescription;
                 string capturedControlText = ExtractControlSearchText(captured);
                 string capturedTab = tabHeader;
+                var capturedPlacements = CaptureOriginalPlacements(captured);
                 _settingEntries.Add(new SettingEntry
                 {
                     TabHeader = capturedTab,
                     Label = capturedLabel,
                     Description = capturedDesc,
                     ControlText = capturedControlText,
+                    OriginalPlacements = capturedPlacements,
                     BuildElements = () => captured,
                 });
             }
         }
+    }
+
+    private void CaptureTabPageRootElements()
+    {
+        _tabPageRootElements.Clear();
+        foreach (var page in _tabPages)
+        {
+            if (page is StackPanel sp)
+                _tabPageRootElements.Add(sp.Children.ToList());
+            else
+                _tabPageRootElements.Add(new List<UIElement>());
+        }
+    }
+
+    private static List<ElementPlacement> CaptureOriginalPlacements(IEnumerable<UIElement> elements)
+    {
+        var placements = new List<ElementPlacement>();
+        foreach (var element in elements)
+        {
+            if (element is not FrameworkElement { Parent: Panel parent })
+                continue;
+
+            int index = IndexOfChild(parent, element);
+            if (index < 0)
+                continue;
+
+            placements.Add(new ElementPlacement
+            {
+                Element = element,
+                Parent = parent,
+                Index = index,
+            });
+        }
+
+        return placements;
+    }
+
+    private static int IndexOfChild(Panel parent, UIElement element)
+    {
+        for (int i = 0; i < parent.Children.Count; i++)
+        {
+            if (ReferenceEquals(parent.Children[i], element))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static IEnumerable<UIElement> EnumerateSearchableChildren(Panel parent)
+    {
+        foreach (var child in parent.Children)
+        {
+            if (child is Border { Child: UIElement groupChild })
+            {
+                foreach (var nested in EnumerateSearchableGroupChild(groupChild))
+                    yield return nested;
+                continue;
+            }
+
+            yield return child;
+        }
+    }
+
+    private static IEnumerable<UIElement> EnumerateSearchableGroupChild(UIElement element)
+    {
+        if (element is Panel panel)
+        {
+            foreach (var child in panel.Children)
+            {
+                foreach (var nested in EnumerateSearchableGroupChild(child))
+                    yield return nested;
+            }
+            yield break;
+        }
+
+        yield return element;
     }
 
     private static bool IsLabelElement(UIElement element)
@@ -439,6 +568,9 @@ public sealed partial class SettingsWindow : Window
                 break;
             case ContentControl contentControl:
                 CollectObjectSearchText(contentControl.Content, parts);
+                break;
+            case Border { Child: UIElement child }:
+                CollectControlSearchText(child, parts);
                 break;
             case Panel panel:
                 foreach (var child in panel.Children)
@@ -524,6 +656,159 @@ public sealed partial class SettingsWindow : Window
         string currentHex,
         Windows.UI.Color fallback,
         Action<string> assign)
+        => AddColorSetting(parent, label, description, currentHex, fallback, assign, _applyPreviewSectionBackgrounds);
+
+    private static ComboBox CreateFontFamilyPicker(string currentValue, string defaultValue, Action<string> assign)
+    {
+        var picker = new ComboBox
+        {
+            PlaceholderText = defaultValue,
+            MinWidth = 280,
+            MaxWidth = 520,
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+
+        string selectedValue = string.IsNullOrWhiteSpace(currentValue)
+            ? defaultValue.Trim()
+            : currentValue.Trim();
+        ComboBoxItem? selectedItem = null;
+
+        foreach (string fontFamily in BuildFontFamilyOptions(selectedValue, defaultValue))
+        {
+            var item = CreateFontFamilyItem(fontFamily);
+            picker.Items.Add(item);
+
+            if (string.Equals(fontFamily, selectedValue, StringComparison.OrdinalIgnoreCase))
+                selectedItem = item;
+        }
+
+        picker.SelectedItem = selectedItem;
+        picker.SelectionChanged += (_, _) =>
+        {
+            if (picker.SelectedItem is ComboBoxItem { Tag: string fontFamily })
+                assign(fontFamily);
+        };
+
+        return picker;
+    }
+
+    private static void SelectFontFamily(ComboBox picker, string fontFamily)
+    {
+        string normalized = fontFamily.Trim();
+        ComboBoxItem? item = picker.Items
+            .OfType<ComboBoxItem>()
+            .FirstOrDefault(candidate => candidate.Tag is string candidateFontFamily
+                && string.Equals(candidateFontFamily, normalized, StringComparison.OrdinalIgnoreCase));
+
+        if (item is null)
+        {
+            item = CreateFontFamilyItem(normalized);
+            picker.Items.Insert(0, item);
+        }
+
+        picker.SelectedItem = item;
+    }
+
+    private static ComboBoxItem CreateFontFamilyItem(string fontFamily)
+    {
+        var row = new Grid
+        {
+            ColumnSpacing = 16,
+            MinWidth = 260,
+            MaxWidth = 480,
+        };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        row.Children.Add(new TextBlock
+        {
+            Text = fontFamily,
+            FontSize = 14,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+
+        var sample = new TextBlock
+        {
+            Text = "AaBbCc 123",
+            FontFamily = new XamlFontFamily(fontFamily),
+            FontSize = 14,
+            Opacity = 0.75,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(sample, 1);
+        row.Children.Add(sample);
+        ToolTipService.SetToolTip(row, fontFamily);
+
+        return new ComboBoxItem
+        {
+            Content = row,
+            Tag = fontFamily,
+            MinHeight = 32,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+        };
+    }
+
+    private static List<string> BuildFontFamilyOptions(string currentValue, string defaultValue)
+    {
+        var options = new List<string>();
+        AddFontFamilyOption(options, currentValue);
+        AddFontFamilyOption(options, defaultValue);
+
+        foreach (string fontFamily in GetSystemFontFamilyNames())
+            AddFontFamilyOption(options, fontFamily);
+
+        return options;
+    }
+
+    private static void AddFontFamilyOption(List<string> options, string? fontFamily)
+    {
+        if (string.IsNullOrWhiteSpace(fontFamily))
+            return;
+
+        string normalized = fontFamily.Trim();
+        if (!options.Contains(normalized, StringComparer.OrdinalIgnoreCase))
+            options.Add(normalized);
+    }
+
+    private static IReadOnlyList<string> GetSystemFontFamilyNames()
+    {
+        if (_systemFontFamilyNames is not null)
+            return _systemFontFamilyNames;
+
+        try
+        {
+            _systemFontFamilyNames = CanvasTextFormat.GetSystemFontFamilies()
+                .Where(fontFamily => !string.IsNullOrWhiteSpace(fontFamily))
+                .Select(fontFamily => fontFamily.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(fontFamily => fontFamily, StringComparer.CurrentCultureIgnoreCase)
+                .ToArray();
+        }
+        catch
+        {
+            _systemFontFamilyNames =
+            [
+                AppSettings.DefaultResultListMatchTextFontFamily,
+                "Cascadia Mono",
+                "Courier New",
+                "Segoe UI",
+                "Arial",
+            ];
+        }
+
+        return _systemFontFamilyNames;
+    }
+
+    private static ColorPicker AddColorSetting(
+        StackPanel parent,
+        string label,
+        string description,
+        string currentHex,
+        Windows.UI.Color fallback,
+        Action<string> assign,
+        Action? afterChange = null)
     {
         parent.Children.Add(new TextBlock
         {
@@ -543,7 +828,7 @@ public sealed partial class SettingsWindow : Window
         picker.ColorChanged += (_, args) =>
         {
             assign(ColorStringHelper.ToHex(args.NewColor));
-            _applyPreviewSectionBackgrounds?.Invoke();
+            afterChange?.Invoke();
         };
         parent.Children.Add(picker);
 
@@ -563,6 +848,41 @@ public sealed partial class SettingsWindow : Window
             Opacity = 0.6,
             TextWrapping = TextWrapping.Wrap,
         });
+
+        return picker;
+    }
+
+    private static StackPanel AddSettingsGroupBox(StackPanel parent, string title)
+    {
+        var body = new StackPanel { Spacing = 8 };
+        var content = new StackPanel { Spacing = 8 };
+        content.Children.Add(new TextBlock
+        {
+            Text = title,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            FontSize = 15,
+        });
+        content.Children.Add(body);
+
+        parent.Children.Add(new Border
+        {
+            Margin = new Thickness(0, 8, 0, 4),
+            Padding = new Thickness(14, 12, 14, 14),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            BorderBrush = GetSettingsGroupBrush("ControlStrokeColorDefaultBrush", Windows.UI.Color.FromArgb(0x55, 0xFF, 0xFF, 0xFF)),
+            Background = GetSettingsGroupBrush("LayerFillColorDefaultBrush", Windows.UI.Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF)),
+            Child = content,
+        });
+
+        return body;
+    }
+
+    private static Brush GetSettingsGroupBrush(string resourceKey, Windows.UI.Color fallback)
+    {
+        if (Application.Current.Resources.TryGetValue(resourceKey, out object resource) && resource is Brush brush)
+            return brush;
+        return new SolidColorBrush(fallback);
     }
 
     private static string SettingsGroupIcon(string header) => header switch
@@ -574,6 +894,7 @@ public sealed partial class SettingsWindow : Window
         "Editor" => "\uE70F",
         "Window" => "\uE737",
         "UI Behaviors" => "\uE7C4",
+        "Terminal Emulator" => "\uE756",
         "Developer Options" => "\uE713",
         "General" => "\uE713",
         _ => "\uE7FC",
@@ -653,6 +974,66 @@ public sealed partial class SettingsWindow : Window
             Opacity = 0.6,
             TextWrapping = TextWrapping.Wrap,
         });
+    }
+
+    private void AddTerminalEmulationSetting(StackPanel parent)
+    {
+        parent.Children.Add(new TextBlock { Text = "Terminal Emulator", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 0, 0, 8) });
+        parent.Children.Add(new TextBlock { Text = "Default working directory:" });
+
+        var workingDirectory = new TextBox
+        {
+            Text = _viewModel.TerminalDefaultWorkingDirectory,
+            PlaceholderText = App.LaunchWorkingDirectory,
+            MaxWidth = 520,
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        workingDirectory.TextChanged += (_, _) => _viewModel.TerminalDefaultWorkingDirectory = workingDirectory.Text;
+        parent.Children.Add(workingDirectory);
+
+        var buttonRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Left };
+        var browse = new Button
+        {
+            Content = "Browse...",
+            Padding = new Thickness(10, 4, 10, 4),
+        };
+        browse.Click += async (_, _) => await PickTerminalWorkingDirectoryAsync(workingDirectory);
+        buttonRow.Children.Add(browse);
+
+        var useDefault = new Button
+        {
+            Content = "Use default",
+            Padding = new Thickness(10, 4, 10, 4),
+        };
+        useDefault.Click += (_, _) =>
+        {
+            workingDirectory.Text = string.Empty;
+            _viewModel.TerminalDefaultWorkingDirectory = string.Empty;
+        };
+        buttonRow.Children.Add(useDefault);
+        parent.Children.Add(buttonRow);
+
+        parent.Children.Add(new TextBlock
+        {
+            Text = $"Leave blank to use the Yagu launch directory: {App.LaunchWorkingDirectory}",
+            FontSize = 11,
+            Opacity = 0.6,
+            TextWrapping = TextWrapping.Wrap,
+        });
+    }
+
+    private async System.Threading.Tasks.Task PickTerminalWorkingDirectoryAsync(TextBox target)
+    {
+        var picker = new Windows.Storage.Pickers.FolderPicker();
+        picker.FileTypeFilter.Add("*");
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+        var folder = await picker.PickSingleFolderAsync();
+        if (folder is null)
+            return;
+
+        target.Text = folder.Path;
+        _viewModel.TerminalDefaultWorkingDirectory = folder.Path;
     }
 
     private void BuildSettingsContent()
@@ -986,28 +1367,83 @@ public sealed partial class SettingsWindow : Window
         // ── Display ──
         {
             var g = AddTab("Display");
+            var fileMatchListGroup = AddSettingsGroupBox(g, "File Match List");
+            var previewViewerGroup = AddSettingsGroupBox(g, "Preview Viewer");
+            var editorAppearanceGroup = AddSettingsGroupBox(g, "Editor");
 
-            g.Children.Add(new TextBlock { Text = "Line truncation length (characters):" });
+            fileMatchListGroup.Children.Add(new TextBlock { Text = "Line truncation length (characters):" });
             var trunc = new NumberBox { Value = _viewModel.LineTruncationLength, Minimum = 0, Maximum = 10000 };
             trunc.ValueChanged += (_, args) => _viewModel.LineTruncationLength = (int)args.NewValue;
-            g.Children.Add(trunc);
-            g.Children.Add(new TextBlock { Text = "Lines longer than this are truncated in the results list to prevent UI slowdowns from extremely long lines. Set to 0 to disable truncation.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            fileMatchListGroup.Children.Add(trunc);
+            fileMatchListGroup.Children.Add(new TextBlock { Text = "Lines longer than this are truncated in the results list to prevent UI slowdowns from extremely long lines. Set to 0 to disable truncation.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-            g.Children.Add(new TextBlock { Text = "Preview layout:" });
+            fileMatchListGroup.Children.Add(new TextBlock { Text = "Results list match text", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 12, 0, 0) });
+
+            fileMatchListGroup.Children.Add(new TextBlock { Text = "Font family:" });
+            var resultMatchFontFamily = CreateFontFamilyPicker(
+                _viewModel.ResultListMatchTextFontFamily,
+                AppSettings.DefaultResultListMatchTextFontFamily,
+                value => _viewModel.ResultListMatchTextFontFamily = value);
+            fileMatchListGroup.Children.Add(resultMatchFontFamily);
+
+            fileMatchListGroup.Children.Add(new TextBlock { Text = "Font size:" });
+            var resultMatchFontSize = new NumberBox
+            {
+                Value = _viewModel.ResultListMatchTextFontSize,
+                Minimum = 6,
+                Maximum = 72,
+                SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
+            };
+            resultMatchFontSize.ValueChanged += (_, args) =>
+            {
+                if (!double.IsNaN(args.NewValue))
+                    _viewModel.ResultListMatchTextFontSize = (int)Math.Clamp(args.NewValue, 6, 72);
+            };
+            fileMatchListGroup.Children.Add(resultMatchFontSize);
+
+            var resultMatchColor = AddColorSetting(
+                fileMatchListGroup,
+                "Highlighted match text:",
+                "Color of the matched substring inside each result-list match line. Default is gold.",
+                _viewModel.ResultListMatchHighlightColor,
+                Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00),
+                value => _viewModel.ResultListMatchHighlightColor = value);
+
+            var resetResultMatchText = new Button
+            {
+                Content = "Reset result match text",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+            };
+            resetResultMatchText.Click += (_, _) =>
+            {
+                SelectFontFamily(resultMatchFontFamily, AppSettings.DefaultResultListMatchTextFontFamily);
+                resultMatchFontSize.Value = AppSettings.DefaultResultListMatchTextFontSize;
+                resultMatchColor.Color = ColorStringHelper.Parse(
+                    AppSettings.DefaultResultListMatchHighlightColor,
+                    Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00));
+                _viewModel.ResultListMatchTextFontFamily = AppSettings.DefaultResultListMatchTextFontFamily;
+                _viewModel.ResultListMatchTextFontSize = AppSettings.DefaultResultListMatchTextFontSize;
+                _viewModel.ResultListMatchHighlightColor = AppSettings.DefaultResultListMatchHighlightColor;
+            };
+            fileMatchListGroup.Children.Add(resetResultMatchText);
+            fileMatchListGroup.Children.Add(new TextBlock { Text = "Used by the left results pane match lines. Context lines and line-number buttons keep their compact default styling.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Preview layout:" });
             var previewMode = new ComboBox();
             previewMode.Items.Add("Concatenated (separate match snippets)");
             previewMode.Items.Add("Multi-highlight (unified file view)");
             previewMode.SelectedIndex = _viewModel.PreviewModeIndex;
             previewMode.SelectionChanged += (_, _) => _viewModel.PreviewModeIndex = previewMode.SelectedIndex;
-            g.Children.Add(previewMode);
+            previewViewerGroup.Children.Add(previewMode);
 
             var wordWrap = new CheckBox { Content = "Word wrap in preview panel", IsChecked = _viewModel.PreviewWordWrap };
             wordWrap.Checked += (_, _) => { _viewModel.PreviewWordWrap = true; _applyWordWrap?.Invoke(true); };
             wordWrap.Unchecked += (_, _) => { _viewModel.PreviewWordWrap = false; _applyWordWrap?.Invoke(false); };
-            g.Children.Add(wordWrap);
+            previewViewerGroup.Children.Add(wordWrap);
 
             AddPreviewContentColorSetting(
-                g,
+                previewViewerGroup,
                 "Selected preview content background:",
                 "Background for the content body of the active preview section. Default is black.",
                 _viewModel.SelectedPreviewContentBackgroundColor,
@@ -1015,17 +1451,17 @@ public sealed partial class SettingsWindow : Window
                 value => _viewModel.SelectedPreviewContentBackgroundColor = value);
 
             AddPreviewContentColorSetting(
-                g,
+                previewViewerGroup,
                 "Unselected preview content background:",
                 "Background for preview section content that is not active. Default is transparent so it follows the app theme.",
                 _viewModel.UnselectedPreviewContentBackgroundColor,
                 Windows.UI.Color.FromArgb(0x00, 0x00, 0x00, 0x00),
                 value => _viewModel.UnselectedPreviewContentBackgroundColor = value);
 
-            g.Children.Add(new TextBlock { Text = "Preview font colors", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 12, 0, 0) });
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Preview font colors", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 12, 0, 0) });
 
             AddPreviewContentColorSetting(
-                g,
+                previewViewerGroup,
                 "Preview gutter text:",
                 "Color of line numbers and separator pipes in the preview content gutter.",
                 _viewModel.PreviewGutterContextColor,
@@ -1033,7 +1469,7 @@ public sealed partial class SettingsWindow : Window
                 value => _viewModel.PreviewGutterContextColor = value);
 
             AddPreviewContentColorSetting(
-                g,
+                previewViewerGroup,
                 "Matched preview gutter text:",
                 "Color of line numbers in the preview gutter for matched lines.",
                 _viewModel.PreviewGutterMatchColor,
@@ -1041,15 +1477,7 @@ public sealed partial class SettingsWindow : Window
                 value => _viewModel.PreviewGutterMatchColor = value);
 
             AddPreviewContentColorSetting(
-                g,
-                "Editor gutter text:",
-                "Color of line numbers in the built-in editor gutter.",
-                _viewModel.PreviewEditorGutterColor,
-                Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE),
-                value => _viewModel.PreviewEditorGutterColor = value);
-
-            AddPreviewContentColorSetting(
-                g,
+                previewViewerGroup,
                 "Match highlight text:",
                 "Color of the highlighted match text (the search term occurrence). Default is gold.",
                 _viewModel.PreviewMatchTextColor,
@@ -1057,7 +1485,7 @@ public sealed partial class SettingsWindow : Window
                 value => _viewModel.PreviewMatchTextColor = value);
 
             AddPreviewContentColorSetting(
-                g,
+                previewViewerGroup,
                 "Active match overlay:",
                 "Color of the overlay border/underline on the currently-active match. Default is orange-red.",
                 _viewModel.PreviewOverlayColor,
@@ -1065,37 +1493,85 @@ public sealed partial class SettingsWindow : Window
                 value => _viewModel.PreviewOverlayColor = value);
 
             AddPreviewContentColorSetting(
-                g,
+                previewViewerGroup,
                 "Matched line text:",
                 "Color of text on matched lines (non-highlighted portions). Default is white.",
                 _viewModel.PreviewMatchLineColor,
                 Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF),
                 value => _viewModel.PreviewMatchLineColor = value);
 
-            g.Children.Add(new TextBlock { Text = "Auto-load matches on scroll (matches to load when reaching end of truncated section, 0 = disabled):" });
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Auto-load matches on scroll (matches to load when reaching end of truncated section, 0 = disabled):" });
             var autoLoad = new NumberBox { Value = _viewModel.PreviewAutoLoadMatches, Minimum = 0, Maximum = 5000, SpinButtonPlacementMode = Microsoft.UI.Xaml.Controls.NumberBoxSpinButtonPlacementMode.Compact };
             autoLoad.ValueChanged += (_, args) => _viewModel.PreviewAutoLoadMatches = (int)args.NewValue;
-            g.Children.Add(autoLoad);
+            previewViewerGroup.Children.Add(autoLoad);
 
-            g.Children.Add(new TextBlock { Text = "Preview section limits", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 8, 0, 0) });
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Preview section limits", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 8, 0, 0) });
 
-            g.Children.Add(new TextBlock { Text = "Max matches per file section before truncation (0 = 500):" });
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Max matches per file section before truncation (0 = 500):" });
             var maxPerSection = new NumberBox { Value = _viewModel.MaxMatchesPerSection, Minimum = 0, Maximum = 100_000, SpinButtonPlacementMode = Microsoft.UI.Xaml.Controls.NumberBoxSpinButtonPlacementMode.Compact };
             maxPerSection.ValueChanged += (_, args) => _viewModel.MaxMatchesPerSection = (int)args.NewValue;
-            g.Children.Add(maxPerSection);
-            g.Children.Add(new TextBlock { Text = "Limits how many matches are rendered per file section before the 'Load more' overflow button appears. Higher values show more upfront but may slow the UI with dense files. 0 uses the default (500).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            previewViewerGroup.Children.Add(maxPerSection);
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Limits how many matches are rendered per file section before the 'Load more' overflow button appears. Higher values show more upfront but may slow the UI with dense files. 0 uses the default (500).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-            g.Children.Add(new TextBlock { Text = "File sections per page (0 = 50):" });
+            previewViewerGroup.Children.Add(new TextBlock { Text = "File sections per page (0 = 50):" });
             var sectionPageSize = new NumberBox { Value = _viewModel.PreviewSectionPageSize, Minimum = 0, Maximum = 10_000, SpinButtonPlacementMode = Microsoft.UI.Xaml.Controls.NumberBoxSpinButtonPlacementMode.Compact };
             sectionPageSize.ValueChanged += (_, args) => _viewModel.PreviewSectionPageSize = (int)args.NewValue;
-            g.Children.Add(sectionPageSize);
-            g.Children.Add(new TextBlock { Text = "How many file sections are rendered before a 'Show more' button. Higher values load more files at once but can cause layout delays. 0 uses the default (50).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            previewViewerGroup.Children.Add(sectionPageSize);
+            previewViewerGroup.Children.Add(new TextBlock { Text = "How many file sections are rendered before a 'Show more' button. Higher values load more files at once but can cause layout delays. 0 uses the default (50).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-            g.Children.Add(new TextBlock { Text = "Full-file preview size limit (MB, 0 = 1024):" });
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Full-file preview size limit (MB, 0 = 1024):" });
             var fullFileLimit = new NumberBox { Value = _viewModel.FullFilePreviewLimitMB, Minimum = 0, Maximum = 10_240, SpinButtonPlacementMode = Microsoft.UI.Xaml.Controls.NumberBoxSpinButtonPlacementMode.Compact };
             fullFileLimit.ValueChanged += (_, args) => _viewModel.FullFilePreviewLimitMB = (int)args.NewValue;
-            g.Children.Add(fullFileLimit);
-            g.Children.Add(new TextBlock { Text = "Maximum file size allowed for the full-file preview tab. Files larger than this limit will show an error instead. 0 uses the default (1024 MB / 1 GB).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            previewViewerGroup.Children.Add(fullFileLimit);
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Maximum file size allowed for the full-file preview tab. Files larger than this limit will show an error instead. 0 uses the default (1024 MB / 1 GB).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            editorAppearanceGroup.Children.Add(new TextBlock { Text = "Built-in editor font", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 0, 0, 0) });
+
+            editorAppearanceGroup.Children.Add(new TextBlock { Text = "Font family:" });
+            var editorFontFamily = CreateFontFamilyPicker(
+                _viewModel.PreviewEditorFontFamily,
+                AppSettings.DefaultPreviewEditorFontFamily,
+                value => _viewModel.PreviewEditorFontFamily = value);
+            editorAppearanceGroup.Children.Add(editorFontFamily);
+
+            editorAppearanceGroup.Children.Add(new TextBlock { Text = "Font size:" });
+            var editorFontSize = new NumberBox
+            {
+                Value = _viewModel.PreviewEditorFontSize,
+                Minimum = 6,
+                Maximum = 72,
+                SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
+            };
+            editorFontSize.ValueChanged += (_, args) =>
+            {
+                if (!double.IsNaN(args.NewValue))
+                    _viewModel.PreviewEditorFontSize = (int)Math.Clamp(args.NewValue, 6, 72);
+            };
+            editorAppearanceGroup.Children.Add(editorFontSize);
+
+            var resetEditorFont = new Button
+            {
+                Content = "Reset editor font",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+            };
+            resetEditorFont.Click += (_, _) =>
+            {
+                SelectFontFamily(editorFontFamily, AppSettings.DefaultPreviewEditorFontFamily);
+                editorFontSize.Value = AppSettings.DefaultPreviewEditorFontSize;
+                _viewModel.PreviewEditorFontFamily = AppSettings.DefaultPreviewEditorFontFamily;
+                _viewModel.PreviewEditorFontSize = AppSettings.DefaultPreviewEditorFontSize;
+            };
+            editorAppearanceGroup.Children.Add(resetEditorFont);
+            editorAppearanceGroup.Children.Add(new TextBlock { Text = "Used by the built-in editor for full-file editing. Zoom controls still scale from this base size.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            AddPreviewContentColorSetting(
+                editorAppearanceGroup,
+                "Editor gutter text:",
+                "Color of line numbers in the built-in editor gutter.",
+                _viewModel.PreviewEditorGutterColor,
+                Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE),
+                value => _viewModel.PreviewEditorGutterColor = value);
         }
 
         // ── Editor ──
@@ -1112,50 +1588,6 @@ public sealed partial class SettingsWindow : Window
             backup.Unchecked += (_, _) => _viewModel.BackupBeforeSave = false;
             g.Children.Add(backup);
             g.Children.Add(new TextBlock { Text = "When enabled, the original file is copied to <filename>.yagubak before saving changes from the built-in editor. If a .yagubak already exists, uses .yagubak-2, .yagubak-3, etc.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
-
-            g.Children.Add(new TextBlock { Text = "Built-in editor font", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 8, 0, 0) });
-
-            g.Children.Add(new TextBlock { Text = "Font family:" });
-            var editorFontFamily = new TextBox
-            {
-                Text = _viewModel.PreviewEditorFontFamily,
-                PlaceholderText = AppSettings.DefaultPreviewEditorFontFamily,
-                MaxWidth = 520,
-                HorizontalAlignment = HorizontalAlignment.Left,
-            };
-            editorFontFamily.TextChanged += (_, _) => _viewModel.PreviewEditorFontFamily = editorFontFamily.Text;
-            g.Children.Add(editorFontFamily);
-
-            g.Children.Add(new TextBlock { Text = "Font size:" });
-            var editorFontSize = new NumberBox
-            {
-                Value = _viewModel.PreviewEditorFontSize,
-                Minimum = 6,
-                Maximum = 72,
-                SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
-            };
-            editorFontSize.ValueChanged += (_, args) =>
-            {
-                if (!double.IsNaN(args.NewValue))
-                    _viewModel.PreviewEditorFontSize = (int)Math.Clamp(args.NewValue, 6, 72);
-            };
-            g.Children.Add(editorFontSize);
-
-            var resetEditorFont = new Button
-            {
-                Content = "Reset editor font",
-                HorizontalAlignment = HorizontalAlignment.Left,
-                Padding = new Thickness(10, 4, 10, 4),
-            };
-            resetEditorFont.Click += (_, _) =>
-            {
-                editorFontFamily.Text = AppSettings.DefaultPreviewEditorFontFamily;
-                editorFontSize.Value = AppSettings.DefaultPreviewEditorFontSize;
-                _viewModel.PreviewEditorFontFamily = AppSettings.DefaultPreviewEditorFontFamily;
-                _viewModel.PreviewEditorFontSize = AppSettings.DefaultPreviewEditorFontSize;
-            };
-            g.Children.Add(resetEditorFont);
-            g.Children.Add(new TextBlock { Text = "Used by the built-in editor for full-file editing. Zoom controls still scale from this base size.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             g.Children.Add(new TextBlock { Text = "Built-in editor limits", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 8, 0, 0) });
             g.Children.Add(new TextBlock { Text = "Files exceeding any of these limits will not open in the built-in editor. Use the external editor or Show in Explorer for very large files.", FontSize = 11, Opacity = 0.7, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
@@ -1230,6 +1662,13 @@ public sealed partial class SettingsWindow : Window
             matchLineCheck.Unchecked += (_, _) => _viewModel.MatchLineCheckAddsToPreview = false;
             g.Children.Add(matchLineCheck);
             g.Children.Add(new TextBlock { Text = "When enabled, selecting the checkbox on an individual match line immediately shows that match in the preview pane.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+        }
+
+        // ── Terminal Emulator ──
+        {
+            var g = AddTab("Terminal Emulator");
+
+            AddTerminalEmulationSetting(g);
         }
 
         // ── Developer Options ──

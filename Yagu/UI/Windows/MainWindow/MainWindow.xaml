@@ -101,7 +101,7 @@
                         </Grid.ColumnDefinitions>
                         <CheckBox AutomationProperties.AutomationId="FileGroupCheckBox"
                                   IsThreeState="False"
-                                  IsChecked="{x:Bind AllSelected, Mode=TwoWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
+                                  IsChecked="{x:Bind AllSelected, Mode=OneWay}" MinWidth="32" MinHeight="0" Padding="0" VerticalAlignment="Center"
                                   Click="OnFileGroupCheckBoxClicked" />
                         <Border Grid.Column="1" Background="#1A6B5A" CornerRadius="4" Padding="8,2" VerticalAlignment="Center" Margin="0,0,10,0" MinWidth="105">
                             <TextBlock VerticalAlignment="Center" HorizontalTextAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#B0E0D0">
@@ -109,7 +109,9 @@
                             </TextBlock>
                         </Border>
                         <StackPanel Grid.Column="2" VerticalAlignment="Center">
-                            <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{x:Bind FileName}"
+                                       ToolTipService.ToolTip="{x:Bind FileName}"
+                                       FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis" />
                             <TextBlock Text="{x:Bind DirectoryName}" Tag="CompactDir"
                                        ToolTipService.ToolTip="{x:Bind DirectoryName}"
                                        FontSize="13" Opacity="0.55" TextTrimming="CharacterEllipsis"
@@ -224,8 +226,8 @@
             <RowDefinition Height="Auto" />  <!-- Search card -->
             <RowDefinition x:Name="ProgressRow" Height="Auto" />  <!-- Status / progress -->
             <RowDefinition x:Name="SplitPaneRow" Height="*" />     <!-- Split pane -->
-            <RowDefinition x:Name="StatusBarRow" Height="Auto" />  <!-- Status bar -->
             <RowDefinition x:Name="TerminalRow" Height="0" />      <!-- Embedded terminal -->
+            <RowDefinition x:Name="StatusBarRow" Height="Auto" />  <!-- Status bar -->
         </Grid.RowDefinitions>
 
         <!-- Custom title bar -->
@@ -328,10 +330,10 @@
                         TextChanged="OnDirectoryTextChanged"
                         SuggestionChosen="OnDirectorySuggestionChosen"
                         QuerySubmitted="OnDirectoryQuerySubmitted" />
-                    <Button x:Name="BrowseDirectoryButton" Grid.Column="2" Click="OnBrowseDirectory" ToolTipService.ToolTip="Browse for folder" Padding="8,6">
+                    <Button x:Name="BrowseDirectoryButton" Grid.Column="2" Click="OnBrowseDirectory" ToolTipService.ToolTip="Browse for folder" Padding="8,6" MinWidth="0">
                         <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center">
                             <FontIcon Glyph="&#xED25;" FontSize="14" />
-                            <TextBlock Text="Browse" />
+                            <TextBlock x:Name="BrowseDirectoryLabel" Text="Browse" />
                         </StackPanel>
                     </Button>
                 </Grid>
@@ -358,7 +360,7 @@
                         <StackPanel x:Name="InlineSearchToggles"
                                     Orientation="Horizontal" Spacing="2"
                                     HorizontalAlignment="Right" VerticalAlignment="Center"
-                                Margin="0,0,32,0">
+                                Margin="0,0,36,0">
                             <ToggleButton x:Name="CaseSensitiveToggle"
                                           IsChecked="{x:Bind ViewModel.CaseSensitive, Mode=TwoWay}"
                                           ToolTipService.ToolTip="Match Case (Alt+C)"
@@ -384,8 +386,18 @@
                                 <TextBlock Text="&quot;&quot;" FontSize="12" FontFamily="Consolas" />
                             </ToggleButton>
                         </StackPanel>
+                        <Button x:Name="QueryClearButton"
+                                Width="32" Height="32" MinWidth="0" Padding="0"
+                                HorizontalAlignment="Right" VerticalAlignment="Center"
+                                Margin="0,0,4,0"
+                                Background="Transparent" BorderThickness="0"
+                                Visibility="{x:Bind ViewModel.HasQueryText, Mode=OneWay}"
+                                Click="OnQueryClearClick"
+                                ToolTipService.ToolTip="Clear query">
+                            <FontIcon Glyph="&#xE894;" FontSize="12" />
+                        </Button>
                     </Grid>
-                    <Button x:Name="SearchCancelButton" Grid.Column="2" Click="OnSearchCancelClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,6"
+                        <Button x:Name="SearchCancelButton" Grid.Column="2" Click="OnSearchCancelClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,6" MinWidth="0"
                             ToolTipService.ToolTip="Search (F5)">
                         <Button.KeyboardAccelerators>
                             <KeyboardAccelerator Key="F5" />
@@ -930,7 +942,7 @@
                                 <TextBlock Text="Filter" />
                             </StackPanel>
                             <DropDownButton.Flyout>
-                                <MenuFlyout Opening="OnFilterFlyoutOpening">
+                                <MenuFlyout Placement="BottomEdgeAlignedLeft" Opening="OnFilterFlyoutOpening">
                                     <MenuFlyoutSubItem Text="By date">
                                         <MenuFlyoutItem Text="Any date" Click="OnDateFilterNone" />
                                         <MenuFlyoutSeparator />
@@ -1150,7 +1162,6 @@
                                 <Button.Flyout>
                                     <MenuFlyout>
                                         <ToggleMenuFlyoutItem x:Name="WrapModeWrap" Text="Word wrap" Click="OnWrapModeOptionClicked" />
-                                        <ToggleMenuFlyoutItem x:Name="WrapModePartial" Text="Partial word wrap" Click="OnWrapModeOptionClicked" />
                                         <ToggleMenuFlyoutItem x:Name="WrapModeNone" Text="No wrap" Click="OnWrapModeOptionClicked" />
                                     </MenuFlyout>
                                 </Button.Flyout>
@@ -1206,7 +1217,7 @@
                             <FontIcon x:Name="ExpandPreviewIcon" Glyph="&#xE740;" FontSize="12" />
                         </Button>
                     </Grid>
-                    <Grid Grid.Row="1">
+                    <Grid x:Name="PreviewContentHost" Grid.Row="1">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
@@ -1289,6 +1300,30 @@
                                 </StackPanel>
                             </Grid>
                         </ScrollViewer>
+
+                        <Grid x:Name="PreviewEmptyState" Grid.Row="1"
+                              Visibility="Collapsed"
+                              IsHitTestVisible="False"
+                              Padding="24,0"
+                              HorizontalAlignment="Stretch"
+                              VerticalAlignment="Stretch"
+                              Canvas.ZIndex="5">
+                            <StackPanel HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        MaxWidth="640"
+                                        Spacing="8">
+                                <TextBlock Text="Nothing to show"
+                                           FontSize="24"
+                                           FontWeight="SemiBold"
+                                           TextAlignment="Center"
+                                           TextWrapping="NoWrap" />
+                                <TextBlock Text="Add files to this preview by selecting one or more files on the left panel, right clicking, and selecting the preview option."
+                                           FontSize="13"
+                                           Opacity="0.72"
+                                           TextAlignment="Center"
+                                           TextWrapping="WrapWholeWords" />
+                            </StackPanel>
+                        </Grid>
 
                         <!-- Sticky horizontal scrollbar for multi-section preview mode.
                              The per-section ScrollViewers host horizontal scrolling but their
@@ -1506,7 +1541,7 @@
         </Grid>
 
         <!-- Bottom status bar -->
-        <Grid Grid.Row="5" Padding="20,8,20,10"
+        <Grid Grid.Row="6" Padding="20,8,20,10"
               Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
               BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" ColumnSpacing="16">
             <Grid.ColumnDefinitions>
@@ -1574,7 +1609,7 @@
         </Border>
 
         <!-- Embedded terminal panel (ConPTY + xterm.js in WebView2) -->
-        <WebView2 x:Name="TerminalWebView" Grid.Row="6" Visibility="Collapsed"
+        <WebView2 x:Name="TerminalWebView" Grid.Row="5" Visibility="Collapsed"
                   DefaultBackgroundColor="#1E1E1E" />
 
     </Grid>

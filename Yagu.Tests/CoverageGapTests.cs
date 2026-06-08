@@ -824,6 +824,80 @@ public class SearchResultCollectionGapTests
     }
 
     [Fact]
+    public void ApplySortAndFilter_FileNameFilterMatchesFormattedFileSize()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "yagu-filter-size-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string target = Path.Combine(root, "target.bin");
+        string other = Path.Combine(root, "other.bin");
+
+        try
+        {
+            SetFileLength(target, (long)(27.5 * 1024 * 1024));
+            SetFileLength(other, 4 * 1024 * 1024);
+
+            var coll = new SearchResultCollection();
+            coll.Add(MakeResult(target, "match"), group => group.LoadMetadata());
+            coll.Add(MakeResult(other, "match"), group => group.LoadMetadata());
+
+            coll.FileNameFilter = "27.5";
+            coll.ApplySortAndFilter();
+
+            Assert.Equal(target, Assert.Single(coll.VisibleGroups).FilePath);
+
+            coll.FileNameFilter = "27.5MB";
+            coll.ApplySortAndFilter();
+
+            Assert.Equal(target, Assert.Single(coll.VisibleGroups).FilePath);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ApplySortAndFilter_FileNameFilterMatchesFormattedModifiedDate()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "yagu-filter-date-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string target = Path.Combine(root, "target.txt");
+        string other = Path.Combine(root, "other.txt");
+
+        try
+        {
+            File.WriteAllText(target, "target");
+            File.WriteAllText(other, "other");
+            File.SetLastWriteTime(target, new DateTime(2024, 3, 14, 9, 45, 0));
+            File.SetLastWriteTime(other, new DateTime(2022, 1, 2, 3, 4, 0));
+
+            var coll = new SearchResultCollection();
+            coll.Add(MakeResult(target, "match"), group => group.LoadMetadata());
+            coll.Add(MakeResult(other, "match"), group => group.LoadMetadata());
+
+            coll.FileNameFilter = "2024-03-14";
+            coll.ApplySortAndFilter();
+
+            Assert.Equal(target, Assert.Single(coll.VisibleGroups).FilePath);
+
+            coll.FileNameFilter = "09:45";
+            coll.ApplySortAndFilter();
+
+            Assert.Equal(target, Assert.Single(coll.VisibleGroups).FilePath);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static void SetFileLength(string path, long length)
+    {
+        using var stream = File.Create(path);
+        stream.SetLength(length);
+    }
+
+    [Fact]
     public void ApplySortAndFilter_ExtensionFilter()
     {
         var coll = new SearchResultCollection();
@@ -835,6 +909,27 @@ public class SearchResultCollectionGapTests
         coll.ApplySortAndFilter();
 
         Assert.Equal(new[] { @"C:\src\main.cs", @"C:\src\view.xaml" }, coll.VisibleGroups.Select(g => g.FilePath).ToArray());
+    }
+
+    [Fact]
+    public void ApplySortAndFilter_ReordersButKeepsSelectionWithFileGroup()
+    {
+        var coll = new SearchResultCollection { SortModeIndex = 1, SortDirectionIndex = 0 };
+        const string selectedPath = @"C:\src\selected.txt";
+        const string incomingPath = @"C:\src\incoming.txt";
+        coll.Add(MakeResult(selectedPath, "match"));
+        coll.Add(MakeResult(incomingPath, "match"));
+
+        var selectedGroup = coll.FindGroup(selectedPath)!;
+        selectedGroup.SelectAll();
+        coll.ApplySortAndFilter();
+
+        coll.Add(MakeResult(incomingPath, "new match"));
+        coll.ApplySortAndFilter();
+
+        Assert.Equal(incomingPath, coll.VisibleGroups[0].FilePath);
+        Assert.Equal(selectedPath, coll.VisibleGroups.Single(group => group.AllSelected).FilePath);
+        Assert.All(coll.VisibleGroups.Where(group => group.FilePath != selectedPath), group => Assert.False(group.AllSelected));
     }
 
     [Fact]

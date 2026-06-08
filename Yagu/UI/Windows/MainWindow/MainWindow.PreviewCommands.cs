@@ -47,13 +47,9 @@ public sealed partial class MainWindow
 
     private void OnWrapModeOptionClicked(object sender, RoutedEventArgs e)
     {
-        int mode;
-        if (ReferenceEquals(sender, WrapModeWrap) || ReferenceEquals(sender, EditorWrapModeWrap))
-            mode = 0;
-        else if (ReferenceEquals(sender, WrapModePartial))
-            mode = 1;
-        else
-            mode = 2;
+        int mode = ReferenceEquals(sender, WrapModeWrap) || ReferenceEquals(sender, EditorWrapModeWrap)
+            ? (int)Models.PreviewWrapMode.Wrap
+            : (int)Models.PreviewWrapMode.NoWrap;
 
         int previousMode = ViewModel.PreviewWrapModeIndex;
         ViewModel.PreviewWrapModeIndex = mode;
@@ -72,12 +68,17 @@ public sealed partial class MainWindow
 
     private void SyncWrapModeToggles(int mode)
     {
-        WrapModeWrap.IsChecked = mode == 0;
-        WrapModePartial.IsChecked = mode == 1;
-        WrapModeNone.IsChecked = mode == 2;
-        EditorWrapModeWrap.IsChecked = mode == 0;
-        EditorWrapModeNone.IsChecked = mode != 0;
+        bool wrap = NormalizePreviewWrapModeIndex(mode) == (int)Models.PreviewWrapMode.Wrap;
+        WrapModeWrap.IsChecked = wrap;
+        WrapModeNone.IsChecked = !wrap;
+        EditorWrapModeWrap.IsChecked = wrap;
+        EditorWrapModeNone.IsChecked = !wrap;
     }
+
+    private static int NormalizePreviewWrapModeIndex(int mode)
+        => mode == (int)Models.PreviewWrapMode.Wrap
+            ? (int)Models.PreviewWrapMode.Wrap
+            : (int)Models.PreviewWrapMode.NoWrap;
 
     private async void OnPreviewModeChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -342,6 +343,7 @@ public sealed partial class MainWindow
         PreviewBlock.Blocks.Clear();
         FullFileButton.IsEnabled = true;
         PreviewToolbarContent.Visibility = Visibility.Collapsed;
+        CompletePreviewContentUpdate();
 
         // Reset select-all checkbox for the new search.
         SelectAllFilesCheckBox.IsChecked = false;
@@ -403,6 +405,7 @@ public sealed partial class MainWindow
         InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
         HideMatchNavPanel();
+        CompletePreviewContentUpdate();
 
         // Building a large preview leaves a lot of long-lived allocations on
         // Gen2 (Paragraph/Run/Inline trees) and the LOH (string[] file-content
@@ -433,6 +436,7 @@ public sealed partial class MainWindow
         InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
         HideMatchNavPanel();
+        CompletePreviewContentUpdate();
 
         // Clear results, dispose temp store, and GC
         await ViewModel.ClearResultsAsync();
@@ -488,6 +492,7 @@ public sealed partial class MainWindow
         InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
         HideMatchNavPanel();
+        CompletePreviewContentUpdate();
 
         try
         {
@@ -682,14 +687,61 @@ public sealed partial class MainWindow
     private void OnMatchLineLoaded(object sender, RoutedEventArgs e)
     {
         if (sender is not RichTextBlock rtb) return;
+        RenderResultMatchLine(rtb);
+    }
+
+    private void RenderResultMatchLine(RichTextBlock rtb)
+    {
         var dc = rtb.DataContext;
         if (dc is not SearchResult r) return;
 
+        ApplyResultMatchTextStyle(rtb);
         rtb.Blocks.Clear();
         var para = new Paragraph();
         int matchStart = r.IsEvicted ? r.ShortPreviewMatchStart : r.MatchStartColumn;
         HighlightInline(para, r.MatchLine, matchStart, r.MatchLength);
         rtb.Blocks.Add(para);
+    }
+
+    private void ApplyResultMatchTextSettings()
+    {
+        _resultMatchTextBrush = new SolidColorBrush(ColorStringHelper.Parse(
+            ViewModel.ResultListMatchHighlightColor,
+            Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00)));
+    }
+
+    private void ApplyResultMatchTextStyle(RichTextBlock rtb)
+    {
+        string family = string.IsNullOrWhiteSpace(ViewModel.ResultListMatchTextFontFamily)
+            ? AppSettings.DefaultResultListMatchTextFontFamily
+            : ViewModel.ResultListMatchTextFontFamily.Trim();
+
+        int size = Math.Clamp(
+            ViewModel.ResultListMatchTextFontSize <= 0 ? AppSettings.DefaultResultListMatchTextFontSize : ViewModel.ResultListMatchTextFontSize,
+            6,
+            72);
+
+        rtb.FontFamily = new FontFamily(family);
+        rtb.FontSize = size;
+    }
+
+    private void RefreshVisibleResultMatchLines()
+    {
+        if (ResultsList is null) return;
+        RefreshVisibleResultMatchLines(ResultsList);
+    }
+
+    private void RefreshVisibleResultMatchLines(Microsoft.UI.Xaml.DependencyObject parent)
+    {
+        int count = VisualTreeHelper.GetChildrenCount(parent);
+        for (int i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is RichTextBlock rtb && rtb.DataContext is SearchResult)
+                RenderResultMatchLine(rtb);
+
+            RefreshVisibleResultMatchLines(child);
+        }
     }
 
     private void OnSelectAllFilesChecked(object sender, RoutedEventArgs e)
@@ -1751,6 +1803,15 @@ public sealed partial class MainWindow
     {
         var flyout = new MenuFlyout();
 
+        block.AddHandler(UIElement.PointerPressedEvent,
+            new PointerEventHandler((_, e) =>
+            {
+                var current = e.GetCurrentPoint(block);
+                if (current.Properties.IsRightButtonPressed)
+                    CapturePreviewBlockContextPoint(block, current.Position);
+            }),
+            handledEventsToo: true);
+
         var copyWithLines = new MenuFlyoutItem { Text = "Copy (with line numbers)", Icon = new SymbolIcon(Symbol.Copy) };
         copyWithLines.Click += (_, _) => CopyPreviewSelection(block, withLineNumbers: true);
         flyout.Items.Add(copyWithLines);
@@ -1759,6 +1820,10 @@ public sealed partial class MainWindow
         copyWithout.Click += (_, _) => CopyPreviewSelection(block, withLineNumbers: false);
         flyout.Items.Add(copyWithout);
 
+        var editFileItem = new MenuFlyoutItem { Text = "Edit file", Icon = new SymbolIcon(Symbol.Edit) };
+        editFileItem.Click += async (_, _) => await EditPreviewFileFromContextMenuAsync(block);
+        flyout.Items.Add(editFileItem);
+
         flyout.Items.Add(new MenuFlyoutSeparator());
 
         var wrapSubItem = new MenuFlyoutSubItem { Text = "Word wrap", Icon = new FontIcon { Glyph = "\uE8B3" } };
@@ -1766,15 +1831,17 @@ public sealed partial class MainWindow
         ctxWrap.IsChecked = ViewModel.PreviewWrapModeIndex == 0;
         ctxWrap.Click += (_, _) => { OnWrapModeOptionClicked(WrapModeWrap, new RoutedEventArgs()); };
         wrapSubItem.Items.Add(ctxWrap);
-        var ctxPartial = new ToggleMenuFlyoutItem { Text = "Partial word wrap" };
-        ctxPartial.IsChecked = ViewModel.PreviewWrapModeIndex == 1;
-        ctxPartial.Click += (_, _) => { OnWrapModeOptionClicked(WrapModePartial, new RoutedEventArgs()); };
-        wrapSubItem.Items.Add(ctxPartial);
         var ctxNoWrap = new ToggleMenuFlyoutItem { Text = "No wrap" };
-        ctxNoWrap.IsChecked = ViewModel.PreviewWrapModeIndex == 2;
+        ctxNoWrap.IsChecked = NormalizePreviewWrapModeIndex(ViewModel.PreviewWrapModeIndex) == (int)Models.PreviewWrapMode.NoWrap;
         ctxNoWrap.Click += (_, _) => { OnWrapModeOptionClicked(WrapModeNone, new RoutedEventArgs()); };
         wrapSubItem.Items.Add(ctxNoWrap);
         flyout.Items.Add(wrapSubItem);
+
+        flyout.Items.Add(new MenuFlyoutSeparator());
+
+        var displaySettingsItem = new MenuFlyoutItem { Text = "Change preview fonts/colors...", Icon = new SymbolIcon(Symbol.Setting) };
+        displaySettingsItem.Click += (_, _) => OpenSettingsTab(SettingsDisplayTabIndex);
+        flyout.Items.Add(displaySettingsItem);
 
         flyout.Items.Add(new MenuFlyoutSeparator());
 
@@ -1789,14 +1856,31 @@ public sealed partial class MainWindow
 
         flyout.Opening += (_, _) =>
         {
-            ctxWrap.IsChecked = ViewModel.PreviewWrapModeIndex == 0;
-            ctxPartial.IsChecked = ViewModel.PreviewWrapModeIndex == 1;
-            ctxNoWrap.IsChecked = ViewModel.PreviewWrapModeIndex == 2;
+            bool wrap = NormalizePreviewWrapModeIndex(ViewModel.PreviewWrapModeIndex) == (int)Models.PreviewWrapMode.Wrap;
+            ctxWrap.IsChecked = wrap;
+            ctxNoWrap.IsChecked = !wrap;
             bool hasSelection = HasPreviewCustomSelection(block) || !string.IsNullOrEmpty(block.SelectedText);
             copyWithLines.IsEnabled = hasSelection;
             copyWithout.IsEnabled = hasSelection;
+            editFileItem.IsEnabled = !string.IsNullOrWhiteSpace(ResolvePreviewBlockFilePath(block));
         };
         block.ContextFlyout = flyout;
+    }
+
+    private void CapturePreviewBlockContextPoint(RichTextBlock block, Windows.Foundation.Point point)
+    {
+        _lastPreviewContextMenuBlock = block;
+        _lastPreviewContextMenuPoint = point;
+        _lastPreviewContextMenuFilePath = ResolvePreviewBlockFilePath(block);
+        _lastPreviewContextMenuTick = Environment.TickCount64;
+    }
+
+    private bool TryGetPreviewBlockContextPoint(RichTextBlock block, string filePath, out Windows.Foundation.Point point)
+    {
+        point = _lastPreviewContextMenuPoint;
+        if (!ReferenceEquals(_lastPreviewContextMenuBlock, block)) return false;
+        if (Environment.TickCount64 - _lastPreviewContextMenuTick > PreviewContextMenuPointMaxAgeMs) return false;
+        return string.Equals(_lastPreviewContextMenuFilePath, filePath, StringComparison.OrdinalIgnoreCase);
     }
 
     private void CopyPreviewSelection(RichTextBlock block, bool withLineNumbers)
@@ -2095,7 +2179,7 @@ public sealed partial class MainWindow
             if (matchStart > 0) para.Inlines.Add(new Run { Text = line[..matchStart] });
             var hit = new Run { Text = line.Substring(matchStart, safeLen) };
             hit.FontWeight = Microsoft.UI.Text.FontWeights.Bold;
-            hit.Foreground = _matchTextBrush;
+            hit.Foreground = _resultMatchTextBrush;
             para.Inlines.Add(hit);
             if (matchStart + safeLen < line.Length)
                 para.Inlines.Add(new Run { Text = line[(matchStart + safeLen)..] });
@@ -2111,6 +2195,7 @@ public sealed partial class MainWindow
         LogService.Instance.Info("Preview", $"UpdatePreviewAsync: file='{r.FilePath}', line={r.LineNumber}");
         if (!TryLeavePreviewEditorForPreviewChange()) return;
 
+        BeginPreviewContentUpdate();
         EnsurePreviewPanelVisible();
 
         // Hydrate from disk if this result was evicted during memory pressure.
@@ -2128,18 +2213,21 @@ public sealed partial class MainWindow
 
         if (!TryLeavePreviewEditorForPreviewChange()) return;
 
-        EnsurePreviewPanelVisible();
-
         var selected = ViewModel.GetAllSelectedResults();
         if (selected.Count == 0)
         {
+            EnsurePreviewPanelVisible();
             ShowPreviewBlockSurface();
             PreviewBlock.Blocks.Clear();
             SetPreviewFileLabel(string.Empty);
             PreviewToolbarContent.Visibility = Visibility.Collapsed;
             _previewResult = null;
+            CompletePreviewContentUpdate();
             return;
         }
+
+        BeginPreviewContentUpdate();
+        EnsurePreviewPanelVisible();
 
         // Hydrate any evicted results before rendering the preview.
         foreach (var r in selected)
@@ -2176,13 +2264,13 @@ public sealed partial class MainWindow
     {
         LogService.Instance.Info("Preview", $"ShowConcatenatedPreviewAsync: {byFile.Count} files, {selected.Count} results, gen={gen}");
         ShowPreviewSectionsSurface();
-        SetPreviewMatchTotals(selected.Count, byFile.Count);
         _matchParagraphs.Clear();
         _sectionOverflow.Clear();
         InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
         int previewLines = ViewModel.PreviewContextLines;
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+        SetPreviewMatchTotals(ComputeMatchCount(selected, null, isHighlight: false, previewLines, rx), byFile.Count);
 
         RichTextBlock? scrollBlock = null;
         Paragraph? scrollPara = null;
@@ -2310,12 +2398,12 @@ public sealed partial class MainWindow
     {
         LogService.Instance.Info("Preview", $"ShowMultiHighlightPreviewAsync: {byFile.Count} files, {selected.Count} results, gen={gen}");
         ShowPreviewSectionsSurface();
-        SetPreviewMatchTotals(selected.Count, byFile.Count);
         _matchParagraphs.Clear();
         _sectionOverflow.Clear();
         InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
         Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+        SetPreviewMatchTotals(ComputeMatchCount(selected, null, isHighlight: true, ViewModel.PreviewContextLines, rx), byFile.Count);
 
         RichTextBlock? scrollBlock = null;
         Paragraph? scrollPara = null;

@@ -11,10 +11,32 @@ public sealed class SettingsWindowRegressionTests
     private static readonly string RepoRoot = FindRepoRoot();
     private static readonly string MainWindowSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdminSettings.cs"));
+    private static readonly string MainWindowLauncherSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Launcher.cs"));
+    private static readonly string MainWindowStartupChecksSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+    private static readonly string MainWindowTerminalSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
+    private static readonly string MainWindowXaml = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
     private static readonly string SettingsWindowSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
     private static readonly string SettingsWindowXaml = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml"));
+    private static readonly string SettingsServiceSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "Services", "SettingsService.cs"));
+    private static readonly string MainViewModelSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
+    private static readonly string ConPtyTerminalServiceSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "Services", "ConPtyTerminalService.cs"));
+    private static readonly string AppSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "App.xaml.cs"));
+    private static readonly string HelpWindowSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "Help", "HelpWindow.xaml.cs"));
+    private static readonly string ResultStoreTempLocationWindowSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "ResultStoreTempLocationWindow.cs"));
+    private static readonly string WindowForegroundHelperSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "Helpers", "WindowForegroundHelper.cs"));
     private static readonly string SelectionRendererSource = File.ReadAllText(
         Path.Combine(RepoRoot, "vendor", "TextControlBox-WinUI", "TextControlBox",
             "Core", "Renderer", "SelectionRenderer.cs"));
@@ -84,6 +106,29 @@ public sealed class SettingsWindowRegressionTests
     }
 
     [Fact]
+    public void AppOwnedWindows_AreOwnedAndRaisedAboveMainWindow()
+    {
+        Assert.Contains("GwlpHwndParent = -8", WindowForegroundHelperSource);
+        Assert.Contains("SetWindowLongPtr(childHwnd, GwlpHwndParent, ownerHwnd)", WindowForegroundHelperSource);
+        Assert.Contains("IsTopMost(ownerHwnd)", WindowForegroundHelperSource);
+        Assert.Contains("SetWindowPos(childHwnd, HwndTopmost", WindowForegroundHelperSource);
+        Assert.Contains("SetForegroundWindow(childHwnd)", WindowForegroundHelperSource);
+
+        Assert.Contains("WindowForegroundHelper.ConfigureOwnedWindow(hwnd, mainHwnd);", SettingsWindowSource);
+        Assert.Contains("public void BringInFrontOfMainWindow()", SettingsWindowSource);
+        string settingsHelper = ExtractMethod(MainWindowSource, "OpenSettingsTab", window: 2200);
+        Assert.Contains("_settingsWindow.BringInFrontOfMainWindow();", settingsHelper);
+
+        Assert.Contains("WindowForegroundHelper.ConfigureOwnedWindow(hwnd, mainHwnd);", HelpWindowSource);
+        Assert.Contains("public void BringInFrontOfMainWindow(IntPtr mainHwnd)", HelpWindowSource);
+        string helpHelper = ExtractMethod(MainWindowSource, "OpenHelpWindow", window: 1800);
+        Assert.Contains("_helpWindow.BringInFrontOfMainWindow(_hwnd);", helpHelper);
+
+        Assert.Contains("WindowForegroundHelper.ConfigureOwnedWindow(hwnd, _ownerHwnd);", ResultStoreTempLocationWindowSource);
+        Assert.Contains("WindowForegroundHelper.BringOwnedWindowToFront(this, _ownerHwnd);", ResultStoreTempLocationWindowSource);
+    }
+
+    [Fact]
     public void SettingsWindow_SetsUpCustomTitleBar()
     {
         Assert.Contains("ExtendsContentIntoTitleBar = true;", SettingsWindowSource);
@@ -134,10 +179,95 @@ public sealed class SettingsWindowRegressionTests
     }
 
     [Fact]
+    public void SettingsWindow_FontSelectorsUseSystemFontPreviewPicker()
+    {
+        Assert.Contains("CanvasTextFormat.GetSystemFontFamilies()", SettingsWindowSource);
+        Assert.Contains("CreateFontFamilyPicker(", SettingsWindowSource);
+        Assert.Contains("new XamlFontFamily(fontFamily)", SettingsWindowSource);
+        Assert.DoesNotContain("var resultMatchFontFamily = new TextBox", SettingsWindowSource);
+        Assert.DoesNotContain("var editorFontFamily = new TextBox", SettingsWindowSource);
+    }
+
+    [Fact]
+    public void SettingsWindow_DisplayAppearanceSettingsAreGroupedBySurface()
+    {
+        Assert.Contains("AddSettingsGroupBox", SettingsWindowSource);
+        AssertContainsInOrder(SettingsWindowSource,
+            "var g = AddTab(\"Display\");",
+            "var fileMatchListGroup = AddSettingsGroupBox(g, \"File Match List\");",
+            "var previewViewerGroup = AddSettingsGroupBox(g, \"Preview Viewer\");",
+            "var editorAppearanceGroup = AddSettingsGroupBox(g, \"Editor\");");
+
+        int displayStart = SettingsWindowSource.IndexOf("// ── Display ──", StringComparison.Ordinal);
+        int editorTabStart = SettingsWindowSource.IndexOf("// ── Editor ──", StringComparison.Ordinal);
+        int windowTabStart = SettingsWindowSource.IndexOf("// ── Window ──", StringComparison.Ordinal);
+        Assert.True(displayStart >= 0 && editorTabStart > displayStart && windowTabStart > editorTabStart);
+
+        string displayBlock = SettingsWindowSource[displayStart..editorTabStart];
+        string editorTabBlock = SettingsWindowSource[editorTabStart..windowTabStart];
+
+        Assert.Contains("fileMatchListGroup.Children.Add", displayBlock);
+        Assert.Contains("previewViewerGroup.Children.Add", displayBlock);
+        Assert.Contains("editorAppearanceGroup.Children.Add", displayBlock);
+        Assert.Contains("Results list match text", displayBlock);
+        Assert.Contains("Preview font colors", displayBlock);
+        Assert.Contains("_viewModel.PreviewEditorFontFamily", displayBlock);
+        Assert.Contains("Editor gutter text:", displayBlock);
+
+        Assert.Contains("CaptureTabPageRootElements();", SettingsWindowSource);
+        Assert.Contains("OriginalPlacements = capturedPlacements", SettingsWindowSource);
+        Assert.Contains("RestoreOriginalPlacements(entry.OriginalPlacements)", SettingsWindowSource);
+        AssertContainsInOrder(SettingsWindowSource,
+            "if (child is Border { Child: UIElement groupChild })",
+            "EnumerateSearchableGroupChild(groupChild)");
+
+        Assert.DoesNotContain("_viewModel.PreviewEditorFontFamily", editorTabBlock);
+        Assert.DoesNotContain("Editor gutter text:", editorTabBlock);
+    }
+
+    [Fact]
     public void SettingsWindow_HotkeySection_QueriesAvailableKeys()
     {
         Assert.Contains("GetAvailableCtrlShiftLetterKeys(_mainHwnd)", SettingsWindowSource);
         Assert.Contains("ChooseAvailableKey(", SettingsWindowSource);
+    }
+
+    [Fact]
+    public void SettingsWindow_TerminalEmulatorSectionConfiguresDefaultWorkingDirectory()
+    {
+        Assert.Contains("\"Terminal Emulator\"", SettingsWindowSource);
+        Assert.Contains("Default working directory:", SettingsWindowSource);
+        Assert.Contains("_viewModel.TerminalDefaultWorkingDirectory", SettingsWindowSource);
+        Assert.Contains("PickTerminalWorkingDirectoryAsync", SettingsWindowSource);
+        Assert.Contains("App.LaunchWorkingDirectory", SettingsWindowSource);
+
+        AssertContainsInOrder(SettingsWindowSource,
+            "var g = AddTab(\"UI Behaviors\");",
+            "var g = AddTab(\"Terminal Emulator\");",
+            "AddTerminalEmulationSetting(g);",
+            "var g = AddTab(\"Developer Options\");");
+
+        int uiBehaviorStart = SettingsWindowSource.IndexOf("var g = AddTab(\"UI Behaviors\");", StringComparison.Ordinal);
+        int terminalEmulatorStart = SettingsWindowSource.IndexOf("var g = AddTab(\"Terminal Emulator\");", StringComparison.Ordinal);
+        Assert.True(uiBehaviorStart >= 0 && terminalEmulatorStart > uiBehaviorStart);
+        string uiBehaviorBlock = SettingsWindowSource[uiBehaviorStart..terminalEmulatorStart];
+        Assert.DoesNotContain("AddTerminalEmulationSetting", uiBehaviorBlock);
+    }
+
+    [Fact]
+    public void TerminalDefaultWorkingDirectory_PersistsAndStartsConPtyInResolvedDirectory()
+    {
+        Assert.Contains("public string TerminalDefaultWorkingDirectory", SettingsServiceSource);
+        Assert.Contains("TerminalDefaultWorkingDirectory = _settings.TerminalDefaultWorkingDirectory", MainViewModelSource);
+        Assert.Contains("_settings.TerminalDefaultWorkingDirectory =", MainViewModelSource);
+        Assert.Contains("[ObservableProperty] public partial string TerminalDefaultWorkingDirectory", MainViewModelSource);
+        Assert.Contains("public static string LaunchWorkingDirectory", AppSource);
+        Assert.Contains("workingDirectory: ResolveTerminalWorkingDirectory()", MainWindowTerminalSource);
+        Assert.Contains("TryResolveExistingDirectory(ViewModel.TerminalDefaultWorkingDirectory", MainWindowTerminalSource);
+        Assert.Contains("TryResolveExistingDirectory(App.LaunchWorkingDirectory", MainWindowTerminalSource);
+        Assert.Contains("Start(int cols = 120, int rows = 30, string? workingDirectory = null)", ConPtyTerminalServiceSource);
+        Assert.Contains("SpawnProcess(\"pwsh.exe\", workingDirectory)", ConPtyTerminalServiceSource);
+        Assert.Contains("workingDirectory, ref startupInfo", ConPtyTerminalServiceSource);
     }
 
     // ── MainWindow settings integration ──
@@ -146,45 +276,86 @@ public sealed class SettingsWindowRegressionTests
     public void MainWindow_OnOpenSettings_CreatesSettingsWindow()
     {
         string method = ExtractMethod(MainWindowSource, "OnOpenSettings", window: 800);
-        Assert.Contains("new SettingsWindow(", method);
-        Assert.Contains("_settingsWindow.Activate()", method);
+        Assert.Contains("OpenSettingsTab();", method);
         // Settings are now in a standalone window, not a ContentDialog
         Assert.DoesNotContain("new ContentDialog", method);
+
+        string helper = ExtractMethod(MainWindowSource, "OpenSettingsTab", window: 1800);
+        Assert.Contains("new SettingsWindow(", helper);
+        Assert.Contains("_settingsWindow.Activate()", helper);
     }
 
     [Fact]
     public void MainWindow_OnOpenSettings_ReusesExistingWindow()
     {
-        string method = ExtractMethod(MainWindowSource, "OnOpenSettings");
+        string method = ExtractMethod(MainWindowSource, "OpenSettingsTab");
         Assert.Contains("if (_settingsWindow is not null)", method);
         // try-catch around Activate to handle the case where the window was already closed
-        Assert.Contains("try { _settingsWindow.Activate(); return; }", method);
+        Assert.Contains("_settingsWindow.Activate();", method);
+        Assert.Contains("_settingsWindow.SelectTab(tabIndex.Value);", method);
         Assert.Contains("catch { _settingsWindow = null; }", method);
     }
 
     [Fact]
     public void MainWindow_OnOpenSettings_ClearsReferenceOnClose()
     {
-        string method = ExtractMethod(MainWindowSource, "OnOpenSettings");
+        string method = ExtractMethod(MainWindowSource, "OpenSettingsTab");
         Assert.Contains("_settingsWindow.Closed += ", method);
         Assert.Contains("_settingsWindow = null", method);
     }
 
     [Fact]
+    public void SettingsWindow_SelectTab_RestoresNormalTabViewBeforeSelecting()
+    {
+        string method = ExtractMethod(SettingsWindowSource, "SelectTab", window: 1800);
+        Assert.Contains("_isSearchActive", method);
+        Assert.Contains("SearchBox.Text = string.Empty;", method);
+        Assert.Contains("TabList.Visibility = Visibility.Visible;", method);
+        Assert.Contains("ClearSearchResultContainers();", method);
+        Assert.Contains("RestoreTabPageElements();", method);
+        AssertContainsInOrder(method,
+            "TabList.SelectedIndex = index;",
+            "SettingsContent.Children.Clear();",
+            "SettingsContent.Children.Add(_tabPages[index]);");
+    }
+
+    [Fact]
+    public void MainWindow_SettingsHelperCanOpenPerformanceAndDisplayTabs()
+    {
+        Assert.Contains("private const int SettingsPerformanceTabIndex = 2;", MainWindowSource);
+        Assert.Contains("private const int SettingsDisplayTabIndex = 3;", MainWindowSource);
+        Assert.Contains("OpenSettingsTab(SettingsPerformanceTabIndex);", MainWindowSource);
+    }
+
+    [Fact]
     public void MainWindow_OnWindowActivated_SuppressesTrayHideForSettings()
     {
-        string method = ExtractMethod(MainWindowSource, "OnWindowActivated");
+        string method = ExtractMethod(MainWindowLauncherSource, "OnWindowActivated");
         AssertContainsInOrder(method,
             "WindowActivationState.Deactivated",
-            "_settingsWindow is not null",
+            "HasOpenAppOwnedWindowOrModal()",
             "return;",
             "HideToTray()");
+
+        string helper = ExtractMethod(MainWindowLauncherSource, "HasOpenAppOwnedWindowOrModal", window: 800);
+        Assert.Contains("_settingsWindow is not null", helper);
+        Assert.Contains("_helpWindow is not null", helper);
+        Assert.Contains("_ownedModalWindowDepth > 0", helper);
+
+        Assert.Contains("_ownedModalWindowDepth++;", MainWindowStartupChecksSource);
+        Assert.Contains("_ownedModalWindowDepth = Math.Max(0, _ownedModalWindowDepth - 1);", MainWindowStartupChecksSource);
     }
 
     [Fact]
     public void MainWindow_HasSettingsWindowField()
     {
         Assert.Contains("private SettingsWindow? _settingsWindow;", MainWindowSource);
+    }
+
+    [Fact]
+    public void MainWindowXaml_FilterFlyoutOpensBelowToolbarButton()
+    {
+        Assert.Contains("<MenuFlyout Placement=\"BottomEdgeAlignedLeft\" Opening=\"OnFilterFlyoutOpening\">", MainWindowXaml);
     }
 
     [Fact]

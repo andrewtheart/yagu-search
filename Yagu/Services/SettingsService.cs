@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Yagu.Models;
@@ -31,6 +32,9 @@ public sealed class AppSettings
     public const string DefaultPreviewMatchLineColor = "#FFFFFFFF"; // White
     public const string DefaultPreviewEditorFontFamily = "Consolas, Cascadia Mono, Segoe UI, Segoe UI Symbol, Segoe UI Emoji";
     public const int DefaultPreviewEditorFontSize = 13;
+    public const string DefaultResultListMatchTextFontFamily = "Consolas";
+    public const int DefaultResultListMatchTextFontSize = 12;
+    public const string DefaultResultListMatchHighlightColor = DefaultPreviewMatchTextColor;
 
     public string? LastDirectory { get; set; }
     public List<string> RecentDirectories { get; set; } = [];
@@ -65,7 +69,7 @@ public sealed class AppSettings
     public string GlobalHotkeyKey { get; set; } = HotkeyService.DefaultStartKey.ToString();
     public int PreviewModeIndex { get; set; } = 1; // 0 = Concatenated, 1 = Multi-highlight
     public bool PreviewWordWrap { get; set; }
-    public int PreviewWrapModeIndex { get; set; } = 1; // 0 = Wrap, 1 = PartialWrap, 2 = NoWrap
+    public int PreviewWrapModeIndex { get; set; } = 2; // 0 = Wrap, 1 = legacy PartialWrap, 2 = NoWrap
     public string SelectedPreviewContentBackgroundColor { get; set; } = DefaultSelectedPreviewContentBackgroundColor;
     public string UnselectedPreviewContentBackgroundColor { get; set; } = DefaultUnselectedPreviewContentBackgroundColor;
     public string PreviewGutterContextColor { get; set; } = DefaultPreviewGutterContextColor;
@@ -76,6 +80,9 @@ public sealed class AppSettings
     public string PreviewMatchLineColor { get; set; } = DefaultPreviewMatchLineColor;
     public string PreviewEditorFontFamily { get; set; } = DefaultPreviewEditorFontFamily;
     public int PreviewEditorFontSize { get; set; } = DefaultPreviewEditorFontSize;
+    public string ResultListMatchTextFontFamily { get; set; } = DefaultResultListMatchTextFontFamily;
+    public int ResultListMatchTextFontSize { get; set; } = DefaultResultListMatchTextFontSize;
+    public string ResultListMatchHighlightColor { get; set; } = DefaultResultListMatchHighlightColor;
     public int LogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose (file logging)
     public int ConsoleLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     public int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
@@ -167,6 +174,8 @@ public sealed class AppSettings
     public bool HasShownCloseToTrayNotification { get; set; }
     /// <summary>When true, maximize the window on startup. Default false.</summary>
     public bool MaximizeOnStartup { get; set; }
+    /// <summary>Optional default working directory for the embedded terminal. Empty uses the Yagu launch directory.</summary>
+    public string TerminalDefaultWorkingDirectory { get; set; } = string.Empty;
     /// <summary>When true (default), checking a file header checkbox immediately adds it to the preview pane.</summary>
     public bool FileHeaderCheckAddsToPreview { get; set; } = true;
     /// <summary>When true (default), checking a match line checkbox immediately adds it to the preview pane.</summary>
@@ -244,6 +253,8 @@ public sealed class SettingsService
             MigrateLegacyPreviewGutterColors(settings);
             MigrateLegacyWindowFocusBehavior(settings);
             NormalizePreviewEditorFontSettings(settings);
+            NormalizeResultListMatchTextSettings(settings);
+            settings.TerminalDefaultWorkingDirectory ??= string.Empty;
             return settings;
         }
         catch (Exception ex) { LogService.Instance.Warning("Settings", $"Failed to load settings from {_path}", ex); return new AppSettings(); }
@@ -274,6 +285,8 @@ public sealed class SettingsService
             MigrateLegacyPreviewGutterColors(settings);
             MigrateLegacyWindowFocusBehavior(settings);
             NormalizePreviewEditorFontSettings(settings);
+            NormalizeResultListMatchTextSettings(settings);
+            settings.TerminalDefaultWorkingDirectory ??= string.Empty;
             return settings;
         }
         catch (Exception ex) { LogService.Instance.Warning("Settings", $"Failed to load settings from {_path}", ex); return new AppSettings(); }
@@ -320,6 +333,59 @@ public sealed class SettingsService
             6,
             72);
     }
+
+    private static void NormalizeResultListMatchTextSettings(AppSettings settings)
+    {
+        if (string.IsNullOrWhiteSpace(settings.ResultListMatchTextFontFamily))
+            settings.ResultListMatchTextFontFamily = AppSettings.DefaultResultListMatchTextFontFamily;
+
+        settings.ResultListMatchTextFontSize = Math.Clamp(
+            settings.ResultListMatchTextFontSize <= 0 ? AppSettings.DefaultResultListMatchTextFontSize : settings.ResultListMatchTextFontSize,
+            6,
+            72);
+
+        settings.ResultListMatchHighlightColor = NormalizeArgbHexString(
+            settings.ResultListMatchHighlightColor,
+            AppSettings.DefaultResultListMatchHighlightColor);
+    }
+
+    private static string NormalizeArgbHexString(string? value, string fallback)
+    {
+        if (TryParseArgbHex(value, out var color))
+            return FormatArgbHex(color);
+
+        return TryParseArgbHex(fallback, out var fallbackColor)
+            ? FormatArgbHex(fallbackColor)
+            : AppSettings.DefaultPreviewMatchTextColor;
+    }
+
+    private static bool TryParseArgbHex(string? value, out uint color)
+    {
+        color = 0;
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        string hex = value.Trim();
+        if (hex.StartsWith('#'))
+            hex = hex[1..];
+
+        if (hex.Length == 6 && uint.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var rgb))
+        {
+            color = 0xFF000000 | rgb;
+            return true;
+        }
+
+        if (hex.Length == 8 && uint.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var argb))
+        {
+            color = argb;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string FormatArgbHex(uint color)
+        => "#" + color.ToString("X8", CultureInfo.InvariantCulture);
 
     private static bool IsLegacyDefaultSkipExtensions(string skipExtensions) =>
         string.Equals(skipExtensions, AppSettings.LegacyDefaultSkipExtensions, StringComparison.OrdinalIgnoreCase) ||

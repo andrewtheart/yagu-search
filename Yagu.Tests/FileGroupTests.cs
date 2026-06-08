@@ -101,6 +101,55 @@ public class FileGroupTests
     }
 
     [Fact]
+    public void AddAfterSelectAll_SelectsNewResultAndKeepsFileChecked()
+    {
+        var group = new FileGroup(@"D:\file.txt");
+        group.Add(MakeResult(@"D:\file.txt", 1));
+        group.Add(MakeResult(@"D:\file.txt", 2));
+        group.SelectAll();
+
+        var incoming = MakeResult(@"D:\file.txt", 3);
+        group.Add(incoming);
+
+        Assert.True(incoming.IsSelected);
+        Assert.True(group.AllSelected);
+        Assert.Equal(3, group.SelectedCount);
+        Assert.Equal("3/3 selected", group.SelectedCountText);
+    }
+
+    [Fact]
+    public void AddAfterDeselectAll_DoesNotSelectNewResult()
+    {
+        var group = new FileGroup(@"D:\file.txt");
+        group.Add(MakeResult(@"D:\file.txt", 1));
+        group.SelectAll();
+        group.DeselectAll();
+
+        var incoming = MakeResult(@"D:\file.txt", 2);
+        group.Add(incoming);
+
+        Assert.False(incoming.IsSelected);
+        Assert.False(group.AllSelected);
+        Assert.Equal(0, group.SelectedCount);
+    }
+
+    [Fact]
+    public void PreEvictedResultAddedAfterSelectAll_IsSelectedWhenMaterialized()
+    {
+        var group = new FileGroup(@"D:\file.txt");
+        group.Add(MakeResult(@"D:\file.txt", 1));
+        group.SelectAll();
+
+        group.Add(SearchResult.CreatePreEvicted(@"D:\file.txt", 2, 0, 5, diskOffset: 100));
+        group.IsExpanded = true;
+
+        Assert.Equal(2, group.Count);
+        Assert.True(group[1].IsSelected);
+        Assert.True(group.AllSelected);
+        Assert.Equal(2, group.SelectedCount);
+    }
+
+    [Fact]
     public void DeselectAll_ClearsAllSelected()
     {
         var group = new FileGroup(@"D:\file.txt");

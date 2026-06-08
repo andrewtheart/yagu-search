@@ -456,10 +456,13 @@ public sealed partial class MainWindow
     {
         if (args.WindowActivationState == WindowActivationState.Deactivated && _pinState == PinState.MinimizeToTray)
         {
-            if (_settingsWindow is not null) return;
+            if (HasOpenAppOwnedWindowOrModal()) return;
             HideToTray();
         }
     }
+
+    private bool HasOpenAppOwnedWindowOrModal()
+        => _settingsWindow is not null || _helpWindow is not null || _ownedModalWindowDepth > 0;
 
     private void OnAppWindowClosing(Microsoft.UI.Windowing.AppWindow sender, Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
     {
@@ -580,6 +583,7 @@ public sealed partial class MainWindow
         PreviewToolbarContent.Visibility = Visibility.Collapsed;
         _matchParagraphs.Clear();
         InvalidateParagraphIndexCache();
+        CompletePreviewContentUpdate();
         _currentMatchIndex = -1;
         HideMatchNavPanel();
         ViewModel.ResultGroups.Clear();

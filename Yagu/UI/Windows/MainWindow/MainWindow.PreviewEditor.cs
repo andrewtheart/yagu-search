@@ -80,6 +80,8 @@ public sealed partial class MainWindow
     {
         try
         {
+            PreviewEditor.KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden;
+
             var flyout = PreviewEditor.ContextFlyout;
             if (flyout is not null)
             {
@@ -107,6 +109,16 @@ public sealed partial class MainWindow
                 };
                 zoomReset.Click += (_, _) => SetPreviewEditorZoom(100);
                 flyout.Items.Add(zoomReset);
+
+                flyout.Items.Add(new MenuFlyoutSeparator());
+
+                var displaySettingsItem = new MenuFlyoutItem
+                {
+                    Text = "Change preview fonts/colors...",
+                    Icon = new SymbolIcon(Symbol.Setting),
+                };
+                displaySettingsItem.Click += (_, _) => OpenSettingsTab(SettingsDisplayTabIndex);
+                flyout.Items.Add(displaySettingsItem);
             }
 
             AddPreviewEditorZoomAccelerator(VirtualKey.Add, +PreviewEditorZoomStep);
@@ -167,22 +179,72 @@ public sealed partial class MainWindow
         Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e,
         string? filePath)
     {
+        if (await TryEnterPreviewEditorAtPointAsync(block, e.GetPosition(block), filePath))
+            e.Handled = true;
+    }
+
+    private async Task EditPreviewFileFromContextMenuAsync(RichTextBlock block)
+    {
+        var filePath = ResolvePreviewBlockFilePath(block);
+        if (string.IsNullOrWhiteSpace(filePath))
+            return;
+
+        if (TryGetPreviewBlockContextPoint(block, filePath, out var point)
+            && await TryEnterPreviewEditorAtPointAsync(block, point, filePath))
+            return;
+
+        var target = ResolvePreviewEditorFallbackResult(filePath);
+        if (target is not null)
+            await ShowFullFileEditorAsync(target, scrollToMatch: false);
+    }
+
+    private string? ResolvePreviewBlockFilePath(RichTextBlock block)
+    {
+        if (block.Tag is string tagPath && !string.IsNullOrWhiteSpace(tagPath))
+            return tagPath;
+
+        if (ReferenceEquals(block, PreviewBlock))
+            return _previewResult?.FilePath;
+
+        return null;
+    }
+
+    private SearchResult? ResolvePreviewEditorFallbackResult(string filePath)
+    {
+        var result = ViewModel.ResultGroups
+            .FirstOrDefault(g => string.Equals(g.FilePath, filePath, StringComparison.OrdinalIgnoreCase))
+            ?.FirstOrDefault();
+        if (result is not null)
+            return result;
+
+        if (_previewResult is not null
+            && string.Equals(_previewResult.FilePath, filePath, StringComparison.OrdinalIgnoreCase))
+            return _previewResult;
+
+        return new SearchResult(filePath, 1, string.Empty, 0, 0,
+            Array.Empty<string>(), Array.Empty<string>());
+    }
+
+    private async Task<bool> TryEnterPreviewEditorAtPointAsync(
+        RichTextBlock block,
+        Windows.Foundation.Point point,
+        string? filePath)
+    {
         try
         {
-            if (filePath is null) return;
+            if (filePath is null) return false;
 
             // Abort if the section layout is still animating/oscillating — calling
             // GetPositionFromPoint while the native text layout engine is mid-reflow
             // can trigger an access violation in Microsoft.UI.Xaml.dll.
             if (!IsPreviewSectionBodySettledForActiveOverlay(block, out _))
-                return;
+                return false;
 
-            var pt = e.GetPosition(block);
             TextPointer? tp;
-            try { tp = block.GetPositionFromPoint(pt); }
+            try { tp = block.GetPositionFromPoint(point); }
             catch { tp = null; }
             int lineNum = tp is null ? -1 : ResolveLineNumberAtPointer(block, tp);
-            if (lineNum <= 0) return;
+            if (lineNum <= 0) return false;
 
             var clickedPara = FindParagraphAtOffset(block, tp!.Offset);
             int clickedMatchIndex = clickedPara is null ? -1 : ResolveMatchIndexAtPointer(clickedPara, tp);
@@ -240,13 +302,14 @@ public sealed partial class MainWindow
                     { SourceMatchStartColumn = col };
             }
 
-            e.Handled = true;
             await ShowFullFileEditorAsync(target, scrollToMatch: true);
+            return true;
         }
         catch (Exception ex)
         {
             LogService.Instance.Warning("Preview",
-                $"EnterPreviewEditorAtPointAsync threw: {ex.GetType().Name}: {ex.Message}");
+                $"TryEnterPreviewEditorAtPointAsync threw: {ex.GetType().Name}: {ex.Message}");
+            return false;
         }
     }
 
@@ -1163,6 +1226,7 @@ public sealed partial class MainWindow
 
         if (visible)
         {
+            PreviewEmptyState.Visibility = Visibility.Collapsed;
             HideStickyFileHeader();
             HideActiveMatchOverlay();
             SectionNavOverlay.Visibility = Visibility.Collapsed;
@@ -1171,6 +1235,7 @@ public sealed partial class MainWindow
         else
         {
             UpdateMatchNavPanel();
+            UpdatePreviewEmptyState();
         }
 
         if (visible)
@@ -1340,6 +1405,7 @@ public sealed partial class MainWindow
             HighlightActiveExpander();
             UpdateSectionNavOverlay();
             UpdateStickyFileHeader();
+            UpdatePreviewEmptyState();
             return;
         }
 
@@ -1352,10 +1418,15 @@ public sealed partial class MainWindow
             PreviewToolbarContent.Visibility = _previewResult is not null ? Visibility.Visible : Visibility.Collapsed;
             ApplyPreviewHorizontalScrollForWrap(PreviewScrollViewer, ViewModel.PreviewWordWrap);
             HideStickyFileHeader();
+            UpdatePreviewEmptyState();
             return;
         }
 
-        ShowPreviewMessage("No matches remain for this file.");
+        ShowPreviewBlockSurface();
+        PreviewBlock.Blocks.Clear();
+        PreviewToolbarContent.Visibility = Visibility.Collapsed;
+        _previewResult = null;
+        UpdatePreviewEmptyState();
     }
 
     /// <summary>

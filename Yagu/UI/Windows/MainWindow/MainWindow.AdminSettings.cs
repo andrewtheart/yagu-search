@@ -28,6 +28,9 @@ namespace Yagu;
 /// </summary>
 public sealed partial class MainWindow
 {
+    private const int SettingsPerformanceTabIndex = 2;
+    private const int SettingsDisplayTabIndex = 3;
+
     private async void OnAdminLearnMore(object sender, RoutedEventArgs e)
     {
         var segments = Yagu.Services.FileLister.ParseAdminProtectedSegments(ViewModel.AdminProtectedPathSegments);
@@ -123,16 +126,31 @@ public sealed partial class MainWindow
 
     private void OnOpenSettings(object sender, RoutedEventArgs e)
     {
+        OpenSettingsTab();
+    }
+
+    private void OpenSettingsTab(int? tabIndex = null)
+    {
         // If a settings window is already open, activate it instead of creating a new one.
         if (_settingsWindow is not null)
         {
-            try { _settingsWindow.Activate(); return; }
+            try
+            {
+                _settingsWindow.Activate();
+                _settingsWindow.BringInFrontOfMainWindow();
+                if (tabIndex.HasValue)
+                    _settingsWindow.SelectTab(tabIndex.Value);
+                return;
+            }
             catch { _settingsWindow = null; }
         }
 
         _settingsWindow = new SettingsWindow(ViewModel, _hotkeyService, _hwnd, ApplyWordWrap, ApplyPreviewSectionBackgrounds);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Activate();
+        _settingsWindow.BringInFrontOfMainWindow();
+        if (tabIndex.HasValue)
+            _settingsWindow.SelectTab(tabIndex.Value);
     }
 
     /// <summary>
@@ -167,15 +185,7 @@ public sealed partial class MainWindow
         settingsLink.Inlines.Add(new Run { Text = "Settings \u2192 Performance" });
         settingsLink.Click += (_, _) =>
         {
-            if (_settingsWindow is not null)
-            {
-                try { _settingsWindow.Activate(); return; }
-                catch { _settingsWindow = null; }
-            }
-            _settingsWindow = new SettingsWindow(ViewModel, _hotkeyService, _hwnd, ApplyWordWrap, ApplyPreviewSectionBackgrounds);
-            _settingsWindow.Closed += (_, _) => _settingsWindow = null;
-            _settingsWindow.Activate();
-            _settingsWindow.SelectTab(2);
+            OpenSettingsTab(SettingsPerformanceTabIndex);
         };
         secondBlock.Inlines.Add(settingsLink);
         secondBlock.Inlines.Add(new Run { Text = "." });
@@ -217,7 +227,12 @@ public sealed partial class MainWindow
     {
         if (_helpWindow is not null)
         {
-            try { _helpWindow.Activate(); return; }
+            try
+            {
+                _helpWindow.Activate();
+                _helpWindow.BringInFrontOfMainWindow(_hwnd);
+                return;
+            }
             catch { _helpWindow = null; }
         }
 
@@ -225,6 +240,7 @@ public sealed partial class MainWindow
         _helpWindow = new HelpWindow(_hwnd, helpPath);
         _helpWindow.Closed += (_, _) => _helpWindow = null;
         _helpWindow.Activate();
+        _helpWindow.BringInFrontOfMainWindow(_hwnd);
     }
 
     private void OnDragOver(object sender, DragEventArgs e)

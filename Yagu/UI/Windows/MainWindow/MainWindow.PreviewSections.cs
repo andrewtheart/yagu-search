@@ -30,6 +30,12 @@ public sealed partial class MainWindow
 {
     private SearchResult? _previewResult;
     private bool _previewPanelRevealed;
+    private bool _previewContentPending;
+    private RichTextBlock? _lastPreviewContextMenuBlock;
+    private Windows.Foundation.Point _lastPreviewContextMenuPoint;
+    private string? _lastPreviewContextMenuFilePath;
+    private long _lastPreviewContextMenuTick;
+    private const int PreviewContextMenuPointMaxAgeMs = 30_000;
 
     // Match navigation state for multi-highlight mode
     private readonly List<(RichTextBlock block, Paragraph para, int matchInPara)> _matchParagraphs = new();
@@ -90,6 +96,7 @@ public sealed partial class MainWindow
     private readonly Dictionary<RichTextBlock, LazySection> _lazySections = new();
     private int _lazyMatchCount; // total matches in un-rendered sections
     private int _previewTotalMatchCount;
+    private int _previewStableMatchNavTotal;
     private int _previewTotalFileCount;
     private readonly Dictionary<RichTextBlock, int> _sectionTotalMatchCounts = new();
     private bool _previewViewChangedHooked;
@@ -119,10 +126,6 @@ public sealed partial class MainWindow
         /// highlight mode to clip overlapping context windows so expansion
         /// continues directly from the last rendered line.</summary>
         public int LastRenderedLine;
-        /// <summary>Lines already rendered in the highlight-mode fallback path
-        /// (results on already-rendered lines). Prevents rendering the same
-        /// line content repeatedly across successive overflow expansions.</summary>
-        public HashSet<int>? FallbackRenderedLines;
     }
     private readonly Dictionary<RichTextBlock, SectionOverflow> _sectionOverflow = new();
 
@@ -221,6 +224,7 @@ public sealed partial class MainWindow
         }
 
         UpdateBottomStatusBarVisibility();
+        UpdatePreviewEmptyState();
         // Reposition the active match overlay after the panel layout changes.
         // Schedule two refreshes: one immediate (Low priority, after current
         // layout pass) and a second deferred one to catch cases where inner
@@ -244,6 +248,7 @@ public sealed partial class MainWindow
         SearchControlsBorder.HorizontalAlignment = HorizontalAlignment.Stretch;
         SearchStatusPanel.Width = double.NaN;
         SearchStatusPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
+        ApplyTopSearchDrawerCompactState(false);
 
         Canvas.SetZIndex(SearchControlsBorder, 0);
         Canvas.SetZIndex(SearchStatusPanel, 0);
@@ -287,14 +292,21 @@ public sealed partial class MainWindow
 
         double availableWidth = Math.Max(0, RootGrid.ActualWidth - SplitPaneGrid.Margin.Left - SplitPaneGrid.Margin.Right);
         double splitterWidth = SplitterBorder.ActualWidth > 0 ? SplitterBorder.ActualWidth : 8;
-        double leftWidth = Math.Max(320, (availableWidth - splitterWidth) * 2.0 / 5.0);
-        double maxLeftWidth = Math.Max(320, availableWidth - splitterWidth - 360);
-        leftWidth = Math.Min(leftWidth, maxLeftWidth);
+        double leftWidth = ResultsColumn.ActualWidth;
+        if (leftWidth <= 0)
+        {
+            leftWidth = Math.Max(280, (availableWidth - splitterWidth) * 2.0 / 5.0);
+            double maxLeftWidth = Math.Max(280, availableWidth - splitterWidth - 360);
+            leftWidth = Math.Min(leftWidth, maxLeftWidth);
+        }
+
+        double drawerWidth = Math.Max(240, Math.Min(leftWidth, availableWidth));
 
         SearchControlsBorder.HorizontalAlignment = HorizontalAlignment.Left;
-        SearchControlsBorder.Width = Math.Max(280, leftWidth);
+        SearchControlsBorder.Width = drawerWidth;
         SearchStatusPanel.HorizontalAlignment = HorizontalAlignment.Left;
-        SearchStatusPanel.Width = Math.Max(280, leftWidth);
+        SearchStatusPanel.Width = drawerWidth;
+        ApplyTopSearchDrawerCompactState(drawerWidth < CompactTopSearchDrawerThreshold);
 
         double topOffset = SearchControlsBorder.ActualHeight + SearchStatusPanel.ActualHeight + 10;
         ResultsPanelBorder.Margin = new Thickness(0, Math.Max(0, topOffset), 0, 0);
@@ -389,11 +401,10 @@ public sealed partial class MainWindow
 
     /// <summary>
     /// Walks the recycled container's visual tree to find the file-group
-    /// CheckBox and explicitly re-asserts its <c>IsChecked</c> from the bound
-    /// <see cref="FileGroup.AllSelected"/>. Works around a WinUI 3 quirk where
-    /// the CheckBox visual state can persist as Indeterminate (rendered as a
-    /// horizontal dash) after the container is reused, even though
-    /// <c>IsThreeState="False"</c> is set in XAML.
+    /// CheckBox and explicitly re-asserts its <c>IsChecked</c> from
+    /// <see cref="FileGroup.AllSelected"/>. The header CheckBox is intentionally
+    /// OneWay-bound so recycled visual state cannot write into the wrong group
+    /// while live results are re-sorted.
     /// </summary>
     private static void SyncFileGroupCheckBoxState(FrameworkElement container, FileGroup? group)
     {
@@ -1073,6 +1084,15 @@ public sealed partial class MainWindow
         var sw = System.Diagnostics.Stopwatch.StartNew();
         if (!_sectionOverflow.TryGetValue(section, out var ov)) return;
         int chunkSize = Math.Min(matchCount, ov.RemainingResults.Count);
+        if (ov.IsHighlightMode && ov.AllLines != null && chunkSize > 0)
+        {
+            int boundaryLine = ov.RemainingResults[chunkSize - 1].LineNumber;
+            while (chunkSize < ov.RemainingResults.Count
+                   && ov.RemainingResults[chunkSize].LineNumber == boundaryLine)
+            {
+                chunkSize++;
+            }
+        }
         if (chunkSize <= 0)
         {
             _sectionOverflow.Remove(section);
@@ -1125,11 +1145,10 @@ public sealed partial class MainWindow
             ov.LastRenderedLine = Math.Max(ov.LastRenderedLine, lastRenderedLine);
 
             // Fallback for single-line files: all results are on an already-rendered
-            // line, so AppendHighlightMatchWindows returns 0. Render one window
-            // per unique line (across all expansion calls) to avoid visual duplication.
+            // line, so render a continuation window around each occurrence instead
+            // of consuming same-line results without navigable entries.
             if (truncatePreviewLines && consumed == 0 && ov.RemainingResults.Count > 0)
             {
-                ov.FallbackRenderedLines ??= new HashSet<int>();
                 int blocksAdded = 0;
                 for (int ri = 0; ri < chunkSize && ri < ov.RemainingResults.Count; ri++)
                 {
@@ -1139,13 +1158,6 @@ public sealed partial class MainWindow
                         break;
 
                     var r = ov.RemainingResults[ri];
-
-                    // Skip results whose line was already rendered in any previous fallback.
-                    if (!ov.FallbackRenderedLines.Add(r.LineNumber))
-                    {
-                        consumed++;
-                        continue;
-                    }
 
                     int lineIndex = r.LineNumber - 1;
                     string line = (lineIndex >= 0 && lineIndex < ov.AllLines.Length)
@@ -1158,7 +1170,8 @@ public sealed partial class MainWindow
                         _matchParagraphs, sn,
                         out int addedParagraphs, out _,
                         truncate: truncatePreviewLines,
-                        continuationGutter: true);
+                        continuationGutter: true,
+                        targetOnlyMatchEntry: true);
                     MoveAppendedPreviewLineBesideExistingLine(
                         section,
                         r.LineNumber,
@@ -1360,10 +1373,14 @@ public sealed partial class MainWindow
         try
         {
 
+        BeginPreviewContentUpdate();
         EnsurePreviewPanelVisible();
         EnsureSectionsSurface();
+        Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+        bool isHighlight = ViewModel.PreviewModeIndex == 1;
+        int previewLines = ViewModel.PreviewContextLines;
         AddPreviewMatchTotals(
-            filesToPrepend.Values.Sum(results => results.Count),
+            filesToPrepend.Values.Sum(results => ComputeMatchCount(results, null, isHighlight, previewLines, rx)),
             filesToPrepend.Count);
         PreviewToolbarContent.Visibility = Visibility.Visible;
 
@@ -1383,14 +1400,10 @@ public sealed partial class MainWindow
         if (showSpinner)
             ShowProgressOverlay($"Adding {pageEnd:N0} of {totalRequested:N0} files\u2026", 0);
 
-        Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
-        int previewLines = ViewModel.PreviewContextLines;
-
         // Batch-read file contents off the UI thread — but only for the
         // sections we will eagerly expand. Lazy/collapsed sections read their
         // file on demand inside MaterializeLazySection.
         var fileList = orderedFiles.GetRange(0, pageEnd);
-        bool isHighlight = ViewModel.PreviewModeIndex == 1;
         bool bulkInsert = fileList.Count > BulkExpandLimit;
         int eagerCount = bulkInsert ? Math.Min(BulkExpandLimit, fileList.Count) : fileList.Count;
         var fileContents = await ReadAllFileContentsAsync(
@@ -1458,6 +1471,8 @@ public sealed partial class MainWindow
         {
             PreviewSectionsPanel.Children.Insert(insertIndex++, built[i]);
             InvalidateScrollPositionCache();
+            if (i == 0)
+                CompletePreviewContentUpdate();
             if ((i + 1) % PreviewYieldBatchSize == 0)
             {
                 if (showSpinner)
@@ -1497,7 +1512,7 @@ public sealed partial class MainWindow
         // Update match nav and file label to include the new sections.
         var totalFiles = PreviewSectionsPanel.Children.OfType<Expander>().Count();
         var (deferredFileCount, deferredMatchCount) = GetDeferredCounts();
-        int totalMatches = _previewTotalMatchCount > 0 ? _previewTotalMatchCount : _matchParagraphs.Count + _lazyMatchCount + deferredMatchCount;
+        int totalMatches = GetStableMatchNavTotal();
         int grandFileCount = _previewTotalFileCount > 0 ? _previewTotalFileCount : totalFiles + deferredFileCount;
         SetPreviewFileLabel(
             $"{totalMatches:N0} selected matches across {grandFileCount:N0} file(s)",
@@ -1530,6 +1545,8 @@ public sealed partial class MainWindow
         {
             foreach (var filePath in filesToPrepend.Keys)
                 _pendingPreviewFilePaths.Remove(filePath);
+            if (_previewContentPending)
+                CompletePreviewContentUpdate();
         }
     }
 }

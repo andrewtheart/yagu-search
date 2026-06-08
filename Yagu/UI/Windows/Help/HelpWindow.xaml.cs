@@ -9,6 +9,7 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.Web.WebView2.Core;
 using Windows.Graphics;
+using Yagu.Helpers;
 
 namespace Yagu;
 
@@ -27,6 +28,7 @@ public sealed partial class HelpWindow : Window
         HelpWebView.Loaded += OnHelpWebViewLoaded;
 
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        WindowForegroundHelper.ConfigureOwnedWindow(hwnd, mainHwnd);
         var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
         var appWindow = AppWindow.GetFromWindowId(windowId);
         const int windowWidth = 980;
@@ -34,6 +36,9 @@ public sealed partial class HelpWindow : Window
         appWindow.Resize(new SizeInt32(windowWidth, windowHeight));
         CenterOverOwner(appWindow, mainHwnd, windowWidth, windowHeight);
     }
+
+    public void BringInFrontOfMainWindow(IntPtr mainHwnd)
+        => WindowForegroundHelper.BringOwnedWindowToFront(this, mainHwnd);
 
     private void OnHelpWebViewLoaded(object sender, RoutedEventArgs e)
     {

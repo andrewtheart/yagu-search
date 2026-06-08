@@ -74,6 +74,7 @@ public sealed partial class MainWindow
 
     private void AlignBrowseButtonToSearchButton()
     {
+        if (_topSearchDrawerCompact) return;
         if (SearchCancelButton.ActualWidth <= 0) return;
         BrowseDirectoryButton.Width = SearchCancelButton.ActualWidth;
     }
@@ -371,11 +372,20 @@ public sealed partial class MainWindow
         string? launchDrive = ResultStoreTempLocationService.GetLaunchDriveRoot();
         var options = ResultStoreTempLocationService.GetWritableDriveOptions(launchDrive);
 
-        var result = await ResultStoreTempLocationWindow.ShowAsync(
-            _hwnd,
-            launchDrive,
-            options,
-            ViewModel.SearchResultTempDirectory);
+        ResultStoreTempLocationWindowResult result;
+        _ownedModalWindowDepth++;
+        try
+        {
+            result = await ResultStoreTempLocationWindow.ShowAsync(
+                _hwnd,
+                launchDrive,
+                options,
+                ViewModel.SearchResultTempDirectory);
+        }
+        finally
+        {
+            _ownedModalWindowDepth = Math.Max(0, _ownedModalWindowDepth - 1);
+        }
 
         if (!result.Accepted)
             return;

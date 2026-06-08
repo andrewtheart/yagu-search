@@ -81,6 +81,7 @@ public sealed partial class MainWindow : Window, IDisposable
     private bool _hotkeyHookInstalled;
     private bool _suppressHotkeySettingChange;
     private Helpers.TrayIcon? _trayIcon;
+    private int _ownedModalWindowDepth;
     private bool _screenshotCaptureInFlight;
     private bool _forceClose;
     private bool _disposed;
@@ -207,6 +208,7 @@ public sealed partial class MainWindow : Window, IDisposable
         AttachPreviewBlockContextFlyout(PreviewBlock);
         InitializePreviewEditorZoom();
         ApplyPreviewEditorFontSettings();
+        ApplyResultMatchTextSettings();
         InitializeResultsListSmartScroll();
         PreviewScrollViewer.SizeChanged += OnPreviewViewportSizeChanged;
 
@@ -276,6 +278,14 @@ public sealed partial class MainWindow : Window, IDisposable
                 e.PropertyName == nameof(ViewModel.PreviewEditorFontSize))
             {
                 ApplyPreviewEditorFontSettings();
+            }
+
+            if (e.PropertyName == nameof(ViewModel.ResultListMatchTextFontFamily) ||
+                e.PropertyName == nameof(ViewModel.ResultListMatchTextFontSize) ||
+                e.PropertyName == nameof(ViewModel.ResultListMatchHighlightColor))
+            {
+                ApplyResultMatchTextSettings();
+                RefreshVisibleResultMatchLines();
             }
         };
 

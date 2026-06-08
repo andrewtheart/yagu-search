@@ -1168,26 +1168,12 @@ public sealed partial class MainWindow
 
             ClearActiveMatchExtraWordMarkers();
 
-            // Compute the content area's left edge (after the gutter) so the band
-            // doesn't extend underneath the line-number gutter.
+            // Span the active line band across the full preview viewport, including
+            // the gutter, so the current line reads as one continuous target.
             double bandLeft = 0;
-            double bandWidth = viewportWidth;
-            if (_sectionMatchNavs.TryGetValue(block, out var navForBand))
-            {
-                try
-                {
-                    var scrollerOrigin = navForBand.Scroller.TransformToVisual(ActiveMatchOverlay)
-                        .TransformPoint(new Windows.Foundation.Point(0, 0));
-                    if (scrollerOrigin.X > 0)
-                    {
-                        bandLeft = scrollerOrigin.X;
-                        bandWidth = Math.Max(0, viewportWidth - bandLeft);
-                    }
-                }
-                catch { }
-            }
+            double bandWidth = Math.Max(viewportWidth, ActiveMatchOverlay.ActualWidth);
 
-            // Clip the word marker to the visible content area (between gutter and right edge).
+            // Clip the word marker to the visible overlay area.
             double clippedMarkerLeft = Math.Max(point.X, bandLeft);
             double clippedMarkerRight = Math.Min(point.X + markerWidth, viewportWidth);
             double visibleMarkerWidth = Math.Max(0, clippedMarkerRight - clippedMarkerLeft);
@@ -2157,6 +2143,7 @@ public sealed partial class MainWindow
     private void ResetPreviewMatchTotals()
     {
         _previewTotalMatchCount = 0;
+        _previewStableMatchNavTotal = 0;
         _previewTotalFileCount = 0;
         _sectionTotalMatchCounts.Clear();
     }
@@ -2164,18 +2151,23 @@ public sealed partial class MainWindow
     private void SetPreviewMatchTotals(int matches, int files)
     {
         _previewTotalMatchCount = Math.Max(0, matches);
+        _previewStableMatchNavTotal = _previewTotalMatchCount;
         _previewTotalFileCount = Math.Max(0, files);
     }
 
     private void AddPreviewMatchTotals(int matches, int files)
     {
-        _previewTotalMatchCount += Math.Max(0, matches);
+        int addedMatches = Math.Max(0, matches);
+        _previewTotalMatchCount += addedMatches;
+        _previewStableMatchNavTotal += addedMatches;
         _previewTotalFileCount += Math.Max(0, files);
     }
 
     private void SubtractPreviewMatchTotals(int matches, int files)
     {
-        _previewTotalMatchCount = Math.Max(0, _previewTotalMatchCount - Math.Max(0, matches));
+        int removedMatches = Math.Max(0, matches);
+        _previewTotalMatchCount = Math.Max(0, _previewTotalMatchCount - removedMatches);
+        _previewStableMatchNavTotal = Math.Max(0, _previewStableMatchNavTotal - removedMatches);
         _previewTotalFileCount = Math.Max(0, _previewTotalFileCount - Math.Max(0, files));
     }
 
@@ -2189,25 +2181,68 @@ public sealed partial class MainWindow
         var (_, deferredMatches) = GetDeferredCounts();
         int overflowRemaining = 0;
         foreach (var ov in _sectionOverflow.Values)
-            overflowRemaining += ov.RemainingResults.Count;
+            overflowRemaining += CountOverflowRemainingMatches(ov);
         return _matchParagraphs.Count + _lazyMatchCount + deferredMatches + overflowRemaining;
     }
 
+    private int GetKnownPreviewMatchTotal()
+    {
+        var (deferredFiles, deferredMatches) = GetDeferredCounts();
+        if (_previewTotalFileCount > 0 && _sectionTotalMatchCounts.Count + deferredFiles >= _previewTotalFileCount)
+        {
+            int registeredTotal = _sectionTotalMatchCounts.Values.Sum() + deferredMatches;
+            if (registeredTotal > 0)
+                return registeredTotal;
+        }
+
+        return _previewTotalMatchCount;
+    }
+
     private int GetStableMatchNavTotal()
-        => _previewTotalMatchCount > 0 ? _previewTotalMatchCount : GetRenderedMatchTotal();
+    {
+        int renderedTotal = GetRenderedMatchTotal();
+        int knownTotal = GetKnownPreviewMatchTotal();
+        if (knownTotal > 0)
+        {
+            _previewTotalMatchCount = knownTotal;
+            _previewStableMatchNavTotal = knownTotal;
+            return Math.Max(knownTotal, _matchParagraphs.Count);
+        }
+
+        int stableTotal = Math.Max(Math.Max(_previewTotalMatchCount, _previewStableMatchNavTotal), renderedTotal);
+        if (stableTotal > _previewStableMatchNavTotal)
+            _previewStableMatchNavTotal = stableTotal;
+        if (stableTotal > _previewTotalMatchCount)
+            _previewTotalMatchCount = stableTotal;
+        return stableTotal;
+    }
 
     private int GetStableMatchNavFileCount(int deferredFiles)
         => _previewTotalFileCount > 0 ? _previewTotalFileCount : MatchNavFileCount + deferredFiles;
 
     private int GetSectionMatchTotal(SectionMatchNav sectionNav)
     {
-        if (_sectionTotalMatchCounts.TryGetValue(sectionNav.Block, out int total))
-            return total;
-
-        total = sectionNav.Matches.Count;
+        int renderedTotal = sectionNav.Matches.Count;
         if (_sectionOverflow.TryGetValue(sectionNav.Block, out var ov))
-            total += ov.RemainingResults.Count;
-        return total;
+            renderedTotal += CountOverflowRemainingMatches(ov);
+
+        if (_sectionTotalMatchCounts.TryGetValue(sectionNav.Block, out int total))
+            return Math.Max(total, renderedTotal);
+
+        return renderedTotal;
+    }
+
+    private static int CountOverflowRemainingMatches(SectionOverflow overflow)
+    {
+        if (overflow.RemainingResults.Count == 0)
+            return 0;
+
+        return ComputeMatchCount(
+            overflow.RemainingResults,
+            overflow.AllLines,
+            overflow.IsHighlightMode,
+            overflow.PreviewLines,
+            overflow.Rx);
     }
 
     /// <summary>
@@ -2228,8 +2263,11 @@ public sealed partial class MainWindow
 
         int files = list.Count - _deferredCursor;
         int matches = 0;
+        bool isHighlight = ViewModel.PreviewModeIndex == 1;
+        int previewLines = ViewModel.PreviewContextLines;
+        var rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
         for (int i = _deferredCursor; i < list.Count; i++)
-            matches += list[i].Value.Count;
+            matches += ComputeMatchCount(list[i].Value, null, isHighlight, previewLines, rx);
         _cachedDeferredCountsList = list;
         _cachedDeferredCountsCursor = _deferredCursor;
         _cachedDeferredCounts = (files, matches);
@@ -2991,6 +3029,15 @@ public sealed partial class MainWindow
         if (!_sectionOverflow.TryGetValue(section, out var ov)) return false;
         int requestedChunkSize = maxResultsToExpand is > 0 ? maxResultsToExpand.Value : MaxMatchesPerExpandChunk;
         int chunkSize = Math.Min(requestedChunkSize, ov.RemainingResults.Count);
+        if (ov.IsHighlightMode && ov.AllLines != null && chunkSize > 0)
+        {
+            int boundaryLine = ov.RemainingResults[chunkSize - 1].LineNumber;
+            while (chunkSize < ov.RemainingResults.Count
+                   && ov.RemainingResults[chunkSize].LineNumber == boundaryLine)
+            {
+                chunkSize++;
+            }
+        }
         if (chunkSize <= 0)
         {
             _sectionOverflow.Remove(section);
@@ -3045,11 +3092,10 @@ public sealed partial class MainWindow
             ov.LastRenderedLine = Math.Max(ov.LastRenderedLine, lastRenderedLine);
 
             // Fallback: all remaining results are on already-rendered lines.
-            // Render one window per unique line (across all expansion calls) to
-            // avoid showing duplicate content repeatedly as user navigates matches.
+            // Render a continuation window around each occurrence so every
+            // consumed result gets a concrete target for global navigation.
             if (truncatePreviewLines && consumed == 0 && ov.RemainingResults.Count > 0)
             {
-                ov.FallbackRenderedLines ??= new HashSet<int>();
                 int entriesBefore = _matchParagraphs.Count;
                 int maxResults = Math.Min(chunkSize, ov.RemainingResults.Count);
                 for (int ri = 0; ri < maxResults; ri++)
@@ -3058,13 +3104,6 @@ public sealed partial class MainWindow
                         break;
 
                     var r = ov.RemainingResults[ri];
-
-                    // Skip results whose line was already rendered in any previous fallback.
-                    if (!ov.FallbackRenderedLines.Add(r.LineNumber))
-                    {
-                        consumed++;
-                        continue;
-                    }
 
                     int lineIndex = r.LineNumber - 1;
                     if (lineIndex < 0 || lineIndex >= ov.AllLines.Length) continue;
@@ -3082,7 +3121,8 @@ public sealed partial class MainWindow
                         out int addedParagraphs,
                         out _,
                         truncate: truncatePreviewLines,
-                        continuationGutter: true);
+                        continuationGutter: true,
+                        targetOnlyMatchEntry: true);
                     MoveAppendedPreviewLineBesideExistingLine(
                         section,
                         r.LineNumber,

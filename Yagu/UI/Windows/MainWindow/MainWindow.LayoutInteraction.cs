@@ -32,6 +32,9 @@ public sealed partial class MainWindow
     private double _splitterStartX;
     private double _col0StartWidth;
     private double _col2StartWidth;
+    private bool _topSearchDrawerCompact;
+    private const double CompactTopSearchDrawerThreshold = 440;
+    private const double CompactTopSearchActionButtonWidth = 38;
 
     private void OnAdvancedOptionsExpanding(Expander sender, ExpanderExpandingEventArgs args)
     {
@@ -133,6 +136,7 @@ public sealed partial class MainWindow
         if (newCol0 < minWidth || newCol2 < minWidth) return;
         SplitPaneGrid.ColumnDefinitions[0].Width = new GridLength(newCol0, GridUnitType.Pixel);
         SplitPaneGrid.ColumnDefinitions[2].Width = new GridLength(newCol2, GridUnitType.Pixel);
+        UpdateTopExpandedPreviewMeasurements();
         e.Handled = true;
     }
 
@@ -151,7 +155,29 @@ public sealed partial class MainWindow
             SplitPaneGrid.ColumnDefinitions[2].Width = new GridLength(col2 / total, GridUnitType.Star);
         }
         e.Handled = true;
+        UpdateTopExpandedPreviewMeasurements();
         QueueActiveMatchOverlayRefresh();
+    }
+
+    private void ApplyTopSearchDrawerCompactState(bool compact)
+    {
+        _topSearchDrawerCompact = compact;
+        BrowseDirectoryLabel.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        SearchCancelLabel.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+
+        if (compact)
+        {
+            BrowseDirectoryButton.Padding = new Thickness(0);
+            SearchCancelButton.Padding = new Thickness(0);
+            BrowseDirectoryButton.Width = CompactTopSearchActionButtonWidth;
+            SearchCancelButton.Width = CompactTopSearchActionButtonWidth;
+            return;
+        }
+
+        BrowseDirectoryButton.Padding = new Thickness(8, 6, 8, 6);
+        SearchCancelButton.Padding = new Thickness(12, 6, 12, 6);
+        SearchCancelButton.Width = double.NaN;
+        AlignBrowseButtonToSearchButton();
     }
 
     private void OnSplitterPointerEntered(object sender, PointerRoutedEventArgs e)

@@ -363,8 +363,7 @@ public sealed class SearchResultCollection
 
         if (!string.IsNullOrWhiteSpace(FileNameFilter))
         {
-            if (!group.FileName.Contains(FileNameFilter, StringComparison.OrdinalIgnoreCase)
-                && !group.FilePath.Contains(FileNameFilter, StringComparison.OrdinalIgnoreCase))
+            if (!MatchesFileTextFilter(group, FileNameFilter))
                 return false;
         }
 
@@ -376,6 +375,38 @@ public sealed class SearchResultCollection
 
         return true;
     }
+
+    private static bool MatchesFileTextFilter(FileGroup group, string filter)
+    {
+        string value = filter.Trim();
+        if (value.Length == 0)
+            return true;
+
+        return ContainsFilter(group.FileName, value)
+            || ContainsFilter(group.FilePath, value)
+            || ContainsFilter(group.FormattedSize, value)
+            || ContainsFilter(group.FormattedDate, value);
+    }
+
+    private static bool ContainsFilter(string candidate, string filter)
+    {
+        if (candidate.Contains(filter, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!HasWhitespace(candidate) && !HasWhitespace(filter))
+            return false;
+
+        string compactCandidate = RemoveWhitespace(candidate);
+        string compactFilter = RemoveWhitespace(filter);
+        return compactFilter.Length > 0
+            && compactCandidate.Contains(compactFilter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasWhitespace(string value)
+        => value.Any(static ch => char.IsWhiteSpace(ch));
+
+    private static string RemoveWhitespace(string value)
+        => string.Concat(value.Where(static ch => !char.IsWhiteSpace(ch)));
 
     internal static string NormalizeExtensionFilter(string extension)
     {

@@ -333,6 +333,14 @@ public sealed partial class MainWindow
             ApplyQuerySuggestions(sender, open: sender.IsSuggestionListOpen || _querySuggestionsUserOpened);
     }
 
+    private void OnQueryClearClick(object sender, RoutedEventArgs e)
+    {
+        SuppressQuerySuggestionsFor(250, QueryBox);
+        QueryBox.Text = string.Empty;
+        ViewModel.Query = string.Empty;
+        QueryBox.Focus(FocusState.Programmatic);
+    }
+
     private void OnQueryBoxPointerPressed(object sender, PointerRoutedEventArgs e)
     {
         var point = e.GetCurrentPoint(QueryBox);

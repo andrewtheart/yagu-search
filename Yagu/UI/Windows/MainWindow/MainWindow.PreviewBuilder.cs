@@ -674,7 +674,7 @@ public sealed partial class MainWindow
         // Update match count and file count to reflect all loaded files.
         int loadedFiles = PreviewSectionsPanel.Children.OfType<Expander>().Count();
         var (deferredFileCount, deferredMatchCount) = GetDeferredCounts();
-        int totalMatches = _previewTotalMatchCount > 0 ? _previewTotalMatchCount : _matchParagraphs.Count + _lazyMatchCount + deferredMatchCount;
+        int totalMatches = GetStableMatchNavTotal();
         int grandFileCount = _previewTotalFileCount > 0 ? _previewTotalFileCount : loadedFiles + deferredFileCount;
         SetPreviewFileLabel(
             $"{totalMatches:N0} selected matches across {grandFileCount:N0} file(s)",
@@ -1371,6 +1371,7 @@ public sealed partial class MainWindow
     {
         LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync: file='{r.FilePath}', line={r.LineNumber}, fullFile={fullFile}");
         var singleSw = System.Diagnostics.Stopwatch.StartNew();
+        BeginPreviewContentUpdate();
         ShowPreviewBlockSurface();
         PreviewBlock.Tag = r.FilePath;
 
@@ -1420,12 +1421,14 @@ public sealed partial class MainWindow
         finally
         {
             _previewMutating = false;
+            CompletePreviewContentUpdate();
         }
     }
 
     private void ShowPreviewBlockSurface()
     {
         PreviewScrollViewer.Padding = new Thickness(16, 12, 16, 12);
+        PreviewMessagePanel.Visibility = Visibility.Visible;
         PreviewSectionsPanel.Children.Clear();
         PreviewSectionsPanel.Visibility = Visibility.Collapsed;
         PreviewBlock.TextWrapping = ViewModel.PreviewWordWrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
@@ -1437,6 +1440,7 @@ public sealed partial class MainWindow
         // Restore outer horizontal scroll for single-file block view.
         ApplyPreviewHorizontalScrollForWrap(PreviewScrollViewer, ViewModel.PreviewWordWrap);
         HideStickyHorizontalScrollBar();
+        UpdatePreviewEmptyState();
     }
 
     private void ShowPreviewSectionsSurface()
@@ -1453,6 +1457,7 @@ public sealed partial class MainWindow
         // Sections have their own per-section horizontal scroll; outer viewer stays vertical-only.
         SetHorizontalPreviewScroll(PreviewScrollViewer, enabled: false);
         HideStickyHorizontalScrollBar();
+        UpdatePreviewEmptyState();
     }
 
     private void ShowPreviewLoading(string message = "Loading preview…")
@@ -1460,6 +1465,7 @@ public sealed partial class MainWindow
         PreviewScrollViewer.Padding = new Thickness(16, 12, 16, 12);
         PreviewMessagePanel.Visibility = Visibility.Collapsed;
         PreviewSectionsPanel.Visibility = Visibility.Collapsed;
+        PreviewEmptyState.Visibility = Visibility.Collapsed;
         PreviewLoadingText.Text = message;
         PreviewLoadingRing.IsActive = true;
         PreviewLoadingPanel.Visibility = Visibility.Visible;
@@ -1469,10 +1475,45 @@ public sealed partial class MainWindow
     {
         PreviewLoadingRing.IsActive = false;
         PreviewLoadingPanel.Visibility = Visibility.Collapsed;
+        UpdatePreviewEmptyState();
+    }
+
+    private void UpdatePreviewEmptyState()
+    {
+        bool editorVisible = PreviewEditor.Visibility == Visibility.Visible
+            || PreviewEditorContainer.Visibility == Visibility.Visible;
+        bool busy = PreviewLoadingPanel.Visibility == Visibility.Visible
+            || PreviewProgressOverlay.Visibility == Visibility.Visible
+            || _previewContentPending;
+        bool hasBlockContent = PreviewMessagePanel.Visibility == Visibility.Visible
+            && PreviewBlock.Visibility == Visibility.Visible
+            && PreviewBlock.Blocks.Count > 0;
+        bool hasSections = PreviewSectionsPanel.Visibility == Visibility.Visible
+            && PreviewSectionsPanel.Children.OfType<Expander>().Any();
+        bool showEmptyState = PreviewPanelBorder.Visibility == Visibility.Visible
+            && !editorVisible
+            && !busy
+            && !hasBlockContent
+            && !hasSections;
+
+        PreviewEmptyState.Visibility = showEmptyState ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void BeginPreviewContentUpdate()
+    {
+        _previewContentPending = true;
+        PreviewEmptyState.Visibility = Visibility.Collapsed;
+    }
+
+    private void CompletePreviewContentUpdate()
+    {
+        _previewContentPending = false;
+        UpdatePreviewEmptyState();
     }
 
     private void ShowProgressOverlay(string message, int percent)
     {
+        PreviewEmptyState.Visibility = Visibility.Collapsed;
         PreviewProgressText.Text = message;
         PreviewProgressPercent.Text = $"{percent}%";
         PreviewProgressRing.IsActive = true;
@@ -1488,6 +1529,7 @@ public sealed partial class MainWindow
     {
         PreviewProgressRing.IsActive = false;
         PreviewProgressOverlay.Visibility = Visibility.Collapsed;
+        UpdatePreviewEmptyState();
     }
 
     private void SetPerFileToolbarVisibility(Visibility visibility)
@@ -1665,6 +1707,7 @@ public sealed partial class MainWindow
             PreviewSectionsPanel.Children.Add(expander);
             InvalidateScrollPositionCache();
             _lastHighlightedActiveBlock = null;
+            CompletePreviewContentUpdate();
         }
         return (block, expander);
     }
@@ -1907,6 +1950,7 @@ public sealed partial class MainWindow
                     HideMatchNavPanel();
                     UpdateExpandAllButtonVisibility();
                 }
+                UpdatePreviewEmptyState();
                 return;
             }
         }
@@ -1933,7 +1977,7 @@ public sealed partial class MainWindow
         {
             Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
             ShowPreviewSectionsSurface();
-            SetPreviewMatchTotals(targets.Sum(t => t.Matches.Count), targets.Count);
+            SetPreviewMatchTotals(targets.Sum(t => ComputeMatchCount(t.Matches, null, isHighlight: true, previewLines: 0, rx)), targets.Count);
 
             int filesLoaded = 0;
             (RichTextBlock block, Paragraph para, int matchInPara)? firstMatch = null;
@@ -2217,6 +2261,7 @@ public sealed partial class MainWindow
         para.Inlines.Add(new Run { Text = message });
         PreviewBlock.Blocks.Add(para);
         PreviewBackButton.Visibility = showBackButton ? Visibility.Visible : Visibility.Collapsed;
+        CompletePreviewContentUpdate();
     }
 
     private void OnPreviewBackClick(object sender, RoutedEventArgs e)
@@ -2346,6 +2391,7 @@ public sealed partial class MainWindow
     private SolidColorBrush s_matchAccentBrush = new(Windows.UI.Color.FromArgb(255, 70, 140, 70));
     private static readonly SolidColorBrush _transparentBrush = new(Microsoft.UI.Colors.Transparent);
     private SolidColorBrush _matchTextBrush = new(Microsoft.UI.Colors.Gold);
+    private SolidColorBrush _resultMatchTextBrush = new(Microsoft.UI.Colors.Gold);
     private SolidColorBrush _matchLineBrush = new(Microsoft.UI.Colors.White);
     private Windows.UI.Color _overlayColor = Microsoft.UI.Colors.OrangeRed;
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphLineNumbers = new();
@@ -2634,7 +2680,8 @@ public sealed partial class MainWindow
         out int paragraphsAdded,
         out int matchEntriesAdded,
         bool truncate = true,
-        bool continuationGutter = false)
+        bool continuationGutter = false,
+        bool targetOnlyMatchEntry = false)
     {
         line ??= string.Empty;
         var window = truncate
@@ -2646,6 +2693,7 @@ public sealed partial class MainWindow
         bool addedMatchEntries = false;
         paragraphsAdded = 0;
         matchEntriesAdded = 0;
+        int segmentDisplayStart = 0;
 
         foreach (var segment in EnumeratePreviewLineLayoutSegments(window.Text))
         {
@@ -2656,35 +2704,111 @@ public sealed partial class MainWindow
             paragraphsAdded++;
 
             if (matchParagraphs is null)
+            {
+                segmentDisplayStart += segment.Length;
                 continue;
+            }
 
             int beforeCount = matchParagraphs.Count;
-            AddMatchEntries(
-                matchParagraphs,
-                sectionNav,
-                section,
-                para,
-                segment,
-                rx,
-                minimumOne: rx is null && !addedMatchEntries);
+            if (targetOnlyMatchEntry
+                && TryGetTargetMatchOrdinalInSegment(line, result, rx, window, segment, segmentDisplayStart, out int matchOrdinal))
+            {
+                matchParagraphs.Add((section, para, matchOrdinal));
+                sectionNav?.Matches.Add((para, matchOrdinal));
+            }
+            else if (!targetOnlyMatchEntry)
+            {
+                AddMatchEntries(
+                    matchParagraphs,
+                    sectionNav,
+                    section,
+                    para,
+                    segment,
+                    rx,
+                    minimumOne: rx is null && !addedMatchEntries);
+            }
             int added = matchParagraphs.Count - beforeCount;
             if (added > 0)
             {
                 addedMatchEntries = true;
                 matchEntriesAdded += added;
             }
+
+            segmentDisplayStart += segment.Length;
         }
 
         if (matchParagraphs is not null && !addedMatchEntries && firstParagraph is not null)
         {
             int beforeCount = matchParagraphs.Count;
-            AddMatchEntries(matchParagraphs, sectionNav, section, firstParagraph, string.Empty, rx: null);
+            AddMatchEntries(matchParagraphs, sectionNav, section, firstParagraph, window.Text, rx, minimumOne: rx is null);
             matchEntriesAdded += matchParagraphs.Count - beforeCount;
         }
 
         ScheduleGutterSync(section);
 
         return firstParagraph ?? throw new InvalidOperationException("Preview line renderer did not create a paragraph.");
+    }
+
+    private static bool TryGetTargetMatchOrdinalInSegment(
+        string sourceLine,
+        SearchResult result,
+        Regex? rx,
+        PreviewLineWindow window,
+        string segment,
+        int segmentDisplayStart,
+        out int matchOrdinal)
+    {
+        matchOrdinal = 0;
+
+        int matchStart = ResolveSourceMatchStart(sourceLine, result, rx);
+        if (matchStart < window.SourceStart || matchStart >= window.SourceEnd)
+            return false;
+
+        int targetDisplayStart = matchStart - window.SourceStart;
+        if (window.SourceStart > 0)
+            targetDisplayStart += LineTruncator.Ellipsis.Length;
+
+        int segmentDisplayEnd = segmentDisplayStart + segment.Length;
+        if (targetDisplayStart < segmentDisplayStart || targetDisplayStart >= segmentDisplayEnd)
+            return false;
+
+        int prefixLength = segmentDisplayStart == 0
+            && window.SourceStart > 0
+            && segment.StartsWith(LineTruncator.Ellipsis, StringComparison.Ordinal)
+                ? LineTruncator.Ellipsis.Length
+                : 0;
+        int suffixLength = segmentDisplayEnd == window.Text.Length
+            && window.SourceEnd < sourceLine.Length
+            && segment.EndsWith(LineTruncator.Ellipsis, StringComparison.Ordinal)
+                ? LineTruncator.Ellipsis.Length
+                : 0;
+        int coreStart = prefixLength;
+        int coreEnd = segment.Length - suffixLength;
+        if (coreEnd < coreStart)
+            return false;
+
+        int targetCoreStart = targetDisplayStart - segmentDisplayStart - coreStart;
+        if (targetCoreStart < 0 || targetCoreStart >= coreEnd - coreStart)
+            return false;
+
+        if (rx is null)
+            return true;
+
+        string coreText = segment[coreStart..coreEnd];
+        int ordinal = 0;
+        foreach (System.Text.RegularExpressions.Match match in rx.Matches(coreText))
+        {
+            if (match.Index == targetCoreStart
+                || (match.Index <= targetCoreStart && targetCoreStart < match.Index + match.Length))
+            {
+                matchOrdinal = ordinal;
+                return true;
+            }
+
+            ordinal++;
+        }
+
+        return false;
     }
 
     private static Dictionary<int, SearchResult> BuildMatchByLineForRanges(
@@ -2790,9 +2914,9 @@ public sealed partial class MainWindow
 
         if (ranges.Count == 0)
         {
-            // All pending results are on lines already rendered. Deduplicate by
-            // line number — render one truncated window per unique line and consume
-            // all results on that line to avoid showing the same content repeatedly.
+            // All pending results are on lines already rendered. Render a small
+            // continuation window around each pending occurrence so every loaded
+            // result gets a concrete target for global match navigation.
             int maxResults = Math.Min(anchorLimit, pendingResults.Count);
             if (!truncatePreviewLines)
             {
@@ -2802,7 +2926,6 @@ public sealed partial class MainWindow
                 return 0;
             }
 
-            var renderedFallbackLines = new HashSet<int>();
             for (int i = 0; i < maxResults; i++)
             {
                 if (addedMatchEntries >= maxAdditionalMatchEntries || paragraphsAdded >= maxAdditionalBlocks)
@@ -2812,14 +2935,6 @@ public sealed partial class MainWindow
                 int lineIndex = result.LineNumber - 1;
                 if (lineIndex < 0 || lineIndex >= allLines.Length)
                     continue;
-
-                // Skip results whose line was already rendered in this chunk.
-                if (!renderedFallbackLines.Add(result.LineNumber))
-                {
-                    consumedResults++;
-                    lastRenderedLine = Math.Max(lastRenderedLine, result.LineNumber);
-                    continue;
-                }
 
                 if (paragraphsAdded >= maxAdditionalBlocks)
                     break;
@@ -2837,7 +2952,8 @@ public sealed partial class MainWindow
                     out int addedParagraphs,
                     out int matchEntriesAdded,
                     truncate: truncatePreviewLines,
-                    continuationGutter: true);
+                    continuationGutter: true,
+                    targetOnlyMatchEntry: true);
                 MoveAppendedPreviewLineBesideExistingLine(
                     section,
                     result.LineNumber,

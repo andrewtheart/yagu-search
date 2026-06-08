@@ -118,8 +118,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         MaxResults = _settings.MaxResults <= 0 ? 0 : Math.Min(_settings.MaxResults, SearchOptions.MaxResultsCeiling);
         EditorCommand = _settings.EditorCommand;
         PreviewModeIndex = _settings.PreviewModeIndex;
-        // Migrate legacy bool → new tri-state: if user had wrap ON and new index is still at default (PartialWrap), upgrade to Wrap.
-        PreviewWrapModeIndex = _settings.PreviewWordWrap && _settings.PreviewWrapModeIndex == 1 ? 0 : _settings.PreviewWrapModeIndex;
+        PreviewWrapModeIndex = NormalizePreviewWrapModeIndex(_settings.PreviewWordWrap, _settings.PreviewWrapModeIndex);
         PreviewWordWrap = PreviewWrapModeIndex == 0;
         PreviewAutoLoadMatches = _settings.PreviewAutoLoadMatches;
         SelectedPreviewContentBackgroundColor = ColorStringHelper.Normalize(
@@ -153,6 +152,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             _settings.PreviewEditorFontSize <= 0 ? AppSettings.DefaultPreviewEditorFontSize : _settings.PreviewEditorFontSize,
             6,
             72);
+        ResultListMatchTextFontFamily = string.IsNullOrWhiteSpace(_settings.ResultListMatchTextFontFamily)
+            ? AppSettings.DefaultResultListMatchTextFontFamily
+            : _settings.ResultListMatchTextFontFamily;
+        ResultListMatchTextFontSize = Math.Clamp(
+            _settings.ResultListMatchTextFontSize <= 0 ? AppSettings.DefaultResultListMatchTextFontSize : _settings.ResultListMatchTextFontSize,
+            6,
+            72);
+        ResultListMatchHighlightColor = ColorStringHelper.Normalize(
+            _settings.ResultListMatchHighlightColor,
+            Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00));
         FileLogLevelIndex = _settings.LogLevelIndex;
         ConsoleLogLevelIndex = _settings.ConsoleLogLevelIndex;
         FileListerBackendIndex = _settings.FileListerBackendIndex;
@@ -193,6 +202,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         StartInLauncherMode = _settings.StartInLauncherMode;
         CloseToTray = _settings.CloseToTray;
         MaximizeOnStartup = _settings.MaximizeOnStartup;
+        TerminalDefaultWorkingDirectory = _settings.TerminalDefaultWorkingDirectory ?? string.Empty;
         FileHeaderCheckAddsToPreview = _settings.FileHeaderCheckAddsToPreview;
         MatchLineCheckAddsToPreview = _settings.MatchLineCheckAddsToPreview;
         PreviewEditorMaxSizeMB = _settings.PreviewEditorMaxSizeMB;
@@ -220,6 +230,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         SyncSkipExtensionItems();
         SyncBinaryExtensionItems();
         SyncArchiveExtensionItems();
+    }
+
+    private static int NormalizePreviewWrapModeIndex(bool legacyPreviewWordWrap, int modeIndex)
+    {
+        if (legacyPreviewWordWrap)
+            return (int)PreviewWrapMode.Wrap;
+
+        return modeIndex == (int)PreviewWrapMode.Wrap
+            ? (int)PreviewWrapMode.Wrap
+            : (int)PreviewWrapMode.NoWrap;
     }
 
     public void Dispose()
@@ -423,7 +443,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
     [ObservableProperty] public partial int PreviewModeIndex { get; set; } = 1; // 0 = Concatenated, 1 = Multi-highlight
     [ObservableProperty] public partial bool PreviewWordWrap { get; set; }
-    [ObservableProperty] public partial int PreviewWrapModeIndex { get; set; } = 1; // 0 = Wrap, 1 = PartialWrap, 2 = NoWrap
+    [ObservableProperty] public partial int PreviewWrapModeIndex { get; set; } = 2; // 0 = Wrap, 1 = legacy PartialWrap, 2 = NoWrap
     [ObservableProperty] public partial int PreviewAutoLoadMatches { get; set; } = 50;
     [ObservableProperty] public partial string SelectedPreviewContentBackgroundColor { get; set; } = AppSettings.DefaultSelectedPreviewContentBackgroundColor;
     [ObservableProperty] public partial string UnselectedPreviewContentBackgroundColor { get; set; } = AppSettings.DefaultUnselectedPreviewContentBackgroundColor;
@@ -435,6 +455,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial string PreviewMatchLineColor { get; set; } = AppSettings.DefaultPreviewMatchLineColor;
     [ObservableProperty] public partial string PreviewEditorFontFamily { get; set; } = AppSettings.DefaultPreviewEditorFontFamily;
     [ObservableProperty] public partial int PreviewEditorFontSize { get; set; } = AppSettings.DefaultPreviewEditorFontSize;
+    [ObservableProperty] public partial string ResultListMatchTextFontFamily { get; set; } = AppSettings.DefaultResultListMatchTextFontFamily;
+    [ObservableProperty] public partial int ResultListMatchTextFontSize { get; set; } = AppSettings.DefaultResultListMatchTextFontSize;
+    [ObservableProperty] public partial string ResultListMatchHighlightColor { get; set; } = AppSettings.DefaultResultListMatchHighlightColor;
     [ObservableProperty] public partial int FileLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] public partial int ConsoleLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] public partial int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
@@ -588,6 +611,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial bool StartInLauncherMode { get; set; } = true;
     [ObservableProperty] public partial bool CloseToTray { get; set; } = true;
     [ObservableProperty] public partial bool MaximizeOnStartup { get; set; }
+    [ObservableProperty] public partial string TerminalDefaultWorkingDirectory { get; set; } = string.Empty;
     [ObservableProperty] public partial bool FileHeaderCheckAddsToPreview { get; set; } = true;
     [ObservableProperty] public partial bool MatchLineCheckAddsToPreview { get; set; } = true;
 
@@ -2270,6 +2294,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             PreviewEditorFontSize <= 0 ? AppSettings.DefaultPreviewEditorFontSize : PreviewEditorFontSize,
             6,
             72);
+        _settings.ResultListMatchTextFontFamily = string.IsNullOrWhiteSpace(ResultListMatchTextFontFamily)
+            ? AppSettings.DefaultResultListMatchTextFontFamily
+            : ResultListMatchTextFontFamily.Trim();
+        _settings.ResultListMatchTextFontSize = Math.Clamp(
+            ResultListMatchTextFontSize <= 0 ? AppSettings.DefaultResultListMatchTextFontSize : ResultListMatchTextFontSize,
+            6,
+            72);
+        _settings.ResultListMatchHighlightColor = ColorStringHelper.Normalize(
+            ResultListMatchHighlightColor,
+            Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00));
         _settings.LogLevelIndex = FileLogLevelIndex;
         _settings.ConsoleLogLevelIndex = ConsoleLogLevelIndex;
         _settings.FileListerBackendIndex = FileListerBackendIndex;
@@ -2304,6 +2338,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.StartInLauncherMode = StartInLauncherMode;
         _settings.CloseToTray = CloseToTray;
         _settings.MaximizeOnStartup = MaximizeOnStartup;
+        _settings.TerminalDefaultWorkingDirectory = string.IsNullOrWhiteSpace(TerminalDefaultWorkingDirectory)
+            ? string.Empty
+            : TerminalDefaultWorkingDirectory.Trim();
         _settings.FileHeaderCheckAddsToPreview = FileHeaderCheckAddsToPreview;
         _settings.MatchLineCheckAddsToPreview = MatchLineCheckAddsToPreview;
         _settings.PreviewEditorMaxSizeMB = PreviewEditorMaxSizeMB;

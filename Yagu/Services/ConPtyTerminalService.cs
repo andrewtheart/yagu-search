@@ -31,7 +31,7 @@ internal sealed class ConPtyTerminalService : IDisposable
     /// <summary>Fired when the child process exits.</summary>
     public event Action<int>? ProcessExited;
 
-    public void Start(int cols = 120, int rows = 30)
+    public void Start(int cols = 120, int rows = 30, string? workingDirectory = null)
     {
         if (_pseudoConsoleHandle != 0) return;
 
@@ -52,7 +52,7 @@ internal sealed class ConPtyTerminalService : IDisposable
         outputWriteSide.Dispose();
 
         // Spawn PowerShell attached to the pseudo console
-        SpawnProcess("pwsh.exe");
+        SpawnProcess("pwsh.exe", workingDirectory);
 
         // Open writer stream
         _writer = new FileStream(_pipeIn, FileAccess.Write, bufferSize: 256, isAsync: false);
@@ -110,7 +110,7 @@ internal sealed class ConPtyTerminalService : IDisposable
         ProcessExited?.Invoke(exitCode);
     }
 
-    private void SpawnProcess(string command)
+    private void SpawnProcess(string command, string? workingDirectory)
     {
         var startupInfo = new STARTUPINFOEX();
         startupInfo.StartupInfo.cb = Marshal.SizeOf<STARTUPINFOEX>();
@@ -131,7 +131,7 @@ internal sealed class ConPtyTerminalService : IDisposable
         var processInfo = new PROCESS_INFORMATION();
         bool success = CreateProcessW(
             null, command, nint.Zero, nint.Zero, false,
-            EXTENDED_STARTUPINFO_PRESENT, nint.Zero, null, ref startupInfo, out processInfo);
+            EXTENDED_STARTUPINFO_PRESENT, nint.Zero, workingDirectory, ref startupInfo, out processInfo);
 
         if (!success)
             throw new InvalidOperationException($"CreateProcessW failed: {Marshal.GetLastWin32Error()}");

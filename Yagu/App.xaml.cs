@@ -15,8 +15,24 @@ public sealed partial class App : Application, IDisposable
     public static string? StartupQuery { get; set; }
     public static int? StartupWindowFocusBehavior { get; set; }
     public static Mutex? InstanceMutex { get; set; }
+    public static string LaunchWorkingDirectory { get; } = ResolveLaunchWorkingDirectory();
     public static string CrashLogPath { get; } = Path.Combine(
         Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory, "yagu-crash.log");
+
+    private static string ResolveLaunchWorkingDirectory()
+    {
+        try
+        {
+            string currentDirectory = Directory.GetCurrentDirectory();
+            if (!string.IsNullOrWhiteSpace(currentDirectory) && Directory.Exists(currentDirectory))
+                return currentDirectory;
+        }
+        catch
+        {
+        }
+
+        return AppContext.BaseDirectory;
+    }
 
     /// <summary>UI thread dispatcher. Captured during <see cref="OnLaunched"/>; null until then.
     /// Models (e.g. SearchResult) use this to marshal PropertyChanged events that drive

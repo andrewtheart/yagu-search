@@ -452,6 +452,7 @@ public sealed partial class MainWindow
                     InvalidateParagraphIndexCache();
                     _currentMatchIndex = -1;
                     HideMatchNavPanel();
+                    CompletePreviewContentUpdate();
                 }
             }
         }
@@ -535,12 +536,13 @@ public sealed partial class MainWindow
         {
         bool isHighlight = ViewModel.PreviewModeIndex == 1;
         _sectionMatchNavs.TryGetValue(section, out var sectionNav);
+        int matchCountBeforeAppend = _matchParagraphs.Count;
 
         // In highlight mode, if the match line is already rendered (as context),
         // promote it in-place rather than appending duplicate context.
         if (isHighlight && TryPromoteContextLineToMatch(section, result, allLines, rx, sectionNav))
         {
-            AddPreviewMatchTotals(1, 0);
+            AddPreviewMatchTotals(Math.Max(1, _matchParagraphs.Count - matchCountBeforeAppend), 0);
             UpdateMatchNavPanel();
             UpdateSectionMatchNavPanels();
             return;
@@ -678,11 +680,11 @@ public sealed partial class MainWindow
         if (sectionNav is not null)
             sectionNav.IndexByMatch = null;
 
-        AddPreviewMatchTotals(1, 0);
+        AddPreviewMatchTotals(Math.Max(1, _matchParagraphs.Count - matchCountBeforeAppend), 0);
 
         var totalFiles = PreviewSectionsPanel.Children.OfType<Expander>().Count();
         var (deferredFileCount, deferredMatchCount) = GetDeferredCounts();
-        int totalMatches = _previewTotalMatchCount > 0 ? _previewTotalMatchCount : _matchParagraphs.Count + _lazyMatchCount + deferredMatchCount;
+        int totalMatches = GetStableMatchNavTotal();
         int grandFileCount = _previewTotalFileCount > 0 ? _previewTotalFileCount : totalFiles + deferredFileCount;
         SetPreviewFileLabel(
             $"{totalMatches:N0} selected matches across {grandFileCount:N0} file(s)",

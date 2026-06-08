@@ -65,6 +65,118 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void PreviewPanel_EmptyVisibleSurfaceShowsCenteredWrappedMessage()
+    {
+        string emptyState = ExtractXamlWindow("x:Name=\"PreviewEmptyState\"", 1200);
+        Assert.Contains("Grid.Row=\"1\"", emptyState);
+        Assert.Contains("HorizontalAlignment=\"Stretch\"", emptyState);
+        Assert.Contains("VerticalAlignment=\"Stretch\"", emptyState);
+        Assert.Contains("Text=\"Nothing to show\"", emptyState);
+        Assert.Contains("FontSize=\"24\"", emptyState);
+        Assert.Contains("Text=\"Add files to this preview by selecting one or more files on the left panel, right clicking, and selecting the preview option.\"", emptyState);
+        Assert.Contains("FontSize=\"13\"", emptyState);
+        Assert.Contains("TextWrapping=\"WrapWholeWords\"", emptyState);
+
+        string update = ExtractMethodWindow(MainWindowSource, "UpdatePreviewEmptyState", 1600);
+        Assert.Contains("PreviewPanelBorder.Visibility == Visibility.Visible", update);
+        Assert.Contains("PreviewBlock.Blocks.Count > 0", update);
+        Assert.Contains("PreviewSectionsPanel.Children.OfType<Expander>().Any()", update);
+        Assert.Contains("PreviewEmptyState.Visibility = showEmptyState ? Visibility.Visible : Visibility.Collapsed;", update);
+
+        string remove = ExtractMethodWindow(MainWindowSource, "RemovePreviewSection", 2600);
+        AssertContainsInOrder(remove,
+            "if (!PreviewSectionsPanel.Children.OfType<Expander>().Any())",
+            "PreviewToolbarContent.Visibility = Visibility.Collapsed;",
+            "UpdatePreviewEmptyState();");
+    }
+
+    [Fact]
+    public void PreviewPanel_HidesEmptyStateBeforePreviewContentRenders()
+    {
+        Assert.Contains("private bool _previewContentPending;", MainWindowSource);
+
+        string emptyStateUpdate = ExtractMethodWindow(MainWindowSource, "UpdatePreviewEmptyState", 1700);
+        Assert.Contains("|| _previewContentPending", emptyStateUpdate);
+
+        string singleSelection = ExtractMethodWindow(MainWindowSource, "UpdatePreviewAsync", 1200);
+        AssertContainsInOrder(singleSelection,
+            "BeginPreviewContentUpdate();",
+            "EnsurePreviewPanelVisible();",
+            "await ShowSingleFilePreviewAsync(r, fullFile: false);");
+
+        string singlePreview = ExtractMethodWindow(MainWindowSource, "ShowSingleFilePreviewAsync", 2300);
+        AssertContainsInOrder(singlePreview,
+            "BeginPreviewContentUpdate();",
+            "ShowPreviewBlockSurface();",
+            "PreviewBlock.Blocks.Clear();");
+        Assert.Contains("CompletePreviewContentUpdate();", singlePreview);
+
+        string multiSelection = ExtractMethodWindow(MainWindowSource, "UpdateMultiSelectPreviewAsync", 2600);
+        AssertContainsInOrder(multiSelection,
+            "var selected = ViewModel.GetAllSelectedResults();",
+            "BeginPreviewContentUpdate();",
+            "EnsurePreviewPanelVisible();");
+
+        string prepend = ExtractMethodWindow(MainWindowSource, "PrependPreviewSectionsForFilesAsync", 5200);
+        AssertContainsInOrder(prepend,
+            "BeginPreviewContentUpdate();",
+            "EnsurePreviewPanelVisible();",
+            "EnsureSectionsSurface();");
+        AssertContainsInOrder(prepend,
+            "PreviewSectionsPanel.Children.Insert(insertIndex++, built[i]);",
+            "if (i == 0)",
+            "CompletePreviewContentUpdate();");
+
+        string addSection = ExtractMethodWindow(MainWindowSource, "AddPreviewSection", 6500);
+        AssertContainsInOrder(addSection,
+            "PreviewSectionsPanel.Children.Add(expander);",
+            "CompletePreviewContentUpdate();");
+    }
+
+    [Fact]
+    public void PreviewContextMenus_OpenDisplaySettingsForPreviewFontsAndColors()
+    {
+        string previewFlyout = ExtractMethodWindow(MainWindowSource, "AttachPreviewBlockContextFlyout", 3400);
+        AssertContainsInOrder(previewFlyout,
+            "Text = \"Change preview fonts/colors...\"",
+            "OpenSettingsTab(SettingsDisplayTabIndex)",
+            "flyout.Items.Add(displaySettingsItem);");
+
+        string editorFlyout = ExtractMethodWindow(PreviewEditorSource, "InitializePreviewEditorZoom", 2600);
+        AssertContainsInOrder(editorFlyout,
+            "Text = \"Change preview fonts/colors...\"",
+            "OpenSettingsTab(SettingsDisplayTabIndex)",
+            "flyout.Items.Add(displaySettingsItem);");
+    }
+
+    [Fact]
+    public void PreviewContextMenu_EditFileOpensEditorAtRightClickedLine()
+    {
+        string previewFlyout = ExtractMethodWindow(MainWindowSource, "AttachPreviewBlockContextFlyout", 4200);
+        AssertContainsInOrder(previewFlyout,
+            "UIElement.PointerPressedEvent",
+            "CapturePreviewBlockContextPoint(block, current.Position)",
+            "Text = \"Edit file\"",
+            "EditPreviewFileFromContextMenuAsync(block)",
+            "flyout.Items.Add(editFileItem);");
+
+        string editCommand = ExtractMethodWindow(PreviewEditorSource, "EditPreviewFileFromContextMenuAsync", 1800);
+        AssertContainsInOrder(editCommand,
+            "ResolvePreviewBlockFilePath(block)",
+            "TryGetPreviewBlockContextPoint(block, filePath, out var point)",
+            "TryEnterPreviewEditorAtPointAsync(block, point, filePath)",
+            "ResolvePreviewEditorFallbackResult(filePath)",
+            "ShowFullFileEditorAsync(target, scrollToMatch: false)");
+
+        string pointEntry = ExtractMethodWindow(PreviewEditorSource, "TryEnterPreviewEditorAtPointAsync", 3400);
+        AssertContainsInOrder(pointEntry,
+            "block.GetPositionFromPoint(point)",
+            "ResolveLineNumberAtPointer(block, tp)",
+            "ResolveSearchResultAtPreviewPoint(fileGroup, lineNum, clickedMatchIndex)",
+            "ShowFullFileEditorAsync(target, scrollToMatch: true)");
+    }
+
+    [Fact]
     public void SearchStart_CollapsesAdvancedOptions()
     {
         string buttonSearch = ExtractMethodWindow(MainWindowSource, "OnSearchCancelClick", 1200);
@@ -89,6 +201,26 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(helper,
             "if (AdvancedOptionsExpander.IsExpanded)",
             "AdvancedOptionsExpander.IsExpanded = false;");
+    }
+
+    [Fact]
+    public void QueryBox_ClearButtonVisibilityFollowsQueryTextEvenWithoutFocus()
+    {
+        string searchBar = ExtractXamlWindow("x:Name=\"QueryClearButton\"", 1100);
+        Assert.Contains("Margin=\"0,0,36,0\"", searchBar);
+        Assert.Contains("Width=\"32\" Height=\"32\"", searchBar);
+        Assert.Contains("Margin=\"0,0,4,0\"", searchBar);
+        Assert.Contains("Visibility=\"{x:Bind ViewModel.HasQueryText, Mode=OneWay}\"", searchBar);
+        Assert.Contains("Click=\"OnQueryClearClick\"", searchBar);
+        Assert.Contains("ToolTipService.ToolTip=\"Clear query\"", searchBar);
+        Assert.Contains("<FontIcon Glyph=\"&#xE894;\"", searchBar);
+
+        string clearHandler = ExtractMethodWindow(MainWindowSource, "OnQueryClearClick", 700);
+        AssertContainsInOrder(clearHandler,
+            "SuppressQuerySuggestionsFor(250, QueryBox);",
+            "QueryBox.Text = string.Empty;",
+            "ViewModel.Query = string.Empty;",
+            "QueryBox.Focus(FocusState.Programmatic);");
     }
 
     [Fact]
@@ -566,6 +698,20 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void EmbeddedTerminal_RendersAboveBottomStatusBar()
+    {
+        AssertContainsInOrder(MainWindowXaml,
+            "<RowDefinition x:Name=\"SplitPaneRow\" Height=\"*\" />",
+            "<RowDefinition x:Name=\"TerminalRow\" Height=\"0\" />",
+            "<RowDefinition x:Name=\"StatusBarRow\" Height=\"Auto\" />");
+
+        AssertContainsInOrder(MainWindowXaml,
+            "<!-- Bottom status bar -->",
+            "<Grid Grid.Row=\"6\"");
+        Assert.Contains("<WebView2 x:Name=\"TerminalWebView\" Grid.Row=\"5\"", MainWindowXaml);
+    }
+
+    [Fact]
     public void ResultsList_GroupHeadersUseExpandableMixedRows()
     {
         Assert.Contains("<DataTemplate x:Key=\"ResultGroupHeaderTemplate\" x:DataType=\"models:ResultGroupHeaderRow\">", MainWindowXaml);
@@ -604,7 +750,8 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("AutomationProperties.AutomationId=\"FileGroupCheckBox\"", MainWindowXaml);
 
         string headerCheckbox = ExtractXamlWindow("AutomationProperties.AutomationId=\"FileGroupCheckBox\"", 500);
-        Assert.Contains("IsChecked=\"{x:Bind AllSelected, Mode=TwoWay}\"", headerCheckbox);
+        Assert.Contains("IsChecked=\"{x:Bind AllSelected, Mode=OneWay}\"", headerCheckbox);
+        Assert.DoesNotContain("Mode=TwoWay", headerCheckbox);
         Assert.Contains("Click=\"OnFileGroupCheckBoxClicked\"", headerCheckbox);
         Assert.DoesNotContain("IsHitTestVisible=\"False\"", headerCheckbox);
         Assert.DoesNotContain("Checked=\"OnSelectAllChecked\"", headerCheckbox);
@@ -910,6 +1057,27 @@ public sealed class PreviewCoreRegressionTests
 
         string sectionNext = ExtractMethodWindow(MainWindowSource, "OnSectionNextMatch", window: 1800);
         Assert.Contains("ScrollAfterMatchNavigation(sn.Block, para, justMaterialized: expandedOverflow", sectionNext);
+    }
+
+    [Fact]
+    public void GlobalMatchPaginator_UsesKnownTotalsWithoutRenderedOverflowRatchet()
+    {
+        string knownTotal = ExtractMethodWindow(MainWindowSource, "GetKnownPreviewMatchTotal", window: 1400);
+        Assert.Contains("_sectionTotalMatchCounts.Count + deferredFiles >= _previewTotalFileCount", knownTotal);
+        Assert.Contains("_sectionTotalMatchCounts.Values.Sum() + deferredMatches", knownTotal);
+        Assert.Contains("return _previewTotalMatchCount;", knownTotal);
+
+        string stableTotal = ExtractMethodWindow(MainWindowSource, "GetStableMatchNavTotal", window: 1800);
+        AssertContainsInOrder(stableTotal,
+            "int renderedTotal = GetRenderedMatchTotal();",
+            "int knownTotal = GetKnownPreviewMatchTotal();",
+            "if (knownTotal > 0)",
+            "return Math.Max(knownTotal, _matchParagraphs.Count);");
+        int knownBranchStart = stableTotal.IndexOf("if (knownTotal > 0)", StringComparison.Ordinal);
+        int fallbackStart = stableTotal.IndexOf("int stableTotal", StringComparison.Ordinal);
+        Assert.True(knownBranchStart >= 0 && fallbackStart > knownBranchStart);
+        string knownBranch = stableTotal[knownBranchStart..fallbackStart];
+        Assert.DoesNotContain("stableTotal", knownBranch);
     }
 
     [Fact]
