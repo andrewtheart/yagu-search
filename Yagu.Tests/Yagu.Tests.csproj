@@ -77,6 +77,7 @@
     <Compile Include="..\Yagu\Services\ResultStore.cs" Link="Source\Services\ResultStore.cs" />
     <Compile Include="..\Yagu\Services\DirectOutputSink.cs" Link="Source\Services\DirectOutputSink.cs" />
     <Compile Include="..\Yagu\Services\FileWatchDiagnostics.cs" Link="Source\Services\FileWatchDiagnostics.cs" />
+    <Compile Include="..\Yagu\Services\FontContrastWarningService.cs" Link="Source\Services\FontContrastWarningService.cs" />
     <Compile Include="..\Yagu\Native\NativeSearcher.cs" Link="Source\Native\NativeSearcher.cs" />
     <Compile Include="..\Yagu\Native\EverythingSdk.cs" Link="Source\Native\EverythingSdk.cs" />
   </ItemGroup>

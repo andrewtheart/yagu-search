@@ -209,7 +209,7 @@ public sealed partial class MainWindow
         return null;
     }
 
-    private SearchResult? ResolvePreviewEditorFallbackResult(string filePath)
+    private SearchResult ResolvePreviewEditorFallbackResult(string filePath)
     {
         var result = ViewModel.ResultGroups
             .FirstOrDefault(g => string.Equals(g.FilePath, filePath, StringComparison.OrdinalIgnoreCase))
@@ -223,6 +223,44 @@ public sealed partial class MainWindow
 
         return new SearchResult(filePath, 1, string.Empty, 0, 0,
             Array.Empty<string>(), Array.Empty<string>());
+    }
+
+    private SearchResult? ResolveCurrentPreviewEditorTarget()
+    {
+        if (_previewResult is not null)
+            return _previewResult;
+
+        if (PreviewSectionsPanel.Visibility == Visibility.Visible)
+        {
+            if (_currentMatchIndex >= 0 && _currentMatchIndex < _matchParagraphs.Count)
+            {
+                var activeBlock = _matchParagraphs[_currentMatchIndex].block;
+                var activePath = ResolvePreviewBlockFilePath(activeBlock);
+                if (!string.IsNullOrWhiteSpace(activePath))
+                    return ResolvePreviewEditorFallbackResult(activePath);
+            }
+
+            foreach (var expander in PreviewSectionsPanel.Children.OfType<Expander>())
+            {
+                if (!expander.IsExpanded)
+                    continue;
+
+                var block = FindFirstDescendantRichTextBlock(expander);
+                var path = block is null ? null : ResolvePreviewBlockFilePath(block);
+                if (!string.IsNullOrWhiteSpace(path))
+                    return ResolvePreviewEditorFallbackResult(path);
+            }
+
+            foreach (var block in _sectionGutterBlocks.Keys)
+            {
+                var path = ResolvePreviewBlockFilePath(block);
+                if (!string.IsNullOrWhiteSpace(path))
+                    return ResolvePreviewEditorFallbackResult(path);
+            }
+        }
+
+        var selected = ViewModel.GetAllSelectedResults();
+        return selected.Count > 0 ? selected[0] : null;
     }
 
     private async Task<bool> TryEnterPreviewEditorAtPointAsync(

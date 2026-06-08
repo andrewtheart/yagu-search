@@ -149,7 +149,7 @@ internal static class CliRunner
         nint hOutBefore = GetStdHandle(STD_OUTPUT_HANDLE);
         nint hErrBefore = GetStdHandle(STD_ERROR_HANDLE);
         // A handle is "piped" only when it's a VALID handle pointing at a pipe or file.
-        // Invalid handles (0/-1) mean we're a GUI app with no console — need AttachConsole.
+        // Invalid handles (0/-1) mean we're a GUI app with no console - need AttachConsole.
         bool outHasHandle = hOutBefore != 0 && hOutBefore != -1;
         bool errHasHandle = hErrBefore != 0 && hErrBefore != -1;
         bool outPiped = outHasHandle && GetFileType(hOutBefore) != FILE_TYPE_CHAR;
@@ -157,14 +157,14 @@ internal static class CliRunner
 
         if (!outPiped || !errPiped)
         {
-            // Need a console for at least one stream — attach to parent or allocate.
+            // Need a console for at least one stream - attach to parent or allocate.
             if (!AttachConsole(ATTACH_PARENT_PROCESS))
                 AllocConsole();
         }
 
         bool vtEnabled = false;
 
-        // Reinitialise Console.Out — use the inherited pipe handle when piped,
+        // Reinitialise Console.Out - use the inherited pipe handle when piped,
         // or CONOUT$ for interactive terminal output.
         try
         {
@@ -227,15 +227,14 @@ internal static class CliRunner
 
     private static async Task OfferEverythingSetupAsync()
     {
-        // Only ask once — marker file records that we've already prompted.
+        // Only ask once - marker file records that we've already prompted.
         if (File.Exists(EverythingMarkerPath)) return;
 
         bool running  = Process.GetProcessesByName("Everything").Length > 0;
 
-        // Everything is running — nothing to do (don't write the marker;
+        // Everything is running - nothing to do (don't write the marker;
         // if Everything is later uninstalled we still want to ask again).
         if (running) return;
-
         // Check if Everything.exe can be located (meaning the full app is installed).
         var esPath        = FileLister.FindEsExe();
         var everythingExe = esPath != null ? FindEverythingExe(esPath) : null;
@@ -1158,6 +1157,807 @@ internal static class CliRunner
               base configuration. CLI flags always override file-based settings.
               Falls back to the global AppData settings when no local file is present.
 
+            EXAMPLES (200):
+              001. Basic search in the current folder
+                  Does: Finds TODO anywhere under the current directory.
+                  Cmd:  Yagu.exe --cli --directory . "TODO"
+
+              002. Limit the number of matches
+                  Does: Finds TODO under src and stops after 100 matches.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --max-results 100
+
+              003. Match case exactly
+                  Does: Finds uppercase TODO only, not todo or Todo.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --case-sensitive
+
+              004. Ignore case differences
+                  Does: Finds todo, TODO, Todo, and other casing variants.
+                  Cmd:  Yagu.exe --cli --directory src "todo" --ignore-case
+
+              005. Show match lines only
+                  Does: Finds TODO without printing any surrounding context lines.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --context 0
+
+              006. Show extra context
+                  Does: Finds TODO and includes five lines around each match.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --context 5
+
+              007. Use an explicit pattern flag
+                  Does: Searches for TODO using --pattern instead of a positional term.
+                  Cmd:  Yagu.exe --cli --directory src --pattern "TODO" --exact-match
+
+              008. Allow substring matches
+                  Does: Finds TODO even when it appears inside a larger word.
+                  Cmd:  Yagu.exe --cli --directory src --pattern "TODO" --no-exact-match
+
+              009. Search for two terms with regex
+                  Does: Finds either TODO or FIXME in source files.
+                  Cmd:  Yagu.exe --cli --directory src --regex "TODO|FIXME"
+
+              010. Find class declarations
+                  Does: Uses a regex to find class declarations for MainViewModel.
+                  Cmd:  Yagu.exe --cli --directory src -e "class\\s+MainViewModel"
+
+              011. Find async task methods
+                  Does: Finds public async Task patterns and prints two context lines.
+                  Cmd:  Yagu.exe --cli --directory src -e "public\\s+async\\s+Task" -C 2
+
+              012. Find catch blocks case-sensitively
+                  Does: Finds catch statements with exact casing.
+                  Cmd:  Yagu.exe --cli --directory src -e "catch\\s*\\(" --case-sensitive
+
+              013. Search file contents only
+                  Does: Finds ResultStore inside file contents and ignores filename matches.
+                  Cmd:  Yagu.exe --cli --directory src "ResultStore" --search-mode content
+
+              014. Search filenames only
+                  Does: Finds files whose names include SettingsWindow.
+                  Cmd:  Yagu.exe --cli --directory src "SettingsWindow" --search-mode filenames
+
+              015. Prefer filename matches first
+                  Does: Checks filenames for preview before falling back to file contents.
+                  Cmd:  Yagu.exe --cli --directory src "preview" --search-mode filename-then-content
+
+              016. Search names and contents
+                  Does: Searches both filenames and file contents for query.
+                  Cmd:  Yagu.exe --cli --directory src "query" --search-mode both
+
+              017. Search only C# files
+                  Does: Finds TODO only in files matching *.cs.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" -g "*.cs"
+
+              018. Search only XAML files
+                  Does: Finds TODO only in files matching *.xaml.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" -g "*.xaml"
+
+              019. Search C# and XAML files
+                  Does: Finds TODO in either C# or XAML files.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" -g "*.cs" -g "*.xaml"
+
+              020. Exclude build output folders
+                  Does: Finds TODO while skipping bin and obj folders.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --exclude-glob "bin/**" --exclude-glob "obj/**"
+
+              021. Search app C# files but skip generated code
+                  Does: Searches Yagu C# files and ignores generated .g.cs files.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" -g "Yagu/**/*.cs" --exclude-glob "**/*.g.cs"
+
+              022. Use regex include filters
+                  Does: Finds TODO only in paths matching a test-file regex.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --include-regex -g ".*Tests.*\\.cs$"
+
+              023. Use regex exclude filters
+                  Does: Finds TODO while excluding Designer C# files with a regex.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --exclude-regex --exclude-glob ".*\\.Designer\\.cs$"
+
+              024. Use glob include and exclude filters
+                  Does: Uses glob mode and skips Generated folders.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --include-glob --exclude-glob "**/Generated/**"
+
+              025. Force exclude patterns to glob mode
+                  Does: Treats exclude patterns as globs and skips bin folders.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --exclude-glob-mode --exclude-glob "**/bin/**"
+
+              026. Skip tiny files
+                  Does: Finds TODO only in files at least 1 KB in size.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --min-filesize 1K
+
+              027. Skip large files
+                  Does: Finds TODO only in files no larger than 250 KB.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --max-filesize 250K
+
+              028. Search a file-size band
+                  Does: Finds TODO in files from 1 KB through 2 MB.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --min-filesize 1K --max-filesize 2M
+
+              029. Include binary files
+                  Does: Allows binary files to be considered during the search.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --binary
+
+              030. Skip binary files
+                  Does: Searches text-like files and skips binary files.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --no-binary
+
+              031. Skip selected extensions
+                  Does: Finds TODO while skipping exe, dll, and pdb files.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --skip-extensions "exe;dll;pdb"
+
+              032. Search recently created files
+                  Does: Finds TODO in files created on or after January 1, 2026.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --created-after 2026-01-01
+
+              033. Search files created before a date
+                  Does: Finds TODO in files created on or before June 1, 2026.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --created-before 2026-06-01
+
+              034. Search a created-date range
+                  Does: Finds TODO in files created from January 1 through June 1, 2026.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --created-after 2026-01-01 --created-before 2026-06-01
+
+              035. Search recently modified files
+                  Does: Finds TODO in files modified on or after May 1, 2026.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --modified-after 2026-05-01
+
+              036. Search files modified before a date
+                  Does: Finds TODO in files modified on or before June 1, 2026.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --modified-before 2026-06-01
+
+              037. Search a modified-date range
+                  Does: Finds TODO in files modified from May 1 through June 1, 2026.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --modified-after 2026-05-01 --modified-before 2026-06-01
+
+              038. Respect .gitignore files
+                  Does: Finds TODO while honoring .gitignore exclusions.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --obey-gitignore
+
+              039. Ignore .gitignore files
+                  Does: Finds TODO even in paths that .gitignore would exclude.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --no-obey-gitignore
+
+              040. Let .gitignore win over includes
+                  Does: Honors .gitignore exclusions even if an include filter matches.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --obey-gitignore --gitignore-precedence
+
+              041. Let includes override .gitignore
+                  Does: Allows include filters to bring back files excluded by .gitignore.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --obey-gitignore --no-gitignore-precedence
+
+              042. Use automatic thread count
+                  Does: Lets Yagu choose the content-search worker count.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --threads 0
+
+              043. Use four worker threads
+                  Does: Runs the search with four content-search workers.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --threads 4
+
+              044. Limit process memory
+                  Does: Caps Yagu's search memory target at 1024 MB.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --memory-limit 1024
+
+              045. React to system memory pressure
+                  Does: Enters memory-saving behavior when machine RAM usage reaches 85 percent.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --memory-pressure 85
+
+              046. Tune the SDK channel buffer
+                  Does: Uses a larger Everything SDK channel buffer.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --sdk-channel-buffer 4096
+
+              047. Use automatic file listing
+                  Does: Lets Yagu choose the best file-listing backend.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --file-lister-backend 0
+
+              048. Use Everything SDK listing
+                  Does: Forces the Everything SDK backend for file discovery.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --file-lister-backend 1
+
+              049. Use es.exe listing
+                  Does: Forces the es.exe backend for file discovery.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --file-lister-backend 2
+
+              050. Use managed listing
+                  Does: Forces Yagu's built-in managed file lister.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --file-lister-backend 3
+
+              051. Cap matches per file
+                  Does: Stops collecting matches from a file after 10 hits.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --max-matches-per-file 10
+
+              052. Limit recursion depth
+                  Does: Searches no deeper than three directory levels.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --max-depth 3
+
+              053. Search with unlimited depth
+                  Does: Allows recursive search without a depth cap.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --max-depth 0
+
+              054. Search inside archives
+                  Does: Looks for TODO inside supported archive files.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --search-archives
+
+              055. Skip archive contents
+                  Does: Searches normal files and ignores archive interiors.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --no-search-archives
+
+              056. Search selected archive types
+                  Does: Searches inside zip, 7z, and jar archive files.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --search-archives --archive-extensions "zip;7z;jar"
+
+              057. Suppress admin warning
+                  Does: Runs without showing the non-administrator warning.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --no-admin-warning
+
+              058. Skip admin-protected paths
+                  Does: Searches C:\ while avoiding known protected paths.
+                  Cmd:  Yagu.exe --cli --directory C:\ "TODO" --exclude-admin-paths
+
+              059. Include admin-protected paths
+                  Does: Searches C:\ without skipping protected-path patterns.
+                  Cmd:  Yagu.exe --cli --directory C:\ "TODO" --no-exclude-admin-paths
+
+              060. Customize protected paths
+                  Does: Supplies custom protected path segments to skip.
+                  Cmd:  Yagu.exe --cli --directory C:\ "TODO" --admin-protected-paths "\\Windows\\System32\\config;\\System Volume Information"
+
+              061. Disable file logging
+                  Does: Searches while turning file logging off.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --log-level -1
+
+              062. Use informational file logging
+                  Does: Searches while writing informational file logs.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --log-level 2
+
+              063. Disable console logging
+                  Does: Searches with console log messages disabled.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --console-log-level -1
+
+              064. Show critical console logs only
+                  Does: Searches while allowing only critical console logs.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --console-log-level 0
+
+              065. Sort by match count
+                  Does: Sorts result groups by how many matches they contain.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --sort matches
+
+              066. Sort by most matches first
+                  Does: Shows files with the most TODO matches first.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --sort matches --sort-desc
+
+              067. Sort newest files first
+                  Does: Sorts matching files by modified date descending.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --sort date --sort-desc
+
+              068. Sort by smallest files first
+                  Does: Sorts matching files by size ascending.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --sort size --sort-asc
+
+              069. Sort by filename
+                  Does: Sorts matching files alphabetically by file name.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --sort name
+
+              070. Sort by full path
+                  Does: Sorts matching files alphabetically by full path.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --sort path
+
+              071. Export an HTML report
+                  Does: Searches for TODO and writes an HTML report.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --export .\reports\todo.html
+
+              072. Export JSON explicitly
+                  Does: Searches for TODO and writes JSON output.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --export .\reports\todo.json --export-format json
+
+              073. Export CSV explicitly
+                  Does: Searches for TODO and writes CSV output.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --export .\reports\todo.csv --export-format csv
+
+              074. Export without context
+                  Does: Writes an HTML report with no surrounding context lines.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --export .\reports\todo.html --export-context 0
+
+              075. Export with more context
+                  Does: Writes an HTML report with five context lines per match.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --export .\reports\todo.html --export-context 5
+
+              076. Include file sizes in export
+                  Does: Adds file size information to the HTML report.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --export .\reports\todo.html --export-file-sizes
+
+              077. Include modified dates in export
+                  Does: Adds file modified dates to the HTML report.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --export .\reports\todo.html --export-modified-dates
+
+              078. Export JSON without markers
+                  Does: Writes JSON without match marker tags in context text.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --export .\reports\todo.json --export-no-markers
+
+              079. Embed context in CSV fields
+                  Does: Writes CSV with context stored as multiline fields.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --export .\reports\todo.csv --export-csv-embed-context
+
+              080. Use pipe-separated CSV context
+                  Does: Writes CSV with context lines separated by pipe characters.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --export .\reports\todo.csv --export-csv-pipe-separator
+
+              081. Preview a replacement
+                  Does: Shows what replacing oldName with newName would change.
+                  Cmd:  Yagu.exe --cli --directory src "oldName" --replace "newName" --replace-dry-run
+
+              082. Replace text with backups
+                  Does: Replaces oldName with newName and creates backup files.
+                  Cmd:  Yagu.exe --cli --directory src "oldName" --replace "newName"
+
+              083. Replace text without backups
+                  Does: Replaces oldName with newName without creating .yagubak files.
+                  Cmd:  Yagu.exe --cli --directory src "oldName" --replace "newName" --replace-no-backup
+
+              084. Preview regex-based replacement
+                  Does: Finds oldName or oldValue patterns and previews replacing them.
+                  Cmd:  Yagu.exe --cli --directory src -e "old(Name|Value)" --replace "newName" --replace-dry-run
+
+              085. Use the dry-run alias
+                  Does: Previews replacing oldFunction with newFunction using --dry-run.
+                  Cmd:  Yagu.exe --cli --directory src "oldFunction" --replace "newFunction" --dry-run
+
+              086. Save a session file
+                  Does: Searches for TODO and saves the results for later reuse.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --save-session .\sessions\todo.yagu-session
+
+              087. Load a session file
+                  Does: Replays results from a saved session without searching again.
+                  Cmd:  Yagu.exe --cli --load-session .\sessions\todo.yagu-session
+
+              088. Load and sort a session
+                  Does: Replays a saved session and sorts its results by path.
+                  Cmd:  Yagu.exe --cli --load-session .\sessions\todo.yagu-session --sort path
+
+              089. Investigate exceptions in C# files
+                  Does: Finds Exception in C# files with context and newest files first.
+                  Cmd:  Yagu.exe --cli --directory . "Exception" -g "*.cs" --context 4 --sort date --sort-desc
+
+              090. Search recent log errors
+                  Does: Finds ERROR in logs, ignores casing, and shows newest files first.
+                  Cmd:  Yagu.exe --cli --directory logs "ERROR" --ignore-case --max-results 500 --sort date --sort-desc
+
+              091. Search warnings or errors in logs
+                  Does: Finds ERROR or WARN in logs changed since June 1, 2026.
+                  Cmd:  Yagu.exe --cli --directory logs -e "ERROR|WARN" --context 1 --modified-after 2026-06-01
+
+              092. Search a path with spaces
+                  Does: Searches a project folder whose path contains spaces.
+                  Cmd:  Yagu.exe --cli --directory "C:\Projects\My App" "connection string" --ignore-case
+
+              093. Search large CSV exports
+                  Does: Finds customerId in CSV files up to 50 MB.
+                  Cmd:  Yagu.exe --cli --directory "D:\Data Exports" "customerId" -g "*.csv" --max-filesize 50M
+
+              094. Find one match per C# file
+                  Does: Finds using System in C# files and keeps one match per file.
+                  Cmd:  Yagu.exe --cli --directory src "using System" -g "*.cs" --sort name --max-matches-per-file 1
+
+              095. Tune a larger source search
+                  Does: Searches C# files with gitignore, eight threads, and a 2 GB memory target.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" -g "*.cs" --obey-gitignore --threads 8 --memory-limit 2048
+
+              096. Search archive-heavy source trees
+                  Does: Searches TODO inside zip and jar archives up to five levels deep.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --search-archives --archive-extensions "zip;jar" --max-depth 5
+
+              097. Export work-item markers
+                  Does: Finds TODO, FIXME, or HACK comments and writes an HTML report.
+                  Cmd:  Yagu.exe --cli --directory src -e "TODO|FIXME|HACK" -g "*.cs" --export .\reports\work-items.html --sort path
+
+              098. Preview a replace and export findings
+                  Does: Previews replacing obsolete with current and writes JSON results.
+                  Cmd:  Yagu.exe --cli --directory src "obsolete" --replace "current" --replace-dry-run --export .\reports\obsolete.json --export-format json
+
+              099. Quick sensitive-word sweep
+                  Does: Finds password mentions while skipping build output and limiting noise.
+                  Cmd:  Yagu.exe --cli --directory . "password" --ignore-case --exclude-glob "**/bin/**" --exclude-glob "**/obj/**" --max-results 50
+
+              100. Search for API key patterns
+                  Does: Finds api key naming variants while skipping the .git folder.
+                  Cmd:  Yagu.exe --cli --directory . -e "api[_-]?key" --ignore-case --exclude-glob "**/.git/**" --context 2 --sort path
+
+              101. Search solution files by name
+                  Does: Finds solution files whose names contain Yagu.
+                  Cmd:  Yagu.exe --cli --directory . "Yagu" --search-mode filenames -g "*.sln"
+
+              102. Search project files
+                  Does: Finds TargetFramework in C# project files.
+                  Cmd:  Yagu.exe --cli --directory . "TargetFramework" -g "*.csproj"
+
+              103. Search props and targets files
+                  Does: Finds LangVersion in MSBuild props and targets files.
+                  Cmd:  Yagu.exe --cli --directory . "LangVersion" -g "*.props" -g "*.targets"
+
+              104. Search JSON configuration
+                  Does: Finds featureFlag in JSON config files only.
+                  Cmd:  Yagu.exe --cli --directory config "featureFlag" -g "*.json"
+
+              105. Search XML configuration
+                  Does: Finds connectionStrings in XML configuration files.
+                  Cmd:  Yagu.exe --cli --directory config "connectionStrings" -g "*.xml"
+
+              106. Search Markdown docs
+                  Does: Finds installation mentions in Markdown files.
+                  Cmd:  Yagu.exe --cli --directory docs "installation" -g "*.md"
+
+              107. Search scripts
+                  Does: Finds Invoke-RestMethod in PowerShell scripts.
+                  Cmd:  Yagu.exe --cli --directory scripts "Invoke-RestMethod" -g "*.ps1"
+
+              108. Search batch files
+                  Does: Finds robocopy usage in command scripts.
+                  Cmd:  Yagu.exe --cli --directory scripts "robocopy" -g "*.cmd" -g "*.bat"
+
+              109. Search TypeScript files
+                  Does: Finds useEffect calls in TypeScript and TSX files.
+                  Cmd:  Yagu.exe --cli --directory src "useEffect" -g "*.ts" -g "*.tsx"
+
+              110. Search JavaScript files
+                  Does: Finds console.log calls in JavaScript files.
+                  Cmd:  Yagu.exe --cli --directory web "console.log" -g "*.js"
+
+              111. Find GUID-like values
+                  Does: Uses regex to find GUID-looking identifiers.
+                  Cmd:  Yagu.exe --cli --directory . -e "[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}"
+
+              112. Find IPv4 addresses
+                  Does: Uses regex to find IPv4-looking addresses in logs.
+                  Cmd:  Yagu.exe --cli --directory logs -e "\\b\\d{1,3}(\\.\\d{1,3}){3}\\b"
+
+              113. Find email-like text
+                  Does: Uses regex to find email-shaped strings in docs.
+                  Cmd:  Yagu.exe --cli --directory docs -e "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+"
+
+              114. Find HTTP URLs
+                  Does: Uses regex to find HTTP or HTTPS URLs.
+                  Cmd:  Yagu.exe --cli --directory . -e "https?://[^\\s\"]+"
+
+              115. Find Windows absolute paths
+                  Does: Uses regex to find drive-rooted Windows paths.
+                  Cmd:  Yagu.exe --cli --directory docs -e "[A-Z]:\\\\[^\\r\\n\"]+"
+
+              116. Search recent errors with context
+                  Does: Finds TimeoutException in recent log files with three context lines.
+                  Cmd:  Yagu.exe --cli --directory logs "TimeoutException" --modified-after 2026-06-01 -C 3
+
+              117. Search old logs before archiving
+                  Does: Finds ERROR in logs modified before 2026-01-01.
+                  Cmd:  Yagu.exe --cli --directory logs "ERROR" --modified-before 2026-01-01
+
+              118. Search small log files only
+                  Does: Finds WARN in log files no larger than 5 MB.
+                  Cmd:  Yagu.exe --cli --directory logs "WARN" -g "*.log" --max-filesize 5M
+
+              119. Search large data files only
+                  Does: Finds customerId in CSV files that are at least 10 MB.
+                  Cmd:  Yagu.exe --cli --directory data "customerId" -g "*.csv" --min-filesize 10M
+
+              120. Search shallow docs only
+                  Does: Finds migration in docs without recursing deeper than two levels.
+                  Cmd:  Yagu.exe --cli --directory docs "migration" --max-depth 2
+
+              121. Search generated code only
+                  Does: Finds partial class in generated C# files.
+                  Cmd:  Yagu.exe --cli --directory src "partial class" -g "**/*.g.cs"
+
+              122. Exclude generated code
+                  Does: Finds partial class while skipping generated C# files.
+                  Cmd:  Yagu.exe --cli --directory src "partial class" --exclude-glob "**/*.g.cs"
+
+              123. Exclude package folders
+                  Does: Searches TODO while skipping node_modules and packages folders.
+                  Cmd:  Yagu.exe --cli --directory . "TODO" --exclude-glob "**/node_modules/**" --exclude-glob "**/packages/**"
+
+              124. Exclude source control data
+                  Does: Searches TODO while skipping .git and .svn folders.
+                  Cmd:  Yagu.exe --cli --directory . "TODO" --exclude-glob "**/.git/**" --exclude-glob "**/.svn/**"
+
+              125. Search only test files
+                  Does: Finds Assert in files with Tests in the path.
+                  Cmd:  Yagu.exe --cli --directory . "Assert" --include-regex -g ".*Tests.*"
+
+              126. Search non-test files
+                  Does: Finds Assert while excluding paths with Tests in the name.
+                  Cmd:  Yagu.exe --cli --directory . "Assert" --exclude-regex --exclude-glob ".*Tests.*"
+
+              127. Search exact identifier
+                  Does: Finds ResultStore as a whole-word identifier.
+                  Cmd:  Yagu.exe --cli --directory src "ResultStore" --exact-match
+
+              128. Search partial identifier
+                  Does: Finds Store inside longer identifiers.
+                  Cmd:  Yagu.exe --cli --directory src "Store" --no-exact-match
+
+              129. Search with no result cap
+                  Does: Allows all matches by setting max results to zero.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --max-results 0
+
+              130. Search with one match per file
+                  Does: Finds TODO but keeps only the first match from each file.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --max-matches-per-file 1
+
+              131. Search with no per-file cap
+                  Does: Allows unlimited matches per file.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --max-matches-per-file 0
+
+              132. Search only recently created tests
+                  Does: Finds Fact attributes in test files created after 2026-05-01.
+                  Cmd:  Yagu.exe --cli --directory tests "[Fact]" -g "*.cs" --created-after 2026-05-01
+
+              133. Search config by modification window
+                  Does: Finds enabled in JSON files modified during May 2026.
+                  Cmd:  Yagu.exe --cli --directory config "enabled" -g "*.json" --modified-after 2026-05-01 --modified-before 2026-06-01
+
+              134. Search archive names only
+                  Does: Finds backup in archive filenames without searching contents.
+                  Cmd:  Yagu.exe --cli --directory backups "backup" --search-mode filenames --no-search-archives
+
+              135. Search inside NuGet packages
+                  Does: Searches package archives by treating nupkg as an archive extension.
+                  Cmd:  Yagu.exe --cli --directory packages "TargetFramework" --search-archives --archive-extensions "nupkg"
+
+              136. Search JAR contents
+                  Does: Searches manifest text inside jar files.
+                  Cmd:  Yagu.exe --cli --directory libs "Implementation-Version" --search-archives --archive-extensions "jar"
+
+              137. Search ZIP backups
+                  Does: Searches TODO inside zip files in the backup folder.
+                  Cmd:  Yagu.exe --cli --directory backups "TODO" --search-archives --archive-extensions "zip"
+
+              138. Search with managed listing and gitignore
+                  Does: Uses the managed file lister while respecting .gitignore.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --file-lister-backend 3 --obey-gitignore
+
+              139. Search with es.exe and no gitignore
+                  Does: Uses es.exe discovery and ignores .gitignore rules.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --file-lister-backend 2 --no-obey-gitignore
+
+              140. Search with SDK backend and threads
+                  Does: Uses the Everything SDK backend with six workers.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --file-lister-backend 1 --threads 6
+
+              141. Export sorted HTML
+                  Does: Searches TODO, sorts by path, and exports an HTML report.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --sort path --export .\reports\todo.html
+
+              142. Export newest-first JSON
+                  Does: Searches ERROR and exports newest-first JSON results.
+                  Cmd:  Yagu.exe --cli --directory logs "ERROR" --sort date --sort-desc --export .\reports\errors.json
+
+              143. Export compact CSV
+                  Does: Exports TODO to CSV without context lines.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --export .\reports\todo.csv --export-context 0
+
+              144. Export CSV with file metadata
+                  Does: Exports TODO to CSV with file sizes and modified dates.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --export .\reports\todo.csv --export-file-sizes --export-modified-dates
+
+              145. Export regex findings
+                  Does: Finds TODO or FIXME and writes a JSON report.
+                  Cmd:  Yagu.exe --cli --directory src -e "TODO|FIXME" --export .\reports\work.json --export-format json
+
+              146. Save sorted session
+                  Does: Searches TODO, sorts by path, and saves a session file.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --sort path --save-session .\sessions\todo.yagu-session
+
+              147. Save recent-error session
+                  Does: Searches recent errors and saves the result set for later review.
+                  Cmd:  Yagu.exe --cli --directory logs "ERROR" --modified-after 2026-06-01 --save-session .\sessions\errors.yagu-session
+
+              148. Load session as CSV source
+                  Does: Loads a saved session and exports it to CSV.
+                  Cmd:  Yagu.exe --cli --load-session .\sessions\todo.yagu-session --export .\reports\todo.csv
+
+              149. Load session as HTML report
+                  Does: Loads saved results and writes an HTML report.
+                  Cmd:  Yagu.exe --cli --load-session .\sessions\todo.yagu-session --export .\reports\todo.html
+
+              150. Load session newest first
+                  Does: Loads saved results and sorts them by date descending.
+                  Cmd:  Yagu.exe --cli --load-session .\sessions\todo.yagu-session --sort date --sort-desc
+
+              151. Preview literal rename
+                  Does: Previews replacing OldService with NewService in C# files.
+                  Cmd:  Yagu.exe --cli --directory src "OldService" -g "*.cs" --replace "NewService" --dry-run
+
+              152. Replace literal with backups
+                  Does: Replaces OldService with NewService and keeps backup files.
+                  Cmd:  Yagu.exe --cli --directory src "OldService" --replace "NewService"
+
+              153. Replace literal without backups
+                  Does: Replaces OldService without creating backup files.
+                  Cmd:  Yagu.exe --cli --directory src "OldService" --replace "NewService" --replace-no-backup
+
+              154. Preview regex cleanup
+                  Does: Previews replacing multiple whitespace runs with one space.
+                  Cmd:  Yagu.exe --cli --directory docs -e "\\s{2,}" --replace " " --replace-dry-run
+
+              155. Replace in Markdown only
+                  Does: Replaces old product text with new text in Markdown files.
+                  Cmd:  Yagu.exe --cli --directory docs "Old Product" -g "*.md" --replace "New Product"
+
+              156. Replace with no context output
+                  Does: Previews a replacement while suppressing context lines.
+                  Cmd:  Yagu.exe --cli --directory src "obsolete" --replace "current" --dry-run --context 0
+
+              157. Replace with case-sensitive matching
+                  Does: Replaces TODO only when the case exactly matches.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --case-sensitive --replace "DONE" --dry-run
+
+              158. Replace substring matches
+                  Does: Previews replacing temp even inside longer words.
+                  Cmd:  Yagu.exe --cli --directory src "temp" --no-exact-match --replace "temporary" --dry-run
+
+              159. Replace and export audit
+                  Does: Previews replacements and exports the matching rows to HTML.
+                  Cmd:  Yagu.exe --cli --directory src "legacy" --replace "modern" --dry-run --export .\reports\legacy.html
+
+              160. Replace in recent files only
+                  Does: Previews replacements only in files modified after 2026-06-01.
+                  Cmd:  Yagu.exe --cli --directory src "old" --replace "new" --dry-run --modified-after 2026-06-01
+
+              161. Find nullable annotations
+                  Does: Finds nullable reference type annotations in C# files.
+                  Cmd:  Yagu.exe --cli --directory src -e "\\w+\\?" -g "*.cs"
+
+              162. Find async void methods
+                  Does: Finds async void declarations in C# files.
+                  Cmd:  Yagu.exe --cli --directory src -e "async\\s+void" -g "*.cs"
+
+              163. Find public fields
+                  Does: Finds public field-like declarations in C# files.
+                  Cmd:  Yagu.exe --cli --directory src -e "public\\s+\\w+\\s+\\w+;" -g "*.cs"
+
+              164. Find hardcoded localhost URLs
+                  Does: Finds localhost URLs in source files.
+                  Cmd:  Yagu.exe --cli --directory src -e "https?://localhost(:\\d+)?"
+
+              165. Find TODO comments exactly
+                  Does: Finds line comments that contain TODO.
+                  Cmd:  Yagu.exe --cli --directory src -e "//.*TODO" -g "*.cs"
+
+              166. Find XML comments
+                  Does: Finds summary XML doc comments in C# files.
+                  Cmd:  Yagu.exe --cli --directory src "<summary>" -g "*.cs"
+
+              167. Find XAML controls
+                  Does: Finds Button elements in XAML files.
+                  Cmd:  Yagu.exe --cli --directory src "<Button" -g "*.xaml"
+
+              168. Find resource keys
+                  Does: Finds StaticResource references in XAML files.
+                  Cmd:  Yagu.exe --cli --directory src "StaticResource" -g "*.xaml"
+
+              169. Find package references
+                  Does: Finds PackageReference entries in project files.
+                  Cmd:  Yagu.exe --cli --directory . "PackageReference" -g "*.csproj"
+
+              170. Find project references
+                  Does: Finds ProjectReference entries in project files.
+                  Cmd:  Yagu.exe --cli --directory . "ProjectReference" -g "*.csproj"
+
+              171. Find Docker base images
+                  Does: Finds FROM lines in Dockerfiles.
+                  Cmd:  Yagu.exe --cli --directory . -e "^FROM\\s+" -g "Dockerfile*"
+
+              172. Find YAML image references
+                  Does: Finds image fields in YAML deployment files.
+                  Cmd:  Yagu.exe --cli --directory . -e "image:\\s*" -g "*.yml" -g "*.yaml"
+
+              173. Find ports in YAML
+                  Does: Finds port declarations in YAML files.
+                  Cmd:  Yagu.exe --cli --directory . -e "port:\\s*\\d+" -g "*.yml" -g "*.yaml"
+
+              174. Find Terraform resources
+                  Does: Finds Terraform resource blocks.
+                  Cmd:  Yagu.exe --cli --directory infra -e "resource\\s+\"" -g "*.tf"
+
+              175. Find Bicep resources
+                  Does: Finds resource declarations in Bicep files.
+                  Cmd:  Yagu.exe --cli --directory infra -e "^resource\\s+" -g "*.bicep"
+
+              176. Find ARM template parameters
+                  Does: Finds parameters sections in ARM JSON templates.
+                  Cmd:  Yagu.exe --cli --directory infra "parameters" -g "*.json"
+
+              177. Find SQL table creation
+                  Does: Finds CREATE TABLE statements in SQL files.
+                  Cmd:  Yagu.exe --cli --directory database -e "CREATE\\s+TABLE" -g "*.sql"
+
+              178. Find stored procedures
+                  Does: Finds procedure creation statements in SQL files.
+                  Cmd:  Yagu.exe --cli --directory database -e "CREATE\\s+PROCEDURE" -g "*.sql"
+
+              179. Find migration scripts
+                  Does: Finds migration mentions in SQL and Markdown files.
+                  Cmd:  Yagu.exe --cli --directory database "migration" -g "*.sql" -g "*.md"
+
+              180. Find CSV headers
+                  Does: Finds files with customer_id in CSV content.
+                  Cmd:  Yagu.exe --cli --directory data "customer_id" -g "*.csv" --context 0
+
+              181. Find tab-separated columns
+                  Does: Finds status columns in TSV files.
+                  Cmd:  Yagu.exe --cli --directory data "status" -g "*.tsv" --context 0
+
+              182. Find binary-adjacent metadata
+                  Does: Searches metadata files while skipping common binaries.
+                  Cmd:  Yagu.exe --cli --directory assets "license" --skip-extensions "png;jpg;gif;webp"
+
+              183. Search media sidecars
+                  Does: Finds title in JSON sidecar files next to media assets.
+                  Cmd:  Yagu.exe --cli --directory assets "title" -g "*.json"
+
+              184. Search logs with low noise
+                  Does: Finds error in log files but returns at most 20 matches.
+                  Cmd:  Yagu.exe --cli --directory logs "error" --ignore-case --max-results 20
+
+              185. Search logs by newest path order
+                  Does: Finds error and sorts matching log files by modified date.
+                  Cmd:  Yagu.exe --cli --directory logs "error" --sort date --sort-desc
+
+              186. Search one directory level
+                  Does: Finds README only in the top directory and direct children.
+                  Cmd:  Yagu.exe --cli --directory . "README" --max-depth 1
+
+              187. Search by filename and export
+                  Does: Finds files with README in the name and exports HTML.
+                  Cmd:  Yagu.exe --cli --directory . "README" --search-mode filenames --export .\reports\readme.html
+
+              188. Search content and save session
+                  Does: Searches for Exception and saves the results to a session file.
+                  Cmd:  Yagu.exe --cli --directory src "Exception" --save-session .\sessions\exceptions.yagu-session
+
+              189. Load session and export JSON
+                  Does: Converts a saved exception session to JSON.
+                  Cmd:  Yagu.exe --cli --load-session .\sessions\exceptions.yagu-session --export .\reports\exceptions.json
+
+              190. Load session and limit output
+                  Does: Loads a session and emits only the first 25 matches.
+                  Cmd:  Yagu.exe --cli --load-session .\sessions\exceptions.yagu-session --max-results 25
+
+              191. Search code comments
+                  Does: Finds TODO comments in C# files with one context line.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" -g "*.cs" --context 1
+
+              192. Search docs excluding drafts
+                  Does: Finds release in docs while excluding draft folders.
+                  Cmd:  Yagu.exe --cli --directory docs "release" --exclude-glob "**/drafts/**"
+
+              193. Search release notes
+                  Does: Finds breaking changes in Markdown release notes.
+                  Cmd:  Yagu.exe --cli --directory docs "breaking" -g "*.md" --sort name
+
+              194. Search build output intentionally
+                  Does: Finds version text inside bin folders by explicitly including them.
+                  Cmd:  Yagu.exe --cli --directory . "Version" -g "**/bin/**"
+
+              195. Search with include overriding gitignore
+                  Does: Searches generated files even if .gitignore excludes them.
+                  Cmd:  Yagu.exe --cli --directory . "Generated" -g "**/Generated/**" --obey-gitignore --no-gitignore-precedence
+
+              196. Search with gitignore precedence
+                  Does: Keeps ignored generated folders excluded even with broad includes.
+                  Cmd:  Yagu.exe --cli --directory . "Generated" -g "**/*" --obey-gitignore --gitignore-precedence
+
+              197. Search non-admin friendly C drive
+                  Does: Searches C:\ while skipping protected paths and hiding the admin warning.
+                  Cmd:  Yagu.exe --cli --directory C:\ "TODO" --exclude-admin-paths --no-admin-warning
+
+              198. Search C drive with tight limits
+                  Does: Searches C:\ for TODO with shallow depth and a small result cap.
+                  Cmd:  Yagu.exe --cli --directory C:\ "TODO" --max-depth 2 --max-results 100
+
+              199. Search source with strict resource limits
+                  Does: Searches TODO with two workers, 512 MB memory, and 50 results.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --threads 2 --memory-limit 512 --max-results 50
+
+              200. Search source and write a compact audit
+                  Does: Finds TODO in C# files, exports JSON, and omits match markers.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" -g "*.cs" --export .\reports\todo-audit.json --export-no-markers
+
             EXIT CODES:
               0   One or more matches found.
               1   No matches found.
@@ -1452,7 +2252,8 @@ internal sealed class CliArgs
             var tok = raw[i];
 
             if (Eq(tok, "--cli"))                          { i++; continue; }
-            if (Eq(tok, "--help", "-h", "-?"))             { a.ShowHelp = true; i++; continue; }
+            if (Eq(tok, "--help", "-help", "-h", "--h", "-?", "/?", "?", "/help", "/h"))
+                { a.ShowHelp = true; i++; continue; }
             if (Eq(tok, "--case-sensitive", "-s"))         { a.CaseSensitive = true; i++; continue; }
             if (Eq(tok, "--ignore-case", "-i"))            { a.CaseSensitive = false; i++; continue; }
             if (Eq(tok, "--regex", "-e"))                  { a.UseRegex = true; i++; continue; }

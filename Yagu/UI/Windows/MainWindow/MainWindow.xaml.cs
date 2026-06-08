@@ -192,7 +192,11 @@ public sealed partial class MainWindow : Window, IDisposable
         }
         InitializeComponent();
         ApplyAppTheme();
-        RootGrid.ActualThemeChanged += (_, _) => ApplyTitleBarButtonTheme();
+        RootGrid.ActualThemeChanged += (_, _) =>
+        {
+            ApplyTitleBarButtonTheme();
+            QueueFontContrastCheck();
+        };
         TextControlBoxNS.TextControlBoxDiagnostics.VerboseLogger = (source, message) => LogService.Instance.Verbose(source, message);
         TextControlBoxNS.TextControlBoxDiagnostics.IsVerboseEnabledProvider = () => LogService.Instance.IsVerboseEnabled;
         QueryBox.AddHandler(UIElement.PointerPressedEvent,
@@ -298,6 +302,9 @@ public sealed partial class MainWindow : Window, IDisposable
                 ApplyResultMatchTextSettings();
                 RefreshVisibleResultMatchLines();
             }
+
+            if (IsFontContrastRelevantProperty(e.PropertyName))
+                QueueFontContrastCheck();
         };
 
         ((FrameworkElement)Content).Loaded += OnContentLoaded;

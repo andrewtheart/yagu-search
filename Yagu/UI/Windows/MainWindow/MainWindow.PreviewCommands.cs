@@ -366,8 +366,15 @@ public sealed partial class MainWindow
 
     private async void OnOpenInEditor(object sender, RoutedEventArgs e)
     {
-        if (_previewResult is null) return;
-        await ShowFullFileEditorAsync(_previewResult, scrollToMatch: false);
+        var target = ResolveCurrentPreviewEditorTarget();
+        if (target is null)
+        {
+            ViewModel.StatusText = "Select or preview a file before opening the editor.";
+            LogService.Instance.Warning("Preview", "OnOpenInEditor: no preview result or selected result available");
+            return;
+        }
+
+        await ShowFullFileEditorAsync(target, scrollToMatch: false);
     }
 
     private async void OnExpandAllSections(object sender, RoutedEventArgs e)

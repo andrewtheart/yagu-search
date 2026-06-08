@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
@@ -82,13 +83,46 @@ public sealed partial class MainWindow
 
     private void ApplyTitleBarButtonTheme()
     {
+        ElementTheme actualTheme;
         try
         {
+            actualTheme = AppThemeService.ResolveEffectiveTheme(RootGrid, ViewModel.ThemeModeIndex);
             AppThemeService.ApplyTitleBarButtonTheme(
                 AppWindow,
-                AppThemeService.ResolveEffectiveTheme(RootGrid, ViewModel.ThemeModeIndex));
+                actualTheme);
         }
-        catch { }
+        catch
+        {
+            actualTheme = ElementTheme.Dark;
+        }
+
+        ApplyCustomTitleBarForeground(actualTheme);
+    }
+
+    private void ApplyCustomTitleBarForeground(ElementTheme actualTheme)
+    {
+        var foreground = new SolidColorBrush(actualTheme == ElementTheme.Light ? Colors.Black : Colors.White);
+        ApplyCustomTitleBarForeground(AppTitleBar, foreground);
+        ApplyCustomTitleBarForeground(TitleBarActions, foreground);
+    }
+
+    private static void ApplyCustomTitleBarForeground(DependencyObject root, Brush foreground)
+    {
+        switch (root)
+        {
+            case Button button:
+                button.Foreground = foreground;
+                break;
+            case FontIcon icon:
+                icon.Foreground = foreground;
+                break;
+        }
+
+        int childCount = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < childCount; i++)
+        {
+            ApplyCustomTitleBarForeground(VisualTreeHelper.GetChild(root, i), foreground);
+        }
     }
 
     private void ApplyAppTheme()

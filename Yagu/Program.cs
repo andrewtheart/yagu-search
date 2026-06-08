@@ -10,6 +10,7 @@ namespace Yagu;
 internal static class Program
 {
     [DllImport("kernel32.dll")] private static extern nint GetConsoleWindow();
+    [DllImport("kernel32.dll")] private static extern bool FreeConsole();
     [DllImport("user32.dll")]   private static extern bool ShowWindow(nint hWnd, int nCmdShow);
     [DllImport("user32.dll")]   private static extern bool SetForegroundWindow(nint hWnd);
     [DllImport("user32.dll")]   private static extern bool IsWindowVisible(nint hWnd);
@@ -19,6 +20,7 @@ internal static class Program
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint hWnd, out uint lpdwProcessId);
 
     private const int SW_RESTORE = 9;
+    private const string GuiChildFlag = "--yagu-gui-child";
 
     /// <summary>
     /// Custom entry point that intercepts <c>--cli</c> before any WinUI3 initialisation
@@ -27,10 +29,13 @@ internal static class Program
     [global::System.STAThread]
     private static void Main(string[] args)
     {
+        bool isGuiChild = ConsumeGuiChildFlag(ref args);
+
         // Help flags: print CLI help and exit without launching GUI.
         if (args.Any(a => IsHelpFlag(a)))
         {
             CliRunner.RunHelp();
+            Environment.Exit(0);
             return;
         }
 
@@ -41,6 +46,11 @@ internal static class Program
             Environment.Exit(exitCode);
             return;
         }
+
+        if (!isGuiChild && TryRelaunchDetachedGui(args))
+            return;
+
+        FreeConsole();
 
         // If launched as part of an elevated relaunch, wait for the old (non-elevated)
         // process to fully exit so its single-instance mutex is released.
@@ -79,6 +89,44 @@ internal static class Program
             SynchronizationContext.SetSynchronizationContext(context);
             _ = new App();
         });
+    }
+
+    private static bool ConsumeGuiChildFlag(ref string[] args)
+    {
+        int index = Array.FindIndex(args, a => string.Equals(a, GuiChildFlag, StringComparison.OrdinalIgnoreCase));
+        if (index < 0)
+            return false;
+
+        args = args.Where((_, i) => i != index).ToArray();
+        return true;
+    }
+
+    private static bool TryRelaunchDetachedGui(string[] args)
+    {
+        string? exePath = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(exePath))
+            return false;
+
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = exePath,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = Environment.CurrentDirectory,
+            };
+            psi.ArgumentList.Add(GuiChildFlag);
+            foreach (var arg in args)
+                psi.ArgumentList.Add(arg);
+
+            Process.Start(psi)?.Dispose();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>

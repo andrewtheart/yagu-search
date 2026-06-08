@@ -1879,11 +1879,8 @@ public sealed partial class MainWindow
         ToolTipService.SetToolTip(editorBtn, "Edit file");
         editorBtn.Click += async (_, _) =>
         {
-            var result = ViewModel.ResultGroups
-                .FirstOrDefault(g => string.Equals(g.FilePath, path, StringComparison.OrdinalIgnoreCase))
-                ?.FirstOrDefault();
-            if (result is not null)
-                await ShowFullFileEditorAsync(result, scrollToMatch: false);
+            var result = ResolvePreviewEditorFallbackResult(path);
+            await ShowFullFileEditorAsync(result, scrollToMatch: false);
         };
         buttonPanel.Children.Add(editorBtn);
 

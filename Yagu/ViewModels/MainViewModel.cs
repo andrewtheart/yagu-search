@@ -192,6 +192,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         BinaryExtensions = SettingsBinaryExtensions;
         ArchiveExtensions = SettingsArchiveExtensions;
         SuppressAdminWarning = _settings.SuppressAdminWarning;
+        SuppressFontContrastWarnings = _settings.SuppressFontContrastWarnings;
+        FontContrastReminderAfterUtc = _settings.FontContrastReminderAfterUtc;
         ExcludeAdminProtectedPaths = _settings.ExcludeAdminProtectedPaths;
         AdminProtectedPathSegments = string.IsNullOrWhiteSpace(_settings.AdminProtectedPathSegments)
             ? AppSettings.DefaultAdminProtectedPathSegments
@@ -460,6 +462,48 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial string ResultListMatchTextFontFamily { get; set; } = AppSettings.DefaultResultListMatchTextFontFamily;
     [ObservableProperty] public partial int ResultListMatchTextFontSize { get; set; } = AppSettings.DefaultResultListMatchTextFontSize;
     [ObservableProperty] public partial string ResultListMatchHighlightColor { get; set; } = AppSettings.DefaultResultListMatchHighlightColor;
+
+    public IReadOnlyList<FontContrastCandidate> GetFontContrastCandidates() =>
+    [
+        new(nameof(PreviewGutterContextColor), "preview pane", "Preview gutter text", PreviewGutterContextColor, FontContrastColor.FromArgb(0xFF, 0x9C, 0xDC, 0xFE)),
+        new(nameof(PreviewGutterMatchColor), "preview pane", "Matched preview gutter text", PreviewGutterMatchColor, FontContrastColor.FromArgb(0xFF, 0x9C, 0xDC, 0xFE)),
+        new(nameof(PreviewMatchTextColor), "preview pane", "Match highlight text", PreviewMatchTextColor, FontContrastColor.FromArgb(0xFF, 0xFF, 0xD7, 0x00)),
+        new(nameof(PreviewMatchLineColor), "preview pane", "Matched line text", PreviewMatchLineColor, FontContrastColor.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)),
+        new(nameof(PreviewEditorGutterColor), "built-in editor", "Editor gutter text", PreviewEditorGutterColor, FontContrastColor.FromArgb(0xFF, 0x9C, 0xDC, 0xFE)),
+        new(nameof(ResultListMatchHighlightColor), "file list", "Highlighted match text", ResultListMatchHighlightColor, FontContrastColor.FromArgb(0xFF, 0xFF, 0xD7, 0x00)),
+    ];
+
+    public void ApplyFontContrastColor(string key, string colorHex)
+    {
+        switch (key)
+        {
+            case nameof(PreviewGutterContextColor):
+                PreviewGutterContextColor = ColorStringHelper.Normalize(colorHex, Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE));
+                break;
+            case nameof(PreviewGutterMatchColor):
+                PreviewGutterMatchColor = ColorStringHelper.Normalize(colorHex, Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE));
+                break;
+            case nameof(PreviewMatchTextColor):
+                PreviewMatchTextColor = ColorStringHelper.Normalize(colorHex, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00));
+                break;
+            case nameof(PreviewMatchLineColor):
+                PreviewMatchLineColor = ColorStringHelper.Normalize(colorHex, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF));
+                break;
+            case nameof(PreviewEditorGutterColor):
+                PreviewEditorGutterColor = ColorStringHelper.Normalize(colorHex, Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE));
+                break;
+            case nameof(ResultListMatchHighlightColor):
+                ResultListMatchHighlightColor = ColorStringHelper.Normalize(colorHex, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00));
+                break;
+        }
+    }
+
+    public void ResetFontContrastReminderState()
+    {
+        SuppressFontContrastWarnings = false;
+        FontContrastReminderAfterUtc = null;
+    }
+
     [ObservableProperty] public partial int FileLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] public partial int ConsoleLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] public partial int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
@@ -600,6 +644,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         get => _suppressAdminWarning;
         set => SetProperty(ref _suppressAdminWarning, value);
     }
+
+    [ObservableProperty] public partial bool SuppressFontContrastWarnings { get; set; }
+    [ObservableProperty] public partial DateTimeOffset? FontContrastReminderAfterUtc { get; set; }
 
     [ObservableProperty] public partial bool ExcludeAdminProtectedPaths { get; set; } = true;
     [ObservableProperty] public partial string AdminProtectedPathSegments { get; set; } = AppSettings.DefaultAdminProtectedPathSegments;
@@ -2332,6 +2379,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.SkipExtensions = SettingsSkipExtensions;
         _settings.BinaryExtensions = SettingsBinaryExtensions;
         _settings.SuppressAdminWarning = SuppressAdminWarning;
+        _settings.SuppressFontContrastWarnings = SuppressFontContrastWarnings;
+        _settings.FontContrastReminderAfterUtc = FontContrastReminderAfterUtc;
         _settings.ExcludeAdminProtectedPaths = ExcludeAdminProtectedPaths;
         _settings.AdminProtectedPathSegments = AdminProtectedPathSegments;
         _settings.HasCompletedFirstRun = HasCompletedFirstRun;

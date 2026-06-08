@@ -56,6 +56,7 @@ public sealed partial class MainWindow
         await CheckFirstRunResultStoreTempLocationAsync();
         await CheckEverythingAsync();
         await CheckFirstRunContextMenuAsync();
+        await ShowFontContrastWarningIfNeededAsync();
 
         if (_autoSearchOnLoad)
         {

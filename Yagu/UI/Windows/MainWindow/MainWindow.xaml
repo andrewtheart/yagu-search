@@ -380,7 +380,7 @@
                             </ToggleButton>
                             <ToggleButton x:Name="ExactMatchToggle"
                                           IsChecked="{x:Bind ViewModel.ExactMatch, Mode=TwoWay}"
-                                          ToolTipService.ToolTip="Exact Match — treat entire query as one term (Alt+E)"
+                                          ToolTipService.ToolTip="Exact Match — on: treat the whole query as one term. Off: split on spaces and match any term. (Alt+E)"
                                           Padding="4,2" MinWidth="0" MinHeight="0"
                                           Width="28" Height="24" FontSize="12"
                                           VerticalAlignment="Center">

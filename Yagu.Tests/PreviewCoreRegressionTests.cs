@@ -188,7 +188,7 @@ public sealed class PreviewCoreRegressionTests
             "ResolvePreviewEditorFallbackResult(filePath)",
             "ShowFullFileEditorAsync(target, scrollToMatch: false)");
 
-        string pointEntry = ExtractMethodWindow(PreviewEditorSource, "TryEnterPreviewEditorAtPointAsync", 3400);
+        string pointEntry = ExtractMethodWindow(PreviewEditorSource, "TryEnterPreviewEditorAtPointAsync", 4600);
         AssertContainsInOrder(pointEntry,
             "block.GetPositionFromPoint(point)",
             "ResolveLineNumberAtPointer(block, tp)",

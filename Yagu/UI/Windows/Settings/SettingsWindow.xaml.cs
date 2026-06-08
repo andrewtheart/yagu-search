@@ -47,8 +47,13 @@ public sealed partial class SettingsWindow : Window
     private readonly List<List<UIElement>> _tabPageRootElements = new();
     private readonly HashSet<UIElement> _dirtyTrackedElements = new();
     private readonly Dictionary<UIElement, object?> _cleanSettingValues = new();
+    private readonly List<Action> _fontContrastStatusRefreshers = new();
     private bool _settingsDirty;
     private bool _settingDirtyTrackingEnabled;
+    private DispatcherTimer? _fontContrastCheckTimer;
+
+    private static readonly Windows.UI.Color ContrastReadableGreen = Windows.UI.Color.FromArgb(0xFF, 0x2E, 0xA0, 0x43);
+    private static readonly Windows.UI.Color ContrastUnreadableRed = Windows.UI.Color.FromArgb(0xFF, 0xD1, 0x34, 0x38);
 
     /// <summary>Flat registry of every setting built during BuildSettingsContent for search filtering.</summary>
     private readonly List<SettingEntry> _settingEntries = new();
@@ -109,9 +114,18 @@ public sealed partial class SettingsWindow : Window
         CenterOverOwner(appWindow, mainHwnd, w, h);
 
         ApplySettingsTheme();
-        RootGrid.ActualThemeChanged += (_, _) => ApplySettingsTitleBarButtonTheme();
+        RootGrid.ActualThemeChanged += (_, _) =>
+        {
+            ApplySettingsTitleBarButtonTheme();
+            RefreshFontContrastStatusIndicators();
+            QueueFontContrastCheck();
+        };
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
-        Closed += (_, _) => _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        Closed += (_, _) =>
+        {
+            _fontContrastCheckTimer?.Stop();
+            _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        };
 
         // Set window icon to match the main Yagu window
         var icoPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "yagu.ico");
@@ -128,13 +142,67 @@ public sealed partial class SettingsWindow : Window
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(MainViewModel.ThemeModeIndex))
+        {
             ApplySettingsTheme();
+            QueueFontContrastCheck();
+            return;
+        }
+
+        if (IsFontContrastRelevantProperty(e.PropertyName))
+            QueueFontContrastCheck();
     }
+
+    private void QueueFontContrastCheck()
+    {
+        _fontContrastCheckTimer ??= CreateFontContrastCheckTimer();
+        _fontContrastCheckTimer.Stop();
+        _fontContrastCheckTimer.Start();
+    }
+
+    private DispatcherTimer CreateFontContrastCheckTimer()
+    {
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+        timer.Tick += OnFontContrastCheckTimerTick;
+        return timer;
+    }
+
+    private async void OnFontContrastCheckTimerTick(object? sender, object e)
+    {
+        _fontContrastCheckTimer?.Stop();
+
+        await FontContrastWarningDialog.ShowIfNeededAsync(
+            WindowForegroundHelper.GetWindowHandle(this),
+            _viewModel,
+            ResolveFontContrastTheme());
+    }
+
+    private FontContrastTheme ResolveFontContrastTheme()
+        => AppThemeService.ResolveEffectiveTheme(RootGrid, _viewModel.ThemeModeIndex) == ElementTheme.Light
+            ? FontContrastTheme.Light
+            : FontContrastTheme.Dark;
+
+    private static bool IsFontContrastRelevantProperty(string? propertyName)
+        => propertyName is nameof(MainViewModel.PreviewGutterContextColor)
+            or nameof(MainViewModel.PreviewGutterMatchColor)
+            or nameof(MainViewModel.PreviewEditorGutterColor)
+            or nameof(MainViewModel.PreviewMatchTextColor)
+            or nameof(MainViewModel.PreviewMatchLineColor)
+            or nameof(MainViewModel.ResultListMatchHighlightColor);
 
     private void ApplySettingsTheme()
     {
         AppThemeService.ApplyRequestedTheme(RootGrid, _viewModel.ThemeModeIndex);
         ApplySettingsTitleBarButtonTheme();
+        RefreshFontContrastStatusIndicators();
+    }
+
+    private void RefreshFontContrastStatusIndicators()
+    {
+        foreach (var refresh in _fontContrastStatusRefreshers.ToArray())
+        {
+            try { refresh(); }
+            catch { }
+        }
     }
 
     private void ApplySettingsTitleBarButtonTheme()
@@ -875,8 +943,18 @@ public sealed partial class SettingsWindow : Window
         string description,
         string currentHex,
         Windows.UI.Color fallback,
-        Action<string> assign)
-        => AddColorSetting(parent, label, description, currentHex, fallback, assign, _applyPreviewSectionBackgrounds);
+        Action<string> assign,
+        bool showContrastStatus = false)
+        => AddColorSetting(
+            parent,
+            label,
+            description,
+            currentHex,
+            fallback,
+            assign,
+            _applyPreviewSectionBackgrounds,
+            showContrastStatus ? ResolveFontContrastTheme : null,
+            _fontContrastStatusRefreshers.Add);
 
     private static ComboBox CreateFontFamilyPicker(string currentValue, string defaultValue, Action<string> assign)
     {
@@ -1028,7 +1106,9 @@ public sealed partial class SettingsWindow : Window
         string currentHex,
         Windows.UI.Color fallback,
         Action<string> assign,
-        Action? afterChange = null)
+        Action? afterChange = null,
+        Func<FontContrastTheme>? contrastThemeProvider = null,
+        Action<Action>? registerContrastStatusRefresher = null)
     {
         parent.Children.Add(new TextBlock
         {
@@ -1045,12 +1125,56 @@ public sealed partial class SettingsWindow : Window
             MaxWidth = 180,
             HorizontalAlignment = HorizontalAlignment.Left,
         };
+        FontIcon? contrastIcon = null;
+        TextBlock? contrastText = null;
+        void refreshContrastStatus()
+        {
+            if (contrastThemeProvider is null || contrastIcon is null || contrastText is null)
+                return;
+
+            var background = FontContrastWarningService.GetThemeSampleBackground(contrastThemeProvider());
+            double ratio = FontContrastWarningService.GetContrastRatio(ToFontContrastColor(picker.Color), background);
+            bool readable = ratio >= FontContrastWarningService.MinimumReadableContrastRatio;
+            var statusColor = readable ? ContrastReadableGreen : ContrastUnreadableRed;
+            contrastIcon.Glyph = readable ? "\uE73E" : "\uE711";
+            contrastIcon.Foreground = new SolidColorBrush(statusColor);
+            contrastText.Foreground = new SolidColorBrush(statusColor);
+            contrastText.Text = $"Contrast ratio: {ratio:F1}:1";
+        }
+
         picker.ColorChanged += (_, args) =>
         {
             assign(ColorStringHelper.ToHex(args.NewColor));
             afterChange?.Invoke();
+            refreshContrastStatus();
         };
         parent.Children.Add(picker);
+
+        if (contrastThemeProvider is not null)
+        {
+            contrastIcon = new FontIcon
+            {
+                FontSize = 13,
+                Width = 16,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            contrastText = new TextBlock
+            {
+                FontSize = 12,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            var contrastRow = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            contrastRow.Children.Add(contrastIcon);
+            contrastRow.Children.Add(contrastText);
+            parent.Children.Add(contrastRow);
+            refreshContrastStatus();
+            registerContrastStatusRefresher?.Invoke(refreshContrastStatus);
+        }
 
         var reset = new Button
         {
@@ -1071,6 +1195,9 @@ public sealed partial class SettingsWindow : Window
 
         return picker;
     }
+
+    private static FontContrastColor ToFontContrastColor(Windows.UI.Color color)
+        => FontContrastColor.FromArgb(color.A, color.R, color.G, color.B);
 
     private static StackPanel AddSettingsGroupBox(StackPanel parent, string title)
     {
@@ -1673,7 +1800,9 @@ public sealed partial class SettingsWindow : Window
                 "Color of the matched substring inside each result-list match line. Default is gold.",
                 _viewModel.ResultListMatchHighlightColor,
                 Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00),
-                value => _viewModel.ResultListMatchHighlightColor = value);
+                value => _viewModel.ResultListMatchHighlightColor = value,
+                contrastThemeProvider: ResolveFontContrastTheme,
+                registerContrastStatusRefresher: _fontContrastStatusRefreshers.Add);
 
             var resetResultMatchText = new Button
             {
@@ -1732,7 +1861,8 @@ public sealed partial class SettingsWindow : Window
                 "Color of line numbers and separator pipes in the preview content gutter.",
                 _viewModel.PreviewGutterContextColor,
                 Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE),
-                value => _viewModel.PreviewGutterContextColor = value);
+                value => _viewModel.PreviewGutterContextColor = value,
+                showContrastStatus: true);
 
             AddPreviewContentColorSetting(
                 previewViewerGroup,
@@ -1740,7 +1870,8 @@ public sealed partial class SettingsWindow : Window
                 "Color of line numbers in the preview gutter for matched lines.",
                 _viewModel.PreviewGutterMatchColor,
                 Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE),
-                value => _viewModel.PreviewGutterMatchColor = value);
+                value => _viewModel.PreviewGutterMatchColor = value,
+                showContrastStatus: true);
 
             AddPreviewContentColorSetting(
                 previewViewerGroup,
@@ -1748,7 +1879,8 @@ public sealed partial class SettingsWindow : Window
                 "Color of the highlighted match text (the search term occurrence). Default is gold.",
                 _viewModel.PreviewMatchTextColor,
                 Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00),
-                value => _viewModel.PreviewMatchTextColor = value);
+                value => _viewModel.PreviewMatchTextColor = value,
+                showContrastStatus: true);
 
             AddPreviewContentColorSetting(
                 previewViewerGroup,
@@ -1764,7 +1896,8 @@ public sealed partial class SettingsWindow : Window
                 "Color of text on matched lines (non-highlighted portions). Default is white.",
                 _viewModel.PreviewMatchLineColor,
                 Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF),
-                value => _viewModel.PreviewMatchLineColor = value);
+                value => _viewModel.PreviewMatchLineColor = value,
+                showContrastStatus: true);
 
             previewViewerGroup.Children.Add(new TextBlock { Text = "Auto-load matches on scroll (matches to load when reaching end of truncated section, 0 = disabled):" });
             var autoLoad = new NumberBox { Value = _viewModel.PreviewAutoLoadMatches, Minimum = 0, Maximum = 5000, SpinButtonPlacementMode = Microsoft.UI.Xaml.Controls.NumberBoxSpinButtonPlacementMode.Compact };
@@ -1837,7 +1970,8 @@ public sealed partial class SettingsWindow : Window
                 "Color of line numbers in the built-in editor gutter.",
                 _viewModel.PreviewEditorGutterColor,
                 Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE),
-                value => _viewModel.PreviewEditorGutterColor = value);
+                value => _viewModel.PreviewEditorGutterColor = value,
+                showContrastStatus: true);
         }
 
         // ── Editor ──
@@ -1999,6 +2133,29 @@ public sealed partial class SettingsWindow : Window
             g.Children.Add(new TextBlock
             {
                 Text = "Shows the results-toolbar Auto-scroll checkbox for testing searches that continuously append result rows. Hidden by default.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var resetFontContrastReminder = new Button
+            {
+                Content = "Reset font contrast reminders",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetFontContrastReminder.Click += (_, _) =>
+            {
+                _viewModel.ResetFontContrastReminderState();
+                MarkSettingsDirty();
+                resetFontContrastReminder.Content = "Font contrast reminders reset";
+                resetFontContrastReminder.IsEnabled = false;
+            };
+            g.Children.Add(resetFontContrastReminder);
+            g.Children.Add(new TextBlock
+            {
+                Text = "Allows theme/font contrast warnings to appear again after Remind me later or Don't remind me again.",
                 FontSize = 11,
                 Opacity = 0.6,
                 TextWrapping = TextWrapping.Wrap,

@@ -122,6 +122,10 @@ public sealed class AppSettings
     public string BinaryExtensions { get; set; } = DefaultBinaryExtensions;
     /// <summary>When true, do not show the non-admin access warning banner on startup.</summary>
     public bool SuppressAdminWarning { get; set; }
+    /// <summary>When true, do not show theme/font contrast warnings.</summary>
+    public bool SuppressFontContrastWarnings { get; set; }
+    /// <summary>UTC time before which theme/font contrast warnings are snoozed.</summary>
+    public DateTimeOffset? FontContrastReminderAfterUtc { get; set; }
     /// <summary>When true (default) and the process is not elevated, file listing skips well-known admin-protected paths (System Volume Information, $Recycle.Bin, Windows\System32\config, etc.) to speed up search.</summary>
     public bool ExcludeAdminProtectedPaths { get; set; } = true;
     /// <summary>Semicolon- or newline-separated list of path segments (e.g. <c>\Windows\System32\config</c>) treated as admin-protected. Used only when <see cref="ExcludeAdminProtectedPaths"/> is true and the process is not elevated. Empty falls back to the built-in defaults.</summary>
