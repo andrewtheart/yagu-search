@@ -68,11 +68,37 @@ public sealed class CliRunnerRegressionTests
         Assert.Contains("Cmd:  Yagu.exe --cli --directory src \"TODO\" -g \"*.cs\" --export .\\reports\\todo-audit.json --export-no-markers", source);
     }
 
+    [Fact]
+    public void CliSettings_LoadsCurrentDirectoryThenProcessLaunchDirectoryThenGlobal()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+
+        AssertContainsInOrder(source,
+            "Path.Combine(Directory.GetCurrentDirectory(), LocalSettingsFileName)",
+            "var launchSettings = ResolveProcessLaunchSettingsPath();",
+            "return new SettingsService().Load();");
+        Assert.Contains("Environment.ProcessPath", source);
+        Assert.Contains("AppContext.BaseDirectory", source);
+        Assert.Contains("If not, Yagu checks the running process launch", source);
+        Assert.Contains("directory next, then falls back to global AppData settings", source);
+    }
+
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
             dir = dir.Parent;
         return dir?.FullName ?? Directory.GetCurrentDirectory();
+    }
+
+    private static void AssertContainsInOrder(string text, params string[] expected)
+    {
+        int position = 0;
+        foreach (var item in expected)
+        {
+            int found = text.IndexOf(item, position, StringComparison.Ordinal);
+            Assert.True(found >= 0, $"Expected to find '{item}' after position {position}.");
+            position = found + item.Length;
+        }
     }
 }

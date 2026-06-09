@@ -145,6 +145,7 @@ public sealed partial class MainWindow
 
     private enum SplitLayoutMode { Split, ResultsMaximized, PreviewMaximized, PreviewTopExpanded }
     private SplitLayoutMode _splitLayoutMode = SplitLayoutMode.ResultsMaximized;
+    private bool _topExpandedPreviewLayoutSyncActive;
     // Remembers the layout to restore when toggling out of ResultsMaximized so that
     // collapsing the maximized results panel returns to whatever split mode was active
     // before (e.g. PreviewTopExpanded), not always plain Split.
@@ -245,8 +246,10 @@ public sealed partial class MainWindow
         ResultsPanelBorder.Margin = new Thickness(0);
 
         SearchControlsBorder.Width = double.NaN;
+        SearchControlsBorder.MaxWidth = double.PositiveInfinity;
         SearchControlsBorder.HorizontalAlignment = HorizontalAlignment.Stretch;
         SearchStatusPanel.Width = double.NaN;
+        SearchStatusPanel.MaxWidth = double.PositiveInfinity;
         SearchStatusPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
         ApplyTopSearchDrawerCompactState(false);
 
@@ -275,6 +278,7 @@ public sealed partial class MainWindow
         Canvas.SetZIndex(SearchStatusPanel, 10);
 
         UpdateTopExpandedPreviewMeasurements();
+        ListenForTopExpandedPreviewLayoutSync();
 
         ExpandResultsIcon.Glyph = "\uE740";
         ToolTipService.SetToolTip(ExpandResultsButton, "Maximize file list / hide preview");
@@ -285,14 +289,50 @@ public sealed partial class MainWindow
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, UpdateTopExpandedPreviewMeasurements);
     }
 
+    private void ListenForTopExpandedPreviewLayoutSync()
+    {
+        if (_topExpandedPreviewLayoutSyncActive)
+            return;
+
+        _topExpandedPreviewLayoutSyncActive = true;
+        var debounce = DispatcherQueue.CreateTimer();
+        debounce.Interval = TimeSpan.FromMilliseconds(500);
+        debounce.IsRepeating = false;
+
+        void handler(object? s, object? e)
+            => UpdateTopExpandedPreviewMeasurements();
+
+        debounce.Tick += (t, a) =>
+        {
+            debounce.Stop();
+            Microsoft.UI.Xaml.Media.CompositionTarget.Rendering -= handler;
+            _topExpandedPreviewLayoutSyncActive = false;
+            UpdateTopExpandedPreviewMeasurements();
+        };
+
+        Microsoft.UI.Xaml.Media.CompositionTarget.Rendering += handler;
+        debounce.Start();
+    }
+
     private void UpdateTopExpandedPreviewMeasurements()
     {
         if (_splitLayoutMode != SplitLayoutMode.PreviewTopExpanded)
             return;
 
         double availableWidth = Math.Max(0, RootGrid.ActualWidth - SplitPaneGrid.Margin.Left - SplitPaneGrid.Margin.Right);
+        if (availableWidth <= 0)
+            return;
+
         double splitterWidth = SplitterBorder.ActualWidth > 0 ? SplitterBorder.ActualWidth : 8;
-        double leftWidth = ResultsColumn.ActualWidth;
+        double leftWidth = ResultsPanelBorder.ActualWidth > 0 ? ResultsPanelBorder.ActualWidth : ResultsColumn.ActualWidth;
+        double previewWidth = PreviewPanelBorder.Visibility == Visibility.Visible ? PreviewPanelBorder.ActualWidth : 0;
+        if (previewWidth > 0)
+        {
+            double widthFromPreview = availableWidth - splitterWidth - previewWidth;
+            if (widthFromPreview > 0)
+                leftWidth = leftWidth > 0 ? Math.Min(leftWidth, widthFromPreview) : widthFromPreview;
+        }
+
         if (leftWidth <= 0)
         {
             leftWidth = Math.Max(280, (availableWidth - splitterWidth) * 2.0 / 5.0);
@@ -300,12 +340,14 @@ public sealed partial class MainWindow
             leftWidth = Math.Min(leftWidth, maxLeftWidth);
         }
 
-        double drawerWidth = Math.Max(240, Math.Min(leftWidth, availableWidth));
+        double drawerWidth = Math.Min(availableWidth, Math.Max(240, leftWidth));
 
         SearchControlsBorder.HorizontalAlignment = HorizontalAlignment.Left;
         SearchControlsBorder.Width = drawerWidth;
+        SearchControlsBorder.MaxWidth = drawerWidth;
         SearchStatusPanel.HorizontalAlignment = HorizontalAlignment.Left;
         SearchStatusPanel.Width = drawerWidth;
+        SearchStatusPanel.MaxWidth = drawerWidth;
         ApplyTopSearchDrawerCompactState(drawerWidth < CompactTopSearchDrawerThreshold);
 
         double topOffset = SearchControlsBorder.ActualHeight + SearchStatusPanel.ActualHeight + 10;
@@ -313,6 +355,11 @@ public sealed partial class MainWindow
     }
 
     private void OnRootGridSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        UpdateTopExpandedPreviewMeasurements();
+    }
+
+    private void OnTopExpandedPreviewLayoutSourceSizeChanged(object sender, SizeChangedEventArgs e)
     {
         UpdateTopExpandedPreviewMeasurements();
     }
@@ -364,14 +411,18 @@ public sealed partial class MainWindow
     private void OnResultsListSizeChanged(object sender, SizeChangedEventArgs e)
     {
         bool compact = e.NewSize.Width < ResultsCompactThreshold;
-        if (compact == _resultsCompactMode) return;
-        _resultsCompactMode = compact;
-        // Update all currently materialized containers
-        for (int i = 0; i < ResultsList.Items.Count; i++)
+        if (compact != _resultsCompactMode)
         {
-            if (ResultsList.ContainerFromIndex(i) is FrameworkElement container)
-                ApplyResultsCompactState(container, compact);
+            _resultsCompactMode = compact;
+            // Update all currently materialized containers
+            for (int i = 0; i < ResultsList.Items.Count; i++)
+            {
+                if (ResultsList.ContainerFromIndex(i) is FrameworkElement container)
+                    ApplyResultsCompactState(container, compact);
+            }
         }
+
+        QueueResultsFileOverlayUpdate();
     }
 
     private void OnResultsListContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
@@ -383,6 +434,8 @@ public sealed partial class MainWindow
 
             if (args.Item is FileGroup g && g.IsExpanded)
                 _ = EnsureVisibleResultsForExpandedGroupFromContainerAsync(g);
+
+            QueueResultsFileOverlayUpdate();
         }
     }
 

@@ -93,6 +93,33 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void PreviewTopExpandedLayout_KeepsSearchDrawerSyncedToSettledPaneWidths()
+    {
+        string splitPane = ExtractXamlWindow("x:Name=\"SplitPaneGrid\"", 500);
+        Assert.Contains("SizeChanged=\"OnTopExpandedPreviewLayoutSourceSizeChanged\"", splitPane);
+
+        string resultsPanel = ExtractXamlWindow("x:Name=\"ResultsPanelBorder\"", 500);
+        Assert.Contains("SizeChanged=\"OnTopExpandedPreviewLayoutSourceSizeChanged\"", resultsPanel);
+
+        string previewPanel = ExtractXamlWindow("x:Name=\"PreviewPanelBorder\"", 500);
+        Assert.Contains("SizeChanged=\"OnTopExpandedPreviewLayoutSourceSizeChanged\"", previewPanel);
+
+        string apply = ExtractMethodWindow(MainWindowSource, "ApplyTopExpandedPreviewLayout", 1800);
+        Assert.Contains("ListenForTopExpandedPreviewLayoutSync();", apply);
+
+        string sync = ExtractMethodWindow(MainWindowSource, "ListenForTopExpandedPreviewLayoutSync", 2200);
+        Assert.Contains("CompositionTarget.Rendering += handler;", sync);
+        Assert.Contains("CompositionTarget.Rendering -= handler;", sync);
+        Assert.Contains("UpdateTopExpandedPreviewMeasurements();", sync);
+
+        string update = ExtractMethodWindow(MainWindowSource, "UpdateTopExpandedPreviewMeasurements", 2600);
+        Assert.Contains("ResultsPanelBorder.ActualWidth", update);
+        Assert.Contains("PreviewPanelBorder.ActualWidth", update);
+        Assert.Contains("SearchControlsBorder.MaxWidth = drawerWidth;", update);
+        Assert.Contains("SearchStatusPanel.MaxWidth = drawerWidth;", update);
+    }
+
+    [Fact]
     public void PreviewPanel_HidesEmptyStateBeforePreviewContentRenders()
     {
         Assert.Contains("private bool _previewContentPending;", MainWindowSource);
@@ -167,6 +194,35 @@ public sealed class PreviewCoreRegressionTests
             "OpenSettingsTab(SettingsDisplayTabIndex)",
             "flyout.Items.Add(displaySettingsItem);");
         Assert.DoesNotContain("Change preview fonts/colors...", editorFlyout);
+    }
+
+    [Fact]
+    public void PreviewSections_UseConfigurablePreviewTextFontFamilyAndSize()
+    {
+        string addSection = ExtractMethodWindow(MainWindowSource, "AddPreviewSection", window: 3600);
+        AssertContainsInOrder(addSection,
+            "string previewTextFontFamily = ResolvePreviewTextFontFamily();",
+            "int previewTextFontSize = ResolvePreviewTextFontSize();",
+            "double previewTextLineHeight = ResolvePreviewTextLineHeight(previewTextFontSize);",
+            "FontFamily = new FontFamily(previewTextFontFamily)",
+            "FontSize = previewTextFontSize",
+            "LineHeight = previewTextLineHeight");
+        Assert.DoesNotContain("FontFamily = new FontFamily(\"Consolas\")", addSection);
+
+        string mainWindowPropertyChanged = ExtractMethodWindow(MainWindowSource, "MainWindow", window: 6200);
+        AssertContainsInOrder(mainWindowPropertyChanged,
+            "e.PropertyName == nameof(ViewModel.PreviewTextFontFamily)",
+            "e.PropertyName == nameof(ViewModel.PreviewTextFontSize)",
+            "ApplyPreviewTextFontSettings();");
+
+        string applyFont = ExtractMethodWindow(MainWindowSource, "ApplyPreviewTextFontSettings", window: 2600);
+        AssertContainsInOrder(applyFont,
+            "foreach (var block in EnumeratePreviewSectionBlocks())",
+            "ApplyPreviewTextFontSettings(block, family, size, lineHeight);",
+            "ApplyPreviewTextFontSettings(gutterBlock, family, size, lineHeight);",
+            "InvalidateParagraphIndexCache(block);",
+            "ScheduleGutterSync(block);",
+            "QueueActiveMatchOverlayRefresh();");
     }
 
     [Fact]
@@ -567,13 +623,15 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void DeveloperOptions_CanHideMemoryPressureWarningLabel()
+    public void DeveloperOptions_HidesMemoryPressureWarningLabelByDefault()
     {
         string settingsSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "Services", "SettingsService.cs"));
-        Assert.Contains("ShowMemoryPressureWarningLabel", settingsSource);
-        Assert.Contains("ShowMemoryPressureWarningLabel { get; set; } = true", settingsSource);
+        Assert.Contains("public bool ShowMemoryPressureWarningLabel { get; set; }", settingsSource);
+        Assert.DoesNotContain("ShowMemoryPressureWarningLabel { get; set; } = true", settingsSource);
 
         string viewModelSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
+        Assert.Contains("[ObservableProperty] public partial bool ShowMemoryPressureWarningLabel { get; set; }", viewModelSource);
+        Assert.DoesNotContain("ShowMemoryPressureWarningLabel { get; set; } = true", viewModelSource);
         Assert.Contains("ShowMemoryPressureWarningLabel = _settings.ShowMemoryPressureWarningLabel;", viewModelSource);
         Assert.Contains("_settings.ShowMemoryPressureWarningLabel = ShowMemoryPressureWarningLabel;", viewModelSource);
         AssertContainsInOrder(viewModelSource,
@@ -588,6 +646,8 @@ public sealed class PreviewCoreRegressionTests
 
         Assert.Contains("AddTab(\"Developer Options\")", SettingsWindowSource);
         Assert.Contains("Show memory pressure warning label", SettingsWindowSource);
+        Assert.Contains("IsChecked = _viewModel.ShowMemoryPressureWarningLabel", SettingsWindowSource);
+        Assert.Contains("_viewModel.ShowMemoryPressureWarningLabel = true", SettingsWindowSource);
         Assert.Contains("_viewModel.ShowMemoryPressureWarningLabel = false", SettingsWindowSource);
     }
 
@@ -616,6 +676,34 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("_viewModel.ShowAutoScrollResultsCheckbox = false", SettingsWindowSource);
 
         Assert.Contains("AutoScrollResultsCheckBox.Visibility == Visibility.Visible", MainWindowSource);
+    }
+
+    [Fact]
+    public void DeveloperOptions_HidesStatsForNerdsByDefault()
+    {
+        string settingsSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "Services", "SettingsService.cs"));
+        Assert.Contains("public bool ShowStatsForNerds { get; set; }", settingsSource);
+        Assert.DoesNotContain("ShowStatsForNerds { get; set; } = true", settingsSource);
+
+        string viewModelSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
+        Assert.Contains("[ObservableProperty] public partial bool ShowStatsForNerds { get; set; }", viewModelSource);
+        Assert.DoesNotContain("ShowStatsForNerds { get; set; } = true", viewModelSource);
+        Assert.Contains("ShowStatsForNerds = _settings.ShowStatsForNerds;", viewModelSource);
+        Assert.Contains("_settings.ShowStatsForNerds = ShowStatsForNerds;", viewModelSource);
+        AssertContainsInOrder(viewModelSource,
+            "StatsForNerdsVisibility =>",
+            "ShowStatsForNerds",
+            "Microsoft.UI.Xaml.Visibility.Visible",
+            "Microsoft.UI.Xaml.Visibility.Collapsed");
+        Assert.Contains("OnShowStatsForNerdsChanged", viewModelSource);
+
+        string statusBar = ExtractXamlWindow("ViewModel.StatsForNerdsVisibility", 900);
+        Assert.Contains("Visibility=\"{x:Bind ViewModel.StatsForNerdsVisibility, Mode=OneWay}\"", statusBar);
+
+        Assert.Contains("Stats for nerds", SettingsWindowSource);
+        Assert.Contains("IsChecked = _viewModel.ShowStatsForNerds", SettingsWindowSource);
+        Assert.Contains("_viewModel.ShowStatsForNerds = true", SettingsWindowSource);
+        Assert.Contains("_viewModel.ShowStatsForNerds = false", SettingsWindowSource);
     }
 
     [Fact]

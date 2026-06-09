@@ -12,7 +12,8 @@ namespace Yagu;
 
 /// <summary>
 /// Implements <c>--cli</c> mode: attaches to the parent console, parses command-line
-/// arguments, loads settings (local <c>.yagu.json</c> → global AppData → CLI overrides),
+/// arguments, loads settings (current-directory <c>.yagu.json</c> → process launch-directory
+/// <c>.yagu.json</c> → global AppData → CLI overrides),
 /// and streams search results to stdout in ripgrep-compatible format while writing
 /// warnings and the completion summary to stderr.
 /// </summary>
@@ -401,7 +402,7 @@ internal static class CliRunner
     }
 
     // -----------------------------------------------------------------------
-    // Settings: .yagu.json in CWD → global AppData settings, then CLI overrides
+    // Settings: .yagu.json in CWD → process launch directory → global AppData, then CLI overrides
     // -----------------------------------------------------------------------
 
     private static AppSettings LoadEffectiveSettings(CliArgs args)
@@ -411,8 +412,51 @@ internal static class CliRunner
         if (File.Exists(cwdSettings))
             return new SettingsService(cwdSettings).Load();
 
-        // 2. Fall back to global AppData settings.
+        // 2. Next try a .yagu.json beside the running process. This lets a portable
+        // Yagu install carry a local CLI defaults file even when invoked from another CWD.
+        var launchSettings = ResolveProcessLaunchSettingsPath();
+        if (!string.IsNullOrWhiteSpace(launchSettings) && File.Exists(launchSettings))
+            return new SettingsService(launchSettings).Load();
+
+        // 3. Fall back to global AppData settings.
         return new SettingsService().Load();
+    }
+
+    private static string? ResolveProcessLaunchSettingsPath()
+    {
+        string? launchDirectory = null;
+        try
+        {
+            launchDirectory = !string.IsNullOrWhiteSpace(Environment.ProcessPath)
+                ? Path.GetDirectoryName(Environment.ProcessPath)
+                : null;
+
+            if (string.IsNullOrWhiteSpace(launchDirectory))
+                launchDirectory = AppContext.BaseDirectory;
+        }
+        catch
+        {
+            launchDirectory = AppContext.BaseDirectory;
+        }
+
+        if (string.IsNullOrWhiteSpace(launchDirectory))
+            return null;
+
+        try
+        {
+            var cwd = Directory.GetCurrentDirectory();
+            if (Path.GetFullPath(launchDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                .Equals(Path.GetFullPath(cwd).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+        }
+        catch
+        {
+            // If paths cannot be normalized, still try the launch directory.
+        }
+
+        return Path.Combine(launchDirectory, LocalSettingsFileName);
     }
 
     // -----------------------------------------------------------------------
@@ -1097,7 +1141,7 @@ internal static class CliRunner
                   --no-gitignore-precedence  Include filters win over .gitignore.
 
             PERFORMANCE:
-                  --threads <n>           Worker threads (0 = auto).
+                  --threads <n>           Worker threads (0 = service-selected safe cap).
                   --memory-limit <MB>     Process memory cap in megabytes.
                   --memory-pressure <n>   System memory pressure threshold 0-100 (0 = disabled).
                   --sdk-channel-buffer <n> Everything SDK channel buffer size.
@@ -1153,9 +1197,10 @@ internal static class CliRunner
                                           PATTERN are not required when loading a session.
 
             SETTINGS FILE:
-              If .yagu.json exists in the current working directory it is used as the
-              base configuration. CLI flags always override file-based settings.
-              Falls back to the global AppData settings when no local file is present.
+                            If .yagu.json exists in the current working directory it is used as the
+                            base configuration. If not, Yagu checks the running process launch
+                            directory next, then falls back to global AppData settings. CLI flags
+                            always override file-based settings.
 
             EXAMPLES (200):
               001. Basic search in the current folder
@@ -1322,8 +1367,8 @@ internal static class CliRunner
                   Does: Allows include filters to bring back files excluded by .gitignore.
                   Cmd:  Yagu.exe --cli --directory src "TODO" --obey-gitignore --no-gitignore-precedence
 
-              042. Use automatic thread count
-                  Does: Lets Yagu choose the content-search worker count.
+              042. Use service-selected thread count
+                  Does: Uses Yagu's safe-cap content-search worker count.
                   Cmd:  Yagu.exe --cli --directory src "TODO" --threads 0
 
               043. Use four worker threads

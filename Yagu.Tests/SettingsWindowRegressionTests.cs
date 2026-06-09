@@ -41,6 +41,8 @@ public sealed class SettingsWindowRegressionTests
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "Help", "HelpWindow.xaml.cs"));
     private static readonly string ResultStoreTempLocationWindowSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "ResultStoreTempLocationWindow.cs"));
+    private static readonly string AdminProtectedPathsDialogSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "AdminProtectedPathsDialog.cs"));
     private static readonly string WindowForegroundHelperSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "Helpers", "WindowForegroundHelper.cs"));
     private static readonly string SelectionRendererSource = File.ReadAllText(
@@ -136,6 +138,28 @@ public sealed class SettingsWindowRegressionTests
 
         Assert.Contains("WindowForegroundHelper.ConfigureOwnedWindow(hwnd, _ownerHwnd);", ResultStoreTempLocationWindowSource);
         Assert.Contains("WindowForegroundHelper.BringOwnedWindowToFront(this, _ownerHwnd);", ResultStoreTempLocationWindowSource);
+
+        Assert.Contains("WindowForegroundHelper.ConfigureOwnedWindow(dialogHwnd, _ownerHwnd);", AdminProtectedPathsDialogSource);
+        Assert.Contains("WindowForegroundHelper.BringOwnedWindowToFront(this, _ownerHwnd);", AdminProtectedPathsDialogSource);
+    }
+
+    [Fact]
+    public void AdminProtectedPathsDialog_IsOwnedFixedSizeWindow()
+    {
+        string learnMore = ExtractMethod(MainWindowSource, "OnAdminLearnMore", window: 500);
+        Assert.Contains("await AdminProtectedPathsDialog.ShowAsync(_hwnd, segments);", learnMore);
+        Assert.DoesNotContain("new ContentDialog", learnMore);
+        Assert.DoesNotContain("XamlRoot", learnMore);
+
+        Assert.Contains("internal sealed class AdminProtectedPathsDialog : Window", AdminProtectedPathsDialogSource);
+        Assert.Contains("private const int DialogWidth = 720;", AdminProtectedPathsDialogSource);
+        Assert.Contains("private const int DialogHeight = 540;", AdminProtectedPathsDialogSource);
+        Assert.Contains("SizeAndCenter(appWindow, _ownerHwnd, DialogWidth, DialogHeight);", AdminProtectedPathsDialogSource);
+        Assert.Contains("presenter.IsResizable = false;", AdminProtectedPathsDialogSource);
+        Assert.Contains("EnableWindow(_ownerHwnd, false);", AdminProtectedPathsDialogSource);
+        Assert.Contains("EnableWindow(_ownerHwnd, true);", AdminProtectedPathsDialogSource);
+        Assert.Contains("ScrollViewer", AdminProtectedPathsDialogSource);
+        Assert.Contains("FontFamily = new FontFamily(\"Consolas\")", AdminProtectedPathsDialogSource);
     }
 
     [Fact]
@@ -176,10 +200,12 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("Dark mode", SettingsWindowSource);
         Assert.Contains("Light mode", SettingsWindowSource);
         Assert.Contains("_viewModel.ThemeModeIndex = AppThemeService.NormalizeThemeModeIndex(themeMode.SelectedIndex);", SettingsWindowSource);
-        Assert.Contains("RootGrid.ActualThemeChanged += (_, _) => ApplySettingsTitleBarButtonTheme();", SettingsWindowSource);
+        Assert.Contains("RootGrid.ActualThemeChanged += (_, _) =>", SettingsWindowSource);
+        Assert.Contains("ApplySettingsTitleBarButtonTheme();", SettingsWindowSource);
 
         Assert.Contains("ApplyAppTheme();", MainWindowWindowSource);
-        Assert.Contains("RootGrid.ActualThemeChanged += (_, _) => ApplyTitleBarButtonTheme();", MainWindowWindowSource);
+        Assert.Contains("RootGrid.ActualThemeChanged += (_, _) =>", MainWindowWindowSource);
+        Assert.Contains("ApplyTitleBarButtonTheme();", MainWindowWindowSource);
         Assert.Contains("nameof(ViewModel.ThemeModeIndex)", MainWindowWindowSource);
     }
 
@@ -240,6 +266,41 @@ public sealed class SettingsWindowRegressionTests
             "_viewModel.SuppressAdminWarning = false;",
             "MarkSettingsDirty();",
             "resetAdmin.IsEnabled = false;");
+    }
+
+    [Fact]
+    public void SettingsWindow_ResetButtonsDisableWhenAlreadyAtDefaults()
+    {
+        Assert.Contains("private readonly List<Action> _defaultResetButtonRefreshers = new();", SettingsWindowSource);
+
+        string propertyChanged = ExtractMethod(SettingsWindowSource, "OnViewModelPropertyChanged", window: 900);
+        Assert.Contains("RefreshDefaultResetButtons();", propertyChanged);
+
+        string registerMethod = ExtractMethod(SettingsWindowSource, "RegisterDefaultResetButton", window: 900);
+        AssertContainsInOrder(registerMethod,
+            "void Refresh() => button.IsEnabled = !isCurrentDefault();",
+            "_defaultResetButtonRefreshers.Add(Refresh);",
+            "Refresh();");
+
+        Assert.Contains("RegisterDefaultResetButton(reset, () => picker.Color.Equals(fallback));", SettingsWindowSource);
+        Assert.Contains("RegisterDefaultResetButton(useDefault, () => SettingStringEquals(_viewModel.TerminalDefaultWorkingDirectory, string.Empty));", SettingsWindowSource);
+        Assert.Contains("RegisterDefaultResetButton(clearDateDefaults,", SettingsWindowSource);
+        Assert.Contains("_viewModel.DefaultCreatedAfterDate is null", SettingsWindowSource);
+        Assert.Contains("_viewModel.DefaultModifiedBeforeDate is null", SettingsWindowSource);
+        Assert.Contains("RegisterDefaultResetButton(resetAdminSeg,", SettingsWindowSource);
+        Assert.Contains("SettingStringEquals(_viewModel.AdminProtectedPathSegments, AppSettings.DefaultAdminProtectedPathSegments)", SettingsWindowSource);
+        Assert.Contains("RegisterDefaultResetButton(resetBinaryExt,", SettingsWindowSource);
+        Assert.Contains("SettingStringEquals(_viewModel.SettingsBinaryExtensions, AppSettings.DefaultBinaryExtensions)", SettingsWindowSource);
+        Assert.Contains("RegisterDefaultResetButton(resetResultMatchText,", SettingsWindowSource);
+        Assert.Contains("SettingStringEquals(_viewModel.ResultListMatchTextFontFamily, AppSettings.DefaultResultListMatchTextFontFamily)", SettingsWindowSource);
+        Assert.Contains("SettingColorEquals(", SettingsWindowSource);
+        Assert.Contains("RegisterDefaultResetButton(resetPreviewTextFont,", SettingsWindowSource);
+        Assert.Contains("SettingStringEquals(_viewModel.PreviewTextFontFamily, AppSettings.DefaultPreviewTextFontFamily)", SettingsWindowSource);
+        Assert.Contains("RegisterDefaultResetButton(resetEditorFont,", SettingsWindowSource);
+        Assert.Contains("SettingStringEquals(_viewModel.PreviewEditorFontFamily, AppSettings.DefaultPreviewEditorFontFamily)", SettingsWindowSource);
+        Assert.Contains("RegisterDefaultResetButton(resetFontContrastReminder,", SettingsWindowSource);
+        Assert.Contains("!_viewModel.SuppressFontContrastWarnings && _viewModel.FontContrastReminderAfterUtc is null", SettingsWindowSource);
+        Assert.Contains("RegisterDefaultResetButton(resetAdmin, () => !_viewModel.SuppressAdminWarning);", SettingsWindowSource);
     }
 
     [Fact]
@@ -305,13 +366,57 @@ public sealed class SettingsWindowRegressionTests
     }
 
     [Fact]
+    public void ContentSearchParallelism_DefaultsToAllCoresWithoutAutoLabel()
+    {
+        Assert.Contains("public int ParallelismIndex { get; set; } = 4; // 0 = safe cap", SettingsServiceSource);
+        Assert.Contains("[ObservableProperty] public partial int ParallelismIndex { get; set; } = 4; // 0 = safe cap", MainViewModelSource);
+
+        int start = SettingsWindowSource.IndexOf("Content-search parallelism (concurrent file scan threads):", StringComparison.Ordinal);
+        int end = SettingsWindowSource.IndexOf("var hddToggle", start, StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start);
+
+        string parallelismBlock = SettingsWindowSource[start..end];
+        Assert.Contains("Safe cap (up to", parallelismBlock);
+        Assert.Contains("All cores", parallelismBlock);
+        Assert.DoesNotContain("Auto", parallelismBlock);
+        Assert.Contains("parallelism.SelectedIndex = _viewModel.ParallelismIndex;", parallelismBlock);
+    }
+
+    [Fact]
     public void SettingsWindow_FontSelectorsUseSystemFontPreviewPicker()
     {
         Assert.Contains("CanvasTextFormat.GetSystemFontFamilies()", SettingsWindowSource);
         Assert.Contains("CreateFontFamilyPicker(", SettingsWindowSource);
         Assert.Contains("new XamlFontFamily(fontFamily)", SettingsWindowSource);
         Assert.DoesNotContain("var resultMatchFontFamily = new TextBox", SettingsWindowSource);
+        Assert.DoesNotContain("var previewTextFontFamily = new TextBox", SettingsWindowSource);
         Assert.DoesNotContain("var editorFontFamily = new TextBox", SettingsWindowSource);
+    }
+
+    [Fact]
+    public void SettingsWindow_ConfigurableFontSurfacesExposeFamilyAndSizeTogether()
+    {
+        string displayBlock = SettingsWindowSource[
+            SettingsWindowSource.IndexOf("// ── Display ──", StringComparison.Ordinal)..
+            SettingsWindowSource.IndexOf("// ── Editor ──", StringComparison.Ordinal)];
+
+        AssertContainsInOrder(displayBlock,
+            "Results list match text",
+            "var resultMatchFontFamily = CreateFontFamilyPicker(",
+            "var resultMatchFontSize = new NumberBox");
+        AssertContainsInOrder(displayBlock,
+            "Preview text font",
+            "var previewTextFontFamily = CreateFontFamilyPicker(",
+            "var previewTextFontSize = new NumberBox");
+        AssertContainsInOrder(displayBlock,
+            "Built-in editor font",
+            "var editorFontFamily = CreateFontFamilyPicker(",
+            "var editorFontSize = new NumberBox");
+
+        Assert.Contains("public string PreviewTextFontFamily { get; set; } = DefaultPreviewTextFontFamily;", SettingsServiceSource);
+        Assert.Contains("public int PreviewTextFontSize { get; set; } = DefaultPreviewTextFontSize;", SettingsServiceSource);
+        Assert.Contains("[ObservableProperty] public partial string PreviewTextFontFamily", MainViewModelSource);
+        Assert.Contains("[ObservableProperty] public partial int PreviewTextFontSize", MainViewModelSource);
     }
 
     [Fact]
@@ -336,7 +441,9 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("previewViewerGroup.Children.Add", displayBlock);
         Assert.Contains("editorAppearanceGroup.Children.Add", displayBlock);
         Assert.Contains("Results list match text", displayBlock);
+        Assert.Contains("Preview text font", displayBlock);
         Assert.Contains("Preview font colors", displayBlock);
+        Assert.Contains("_viewModel.PreviewTextFontFamily", displayBlock);
         Assert.Contains("_viewModel.PreviewEditorFontFamily", displayBlock);
         Assert.Contains("Editor gutter text:", displayBlock);
 

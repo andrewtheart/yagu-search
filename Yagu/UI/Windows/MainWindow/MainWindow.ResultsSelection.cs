@@ -51,6 +51,7 @@ public sealed partial class MainWindow
                 // after content was added, so it allocates the correct height.
                 InvalidateListViewItemContainer(sender);
                 sender.InvalidateMeasure();
+                QueueResultsFileOverlayUpdate();
 
                 LogService.Instance.Info("Preview", $"OnFileGroupExpanding: expand only file='{g.FilePath}', matchCount={g.Count}");
             }
@@ -91,6 +92,7 @@ public sealed partial class MainWindow
                 {
                     LogService.Instance.Info("Preview", $"OnFileGroupCollapsed: clearing visible results file='{g.FilePath}', matchCount={g.Count}");
                     g.ClearVisibleResults();
+                    QueueResultsFileOverlayUpdate();
                 }
                 else if (LogService.Instance.IsVerboseEnabled)
                 {

@@ -272,8 +272,9 @@ line to preview it.</li>
 results.</li>
 </ol>
 <p>The status bar shows progress during a search. When the search
-finishes or is canceled, it shows elapsed time and files processed per
-second. A throughput sparkline visualizes I/O activity in real time.</p>
+finishes or is canceled, it shows elapsed time. Enable <strong>Stats for
+nerds</strong> in Settings -&gt; Developer Options to show files
+processed per second and a real-time throughput sparkline.</p>
 <h2 id="main-screen">Main Screen</h2>
 <p>The main screen has six working areas:</p>
 <table>
@@ -567,11 +568,38 @@ folders. This value is per-search and is not saved to settings.</td>
 </tr>
 </tbody>
 </table>
+<h3 id="cli-command">CLI Command</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Control</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Generate CLI command</td>
+<td>Builds a <code>Yagu.exe --cli</code> command from the current
+directory, query, search toggles, and Advanced Options. The command
+appears in a closable code-styled overlay with a copy button and a
+toggle for showing or hiding flags already covered by the current
+settings file.</td>
+</tr>
+</tbody>
+</table>
 <hr />
 <h2 id="results-pane-left-panel">Results Pane (Left Panel)</h2>
 <p>Results are grouped by file. Each group header shows the file name,
 match count, file size, modified date, and directory path. Expand a file
 group to see individual matching lines with context.</p>
+<p>When an expanded file’s header scrolls out of view, a compact sticky
+strip at the top of the results list shows the current file name and
+includes an Explorer button for that file. Double-click the strip to
+collapse that file group.</p>
 <h3 id="results-toolbar">Results Toolbar</h3>
 <table>
 <colgroup>
@@ -1024,7 +1052,9 @@ occurrences and files that will be affected.</p>
 <hr />
 <h2 id="settings">Settings</h2>
 <p>Open Settings from the <strong>gear</strong> button in the title bar.
-Settings are saved to <code>%APPDATA%\Yagu\settings.json</code>.</p>
+Settings are saved to <code>%APPDATA%\Yagu\settings.json</code>. Reset
+and Use default buttons are disabled when the current value already
+matches the default.</p>
 <h3 id="search-defaults-tab">Search Defaults Tab</h3>
 <table>
 <colgroup>
@@ -1140,8 +1170,8 @@ MB).</td>
 <tbody>
 <tr>
 <td>Content-search parallelism</td>
-<td>Concurrent file scan workers: Auto, 1 thread, Half cores, All cores,
-2× cores.</td>
+<td>Concurrent file scan workers: Safe cap, 1 thread, Half cores, 2×
+cores, All cores. Default: All cores.</td>
 </tr>
 <tr>
 <td>Native concurrency limit</td>
@@ -1216,6 +1246,16 @@ lines.</td>
 <td>Default word-wrap state in preview.</td>
 </tr>
 <tr>
+<td>Preview text font family</td>
+<td>Typeface used by preview pane line text and line-number
+gutters.</td>
+</tr>
+<tr>
+<td>Preview text font size</td>
+<td>Base size used by preview pane line text and line-number
+gutters.</td>
+</tr>
+<tr>
 <td>Auto-load matches on scroll</td>
 <td>Number of matches to auto-load when scrolling (default: 50).</td>
 </tr>
@@ -1241,6 +1281,23 @@ MB).</td>
 <tr>
 <td>Unselected section background</td>
 <td>Background color for inactive preview sections.</td>
+</tr>
+<tr>
+<td>Results match text font family</td>
+<td>Typeface used by match lines in the left results pane.</td>
+</tr>
+<tr>
+<td>Results match text font size</td>
+<td>Base size used by match lines in the left results pane.</td>
+</tr>
+<tr>
+<td>Built-in editor font family</td>
+<td>Typeface used by the built-in full-file editor.</td>
+</tr>
+<tr>
+<td>Built-in editor font size</td>
+<td>Base size used by the built-in full-file editor; zoom scales from
+this value.</td>
 </tr>
 </tbody>
 </table>
@@ -1395,7 +1452,7 @@ default).</td>
 <tr>
 <td>Show memory pressure warning</td>
 <td>Display the orange toolbar warning when memory-saving mode
-activates.</td>
+activates. Hidden by default.</td>
 </tr>
 </tbody>
 </table>
@@ -1612,7 +1669,8 @@ dialog informs you when this occurs. Control this with the “Limit
 parallelism on HDD” setting.</p>
 <hr />
 <h2 id="throughput-sparkline">Throughput Sparkline</h2>
-<p>During a search, a real-time sparkline graph appears in the status
+<p>When <strong>Stats for nerds</strong> is enabled in Settings -&gt;
+Developer Options, a real-time sparkline graph appears in the status
 area showing I/O throughput over time. It brightens during active
 scanning and dims during idle periods. This helps identify bottlenecks
 (e.g., if throughput drops to zero, the disk may be saturated or a large
@@ -1808,7 +1866,7 @@ source files behaves differently from large logs or archives.</p>
 <li>Exclude:
 <code>bin;obj;node_modules;.git;target;dist;__pycache__</code>.</li>
 <li>Search binary: off.</li>
-<li>Parallelism: Auto (try 2× cores on fast NVMe SSDs).</li>
+<li>Parallelism: All cores (try 2× cores on fast NVMe SSDs).</li>
 </ul>
 <h3 id="large-log-search">Large Log Search</h3>
 <ul>
@@ -2221,7 +2279,7 @@ integration:</p>
 <tbody>
 <tr>
 <td><code>--threads &lt;n&gt;</code></td>
-<td>Worker threads (0 = auto).</td>
+<td>Worker threads (0 = service-selected safe cap).</td>
 </tr>
 <tr>
 <td><code>--memory-limit &lt;MB&gt;</code></td>
@@ -2470,9 +2528,9 @@ results before printing (unlike the default streaming mode).</p>
 </table>
 <h3 id="local-settings-file">Local Settings File</h3>
 <p>If <code>.yagu.json</code> exists in the current working directory,
-it is used as the base configuration. CLI flags always override file
-settings. Falls back to global AppData settings when no local file
-exists.</p>
+it is used as the base configuration. If not, Yagu checks the running
+process launch directory next, then falls back to global AppData
+settings. CLI flags always override file settings.</p>
 <hr />
 <h2 id="gui-command-line-arguments">GUI Command-Line Arguments</h2>
 <p>When launching Yagu in GUI mode (without <code>--cli</code>):</p>

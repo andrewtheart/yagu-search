@@ -1616,11 +1616,15 @@ public sealed partial class MainWindow
     {
         LogService.Instance.Verbose("Preview", $"AddPreviewSection: file='{System.IO.Path.GetFileName(filePath)}', detail='{detail}', expanded={isExpanded}, addToPanel={addToPanel}");
         bool wrap = ViewModel.PreviewWrapModeIndex == (int)Models.PreviewWrapMode.Wrap;
+        string previewTextFontFamily = ResolvePreviewTextFontFamily();
+        int previewTextFontSize = ResolvePreviewTextFontSize();
+        double previewTextLineHeight = ResolvePreviewTextLineHeight(previewTextFontSize);
         var block = new RichTextBlock
         {
-            FontFamily = new FontFamily("Consolas"),
+            FontFamily = new FontFamily(previewTextFontFamily),
+            FontSize = previewTextFontSize,
             TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap,
-            LineHeight = 20,
+            LineHeight = previewTextLineHeight,
             LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
             IsTextSelectionEnabled = wrap,
             Tag = filePath,
@@ -1629,9 +1633,10 @@ public sealed partial class MainWindow
 
         var gutterBlock = new RichTextBlock
         {
-            FontFamily = new FontFamily("Consolas"),
+            FontFamily = new FontFamily(previewTextFontFamily),
+            FontSize = previewTextFontSize,
             TextWrapping = TextWrapping.NoWrap,
-            LineHeight = 20,
+            LineHeight = previewTextLineHeight,
             LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
             IsTextSelectionEnabled = false,
         };
@@ -2511,6 +2516,46 @@ public sealed partial class MainWindow
         ActiveMatchBand.BorderBrush = new SolidColorBrush(_overlayColor);
         ActiveMatchWordMarker.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x1A, _overlayColor.R, _overlayColor.G, _overlayColor.B));
         ActiveMatchWordMarker.BorderBrush = new SolidColorBrush(_overlayColor);
+    }
+
+    private string ResolvePreviewTextFontFamily()
+        => string.IsNullOrWhiteSpace(ViewModel.PreviewTextFontFamily)
+            ? AppSettings.DefaultPreviewTextFontFamily
+            : ViewModel.PreviewTextFontFamily.Trim();
+
+    private int ResolvePreviewTextFontSize()
+        => Math.Clamp(
+            ViewModel.PreviewTextFontSize <= 0 ? AppSettings.DefaultPreviewTextFontSize : ViewModel.PreviewTextFontSize,
+            6,
+            72);
+
+    private static double ResolvePreviewTextLineHeight(int fontSize)
+        => Math.Ceiling(Math.Clamp(fontSize, 6, 72) * 1.4);
+
+    private void ApplyPreviewTextFontSettings()
+    {
+        string family = ResolvePreviewTextFontFamily();
+        int size = ResolvePreviewTextFontSize();
+        double lineHeight = ResolvePreviewTextLineHeight(size);
+
+        foreach (var block in EnumeratePreviewSectionBlocks())
+        {
+            ApplyPreviewTextFontSettings(block, family, size, lineHeight);
+            if (_sectionGutterBlocks.TryGetValue(block, out var gutterBlock))
+                ApplyPreviewTextFontSettings(gutterBlock, family, size, lineHeight);
+
+            InvalidateParagraphIndexCache(block);
+            ScheduleGutterSync(block);
+        }
+
+        QueueActiveMatchOverlayRefresh();
+    }
+
+    private static void ApplyPreviewTextFontSettings(RichTextBlock block, string family, int size, double lineHeight)
+    {
+        block.FontFamily = new FontFamily(family);
+        block.FontSize = size;
+        block.LineHeight = lineHeight;
     }
 
     private Paragraph AddPreviewLineParagraphs(

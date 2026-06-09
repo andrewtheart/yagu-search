@@ -295,6 +295,12 @@ public sealed partial class MainWindow : Window, IDisposable
                 ApplyPreviewEditorFontSettings();
             }
 
+            if (e.PropertyName == nameof(ViewModel.PreviewTextFontFamily) ||
+                e.PropertyName == nameof(ViewModel.PreviewTextFontSize))
+            {
+                ApplyPreviewTextFontSettings();
+            }
+
             if (e.PropertyName == nameof(ViewModel.ResultListMatchTextFontFamily) ||
                 e.PropertyName == nameof(ViewModel.ResultListMatchTextFontSize) ||
                 e.PropertyName == nameof(ViewModel.ResultListMatchHighlightColor))

@@ -30,6 +30,8 @@ public sealed class AppSettings
     public const string DefaultPreviewMatchTextColor = "#FFFFD700"; // Gold
     public const string DefaultPreviewOverlayColor = "#FFFF4500"; // OrangeRed
     public const string DefaultPreviewMatchLineColor = "#FFFFFFFF"; // White
+    public const string DefaultPreviewTextFontFamily = "Consolas";
+    public const int DefaultPreviewTextFontSize = 14;
     public const string DefaultPreviewEditorFontFamily = "Consolas, Cascadia Mono, Segoe UI, Segoe UI Symbol, Segoe UI Emoji";
     public const int DefaultPreviewEditorFontSize = 13;
     public const string DefaultResultListMatchTextFontFamily = "Consolas";
@@ -79,6 +81,8 @@ public sealed class AppSettings
     public string PreviewMatchTextColor { get; set; } = DefaultPreviewMatchTextColor;
     public string PreviewOverlayColor { get; set; } = DefaultPreviewOverlayColor;
     public string PreviewMatchLineColor { get; set; } = DefaultPreviewMatchLineColor;
+    public string PreviewTextFontFamily { get; set; } = DefaultPreviewTextFontFamily;
+    public int PreviewTextFontSize { get; set; } = DefaultPreviewTextFontSize;
     public string PreviewEditorFontFamily { get; set; } = DefaultPreviewEditorFontFamily;
     public int PreviewEditorFontSize { get; set; } = DefaultPreviewEditorFontSize;
     public string ResultListMatchTextFontFamily { get; set; } = DefaultResultListMatchTextFontFamily;
@@ -87,7 +91,7 @@ public sealed class AppSettings
     public int LogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose (file logging)
     public int ConsoleLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     public int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
-    public int ParallelismIndex { get; set; } // 0 = Auto, 1 = 1, 2 = half cores, 3 = 2x cores, 4 = all cores
+    public int ParallelismIndex { get; set; } = 4; // 0 = safe cap, 1 = 1, 2 = half cores, 3 = 2x cores, 4 = all cores
     public int LineTruncationLength { get; set; } = 500;
     public int MaxRecentItems { get; set; } = 20;
     /// <summary>Hard process memory cap in MB. 0 = automatic sub-GB paging target.</summary>
@@ -98,10 +102,10 @@ public sealed class AppSettings
     public string? SearchResultTempDirectory { get; set; }
     /// <summary>Whether the user has chosen the search result temp-file location.</summary>
     public bool HasChosenSearchResultTempDirectory { get; set; }
-    /// <summary>When true, show the memory pressure warning label in the results toolbar.</summary>
-    public bool ShowMemoryPressureWarningLabel { get; set; } = true;
+    /// <summary>When true, show the memory pressure warning label in the results toolbar. Hidden by default.</summary>
+    public bool ShowMemoryPressureWarningLabel { get; set; }
     /// <summary>When true, show throughput labels and disk utilization sparkline in the bottom status bar.</summary>
-    public bool ShowStatsForNerds { get; set; } = true;
+    public bool ShowStatsForNerds { get; set; }
     /// <summary>When true, show the Auto-scroll checkbox in the results toolbar. Hidden by default.</summary>
     public bool ShowAutoScrollResultsCheckbox { get; set; }
     /// <summary>Bounded channel buffer size for the Everything SDK streaming path. Higher values use more memory but can improve throughput.</summary>
@@ -259,6 +263,7 @@ public sealed class SettingsService
             MigrateLegacyWindowFocusBehavior(settings);
             NormalizeFilterModeSettings(settings);
             NormalizeThemeSettings(settings);
+            NormalizePreviewTextFontSettings(settings);
             NormalizePreviewEditorFontSettings(settings);
             NormalizeResultListMatchTextSettings(settings);
             settings.TerminalDefaultWorkingDirectory ??= string.Empty;
@@ -293,6 +298,7 @@ public sealed class SettingsService
             MigrateLegacyWindowFocusBehavior(settings);
             NormalizeFilterModeSettings(settings);
             NormalizeThemeSettings(settings);
+            NormalizePreviewTextFontSettings(settings);
             NormalizePreviewEditorFontSettings(settings);
             NormalizeResultListMatchTextSettings(settings);
             settings.TerminalDefaultWorkingDirectory ??= string.Empty;
@@ -343,6 +349,17 @@ public sealed class SettingsService
     private static void NormalizeThemeSettings(AppSettings settings)
     {
         settings.ThemeModeIndex = settings.ThemeModeIndex is >= 0 and <= 2 ? settings.ThemeModeIndex : 0;
+    }
+
+    private static void NormalizePreviewTextFontSettings(AppSettings settings)
+    {
+        if (string.IsNullOrWhiteSpace(settings.PreviewTextFontFamily))
+            settings.PreviewTextFontFamily = AppSettings.DefaultPreviewTextFontFamily;
+
+        settings.PreviewTextFontSize = Math.Clamp(
+            settings.PreviewTextFontSize <= 0 ? AppSettings.DefaultPreviewTextFontSize : settings.PreviewTextFontSize,
+            6,
+            72);
     }
 
     private static void NormalizePreviewEditorFontSettings(AppSettings settings)

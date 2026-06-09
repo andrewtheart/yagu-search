@@ -17,7 +17,7 @@ Yagu is a fast Windows search app for finding text, regex matches, or file names
 6. Results stream in while the search runs. Click a result or match line to preview it.
 7. Use Open, Edit, Copy, or Export actions to work with the results.
 
-The status bar shows progress during a search. When the search finishes or is canceled, it shows elapsed time and files processed per second. A throughput sparkline visualizes I/O activity in real time.
+The status bar shows progress during a search. When the search finishes or is canceled, it shows elapsed time. Enable **Stats for nerds** in Settings -> Developer Options to show files processed per second and a real-time throughput sparkline.
 
 ## Main Screen
 
@@ -108,11 +108,19 @@ Click the **Advanced Options** expander below the search bar to reveal additiona
 | --- | --- |
 | Max depth | Maximum subdirectory levels to recurse below the search root. 0 = unlimited. A value of 2 searches the root and up to two levels of child folders. This value is per-search and is not saved to settings. |
 
+### CLI Command
+
+| Control | Effect |
+| --- | --- |
+| Generate CLI command | Builds a `Yagu.exe --cli` command from the current directory, query, search toggles, and Advanced Options. The command appears in a closable code-styled overlay with a copy button and a toggle for showing or hiding flags already covered by the current settings file. |
+
 ---
 
 ## Results Pane (Left Panel)
 
 Results are grouped by file. Each group header shows the file name, match count, file size, modified date, and directory path. Expand a file group to see individual matching lines with context.
+
+When an expanded file's header scrolls out of view, a compact sticky strip at the top of the results list shows the current file name and includes an Explorer button for that file. Double-click the strip to collapse that file group.
 
 ### Results Toolbar
 
@@ -272,7 +280,7 @@ Open with **Ctrl+F** (find only) or **Ctrl+H** (find and replace).
 
 ## Settings
 
-Open Settings from the **gear** button in the title bar. Settings are saved to `%APPDATA%\Yagu\settings.json`.
+Open Settings from the **gear** button in the title bar. Settings are saved to `%APPDATA%\Yagu\settings.json`. Reset and Use default buttons are disabled when the current value already matches the default.
 
 ### Search Defaults Tab
 
@@ -305,7 +313,7 @@ Open Settings from the **gear** button in the title bar. Settings are saved to `
 
 | Setting | What It Controls |
 | --- | --- |
-| Content-search parallelism | Concurrent file scan workers: Auto, 1 thread, Half cores, All cores, 2× cores. |
+| Content-search parallelism | Concurrent file scan workers: Safe cap, 1 thread, Half cores, 2× cores, All cores. Default: All cores. |
 | Native concurrency limit | Max concurrent Rust native scanner operations (default: min(64, cores×2)). |
 | MMF concurrency limit | Max concurrent memory-mapped file views (default: 16). |
 | File-listing backend | Auto, Everything SDK, `es.exe`, or .NET enumeration. |
@@ -324,12 +332,18 @@ Open Settings from the **gear** button in the title bar. Settings are saved to `
 | --- | --- |
 | Preview layout | Default layout: Concatenated or Multi-highlight. |
 | Word wrap | Default word-wrap state in preview. |
+| Preview text font family | Typeface used by preview pane line text and line-number gutters. |
+| Preview text font size | Base size used by preview pane line text and line-number gutters. |
 | Auto-load matches on scroll | Number of matches to auto-load when scrolling (default: 50). |
 | Max matches per section | Matches shown per file section before an overflow "show more" button (default: 500). |
 | Preview section page size | Initial file sections loaded per page, more loaded on scroll (default: 50). |
 | Full-file preview limit (MB) | Largest file size for full-file preview mode (default: 1024 MB). |
 | Selected section background | Background color for the active preview section. |
 | Unselected section background | Background color for inactive preview sections. |
+| Results match text font family | Typeface used by match lines in the left results pane. |
+| Results match text font size | Base size used by match lines in the left results pane. |
+| Built-in editor font family | Typeface used by the built-in full-file editor. |
+| Built-in editor font size | Base size used by the built-in full-file editor; zoom scales from this value. |
 
 ### Preview Colors Tab
 
@@ -373,7 +387,7 @@ All colors are specified as ARGB hex strings (e.g. `#FFFFD700`). Use the color p
 
 | Setting | What It Controls |
 | --- | --- |
-| Show memory pressure warning | Display the orange toolbar warning when memory-saving mode activates. |
+| Show memory pressure warning | Display the orange toolbar warning when memory-saving mode activates. Hidden by default. |
 
 ---
 
@@ -508,7 +522,7 @@ When Yagu detects the search directory is on a rotational (HDD) drive, it can au
 
 ## Throughput Sparkline
 
-During a search, a real-time sparkline graph appears in the status area showing I/O throughput over time. It brightens during active scanning and dims during idle periods. This helps identify bottlenecks (e.g., if throughput drops to zero, the disk may be saturated or a large file is being processed).
+When **Stats for nerds** is enabled in Settings -> Developer Options, a real-time sparkline graph appears in the status area showing I/O throughput over time. It brightens during active scanning and dims during idle periods. This helps identify bottlenecks (e.g., if throughput drops to zero, the disk may be saturated or a large file is being processed).
 
 ---
 
@@ -602,7 +616,7 @@ Do not compare rates across unrelated directories — a tree of tiny source file
 - Include: `cs;ts;js;py;rs;go;java;cpp;h`.
 - Exclude: `bin;obj;node_modules;.git;target;dist;__pycache__`.
 - Search binary: off.
-- Parallelism: Auto (try 2× cores on fast NVMe SSDs).
+- Parallelism: All cores (try 2× cores on fast NVMe SSDs).
 
 ### Large Log Search
 
@@ -794,7 +808,7 @@ Yagu.exe --cli --directory <path> PATTERN [OPTIONS]
 
 | Flag | Description |
 | --- | --- |
-| `--threads <n>` | Worker threads (0 = auto). |
+| `--threads <n>` | Worker threads (0 = service-selected safe cap). |
 | `--memory-limit <MB>` | Process memory cap. |
 | `--memory-pressure <n>` | System memory threshold 0–100. |
 | `--file-lister-backend <n>` | 0=Auto, 1=SDK, 2=es.exe, 3=Managed. |
@@ -901,7 +915,7 @@ Yagu.exe --cli --directory logs "error" --sort date --sort-desc
 
 ### Local Settings File
 
-If `.yagu.json` exists in the current working directory, it is used as the base configuration. CLI flags always override file settings. Falls back to global AppData settings when no local file exists.
+If `.yagu.json` exists in the current working directory, it is used as the base configuration. If not, Yagu checks the running process launch directory next, then falls back to global AppData settings. CLI flags always override file settings.
 
 ---
 

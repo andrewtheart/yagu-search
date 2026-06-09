@@ -1,8 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.Specialized;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Yagu.Models;
 using Yagu.Services;
 
 namespace Yagu;
@@ -14,6 +17,7 @@ namespace Yagu;
 public sealed partial class MainWindow
 {
     private const double ResultsListScrollEdgeEpsilon = 0.5;
+    private const double ResultsFileOverlayFallbackHeight = 36;
     private const int ResultsListSmartScrollRestorePasses = 3;
 
     private enum ResultsListSmartScrollIntent
@@ -30,6 +34,8 @@ public sealed partial class MainWindow
     private bool _resultsListSmartScrollPending;
     private bool _resultsListTopRestoreInProgress;
     private bool _resultsListShowMoreRestoreInProgress;
+    private bool _resultsFileOverlayUpdatePending;
+    private FileGroup? _resultsFileOverlayGroup;
     private ResultsListSmartScrollIntent _pendingResultsListSmartScrollIntent;
 
     private void InitializeResultsListSmartScroll()
@@ -40,11 +46,13 @@ public sealed partial class MainWindow
         {
             EnsureResultsListScrollViewerHooked();
             CaptureResultsListScrollPosition();
+            QueueResultsFileOverlayUpdate();
         };
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
             EnsureResultsListScrollViewerHooked();
             CaptureResultsListScrollPosition();
+            QueueResultsFileOverlayUpdate();
         });
     }
 
@@ -56,6 +64,7 @@ public sealed partial class MainWindow
             _resultsListScrollViewer.ViewChanged -= OnResultsListScrollViewerViewChanged;
         _resultsListScrollViewer = null;
         _resultsListScrollViewerHooked = false;
+        _resultsFileOverlayGroup = null;
     }
 
     private void EnsureResultsListScrollViewerHooked()
@@ -74,6 +83,7 @@ public sealed partial class MainWindow
     private void OnResultsListScrollViewerViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
         CaptureResultsListScrollPosition();
+        QueueResultsFileOverlayUpdate();
     }
 
     private void CaptureResultsListScrollPosition()
@@ -166,12 +176,175 @@ public sealed partial class MainWindow
         if (ViewModel.ResultRows.Count == 0)
         {
             CaptureResultsListScrollPosition();
+            QueueResultsFileOverlayUpdate();
             return;
         }
 
         ResultsListSmartScrollIntent intent = ResolveResultsListSmartScrollIntent();
         if (intent != ResultsListSmartScrollIntent.None)
             QueueResultsListSmartScrollRestore(intent);
+        QueueResultsFileOverlayUpdate();
+    }
+
+    private void QueueResultsFileOverlayUpdate()
+    {
+        if (_resultsFileOverlayUpdatePending)
+            return;
+
+        _resultsFileOverlayUpdatePending = true;
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            _resultsFileOverlayUpdatePending = false;
+            UpdateResultsFileOverlay();
+        });
+    }
+
+    private void UpdateResultsFileOverlay()
+    {
+        EnsureResultsListScrollViewerHooked();
+        if (_resultsListScrollViewer is null || ViewModel.ResultRows.Count == 0 || ResultsList.ActualHeight <= 0)
+        {
+            HideResultsFileOverlay();
+            return;
+        }
+
+        var group = FindCurrentResultsFileGroupWithHiddenHeader();
+        if (group is null)
+        {
+            HideResultsFileOverlay();
+            return;
+        }
+
+        if (!ReferenceEquals(_resultsFileOverlayGroup, group) || ResultsFileOverlay.Visibility != Visibility.Visible)
+        {
+            _resultsFileOverlayGroup = group;
+            ResultsFileOverlayFileName.Text = group.FileName;
+            ToolTipService.SetToolTip(ResultsFileOverlayFileName, group.FilePath);
+            ResultsFileOverlayExplorerButton.Tag = group.FilePath;
+        }
+
+        ResultsFileOverlay.Visibility = Visibility.Visible;
+    }
+
+    private void HideResultsFileOverlay()
+    {
+        _resultsFileOverlayGroup = null;
+        ResultsFileOverlay.Visibility = Visibility.Collapsed;
+        ResultsFileOverlayExplorerButton.Tag = null;
+    }
+
+    private void OnResultsFileOverlayDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+    {
+        if (IsInsideHeaderCommand(e.OriginalSource as DependencyObject, ResultsFileOverlay))
+            return;
+
+        var group = _resultsFileOverlayGroup;
+        if (group is null)
+        {
+            HideResultsFileOverlay();
+            return;
+        }
+
+        if (group.IsExpanded)
+            group.IsExpanded = false;
+
+        HideResultsFileOverlay();
+        QueueResultsFileOverlayUpdate();
+        e.Handled = true;
+    }
+
+    private FileGroup? FindCurrentResultsFileGroupWithHiddenHeader()
+    {
+        double viewportBottom = Math.Max(0, ResultsList.ActualHeight);
+        double overlayBottom = GetResultsFileOverlayReservedHeight();
+        FileGroup? bestGroup = null;
+        double bestTop = double.NegativeInfinity;
+
+        foreach (var expander in FindVisualDescendants<Expander>(ResultsList))
+        {
+            if (expander.DataContext is not FileGroup group || expander.ActualHeight <= 0)
+                continue;
+
+            if (!TryGetElementBoundsInResultsList(expander, out double top, out double bottom))
+                continue;
+
+            if (bottom <= 0 || top >= viewportBottom)
+                continue;
+
+            if (!TryGetFileGroupHeaderBoundsInResultsList(expander, fallbackTop: top, out double headerTop, out double headerBottom))
+                continue;
+
+            if (headerBottom > ResultsListScrollEdgeEpsilon && headerTop < overlayBottom)
+                return null;
+
+            if (headerBottom > ResultsListScrollEdgeEpsilon)
+                continue;
+
+            if (bottom <= overlayBottom + ResultsListScrollEdgeEpsilon)
+                continue;
+
+            if (top > bestTop)
+            {
+                bestTop = top;
+                bestGroup = group;
+            }
+        }
+
+        return bestGroup;
+    }
+
+    private double GetResultsFileOverlayReservedHeight()
+    {
+        double actualHeight = ResultsFileOverlay.ActualHeight;
+        return double.IsFinite(actualHeight) && actualHeight > ResultsListScrollEdgeEpsilon
+            ? actualHeight
+            : ResultsFileOverlayFallbackHeight;
+    }
+
+    private bool TryGetFileGroupHeaderBoundsInResultsList(Expander expander, double fallbackTop, out double headerTop, out double headerBottom)
+    {
+        headerTop = fallbackTop;
+        headerBottom = fallbackTop + Math.Min(expander.ActualHeight, ResultsFileOverlayFallbackHeight);
+        if (expander.Header is FrameworkElement header && header.ActualHeight > 0)
+        {
+            try
+            {
+                var point = header.TransformToVisual(ResultsList).TransformPoint(new Windows.Foundation.Point(0, 0));
+                headerTop = point.Y;
+                headerBottom = point.Y + header.ActualHeight;
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private bool TryGetElementBoundsInResultsList(FrameworkElement element, out double top, out double bottom)
+    {
+        top = 0;
+        bottom = 0;
+        try
+        {
+            var point = element.TransformToVisual(ResultsList).TransformPoint(new Windows.Foundation.Point(0, 0));
+            top = point.Y;
+            bottom = top + element.ActualHeight;
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private ResultsListSmartScrollIntent ResolveResultsListSmartScrollIntent()
@@ -297,6 +470,20 @@ public sealed partial class MainWindow
         }
 
         return null;
+    }
+
+    private static IEnumerable<T> FindVisualDescendants<T>(DependencyObject parent) where T : DependencyObject
+    {
+        int count = VisualTreeHelper.GetChildrenCount(parent);
+        for (int i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T match)
+                yield return match;
+
+            foreach (var nested in FindVisualDescendants<T>(child))
+                yield return nested;
+        }
     }
 
 }

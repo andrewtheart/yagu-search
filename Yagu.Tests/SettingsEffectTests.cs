@@ -908,16 +908,16 @@ public sealed class SettingsEffectTests : IDisposable
     {
         var s = new AppSettings();
         Assert.Equal(3, s.ContextLines);
-        Assert.Equal(20, s.PreviewContextLines);
+        Assert.Equal(10, s.PreviewContextLines);
         Assert.Equal(0, s.MaxResults);
         Assert.Equal(0, s.DefaultMinFileSizeBytes);
         Assert.Equal(0, s.DefaultMaxFileSizeBytes);
         Assert.Equal(0, s.FileListerBackendIndex);
-        Assert.Equal(0, s.ParallelismIndex);
+        Assert.Equal(4, s.ParallelismIndex);
         Assert.Equal(500, s.LineTruncationLength);
         Assert.Equal(20, s.MaxRecentItems);
         Assert.Equal(0, s.MemoryLimitMB);
-        Assert.Equal(80, s.MemoryPressurePercent);
+        Assert.Equal(75, s.MemoryPressurePercent);
         Assert.Equal(4096, s.SdkChannelBufferSize);
         Assert.Equal(0, s.MaxMatchesPerFile);
         Assert.True(s.BackupBeforeSave);
@@ -925,6 +925,8 @@ public sealed class SettingsEffectTests : IDisposable
         Assert.False(s.GlobalHotkeyEnabled);
         Assert.Equal(1, s.PreviewModeIndex);
         Assert.False(s.PreviewWordWrap);
+        Assert.Equal(AppSettings.DefaultPreviewTextFontFamily, s.PreviewTextFontFamily);
+        Assert.Equal(AppSettings.DefaultPreviewTextFontSize, s.PreviewTextFontSize);
         Assert.Equal(32, s.PreviewEditorMaxSizeMB);
         Assert.Equal(20_000_000, s.PreviewEditorMaxTextLength);
         Assert.Equal(1_000_000, s.PreviewEditorMaxLineLength);

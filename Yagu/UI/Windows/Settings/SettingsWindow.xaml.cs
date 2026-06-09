@@ -48,6 +48,7 @@ public sealed partial class SettingsWindow : Window
     private readonly HashSet<UIElement> _dirtyTrackedElements = new();
     private readonly Dictionary<UIElement, object?> _cleanSettingValues = new();
     private readonly List<Action> _fontContrastStatusRefreshers = new();
+    private readonly List<Action> _defaultResetButtonRefreshers = new();
     private bool _settingsDirty;
     private bool _settingDirtyTrackingEnabled;
     private DispatcherTimer? _fontContrastCheckTimer;
@@ -141,6 +142,8 @@ public sealed partial class SettingsWindow : Window
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
+        RefreshDefaultResetButtons();
+
         if (e.PropertyName == nameof(MainViewModel.ThemeModeIndex))
         {
             ApplySettingsTheme();
@@ -206,6 +209,29 @@ public sealed partial class SettingsWindow : Window
             catch { }
         }
     }
+
+    private void RefreshDefaultResetButtons()
+    {
+        foreach (var refresh in _defaultResetButtonRefreshers.ToArray())
+        {
+            try { refresh(); }
+            catch { }
+        }
+    }
+
+    private void RegisterDefaultResetButton(Button button, Func<bool> isCurrentDefault)
+    {
+        void Refresh() => button.IsEnabled = !isCurrentDefault();
+        _defaultResetButtonRefreshers.Add(Refresh);
+        Refresh();
+    }
+
+    private static bool SettingStringEquals(string? currentValue, string defaultValue)
+        => string.Equals(currentValue ?? string.Empty, defaultValue, StringComparison.Ordinal);
+
+    private static bool SettingColorEquals(string? currentHex, string defaultHex, Windows.UI.Color fallback)
+        => ColorStringHelper.Parse(currentHex ?? string.Empty, fallback)
+            .Equals(ColorStringHelper.Parse(defaultHex, fallback));
 
     private void ApplySettingsTitleBarButtonTheme()
     {
@@ -1122,6 +1148,7 @@ public sealed partial class SettingsWindow : Window
         {
             _systemFontFamilyNames =
             [
+                AppSettings.DefaultPreviewTextFontFamily,
                 AppSettings.DefaultResultListMatchTextFontFamily,
                 "Cascadia Mono",
                 "Courier New",
@@ -1133,7 +1160,7 @@ public sealed partial class SettingsWindow : Window
         return _systemFontFamilyNames;
     }
 
-    private static ColorPicker AddColorSetting(
+    private ColorPicker AddColorSetting(
         StackPanel parent,
         string label,
         string description,
@@ -1222,6 +1249,7 @@ public sealed partial class SettingsWindow : Window
             Padding = new Thickness(10, 4, 10, 4),
         };
         reset.Click += (_, _) => picker.Color = fallback;
+        RegisterDefaultResetButton(reset, () => picker.Color.Equals(fallback));
         parent.Children.Add(reset);
 
         parent.Children.Add(new TextBlock
@@ -1396,6 +1424,7 @@ public sealed partial class SettingsWindow : Window
             workingDirectory.Text = string.Empty;
             _viewModel.TerminalDefaultWorkingDirectory = string.Empty;
         };
+        RegisterDefaultResetButton(useDefault, () => SettingStringEquals(_viewModel.TerminalDefaultWorkingDirectory, string.Empty));
         buttonRow.Children.Add(useDefault);
         parent.Children.Add(buttonRow);
 
@@ -1609,6 +1638,11 @@ public sealed partial class SettingsWindow : Window
                 _viewModel.ModifiedAfterDate = null;
                 _viewModel.ModifiedBeforeDate = null;
             };
+            RegisterDefaultResetButton(clearDateDefaults,
+                () => _viewModel.DefaultCreatedAfterDate is null
+                    && _viewModel.DefaultCreatedBeforeDate is null
+                    && _viewModel.DefaultModifiedAfterDate is null
+                    && _viewModel.DefaultModifiedBeforeDate is null);
             g.Children.Add(clearDateDefaults);
 
             var searchBinary = new ToggleSwitch { OnContent = NextSearchLabel("Search binary files"), OffContent = NextSearchLabel("Search binary files"), IsOn = _viewModel.SearchBinary };
@@ -1643,6 +1677,8 @@ public sealed partial class SettingsWindow : Window
                 adminSeg.Text = AppSettings.DefaultAdminProtectedPathSegments;
                 _viewModel.AdminProtectedPathSegments = adminSeg.Text;
             };
+            RegisterDefaultResetButton(resetAdminSeg,
+                () => SettingStringEquals(_viewModel.AdminProtectedPathSegments, AppSettings.DefaultAdminProtectedPathSegments));
             g.Children.Add(resetAdminSeg);
             g.Children.Add(new TextBlock { Text = "Each entry is a path substring like \\Windows\\System32\\config. Anchored with backslashes so it matches the folder anywhere in the tree. Only applied when the process is not elevated.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
@@ -1675,6 +1711,8 @@ public sealed partial class SettingsWindow : Window
                 _viewModel.SettingsBinaryExtensions = binaryExt.Text;
                 _viewModel.BinaryExtensions = binaryExt.Text;
             };
+            RegisterDefaultResetButton(resetBinaryExt,
+                () => SettingStringEquals(_viewModel.SettingsBinaryExtensions, AppSettings.DefaultBinaryExtensions));
             g.Children.Add(resetBinaryExt);
             g.Children.Add(new TextBlock { Text = "These populate the Binary ext dropdown shown beside Skip Extensions when Search binary is enabled. Use this for compiled binary and build artifact extensions that should remain skipped even during binary search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
@@ -1711,7 +1749,7 @@ public sealed partial class SettingsWindow : Window
 
             g.Children.Add(NextSearchLabel("Content-search parallelism (concurrent file scan threads):"));
             var parallelism = new ComboBox();
-            parallelism.Items.Add($"Auto (safe cap · up to {Math.Min(16, Environment.ProcessorCount)})");
+            parallelism.Items.Add($"Safe cap (up to {Math.Min(16, Environment.ProcessorCount)})");
             parallelism.Items.Add("1 thread (sequential, HDD safe)");
             parallelism.Items.Add($"Half cores ({Math.Max(1, Environment.ProcessorCount / 2)})");
             parallelism.Items.Add($"2× cores ({Environment.ProcessorCount * 2}, I/O heavy)");
@@ -1860,6 +1898,13 @@ public sealed partial class SettingsWindow : Window
                 _viewModel.ResultListMatchTextFontSize = AppSettings.DefaultResultListMatchTextFontSize;
                 _viewModel.ResultListMatchHighlightColor = AppSettings.DefaultResultListMatchHighlightColor;
             };
+            RegisterDefaultResetButton(resetResultMatchText,
+                () => SettingStringEquals(_viewModel.ResultListMatchTextFontFamily, AppSettings.DefaultResultListMatchTextFontFamily)
+                    && _viewModel.ResultListMatchTextFontSize == AppSettings.DefaultResultListMatchTextFontSize
+                    && SettingColorEquals(
+                        _viewModel.ResultListMatchHighlightColor,
+                        AppSettings.DefaultResultListMatchHighlightColor,
+                        Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00)));
             fileMatchListGroup.Children.Add(resetResultMatchText);
             fileMatchListGroup.Children.Add(new TextBlock { Text = "Used by the left results pane match lines. Context lines and line-number buttons keep their compact default styling.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
@@ -1875,6 +1920,49 @@ public sealed partial class SettingsWindow : Window
             wordWrap.Checked += (_, _) => { _viewModel.PreviewWordWrap = true; _applyWordWrap?.Invoke(true); };
             wordWrap.Unchecked += (_, _) => { _viewModel.PreviewWordWrap = false; _applyWordWrap?.Invoke(false); };
             previewViewerGroup.Children.Add(wordWrap);
+
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Preview text font", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 12, 0, 0) });
+
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Font family:" });
+            var previewTextFontFamily = CreateFontFamilyPicker(
+                _viewModel.PreviewTextFontFamily,
+                AppSettings.DefaultPreviewTextFontFamily,
+                value => _viewModel.PreviewTextFontFamily = value);
+            previewViewerGroup.Children.Add(previewTextFontFamily);
+
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Font size:" });
+            var previewTextFontSize = new NumberBox
+            {
+                Value = _viewModel.PreviewTextFontSize,
+                Minimum = 6,
+                Maximum = 72,
+                SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
+            };
+            previewTextFontSize.ValueChanged += (_, args) =>
+            {
+                if (!double.IsNaN(args.NewValue))
+                    _viewModel.PreviewTextFontSize = (int)Math.Clamp(args.NewValue, 6, 72);
+            };
+            previewViewerGroup.Children.Add(previewTextFontSize);
+
+            var resetPreviewTextFont = new Button
+            {
+                Content = "Reset preview text font",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+            };
+            resetPreviewTextFont.Click += (_, _) =>
+            {
+                SelectFontFamily(previewTextFontFamily, AppSettings.DefaultPreviewTextFontFamily);
+                previewTextFontSize.Value = AppSettings.DefaultPreviewTextFontSize;
+                _viewModel.PreviewTextFontFamily = AppSettings.DefaultPreviewTextFontFamily;
+                _viewModel.PreviewTextFontSize = AppSettings.DefaultPreviewTextFontSize;
+            };
+            RegisterDefaultResetButton(resetPreviewTextFont,
+                () => SettingStringEquals(_viewModel.PreviewTextFontFamily, AppSettings.DefaultPreviewTextFontFamily)
+                    && _viewModel.PreviewTextFontSize == AppSettings.DefaultPreviewTextFontSize);
+            previewViewerGroup.Children.Add(resetPreviewTextFont);
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Used by preview pane line text and line-number gutters.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             AddPreviewContentColorSetting(
                 previewViewerGroup,
@@ -2000,6 +2088,9 @@ public sealed partial class SettingsWindow : Window
                 _viewModel.PreviewEditorFontFamily = AppSettings.DefaultPreviewEditorFontFamily;
                 _viewModel.PreviewEditorFontSize = AppSettings.DefaultPreviewEditorFontSize;
             };
+            RegisterDefaultResetButton(resetEditorFont,
+                () => SettingStringEquals(_viewModel.PreviewEditorFontFamily, AppSettings.DefaultPreviewEditorFontFamily)
+                    && _viewModel.PreviewEditorFontSize == AppSettings.DefaultPreviewEditorFontSize);
             editorAppearanceGroup.Children.Add(resetEditorFont);
             editorAppearanceGroup.Children.Add(new TextBlock { Text = "Used by the built-in editor for full-file editing. Zoom controls still scale from this base size.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
@@ -2191,6 +2282,8 @@ public sealed partial class SettingsWindow : Window
                 resetFontContrastReminder.Content = "Font contrast reminders reset";
                 resetFontContrastReminder.IsEnabled = false;
             };
+            RegisterDefaultResetButton(resetFontContrastReminder,
+                () => !_viewModel.SuppressFontContrastWarnings && _viewModel.FontContrastReminderAfterUtc is null);
             g.Children.Add(resetFontContrastReminder);
             g.Children.Add(new TextBlock
             {
@@ -2257,6 +2350,7 @@ public sealed partial class SettingsWindow : Window
                     resetAdmin.Content = "Admin warning re-enabled ✓";
                     resetAdmin.IsEnabled = false;
                 };
+                RegisterDefaultResetButton(resetAdmin, () => !_viewModel.SuppressAdminWarning);
                 g.Children.Add(resetAdmin);
                 g.Children.Add(new TextBlock { Text = "The non-administrator warning was previously dismissed. Click to show it again on next launch.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
             }

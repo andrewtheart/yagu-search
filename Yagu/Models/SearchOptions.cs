@@ -82,7 +82,7 @@ public sealed class SearchOptions
     public static int MaxResultsCeiling { get; set; } = 50_000;
 
     /// <summary>
-    /// Number of concurrent file scans. 0 = auto safe cap chosen by <see cref="Services.SearchService"/>.
+    /// Number of concurrent file scans. 0 = service-selected safe cap chosen by <see cref="Services.SearchService"/>.
     /// </summary>
     public int MaxDegreeOfParallelism { get; init; }
 

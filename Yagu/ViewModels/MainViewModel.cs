@@ -146,6 +146,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         PreviewMatchLineColor = ColorStringHelper.Normalize(
             _settings.PreviewMatchLineColor,
             Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF));
+        PreviewTextFontFamily = string.IsNullOrWhiteSpace(_settings.PreviewTextFontFamily)
+            ? AppSettings.DefaultPreviewTextFontFamily
+            : _settings.PreviewTextFontFamily;
+        PreviewTextFontSize = Math.Clamp(
+            _settings.PreviewTextFontSize <= 0 ? AppSettings.DefaultPreviewTextFontSize : _settings.PreviewTextFontSize,
+            6,
+            72);
         PreviewEditorFontFamily = string.IsNullOrWhiteSpace(_settings.PreviewEditorFontFamily)
             ? AppSettings.DefaultPreviewEditorFontFamily
             : _settings.PreviewEditorFontFamily;
@@ -457,6 +464,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial string PreviewMatchTextColor { get; set; } = AppSettings.DefaultPreviewMatchTextColor;
     [ObservableProperty] public partial string PreviewOverlayColor { get; set; } = AppSettings.DefaultPreviewOverlayColor;
     [ObservableProperty] public partial string PreviewMatchLineColor { get; set; } = AppSettings.DefaultPreviewMatchLineColor;
+    [ObservableProperty] public partial string PreviewTextFontFamily { get; set; } = AppSettings.DefaultPreviewTextFontFamily;
+    [ObservableProperty] public partial int PreviewTextFontSize { get; set; } = AppSettings.DefaultPreviewTextFontSize;
     [ObservableProperty] public partial string PreviewEditorFontFamily { get; set; } = AppSettings.DefaultPreviewEditorFontFamily;
     [ObservableProperty] public partial int PreviewEditorFontSize { get; set; } = AppSettings.DefaultPreviewEditorFontSize;
     [ObservableProperty] public partial string ResultListMatchTextFontFamily { get; set; } = AppSettings.DefaultResultListMatchTextFontFamily;
@@ -521,14 +530,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial int FileLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] public partial int ConsoleLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] public partial int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
-    [ObservableProperty] public partial int ParallelismIndex { get; set; } // 0 = Auto, 1 = 1 thread, 2 = half cores, 3 = 2x cores, 4 = all cores
+    [ObservableProperty] public partial int ParallelismIndex { get; set; } = 4; // 0 = safe cap, 1 = 1 thread, 2 = half cores, 3 = 2x cores, 4 = all cores
     [ObservableProperty] public partial int LineTruncationLength { get; set; } = 500;
     [ObservableProperty] public partial int MaxRecentItems { get; set; } = 20;
     [ObservableProperty] public partial bool GlobalHotkeyEnabled { get; set; }
     [ObservableProperty] public partial int MemoryLimitMB { get; set; }
     [ObservableProperty] public partial int MemoryPressurePercent { get; set; } = 75;
-    [ObservableProperty] public partial bool ShowMemoryPressureWarningLabel { get; set; } = true;
-    [ObservableProperty] public partial bool ShowStatsForNerds { get; set; } = true;
+    [ObservableProperty] public partial bool ShowMemoryPressureWarningLabel { get; set; }
+    [ObservableProperty] public partial bool ShowStatsForNerds { get; set; }
     [ObservableProperty] public partial bool ShowAutoScrollResultsCheckbox { get; set; }
     [ObservableProperty] public partial int SdkChannelBufferSize { get; set; } = 4096;
     [ObservableProperty] public partial int MaxMatchesPerFile { get; set; }
@@ -2351,6 +2360,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.PreviewMatchLineColor = ColorStringHelper.Normalize(
             PreviewMatchLineColor,
             Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF));
+        _settings.PreviewTextFontFamily = string.IsNullOrWhiteSpace(PreviewTextFontFamily)
+            ? AppSettings.DefaultPreviewTextFontFamily
+            : PreviewTextFontFamily.Trim();
+        _settings.PreviewTextFontSize = Math.Clamp(
+            PreviewTextFontSize <= 0 ? AppSettings.DefaultPreviewTextFontSize : PreviewTextFontSize,
+            6,
+            72);
         _settings.PreviewEditorFontFamily = string.IsNullOrWhiteSpace(PreviewEditorFontFamily)
             ? AppSettings.DefaultPreviewEditorFontFamily
             : PreviewEditorFontFamily.Trim();

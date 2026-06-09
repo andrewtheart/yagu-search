@@ -361,6 +361,8 @@ When the process working set exceeds the configured memory limit, `SearchService
 
 Settings include recent directories, search history, search defaults, file limits, skip extensions, backend selection, parallelism, memory limits, editor command, preview mode, word wrap, global hotkey, and log verbosity.
 
+In CLI mode, Yagu looks for `.yagu.json` in the current working directory first. If it is not present there, Yagu checks the running process launch directory next, then falls back to `%APPDATA%\Yagu\settings.json`. CLI flags override any file-based settings.
+
 The app schedules best-effort cleanup for orphaned Yagu result temp files on startup.
 
 ## Test Setup

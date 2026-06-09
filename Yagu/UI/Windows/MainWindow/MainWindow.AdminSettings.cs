@@ -35,63 +35,7 @@ public sealed partial class MainWindow
     {
         var segments = Yagu.Services.FileLister.ParseAdminProtectedSegments(ViewModel.AdminProtectedPathSegments);
         if (segments.Count == 0) segments.AddRange(Yagu.Services.FileLister.DefaultAdminProtectedPathSegments);
-
-        var sp = new StackPanel { Spacing = 8 };
-        sp.Children.Add(new TextBlock
-        {
-            Text = "Some paths are not accessible by non-administrative processes. Currently, Yagu is configured to skip the following administrator-only paths while running in non-administrator mode:",
-            TextWrapping = TextWrapping.Wrap,
-        });
-
-        // Use a ScrollViewer + StackPanel of TextBlocks instead of a multiline TextBox.
-        // WinUI TextBox programmatic Text with multiple newlines is fiddly; a list of
-        // TextBlocks is simpler and renders reliably.
-        var listPanel = new StackPanel { Spacing = 2 };
-        foreach (var seg in segments)
-        {
-            listPanel.Children.Add(new TextBlock
-            {
-                Text = seg,
-                FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
-                IsTextSelectionEnabled = true,
-            });
-        }
-        var scroller = new ScrollViewer
-        {
-            Content = listPanel,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-            Height = 220,
-            Padding = new Thickness(8),
-            Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["LayerFillColorDefaultBrush"],
-            BorderThickness = new Thickness(1),
-            BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["ControlElevationBorderBrush"],
-            CornerRadius = new CornerRadius(4),
-        };
-        sp.Children.Add(scroller);
-
-        sp.Children.Add(new TextBlock
-        {
-            Text = "This list is not exhaustive, and some other protected paths may be inaccessible and fail during search.",
-            TextWrapping = TextWrapping.Wrap,
-            Opacity = 0.8,
-        });
-        sp.Children.Add(new TextBlock
-        {
-            Text = "To modify this list, please go to the Settings page (click the gear on the top right of the app).",
-            TextWrapping = TextWrapping.Wrap,
-            Opacity = 0.8,
-        });
-
-        var dlg = new ContentDialog
-        {
-            Title = "Admin-protected paths",
-            Content = sp,
-            CloseButtonText = "Close",
-            DefaultButton = ContentDialogButton.Close,
-            XamlRoot = this.Content.XamlRoot,
-        };
-        await dlg.ShowAsync();
+        await AdminProtectedPathsDialog.ShowAsync(_hwnd, segments);
     }
 
     private async void OnObeyGitignoreToggled(object sender, RoutedEventArgs e)
