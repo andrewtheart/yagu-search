@@ -112,7 +112,11 @@ Click the **Advanced Options** expander below the search bar to reveal additiona
 
 | Control | Effect |
 | --- | --- |
-| Generate CLI command | Builds a `Yagu.exe --cli` command from the current directory, query, search toggles, and Advanced Options. The command appears in a closable code-styled overlay with a copy button and a toggle for showing or hiding flags already covered by the current settings file. |
+| Generate CLI command | Builds a `Yagu.exe --cli` command from the current directory, query, search toggles, and Advanced Options. The command appears in a closable code-styled overlay with buttons to copy it or send it to the embedded terminal, plus a toggle for including or omitting options already saved in the current settings file. Sending to the terminal places the command at the prompt without pressing Enter. |
+
+### Embedded Terminal
+
+Right-click inside the terminal pane and choose **Reset terminal session** to clear the xterm.js surface, dispose the current ConPTY session, and start a fresh PowerShell session. Use this if the terminal appears disconnected, stuck, or out of sync.
 
 ---
 

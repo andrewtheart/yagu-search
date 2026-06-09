@@ -18,15 +18,22 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("x:Name=\"GeneratedCliCommandOverlay\"", xaml);
         Assert.Contains("x:Name=\"GeneratedCliCommandBubble\"", xaml);
         Assert.Contains("x:Name=\"GeneratedCliCommandText\"", xaml);
-        Assert.Contains("x:Name=\"ShowSettingsBackedCliFlagsToggle\"", xaml);
-        Assert.Contains("Header=\"Show settings-backed flags\"", xaml);
+        Assert.Contains("x:Name=\"IncludeSavedSettingCliOptionsToggle\"", xaml);
+        Assert.Contains("Header=\"Options already saved in settings\"", xaml);
+        Assert.Contains("OnContent=\"Include\"", xaml);
+        Assert.Contains("OffContent=\"Omit\"", xaml);
+        Assert.Contains("Omit options that already match the current settings file", xaml);
         Assert.Contains("IsOn=\"True\"", xaml);
-        Assert.Contains("Toggled=\"OnGeneratedCliCommandSettingsFlagsToggled\"", xaml);
+        Assert.Contains("Toggled=\"OnGeneratedCliCommandSavedSettingOptionsToggled\"", xaml);
+        Assert.DoesNotContain("settings-backed", xaml);
         Assert.Contains("FontFamily=\"Consolas\"", xaml);
         string commandTextSnippet = xaml.Substring(xaml.IndexOf("x:Name=\"GeneratedCliCommandText\"", StringComparison.Ordinal), 300);
         Assert.Contains("TextWrapping=\"Wrap\"", commandTextSnippet);
         Assert.DoesNotContain("TextWrapping=\"WrapWholeWords\"", commandTextSnippet);
         Assert.Contains("Click=\"OnCopyGeneratedCliCommandClick\"", xaml);
+        Assert.Contains("x:Name=\"SendGeneratedCliCommandToTerminalButton\"", xaml);
+        Assert.Contains("Click=\"OnSendGeneratedCliCommandToTerminalClick\"", xaml);
+        Assert.Contains("ToolTipService.ToolTip=\"Send command to terminal\"", xaml);
         Assert.Contains("Click=\"OnCloseGeneratedCliCommandOverlayClick\"", xaml);
         int buttonIndex = xaml.IndexOf("x:Name=\"GenerateCliCommandButton\"", StringComparison.Ordinal);
         int controlStackIndex = xaml.IndexOf("<StackPanel Spacing=\"10\">", buttonIndex, StringComparison.Ordinal);
@@ -43,6 +50,8 @@ public sealed class MainWindowCliCommandRegressionTests
     public void CliCommandGenerator_EmitsExplicitSearchAndAdvancedOptionFlags()
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.CliCommand.cs"));
+        string terminalSource = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
+        string terminalHtml = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Assets", "terminal.html"));
 
         Assert.Contains("\"--directory\"", source);
         Assert.Contains("\"--pattern\"", source);
@@ -62,15 +71,31 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("SearchOptions.ResolveContentSearchParallelism", source);
         Assert.Contains("BuildEffectiveSkipExtensionsForCli", source);
         Assert.Contains("QuoteCliValue", source);
-        Assert.Contains("_showGeneratedCliCommandSettingsBackedFlags", source);
-        Assert.Contains("OnGeneratedCliCommandSettingsFlagsToggled", source);
-        Assert.Contains("BuildGeneratedCliCommand(bool includeSettingsBackedFlags)", source);
+        Assert.Contains("_includeGeneratedCliCommandSavedSettingOptions", source);
+        Assert.Contains("OnGeneratedCliCommandSavedSettingOptionsToggled", source);
+        Assert.Contains("BuildGeneratedCliCommand(bool includeSavedSettingOptions)", source);
         Assert.Contains("new SettingsService().Load()", source);
-        Assert.Contains("ShouldIncludeSettingsBackedFlag", source);
+        Assert.Contains("ShouldIncludeSavedSettingOption", source);
         Assert.Contains("SplitSettingsPatternsForCli", source);
         Assert.Contains("AdminProtectedPathSegmentsEqual", source);
         Assert.Contains("CloseGeneratedCliCommandOverlay", source);
         Assert.Contains("Visibility.Collapsed", source);
+        Assert.Contains("OnSendGeneratedCliCommandToTerminalClick", source);
+        Assert.Contains("await SendTextToTerminalAsync(commandText.Text);", source);
+        Assert.Contains("EnsureGeneratedCliCommandText(commandText);", source);
+        Assert.Contains("private async Task SendTextToTerminalAsync(string text)", terminalSource);
+        Assert.Contains("EnsureTerminalPaneExpandedAsync", terminalSource);
+        Assert.Contains("_terminalService?.WriteInput(text);", terminalSource);
+        Assert.Contains("PostWebMessageAsJson(\"{\\\"type\\\":\\\"focus\\\"}\")", terminalSource);
+        Assert.Contains("msg.type === 'focus'", terminalHtml);
+
+        string ensureTerminalPane = terminalSource.Substring(
+            terminalSource.IndexOf("private async Task EnsureTerminalPaneExpandedAsync()", StringComparison.Ordinal),
+            500);
+        Assert.Contains("SetTerminalPaneExpanded(true);", ensureTerminalPane);
+        Assert.Contains("TerminalWebView.UpdateLayout();", ensureTerminalPane);
+        Assert.DoesNotContain("if (!_terminalPaneExpanded)", ensureTerminalPane);
+        Assert.DoesNotContain("SettingsBacked", source);
     }
 
     private static string FindRepoRoot()

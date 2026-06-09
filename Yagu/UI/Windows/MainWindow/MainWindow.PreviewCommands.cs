@@ -1382,7 +1382,7 @@ public sealed partial class MainWindow
         return previewable;
     }
 
-    private List<SearchResult> GetPreviewableResults(FileGroup group)
+    private static List<SearchResult> GetPreviewableResults(FileGroup group)
     {
         int limit = GetPreviewResultSnapshotLimit();
         List<SearchResult> candidates = group.AllSelected
@@ -1394,15 +1394,7 @@ public sealed partial class MainWindow
         return GetPreviewableResults(candidates);
     }
 
-    private int GetPreviewResultSnapshotLimit()
-    {
-        if (!ViewModel.IsSearching)
-            return int.MaxValue;
-
-        return Math.Max(
-            EffectiveInitialMaxMatchesPerSection,
-            EffectiveInitialMaxMatchesPerSection + MaxMatchesPerExpandChunk);
-    }
+    private static int GetPreviewResultSnapshotLimit() => int.MaxValue;
 
     private FileGroup? GetFileHeaderContextGroup(object? sender)
     {

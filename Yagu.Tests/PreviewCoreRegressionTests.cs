@@ -947,9 +947,14 @@ public sealed class PreviewCoreRegressionTests
 
         Assert.Contains("RegisterSectionMatchTotal(block, CountContentMatchResults(results));", MainWindowSource);
 
-        Assert.Contains("private List<SearchResult> GetPreviewableResults(FileGroup group)", MainWindowSource);
+        Assert.Contains("private static List<SearchResult> GetPreviewableResults(FileGroup group)", MainWindowSource);
         Assert.Contains("group.GetPreviewSnapshot(limit)", MainWindowSource);
         Assert.Contains("GetPreviewResultSnapshotLimit()", MainWindowSource);
+
+        string snapshotLimit = ExtractMethodWindow(MainWindowSource, "GetPreviewResultSnapshotLimit", window: 400);
+        Assert.Contains("=> int.MaxValue;", snapshotLimit);
+        Assert.DoesNotContain("ViewModel.IsSearching", snapshotLimit);
+        Assert.DoesNotContain("MaxMatchesPerExpandChunk", snapshotLimit);
 
         string fullFileSection = ExtractMethodWindow(MainWindowSource, "AddFullFileSection", window: 900);
         Assert.Contains("RegisterSectionMatchTotal(block, CountContentMatchResults(target.Matches));", fullFileSection);
@@ -1859,6 +1864,35 @@ public sealed class PreviewCoreRegressionTests
 
         string hide = ExtractMethodWindow(MainWindowSource, "HideActiveMatchOverlay", window: 500);
         Assert.Contains("ClearActiveMatchExtraWordMarkers();", hide);
+        Assert.Contains("ActiveMatchBand.Width = 0;", hide);
+        Assert.Contains("ActiveMatchBand.Height = 0;", hide);
+        Assert.Contains("ActiveMatchWordMarker.Width = 0;", hide);
+        Assert.Contains("ActiveMatchWordMarker.Height = 0;", hide);
+    }
+
+    [Fact]
+    public void ActiveOverlayHide_ClearsPreviousGeometryBeforeQueuedRetryCanShowCanvas()
+    {
+        string queuedUpdate = ExtractMethodWindow(MainWindowSource, "QueueActiveMatchOverlayUpdate", window: 2200);
+        AssertContainsInOrder(queuedUpdate,
+            "HideActiveMatchOverlay();",
+            "int navIndex = _currentMatchIndex;",
+            "TryUpdateActiveMatchOverlayFromActualRun(block, targetPara, targetRun, expectedVerticalOffset");
+
+        string updateOverlay = ExtractMethodWindow(MainWindowSource, "TryUpdateActiveMatchOverlayFromActualRun", window: 2400);
+        AssertContainsInOrder(updateOverlay,
+            "if (ActiveMatchOverlay.Visibility != Visibility.Visible)",
+            "ActiveMatchOverlay.Visibility = Visibility.Visible;",
+            "return false;");
+
+        string hide = ExtractMethodWindow(MainWindowSource, "HideActiveMatchOverlay", window: 900);
+        AssertContainsInOrder(hide,
+            "ClearActiveMatchExtraWordMarkers();",
+            "ActiveMatchBand.Width = 0;",
+            "ActiveMatchBand.Height = 0;",
+            "ActiveMatchWordMarker.Width = 0;",
+            "ActiveMatchWordMarker.Height = 0;",
+            "ActiveMatchOverlay.Visibility = Visibility.Collapsed;");
     }
 
     [Fact]

@@ -500,8 +500,36 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("TryResolveExistingDirectory(ViewModel.TerminalDefaultWorkingDirectory", MainWindowTerminalSource);
         Assert.Contains("TryResolveExistingDirectory(App.LaunchWorkingDirectory", MainWindowTerminalSource);
         Assert.Contains("Start(int cols = 120, int rows = 30, string? workingDirectory = null)", ConPtyTerminalServiceSource);
-        Assert.Contains("SpawnProcess(\"pwsh.exe\", workingDirectory)", ConPtyTerminalServiceSource);
+        Assert.Contains("ResolvePowerShellExecutable()", ConPtyTerminalServiceSource);
+        Assert.Contains("Path.Combine(programFiles, \"PowerShell\", \"7\", \"pwsh.exe\")", ConPtyTerminalServiceSource);
+        Assert.Contains("Path.Combine(system, \"WindowsPowerShell\", \"v1.0\", \"powershell.exe\")", ConPtyTerminalServiceSource);
+        Assert.Contains("SpawnProcess(shellPath, $\"\\\"{shellPath}\\\" -NoLogo -NoExit\", workingDirectory)", ConPtyTerminalServiceSource);
         Assert.Contains("workingDirectory, ref startupInfo", ConPtyTerminalServiceSource);
+    }
+
+    [Fact]
+    public void TerminalStartup_IsTransactionalAndReportsFailures()
+    {
+        AssertContainsInOrder(MainWindowTerminalSource,
+            "terminalService.OutputReceived += text => OnTerminalOutput(text, sessionGeneration);",
+            "terminalService.ProcessExited += exitCode => OnTerminalProcessExited(exitCode, sessionGeneration);",
+            "_terminalService = terminalService;",
+            "try",
+            "terminalService.Start(cols: _terminalColumns, rows: _terminalRows, workingDirectory: ResolveTerminalWorkingDirectory());");
+        Assert.Contains("terminalService.Start(cols: _terminalColumns, rows: _terminalRows, workingDirectory: ResolveTerminalWorkingDirectory());", MainWindowTerminalSource);
+        Assert.Contains("_terminalService = terminalService;", MainWindowTerminalSource);
+        Assert.Contains("if (ReferenceEquals(_terminalService, terminalService))", MainWindowTerminalSource);
+        Assert.Contains("_terminalService = null;", MainWindowTerminalSource);
+        Assert.Contains("LogService.Instance.Warning(\"Terminal\", \"Failed to start ConPTY terminal session\", ex);", MainWindowTerminalSource);
+        Assert.Contains("[Terminal failed to start:", MainWindowTerminalSource);
+
+        string startMethod = ExtractMethod(ConPtyTerminalServiceSource, "Start", window: 2800);
+        Assert.Contains("try", startMethod);
+        Assert.Contains("catch", startMethod);
+        Assert.Contains("inputReadSide?.Dispose();", startMethod);
+        Assert.Contains("outputWriteSide?.Dispose();", startMethod);
+        Assert.Contains("Dispose();", startMethod);
+        Assert.Contains("throw;", startMethod);
     }
 
     // ── MainWindow settings integration ──
@@ -622,6 +650,23 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("OpenHelpWindow();", MainWindowTerminalSource);
         Assert.Contains("event.key === 'F1'", TerminalHtml);
         Assert.Contains("type: 'openHelp'", TerminalHtml);
+    }
+
+    [Fact]
+    public void EmbeddedTerminal_ContextMenuResetsTerminalSession()
+    {
+        Assert.Contains("id=\"terminalMenu\"", TerminalHtml);
+        Assert.Contains("Reset terminal session", TerminalHtml);
+        Assert.Contains("terminalElement.addEventListener('contextmenu', showTerminalMenu);", TerminalHtml);
+        Assert.Contains("term.reset();", TerminalHtml);
+        Assert.Contains("type: 'resetTerminal'", TerminalHtml);
+
+        Assert.Contains("case \"resetTerminal\":", MainWindowTerminalSource);
+        Assert.Contains("ResetTerminalSession();", MainWindowTerminalSource);
+        Assert.Contains("private void ResetTerminalSession()", MainWindowTerminalSource);
+        Assert.Contains("DisposeTerminal();", MainWindowTerminalSource);
+        Assert.Contains("StartConPtySession();", MainWindowTerminalSource);
+        Assert.Contains("_terminalSessionGeneration", MainWindowTerminalSource);
     }
 
     [Fact]

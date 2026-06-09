@@ -21,14 +21,49 @@
     padding: 8px 12px;
     background: #1e1e1e;
   }
+  #terminalMenu {
+    position: fixed;
+    display: none;
+    min-width: 188px;
+    padding: 6px;
+    border: 1px solid #454545;
+    border-radius: 6px;
+    background: #252526;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    z-index: 20;
+  }
+  #terminalMenu button {
+    display: block;
+    width: 100%;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: #cccccc;
+    font: 13px 'Segoe UI', sans-serif;
+    text-align: left;
+  }
+  #terminalMenu button:hover,
+  #terminalMenu button:focus {
+    outline: none;
+    background: #37373d;
+    color: #ffffff;
+  }
 </style>
 </head>
 <body>
 <div id="terminal"></div>
+<div id="terminalMenu" role="menu" aria-label="Terminal menu">
+  <button id="resetTerminalSession" type="button" role="menuitem">Reset terminal session</button>
+</div>
 <script src="xterm.js"></script>
 <script src="addon-fit.js"></script>
 <script>
 (function() {
+  const terminalElement = document.getElementById('terminal');
+  const terminalMenu = document.getElementById('terminalMenu');
+  const resetTerminalSessionButton = document.getElementById('resetTerminalSession');
+
   const term = new Terminal({
     cursorBlink: true,
     fontSize: 13,
@@ -59,11 +94,42 @@
 
   const fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
-  term.open(document.getElementById('terminal'));
+  term.open(terminalElement);
   fitAddon.fit();
+
+  function hideTerminalMenu() {
+    terminalMenu.style.display = 'none';
+  }
+
+  function showTerminalMenu(event) {
+    event.preventDefault();
+    const menuWidth = terminalMenu.offsetWidth || 188;
+    const menuHeight = terminalMenu.offsetHeight || 34;
+    const x = Math.min(event.clientX, window.innerWidth - menuWidth - 4);
+    const y = Math.min(event.clientY, window.innerHeight - menuHeight - 4);
+    terminalMenu.style.left = Math.max(4, x) + 'px';
+    terminalMenu.style.top = Math.max(4, y) + 'px';
+    terminalMenu.style.display = 'block';
+    resetTerminalSessionButton.focus({ preventScroll: true });
+  }
+
+  terminalElement.addEventListener('contextmenu', showTerminalMenu);
+
+  resetTerminalSessionButton.addEventListener('click', function() {
+    hideTerminalMenu();
+    term.reset();
+    window.chrome.webview.postMessage(JSON.stringify({ type: 'resetTerminal' }));
+    term.focus();
+  });
+
+  document.addEventListener('pointerdown', function(event) {
+    if (!terminalMenu.contains(event.target))
+      hideTerminalMenu();
+  });
 
   // Send user input to C# host
   term.onData(function(data) {
+    hideTerminalMenu();
     window.chrome.webview.postMessage(JSON.stringify({ type: 'input', data: data }));
   });
 
@@ -79,6 +145,8 @@
       term.write(msg.data);
     } else if (msg && msg.type === 'clear') {
       term.clear();
+    } else if (msg && msg.type === 'focus') {
+      term.focus();
     }
   });
 
@@ -88,6 +156,8 @@
       event.preventDefault();
       event.stopPropagation();
       window.chrome.webview.postMessage(JSON.stringify({ type: 'openHelp' }));
+    } else if (event.key === 'Escape') {
+      hideTerminalMenu();
     }
   }, true);
 

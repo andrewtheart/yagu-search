@@ -35,31 +35,47 @@ internal sealed class ConPtyTerminalService : IDisposable
     {
         if (_pseudoConsoleHandle != 0) return;
 
-        // Create pipes: inputReadSide→PTY stdin, PTY stdout→outputWriteSide
-        CreatePipe(out var inputReadSide, out var inputWriteSide);
-        CreatePipe(out var outputReadSide, out var outputWriteSide);
+        SafeFileHandle? inputReadSide = null;
+        SafeFileHandle? outputWriteSide = null;
 
-        _pipeIn = inputWriteSide;
-        _pipeOut = outputReadSide;
+        try
+        {
+            // Create pipes: inputReadSide→PTY stdin, PTY stdout→outputWriteSide
+            CreatePipe(out inputReadSide, out var inputWriteSide);
+            CreatePipe(out var outputReadSide, out outputWriteSide);
 
-        // Create pseudo console
-        var size = new COORD { X = (short)cols, Y = (short)rows };
-        int hr = CreatePseudoConsole(size, inputReadSide.DangerousGetHandle(), outputWriteSide.DangerousGetHandle(), 0, out _pseudoConsoleHandle);
-        if (hr != 0) throw new InvalidOperationException($"CreatePseudoConsole failed: 0x{hr:X8}");
+            _pipeIn = inputWriteSide;
+            _pipeOut = outputReadSide;
 
-        // Close the pipe ends that the PTY now owns
-        inputReadSide.Dispose();
-        outputWriteSide.Dispose();
+            // Create pseudo console
+            var size = new COORD { X = (short)cols, Y = (short)rows };
+            int hr = CreatePseudoConsole(size, inputReadSide.DangerousGetHandle(), outputWriteSide.DangerousGetHandle(), 0, out _pseudoConsoleHandle);
+            if (hr != 0) throw new InvalidOperationException($"CreatePseudoConsole failed: 0x{hr:X8}");
 
-        // Spawn PowerShell attached to the pseudo console
-        SpawnProcess("pwsh.exe", workingDirectory);
+            // Close the pipe ends that the PTY now owns
+            inputReadSide.Dispose();
+            inputReadSide = null;
+            outputWriteSide.Dispose();
+            outputWriteSide = null;
 
-        // Open writer stream
-        _writer = new FileStream(_pipeIn, FileAccess.Write, bufferSize: 256, isAsync: false);
+            // Spawn PowerShell attached to the pseudo console
+            string shellPath = ResolvePowerShellExecutable();
+            SpawnProcess(shellPath, $"\"{shellPath}\" -NoLogo -NoExit", workingDirectory);
 
-        // Start reader loop
-        _cts = new CancellationTokenSource();
-        _readerTask = Task.Run(() => ReadLoop(_cts.Token));
+            // Open writer stream
+            _writer = new FileStream(_pipeIn, FileAccess.Write, bufferSize: 256, isAsync: false);
+
+            // Start reader loop
+            _cts = new CancellationTokenSource();
+            _readerTask = Task.Run(() => ReadLoop(_cts.Token));
+        }
+        catch
+        {
+            inputReadSide?.Dispose();
+            outputWriteSide?.Dispose();
+            Dispose();
+            throw;
+        }
     }
 
     public void Resize(int cols, int rows)
@@ -110,7 +126,52 @@ internal sealed class ConPtyTerminalService : IDisposable
         ProcessExited?.Invoke(exitCode);
     }
 
-    private void SpawnProcess(string command, string? workingDirectory)
+    private static string ResolvePowerShellExecutable()
+    {
+        string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        string programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        string system = Environment.GetFolderPath(Environment.SpecialFolder.System);
+        string[] candidates =
+        [
+            Path.Combine(programFiles, "PowerShell", "7", "pwsh.exe"),
+            Path.Combine(programFilesX86, "PowerShell", "7", "pwsh.exe"),
+            FindExecutableOnPath("pwsh.exe"),
+            Path.Combine(system, "WindowsPowerShell", "v1.0", "powershell.exe"),
+            FindExecutableOnPath("powershell.exe"),
+        ];
+
+        foreach (string candidate in candidates)
+        {
+            if (!string.IsNullOrWhiteSpace(candidate) && File.Exists(candidate))
+                return candidate;
+        }
+
+        return "powershell.exe";
+    }
+
+    private static string FindExecutableOnPath(string executableName)
+    {
+        string? path = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrWhiteSpace(path))
+            return string.Empty;
+
+        foreach (string directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            try
+            {
+                string candidate = Path.Combine(directory, executableName);
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+            catch
+            {
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private void SpawnProcess(string applicationName, string commandLine, string? workingDirectory)
     {
         var startupInfo = new STARTUPINFOEX();
         startupInfo.StartupInfo.cb = Marshal.SizeOf<STARTUPINFOEX>();
@@ -130,7 +191,7 @@ internal sealed class ConPtyTerminalService : IDisposable
 
         var processInfo = new PROCESS_INFORMATION();
         bool success = CreateProcessW(
-            null, command, nint.Zero, nint.Zero, false,
+            applicationName, commandLine, nint.Zero, nint.Zero, false,
             EXTENDED_STARTUPINFO_PRESENT, nint.Zero, workingDirectory, ref startupInfo, out processInfo);
 
         if (!success)

@@ -1716,6 +1716,14 @@ public sealed partial class MainWindow
     private void HideActiveMatchOverlay()
     {
         ClearActiveMatchExtraWordMarkers();
+        ActiveMatchBand.Width = 0;
+        ActiveMatchBand.Height = 0;
+        Canvas.SetLeft(ActiveMatchBand, 0);
+        Canvas.SetTop(ActiveMatchBand, 0);
+        ActiveMatchWordMarker.Width = 0;
+        ActiveMatchWordMarker.Height = 0;
+        Canvas.SetLeft(ActiveMatchWordMarker, 0);
+        Canvas.SetTop(ActiveMatchWordMarker, 0);
         ActiveMatchOverlay.Visibility = Visibility.Collapsed;
     }
 

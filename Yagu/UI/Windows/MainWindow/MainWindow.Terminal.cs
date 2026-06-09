@@ -11,18 +11,28 @@ public sealed partial class MainWindow
     private ConPtyTerminalService? _terminalService;
     private bool _terminalPaneExpanded;
     private bool _terminalInitialized;
+    private int _terminalColumns = 120;
+    private int _terminalRows = 24;
+    private int _terminalSessionGeneration;
+    private readonly TaskCompletionSource<bool> _terminalReadyCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private void OnToggleTerminalPane(object sender, RoutedEventArgs e)
     {
-        _terminalPaneExpanded = !_terminalPaneExpanded;
+        SetTerminalPaneExpanded(!_terminalPaneExpanded);
+
+        if (_terminalPaneExpanded && !_terminalInitialized)
+            _ = InitializeTerminalAsync();
+    }
+
+    private void SetTerminalPaneExpanded(bool expanded)
+    {
+        _terminalPaneExpanded = expanded;
 
         if (_terminalPaneExpanded)
         {
             TerminalRow.Height = new GridLength(250);
             TerminalWebView.Visibility = Visibility.Visible;
             TerminalChevronIcon.Glyph = "\uE70D"; // ChevronDown — click to collapse
-            if (!_terminalInitialized)
-                _ = InitializeTerminalAsync();
         }
         else
         {
@@ -30,6 +40,51 @@ public sealed partial class MainWindow
             TerminalWebView.Visibility = Visibility.Collapsed;
             TerminalChevronIcon.Glyph = "\uE70E"; // ChevronUp — click to expand
         }
+    }
+
+    private async Task SendTextToTerminalAsync(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+
+        await EnsureTerminalPaneExpandedAsync();
+        await WaitForTerminalReadyAsync();
+
+        StartConPtySession();
+        _terminalService?.WriteInput(text);
+        FocusTerminal();
+    }
+
+    private async Task EnsureTerminalPaneExpandedAsync()
+    {
+        SetTerminalPaneExpanded(true);
+        TerminalWebView.UpdateLayout();
+
+        if (!_terminalInitialized)
+            await InitializeTerminalAsync();
+
+        SetTerminalPaneExpanded(true);
+        TerminalWebView.UpdateLayout();
+    }
+
+    private async Task WaitForTerminalReadyAsync()
+    {
+        if (_terminalReadyCompletion.Task.IsCompleted)
+            return;
+
+        try
+        {
+            await _terminalReadyCompletion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (TimeoutException ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Timed out waiting for terminal readiness: {ex.Message}");
+        }
+    }
+
+    private void FocusTerminal()
+    {
+        TerminalWebView.Focus(FocusState.Programmatic);
+        TerminalWebView.CoreWebView2?.PostWebMessageAsJson("{\"type\":\"focus\"}");
     }
 
     private async Task InitializeTerminalAsync()
@@ -85,15 +140,19 @@ public sealed partial class MainWindow
         {
             case "ready":
                 StartConPtySession();
+                _terminalReadyCompletion.TrySetResult(true);
                 break;
             case "input":
                 string data = root.GetProperty("data").GetString() ?? "";
                 _terminalService?.WriteInput(data);
                 break;
             case "resize":
-                int cols = root.GetProperty("cols").GetInt32();
-                int rows = root.GetProperty("rows").GetInt32();
-                _terminalService?.Resize(cols, rows);
+                _terminalColumns = Math.Max(1, root.GetProperty("cols").GetInt32());
+                _terminalRows = Math.Max(1, root.GetProperty("rows").GetInt32());
+                _terminalService?.Resize(_terminalColumns, _terminalRows);
+                break;
+            case "resetTerminal":
+                ResetTerminalSession();
                 break;
             case "openHelp":
                 OpenHelpWindow();
@@ -105,10 +164,29 @@ public sealed partial class MainWindow
     {
         if (_terminalService is not null) return;
 
-        _terminalService = new ConPtyTerminalService();
-        _terminalService.OutputReceived += OnTerminalOutput;
-        _terminalService.ProcessExited += OnTerminalProcessExited;
-        _terminalService.Start(cols: 120, rows: 24, workingDirectory: ResolveTerminalWorkingDirectory());
+        int sessionGeneration = ++_terminalSessionGeneration;
+        var terminalService = new ConPtyTerminalService();
+        terminalService.OutputReceived += text => OnTerminalOutput(text, sessionGeneration);
+        terminalService.ProcessExited += exitCode => OnTerminalProcessExited(exitCode, sessionGeneration);
+        _terminalService = terminalService;
+        try
+        {
+            terminalService.Start(cols: _terminalColumns, rows: _terminalRows, workingDirectory: ResolveTerminalWorkingDirectory());
+        }
+        catch (Exception ex)
+        {
+            if (ReferenceEquals(_terminalService, terminalService))
+                _terminalService = null;
+            terminalService.Dispose();
+            LogService.Instance.Warning("Terminal", "Failed to start ConPTY terminal session", ex);
+            OnTerminalOutput($"\r\n\x1b[91m[Terminal failed to start: {ex.Message}]\x1b[0m\r\n", sessionGeneration);
+        }
+    }
+
+    private void ResetTerminalSession()
+    {
+        DisposeTerminal();
+        StartConPtySession();
     }
 
     private string ResolveTerminalWorkingDirectory()
@@ -147,12 +225,13 @@ public sealed partial class MainWindow
         }
     }
 
-    private void OnTerminalOutput(string text)
+    private void OnTerminalOutput(string text, int sessionGeneration)
     {
         DispatcherQueue.TryEnqueue(() =>
         {
             try
             {
+                if (sessionGeneration != _terminalSessionGeneration) return;
                 if (TerminalWebView.CoreWebView2 is null) return;
                 string escaped = EscapeForJson(text);
                 TerminalWebView.CoreWebView2.PostWebMessageAsJson($"{{\"type\":\"output\",\"data\":\"{escaped}\"}}");
@@ -189,11 +268,12 @@ public sealed partial class MainWindow
         return sb.ToString();
     }
 
-    private void OnTerminalProcessExited(int exitCode)
+    private void OnTerminalProcessExited(int exitCode, int sessionGeneration)
     {
         DispatcherQueue.TryEnqueue(() =>
         {
-            OnTerminalOutput($"\r\n\x1b[90m[Process exited with code {exitCode}. Press any key to restart.]\x1b[0m\r\n");
+            if (sessionGeneration != _terminalSessionGeneration) return;
+            OnTerminalOutput($"\r\n\x1b[90m[Process exited with code {exitCode}. Press any key to restart.]\x1b[0m\r\n", sessionGeneration);
             // Allow restart on next keypress
             _terminalService?.Dispose();
             _terminalService = null;
@@ -202,6 +282,7 @@ public sealed partial class MainWindow
 
     private void DisposeTerminal()
     {
+        _terminalSessionGeneration++;
         _terminalService?.Dispose();
         _terminalService = null;
     }

@@ -1689,6 +1689,7 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <TextBlock Text="CLI command"
                                FontWeight="SemiBold"
@@ -1701,7 +1702,14 @@
                             ToolTipService.ToolTip="Copy command">
                         <FontIcon Glyph="&#xE8C8;" FontSize="12" />
                     </Button>
-                    <Button x:Name="CloseGeneratedCliCommandOverlayButton" Grid.Column="2"
+                    <Button x:Name="SendGeneratedCliCommandToTerminalButton" Grid.Column="2"
+                            Click="OnSendGeneratedCliCommandToTerminalClick"
+                            Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
+                            Background="Transparent" BorderThickness="0"
+                            ToolTipService.ToolTip="Send command to terminal">
+                        <FontIcon Glyph="&#xE756;" FontSize="12" />
+                    </Button>
+                    <Button x:Name="CloseGeneratedCliCommandOverlayButton" Grid.Column="3"
                             Click="OnCloseGeneratedCliCommandOverlayClick"
                             Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
                             Background="Transparent" BorderThickness="0"
@@ -1709,14 +1717,15 @@
                         <FontIcon Glyph="&#xE711;" FontSize="10" />
                     </Button>
                 </Grid>
-                <ToggleSwitch x:Name="ShowSettingsBackedCliFlagsToggle"
+                <ToggleSwitch x:Name="IncludeSavedSettingCliOptionsToggle"
                               Grid.Row="1"
-                              Header="Show settings-backed flags"
+                              Header="Options already saved in settings"
                               IsOn="True"
-                              OnContent="Shown"
-                              OffContent="Hidden"
+                              OnContent="Include"
+                              OffContent="Omit"
                               FontSize="12"
-                              Toggled="OnGeneratedCliCommandSettingsFlagsToggled" />
+                              ToolTipService.ToolTip="Omit options that already match the current settings file to make the command shorter."
+                              Toggled="OnGeneratedCliCommandSavedSettingOptionsToggled" />
                 <Border x:Name="GeneratedCliCommandBubble"
                         Grid.Row="2"
                         Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"

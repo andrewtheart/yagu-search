@@ -13,26 +13,26 @@ namespace Yagu;
 public sealed partial class MainWindow
 {
     private static readonly char[] CliListSeparators = [',', ';'];
-    private bool _showGeneratedCliCommandSettingsBackedFlags = true;
+    private bool _includeGeneratedCliCommandSavedSettingOptions = true;
 
     private void OnGenerateCliCommandClick(object sender, RoutedEventArgs e)
     {
         if (TryGetGeneratedCliCommandControls(out var commandText, out var commandOverlay))
         {
-            commandText.Text = BuildGeneratedCliCommand(_showGeneratedCliCommandSettingsBackedFlags);
+            commandText.Text = BuildGeneratedCliCommand(_includeGeneratedCliCommandSavedSettingOptions);
             commandOverlay.Visibility = Visibility.Visible;
         }
     }
 
-    private void OnGeneratedCliCommandSettingsFlagsToggled(object sender, RoutedEventArgs e)
+    private void OnGeneratedCliCommandSavedSettingOptionsToggled(object sender, RoutedEventArgs e)
     {
         if (sender is ToggleSwitch toggle)
-            _showGeneratedCliCommandSettingsBackedFlags = toggle.IsOn;
+            _includeGeneratedCliCommandSavedSettingOptions = toggle.IsOn;
 
         if (TryGetGeneratedCliCommandControls(out var commandText, out var commandOverlay)
             && commandOverlay.Visibility == Visibility.Visible)
         {
-            commandText.Text = BuildGeneratedCliCommand(_showGeneratedCliCommandSettingsBackedFlags);
+            commandText.Text = BuildGeneratedCliCommand(_includeGeneratedCliCommandSavedSettingOptions);
         }
     }
 
@@ -44,11 +44,37 @@ public sealed partial class MainWindow
         if (!TryGetGeneratedCliCommandControls(out var commandText, out _))
             return;
 
-        if (string.IsNullOrWhiteSpace(commandText.Text))
-            commandText.Text = BuildGeneratedCliCommand(_showGeneratedCliCommandSettingsBackedFlags);
+        EnsureGeneratedCliCommandText(commandText);
 
         SetClipboardText(commandText.Text, "generated CLI command");
         CloseGeneratedCliCommandOverlay();
+    }
+
+    private async void OnSendGeneratedCliCommandToTerminalClick(object sender, RoutedEventArgs e)
+    {
+        if (!TryGetGeneratedCliCommandControls(out var commandText, out _))
+            return;
+
+        EnsureGeneratedCliCommandText(commandText);
+        if (string.IsNullOrWhiteSpace(commandText.Text))
+            return;
+
+        CloseGeneratedCliCommandOverlay();
+
+        try
+        {
+            await SendTextToTerminalAsync(commandText.Text);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to send generated CLI command to terminal: {ex}");
+        }
+    }
+
+    private void EnsureGeneratedCliCommandText(TextBlock commandText)
+    {
+        if (string.IsNullOrWhiteSpace(commandText.Text))
+            commandText.Text = BuildGeneratedCliCommand(_includeGeneratedCliCommandSavedSettingOptions);
     }
 
     private void CloseGeneratedCliCommandOverlay()
@@ -67,11 +93,11 @@ public sealed partial class MainWindow
     private object? FindGeneratedCliCommandElement(string name)
         => (Content as FrameworkElement)?.FindName(name);
 
-    private string BuildGeneratedCliCommand() => BuildGeneratedCliCommand(includeSettingsBackedFlags: true);
+    private string BuildGeneratedCliCommand() => BuildGeneratedCliCommand(includeSavedSettingOptions: true);
 
-    private string BuildGeneratedCliCommand(bool includeSettingsBackedFlags)
+    private string BuildGeneratedCliCommand(bool includeSavedSettingOptions)
     {
-        AppSettings? settings = includeSettingsBackedFlags ? null : new SettingsService().Load();
+        AppSettings? settings = includeSavedSettingOptions ? null : new SettingsService().Load();
         var parts = new List<string>
         {
             "Yagu.exe",
@@ -81,90 +107,90 @@ public sealed partial class MainWindow
         AddValue(parts, "--directory", ViewModel.Directory);
         AddValue(parts, "--pattern", ViewModel.Query);
 
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => ViewModel.UseRegex == setting.UseRegex))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.UseRegex == setting.UseRegex))
             parts.Add(ViewModel.UseRegex ? "--regex" : "--no-regex");
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => ViewModel.CaseSensitive == setting.CaseSensitive))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.CaseSensitive == setting.CaseSensitive))
             parts.Add(ViewModel.CaseSensitive ? "--case-sensitive" : "--ignore-case");
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => ViewModel.ExactMatch == setting.ExactMatch))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.ExactMatch == setting.ExactMatch))
             parts.Add(ViewModel.ExactMatch ? "--exact-match" : "--no-exact-match");
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => Math.Max(0, ViewModel.ContextLines) == Math.Max(0, setting.ContextLines)))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => Math.Max(0, ViewModel.ContextLines) == Math.Max(0, setting.ContextLines)))
             AddValue(parts, "--context", Math.Max(0, ViewModel.ContextLines).ToString(CultureInfo.InvariantCulture), quote: false);
 
         AddValue(parts, "--search-mode", FormatSearchMode(ViewModel.SearchModeIndex), quote: false);
 
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => NormalizeFilterModeIndex(ViewModel.IncludeFilterModeIndex) == NormalizeFilterModeIndex(setting.IncludeFilterModeIndex)))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => NormalizeFilterModeIndex(ViewModel.IncludeFilterModeIndex) == NormalizeFilterModeIndex(setting.IncludeFilterModeIndex)))
             parts.Add(ViewModel.IncludeFilterMode == FilterPatternMode.Regex ? "--include-regex" : "--include-glob");
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => CliListsEqual(SplitFilterPatternsForCli(ViewModel.IncludeGlobs, ViewModel.IncludeFilterMode), SplitSettingsPatternsForCli(setting.IncludeGlobs))))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => CliListsEqual(SplitFilterPatternsForCli(ViewModel.IncludeGlobs, ViewModel.IncludeFilterMode), SplitSettingsPatternsForCli(setting.IncludeGlobs))))
         {
             foreach (var pattern in SplitFilterPatternsForCli(ViewModel.IncludeGlobs, ViewModel.IncludeFilterMode))
                 AddValue(parts, "--glob", pattern);
         }
 
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => NormalizeFilterModeIndex(ViewModel.ExcludeFilterModeIndex) == NormalizeFilterModeIndex(setting.ExcludeFilterModeIndex)))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => NormalizeFilterModeIndex(ViewModel.ExcludeFilterModeIndex) == NormalizeFilterModeIndex(setting.ExcludeFilterModeIndex)))
             parts.Add(ViewModel.ExcludeFilterMode == FilterPatternMode.Regex ? "--exclude-regex" : "--exclude-glob-mode");
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => CliListsEqual(SplitFilterPatternsForCli(ViewModel.ExcludeGlobs, ViewModel.ExcludeFilterMode), SplitSettingsPatternsForCli(setting.ExcludeGlobs))))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => CliListsEqual(SplitFilterPatternsForCli(ViewModel.ExcludeGlobs, ViewModel.ExcludeFilterMode), SplitSettingsPatternsForCli(setting.ExcludeGlobs))))
         {
             foreach (var pattern in SplitFilterPatternsForCli(ViewModel.ExcludeGlobs, ViewModel.ExcludeFilterMode))
                 AddValue(parts, "--exclude-glob", pattern);
         }
 
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => ViewModel.ObeyGitignore == setting.ObeyGitignore))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.ObeyGitignore == setting.ObeyGitignore))
             parts.Add(ViewModel.ObeyGitignore ? "--obey-gitignore" : "--no-obey-gitignore");
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => ViewModel.GitignoreTakesPrecedence == setting.GitignoreTakesPrecedence))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.GitignoreTakesPrecedence == setting.GitignoreTakesPrecedence))
             parts.Add(ViewModel.GitignoreTakesPrecedence ? "--gitignore-precedence" : "--no-gitignore-precedence");
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => ViewModel.MinFileSizeBytes == setting.DefaultMinFileSizeBytes))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.MinFileSizeBytes == setting.DefaultMinFileSizeBytes))
             AddValue(parts, "--min-filesize", FormatFileSizeArgument(ViewModel.MinFileSizeBytes), quote: false);
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => ViewModel.MaxFileSizeBytes == setting.DefaultMaxFileSizeBytes))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.MaxFileSizeBytes == setting.DefaultMaxFileSizeBytes))
             AddValue(parts, "--max-filesize", FormatFileSizeArgument(ViewModel.MaxFileSizeBytes), quote: false);
 
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => DateArgumentsEqual(ViewModel.CreatedAfterDate, setting.DefaultCreatedAfterDate)))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => DateArgumentsEqual(ViewModel.CreatedAfterDate, setting.DefaultCreatedAfterDate)))
             AddDateValue(parts, "--created-after", ViewModel.CreatedAfterDate);
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => DateArgumentsEqual(ViewModel.CreatedBeforeDate, setting.DefaultCreatedBeforeDate)))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => DateArgumentsEqual(ViewModel.CreatedBeforeDate, setting.DefaultCreatedBeforeDate)))
             AddDateValue(parts, "--created-before", ViewModel.CreatedBeforeDate);
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => DateArgumentsEqual(ViewModel.ModifiedAfterDate, setting.DefaultModifiedAfterDate)))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => DateArgumentsEqual(ViewModel.ModifiedAfterDate, setting.DefaultModifiedAfterDate)))
             AddDateValue(parts, "--modified-after", ViewModel.ModifiedAfterDate);
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => DateArgumentsEqual(ViewModel.ModifiedBeforeDate, setting.DefaultModifiedBeforeDate)))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => DateArgumentsEqual(ViewModel.ModifiedBeforeDate, setting.DefaultModifiedBeforeDate)))
             AddDateValue(parts, "--modified-before", ViewModel.ModifiedBeforeDate);
 
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => ViewModel.SkipBinary == setting.SkipBinary))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.SkipBinary == setting.SkipBinary))
             parts.Add(ViewModel.SearchBinary ? "--binary" : "--no-binary");
         var skipExtensions = FormatExtensionList(BuildEffectiveSkipExtensionsForCli());
         if (!string.IsNullOrWhiteSpace(skipExtensions)
-            && ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => ExtensionSetsEqual(ParseExtensionSetForCli(skipExtensions), ParseExtensionSetForCli(setting.SkipExtensions))))
+            && ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ExtensionSetsEqual(ParseExtensionSetForCli(skipExtensions), ParseExtensionSetForCli(setting.SkipExtensions))))
         {
             AddValue(parts, "--skip-extensions", skipExtensions);
         }
 
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => ViewModel.SearchInsideArchives == setting.SearchInsideArchives))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.SearchInsideArchives == setting.SearchInsideArchives))
             parts.Add(ViewModel.SearchInsideArchives ? "--search-archives" : "--no-search-archives");
         var archiveExtensions = FormatExtensionList(ParseExtensionSetForCli(ViewModel.ArchiveExtensions));
         if (!string.IsNullOrWhiteSpace(archiveExtensions)
-            && ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => ExtensionSetsEqual(ParseExtensionSetForCli(archiveExtensions), ParseExtensionSetForCli(setting.ArchiveExtensions))))
+            && ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ExtensionSetsEqual(ParseExtensionSetForCli(archiveExtensions), ParseExtensionSetForCli(setting.ArchiveExtensions))))
         {
             AddValue(parts, "--archive-extensions", archiveExtensions);
         }
 
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => Math.Max(0, ViewModel.MaxResults) == Math.Max(0, setting.MaxResults)))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => Math.Max(0, ViewModel.MaxResults) == Math.Max(0, setting.MaxResults)))
             AddValue(parts, "--max-results", Math.Max(0, ViewModel.MaxResults).ToString(CultureInfo.InvariantCulture), quote: false);
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => Math.Max(0, ViewModel.MaxMatchesPerFile) == Math.Max(0, setting.MaxMatchesPerFile)))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => Math.Max(0, ViewModel.MaxMatchesPerFile) == Math.Max(0, setting.MaxMatchesPerFile)))
             AddValue(parts, "--max-matches-per-file", Math.Max(0, ViewModel.MaxMatchesPerFile).ToString(CultureInfo.InvariantCulture), quote: false);
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => FormatMaxDepth(ViewModel.MaxSearchDepth) == Math.Max(0, setting.MaxSearchDepth).ToString(CultureInfo.InvariantCulture)))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => FormatMaxDepth(ViewModel.MaxSearchDepth) == Math.Max(0, setting.MaxSearchDepth).ToString(CultureInfo.InvariantCulture)))
             AddValue(parts, "--max-depth", FormatMaxDepth(ViewModel.MaxSearchDepth), quote: false);
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => SearchOptions.ResolveContentSearchParallelism(ViewModel.ParallelismIndex, Environment.ProcessorCount) == SearchOptions.ResolveContentSearchParallelism(setting.ParallelismIndex, Environment.ProcessorCount)))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => SearchOptions.ResolveContentSearchParallelism(ViewModel.ParallelismIndex, Environment.ProcessorCount) == SearchOptions.ResolveContentSearchParallelism(setting.ParallelismIndex, Environment.ProcessorCount)))
             AddValue(parts, "--threads", SearchOptions.ResolveContentSearchParallelism(ViewModel.ParallelismIndex, Environment.ProcessorCount).ToString(CultureInfo.InvariantCulture), quote: false);
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => Math.Max(0, ViewModel.MemoryLimitMB) == Math.Max(0, setting.MemoryLimitMB)))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => Math.Max(0, ViewModel.MemoryLimitMB) == Math.Max(0, setting.MemoryLimitMB)))
             AddValue(parts, "--memory-limit", Math.Max(0, ViewModel.MemoryLimitMB).ToString(CultureInfo.InvariantCulture), quote: false);
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => Math.Clamp(ViewModel.MemoryPressurePercent, 0, 100) == Math.Clamp(setting.MemoryPressurePercent, 0, 100)))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => Math.Clamp(ViewModel.MemoryPressurePercent, 0, 100) == Math.Clamp(setting.MemoryPressurePercent, 0, 100)))
             AddValue(parts, "--memory-pressure", Math.Clamp(ViewModel.MemoryPressurePercent, 0, 100).ToString(CultureInfo.InvariantCulture), quote: false);
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => Math.Max(0, ViewModel.SdkChannelBufferSize) == Math.Max(0, setting.SdkChannelBufferSize)))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => Math.Max(0, ViewModel.SdkChannelBufferSize) == Math.Max(0, setting.SdkChannelBufferSize)))
             AddValue(parts, "--sdk-channel-buffer", Math.Max(0, ViewModel.SdkChannelBufferSize).ToString(CultureInfo.InvariantCulture), quote: false);
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => Math.Max(0, ViewModel.FileListerBackendIndex) == Math.Max(0, setting.FileListerBackendIndex)))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => Math.Max(0, ViewModel.FileListerBackendIndex) == Math.Max(0, setting.FileListerBackendIndex)))
             AddValue(parts, "--file-lister-backend", Math.Max(0, ViewModel.FileListerBackendIndex).ToString(CultureInfo.InvariantCulture), quote: false);
 
-        if (ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => ViewModel.ExcludeAdminProtectedPaths == setting.ExcludeAdminProtectedPaths))
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.ExcludeAdminProtectedPaths == setting.ExcludeAdminProtectedPaths))
             parts.Add(ViewModel.ExcludeAdminProtectedPaths ? "--exclude-admin-paths" : "--no-exclude-admin-paths");
         if (!string.IsNullOrWhiteSpace(ViewModel.AdminProtectedPathSegments)
-            && ShouldIncludeSettingsBackedFlag(includeSettingsBackedFlags, settings, setting => AdminProtectedPathSegmentsEqual(ViewModel.AdminProtectedPathSegments, setting.AdminProtectedPathSegments)))
+            && ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => AdminProtectedPathSegmentsEqual(ViewModel.AdminProtectedPathSegments, setting.AdminProtectedPathSegments)))
         {
             AddValue(parts, "--admin-protected-paths", ViewModel.AdminProtectedPathSegments);
         }
@@ -172,8 +198,8 @@ public sealed partial class MainWindow
         return string.Join(' ', parts);
     }
 
-    private static bool ShouldIncludeSettingsBackedFlag(bool includeSettingsBackedFlags, AppSettings? settings, Func<AppSettings, bool> matchesSettings)
-        => includeSettingsBackedFlags || settings is null || !matchesSettings(settings);
+    private static bool ShouldIncludeSavedSettingOption(bool includeSavedSettingOptions, AppSettings? settings, Func<AppSettings, bool> matchesSettings)
+        => includeSavedSettingOptions || settings is null || !matchesSettings(settings);
 
     private static void AddValue(List<string> parts, string flag, string value, bool quote = true)
     {
