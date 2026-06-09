@@ -411,9 +411,14 @@ public sealed partial class MainWindow
         if (group is null) return;
         var checkBox = FindFileGroupCheckBox(container);
         if (checkBox is null) return;
-        bool desired = group.AllSelected;
-        if (checkBox.IsChecked != desired)
-            checkBox.IsChecked = desired;
+        SetFileGroupCheckBoxState(checkBox, group.AllSelected);
+    }
+
+    private static void SetFileGroupCheckBoxState(CheckBox checkBox, bool desired)
+    {
+        checkBox.IsThreeState = false;
+        checkBox.IsChecked = desired;
+        _ = VisualStateManager.GoToState(checkBox, desired ? "Checked" : "Unchecked", false);
     }
 
     private static CheckBox? FindFileGroupCheckBox(Microsoft.UI.Xaml.DependencyObject parent)

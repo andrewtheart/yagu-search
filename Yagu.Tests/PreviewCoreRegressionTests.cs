@@ -904,11 +904,17 @@ public sealed class PreviewCoreRegressionTests
 
         string headerCheckbox = ExtractXamlWindow("AutomationProperties.AutomationId=\"FileGroupCheckBox\"", 500);
         Assert.Contains("IsChecked=\"{x:Bind AllSelected, Mode=OneWay}\"", headerCheckbox);
+        Assert.Contains("IsThreeState=\"False\"", headerCheckbox);
         Assert.DoesNotContain("Mode=TwoWay", headerCheckbox);
         Assert.Contains("Click=\"OnFileGroupCheckBoxClicked\"", headerCheckbox);
         Assert.DoesNotContain("IsHitTestVisible=\"False\"", headerCheckbox);
         Assert.DoesNotContain("Checked=\"OnSelectAllChecked\"", headerCheckbox);
         Assert.DoesNotContain("Unchecked=\"OnSelectAllUnchecked\"", headerCheckbox);
+
+        string checkboxSync = ExtractMethodWindow(MainWindowSource, "SetFileGroupCheckBoxState");
+        Assert.Contains("checkBox.IsThreeState = false;", checkboxSync);
+        Assert.Contains("checkBox.IsChecked = desired;", checkboxSync);
+        Assert.Contains("VisualStateManager.GoToState(checkBox, desired ? \"Checked\" : \"Unchecked\", false)", checkboxSync);
 
         string headerGrid = ExtractXamlWindow("PointerPressed=\"OnFileGroupHeaderPointerPressed\"", 260);
         Assert.Contains("PointerReleased=\"OnFileGroupHeaderPointerReleased\"", headerGrid);
@@ -921,7 +927,7 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(headerLayout,
             "<ColumnDefinition Width=\"Auto\" />",
             "<ColumnDefinition Width=\"Auto\" />",
-            "<ColumnDefinition Width=\"320\" />",
+            "<ColumnDefinition Width=\"320\" MinWidth=\"0\" />",
             "<ColumnDefinition Width=\"*\" />",
             "<ColumnDefinition Width=\"Auto\" />");
         string wideDirectory = ExtractXamlWindow("Grid.Column=\"3\" Text=\"{x:Bind DirectoryName}\"", 900);
@@ -1005,6 +1011,7 @@ public sealed class PreviewCoreRegressionTests
             "groupsToPreview.Add(group);",
             "else",
             "group.DeselectAll();");
+        Assert.Contains("SetFileGroupCheckBoxState(checkBox, group.AllSelected);", checkboxClicked);
         Assert.Contains("await EnsureFileGroupsInPreviewAsync(groupsToPreview, group.FilePath);", checkboxClicked);
 
         string ensureGroups = ExtractMethodWindow(MainWindowSource, "EnsureFileGroupsInPreviewAsync");

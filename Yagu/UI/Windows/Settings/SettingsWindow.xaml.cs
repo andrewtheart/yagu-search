@@ -109,7 +109,7 @@ public sealed partial class SettingsWindow : Window
         var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
         var appWindow = AppWindow.GetFromWindowId(windowId);
         _appWindow = appWindow;
-        const int w = 860, h = 820;
+        const int w = 903, h = 820;
         appWindow.Resize(new SizeInt32(w, h));
         CenterOverOwner(appWindow, mainHwnd, w, h);
 
@@ -171,7 +171,7 @@ public sealed partial class SettingsWindow : Window
         _fontContrastCheckTimer?.Stop();
 
         await FontContrastWarningDialog.ShowIfNeededAsync(
-            WindowForegroundHelper.GetWindowHandle(this),
+            RootGrid.XamlRoot,
             _viewModel,
             ResolveFontContrastTheme());
     }
@@ -182,7 +182,9 @@ public sealed partial class SettingsWindow : Window
             : FontContrastTheme.Dark;
 
     private static bool IsFontContrastRelevantProperty(string? propertyName)
-        => propertyName is nameof(MainViewModel.PreviewGutterContextColor)
+        => propertyName is nameof(MainViewModel.SelectedPreviewContentBackgroundColor)
+            or nameof(MainViewModel.UnselectedPreviewContentBackgroundColor)
+            or nameof(MainViewModel.PreviewGutterContextColor)
             or nameof(MainViewModel.PreviewGutterMatchColor)
             or nameof(MainViewModel.PreviewEditorGutterColor)
             or nameof(MainViewModel.PreviewMatchTextColor)
@@ -954,7 +956,39 @@ public sealed partial class SettingsWindow : Window
             assign,
             _applyPreviewSectionBackgrounds,
             showContrastStatus ? ResolveFontContrastTheme : null,
-            _fontContrastStatusRefreshers.Add);
+            _fontContrastStatusRefreshers.Add,
+            showContrastStatus ? GetPreviewContentContrastStatus : null);
+
+    private readonly record struct ContrastStatus(double Ratio, string Label);
+
+    private static ContrastStatus GetThemeSampleContrastStatus(Windows.UI.Color color, FontContrastTheme theme)
+    {
+        var background = FontContrastWarningService.GetThemeSampleBackground(theme);
+        double ratio = FontContrastWarningService.GetContrastRatio(ToFontContrastColor(color), background);
+        return new ContrastStatus(ratio, "Contrast ratio");
+    }
+
+    private ContrastStatus GetPreviewContentContrastStatus(Windows.UI.Color color, FontContrastTheme theme)
+    {
+        var foreground = ToFontContrastColor(color);
+        var selectedBackground = ResolvePreviewContentBackground(
+            _viewModel.SelectedPreviewContentBackgroundColor,
+            FontContrastColor.FromArgb(0xFF, 0x00, 0x00, 0x00),
+            theme);
+        var unselectedBackground = ResolvePreviewContentBackground(
+            _viewModel.UnselectedPreviewContentBackgroundColor,
+            FontContrastColor.FromArgb(0x00, 0x00, 0x00, 0x00),
+            theme);
+        double selectedRatio = FontContrastWarningService.GetContrastRatio(foreground, selectedBackground);
+        double unselectedRatio = FontContrastWarningService.GetContrastRatio(foreground, unselectedBackground);
+
+        return selectedRatio <= unselectedRatio
+            ? new ContrastStatus(selectedRatio, "Selected preview contrast")
+            : new ContrastStatus(unselectedRatio, "Unselected preview contrast");
+    }
+
+    private static FontContrastColor ResolvePreviewContentBackground(string value, FontContrastColor fallback, FontContrastTheme theme)
+        => FontContrastWarningService.ResolveBackground(FontContrastColor.Parse(value, fallback), theme);
 
     private static ComboBox CreateFontFamilyPicker(string currentValue, string defaultValue, Action<string> assign)
     {
@@ -1108,7 +1142,8 @@ public sealed partial class SettingsWindow : Window
         Action<string> assign,
         Action? afterChange = null,
         Func<FontContrastTheme>? contrastThemeProvider = null,
-        Action<Action>? registerContrastStatusRefresher = null)
+        Action<Action>? registerContrastStatusRefresher = null,
+        Func<Windows.UI.Color, FontContrastTheme, ContrastStatus>? contrastStatusProvider = null)
     {
         parent.Children.Add(new TextBlock
         {
@@ -1132,14 +1167,18 @@ public sealed partial class SettingsWindow : Window
             if (contrastThemeProvider is null || contrastIcon is null || contrastText is null)
                 return;
 
-            var background = FontContrastWarningService.GetThemeSampleBackground(contrastThemeProvider());
-            double ratio = FontContrastWarningService.GetContrastRatio(ToFontContrastColor(picker.Color), background);
+            var theme = contrastThemeProvider();
+            var status = contrastStatusProvider?.Invoke(picker.Color, theme)
+                ?? GetThemeSampleContrastStatus(picker.Color, theme);
+            double ratio = status.Ratio;
             bool readable = ratio >= FontContrastWarningService.MinimumReadableContrastRatio;
             var statusColor = readable ? ContrastReadableGreen : ContrastUnreadableRed;
             contrastIcon.Glyph = readable ? "\uE73E" : "\uE711";
             contrastIcon.Foreground = new SolidColorBrush(statusColor);
             contrastText.Foreground = new SolidColorBrush(statusColor);
-            contrastText.Text = $"Contrast ratio: {ratio:F1}:1";
+            contrastText.Text = string.IsNullOrWhiteSpace(status.Label)
+                ? $"Contrast ratio: {ratio:F1}:1"
+                : $"{status.Label}: {ratio:F1}:1";
         }
 
         picker.ColorChanged += (_, args) =>

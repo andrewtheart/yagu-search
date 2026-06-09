@@ -58,7 +58,8 @@ public sealed record FontContrastCandidate(
     string SurfaceName,
     string SettingLabel,
     string CurrentHex,
-    FontContrastColor FallbackColor);
+    FontContrastColor FallbackColor,
+    FontContrastColor? BackgroundColor = null);
 
 public sealed record FontContrastIssue(
     FontContrastCandidate Candidate,
@@ -90,7 +91,7 @@ public static class FontContrastWarningService
     public static bool TryCreateIssue(FontContrastCandidate candidate, FontContrastTheme theme, out FontContrastIssue? issue)
     {
         var color = FontContrastColor.Parse(candidate.CurrentHex, candidate.FallbackColor);
-        var background = GetThemeSampleBackground(theme);
+        var background = ResolveCandidateBackground(candidate, theme);
         double contrastRatio = GetContrastRatio(color, background);
 
         if (contrastRatio >= MinimumReadableContrastRatio)
@@ -102,11 +103,22 @@ public static class FontContrastWarningService
         issue = new FontContrastIssue(
             candidate,
             theme,
-            theme == FontContrastTheme.Light ? FontContrastDirection.Darker : FontContrastDirection.Lighter,
+            ChooseRecommendedDirection(color, background),
             color,
             background,
             contrastRatio);
         return true;
+    }
+
+    public static FontContrastColor ResolveCandidateBackground(FontContrastCandidate candidate, FontContrastTheme theme)
+        => ResolveBackground(candidate.BackgroundColor, theme);
+
+    public static FontContrastColor ResolveBackground(FontContrastColor? backgroundColor, FontContrastTheme theme)
+    {
+        var themeBackground = GetThemeSampleBackground(theme);
+        return backgroundColor is { } background
+            ? BlendOver(background, themeBackground)
+            : themeBackground;
     }
 
     public static FontContrastColor GetThemeSampleBackground(FontContrastTheme theme)
@@ -142,6 +154,22 @@ public static class FontContrastWarningService
         double green = Linearize(color.G / 255d);
         double blue = Linearize(color.B / 255d);
         return (0.2126 * red) + (0.7152 * green) + (0.0722 * blue);
+    }
+
+    private static FontContrastDirection ChooseRecommendedDirection(FontContrastColor foreground, FontContrastColor background)
+    {
+        var blendedForeground = BlendOver(foreground, background);
+        double foregroundLuminance = GetRelativeLuminance(blendedForeground);
+        double backgroundLuminance = GetRelativeLuminance(background);
+
+        if (Math.Abs(foregroundLuminance - backgroundLuminance) < 0.000001)
+            return backgroundLuminance >= 0.5
+                ? FontContrastDirection.Darker
+                : FontContrastDirection.Lighter;
+
+        return foregroundLuminance > backgroundLuminance
+            ? FontContrastDirection.Darker
+            : FontContrastDirection.Lighter;
     }
 
     private static double Linearize(double channel)

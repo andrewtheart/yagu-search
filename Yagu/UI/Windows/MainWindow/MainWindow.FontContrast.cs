@@ -27,7 +27,6 @@ public sealed partial class MainWindow
         if (_settingsWindow is not null)
             return;
 
-        var ownerHwnd = _hwnd != IntPtr.Zero ? _hwnd : WindowForegroundHelper.GetWindowHandle(this);
         long previousQuerySuggestionSuppression = _suppressQuerySuggestionsUntilTick;
         _suppressQuerySuggestionsUntilTick = long.MaxValue;
         HideQuerySuggestions(QueryBox);
@@ -35,7 +34,7 @@ public sealed partial class MainWindow
         _ownedModalWindowDepth++;
         try
         {
-            await FontContrastWarningDialog.ShowIfNeededAsync(ownerHwnd, ViewModel, ResolveFontContrastTheme());
+            await FontContrastWarningDialog.ShowIfNeededAsync(RootGrid.XamlRoot, ViewModel, ResolveFontContrastTheme());
         }
         finally
         {
@@ -52,6 +51,8 @@ public sealed partial class MainWindow
 
     private static bool IsFontContrastRelevantProperty(string? propertyName)
         => propertyName is nameof(MainViewModel.ThemeModeIndex)
+            or nameof(MainViewModel.SelectedPreviewContentBackgroundColor)
+            or nameof(MainViewModel.UnselectedPreviewContentBackgroundColor)
             or nameof(MainViewModel.PreviewGutterContextColor)
             or nameof(MainViewModel.PreviewGutterMatchColor)
             or nameof(MainViewModel.PreviewEditorGutterColor)

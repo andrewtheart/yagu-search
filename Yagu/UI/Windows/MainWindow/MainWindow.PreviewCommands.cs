@@ -781,7 +781,7 @@ public sealed partial class MainWindow
         {
             // DataContext not set (e.g. during container recycling) — revert checkbox to unchecked.
             if (sender is CheckBox orphan)
-                orphan.IsChecked = false;
+                SetFileGroupCheckBoxState(orphan, false);
             return;
         }
 
@@ -831,7 +831,7 @@ public sealed partial class MainWindow
         }
 
         // Force-sync checkbox to model to prevent divergence from OneWay binding.
-        checkBox.IsChecked = group.AllSelected;
+        SetFileGroupCheckBoxState(checkBox, group.AllSelected);
 
         _lastCheckedGroupIndex = currentIndex;
 

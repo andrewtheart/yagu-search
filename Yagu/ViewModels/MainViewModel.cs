@@ -463,15 +463,29 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial int ResultListMatchTextFontSize { get; set; } = AppSettings.DefaultResultListMatchTextFontSize;
     [ObservableProperty] public partial string ResultListMatchHighlightColor { get; set; } = AppSettings.DefaultResultListMatchHighlightColor;
 
-    public IReadOnlyList<FontContrastCandidate> GetFontContrastCandidates() =>
-    [
-        new(nameof(PreviewGutterContextColor), "preview pane", "Preview gutter text", PreviewGutterContextColor, FontContrastColor.FromArgb(0xFF, 0x9C, 0xDC, 0xFE)),
-        new(nameof(PreviewGutterMatchColor), "preview pane", "Matched preview gutter text", PreviewGutterMatchColor, FontContrastColor.FromArgb(0xFF, 0x9C, 0xDC, 0xFE)),
-        new(nameof(PreviewMatchTextColor), "preview pane", "Match highlight text", PreviewMatchTextColor, FontContrastColor.FromArgb(0xFF, 0xFF, 0xD7, 0x00)),
-        new(nameof(PreviewMatchLineColor), "preview pane", "Matched line text", PreviewMatchLineColor, FontContrastColor.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)),
-        new(nameof(PreviewEditorGutterColor), "built-in editor", "Editor gutter text", PreviewEditorGutterColor, FontContrastColor.FromArgb(0xFF, 0x9C, 0xDC, 0xFE)),
-        new(nameof(ResultListMatchHighlightColor), "file list", "Highlighted match text", ResultListMatchHighlightColor, FontContrastColor.FromArgb(0xFF, 0xFF, 0xD7, 0x00)),
-    ];
+    public IReadOnlyList<FontContrastCandidate> GetFontContrastCandidates()
+    {
+        var selectedPreviewBackground = FontContrastColor.Parse(
+            SelectedPreviewContentBackgroundColor,
+            FontContrastColor.FromArgb(0xFF, 0x00, 0x00, 0x00));
+        var unselectedPreviewBackground = FontContrastColor.Parse(
+            UnselectedPreviewContentBackgroundColor,
+            FontContrastColor.FromArgb(0x00, 0x00, 0x00, 0x00));
+
+        return
+        [
+            new(nameof(PreviewGutterContextColor), "selected preview content", "Preview gutter text", PreviewGutterContextColor, FontContrastColor.FromArgb(0xFF, 0x9C, 0xDC, 0xFE), selectedPreviewBackground),
+            new(nameof(PreviewGutterContextColor), "unselected preview content", "Preview gutter text", PreviewGutterContextColor, FontContrastColor.FromArgb(0xFF, 0x9C, 0xDC, 0xFE), unselectedPreviewBackground),
+            new(nameof(PreviewGutterMatchColor), "selected preview content", "Matched preview gutter text", PreviewGutterMatchColor, FontContrastColor.FromArgb(0xFF, 0x9C, 0xDC, 0xFE), selectedPreviewBackground),
+            new(nameof(PreviewGutterMatchColor), "unselected preview content", "Matched preview gutter text", PreviewGutterMatchColor, FontContrastColor.FromArgb(0xFF, 0x9C, 0xDC, 0xFE), unselectedPreviewBackground),
+            new(nameof(PreviewMatchTextColor), "selected preview content", "Match highlight text", PreviewMatchTextColor, FontContrastColor.FromArgb(0xFF, 0xFF, 0xD7, 0x00), selectedPreviewBackground),
+            new(nameof(PreviewMatchTextColor), "unselected preview content", "Match highlight text", PreviewMatchTextColor, FontContrastColor.FromArgb(0xFF, 0xFF, 0xD7, 0x00), unselectedPreviewBackground),
+            new(nameof(PreviewMatchLineColor), "selected preview content", "Matched line text", PreviewMatchLineColor, FontContrastColor.FromArgb(0xFF, 0xFF, 0xFF, 0xFF), selectedPreviewBackground),
+            new(nameof(PreviewMatchLineColor), "unselected preview content", "Matched line text", PreviewMatchLineColor, FontContrastColor.FromArgb(0xFF, 0xFF, 0xFF, 0xFF), unselectedPreviewBackground),
+            new(nameof(PreviewEditorGutterColor), "built-in editor", "Editor gutter text", PreviewEditorGutterColor, FontContrastColor.FromArgb(0xFF, 0x9C, 0xDC, 0xFE)),
+            new(nameof(ResultListMatchHighlightColor), "file list", "Highlighted match text", ResultListMatchHighlightColor, FontContrastColor.FromArgb(0xFF, 0xFF, 0xD7, 0x00)),
+        ];
+    }
 
     public void ApplyFontContrastColor(string key, string colorHex)
     {
