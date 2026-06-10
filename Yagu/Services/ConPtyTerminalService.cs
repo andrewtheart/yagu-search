@@ -1,78 +1,73 @@
 using System;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Win32.SafeHandles;
 
 namespace Yagu.Services;
 
 /// <summary>
-/// Manages a ConPTY pseudo-console session connected to PowerShell.
-/// Streams output via <see cref="OutputReceived"/> and accepts input via <see cref="WriteInput"/>.
+/// Manages the embedded command-shell session used by the terminal pane.
 /// </summary>
 internal sealed class ConPtyTerminalService : IDisposable
 {
-    private nint _pseudoConsoleHandle;
-    private SafeFileHandle? _pipeIn;       // We write TO this → PTY stdin
-    private SafeFileHandle? _pipeOut;      // We read FROM this ← PTY stdout
-    private SafeProcessHandle? _processHandle;
-    private SafeFileHandle? _threadHandle;
-    private nint _startupInfoEx;
-    private Stream? _writer;
-    private Task? _readerTask;
+    private Process? _process;
+    private StreamWriter? _input;
+    private Task? _stdoutTask;
+    private Task? _stderrTask;
     private CancellationTokenSource? _cts;
+    private bool _loggedFirstOutput;
+    private bool _loggedFirstInput;
     private bool _disposed;
 
-    /// <summary>Fired when the PTY produces output bytes (UTF-8).</summary>
+    public int ProcessId { get; private set; }
+
     public event Action<string>? OutputReceived;
 
-    /// <summary>Fired when the child process exits.</summary>
     public event Action<int>? ProcessExited;
 
     public void Start(int cols = 120, int rows = 30, string? workingDirectory = null)
     {
-        if (_pseudoConsoleHandle != 0) return;
+        if (_process is not null) return;
 
-        SafeFileHandle? inputReadSide = null;
-        SafeFileHandle? outputWriteSide = null;
+        string shellPath = ResolveCommandShellExecutable();
+        string resolvedWorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory) ? AppContext.BaseDirectory : workingDirectory;
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = shellPath,
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            WorkingDirectory = resolvedWorkingDirectory,
+        };
+        // Render the cmd.exe prompt with one extra space after the '>' (default is "$P$G").
+        startInfo.EnvironmentVariables["PROMPT"] = "$P$G ";
+        startInfo.ArgumentList.Add("/Q");
+        startInfo.ArgumentList.Add("/K");
+
+        LogService.Instance.Info("Terminal", $"Launching redirected shell '{shellPath}' with cwd='{resolvedWorkingDirectory}'");
 
         try
         {
-            // Create pipes: inputReadSide→PTY stdin, PTY stdout→outputWriteSide
-            CreatePipe(out inputReadSide, out var inputWriteSide);
-            CreatePipe(out var outputReadSide, out outputWriteSide);
-
-            _pipeIn = inputWriteSide;
-            _pipeOut = outputReadSide;
-
-            // Create pseudo console
-            var size = new COORD { X = (short)cols, Y = (short)rows };
-            int hr = CreatePseudoConsole(size, inputReadSide.DangerousGetHandle(), outputWriteSide.DangerousGetHandle(), 0, out _pseudoConsoleHandle);
-            if (hr != 0) throw new InvalidOperationException($"CreatePseudoConsole failed: 0x{hr:X8}");
-
-            // Close the pipe ends that the PTY now owns
-            inputReadSide.Dispose();
-            inputReadSide = null;
-            outputWriteSide.Dispose();
-            outputWriteSide = null;
-
-            // Spawn PowerShell attached to the pseudo console
-            string shellPath = ResolvePowerShellExecutable();
-            SpawnProcess(shellPath, $"\"{shellPath}\" -NoLogo -NoExit", workingDirectory);
-
-            // Open writer stream
-            _writer = new FileStream(_pipeIn, FileAccess.Write, bufferSize: 256, isAsync: false);
-
-            // Start reader loop
             _cts = new CancellationTokenSource();
-            _readerTask = Task.Run(() => ReadLoop(_cts.Token));
+            _process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+            _process.Exited += OnProcessExited;
+
+            if (!_process.Start())
+                throw new InvalidOperationException($"CreateProcess failed for '{shellPath}'.");
+
+            ProcessId = _process.Id;
+            _input = _process.StandardInput;
+            _input.AutoFlush = true;
+            _stdoutTask = Task.Run(() => ReadRedirectedOutput(_process.StandardOutput, _cts.Token));
+            _stderrTask = Task.Run(() => ReadRedirectedOutput(_process.StandardError, _cts.Token));
         }
-        catch
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
         {
-            inputReadSide?.Dispose();
-            outputWriteSide?.Dispose();
             Dispose();
             throw;
         }
@@ -80,64 +75,136 @@ internal sealed class ConPtyTerminalService : IDisposable
 
     public void Resize(int cols, int rows)
     {
-        if (_pseudoConsoleHandle == 0) return;
-        var size = new COORD { X = (short)cols, Y = (short)rows };
-        ResizePseudoConsole(_pseudoConsoleHandle, size);
+        if (_process is null)
+            return;
     }
 
     public void WriteInput(string text)
     {
-        if (_writer is null) return;
-        byte[] bytes = Encoding.UTF8.GetBytes(text);
-        _writer.Write(bytes);
-        _writer.Flush();
+        if (_input is null)
+        {
+            LogService.Instance.Warning("Terminal", "Ignored terminal input because the shell input stream is not ready.");
+            return;
+        }
+
+        try
+        {
+            if (!_loggedFirstInput && text.Length > 0)
+            {
+                _loggedFirstInput = true;
+                LogService.Instance.Info("Terminal", $"First terminal input written: chars={text.Length}");
+            }
+
+            string echo = BuildLocalEcho(text);
+            if (echo.Length > 0)
+                OutputReceived?.Invoke(echo);
+
+            // The redirected cmd.exe reads its stdin pipe line-by-line and only
+            // executes a command once it sees a newline. xterm sends a lone '\r'
+            // for Enter, which never terminates the line, so normalize every line
+            // ending to '\r\n' before writing to the shell.
+            string shellText = NormalizeShellLineEndings(text);
+            _input.Write(shellText);
+            _input.Flush();
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+        {
+            LogService.Instance.Warning("Terminal", "Failed to write terminal input", ex);
+        }
     }
 
-    private void ReadLoop(CancellationToken ct)
+    private void ReadRedirectedOutput(StreamReader reader, CancellationToken ct)
     {
-        using var reader = new FileStream(_pipeOut!, FileAccess.Read, bufferSize: 4096, isAsync: false);
-        byte[] buffer = new byte[4096];
-        var decoder = Encoding.UTF8.GetDecoder();
-        char[] charBuffer = new char[4096];
+        char[] buffer = new char[4096];
 
         while (!ct.IsCancellationRequested)
         {
-            int bytesRead;
-            try { bytesRead = reader.Read(buffer, 0, buffer.Length); }
-            catch { break; }
-
-            if (bytesRead == 0) break;
-
-            int charCount = decoder.GetChars(buffer, 0, bytesRead, charBuffer, 0);
-            if (charCount > 0)
+            int charsRead;
+            try
             {
-                string output = new string(charBuffer, 0, charCount);
-                OutputReceived?.Invoke(output);
+                charsRead = reader.Read(buffer, 0, buffer.Length);
             }
+            catch
+            {
+                break;
+            }
+
+            if (charsRead <= 0)
+                break;
+
+            string output = new(buffer, 0, charsRead);
+            if (!_loggedFirstOutput)
+            {
+                _loggedFirstOutput = true;
+                LogService.Instance.Info("Terminal", $"First shell output received: chars={charsRead}");
+            }
+
+            OutputReceived?.Invoke(output);
+        }
+    }
+
+    private void OnProcessExited(object? sender, EventArgs e)
+    {
+        int exitCode = 0;
+        try
+        {
+            if (_process is not null)
+                exitCode = _process.ExitCode;
+        }
+        catch
+        {
         }
 
-        // Child exited
-        int exitCode = 0;
-        if (_processHandle is { IsInvalid: false, IsClosed: false })
-        {
-            WaitForSingleObject(_processHandle.DangerousGetHandle(), 5000);
-            GetExitCodeProcess(_processHandle.DangerousGetHandle(), out exitCode);
-        }
         ProcessExited?.Invoke(exitCode);
     }
 
-    private static string ResolvePowerShellExecutable()
+    private static string NormalizeShellLineEndings(string text)
     {
-        string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-        string programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        if (text.IndexOf('\r') < 0 && text.IndexOf('\n') < 0)
+            return text;
+
+        return text.Replace("\r\n", "\n").Replace('\r', '\n').Replace("\n", "\r\n");
+    }
+
+    private static string BuildLocalEcho(string text)
+    {
+        var echo = new StringBuilder(text.Length + 8);
+
+        foreach (char c in text)
+        {
+            switch (c)
+            {
+                case '\r':
+                    echo.Append("\r\n");
+                    break;
+                case '\n':
+                    break;
+                case '\b':
+                case '\u007f':
+                    echo.Append("\b \b");
+                    break;
+                case '\t':
+                    break;
+                case '\u0003':
+                case '\u001b':
+                    break;
+                default:
+                    if (!char.IsControl(c))
+                        echo.Append(c);
+                    break;
+            }
+        }
+
+        return echo.ToString();
+    }
+
+    private static string ResolveCommandShellExecutable()
+    {
         string system = Environment.GetFolderPath(Environment.SpecialFolder.System);
         string[] candidates =
         [
-            Path.Combine(programFiles, "PowerShell", "7", "pwsh.exe"),
-            Path.Combine(programFilesX86, "PowerShell", "7", "pwsh.exe"),
-            FindExecutableOnPath("pwsh.exe"),
-            Path.Combine(system, "WindowsPowerShell", "v1.0", "powershell.exe"),
-            FindExecutableOnPath("powershell.exe"),
+            Path.Combine(system, "cmd.exe"),
+            FindExecutableOnPath("cmd.exe"),
         ];
 
         foreach (string candidate in candidates)
@@ -146,7 +213,7 @@ internal sealed class ConPtyTerminalService : IDisposable
                 return candidate;
         }
 
-        return "powershell.exe";
+        return "cmd.exe";
     }
 
     private static string FindExecutableOnPath(string executableName)
@@ -171,155 +238,29 @@ internal sealed class ConPtyTerminalService : IDisposable
         return string.Empty;
     }
 
-    private void SpawnProcess(string applicationName, string commandLine, string? workingDirectory)
-    {
-        var startupInfo = new STARTUPINFOEX();
-        startupInfo.StartupInfo.cb = Marshal.SizeOf<STARTUPINFOEX>();
-
-        // Initialize proc thread attribute list for pseudo console
-        nint attrListSize = 0;
-        InitializeProcThreadAttributeList(nint.Zero, 1, 0, ref attrListSize);
-        startupInfo.lpAttributeList = Marshal.AllocHGlobal(attrListSize);
-        _startupInfoEx = startupInfo.lpAttributeList;
-
-        if (!InitializeProcThreadAttributeList(startupInfo.lpAttributeList, 1, 0, ref attrListSize))
-            throw new InvalidOperationException("InitializeProcThreadAttributeList failed");
-
-        if (!UpdateProcThreadAttribute(startupInfo.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-                _pseudoConsoleHandle, nint.Size, nint.Zero, nint.Zero))
-            throw new InvalidOperationException("UpdateProcThreadAttribute failed");
-
-        var processInfo = new PROCESS_INFORMATION();
-        bool success = CreateProcessW(
-            applicationName, commandLine, nint.Zero, nint.Zero, false,
-            EXTENDED_STARTUPINFO_PRESENT, nint.Zero, workingDirectory, ref startupInfo, out processInfo);
-
-        if (!success)
-            throw new InvalidOperationException($"CreateProcessW failed: {Marshal.GetLastWin32Error()}");
-
-        _processHandle = new SafeProcessHandle(processInfo.hProcess, ownsHandle: true);
-        _threadHandle = new SafeFileHandle(processInfo.hThread, ownsHandle: true);
-    }
-
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
 
         _cts?.Cancel();
-        _writer?.Dispose();
 
-        if (_pseudoConsoleHandle != 0)
+        try
         {
-            ClosePseudoConsole(_pseudoConsoleHandle);
-            _pseudoConsoleHandle = 0;
+            if (_process is { HasExited: false })
+            {
+                _input?.Write("exit\r");
+                _input?.Flush();
+                if (!_process.WaitForExit(500))
+                    _process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
         }
 
-        _processHandle?.Dispose();
-        _threadHandle?.Dispose();
-        _pipeIn?.Dispose();
-        _pipeOut?.Dispose();
-
-        if (_startupInfoEx != 0)
-        {
-            DeleteProcThreadAttributeList(_startupInfoEx);
-            Marshal.FreeHGlobal(_startupInfoEx);
-            _startupInfoEx = 0;
-        }
-
+        _input?.Dispose();
+        _process?.Dispose();
         _cts?.Dispose();
     }
-
-    // ── P/Invoke ──────────────────────────────────────────────────
-
-    private static void CreatePipe(out SafeFileHandle readSide, out SafeFileHandle writeSide)
-    {
-        var sa = new SECURITY_ATTRIBUTES { nLength = Marshal.SizeOf<SECURITY_ATTRIBUTES>(), bInheritHandle = true };
-        if (!CreatePipe(out readSide, out writeSide, ref sa, 0))
-            throw new InvalidOperationException($"CreatePipe failed: {Marshal.GetLastWin32Error()}");
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct COORD { public short X; public short Y; }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct SECURITY_ATTRIBUTES
-    {
-        public int nLength;
-        public nint lpSecurityDescriptor;
-        [MarshalAs(UnmanagedType.Bool)] public bool bInheritHandle;
-    }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct STARTUPINFOEX
-    {
-        public STARTUPINFO StartupInfo;
-        public nint lpAttributeList;
-    }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct STARTUPINFO
-    {
-        public int cb;
-        public nint lpReserved;
-        public nint lpDesktop;
-        public nint lpTitle;
-        public int dwX, dwY, dwXSize, dwYSize;
-        public int dwXCountChars, dwYCountChars;
-        public int dwFillAttribute;
-        public int dwFlags;
-        public short wShowWindow;
-        public short cbReserved2;
-        public nint lpReserved2;
-        public nint hStdInput, hStdOutput, hStdError;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct PROCESS_INFORMATION
-    {
-        public nint hProcess;
-        public nint hThread;
-        public int dwProcessId;
-        public int dwThreadId;
-    }
-
-    private const int EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
-    private static readonly nint PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = (nint)0x00020016;
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern int CreatePseudoConsole(COORD size, nint hInput, nint hOutput, uint dwFlags, out nint phPC);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern int ResizePseudoConsole(nint hPC, COORD size);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern void ClosePseudoConsole(nint hPC);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CreatePipe(out SafeFileHandle hReadPipe, out SafeFileHandle hWritePipe, ref SECURITY_ATTRIBUTES lpPipeAttributes, uint nSize);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool InitializeProcThreadAttributeList(nint lpAttributeList, int dwAttributeCount, int dwFlags, ref nint lpSize);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool UpdateProcThreadAttribute(nint lpAttributeList, uint dwFlags, nint attribute, nint lpValue, nint cbSize, nint lpPreviousValue, nint lpReturnSize);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern void DeleteProcThreadAttributeList(nint lpAttributeList);
-
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CreateProcessW(string? lpApplicationName, string lpCommandLine, nint lpProcessAttributes, nint lpThreadAttributes,
-        [MarshalAs(UnmanagedType.Bool)] bool bInheritHandles, int dwCreationFlags, nint lpEnvironment, string? lpCurrentDirectory,
-        ref STARTUPINFOEX lpStartupInfo, out PROCESS_INFORMATION lpProcessInformation);
-
-    [DllImport("kernel32.dll")]
-    private static extern uint WaitForSingleObject(nint hHandle, uint dwMilliseconds);
-
-    [DllImport("kernel32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetExitCodeProcess(nint hProcess, out int lpExitCode);
 }

@@ -23,7 +23,8 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("OnContent=\"Include\"", xaml);
         Assert.Contains("OffContent=\"Omit\"", xaml);
         Assert.Contains("Omit options that already match the current settings file", xaml);
-        Assert.Contains("IsOn=\"True\"", xaml);
+        Assert.Contains("IsOn=\"False\"", xaml);
+        Assert.DoesNotContain("IsOn=\"True\"", xaml);
         Assert.Contains("Toggled=\"OnGeneratedCliCommandSavedSettingOptionsToggled\"", xaml);
         Assert.DoesNotContain("settings-backed", xaml);
         Assert.Contains("FontFamily=\"Consolas\"", xaml);
@@ -74,6 +75,10 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("_includeGeneratedCliCommandSavedSettingOptions", source);
         Assert.Contains("OnGeneratedCliCommandSavedSettingOptionsToggled", source);
         Assert.Contains("BuildGeneratedCliCommand(bool includeSavedSettingOptions)", source);
+        Assert.Contains("private bool _includeGeneratedCliCommandSavedSettingOptions;", source);
+        Assert.Contains("BuildGeneratedCliCommand(includeSavedSettingOptions: false)", source);
+        Assert.DoesNotContain("private bool _includeGeneratedCliCommandSavedSettingOptions = true;", source);
+        Assert.DoesNotContain("BuildGeneratedCliCommand(includeSavedSettingOptions: true)", source);
         Assert.Contains("new SettingsService().Load()", source);
         Assert.Contains("ShouldIncludeSavedSettingOption", source);
         Assert.Contains("SplitSettingsPatternsForCli", source);

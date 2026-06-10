@@ -1,6 +1,8 @@
 using System;
 using System.Runtime.InteropServices;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Windows.Graphics;
 
 namespace Yagu.Helpers;
 
@@ -64,6 +66,56 @@ internal static class WindowForegroundHelper
         _ = SetForegroundWindow(childHwnd);
     }
 
+    public static void CenterWindowOverOwner(
+        AppWindow appWindow,
+        IntPtr ownerHwnd,
+        int width,
+        int height,
+        int minWidth = 420,
+        int minHeight = 260)
+    {
+        appWindow.MoveAndResize(CalculateCenteredBounds(ownerHwnd, width, height, minWidth, minHeight));
+    }
+
+    private static RectInt32 CalculateCenteredBounds(IntPtr ownerHwnd, int width, int height, int minWidth, int minHeight)
+    {
+        int x = 100;
+        int y = 100;
+
+        const uint monitorDefaultToNearest = 2;
+        IntPtr monitor = ownerHwnd == IntPtr.Zero
+            ? MonitorFromPoint(new POINT { X = 0, Y = 0 }, monitorDefaultToNearest)
+            : MonitorFromWindow(ownerHwnd, monitorDefaultToNearest);
+
+        var monitorInfo = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (GetMonitorInfo(monitor, ref monitorInfo))
+        {
+            var workArea = monitorInfo.rcWork;
+            width = Math.Min(width, Math.Max(minWidth, workArea.Right - workArea.Left));
+            height = Math.Min(height, Math.Max(minHeight, workArea.Bottom - workArea.Top));
+
+            if (ownerHwnd != IntPtr.Zero && GetWindowRect(ownerHwnd, out var ownerRect))
+            {
+                int ownerCenterX = (ownerRect.Left + ownerRect.Right) / 2;
+                int ownerCenterY = (ownerRect.Top + ownerRect.Bottom) / 2;
+                x = ownerCenterX - width / 2;
+                y = ownerCenterY - height / 2;
+            }
+            else
+            {
+                x = workArea.Left + ((workArea.Right - workArea.Left) - width) / 2;
+                y = workArea.Top + ((workArea.Bottom - workArea.Top) - height) / 2;
+            }
+
+            if (x < workArea.Left) x = workArea.Left;
+            if (y < workArea.Top) y = workArea.Top;
+            if (x + width > workArea.Right) x = workArea.Right - width;
+            if (y + height > workArea.Bottom) y = workArea.Bottom - height;
+        }
+
+        return new RectInt32(x, y, width, height);
+    }
+
     private static bool IsTopMost(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero)
@@ -103,4 +155,41 @@ internal static class WindowForegroundHelper
 
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromPoint(POINT point, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+    }
 }

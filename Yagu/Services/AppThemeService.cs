@@ -60,8 +60,8 @@ public static class AppThemeService
         }
 
         var lightBackground = ColorHelper.FromArgb(0xFF, 0xF3, 0xF3, 0xF3);
-        var lightForeground = ColorHelper.FromArgb(0xFF, 0x1A, 0x1A, 0x1A);
-        var lightInactiveForeground = ColorHelper.FromArgb(0xFF, 0x7A, 0x7A, 0x7A);
+        var lightForeground = Colors.Black;
+        var lightInactiveForeground = Colors.Black;
 
         titleBar.BackgroundColor = lightBackground;
         titleBar.InactiveBackgroundColor = lightBackground;

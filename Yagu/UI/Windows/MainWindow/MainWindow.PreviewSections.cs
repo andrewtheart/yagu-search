@@ -242,7 +242,7 @@ public sealed partial class MainWindow
     {
         Grid.SetRow(SplitPaneGrid, 4);
         Grid.SetRowSpan(SplitPaneGrid, 1);
-        SplitPaneGrid.Margin = new Thickness(16, 2, 20, 4);
+        SplitPaneGrid.Margin = new Thickness(16, 2, 16, 4);
         ResultsPanelBorder.Margin = new Thickness(0);
 
         SearchControlsBorder.Width = double.NaN;
@@ -272,7 +272,7 @@ public sealed partial class MainWindow
 
         Grid.SetRow(SplitPaneGrid, 2);
         Grid.SetRowSpan(SplitPaneGrid, 3);
-        SplitPaneGrid.Margin = new Thickness(16, 10, 20, 4);
+        SplitPaneGrid.Margin = new Thickness(16, 10, 16, 4);
         Canvas.SetZIndex(SplitPaneGrid, 0);
         Canvas.SetZIndex(SearchControlsBorder, 10);
         Canvas.SetZIndex(SearchStatusPanel, 10);
@@ -374,6 +374,7 @@ public sealed partial class MainWindow
         StatusBarRow.Height = showStatusBar ? GridLength.Auto : new GridLength(0);
         if (!showStatusBar)
             SkipBreakdownOverlay.Visibility = Visibility.Collapsed;
+        UpdateTerminalChevronVisibility();
     }
 
     private void OnExpandResultsPanel(object sender, RoutedEventArgs e)

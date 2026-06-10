@@ -120,17 +120,18 @@ public sealed partial class MainWindow
             LogService.Instance.Info("MainWindow", $"CheckEverythingAsync: es.exe found at '{esPath}', Everything.exe resolve={everythingExe ?? "(null)"}");
             if (everythingExe != null)
             {
-                var startDialog = new ContentDialog
-                {
-                    XamlRoot = ((FrameworkElement)Content).XamlRoot,
-                    Title = "Everything Search Not Running",
-                    Content = "Everything Search is installed but not currently running.\nIt must be running for fast file discovery.\n\nWould you like to start it now?",
-                    PrimaryButtonText = "Start Everything",
-                    CloseButtonText = "Skip",
-                    DefaultButton = ContentDialogButton.Primary,
-                };
-
-                if (await startDialog.ShowAsync() == ContentDialogResult.Primary)
+                if (await YaguDialog.ShowAsync(
+                    _hwnd,
+                    new YaguDialogOptions
+                    {
+                        Title = "Everything Search Not Running",
+                        Content = "Everything Search is installed but not currently running.\nIt must be running for fast file discovery.\n\nWould you like to start it now?",
+                        PrimaryButtonText = "Start Everything",
+                        CloseButtonText = "Skip",
+                        DefaultButton = YaguDialogDefaultButton.Primary,
+                        Width = 560,
+                        Height = 300,
+                    }) == YaguDialogResult.Primary)
                 {
                     try
                     {
@@ -156,17 +157,18 @@ public sealed partial class MainWindow
         if (everythingExeStandalone != null)
         {
             LogService.Instance.Info("MainWindow", $"CheckEverythingAsync: Everything.exe found at '{everythingExeStandalone}' (no es.exe), offering to start");
-            var startDialog = new ContentDialog
-            {
-                XamlRoot = ((FrameworkElement)Content).XamlRoot,
-                Title = "Everything Search Not Running",
-                Content = "Everything Search is installed but not currently running.\nIt must be running for fast file discovery.\n\nWould you like to start it now?",
-                PrimaryButtonText = "Start Everything",
-                CloseButtonText = "Skip",
-                DefaultButton = ContentDialogButton.Primary,
-            };
-
-            if (await startDialog.ShowAsync() == ContentDialogResult.Primary)
+            if (await YaguDialog.ShowAsync(
+                _hwnd,
+                new YaguDialogOptions
+                {
+                    Title = "Everything Search Not Running",
+                    Content = "Everything Search is installed but not currently running.\nIt must be running for fast file discovery.\n\nWould you like to start it now?",
+                    PrimaryButtonText = "Start Everything",
+                    CloseButtonText = "Skip",
+                    DefaultButton = YaguDialogDefaultButton.Primary,
+                    Width = 560,
+                    Height = 300,
+                }) == YaguDialogResult.Primary)
             {
                 try
                 {
@@ -188,17 +190,20 @@ public sealed partial class MainWindow
 
         // Nothing found — offer to download and install
         LogService.Instance.Warning("MainWindow", "CheckEverythingAsync: Everything not found anywhere — showing install dialog");
-        var dialog = new ContentDialog
-        {
-            XamlRoot = ((FrameworkElement)Content).XamlRoot,
-            Title = "Everything Search Not Found",
-            Content = "Everything Search by voidtools provides significantly faster file discovery.\n\nWould you like to download and install it?",
-            PrimaryButtonText = "Install",
-            CloseButtonText = "Skip",
-            DefaultButton = ContentDialogButton.Primary,
-        };
+        bool installEverything = await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "Everything Search Not Found",
+                Content = "Everything Search by voidtools provides significantly faster file discovery.\n\nWould you like to download and install it?",
+                PrimaryButtonText = "Install",
+                CloseButtonText = "Skip",
+                DefaultButton = YaguDialogDefaultButton.Primary,
+                Width = 560,
+                Height = 280,
+            }) == YaguDialogResult.Primary;
 
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        if (!installEverything) return;
 
         bool is64Bit = Environment.Is64BitOperatingSystem;
         string url = is64Bit
@@ -288,16 +293,17 @@ public sealed partial class MainWindow
         uint indexedCount = readiness.TotalCount > 0 ? readiness.TotalCount : readiness.ReturnedCount;
         ViewModel.StatusText = $"Everything Search is ready - {indexedCount:N0} files and folders indexed.";
 
-        var readyDialog = new ContentDialog
-        {
-            XamlRoot = ((FrameworkElement)Content).XamlRoot,
-            Title = "Everything Search Ready",
-            Content = $"Everything Search returned indexed files and folders through the SDK. Fast file discovery is ready to use.\n\nIndexed items reported: {indexedCount:N0}",
-            CloseButtonText = "OK",
-            DefaultButton = ContentDialogButton.Close,
-        };
-
-        await readyDialog.ShowAsync();
+        await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "Everything Search Ready",
+                Content = $"Everything Search returned indexed files and folders through the SDK. Fast file discovery is ready to use.\n\nIndexed items reported: {indexedCount:N0}",
+                CloseButtonText = "OK",
+                DefaultButton = YaguDialogDefaultButton.Close,
+                Width = 560,
+                Height = 300,
+            });
         return true;
     }
 

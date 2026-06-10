@@ -5,11 +5,11 @@ using Yagu.Services;
 namespace Yagu;
 
 /// <summary>
-/// Builds and shows a ContentDialog for report export options, returning the chosen options or null if cancelled.
+/// Builds and shows the custom report export dialog, returning the chosen options or null if cancelled.
 /// </summary>
 internal static class ReportExportDialog
 {
-    public static async Task<ReportExportOptions?> ShowAsync(XamlRoot xamlRoot, int defaultContextLines)
+    public static async Task<ReportExportOptions?> ShowAsync(IntPtr ownerHwnd, int defaultContextLines)
     {
         var options = new ReportExportOptions { ContextLineCount = defaultContextLines };
 
@@ -119,18 +119,20 @@ internal static class ReportExportDialog
         root.Children.Add(formatPanel);
         root.Children.Add(optionsPanel);
 
-        var dialog = new ContentDialog
-        {
-            XamlRoot = xamlRoot,
-            Title = "Export Report",
-            Content = root,
-            PrimaryButtonText = "Export",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Primary,
-        };
-
-        var result = await dialog.ShowAsync();
-        if (result != ContentDialogResult.Primary)
+        var result = await YaguDialog.ShowAsync(
+            ownerHwnd,
+            new YaguDialogOptions
+            {
+                Title = "Export Report",
+                Content = root,
+                PrimaryButtonText = "Export",
+                CloseButtonText = "Cancel",
+                DefaultButton = YaguDialogDefaultButton.Primary,
+                Width = 520,
+                Height = 560,
+                MaxContentHeight = 440,
+            });
+        if (result != YaguDialogResult.Primary)
             return null;
 
         // Gather selections

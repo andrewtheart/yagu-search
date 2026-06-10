@@ -38,6 +38,31 @@ public sealed class InstallerPackagingRegressionTests
     }
 
     [Fact]
+    public void InnoInstaller_RequiresDotNet10RuntimeBeforeInstall()
+    {
+        string root = FindRepoRoot();
+        string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+
+        Assert.Contains("DotNet10RuntimeDownloadUrl", inno);
+        Assert.Contains("https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-10.0.9-windows-x64-installer?cid=getdotnetcore", inno);
+        Assert.Contains("DotNet10RuntimeRegistrySubkey", inno);
+        Assert.Contains(@"SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.NETCore.App", inno);
+        Assert.Contains("RegGetValueNames(HKLM64, '{#DotNet10RuntimeRegistrySubkey}', RuntimeVersions)", inno);
+        Assert.Contains("RegGetValueNames(HKLM32, '{#DotNet10RuntimeRegistrySubkey}', RuntimeVersions)", inno);
+        Assert.Contains("Copy(RuntimeVersions[I], 1, 3) = '10.'", inno);
+        Assert.Contains("function InitializeSetup(): Boolean;", inno);
+        Assert.Contains("if not IsDotNet10RuntimeInstalled() then", inno);
+        Assert.Contains("Yagu requires the .NET 10.0 Runtime for Windows x64.", inno);
+        Assert.Contains("Download and install .NET 10.0 Runtime (v10.0.9) - Windows x64 Installer", inno);
+
+        int dotNetCheck = inno.IndexOf("if not IsDotNet10RuntimeInstalled() then", StringComparison.Ordinal);
+        int windowsAppRuntimeInstall = inno.IndexOf("function InstallWindowsAppRuntime(): Boolean;", StringComparison.Ordinal);
+        Assert.True(dotNetCheck >= 0, "Installer should check .NET 10 before installing files.");
+        Assert.True(windowsAppRuntimeInstall >= 0, "Installer should still include the Windows App Runtime prerequisite installer.");
+        Assert.True(dotNetCheck < windowsAppRuntimeInstall, ".NET runtime check should happen before post-install prerequisite handling.");
+    }
+
+    [Fact]
     public void RuntimePrerequisiteInstaller_UsesMsixManifestIdentity()
     {
         string root = FindRepoRoot();

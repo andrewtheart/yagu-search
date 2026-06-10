@@ -5,6 +5,7 @@ using System.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Yagu.Helpers;
 using Yagu.Services;
 
 namespace Yagu;
@@ -187,16 +188,19 @@ public sealed partial class App : Application, IDisposable
             });
             content.Children.Add(detailsViewer);
 
-            var dialog = new ContentDialog
-            {
-                XamlRoot = root.XamlRoot,
-                Title = "Unexpected error",
-                Content = content,
-                CloseButtonText = "Close",
-                DefaultButton = ContentDialogButton.Close,
-            };
-
-            await dialog.ShowAsync();
+            await YaguDialog.ShowAsync(
+                WindowForegroundHelper.GetWindowHandle(_window),
+                new YaguDialogOptions
+                {
+                    Title = "Unexpected error",
+                    Content = content,
+                    CloseButtonText = "Close",
+                    DefaultButton = YaguDialogDefaultButton.Close,
+                    Width = 720,
+                    Height = 620,
+                    MaxContentHeight = 460,
+                    IsResizable = true,
+                });
         }
         catch
         {

@@ -46,46 +46,51 @@ public sealed partial class MainWindow
         if (IsContextMenuRegistered())
             return;
 
-        var dialog = new ContentDialog
-        {
-            XamlRoot = ((FrameworkElement)Content).XamlRoot,
-            Title = "Add Explorer Context Menu?",
-            Content = "Would you like to add a \"Search with Yagu\" option to the Windows Explorer right-click menu?\n\nThis lets you quickly search any folder by right-clicking it.",
-            PrimaryButtonText = "Yes, add it",
-            CloseButtonText = "No thanks",
-            DefaultButton = ContentDialogButton.Primary,
-        };
-
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        if (await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "Add Explorer Context Menu?",
+                Content = "Would you like to add a \"Search with Yagu\" option to the Windows Explorer right-click menu?\n\nThis lets you quickly search any folder by right-clicking it.",
+                PrimaryButtonText = "Yes, add it",
+                CloseButtonText = "No thanks",
+                DefaultButton = YaguDialogDefaultButton.Primary,
+                Width = 560,
+                Height = 300,
+            }) != YaguDialogResult.Primary)
             return;
 
         try
         {
             RegisterContextMenu();
 
-            var successDialog = new ContentDialog
-            {
-                XamlRoot = ((FrameworkElement)Content).XamlRoot,
-                Title = "Context Menu Installed",
-                Content = "The \"Search with Yagu\" context menu has been added.\n\nTo use it: right-click any folder in Windows Explorer and select \"Search with Yagu\". Yagu will open with that folder ready to search.",
-                CloseButtonText = "OK",
-                DefaultButton = ContentDialogButton.Close,
-            };
-            await successDialog.ShowAsync();
+            await YaguDialog.ShowAsync(
+                _hwnd,
+                new YaguDialogOptions
+                {
+                    Title = "Context Menu Installed",
+                    Content = "The \"Search with Yagu\" context menu has been added.\n\nTo use it: right-click any folder in Windows Explorer and select \"Search with Yagu\". Yagu will open with that folder ready to search.",
+                    CloseButtonText = "OK",
+                    DefaultButton = YaguDialogDefaultButton.Close,
+                    Width = 560,
+                    Height = 320,
+                });
         }
         catch (Exception ex)
         {
             LogService.Instance.Warning("ContextMenu", "Failed to register context menu", ex);
 
-            var errorDialog = new ContentDialog
-            {
-                XamlRoot = ((FrameworkElement)Content).XamlRoot,
-                Title = "Context Menu Registration Failed",
-                Content = $"Could not register the context menu entry:\n{ex.Message}",
-                CloseButtonText = "OK",
-                DefaultButton = ContentDialogButton.Close,
-            };
-            await errorDialog.ShowAsync();
+            await YaguDialog.ShowAsync(
+                _hwnd,
+                new YaguDialogOptions
+                {
+                    Title = "Context Menu Registration Failed",
+                    Content = $"Could not register the context menu entry:\n{ex.Message}",
+                    CloseButtonText = "OK",
+                    DefaultButton = YaguDialogDefaultButton.Close,
+                    Width = 560,
+                    Height = 300,
+                });
         }
     }
 

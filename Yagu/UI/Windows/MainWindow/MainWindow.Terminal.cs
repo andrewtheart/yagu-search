@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.UI.Xaml;
 using Microsoft.Web.WebView2.Core;
+using Windows.ApplicationModel.DataTransfer;
 using Yagu.Services;
 
 namespace Yagu;
@@ -14,6 +15,10 @@ public sealed partial class MainWindow
     private int _terminalColumns = 120;
     private int _terminalRows = 24;
     private int _terminalSessionGeneration;
+    private bool _terminalWebViewDiagnosticsAttached;
+    private bool _terminalLoggedFirstOutputPost;
+    private bool _terminalLoggedFirstInput;
+    private bool _terminalStartupPromptNudged;
     private readonly TaskCompletionSource<bool> _terminalReadyCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private void OnToggleTerminalPane(object sender, RoutedEventArgs e)
@@ -31,15 +36,35 @@ public sealed partial class MainWindow
         if (_terminalPaneExpanded)
         {
             TerminalRow.Height = new GridLength(250);
-            TerminalWebView.Visibility = Visibility.Visible;
-            TerminalChevronIcon.Glyph = "\uE70D"; // ChevronDown — click to collapse
+            TerminalHost.Visibility = Visibility.Visible;
         }
         else
         {
             TerminalRow.Height = new GridLength(0);
-            TerminalWebView.Visibility = Visibility.Collapsed;
-            TerminalChevronIcon.Glyph = "\uE70E"; // ChevronUp — click to expand
+            TerminalHost.Visibility = Visibility.Collapsed;
         }
+
+        UpdateTerminalChevronGlyphs();
+        UpdateTerminalChevronVisibility();
+
+        if (_launcherMode)
+            PositionLauncherWindow();
+    }
+
+    private void UpdateTerminalChevronGlyphs()
+    {
+        // In this app's icon font, \uE70E renders as an up-pointing chevron and
+        // \uE70D as a down-pointing chevron. Show up when expanded, down when collapsed.
+        string glyph = _terminalPaneExpanded ? "\uE70E" : "\uE70D";
+        TerminalChevronIcon.Glyph = glyph;
+        PreSearchTerminalChevronIcon.Glyph = glyph;
+    }
+
+    private void UpdateTerminalChevronVisibility()
+    {
+        bool statusBarChevronVisible = StatusBarRow.Height.IsAuto || StatusBarRow.Height.Value > 0;
+        TerminalChevron.Visibility = statusBarChevronVisible ? Visibility.Visible : Visibility.Collapsed;
+        PreSearchTerminalChevron.Visibility = statusBarChevronVisible ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private async Task SendTextToTerminalAsync(string text)
@@ -91,6 +116,7 @@ public sealed partial class MainWindow
     {
         try
         {
+            LogService.Instance.Info("Terminal", "Initializing terminal WebView");
             EnsureWebView2LoaderLoaded();
 
             var env = await CoreWebView2Environment.CreateAsync();
@@ -105,25 +131,66 @@ public sealed partial class MainWindow
             TerminalWebView.CoreWebView2.SetVirtualHostNameToFolderMapping(
                 "yagu-assets", AppContext.BaseDirectory, CoreWebView2HostResourceAccessKind.Allow);
 
+            AttachTerminalWebViewDiagnostics(TerminalWebView.CoreWebView2);
             TerminalWebView.CoreWebView2.WebMessageReceived += OnTerminalWebMessage;
 
-            // Navigate to terminal.html
             string terminalHtmlPath = Path.Combine(AppContext.BaseDirectory, "Assets", "terminal.html");
-            if (File.Exists(terminalHtmlPath))
-            {
-                TerminalWebView.CoreWebView2.Navigate(new Uri(terminalHtmlPath).AbsoluteUri);
-            }
-            else
-            {
-                // Fallback: try virtual host mapping
-                TerminalWebView.CoreWebView2.Navigate("https://yagu-terminal/terminal.html");
-            }
+            if (!File.Exists(terminalHtmlPath))
+                LogService.Instance.Warning("Terminal", $"terminal.html was not found at {terminalHtmlPath}; navigating via virtual host anyway.");
+
+            LogService.Instance.Info("Terminal", $"Navigating terminal WebView to https://yagu-terminal/terminal.html from assets {assetsDir}");
+            TerminalWebView.CoreWebView2.Navigate("https://yagu-terminal/terminal.html");
 
             _terminalInitialized = true;
         }
         catch (Exception ex)
         {
+            LogService.Instance.Warning("Terminal", "Terminal WebView initialization failed", ex);
             System.Diagnostics.Debug.WriteLine($"Terminal init failed: {ex}");
+        }
+    }
+
+    private void AttachTerminalWebViewDiagnostics(CoreWebView2 coreWebView)
+    {
+        if (_terminalWebViewDiagnosticsAttached) return;
+        _terminalWebViewDiagnosticsAttached = true;
+
+        coreWebView.NavigationCompleted += OnTerminalNavigationCompleted;
+        coreWebView.ProcessFailed += OnTerminalWebViewProcessFailed;
+        coreWebView.WebResourceResponseReceived += OnTerminalWebResourceResponseReceived;
+    }
+
+    private void OnTerminalNavigationCompleted(CoreWebView2 sender, CoreWebView2NavigationCompletedEventArgs args)
+    {
+        if (args.IsSuccess)
+        {
+            LogService.Instance.Info("Terminal", "Terminal WebView navigation completed successfully");
+            return;
+        }
+
+        LogService.Instance.Warning("Terminal", $"Terminal WebView navigation failed: {args.WebErrorStatus}");
+    }
+
+    private void OnTerminalWebViewProcessFailed(CoreWebView2 sender, CoreWebView2ProcessFailedEventArgs args)
+    {
+        LogService.Instance.Warning("Terminal", $"Terminal WebView process failed: {args.ProcessFailedKind}");
+    }
+
+    private void OnTerminalWebResourceResponseReceived(CoreWebView2 sender, CoreWebView2WebResourceResponseReceivedEventArgs args)
+    {
+        try
+        {
+            string uri = args.Request.Uri ?? string.Empty;
+            if (!uri.Contains("yagu-terminal", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            int statusCode = args.Response.StatusCode;
+            if (statusCode >= 400)
+                LogService.Instance.Warning("Terminal", $"Terminal WebView resource failed: {statusCode} {uri}");
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Verbose("Terminal", "Failed while reading terminal WebView resource response", ex);
         }
     }
 
@@ -132,32 +199,70 @@ public sealed partial class MainWindow
         string json = args.TryGetWebMessageAsString();
         if (string.IsNullOrEmpty(json)) return;
 
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-        string type = root.GetProperty("type").GetString() ?? "";
-
-        switch (type)
+        try
         {
-            case "ready":
-                StartConPtySession();
-                _terminalReadyCompletion.TrySetResult(true);
-                break;
-            case "input":
-                string data = root.GetProperty("data").GetString() ?? "";
-                _terminalService?.WriteInput(data);
-                break;
-            case "resize":
-                _terminalColumns = Math.Max(1, root.GetProperty("cols").GetInt32());
-                _terminalRows = Math.Max(1, root.GetProperty("rows").GetInt32());
-                _terminalService?.Resize(_terminalColumns, _terminalRows);
-                break;
-            case "resetTerminal":
-                ResetTerminalSession();
-                break;
-            case "openHelp":
-                OpenHelpWindow();
-                break;
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            string type = root.GetProperty("type").GetString() ?? "";
+
+            switch (type)
+            {
+                case "ready":
+                    LogService.Instance.Info("Terminal", "Terminal page reported ready");
+                    StartConPtySession();
+                    _terminalReadyCompletion.TrySetResult(true);
+                    if (_terminalPaneExpanded)
+                        FocusTerminal();
+                    break;
+                case "input":
+                    string data = root.GetProperty("data").GetString() ?? "";
+                    LogTerminalInput(data);
+                    if (_terminalService is null)
+                    {
+                        LogService.Instance.Warning("Terminal", "Terminal input received before the shell session was available; starting a terminal session.");
+                        StartConPtySession();
+                    }
+                    _terminalService?.WriteInput(data);
+                    break;
+                case "resize":
+                    _terminalColumns = Math.Max(1, root.GetProperty("cols").GetInt32());
+                    _terminalRows = Math.Max(1, root.GetProperty("rows").GetInt32());
+                    _terminalService?.Resize(_terminalColumns, _terminalRows);
+                    break;
+                case "resetTerminal":
+                    ResetTerminalSession();
+                    break;
+                case "copyText":
+                    CopyTextToClipboard(root.TryGetProperty("text", out var textElement) ? textElement.GetString() ?? string.Empty : string.Empty);
+                    break;
+                case "requestPaste":
+                    PasteClipboardTextToTerminal();
+                    break;
+                case "openHelp":
+                    OpenHelpWindow();
+                    break;
+                case "hostLog":
+                    LogTerminalPageMessage(root);
+                    break;
+            }
         }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("Terminal", $"Failed to process terminal web message: {json}", ex);
+        }
+    }
+
+    private static void LogTerminalPageMessage(JsonElement root)
+    {
+        string level = root.TryGetProperty("level", out var levelElement) ? levelElement.GetString() ?? "info" : "info";
+        string message = root.TryGetProperty("message", out var messageElement) ? messageElement.GetString() ?? string.Empty : string.Empty;
+        if (string.IsNullOrWhiteSpace(message))
+            return;
+
+        if (string.Equals(level, "warning", StringComparison.OrdinalIgnoreCase) || string.Equals(level, "error", StringComparison.OrdinalIgnoreCase))
+            LogService.Instance.Warning("Terminal", message);
+        else
+            LogService.Instance.Info("Terminal", message);
     }
 
     private void StartConPtySession()
@@ -165,20 +270,26 @@ public sealed partial class MainWindow
         if (_terminalService is not null) return;
 
         int sessionGeneration = ++_terminalSessionGeneration;
+        _terminalStartupPromptNudged = false;
+        _terminalLoggedFirstOutputPost = false;
+        _terminalLoggedFirstInput = false;
         var terminalService = new ConPtyTerminalService();
         terminalService.OutputReceived += text => OnTerminalOutput(text, sessionGeneration);
         terminalService.ProcessExited += exitCode => OnTerminalProcessExited(exitCode, sessionGeneration);
         _terminalService = terminalService;
         try
         {
-            terminalService.Start(cols: _terminalColumns, rows: _terminalRows, workingDirectory: ResolveTerminalWorkingDirectory());
+            string workingDirectory = ResolveTerminalWorkingDirectory();
+            LogService.Instance.Info("Terminal", $"Starting terminal shell session: cols={_terminalColumns}, rows={_terminalRows}, cwd='{workingDirectory}'");
+            terminalService.Start(cols: _terminalColumns, rows: _terminalRows, workingDirectory: workingDirectory);
+            LogService.Instance.Info("Terminal", $"Terminal shell session started: shellPid={terminalService.ProcessId}");
         }
         catch (Exception ex)
         {
             if (ReferenceEquals(_terminalService, terminalService))
                 _terminalService = null;
             terminalService.Dispose();
-            LogService.Instance.Warning("Terminal", "Failed to start ConPTY terminal session", ex);
+            LogService.Instance.Warning("Terminal", "Failed to start terminal shell session", ex);
             OnTerminalOutput($"\r\n\x1b[91m[Terminal failed to start: {ex.Message}]\x1b[0m\r\n", sessionGeneration);
         }
     }
@@ -187,6 +298,46 @@ public sealed partial class MainWindow
     {
         DisposeTerminal();
         StartConPtySession();
+    }
+
+    private static void CopyTextToClipboard(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return;
+
+        try
+        {
+            var package = new DataPackage();
+            package.SetText(text);
+            Clipboard.SetContent(package);
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("Terminal", "Failed to copy terminal selection to clipboard", ex);
+        }
+    }
+
+    private async void PasteClipboardTextToTerminal()
+    {
+        try
+        {
+            DataPackageView content = Clipboard.GetContent();
+            if (!content.Contains(StandardDataFormats.Text))
+                return;
+
+            string text = await content.GetTextAsync();
+            if (string.IsNullOrEmpty(text))
+                return;
+
+            if (_terminalService is null)
+                StartConPtySession();
+
+            _terminalService?.WriteInput(text);
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("Terminal", "Failed to paste clipboard text into terminal", ex);
+        }
     }
 
     private string ResolveTerminalWorkingDirectory()
@@ -233,14 +384,61 @@ public sealed partial class MainWindow
             {
                 if (sessionGeneration != _terminalSessionGeneration) return;
                 if (TerminalWebView.CoreWebView2 is null) return;
-                string escaped = EscapeForJson(text);
-                TerminalWebView.CoreWebView2.PostWebMessageAsJson($"{{\"type\":\"output\",\"data\":\"{escaped}\"}}");
+                string terminalText = FilterTerminalOutputForXterm(text);
+                if (string.IsNullOrEmpty(terminalText))
+                {
+                    NudgeCommandShellPromptAfterStartupControlPacket(text);
+                    return;
+                }
+                PostTerminalOutputToWebView(terminalText);
             }
             catch (Exception ex)
             {
+                LogService.Instance.Warning("Terminal", "Terminal output post failed", ex);
                 System.Diagnostics.Debug.WriteLine($"Terminal output error: {ex.Message}");
             }
         });
+    }
+
+    private static string FilterTerminalOutputForXterm(string text)
+    {
+        return text
+            .Replace("\u001b[?9001h", string.Empty, StringComparison.Ordinal)
+            .Replace("\u001b[?1004h", string.Empty, StringComparison.Ordinal);
+    }
+
+    private void NudgeCommandShellPromptAfterStartupControlPacket(string originalText)
+    {
+        if (_terminalStartupPromptNudged) return;
+        if (!originalText.Contains("\u001b[?9001h", StringComparison.Ordinal) &&
+            !originalText.Contains("\u001b[?1004h", StringComparison.Ordinal))
+            return;
+
+        _terminalStartupPromptNudged = true;
+        LogService.Instance.Info("Terminal", "Sending startup carriage return to command shell after control-only startup packet.");
+        _terminalService?.WriteInput("\r");
+    }
+
+    private void PostTerminalOutputToWebView(string terminalText)
+    {
+        if (TerminalWebView.CoreWebView2 is null) return;
+
+        string escaped = EscapeForJson(terminalText);
+        TerminalWebView.CoreWebView2.PostWebMessageAsJson($"{{\"type\":\"output\",\"data\":\"{escaped}\"}}");
+        if (!_terminalLoggedFirstOutputPost)
+        {
+            _terminalLoggedFirstOutputPost = true;
+            LogService.Instance.Info("Terminal", $"Posted first terminal output to WebView: chars={terminalText.Length}");
+        }
+    }
+
+    private void LogTerminalInput(string data)
+    {
+        if (_terminalLoggedFirstInput || string.IsNullOrEmpty(data))
+            return;
+
+        _terminalLoggedFirstInput = true;
+        LogService.Instance.Info("Terminal", $"Terminal host received first input: chars={data.Length}");
     }
 
     private static string EscapeForJson(string s)
@@ -259,7 +457,10 @@ public sealed partial class MainWindow
                 case '\f': sb.Append("\\f"); break;
                 default:
                     if (c < ' ')
-                        sb.Append($"\\u{(int)c:X4}");
+                    {
+                        sb.Append("\\u");
+                        sb.Append(((int)c).ToString("X4", System.Globalization.CultureInfo.InvariantCulture));
+                    }
                     else
                         sb.Append(c);
                     break;

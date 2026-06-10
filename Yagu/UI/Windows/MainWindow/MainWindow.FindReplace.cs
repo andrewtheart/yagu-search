@@ -757,18 +757,19 @@ public sealed partial class MainWindow
         int totalReplacements = changes.Sum(c => c.Count);
 
         // Confirm before writing.
-        var dialog = new ContentDialog
-        {
-            XamlRoot = ((FrameworkElement)Content).XamlRoot,
-            Title = "Replace in All Files",
-            Content = $"Replace {totalReplacements:N0} occurrence{(totalReplacements == 1 ? "" : "s")} across {changes.Count:N0} file{(changes.Count == 1 ? "" : "s")}?",
-            PrimaryButtonText = "Replace",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Primary,
-        };
-
-        var choice = await dialog.ShowAsync();
-        if (choice != ContentDialogResult.Primary)
+        var choice = await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "Replace in All Files",
+                Content = $"Replace {totalReplacements:N0} occurrence{(totalReplacements == 1 ? "" : "s")} across {changes.Count:N0} file{(changes.Count == 1 ? "" : "s")}?",
+                PrimaryButtonText = "Replace",
+                CloseButtonText = "Cancel",
+                DefaultButton = YaguDialogDefaultButton.Primary,
+                Width = 520,
+                Height = 270,
+            });
+        if (choice != YaguDialogResult.Primary)
         {
             FindStatusText.Text = "Cancelled";
             ReplaceInFilesButton.IsEnabled = true;

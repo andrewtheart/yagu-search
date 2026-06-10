@@ -38,7 +38,7 @@ public sealed partial class MainWindow
 
     private void OnAdvancedOptionsExpanding(Expander sender, ExpanderExpandingEventArgs args)
     {
-        ChevronRotate.Angle = 0;
+        SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: true);
         if (_launcherMode)
             ListenForExpanderResize();
         else
@@ -47,11 +47,20 @@ public sealed partial class MainWindow
 
     private void OnAdvancedOptionsCollapsed(Expander sender, ExpanderCollapsedEventArgs args)
     {
-        ChevronRotate.Angle = -90;
+        SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: false);
         if (_launcherMode)
             ListenForExpanderResize();
         else
             ListenForExpanderLayoutSync();
+    }
+
+    private void SetAdvancedOptionsDrawerExpandedWidthState(bool isExpanded)
+    {
+        AdvancedOptionsExpander.HorizontalAlignment = isExpanded
+            ? HorizontalAlignment.Stretch
+            : HorizontalAlignment.Left;
+        AdvancedOptionsExpander.Width = double.NaN;
+        AdvancedOptionsExpander.InvalidateMeasure();
     }
 
     /// <summary>

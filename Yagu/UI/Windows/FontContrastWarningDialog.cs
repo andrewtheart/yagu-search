@@ -13,7 +13,7 @@ internal static class FontContrastWarningDialog
 {
     private static int s_dialogOpen;
 
-    public static async Task<bool> ShowIfNeededAsync(XamlRoot? xamlRoot, MainViewModel viewModel, FontContrastTheme theme)
+    public static async Task<bool> ShowIfNeededAsync(IntPtr ownerHwnd, MainViewModel viewModel, FontContrastTheme theme)
     {
         if (Interlocked.CompareExchange(ref s_dialogOpen, 1, 0) != 0)
             return false;
@@ -32,14 +32,14 @@ internal static class FontContrastWarningDialog
             if (issue is null)
                 return false;
 
-            if (xamlRoot is null)
+            if (ownerHwnd == IntPtr.Zero)
                 return false;
 
             var selectedColor = ToWindowsColor(issue.CurrentColor);
-            ContentDialogResult result;
+            YaguDialogResult result;
             try
             {
-                result = await FontContrastWarningContentDialog.ShowAsync(xamlRoot, issue, color => selectedColor = color);
+                result = await FontContrastWarningDialogView.ShowAsync(ownerHwnd, issue, color => selectedColor = color);
             }
             catch (Exception ex)
             {
@@ -58,14 +58,14 @@ internal static class FontContrastWarningDialog
 
             switch (result)
             {
-                case ContentDialogResult.Primary:
+                case YaguDialogResult.Primary:
                     viewModel.ApplyFontContrastColor(issue.Candidate.Key, ColorStringHelper.ToHex(selectedColor));
                     viewModel.SuppressFontContrastWarnings = false;
                     viewModel.FontContrastReminderAfterUtc = null;
                     await viewModel.PersistSettingsAsync();
                     return true;
 
-                case ContentDialogResult.Secondary:
+                case YaguDialogResult.Secondary:
                     viewModel.SuppressFontContrastWarnings = true;
                     viewModel.FontContrastReminderAfterUtc = null;
                     await viewModel.PersistSettingsAsync();
@@ -90,31 +90,34 @@ internal static class FontContrastWarningDialog
         => FontContrastColor.FromArgb(color.A, color.R, color.G, color.B);
 }
 
-internal static class FontContrastWarningContentDialog
+internal static class FontContrastWarningDialogView
 {
     private const string DialogTitle = "Font color may be hard to read";
 
     private static readonly Windows.UI.Color ReadableGreen = Windows.UI.Color.FromArgb(0xFF, 0x2E, 0xA0, 0x43);
     private static readonly Windows.UI.Color UnreadableRed = Windows.UI.Color.FromArgb(0xFF, 0xD1, 0x34, 0x38);
 
-    public static async Task<ContentDialogResult> ShowAsync(
-        XamlRoot xamlRoot,
+    public static async Task<YaguDialogResult> ShowAsync(
+        IntPtr ownerHwnd,
         FontContrastIssue issue,
         Action<Windows.UI.Color> onColorChanged)
     {
-        var dialog = new ContentDialog
-        {
-            XamlRoot = xamlRoot,
-            Title = DialogTitle,
-            Content = BuildContent(issue, onColorChanged),
-            PrimaryButtonText = "Save",
-            SecondaryButtonText = "Don't remind me again",
-            CloseButtonText = "Remind me later",
-            DefaultButton = ContentDialogButton.Primary,
-            RequestedTheme = ToElementTheme(issue.Theme),
-        };
-
-        return await dialog.ShowAsync();
+        return await YaguDialog.ShowAsync(
+            ownerHwnd,
+            new YaguDialogOptions
+            {
+                Title = DialogTitle,
+                Content = BuildContent(issue, onColorChanged),
+                PrimaryButtonText = "Save",
+                SecondaryButtonText = "Don't remind me again",
+                CloseButtonText = "Remind me later",
+                DefaultButton = YaguDialogDefaultButton.Primary,
+                RequestedTheme = ToElementTheme(issue.Theme),
+                Width = 760,
+                Height = 720,
+                MaxContentHeight = 560,
+                IsResizable = true,
+            });
     }
 
     private static ScrollViewer BuildContent(FontContrastIssue issue, Action<Windows.UI.Color> onColorChanged)

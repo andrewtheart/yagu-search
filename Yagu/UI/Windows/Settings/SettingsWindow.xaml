@@ -87,7 +87,7 @@
                 <Button x:Name="SaveButton" Content="Save" Style="{ThemeResource AccentButtonStyle}"
                         IsEnabled="False"
                         Click="OnSaveClick" />
-                <Button Content="Cancel" Click="OnCancelClick" />
+                <Button Content="Close" Click="OnCloseClick" />
             </StackPanel>
         </Border>
     </Grid>

@@ -113,14 +113,15 @@ public sealed class FontContrastWarningServiceTests
     }
 
     [Fact]
-    public void WarningDialog_UsesContentDialogWithoutOsTitleBar()
+    public void WarningDialog_UsesSharedCustomDialogWindow()
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "FontContrastWarningDialog.cs"));
 
-        Assert.Contains("new ContentDialog", source);
-        Assert.Contains("XamlRoot = xamlRoot", source);
-        Assert.DoesNotContain(": Window", source);
-        Assert.DoesNotContain("EnableWindow(", source);
+        Assert.Contains("YaguDialog.ShowAsync", source);
+        Assert.Contains("YaguDialogResult.Primary", source);
+        Assert.Contains("YaguDialogResult.Secondary", source);
+        Assert.DoesNotContain("ContentDialog", source);
+        Assert.DoesNotContain("XamlRoot", source);
         Assert.DoesNotContain("SetBorderAndTitleBar", source);
     }
 

@@ -44,20 +44,22 @@ public sealed partial class MainWindow
         if (!_isLoaded) return;
         if (sender is ToggleSwitch ts && !ts.IsOn) return;
 
-        var dialog = new ContentDialog
-        {
-            Title = ".gitignore precedence",
-            Content = "Should .gitignore exclusions take precedence over your Include filter?\n\n" +
-                      "Yes — files excluded by .gitignore will be skipped even if they match your Include filter.\n\n" +
-                      "No — your Include filter takes priority; matching files will be searched even if .gitignore would exclude them.",
-            PrimaryButtonText = "Yes, .gitignore wins",
-            SecondaryButtonText = "No, Include filter wins",
-            DefaultButton = ContentDialogButton.Primary,
-            XamlRoot = this.Content.XamlRoot,
-        };
-
-        var result = await dialog.ShowAsync();
-        ViewModel.GitignoreTakesPrecedence = result != ContentDialogResult.Secondary;
+        var result = await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = ".gitignore precedence",
+                Content = "Should .gitignore exclusions take precedence over your Include filter?\n\n" +
+                          "Yes - files excluded by .gitignore will be skipped even if they match your Include filter.\n\n" +
+                          "No - your Include filter takes priority; matching files will be searched even if .gitignore would exclude them.",
+                PrimaryButtonText = "Yes, .gitignore wins",
+                SecondaryButtonText = "No, Include filter wins",
+                CloseButtonText = null,
+                DefaultButton = YaguDialogDefaultButton.Primary,
+                Width = 620,
+                Height = 330,
+            });
+        ViewModel.GitignoreTakesPrecedence = result != YaguDialogResult.Secondary;
     }
 
     private async Task PickFolderAsync(Windows.Storage.Pickers.FolderPicker picker)
@@ -135,21 +137,19 @@ public sealed partial class MainWindow
         secondBlock.Inlines.Add(new Run { Text = "." });
         contentPanel.Children.Add(secondBlock);
 
-        var dialog = new ContentDialog
-        {
-            Title = "HDD detected — parallelism limited",
-            Content = contentPanel,
-            PrimaryButtonText = "Continue search",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Primary,
-            XamlRoot = this.Content.XamlRoot,
-            Resources =
+        return await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
             {
-                ["ContentDialogMaxHeight"] = double.PositiveInfinity,
-            },
-        };
-
-        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+                Title = "HDD detected - parallelism limited",
+                Content = contentPanel,
+                PrimaryButtonText = "Continue search",
+                CloseButtonText = "Cancel",
+                DefaultButton = YaguDialogDefaultButton.Primary,
+                Width = 560,
+                Height = 330,
+                MaxContentHeight = 220,
+            }) == YaguDialogResult.Primary;
     }
 
     private void OnCloseWindowClick(object sender, RoutedEventArgs e)

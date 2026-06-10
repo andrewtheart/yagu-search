@@ -8,6 +8,8 @@
 #define MyAppExeName "Yagu.exe"
 #define MyAppPublisher "Yagu"
 #define MyAppURL "https://github.com/yagu"
+#define DotNet10RuntimeDownloadUrl "https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-10.0.9-windows-x64-installer?cid=getdotnetcore"
+#define DotNet10RuntimeRegistrySubkey "SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.NETCore.App"
 
 ; Version is read from the build-version.txt file produced by the build.
 ; Override on the ISCC command line with /DMyAppVersion=x.y.z if needed.
@@ -81,6 +83,45 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 Type: filesandordirs; Name: "{app}"
 
 [Code]
+function IsDotNet10RuntimeInstalled(): Boolean;
+var
+  RuntimeVersions: TArrayOfString;
+  I: Integer;
+begin
+  Result := False;
+
+  if not RegGetValueNames(HKLM64, '{#DotNet10RuntimeRegistrySubkey}', RuntimeVersions) then
+  begin
+    if not RegGetValueNames(HKLM32, '{#DotNet10RuntimeRegistrySubkey}', RuntimeVersions) then
+      exit;
+  end;
+
+  for I := 0 to GetArrayLength(RuntimeVersions) - 1 do
+  begin
+    if Copy(RuntimeVersions[I], 1, 3) = '10.' then
+    begin
+      Result := True;
+      exit;
+    end;
+  end;
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  Result := True;
+  if not IsDotNet10RuntimeInstalled() then
+  begin
+    MsgBox(
+      'Yagu requires the .NET 10.0 Runtime for Windows x64.' + #13#10 + #13#10 +
+      'The installer did not find a .NET 10 runtime on this computer.' + #13#10 + #13#10 +
+      'Download and install .NET 10.0 Runtime (v10.0.9) - Windows x64 Installer, then run this installer again:' + #13#10 +
+      '{#DotNet10RuntimeDownloadUrl}',
+      mbCriticalError,
+      MB_OK);
+    Result := False;
+  end;
+end;
+
 function InstallWindowsAppRuntime(): Boolean;
 var
   ResultCode: Integer;

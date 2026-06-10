@@ -47,7 +47,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.DoesNotContain("Padding=\"16,12,16,2\"", searchCard);
         Assert.DoesNotContain("Padding=\"16,12,16,8\"", searchCard);
 
-        string progressRow = ExtractXamlWindow("<StackPanel Grid.Row=\"3\"", 900);
+        string progressRow = ExtractXamlWindow("x:Name=\"SearchStatusPanel\"", 900);
         Assert.Contains("Grid.Row=\"3\"", progressRow);
         Assert.Contains("Padding=\"16,2,16,2\"", progressRow);
         Assert.Contains("Spacing=\"4\"", progressRow);
@@ -56,8 +56,9 @@ public sealed class PreviewCoreRegressionTests
         Assert.DoesNotContain("Padding=\"16,0,16,0\"", progressRow);
 
         string splitPane = ExtractXamlWindow("x:Name=\"SplitPaneGrid\"", 300);
-        Assert.Contains("Margin=\"16,2,20,4\"", splitPane);
-        Assert.DoesNotContain("Margin=\"16,0,20,4\"", splitPane);
+        Assert.Contains("Margin=\"16,2,16,4\"", splitPane);
+        Assert.DoesNotContain("Margin=\"16,2,20,4\"", splitPane);
+        Assert.DoesNotContain("Margin=\"16,0,16,4\"", splitPane);
 
         Assert.Contains("private const double MinimumLauncherHeightDip = 190;", MainWindowSource);
         Assert.Contains("desiredHeightDip < MinimumLauncherHeightDip", MainWindowSource);
@@ -93,6 +94,23 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void ClosingPreviewSection_DeselectsAndCollapsesMatchingLeftFileGroup()
+    {
+        Assert.Contains("dismissBtn.Click += (_, _) => RemovePreviewSection(capturedBlock, capturedPath);", MainWindowSource);
+        Assert.Contains("closeItem.Click += (_, _) => RemovePreviewSection(capturedBlock, capturedPath);", MainWindowSource);
+
+        string remove = ExtractMethodWindow(MainWindowSource, "RemovePreviewSection", 3600);
+        AssertContainsInOrder(remove,
+            "FirstOrDefault(g => string.Equals(g.FilePath, filePath, StringComparison.OrdinalIgnoreCase))",
+            "group.DeselectAll();",
+            "group.IsExpanded = false;",
+            "group.ClearVisibleResults();");
+
+        Assert.Contains("IsExpanded=\"{x:Bind IsExpanded, Mode=TwoWay}\"", MainWindowXaml);
+        Assert.Contains("IsChecked=\"{x:Bind AllSelected, Mode=OneWay}\"", MainWindowXaml);
+    }
+
+    [Fact]
     public void PreviewTopExpandedLayout_KeepsSearchDrawerSyncedToSettledPaneWidths()
     {
         string splitPane = ExtractXamlWindow("x:Name=\"SplitPaneGrid\"", 500);
@@ -105,6 +123,8 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("SizeChanged=\"OnTopExpandedPreviewLayoutSourceSizeChanged\"", previewPanel);
 
         string apply = ExtractMethodWindow(MainWindowSource, "ApplyTopExpandedPreviewLayout", 1800);
+        Assert.Contains("SplitPaneGrid.Margin = new Thickness(16, 10, 16, 4);", apply);
+        Assert.DoesNotContain("SplitPaneGrid.Margin = new Thickness(16, 10, 20, 4);", apply);
         Assert.Contains("ListenForTopExpandedPreviewLayoutSync();", apply);
 
         string sync = ExtractMethodWindow(MainWindowSource, "ListenForTopExpandedPreviewLayoutSync", 2200);
@@ -277,6 +297,67 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(helper,
             "if (AdvancedOptionsExpander.IsExpanded)",
             "AdvancedOptionsExpander.IsExpanded = false;");
+    }
+
+    [Fact]
+    public void AdvancedOptionsDrawer_IsCompactWhenCollapsedAndFullWidthWhenExpanded()
+    {
+        string expander = ExtractXamlWindow("x:Name=\"AdvancedOptionsExpander\"", 1200);
+        Assert.Contains("IsExpanded=\"False\" HorizontalAlignment=\"Left\"", expander);
+        Assert.Contains("HorizontalContentAlignment=\"Stretch\"", expander);
+        Assert.Contains("<TextBlock Text=\"Advanced Options\"", expander);
+        Assert.DoesNotContain("x:Name=\"ChevronRotate\"", expander);
+        Assert.DoesNotContain("Glyph=\"&#xE76C;\"", expander);
+
+        string expanding = ExtractMethodWindow(MainWindowSource, "OnAdvancedOptionsExpanding", 700);
+        Assert.Contains("SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: true);", expanding);
+        Assert.DoesNotContain("ChevronRotate.Angle", expanding);
+
+        string collapsed = ExtractMethodWindow(MainWindowSource, "OnAdvancedOptionsCollapsed", 700);
+        Assert.Contains("SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: false);", collapsed);
+        Assert.DoesNotContain("ChevronRotate.Angle", collapsed);
+
+        string widthState = ExtractMethodWindow(MainWindowSource, "SetAdvancedOptionsDrawerExpandedWidthState", 900);
+        AssertContainsInOrder(widthState,
+            "AdvancedOptionsExpander.HorizontalAlignment = isExpanded",
+            "? HorizontalAlignment.Stretch",
+            ": HorizontalAlignment.Left;",
+            "AdvancedOptionsExpander.Width = double.NaN;",
+            "AdvancedOptionsExpander.InvalidateMeasure();");
+    }
+
+    [Fact]
+    public void TerminalChevron_HasPreSearchFallbackWhenStatusBarIsHidden()
+    {
+        string floatingChevron = ExtractXamlWindow("x:Name=\"PreSearchTerminalChevron\"", 900);
+        Assert.Contains("Grid.RowSpan=\"7\"", floatingChevron);
+        Assert.Contains("Click=\"OnToggleTerminalPane\"", floatingChevron);
+        Assert.Contains("HorizontalAlignment=\"Right\"", floatingChevron);
+        Assert.Contains("VerticalAlignment=\"Bottom\"", floatingChevron);
+        Assert.Contains("x:Name=\"PreSearchTerminalChevronIcon\"", floatingChevron);
+        Assert.Contains("ToolTipService.ToolTip=\"Toggle embedded terminal\"", floatingChevron);
+
+        string terminalToggle = ExtractMethodWindow(MainWindowSource, "SetTerminalPaneExpanded", 1200);
+        AssertContainsInOrder(terminalToggle,
+            "UpdateTerminalChevronGlyphs();",
+            "UpdateTerminalChevronVisibility();",
+            "if (_launcherMode)",
+            "PositionLauncherWindow();");
+
+        string glyphSync = ExtractMethodWindow(MainWindowSource, "UpdateTerminalChevronGlyphs", 800);
+        AssertContainsInOrder(glyphSync,
+            "string glyph = _terminalPaneExpanded ? \"\\uE70D\" : \"\\uE70E\";",
+            "TerminalChevronIcon.Glyph = glyph;",
+            "PreSearchTerminalChevronIcon.Glyph = glyph;");
+
+        string visibilitySync = ExtractMethodWindow(MainWindowSource, "UpdateTerminalChevronVisibility", 1000);
+        AssertContainsInOrder(visibilitySync,
+            "bool statusBarChevronVisible = StatusBarRow.Height.IsAuto || StatusBarRow.Height.Value > 0;",
+            "TerminalChevron.Visibility = statusBarChevronVisible ? Visibility.Visible : Visibility.Collapsed;",
+            "PreSearchTerminalChevron.Visibility = statusBarChevronVisible ? Visibility.Collapsed : Visibility.Visible;");
+
+        string statusBarVisibility = ExtractMethodWindow(MainWindowSource, "UpdateBottomStatusBarVisibility", 900);
+        Assert.Contains("UpdateTerminalChevronVisibility();", statusBarVisibility);
     }
 
     [Fact]
@@ -853,7 +934,8 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(MainWindowXaml,
             "<!-- Bottom status bar -->",
             "<Grid Grid.Row=\"6\"");
-        Assert.Contains("<WebView2 x:Name=\"TerminalWebView\" Grid.Row=\"5\"", MainWindowXaml);
+        Assert.Contains("<Grid x:Name=\"TerminalHost\" Grid.Row=\"5\"", MainWindowXaml);
+        Assert.Contains("<WebView2 x:Name=\"TerminalWebView\"", MainWindowXaml);
         AssertContainsInOrder(TerminalHtml,
             "#terminal {",
             "width: 100%;",

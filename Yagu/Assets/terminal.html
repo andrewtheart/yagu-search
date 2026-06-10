@@ -15,11 +15,23 @@
     background: #1e1e1e;
   }
   #terminal {
+    position: relative;
     width: 100%;
     height: 100%;
     box-sizing: border-box;
     padding: 8px 12px;
     background: #1e1e1e;
+  }
+  #terminal .xterm {
+    width: 100%;
+    height: 100%;
+  }
+  #terminal .xterm .xterm-viewport {
+    z-index: 0;
+    background-color: #1e1e1e;
+  }
+  #terminal .xterm .xterm-screen {
+    z-index: 2;
   }
   #terminalMenu {
     position: fixed;
@@ -49,20 +61,78 @@
     background: #37373d;
     color: #ffffff;
   }
+  #terminalMenu button:disabled {
+    color: #6b6b6b;
+    background: transparent;
+  }
+  #terminalMenu .terminalMenuSeparator {
+    height: 1px;
+    margin: 5px 6px;
+    background: #454545;
+  }
 </style>
 </head>
 <body>
 <div id="terminal"></div>
 <div id="terminalMenu" role="menu" aria-label="Terminal menu">
+  <button id="terminalCopy" type="button" role="menuitem">Copy</button>
+  <button id="terminalPaste" type="button" role="menuitem">Paste</button>
+  <button id="terminalCut" type="button" role="menuitem">Cut</button>
+  <button id="terminalSelectAll" type="button" role="menuitem">Select all</button>
+  <div class="terminalMenuSeparator" role="separator"></div>
+  <button id="terminalClear" type="button" role="menuitem">Clear</button>
   <button id="resetTerminalSession" type="button" role="menuitem">Reset terminal session</button>
 </div>
 <script src="xterm.js"></script>
 <script src="addon-fit.js"></script>
 <script>
 (function() {
+  function postHostMessage(message) {
+    try {
+      window.chrome.webview.postMessage(JSON.stringify(message));
+    } catch (_) {
+    }
+  }
+
+  function logToHost(level, message) {
+    postHostMessage({ type: 'hostLog', level: level, message: message });
+  }
+
+  window.addEventListener('error', function(event) {
+    logToHost('error', 'Terminal page script error: ' + event.message + ' at ' + event.filename + ':' + event.lineno + ':' + event.colno);
+  });
+
+  window.addEventListener('unhandledrejection', function(event) {
+    logToHost('error', 'Terminal page unhandled rejection: ' + (event.reason && event.reason.message ? event.reason.message : event.reason));
+  });
+
   const terminalElement = document.getElementById('terminal');
   const terminalMenu = document.getElementById('terminalMenu');
   const resetTerminalSessionButton = document.getElementById('resetTerminalSession');
+  const terminalCopyButton = document.getElementById('terminalCopy');
+  const terminalPasteButton = document.getElementById('terminalPaste');
+  const terminalCutButton = document.getElementById('terminalCut');
+  const terminalSelectAllButton = document.getElementById('terminalSelectAll');
+  const terminalClearButton = document.getElementById('terminalClear');
+  terminalElement.tabIndex = 0;
+  let receivedOutputCount = 0;
+  let sentFirstInputLog = false;
+  let sentReady = false;
+
+  function showTerminalStartupFailure(error) {
+    terminalElement.textContent = 'Terminal failed to initialize. Check yagu.log for details.';
+    terminalElement.style.color = '#f14c4c';
+    terminalElement.style.font = "13px 'Segoe UI', sans-serif";
+    terminalElement.style.padding = '12px';
+    logToHost('error', 'Terminal page failed to initialize: ' + (error && error.message ? error.message : error));
+  }
+
+  try {
+  if (typeof Terminal === 'undefined')
+    throw new Error('xterm.js did not load');
+
+  if (typeof FitAddon === 'undefined' || typeof FitAddon.FitAddon !== 'function')
+    throw new Error('xterm fit addon did not load');
 
   const term = new Terminal({
     cursorBlink: true,
@@ -95,14 +165,136 @@
   const fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
   term.open(terminalElement);
-  fitAddon.fit();
+
+  function safeFit() {
+    try {
+      fitAddon.fit();
+    } catch (error) {
+      logToHost('warning', 'Terminal fit failed: ' + (error && error.message ? error.message : error));
+    }
+  }
+
+  function terminalHasMeasuredSize() {
+    return terminalElement.clientWidth > 0 &&
+      terminalElement.clientHeight > 0 &&
+      term.cols > 0 &&
+      term.rows > 0;
+  }
+
+  function signalReadyWhenMeasured(attempt) {
+    safeFit();
+
+    if (terminalHasMeasuredSize() || attempt >= 40) {
+      if (!sentReady) {
+        sentReady = true;
+        logToHost('info', 'Terminal page measured: width=' + terminalElement.clientWidth + ', height=' + terminalElement.clientHeight + ', cols=' + term.cols + ', rows=' + term.rows);
+        postHostMessage({ type: 'ready' });
+      }
+
+      return;
+    }
+
+    window.setTimeout(function() { signalReadyWhenMeasured(attempt + 1); }, 50);
+  }
+
+  window.requestAnimationFrame(function() {
+    signalReadyWhenMeasured(0);
+  });
 
   function hideTerminalMenu() {
     terminalMenu.style.display = 'none';
   }
 
+  function normalizeHostMessage(data) {
+    if (typeof data !== 'string')
+      return data;
+
+    try {
+      return JSON.parse(data);
+    } catch (error) {
+      logToHost('warning', 'Terminal page received non-JSON host message string: ' + data);
+      return null;
+    }
+  }
+
+  function refreshTerminalRows() {
+    try {
+      term.refresh(0, term.rows - 1);
+    } catch (error) {
+      logToHost('warning', 'Terminal refresh failed: ' + (error && error.message ? error.message : error));
+    }
+  }
+
+  function scheduleInitialTerminalPaintRefresh() {
+    window.setTimeout(refreshTerminalRows, 50);
+    window.setTimeout(refreshTerminalRows, 150);
+  }
+
+  function isTerminalFocusReport(data) {
+    return data === '\x1b[I' || data === '\x1b[O';
+  }
+
+  function sendTerminalInput(data) {
+    hideTerminalMenu();
+    if (isTerminalFocusReport(data))
+      return;
+    if (!sentFirstInputLog) {
+      sentFirstInputLog = true;
+      logToHost('info', 'Terminal page sent first input: chars=' + data.length);
+    }
+    postHostMessage({ type: 'input', data: data });
+  }
+
+  // WebView2 frequently fails to deliver printable keystrokes to xterm's hidden
+  // textarea, so every key is translated here and forwarded to the host shell.
+  // This window-level capture handler is the single, reliable input path.
+  function translateKeyEventToInput(event) {
+    if (event.altKey || event.metaKey)
+      return null;
+
+    if (event.ctrlKey) {
+      if (event.key.length === 1) {
+        var lower = event.key.toLowerCase();
+        if (lower === 'v')
+          return null; // Paste is handled by the DOM 'paste' event.
+        if (lower >= 'a' && lower <= 'z')
+          return String.fromCharCode(lower.charCodeAt(0) - 96); // Ctrl+A..Z -> 0x01..0x1A
+      }
+      return null;
+    }
+
+    switch (event.key) {
+      case 'Enter': return '\r';
+      case 'Backspace': return '\x7f';
+      case 'Tab': return '\t';
+      case 'Escape': return '\x1b';
+      case 'ArrowUp': return '\x1b[A';
+      case 'ArrowDown': return '\x1b[B';
+      case 'ArrowRight': return '\x1b[C';
+      case 'ArrowLeft': return '\x1b[D';
+      case 'Home': return '\x1b[H';
+      case 'End': return '\x1b[F';
+      case 'Delete': return '\x1b[3~';
+      default:
+        return event.key.length === 1 ? event.key : null;
+    }
+  }
+
+  function forwardEnterKey(event) {
+    if (event.key !== 'Enter' || event.altKey || event.ctrlKey || event.metaKey)
+      return false;
+
+    event.preventDefault();
+    event.stopPropagation();
+    sendTerminalInput('\r');
+    return true;
+  }
+
   function showTerminalMenu(event) {
     event.preventDefault();
+    var hasSelection = term.hasSelection();
+    terminalCopyButton.disabled = !hasSelection;
+    terminalCutButton.disabled = !hasSelection;
     const menuWidth = terminalMenu.offsetWidth || 188;
     const menuHeight = terminalMenu.offsetHeight || 34;
     const x = Math.min(event.clientX, window.innerWidth - menuWidth - 4);
@@ -110,15 +302,75 @@
     terminalMenu.style.left = Math.max(4, x) + 'px';
     terminalMenu.style.top = Math.max(4, y) + 'px';
     terminalMenu.style.display = 'block';
-    resetTerminalSessionButton.focus({ preventScroll: true });
+    terminalPasteButton.focus({ preventScroll: true });
   }
 
   terminalElement.addEventListener('contextmenu', showTerminalMenu);
+  function focusTerminal() {
+    try {
+      terminalElement.focus({ preventScroll: true });
+    } catch (_) {
+      terminalElement.focus();
+    }
+    term.focus();
+  }
+
+  terminalElement.addEventListener('pointerdown', focusTerminal);
+  terminalElement.addEventListener('click', focusTerminal);
+  window.addEventListener('focus', focusTerminal);
+
+  // All key handling happens in the window-level capture listener below, so xterm
+  // must never natively process keys (returning false suppresses its own input).
+  term.attachCustomKeyEventHandler(function() {
+    return false;
+  });
+
+  function copyTerminalSelection() {
+    var selection = term.getSelection();
+    if (selection)
+      postHostMessage({ type: 'copyText', text: selection });
+    return selection;
+  }
+
+  terminalCopyButton.addEventListener('click', function() {
+    hideTerminalMenu();
+    copyTerminalSelection();
+    term.focus();
+  });
+
+  terminalPasteButton.addEventListener('click', function() {
+    hideTerminalMenu();
+    postHostMessage({ type: 'requestPaste' });
+    term.focus();
+  });
+
+  terminalCutButton.addEventListener('click', function() {
+    hideTerminalMenu();
+    if (copyTerminalSelection())
+      term.clearSelection();
+    term.focus();
+  });
+
+  terminalSelectAllButton.addEventListener('click', function() {
+    hideTerminalMenu();
+    term.selectAll();
+    term.focus();
+  });
+
+  terminalClearButton.addEventListener('click', function() {
+    hideTerminalMenu();
+    // Run a real clear command in the shell, then clear xterm's scrollback so the
+    // display is actually empty (the redirected cmd.exe 'cls' does not emit an
+    // escape sequence that xterm honors on its own).
+    sendTerminalInput('cls\r');
+    window.setTimeout(function() { term.clear(); }, 120);
+    term.focus();
+  });
 
   resetTerminalSessionButton.addEventListener('click', function() {
     hideTerminalMenu();
     term.reset();
-    window.chrome.webview.postMessage(JSON.stringify({ type: 'resetTerminal' }));
+    postHostMessage({ type: 'resetTerminal' });
     term.focus();
   });
 
@@ -129,45 +381,84 @@
 
   // Send user input to C# host
   term.onData(function(data) {
-    hideTerminalMenu();
-    window.chrome.webview.postMessage(JSON.stringify({ type: 'input', data: data }));
+    sendTerminalInput(data);
   });
 
   // Send resize events to C# host
   term.onResize(function(size) {
-    window.chrome.webview.postMessage(JSON.stringify({ type: 'resize', cols: size.cols, rows: size.rows }));
+    postHostMessage({ type: 'resize', cols: size.cols, rows: size.rows });
   });
 
   // Receive output from C# host
   window.chrome.webview.addEventListener('message', function(event) {
-    var msg = event.data;
+    var msg = normalizeHostMessage(event.data);
     if (msg && msg.type === 'output') {
-      term.write(msg.data);
+      var firstOutput = receivedOutputCount === 0;
+      if (firstOutput) {
+        safeFit();
+        scheduleInitialTerminalPaintRefresh();
+        logToHost('info', 'Terminal page received first output: chars=' + (msg.data ? msg.data.length : 0));
+      }
+      receivedOutputCount++;
+
+      if (firstOutput && typeof term.writeSync === 'function') {
+        term.writeSync(msg.data || '');
+        refreshTerminalRows();
+      } else {
+        term.write(msg.data || '', function() {
+          refreshTerminalRows();
+        });
+      }
     } else if (msg && msg.type === 'clear') {
       term.clear();
     } else if (msg && msg.type === 'focus') {
-      term.focus();
+      focusTerminal();
     }
   });
 
-  // WebView2 owns keyboard focus while the terminal is active, so forward F1 to the host.
+  // WebView2 owns keyboard focus while the terminal is active, so all input is
+  // captured here and forwarded to the host shell rather than via xterm's textarea.
   window.addEventListener('keydown', function(event) {
     if (event.key === 'F1') {
       event.preventDefault();
       event.stopPropagation();
-      window.chrome.webview.postMessage(JSON.stringify({ type: 'openHelp' }));
-    } else if (event.key === 'Escape') {
+      postHostMessage({ type: 'openHelp' });
+      return;
+    }
+
+    if (event.key === 'Escape' && terminalMenu.style.display === 'block') {
+      event.preventDefault();
+      event.stopPropagation();
       hideTerminalMenu();
+      return;
+    }
+
+    var input = translateKeyEventToInput(event);
+    if (input !== null) {
+      event.preventDefault();
+      event.stopPropagation();
+      sendTerminalInput(input);
+    }
+  }, true);
+
+  // Ctrl+V / context-menu paste: forward clipboard text to the host shell.
+  document.addEventListener('paste', function(event) {
+    var text = event.clipboardData ? event.clipboardData.getData('text') : '';
+    if (text) {
+      event.preventDefault();
+      event.stopPropagation();
+      sendTerminalInput(text.replace(/\r\n/g, '\r').replace(/\n/g, '\r'));
     }
   }, true);
 
   // Handle window resize
   window.addEventListener('resize', function() {
-    fitAddon.fit();
+    safeFit();
   });
 
-  // Signal ready
-  window.chrome.webview.postMessage(JSON.stringify({ type: 'ready' }));
+  } catch (error) {
+    showTerminalStartupFailure(error);
+  }
 })();
 </script>
 </body>

@@ -7,7 +7,6 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using Windows.Graphics;
 using Yagu.Helpers;
 
 namespace Yagu;
@@ -35,7 +34,7 @@ internal sealed class AdminProtectedPathsDialog : Window
         var windowId = Win32Interop.GetWindowIdFromWindow(dialogHwnd);
         var appWindow = AppWindow.GetFromWindowId(windowId);
         appWindow.Title = Title;
-        SizeAndCenter(appWindow, _ownerHwnd, DialogWidth, DialogHeight);
+        WindowForegroundHelper.CenterWindowOverOwner(appWindow, _ownerHwnd, DialogWidth, DialogHeight, minHeight: 300);
         TryConfigurePresenter(appWindow);
         TrySetIcon(appWindow);
     }
@@ -215,86 +214,10 @@ internal sealed class AdminProtectedPathsDialog : Window
         _completion.TrySetResult(true);
     }
 
-    private static void SizeAndCenter(AppWindow appWindow, IntPtr ownerHwnd, int width, int desiredHeight)
-    {
-        int height = desiredHeight;
-        int x = 100;
-        int y = 100;
-
-        const uint monitorDefaultToNearest = 2;
-        IntPtr monitor = ownerHwnd == IntPtr.Zero
-            ? MonitorFromPoint(new POINT { X = 0, Y = 0 }, monitorDefaultToNearest)
-            : MonitorFromWindow(ownerHwnd, monitorDefaultToNearest);
-
-        var monitorInfo = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
-        if (GetMonitorInfo(monitor, ref monitorInfo))
-        {
-            var workArea = monitorInfo.rcWork;
-            width = Math.Min(width, Math.Max(420, workArea.Right - workArea.Left));
-            height = Math.Min(height, Math.Max(300, workArea.Bottom - workArea.Top));
-
-            if (ownerHwnd != IntPtr.Zero && GetWindowRect(ownerHwnd, out var ownerRect))
-            {
-                int ownerCenterX = (ownerRect.Left + ownerRect.Right) / 2;
-                int ownerCenterY = (ownerRect.Top + ownerRect.Bottom) / 2;
-                x = ownerCenterX - width / 2;
-                y = ownerCenterY - height / 2;
-            }
-            else
-            {
-                x = workArea.Left + ((workArea.Right - workArea.Left) - width) / 2;
-                y = workArea.Top + ((workArea.Bottom - workArea.Top) - height) / 2;
-            }
-
-            if (x < workArea.Left) x = workArea.Left;
-            if (y < workArea.Top) y = workArea.Top;
-            if (x + width > workArea.Right) x = workArea.Right - width;
-            if (y + height > workArea.Bottom) y = workArea.Bottom - height;
-        }
-
-        appWindow.MoveAndResize(new RectInt32(x, y, width, height));
-    }
-
     [DllImport("user32.dll")]
     private static extern bool EnableWindow(IntPtr hWnd, bool enable);
 
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
 
-    [DllImport("user32.dll")]
-    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr MonitorFromPoint(POINT point, uint dwFlags);
-
-    [DllImport("user32.dll")]
-    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RECT
-    {
-        public int Left;
-        public int Top;
-        public int Right;
-        public int Bottom;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct POINT
-    {
-        public int X;
-        public int Y;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MONITORINFO
-    {
-        public int cbSize;
-        public RECT rcMonitor;
-        public RECT rcWork;
-        public uint dwFlags;
-    }
 }

@@ -13,7 +13,7 @@ namespace Yagu;
 public sealed partial class MainWindow
 {
     private static readonly char[] CliListSeparators = [',', ';'];
-    private bool _includeGeneratedCliCommandSavedSettingOptions = true;
+    private bool _includeGeneratedCliCommandSavedSettingOptions;
 
     private void OnGenerateCliCommandClick(object sender, RoutedEventArgs e)
     {
@@ -93,7 +93,7 @@ public sealed partial class MainWindow
     private object? FindGeneratedCliCommandElement(string name)
         => (Content as FrameworkElement)?.FindName(name);
 
-    private string BuildGeneratedCliCommand() => BuildGeneratedCliCommand(includeSavedSettingOptions: true);
+    private string BuildGeneratedCliCommand() => BuildGeneratedCliCommand(includeSavedSettingOptions: false);
 
     private string BuildGeneratedCliCommand(bool includeSavedSettingOptions)
     {

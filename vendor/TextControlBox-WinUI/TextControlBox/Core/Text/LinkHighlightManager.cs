@@ -1,7 +1,10 @@
-﻿using Microsoft.UI.Xaml;
+﻿using System;
+using Microsoft.Graphics.Canvas.Text;
+using Microsoft.UI.Xaml;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using TextControlBoxNS.Core.Renderer;
 using TextControlBoxNS.Models;
@@ -29,12 +32,39 @@ namespace TextControlBoxNS.Core.Text
 
         public void FindAndComputeLinkPositions()
         {
-            var matches = linkRegex.Matches(textRenderer.RenderedText);
-
             this.links.Clear();
+
+            string renderedText = textRenderer.RenderedText ?? string.Empty;
+            if (renderedText.Length == 0 || textRenderer.DrawnTextLayout is null)
+                return;
+
+            var matches = linkRegex.Matches(renderedText);
             foreach (Match match in matches)
             {
-                    var rects = textRenderer.DrawnTextLayout.GetCharacterRegions(match.Index, match.Length);
+                if (match.Index < 0 || match.Index >= renderedText.Length || match.Length <= 0)
+                    continue;
+
+                int length = Math.Min(match.Length, renderedText.Length - match.Index);
+                if (length <= 0)
+                    continue;
+
+                CanvasTextLayoutRegion[] rects;
+                try
+                {
+                    rects = textRenderer.DrawnTextLayout.GetCharacterRegions(match.Index, length);
+                }
+                catch (ArgumentException)
+                {
+                    continue;
+                }
+                catch (COMException)
+                {
+                    continue;
+                }
+
+                if (rects.Length == 0)
+                    continue;
+
                 Rect bounds = rects
                     .Select(r => r.LayoutBounds)
                     .Aggregate(Rect.Empty, (acc, r) => RectHelper.Union(acc, r));
@@ -45,7 +75,7 @@ namespace TextControlBoxNS.Core.Text
                 this.links.Add(new LinkInfo
                 {
                     StartIndex = match.Index,
-                    Length = match.Length,
+                    Length = length,
                     Url = match.Value,
                     Bounds = bounds
                 });

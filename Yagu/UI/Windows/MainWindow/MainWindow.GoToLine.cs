@@ -194,36 +194,39 @@ public sealed partial class MainWindow
             panel.Children.Add(label);
             panel.Children.Add(numberBox);
 
-            var dialog = new ContentDialog
-            {
-                Title = "Go to line",
-                Content = panel,
-                PrimaryButtonText = "Go",
-                CloseButtonText = "Cancel",
-                DefaultButton = ContentDialogButton.Primary,
-                XamlRoot = this.Content.XamlRoot,
-            };
-
             // Submit on Enter from inside the NumberBox.
             // We must NOT set args.Handled = true here because the NumberBox
             // needs to process the Enter key to commit its text to .Value.
-            numberBox.KeyUp += (_, args) =>
-            {
-                if (args.Key == VirtualKey.Enter)
-                {
-                    dialog.Hide();
-                    _dialogEnterAccepted = true;
-                }
-            };
-
             numberBox.Loaded += (_, _) =>
             {
                 numberBox.Focus(FocusState.Programmatic);
             };
 
             _dialogEnterAccepted = false;
-            var result = await dialog.ShowAsync();
-            bool accepted = result == ContentDialogResult.Primary || _dialogEnterAccepted;
+            var result = await YaguDialog.ShowAsync(
+                _hwnd,
+                new YaguDialogOptions
+                {
+                    Title = "Go to line",
+                    Content = panel,
+                    PrimaryButtonText = "Go",
+                    CloseButtonText = "Cancel",
+                    DefaultButton = YaguDialogDefaultButton.Primary,
+                    Width = 440,
+                    Height = 270,
+                },
+                dialog =>
+                {
+                    numberBox.KeyUp += (_, args) =>
+                    {
+                        if (args.Key == VirtualKey.Enter)
+                        {
+                            dialog.AcceptPrimary();
+                            _dialogEnterAccepted = true;
+                        }
+                    };
+                });
+            bool accepted = result == YaguDialogResult.Primary || _dialogEnterAccepted;
             _dialogEnterAccepted = false;
             if (!accepted) return null;
 

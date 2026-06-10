@@ -34,7 +34,7 @@ public sealed partial class MainWindow
         _ownedModalWindowDepth++;
         try
         {
-            await FontContrastWarningDialog.ShowIfNeededAsync(RootGrid.XamlRoot, ViewModel, ResolveFontContrastTheme());
+            await FontContrastWarningDialog.ShowIfNeededAsync(_hwnd, ViewModel, ResolveFontContrastTheme());
         }
         finally
         {

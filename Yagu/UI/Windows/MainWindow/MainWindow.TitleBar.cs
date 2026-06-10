@@ -110,11 +110,17 @@ public sealed partial class MainWindow
     {
         switch (root)
         {
-            case Button button:
-                button.Foreground = foreground;
+            case Control control:
+                control.Foreground = foreground;
+                break;
+            case TextBlock textBlock:
+                textBlock.Foreground = foreground;
                 break;
             case FontIcon icon:
                 icon.Foreground = foreground;
+                break;
+            case IconElement iconElement:
+                iconElement.Foreground = foreground;
                 break;
         }
 

@@ -478,17 +478,82 @@ public sealed partial class MainWindow
 
     private async void OnLoadSession(object sender, RoutedEventArgs e)
     {
+        string? path = await ChooseSessionFileToLoadAsync();
+        if (path is null) return;
+
+        await LoadSessionFileAsync(path);
+    }
+
+    private async Task<string?> ChooseSessionFileToLoadAsync()
+    {
+        SessionFileDiscoveryResult discovery;
+        try
+        {
+            ViewModel.StatusText = "Finding saved Yagu sessions...";
+            using var discoveryCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            discovery = await new SessionFileDiscoveryService().FindSessionFilesAsync(discoveryCts.Token);
+        }
+        catch (OperationCanceledException ex)
+        {
+            LogService.Instance.Warning("MainWindow", "Fast session discovery timed out; falling back to Windows picker.", ex);
+            return await PickSessionFileWithWindowsDialogAsync();
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("MainWindow", "Fast session discovery failed; falling back to Windows picker.", ex);
+            return await PickSessionFileWithWindowsDialogAsync();
+        }
+
+        if (!discovery.FastSearchAvailable)
+        {
+            LogService.Instance.Info("MainWindow", $"Fast session discovery unavailable: {discovery.Error ?? "unknown reason"}");
+            return await PickSessionFileWithWindowsDialogAsync();
+        }
+
+        LogService.Instance.Info("MainWindow", $"Fast session discovery found {discovery.Files.Count:N0} session file(s) via {discovery.Backend}.");
+        var hwnd = GetMainWindowHandle();
+        var result = await SessionLoadDialog.ShowAsync(hwnd, discovery.Files, RootGrid.ActualTheme);
+        return result.Action switch
+        {
+            SessionLoadDialogAction.Load when !string.IsNullOrWhiteSpace(result.Path) => result.Path,
+            SessionLoadDialogAction.Browse => await PickSessionFileWithWindowsDialogAsync(),
+            _ => null,
+        };
+    }
+
+    private async Task<string?> PickSessionFileWithWindowsDialogAsync()
+    {
         var picker = new Windows.Storage.Pickers.FileOpenPicker();
         picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
         picker.FileTypeFilter.Add(Services.SessionFileService.FileExtension);
         picker.FileTypeFilter.Add("*");
 
-        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        var hwnd = GetMainWindowHandle();
         WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
 
         var file = await picker.PickSingleFileAsync();
-        if (file is null) return;
+        return file?.Path;
+    }
 
+    private async Task LoadSessionFileAsync(string path)
+    {
+        ClearPreviewStateForSessionLoad();
+
+        try
+        {
+            var header = await ViewModel.LoadSessionAsync(path);
+            LogService.Instance.Info("MainWindow",
+                $"Loaded session: {header.ResultCount:N0} declared results, query='{header.Query}', root='{header.SearchRoot}'");
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("MainWindow", $"Load session failed: {path}", ex);
+            ViewModel.ErrorText = $"Load session failed: {ex.Message}";
+        }
+    }
+
+    private void ClearPreviewStateForSessionLoad()
+    {
         // Clear preview pane state — the previously-selected result no longer applies.
         _previewResult = null;
         SetPreviewFileLabel(string.Empty);
@@ -502,18 +567,14 @@ public sealed partial class MainWindow
         _currentMatchIndex = -1;
         HideMatchNavPanel();
         CompletePreviewContentUpdate();
+    }
 
-        try
-        {
-            var header = await ViewModel.LoadSessionAsync(file.Path);
-            LogService.Instance.Info("MainWindow",
-                $"Loaded session: {header.ResultCount:N0} declared results, query='{header.Query}', root='{header.SearchRoot}'");
-        }
-        catch (Exception ex)
-        {
-            LogService.Instance.Warning("MainWindow", $"Load session failed: {file.Path}", ex);
-            ViewModel.ErrorText = $"Load session failed: {ex.Message}";
-        }
+    private IntPtr GetMainWindowHandle()
+    {
+        if (_hwnd != IntPtr.Zero)
+            return _hwnd;
+
+        return WinRT.Interop.WindowNative.GetWindowHandle(this);
     }
 
     private static string BuildSessionFileSuggestedName(string query)
@@ -1765,7 +1826,7 @@ public sealed partial class MainWindow
         if (groups.Count == 0) return;
 
         // Show export options dialog
-        var exportOptions = await ReportExportDialog.ShowAsync(Content.XamlRoot, ViewModel.ContextLines);
+        var exportOptions = await ReportExportDialog.ShowAsync(_hwnd, ViewModel.ContextLines);
         if (exportOptions is null) return;
 
         // Pick file extension based on format
@@ -2139,7 +2200,7 @@ public sealed partial class MainWindow
         if (group is null || group.Count == 0) return;
 
         // Show export options dialog (same as the main report button)
-        var exportOptions = await ReportExportDialog.ShowAsync(Content.XamlRoot, ViewModel.ContextLines);
+        var exportOptions = await ReportExportDialog.ShowAsync(_hwnd, ViewModel.ContextLines);
         if (exportOptions is null) return;
 
         var picker = new Windows.Storage.Pickers.FileSavePicker();

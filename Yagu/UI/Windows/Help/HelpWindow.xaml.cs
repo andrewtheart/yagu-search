@@ -33,8 +33,7 @@ public sealed partial class HelpWindow : Window
         var appWindow = AppWindow.GetFromWindowId(windowId);
         const int windowWidth = 980;
         const int windowHeight = 720;
-        appWindow.Resize(new SizeInt32(windowWidth, windowHeight));
-        CenterOverOwner(appWindow, mainHwnd, windowWidth, windowHeight);
+        WindowForegroundHelper.CenterWindowOverOwner(appWindow, mainHwnd, windowWidth, windowHeight);
     }
 
     public void BringInFrontOfMainWindow(IntPtr mainHwnd)
@@ -121,49 +120,4 @@ public sealed partial class HelpWindow : Window
         LoadingPanel.Visibility = Visibility.Collapsed;
     }
 
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    private struct RECT { public int Left, Top, Right, Bottom; }
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
-
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    private struct MONITORINFO
-    {
-        public int cbSize;
-        public RECT rcMonitor;
-        public RECT rcWork;
-        public uint dwFlags;
-    }
-
-    private static void CenterOverOwner(AppWindow appWindow, IntPtr ownerHwnd, int width, int height)
-    {
-        if (ownerHwnd == IntPtr.Zero) return;
-        if (!GetWindowRect(ownerHwnd, out var ownerRect)) return;
-
-        int ownerCenterX = (ownerRect.Left + ownerRect.Right) / 2;
-        int ownerCenterY = (ownerRect.Top + ownerRect.Bottom) / 2;
-        int x = ownerCenterX - width / 2;
-        int y = ownerCenterY - height / 2;
-
-        const uint monitorDefaultToNearest = 2;
-        var monitor = MonitorFromWindow(ownerHwnd, monitorDefaultToNearest);
-        var monitorInfo = new MONITORINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<MONITORINFO>() };
-        if (GetMonitorInfo(monitor, ref monitorInfo))
-        {
-            var workArea = monitorInfo.rcWork;
-            if (x < workArea.Left) x = workArea.Left;
-            if (y < workArea.Top) y = workArea.Top;
-            if (x + width > workArea.Right) x = workArea.Right - width;
-            if (y + height > workArea.Bottom) y = workArea.Bottom - height;
-        }
-
-        appWindow.Move(new PointInt32(x, y));
-    }
 }

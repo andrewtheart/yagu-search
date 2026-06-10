@@ -111,8 +111,7 @@ public sealed partial class SettingsWindow : Window
         var appWindow = AppWindow.GetFromWindowId(windowId);
         _appWindow = appWindow;
         const int w = 903, h = 820;
-        appWindow.Resize(new SizeInt32(w, h));
-        CenterOverOwner(appWindow, mainHwnd, w, h);
+        WindowForegroundHelper.CenterWindowOverOwner(appWindow, mainHwnd, w, h);
 
         ApplySettingsTheme();
         RootGrid.ActualThemeChanged += (_, _) =>
@@ -174,7 +173,7 @@ public sealed partial class SettingsWindow : Window
         _fontContrastCheckTimer?.Stop();
 
         await FontContrastWarningDialog.ShowIfNeededAsync(
-            RootGrid.XamlRoot,
+            _mainHwnd,
             _viewModel,
             ResolveFontContrastTheme());
     }
@@ -293,58 +292,11 @@ public sealed partial class SettingsWindow : Window
             SettingsContent.Children.Add(_tabPages[index]);
     }
 
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    private struct RECT { public int Left, Top, Right, Bottom; }
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
-
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    private struct MONITORINFO
-    {
-        public int cbSize;
-        public RECT rcMonitor;
-        public RECT rcWork;
-        public uint dwFlags;
-    }
-
-    private static void CenterOverOwner(AppWindow appWindow, IntPtr ownerHwnd, int w, int h)
-    {
-        if (ownerHwnd == IntPtr.Zero) return;
-        if (!GetWindowRect(ownerHwnd, out var rc)) return;
-        int ownerCx = (rc.Left + rc.Right) / 2;
-        int ownerCy = (rc.Top + rc.Bottom) / 2;
-        int x = ownerCx - w / 2;
-        int y = ownerCy - h / 2;
-
-        // Clamp to the work area of the owner's monitor
-        const uint MONITOR_DEFAULTTONEAREST = 2;
-        var hMon = MonitorFromWindow(ownerHwnd, MONITOR_DEFAULTTONEAREST);
-        var mi = new MONITORINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<MONITORINFO>() };
-        if (GetMonitorInfo(hMon, ref mi))
-        {
-            var work = mi.rcWork;
-            if (x < work.Left) x = work.Left;
-            if (y < work.Top) y = work.Top;
-            if (x + w > work.Right) x = work.Right - w;
-            if (y + h > work.Bottom) y = work.Bottom - h;
-        }
-
-        appWindow.Move(new PointInt32(x, y));
-    }
-
     private async void OnSaveClick(object sender, RoutedEventArgs e)
     {
         SaveButton.IsEnabled = false;
         await _viewModel.PersistSettingsAsync();
         MarkSettingsClean();
-        Close();
     }
 
     private void AttachSettingDirtyHandlers()
@@ -518,7 +470,7 @@ public sealed partial class SettingsWindow : Window
         sb.Begin();
     }
 
-    private void OnCancelClick(object sender, RoutedEventArgs e)
+    private void OnCloseClick(object sender, RoutedEventArgs e)
     {
         Close();
     }
@@ -588,8 +540,7 @@ public sealed partial class SettingsWindow : Window
             var container = new StackPanel { Spacing = 4, Margin = new Thickness(0, 4, 0, 8) };
             foreach (var element in entry.BuildElements())
             {
-                if (element is FrameworkElement fe && fe.Parent is Panel p)
-                    p.Children.Remove(element);
+                DetachFromParent(element);
                 container.Children.Add(element);
             }
             _searchResultContainers.Add(container);
@@ -655,8 +606,24 @@ public sealed partial class SettingsWindow : Window
 
     private static void DetachFromParent(UIElement element)
     {
-        if (element is FrameworkElement fe && fe.Parent is Panel parentPanel)
-            parentPanel.Children.Remove(element);
+        if (element is not FrameworkElement fe || fe.Parent is null)
+            return;
+
+        switch (fe.Parent)
+        {
+            case Panel parentPanel:
+                parentPanel.Children.Remove(element);
+                break;
+            case Border border when ReferenceEquals(border.Child, element):
+                border.Child = null;
+                break;
+            case ContentControl contentControl when ReferenceEquals(contentControl.Content, element):
+                contentControl.Content = null;
+                break;
+            case ScrollViewer scrollViewer when ReferenceEquals(scrollViewer.Content, element):
+                scrollViewer.Content = null;
+                break;
+        }
     }
 
     /// <summary>

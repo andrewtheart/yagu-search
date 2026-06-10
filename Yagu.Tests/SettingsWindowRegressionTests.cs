@@ -48,6 +48,9 @@ public sealed class SettingsWindowRegressionTests
     private static readonly string SelectionRendererSource = File.ReadAllText(
         Path.Combine(RepoRoot, "vendor", "TextControlBox-WinUI", "TextControlBox",
             "Core", "Renderer", "SelectionRenderer.cs"));
+    private static readonly string LinkHighlightManagerSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "vendor", "TextControlBox-WinUI", "TextControlBox",
+            "Core", "Text", "LinkHighlightManager.cs"));
     private static readonly string TerminalHtml = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "Assets", "terminal.html"));
 
@@ -82,10 +85,11 @@ public sealed class SettingsWindowRegressionTests
     }
 
     [Fact]
-    public void SettingsWindowXaml_HasSaveAndCancelButtons()
+    public void SettingsWindowXaml_HasSaveAndCloseButtons()
     {
         Assert.Contains("Click=\"OnSaveClick\"", SettingsWindowXaml);
-        Assert.Contains("Click=\"OnCancelClick\"", SettingsWindowXaml);
+        Assert.Contains("Content=\"Close\"", SettingsWindowXaml);
+        Assert.Contains("Click=\"OnCloseClick\"", SettingsWindowXaml);
         Assert.Contains("Style=\"{ThemeResource AccentButtonStyle}\"", SettingsWindowXaml);
         Assert.Contains("IsEnabled=\"False\"", SettingsWindowXaml);
     }
@@ -106,15 +110,31 @@ public sealed class SettingsWindowRegressionTests
     [Fact]
     public void SettingsWindow_CentersOverOwnerWindow()
     {
-        Assert.Contains("CenterOverOwner(", SettingsWindowSource);
-        Assert.Contains("GetWindowRect(", SettingsWindowSource);
+        Assert.Contains("WindowForegroundHelper.CenterWindowOverOwner(appWindow, mainHwnd, w, h);", SettingsWindowSource);
+        Assert.Contains("WindowForegroundHelper.CenterWindowOverOwner(appWindow, mainHwnd, windowWidth, windowHeight);", HelpWindowSource);
+        Assert.Contains("WindowForegroundHelper.CenterWindowOverOwner(appWindow, _ownerHwnd, width, height, minHeight: 300);", ResultStoreTempLocationWindowSource);
+        Assert.Contains("WindowForegroundHelper.CenterWindowOverOwner(appWindow, _ownerHwnd, DialogWidth, DialogHeight, minHeight: 300);", AdminProtectedPathsDialogSource);
+
+        Assert.Contains("public static void CenterWindowOverOwner(", WindowForegroundHelperSource);
+        Assert.Contains("GetWindowRect(", WindowForegroundHelperSource);
         // Verify centering arithmetic
-        Assert.Contains("ownerCx - w / 2", SettingsWindowSource);
-        Assert.Contains("ownerCy - h / 2", SettingsWindowSource);
+        Assert.Contains("ownerCenterX - width / 2", WindowForegroundHelperSource);
+        Assert.Contains("ownerCenterY - height / 2", WindowForegroundHelperSource);
         // Clamped to monitor work area so window stays on-screen
-        Assert.Contains("MonitorFromWindow(", SettingsWindowSource);
-        Assert.Contains("GetMonitorInfo(", SettingsWindowSource);
-        Assert.Contains("rcWork", SettingsWindowSource);
+        Assert.Contains("MonitorFromWindow(", WindowForegroundHelperSource);
+        Assert.Contains("GetMonitorInfo(", WindowForegroundHelperSource);
+        Assert.Contains("rcWork", WindowForegroundHelperSource);
+        Assert.Contains("appWindow.MoveAndResize(CalculateCenteredBounds(ownerHwnd, width, height, minWidth, minHeight));", WindowForegroundHelperSource);
+    }
+
+    [Fact]
+    public void SettingsFontContrastWarning_CentersOverMainWindow()
+    {
+        string timerHandler = ExtractMethod(SettingsWindowSource, "OnFontContrastCheckTimerTick", window: 500);
+
+        Assert.Contains("FontContrastWarningDialog.ShowIfNeededAsync(", timerHandler);
+        Assert.Contains("_mainHwnd", timerHandler);
+        Assert.DoesNotContain("WindowForegroundHelper.GetWindowHandle(this)", timerHandler);
     }
 
     [Fact]
@@ -154,7 +174,7 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("internal sealed class AdminProtectedPathsDialog : Window", AdminProtectedPathsDialogSource);
         Assert.Contains("private const int DialogWidth = 720;", AdminProtectedPathsDialogSource);
         Assert.Contains("private const int DialogHeight = 540;", AdminProtectedPathsDialogSource);
-        Assert.Contains("SizeAndCenter(appWindow, _ownerHwnd, DialogWidth, DialogHeight);", AdminProtectedPathsDialogSource);
+        Assert.Contains("WindowForegroundHelper.CenterWindowOverOwner(appWindow, _ownerHwnd, DialogWidth, DialogHeight, minHeight: 300);", AdminProtectedPathsDialogSource);
         Assert.Contains("presenter.IsResizable = false;", AdminProtectedPathsDialogSource);
         Assert.Contains("EnableWindow(_ownerHwnd, false);", AdminProtectedPathsDialogSource);
         Assert.Contains("EnableWindow(_ownerHwnd, true);", AdminProtectedPathsDialogSource);
@@ -170,13 +190,13 @@ public sealed class SettingsWindowRegressionTests
     }
 
     [Fact]
-    public void SettingsWindow_SavePersistsAndCloses()
+    public void SettingsWindow_SavePersistsWithoutClosing()
     {
         string saveMethod = ExtractMethod(SettingsWindowSource, "OnSaveClick");
         Assert.Contains("SaveButton.IsEnabled = false;", saveMethod);
         Assert.Contains("await _viewModel.PersistSettingsAsync();", saveMethod);
         Assert.Contains("MarkSettingsClean();", saveMethod);
-        Assert.Contains("Close()", saveMethod);
+        Assert.DoesNotContain("Close()", saveMethod);
     }
 
     [Fact]
@@ -304,10 +324,10 @@ public sealed class SettingsWindowRegressionTests
     }
 
     [Fact]
-    public void SettingsWindow_CancelCloses()
+    public void SettingsWindow_CloseButtonCloses()
     {
-        string cancelMethod = ExtractMethod(SettingsWindowSource, "OnCancelClick");
-        Assert.Contains("Close()", cancelMethod);
+        string closeMethod = ExtractMethod(SettingsWindowSource, "OnCloseClick");
+        Assert.Contains("Close()", closeMethod);
     }
 
     [Theory]
@@ -496,15 +516,20 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("_settings.TerminalDefaultWorkingDirectory =", MainViewModelSource);
         Assert.Contains("[ObservableProperty] public partial string TerminalDefaultWorkingDirectory", MainViewModelSource);
         Assert.Contains("public static string LaunchWorkingDirectory", AppSource);
-        Assert.Contains("workingDirectory: ResolveTerminalWorkingDirectory()", MainWindowTerminalSource);
+        Assert.Contains("string workingDirectory = ResolveTerminalWorkingDirectory();", MainWindowTerminalSource);
+        Assert.Contains("workingDirectory: workingDirectory", MainWindowTerminalSource);
         Assert.Contains("TryResolveExistingDirectory(ViewModel.TerminalDefaultWorkingDirectory", MainWindowTerminalSource);
         Assert.Contains("TryResolveExistingDirectory(App.LaunchWorkingDirectory", MainWindowTerminalSource);
         Assert.Contains("Start(int cols = 120, int rows = 30, string? workingDirectory = null)", ConPtyTerminalServiceSource);
-        Assert.Contains("ResolvePowerShellExecutable()", ConPtyTerminalServiceSource);
-        Assert.Contains("Path.Combine(programFiles, \"PowerShell\", \"7\", \"pwsh.exe\")", ConPtyTerminalServiceSource);
-        Assert.Contains("Path.Combine(system, \"WindowsPowerShell\", \"v1.0\", \"powershell.exe\")", ConPtyTerminalServiceSource);
-        Assert.Contains("SpawnProcess(shellPath, $\"\\\"{shellPath}\\\" -NoLogo -NoExit\", workingDirectory)", ConPtyTerminalServiceSource);
-        Assert.Contains("workingDirectory, ref startupInfo", ConPtyTerminalServiceSource);
+        Assert.Contains("ResolveCommandShellExecutable()", ConPtyTerminalServiceSource);
+        Assert.Contains("Path.Combine(system, \"cmd.exe\")", ConPtyTerminalServiceSource);
+        Assert.Contains("FindExecutableOnPath(\"cmd.exe\")", ConPtyTerminalServiceSource);
+        Assert.Contains("new ProcessStartInfo", ConPtyTerminalServiceSource);
+        Assert.Contains("RedirectStandardInput = true", ConPtyTerminalServiceSource);
+        Assert.Contains("RedirectStandardOutput = true", ConPtyTerminalServiceSource);
+        Assert.Contains("RedirectStandardError = true", ConPtyTerminalServiceSource);
+        Assert.Contains("startInfo.ArgumentList.Add(\"/Q\");", ConPtyTerminalServiceSource);
+        Assert.Contains("startInfo.ArgumentList.Add(\"/K\");", ConPtyTerminalServiceSource);
     }
 
     [Fact]
@@ -515,21 +540,93 @@ public sealed class SettingsWindowRegressionTests
             "terminalService.ProcessExited += exitCode => OnTerminalProcessExited(exitCode, sessionGeneration);",
             "_terminalService = terminalService;",
             "try",
-            "terminalService.Start(cols: _terminalColumns, rows: _terminalRows, workingDirectory: ResolveTerminalWorkingDirectory());");
-        Assert.Contains("terminalService.Start(cols: _terminalColumns, rows: _terminalRows, workingDirectory: ResolveTerminalWorkingDirectory());", MainWindowTerminalSource);
+            "string workingDirectory = ResolveTerminalWorkingDirectory();",
+            "terminalService.Start(cols: _terminalColumns, rows: _terminalRows, workingDirectory: workingDirectory);");
+        Assert.Contains("terminalService.Start(cols: _terminalColumns, rows: _terminalRows, workingDirectory: workingDirectory);", MainWindowTerminalSource);
         Assert.Contains("_terminalService = terminalService;", MainWindowTerminalSource);
         Assert.Contains("if (ReferenceEquals(_terminalService, terminalService))", MainWindowTerminalSource);
         Assert.Contains("_terminalService = null;", MainWindowTerminalSource);
-        Assert.Contains("LogService.Instance.Warning(\"Terminal\", \"Failed to start ConPTY terminal session\", ex);", MainWindowTerminalSource);
+        Assert.Contains("LogService.Instance.Warning(\"Terminal\", \"Failed to start terminal shell session\", ex);", MainWindowTerminalSource);
+        Assert.Contains("Terminal shell session started: shellPid=", MainWindowTerminalSource);
         Assert.Contains("[Terminal failed to start:", MainWindowTerminalSource);
 
         string startMethod = ExtractMethod(ConPtyTerminalServiceSource, "Start", window: 2800);
         Assert.Contains("try", startMethod);
         Assert.Contains("catch", startMethod);
-        Assert.Contains("inputReadSide?.Dispose();", startMethod);
-        Assert.Contains("outputWriteSide?.Dispose();", startMethod);
+        Assert.Contains("_process = new Process", startMethod);
+        Assert.Contains("_process.Start()", startMethod);
         Assert.Contains("Dispose();", startMethod);
         Assert.Contains("throw;", startMethod);
+        Assert.Contains("public int ProcessId { get; private set; }", ConPtyTerminalServiceSource);
+        Assert.Contains("BuildLocalEcho(text)", ConPtyTerminalServiceSource);
+        Assert.Contains("NormalizeShellLineEndings(text)", ConPtyTerminalServiceSource);
+        Assert.Contains("_input.Write(shellText);", ConPtyTerminalServiceSource);
+        Assert.Contains("ReadRedirectedOutput", ConPtyTerminalServiceSource);
+        Assert.Contains("First shell output received", ConPtyTerminalServiceSource);
+        Assert.Contains("First terminal input written", ConPtyTerminalServiceSource);
+    }
+
+    [Fact]
+    public void EmbeddedTerminal_UsesVirtualHostAndLogsStartupFailures()
+    {
+        Assert.Contains("\"yagu-terminal\", assetsDir", MainWindowTerminalSource);
+        Assert.Contains("Navigate(\"https://yagu-terminal/terminal.html\")", MainWindowTerminalSource);
+        Assert.DoesNotContain("new Uri(terminalHtmlPath).AbsoluteUri", MainWindowTerminalSource);
+        Assert.Contains("AttachTerminalWebViewDiagnostics(TerminalWebView.CoreWebView2);", MainWindowTerminalSource);
+        Assert.Contains("coreWebView.NavigationCompleted += OnTerminalNavigationCompleted;", MainWindowTerminalSource);
+        Assert.Contains("coreWebView.ProcessFailed += OnTerminalWebViewProcessFailed;", MainWindowTerminalSource);
+        Assert.Contains("coreWebView.WebResourceResponseReceived += OnTerminalWebResourceResponseReceived;", MainWindowTerminalSource);
+        Assert.Contains("Terminal WebView initialization failed", MainWindowTerminalSource);
+        Assert.Contains("IsTabStop=\"True\"", MainWindowXaml);
+        Assert.Contains("Terminal page reported ready", MainWindowTerminalSource);
+        Assert.Contains("if (_terminalPaneExpanded)", MainWindowTerminalSource);
+        Assert.Contains("FocusTerminal();", MainWindowTerminalSource);
+        Assert.Contains("Posted first terminal output to WebView", MainWindowTerminalSource);
+        Assert.Contains("FilterTerminalOutputForXterm(text)", MainWindowTerminalSource);
+        Assert.Contains("NudgeCommandShellPromptAfterStartupControlPacket(text);", MainWindowTerminalSource);
+        Assert.Contains("_terminalService?.WriteInput(\"\\r\");", MainWindowTerminalSource);
+        Assert.Contains("Terminal host received first input", MainWindowTerminalSource);
+        Assert.Contains("Terminal input received before the shell session was available", MainWindowTerminalSource);
+        Assert.Contains("\\u001b[?9001h", MainWindowTerminalSource);
+        Assert.Contains("\\u001b[?1004h", MainWindowTerminalSource);
+        Assert.Contains("Terminal output post failed", MainWindowTerminalSource);
+        Assert.Contains("case \"hostLog\":", MainWindowTerminalSource);
+        Assert.Contains("LogTerminalPageMessage(root);", MainWindowTerminalSource);
+
+        Assert.Contains("function postHostMessage(message)", TerminalHtml);
+        Assert.Contains("function normalizeHostMessage(data)", TerminalHtml);
+        Assert.Contains("return JSON.parse(data);", TerminalHtml);
+        Assert.Contains("var msg = normalizeHostMessage(event.data);", TerminalHtml);
+        Assert.Contains("function refreshTerminalRows()", TerminalHtml);
+        Assert.Contains("term.refresh(0, term.rows - 1);", TerminalHtml);
+        Assert.Contains("function scheduleInitialTerminalPaintRefresh()", TerminalHtml);
+        Assert.Contains("window.setTimeout(refreshTerminalRows, 150);", TerminalHtml);
+        Assert.Contains("function signalReadyWhenMeasured(attempt)", TerminalHtml);
+        Assert.Contains("Terminal page measured", TerminalHtml);
+        Assert.Contains("function isTerminalFocusReport(data)", TerminalHtml);
+        Assert.Contains("Terminal page sent first input", TerminalHtml);
+        Assert.Contains("terminalElement.tabIndex = 0;", TerminalHtml);
+        Assert.Contains("function focusTerminal()", TerminalHtml);
+        Assert.Contains("terminalElement.addEventListener('pointerdown'", TerminalHtml);
+        Assert.Contains("terminalElement.addEventListener('click'", TerminalHtml);
+        Assert.Contains("window.addEventListener('focus'", TerminalHtml);
+        Assert.Contains("function forwardEnterKey(event)", TerminalHtml);
+        Assert.Contains("term.attachCustomKeyEventHandler", TerminalHtml);
+        Assert.Contains("function translateKeyEventToInput(event)", TerminalHtml);
+        Assert.Contains("document.addEventListener('paste'", TerminalHtml);
+        Assert.Contains("sendTerminalInput('\\r');", TerminalHtml);
+        Assert.Contains("term.focus();", TerminalHtml);
+        Assert.Contains("term.writeSync(msg.data || '')", TerminalHtml);
+        Assert.Contains("type: 'hostLog'", TerminalHtml);
+        Assert.Contains("Terminal page failed to initialize", TerminalHtml);
+        Assert.Contains("Terminal page received first output", TerminalHtml);
+        Assert.Contains("#terminal .xterm .xterm-viewport", TerminalHtml);
+        Assert.Contains("#terminal .xterm .xterm-screen", TerminalHtml);
+        Assert.Contains("function safeFit()", TerminalHtml);
+        Assert.Contains("window.requestAnimationFrame(function()", TerminalHtml);
+        Assert.Contains("signalReadyWhenMeasured(0);", TerminalHtml);
+        Assert.Contains("postHostMessage({ type: 'ready' });", TerminalHtml);
+        Assert.DoesNotContain("window.chrome.webview.postMessage(JSON.stringify({ type: 'ready' }))", TerminalHtml);
     }
 
     // ── MainWindow settings integration ──
@@ -579,6 +676,24 @@ public sealed class SettingsWindowRegressionTests
             "TabList.SelectedIndex = index;",
             "SettingsContent.Children.Clear();",
             "SettingsContent.Children.Add(_tabPages[index]);");
+    }
+
+    [Fact]
+    public void SettingsWindow_SearchReparentsElementsFromAllSupportedParentTypes()
+    {
+        string searchChanged = ExtractMethod(SettingsWindowSource, "OnSearchTextChanged", window: 2600);
+        Assert.Contains("DetachFromParent(element);", searchChanged);
+        Assert.DoesNotContain("fe.Parent is Panel", searchChanged);
+
+        string detach = ExtractMethod(SettingsWindowSource, "DetachFromParent", window: 1800);
+        Assert.Contains("case Panel parentPanel:", detach);
+        Assert.Contains("parentPanel.Children.Remove(element);", detach);
+        Assert.Contains("case Border border when ReferenceEquals(border.Child, element):", detach);
+        Assert.Contains("border.Child = null;", detach);
+        Assert.Contains("case ContentControl contentControl when ReferenceEquals(contentControl.Content, element):", detach);
+        Assert.Contains("contentControl.Content = null;", detach);
+        Assert.Contains("case ScrollViewer scrollViewer when ReferenceEquals(scrollViewer.Content, element):", detach);
+        Assert.Contains("scrollViewer.Content = null;", detach);
     }
 
     [Fact]
@@ -670,6 +785,35 @@ public sealed class SettingsWindowRegressionTests
     }
 
     [Fact]
+    public void EmbeddedTerminal_ContextMenuProvidesClipboardAndClearCommands()
+    {
+        Assert.Contains("id=\"terminalCopy\"", TerminalHtml);
+        Assert.Contains("id=\"terminalPaste\"", TerminalHtml);
+        Assert.Contains("id=\"terminalCut\"", TerminalHtml);
+        Assert.Contains("id=\"terminalSelectAll\"", TerminalHtml);
+        Assert.Contains("id=\"terminalClear\"", TerminalHtml);
+
+        // Copy / cut serialize the current selection to the host clipboard.
+        Assert.Contains("function copyTerminalSelection()", TerminalHtml);
+        Assert.Contains("term.getSelection()", TerminalHtml);
+        Assert.Contains("type: 'copyText'", TerminalHtml);
+        Assert.Contains("term.clearSelection();", TerminalHtml);
+        // Paste asks the host to read the clipboard and write it to the shell.
+        Assert.Contains("type: 'requestPaste'", TerminalHtml);
+        // Select all and clear act on the terminal directly.
+        Assert.Contains("term.selectAll();", TerminalHtml);
+        Assert.Contains("sendTerminalInput('cls\\r');", TerminalHtml);
+        Assert.Contains("term.clear();", TerminalHtml);
+
+        Assert.Contains("case \"copyText\":", MainWindowTerminalSource);
+        Assert.Contains("CopyTextToClipboard(", MainWindowTerminalSource);
+        Assert.Contains("case \"requestPaste\":", MainWindowTerminalSource);
+        Assert.Contains("PasteClipboardTextToTerminal()", MainWindowTerminalSource);
+        Assert.Contains("Clipboard.SetContent(package);", MainWindowTerminalSource);
+        Assert.Contains("Clipboard.GetContent()", MainWindowTerminalSource);
+    }
+
+    [Fact]
     public void MainWindow_NoLongerContainsOldSettingsMethods()
     {
         // The old helper methods that were moved to SettingsWindow should not be in MainWindow.
@@ -734,6 +878,25 @@ public sealed class SettingsWindowRegressionTests
         AssertContainsInOrder(method,
             "lastRenderedLine < 0",
             "return;");
+    }
+
+    [Fact]
+    public void LinkHighlightManager_SkipsInvalidCharacterRegionsInsteadOfCrashingRender()
+    {
+        string method = ExtractMethod(LinkHighlightManagerSource, "FindAndComputeLinkPositions", window: 2600);
+        AssertContainsInOrder(method,
+            "this.links.Clear();",
+            "string renderedText = textRenderer.RenderedText ?? string.Empty;",
+            "renderedText.Length == 0 || textRenderer.DrawnTextLayout is null",
+            "return;");
+        Assert.Contains("match.Index < 0 || match.Index >= renderedText.Length || match.Length <= 0", method);
+        Assert.Contains("int length = Math.Min(match.Length, renderedText.Length - match.Index);", method);
+        Assert.Contains("try", method);
+        Assert.Contains("textRenderer.DrawnTextLayout.GetCharacterRegions(match.Index, length);", method);
+        Assert.Contains("catch (ArgumentException)", method);
+        Assert.Contains("catch (COMException)", method);
+        Assert.Contains("if (rects.Length == 0)", method);
+        Assert.Contains("Length = length", method);
     }
 
     // ── Helpers ──

@@ -250,28 +250,28 @@
                     Margin="0,0,156,0" Canvas.ZIndex="100">
             <Button x:Name="PinButton" Click="OnPinToggle" VerticalAlignment="Center"
                     Width="36" Height="32" MinWidth="0" Padding="0"
-                    Background="Transparent" BorderThickness="0" Foreground="White"
+                    Background="Transparent" BorderThickness="0" Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                     ToolTipService.ToolTip="Minimize to system tray when window loses focus">
-                <FontIcon x:Name="PinIcon" Glyph="&#xE77A;" FontSize="14" Foreground="White" />
+                <FontIcon x:Name="PinIcon" Glyph="&#xE77A;" FontSize="14" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
             </Button>
             <Button Click="OnOpenCredits" VerticalAlignment="Center"
                     Width="36" Height="32" MinWidth="0" Padding="0"
-                    Background="Transparent" BorderThickness="0" Foreground="White"
+                    Background="Transparent" BorderThickness="0" Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                     ToolTipService.ToolTip="Help">
-                <FontIcon Glyph="&#xE897;" FontSize="14" Foreground="White" />
+                <FontIcon Glyph="&#xE897;" FontSize="14" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
             </Button>
             <Button Click="OnOpenSettings" VerticalAlignment="Center"
                     Width="36" Height="32" MinWidth="0" Padding="0"
-                    Background="Transparent" BorderThickness="0" Foreground="White"
+                    Background="Transparent" BorderThickness="0" Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                     ToolTipService.ToolTip="Settings">
-                <FontIcon Glyph="&#xE713;" FontSize="14" Foreground="White" />
+                <FontIcon Glyph="&#xE713;" FontSize="14" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
             </Button>
                 <Button x:Name="CloseWindowButton" Click="OnCloseWindowClick" VerticalAlignment="Center"
                     Visibility="Collapsed"
                     Width="36" Height="32" MinWidth="0" Padding="0"
-                    Background="Transparent" BorderThickness="0" Foreground="White"
+                    Background="Transparent" BorderThickness="0" Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                     ToolTipService.ToolTip="Close Yagu">
-                <FontIcon Glyph="&#xE711;" FontSize="12" Foreground="White" />
+                <FontIcon Glyph="&#xE711;" FontSize="12" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
             </Button>
         </StackPanel>
 
@@ -412,21 +412,13 @@
 
                 <!-- Advanced options (collapsed by default) -->
                 <Expander x:Name="AdvancedOptionsExpander"
-                          IsExpanded="False" HorizontalAlignment="Stretch"
+                          IsExpanded="False" HorizontalAlignment="Left"
                           HorizontalContentAlignment="Stretch" Padding="0"
                           MinHeight="0" FontSize="12"
                           Expanding="OnAdvancedOptionsExpanding"
                           Collapsed="OnAdvancedOptionsCollapsed">
                     <Expander.Header>
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <FontIcon Glyph="&#xE76C;" FontSize="10"
-                                      RenderTransformOrigin="0.5,0.5">
-                                <FontIcon.RenderTransform>
-                                    <RotateTransform x:Name="ChevronRotate" Angle="-90" />
-                                </FontIcon.RenderTransform>
-                            </FontIcon>
-                            <TextBlock Text="Advanced Options" VerticalAlignment="Center" />
-                        </StackPanel>
+                        <TextBlock Text="Advanced Options" VerticalAlignment="Center" />
                     </Expander.Header>
                         <Border Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -790,7 +782,7 @@
         </StackPanel>
 
         <!-- Split pane: results + preview -->
-          <Grid x:Name="SplitPaneGrid" Grid.Row="4" Margin="16,2,20,4"
+          <Grid x:Name="SplitPaneGrid" Grid.Row="4" Margin="16,2,16,4"
               SizeChanged="OnTopExpandedPreviewLayoutSourceSizeChanged">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="ResultsColumn" Width="*" MinWidth="200" />
@@ -1656,9 +1648,28 @@
                     VerticalAlignment="Center"
                     ToolTipService.ToolTip="Toggle embedded terminal">
                 <FontIcon x:Name="TerminalChevronIcon" FontFamily="{StaticResource SymbolThemeFontFamily}"
-                          Glyph="&#xE70E;" FontSize="12" />
+                          Glyph="&#xE70D;" FontSize="12" />
             </Button>
         </Grid>
+
+            <Button x:Name="PreSearchTerminalChevron"
+                Grid.RowSpan="7"
+                Click="OnToggleTerminalPane"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Width="36" Height="32" MinWidth="0" MinHeight="0"
+                Padding="0"
+                Margin="0,0,20,16"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="6"
+                Canvas.ZIndex="210"
+                ToolTipService.ToolTip="Toggle embedded terminal">
+                <FontIcon x:Name="PreSearchTerminalChevronIcon"
+                      FontFamily="{StaticResource SymbolThemeFontFamily}"
+                      Glyph="&#xE70D;" FontSize="12" />
+            </Button>
 
         <!-- Generated CLI command overlay -->
         <Border x:Name="GeneratedCliCommandOverlay"
@@ -1720,7 +1731,7 @@
                 <ToggleSwitch x:Name="IncludeSavedSettingCliOptionsToggle"
                               Grid.Row="1"
                               Header="Options already saved in settings"
-                              IsOn="True"
+                              IsOn="False"
                               OnContent="Include"
                               OffContent="Omit"
                               FontSize="12"
@@ -1769,8 +1780,9 @@
         </Border>
 
         <!-- Embedded terminal panel (ConPTY + xterm.js in WebView2) -->
-        <WebView2 x:Name="TerminalWebView" Grid.Row="5" Visibility="Collapsed"
-                  DefaultBackgroundColor="#1E1E1E" />
+        <Grid x:Name="TerminalHost" Grid.Row="5" Visibility="Collapsed" Background="#1E1E1E">
+            <WebView2 x:Name="TerminalWebView" DefaultBackgroundColor="#1E1E1E" IsTabStop="True" />
+        </Grid>
 
     </Grid>
 </Window>

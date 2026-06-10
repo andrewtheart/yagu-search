@@ -471,7 +471,7 @@ public sealed partial class MainWindow
     }
 
     private bool HasOpenAppOwnedWindowOrModal()
-        => _settingsWindow is not null || _helpWindow is not null || _ownedModalWindowDepth > 0;
+        => _settingsWindow is not null || _helpWindow is not null || _ownedModalWindowDepth > 0 || YaguDialog.HasOpenOwnedWindow(_hwnd);
 
     private void OnAppWindowClosing(Microsoft.UI.Windowing.AppWindow sender, Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
     {

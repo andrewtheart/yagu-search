@@ -188,6 +188,8 @@ Then build the installer from the repo root:
 
 This builds Yagu in Release, stages the output, and compiles an installer EXE at `installer\output\YaguSetup-<version>.exe`.
 
+At install time, the setup program checks for the x64 .NET 10 runtime before copying files. If it is missing, setup stops and directs the user to download [.NET 10.0 Runtime (v10.0.9) - Windows x64 Installer](https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-10.0.9-windows-x64-installer?cid=getdotnetcore).
+
 To skip the build step and use existing Release output:
 
 ```powershell

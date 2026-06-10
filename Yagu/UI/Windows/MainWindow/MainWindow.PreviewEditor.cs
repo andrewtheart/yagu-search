@@ -1082,17 +1082,19 @@ public sealed partial class MainWindow
                     return false;
                 }
 
-                var encDialog = new ContentDialog
-                {
-                    XamlRoot = ((FrameworkElement)Content).XamlRoot,
-                    Title = "Encoding Warning",
-                    Content = $"This file contains characters that cannot be represented in {GetEncodingDisplayName(_previewEditorEncoding)}. Save as UTF-8 instead?",
-                    PrimaryButtonText = "Save as UTF-8",
-                    CloseButtonText = "Cancel",
-                    DefaultButton = ContentDialogButton.Primary,
-                };
-                var encChoice = await encDialog.ShowAsync();
-                if (encChoice != ContentDialogResult.Primary) return false;
+                var encChoice = await YaguDialog.ShowAsync(
+                    _hwnd,
+                    new YaguDialogOptions
+                    {
+                        Title = "Encoding Warning",
+                        Content = $"This file contains characters that cannot be represented in {GetEncodingDisplayName(_previewEditorEncoding)}. Save as UTF-8 instead?",
+                        PrimaryButtonText = "Save as UTF-8",
+                        CloseButtonText = "Cancel",
+                        DefaultButton = YaguDialogDefaultButton.Primary,
+                        Width = 560,
+                        Height = 280,
+                    });
+                if (encChoice != YaguDialogResult.Primary) return false;
                 _previewEditorEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
             }
 
@@ -1186,24 +1188,25 @@ public sealed partial class MainWindow
     /// <summary>Returns true if the caller should proceed (edits were saved or discarded), false to cancel.</summary>
     private async Task<bool> ConfirmDiscardPreviewEditAsync()
     {
-        var dialog = new ContentDialog
-        {
-            XamlRoot = ((FrameworkElement)Content).XamlRoot,
-            Title = "Unsaved changes",
-            Content = "The right-panel editor has unsaved changes.",
-            PrimaryButtonText = "Save",
-            SecondaryButtonText = "Discard",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Primary,
-        };
-
-        var choice = await dialog.ShowAsync();
-        if (choice == ContentDialogResult.Primary)
+        var choice = await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "Unsaved changes",
+                Content = "The right-panel editor has unsaved changes.",
+                PrimaryButtonText = "Save",
+                SecondaryButtonText = "Discard",
+                CloseButtonText = "Cancel",
+                DefaultButton = YaguDialogDefaultButton.Primary,
+                Width = 500,
+                Height = 270,
+            });
+        if (choice == YaguDialogResult.Primary)
         {
             // Save first, then allow the close/navigation to proceed.
             return await SavePreviewEditAsync();
         }
-        return choice == ContentDialogResult.Secondary; // Discard → true, Cancel → false
+        return choice == YaguDialogResult.Secondary; // Discard -> true, Cancel -> false
     }
 
     private bool TryLeavePreviewEditorForPreviewChange()
