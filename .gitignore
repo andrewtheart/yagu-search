@@ -33,6 +33,7 @@ scripts/publish-to-azure.ps1
 # Installer staging (built by build-installer.ps1)
 installer/staging/
 installer/output/
+!installer/*.exe
 build_debug.txt
 Yagu/Native/yagu_core.dll
 build_output.txt

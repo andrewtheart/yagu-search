@@ -342,15 +342,22 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void TerminalChevron_HasPreSearchFallbackWhenStatusBarIsHidden()
+    public void TerminalChevron_HasInlinePreSearchFallbackWhenStatusBarIsHidden()
     {
-        string floatingChevron = ExtractXamlWindow("x:Name=\"PreSearchTerminalChevron\"", 900);
-        Assert.Contains("Grid.RowSpan=\"7\"", floatingChevron);
-        Assert.Contains("Click=\"OnToggleTerminalPane\"", floatingChevron);
-        Assert.Contains("HorizontalAlignment=\"Right\"", floatingChevron);
-        Assert.Contains("VerticalAlignment=\"Bottom\"", floatingChevron);
-        Assert.Contains("x:Name=\"PreSearchTerminalChevronIcon\"", floatingChevron);
-        Assert.Contains("ToolTipService.ToolTip=\"Toggle embedded terminal\"", floatingChevron);
+        string preSearchChevron = ExtractXamlWindow("x:Name=\"PreSearchTerminalChevron\"", 900);
+        Assert.Contains("Grid.Row=\"2\"", preSearchChevron);
+        Assert.Contains("Grid.Column=\"1\"", preSearchChevron);
+        Assert.Contains("Click=\"OnToggleTerminalPane\"", preSearchChevron);
+        Assert.Contains("HorizontalAlignment=\"Center\"", preSearchChevron);
+        Assert.Contains("VerticalAlignment=\"Bottom\"", preSearchChevron);
+        Assert.DoesNotContain("Grid.RowSpan", preSearchChevron);
+        Assert.DoesNotContain("Canvas.ZIndex", preSearchChevron);
+        Assert.Contains("x:Name=\"PreSearchTerminalChevronIcon\"", preSearchChevron);
+        Assert.Contains("ToolTipService.ToolTip=\"Toggle embedded terminal\"", preSearchChevron);
+
+        Assert.Contains("<Grid Grid.Row=\"0\" Grid.ColumnSpan=\"2\" ColumnSpacing=\"8\">", MainWindowXaml);
+        Assert.Contains("<Grid Grid.Row=\"1\" Grid.ColumnSpan=\"2\" ColumnSpacing=\"8\">", MainWindowXaml);
+        Assert.Contains("Grid.Row=\"2\" Grid.Column=\"0\"", ExtractXamlWindow("x:Name=\"AdvancedOptionsExpander\"", 400));
 
         string terminalToggle = ExtractMethodWindow(MainWindowSource, "SetTerminalPaneExpanded", 1200);
         AssertContainsInOrder(terminalToggle,
@@ -361,7 +368,7 @@ public sealed class PreviewCoreRegressionTests
 
         string glyphSync = ExtractMethodWindow(MainWindowSource, "UpdateTerminalChevronGlyphs", 800);
         AssertContainsInOrder(glyphSync,
-            "string glyph = _terminalPaneExpanded ? \"\\uE70D\" : \"\\uE70E\";",
+            "string glyph = _terminalPaneExpanded ? \"\\uE70E\" : \"\\uE70D\";",
             "TerminalChevronIcon.Glyph = glyph;",
             "PreSearchTerminalChevronIcon.Glyph = glyph;");
 

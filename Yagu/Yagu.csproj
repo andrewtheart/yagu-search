@@ -34,6 +34,7 @@
 
   <PropertyGroup>
     <PowerShellExe Condition="'$(PowerShellExe)' == ''">powershell</PowerShellExe>
+    <BuildInstallerOnPublish Condition="'$(BuildInstallerOnPublish)' == ''">true</BuildInstallerOnPublish>
     <YaguBuildVersionFile>$(MSBuildThisFileDirectory)Properties\build-version.txt</YaguBuildVersionFile>
     <YaguGeneratedVersionFile>$(MSBuildThisFileDirectory)Properties\AppInfo.g.cs</YaguGeneratedVersionFile>
   </PropertyGroup>
@@ -176,6 +177,12 @@
     <Copy SourceFiles="@(_YaguPriFiles)"
           DestinationFolder="$(PublishDir)"
           SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="BuildInstallerAfterPublish"
+          AfterTargets="Publish"
+          Condition="'$(BuildInstallerOnPublish)' != 'false' And '$(DesignTimeBuild)' != 'true'">
+    <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\build-installer.ps1&quot; -SkipBuild" />
   </Target>
 
   <!--

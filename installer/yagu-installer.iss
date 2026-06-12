@@ -8,7 +8,9 @@
 #define MyAppExeName "Yagu.exe"
 #define MyAppPublisher "Yagu"
 #define MyAppURL "https://github.com/yagu"
-#define DotNet10RuntimeDownloadUrl "https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-10.0.9-windows-x64-installer?cid=getdotnetcore"
+#define DotNet10RuntimeDisplayName ".NET 10.0 Runtime (v10.0.9) - Windows x64 Installer"
+#define DotNet10RuntimeInstallerName "dotnet-runtime-10.0.9-win-x64.exe"
+#define DotNet10RuntimeDownloadUrl "https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.9/dotnet-runtime-10.0.9-win-x64.exe"
 #define DotNet10RuntimeRegistrySubkey "SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.NETCore.App"
 
 ; Version is read from the build-version.txt file produced by the build.
@@ -83,6 +85,19 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 Type: filesandordirs; Name: "{app}"
 
 [Code]
+var
+  DownloadPage: TDownloadWizardPage;
+  DotNetRuntimeNeedsRestart: Boolean;
+
+procedure InitializeWizard;
+begin
+  DownloadPage := CreateDownloadPage(
+    'Downloading .NET 10 Runtime',
+    'Setup is downloading the required Microsoft .NET 10 Runtime.',
+    nil);
+  DownloadPage.ShowBaseNameInsteadOfUrl := True;
+end;
+
 function IsDotNet10RuntimeInstalled(): Boolean;
 var
   RuntimeVersions: TArrayOfString;
@@ -106,20 +121,105 @@ begin
   end;
 end;
 
-function InitializeSetup(): Boolean;
+function DownloadDotNet10RuntimeInstaller(): Boolean;
+var
+  Error: String;
 begin
-  Result := True;
-  if not IsDotNet10RuntimeInstalled() then
-  begin
-    MsgBox(
-      'Yagu requires the .NET 10.0 Runtime for Windows x64.' + #13#10 + #13#10 +
-      'The installer did not find a .NET 10 runtime on this computer.' + #13#10 + #13#10 +
-      'Download and install .NET 10.0 Runtime (v10.0.9) - Windows x64 Installer, then run this installer again:' + #13#10 +
-      '{#DotNet10RuntimeDownloadUrl}',
-      mbCriticalError,
-      MB_OK);
-    Result := False;
+  Result := False;
+  DownloadPage.Clear;
+  DownloadPage.Add('{#DotNet10RuntimeDownloadUrl}', '{#DotNet10RuntimeInstallerName}', '');
+  DownloadPage.Show;
+
+  try
+    try
+      DownloadPage.Download;
+      Result := True;
+    except
+      if DownloadPage.AbortedByUser then
+        Log('.NET 10 Runtime download aborted by user.')
+      else
+      begin
+        Error := Format('%s: %s', [DownloadPage.LastBaseNameOrUrl, GetExceptionMessage]);
+        SuppressibleMsgBox(AddPeriod(Error), mbCriticalError, MB_OK, IDOK);
+      end;
+    end;
+  finally
+    DownloadPage.Hide;
   end;
+end;
+
+function InstallDotNet10Runtime(): Boolean;
+var
+  ResultCode: Integer;
+  InstallerPath: String;
+  Params: String;
+begin
+  InstallerPath := ExpandConstant('{tmp}\{#DotNet10RuntimeInstallerName}');
+  if not FileExists(InstallerPath) then
+  begin
+    MsgBox('The .NET 10 Runtime installer was not downloaded:' + #13#10 + InstallerPath, mbError, MB_OK);
+    Result := False;
+    exit;
+  end;
+
+  WizardForm.StatusLabel.Caption := 'Installing .NET 10 Runtime...';
+  Params := '/install /passive /norestart';
+  Result := Exec(InstallerPath, Params, '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
+  if not Result then
+  begin
+    MsgBox('Could not start the .NET 10 Runtime installer.', mbError, MB_OK);
+    exit;
+  end;
+
+  if (ResultCode <> 0) and (ResultCode <> 3010) then
+  begin
+    MsgBox('.NET 10 Runtime installation failed with exit code ' + IntToStr(ResultCode) + '.', mbError, MB_OK);
+    Result := False;
+    exit;
+  end;
+
+  DotNetRuntimeNeedsRestart := ResultCode = 3010;
+  Result := IsDotNet10RuntimeInstalled();
+  if not Result then
+  begin
+    MsgBox('The .NET 10 Runtime installer completed, but setup still could not detect a .NET 10 x64 runtime.', mbError, MB_OK);
+  end;
+end;
+
+function EnsureDotNet10RuntimeInstalled(): Boolean;
+begin
+  if IsDotNet10RuntimeInstalled() then
+  begin
+    Result := True;
+    exit;
+  end;
+
+  if (not WizardSilent()) and
+     (MsgBox(
+       'Yagu requires the .NET 10.0 Runtime for Windows x64.' + #13#10 + #13#10 +
+       'Setup did not find a .NET 10 runtime on this computer.' + #13#10 + #13#10 +
+       'Download and install {#DotNet10RuntimeDisplayName} now?',
+       mbConfirmation,
+       MB_YESNO) <> IDYES) then
+  begin
+    Result := False;
+    exit;
+  end;
+
+  Result := DownloadDotNet10RuntimeInstaller() and InstallDotNet10Runtime();
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  if CurPageID = wpReady then
+    Result := EnsureDotNet10RuntimeInstalled()
+  else
+    Result := True;
+end;
+
+function NeedRestart(): Boolean;
+begin
+  Result := DotNetRuntimeNeedsRestart;
 end;
 
 function InstallWindowsAppRuntime(): Boolean;

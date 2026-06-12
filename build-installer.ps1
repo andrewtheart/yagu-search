@@ -119,9 +119,17 @@ if ($LASTEXITCODE -ne 0) {
 
 $installerExe = Join-Path $outputDir "YaguSetup-$version.exe"
 if (Test-Path -LiteralPath $installerExe) {
+  $rootInstallerExe = Join-Path $installerDir (Split-Path -Leaf $installerExe)
+  Get-ChildItem -LiteralPath $installerDir -Filter 'YaguSetup-*.exe' -File |
+    Where-Object { $_.FullName -ne $rootInstallerExe } |
+    Remove-Item -Force
+
+  Copy-Item -LiteralPath $installerExe -Destination $rootInstallerExe -Force
+
   Write-Host ""
   Write-Host "Installer created: $installerExe"
+  Write-Host "Latest installer copied to: $rootInstallerExe"
   Write-Host "File size: $([math]::Round((Get-Item $installerExe).Length / 1MB, 2)) MB"
 } else {
-  Write-Warning "Expected installer not found at $installerExe — check Inno Setup output above."
+  Write-Warning "Expected installer not found at $installerExe - check Inno Setup output above."
 }

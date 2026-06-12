@@ -314,9 +314,18 @@
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1" CornerRadius="8">
-            <StackPanel Spacing="10">
+            <Grid RowSpacing="10" ColumnSpacing="8">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
                 <!-- Directory bar -->
-                <Grid ColumnSpacing="8">
+                <Grid Grid.Row="0" Grid.ColumnSpan="2" ColumnSpacing="8">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
@@ -340,7 +349,7 @@
                 </Grid>
 
                 <!-- Search bar -->
-                <Grid ColumnSpacing="8">
+                <Grid Grid.Row="1" Grid.ColumnSpan="2" ColumnSpacing="8">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
@@ -412,6 +421,7 @@
 
                 <!-- Advanced options (collapsed by default) -->
                 <Expander x:Name="AdvancedOptionsExpander"
+                          Grid.Row="2" Grid.Column="0"
                           IsExpanded="False" HorizontalAlignment="Stretch"
                           HorizontalContentAlignment="Stretch" Padding="0"
                           MinHeight="0" FontSize="12"
@@ -747,7 +757,24 @@
                     </Grid>
                     </Border>
                 </Expander>
-            </StackPanel>
+            <Button x:Name="PreSearchTerminalChevron"
+                    Grid.Row="2"
+                    Grid.Column="1"
+                    Click="OnToggleTerminalPane"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Bottom"
+                    Width="36" Height="32" MinWidth="0" MinHeight="0"
+                    Padding="0"
+                    Background="Transparent"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    ToolTipService.ToolTip="Toggle embedded terminal">
+                <FontIcon x:Name="PreSearchTerminalChevronIcon"
+                          FontFamily="{StaticResource SymbolThemeFontFamily}"
+                          Glyph="&#xE70D;" FontSize="12" />
+            </Button>
+            </Grid>
         </Border>
 
         <!-- Status / progress -->
@@ -1652,25 +1679,6 @@
                           Glyph="&#xE70D;" FontSize="12" />
             </Button>
         </Grid>
-
-            <Button x:Name="PreSearchTerminalChevron"
-                Grid.RowSpan="7"
-                Click="OnToggleTerminalPane"
-                HorizontalAlignment="Right"
-                VerticalAlignment="Bottom"
-                Width="36" Height="32" MinWidth="0" MinHeight="0"
-                Padding="0"
-                Margin="0,0,20,16"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="6"
-                Canvas.ZIndex="210"
-                ToolTipService.ToolTip="Toggle embedded terminal">
-                <FontIcon x:Name="PreSearchTerminalChevronIcon"
-                      FontFamily="{StaticResource SymbolThemeFontFamily}"
-                      Glyph="&#xE70D;" FontSize="12" />
-            </Button>
 
         <!-- Generated CLI command overlay -->
         <Border x:Name="GeneratedCliCommandOverlay"

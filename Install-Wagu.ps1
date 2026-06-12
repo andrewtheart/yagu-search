@@ -137,7 +137,8 @@ function Copy-InstallFile {
 function Set-InstallRegistryEntry {
   param([string]$Path)
 
-  $isUpgrade = (Get-RegisteredInstallDirectory) -ne $null
+  $registeredInstallDirectory = Get-RegisteredInstallDirectory
+  $isUpgrade = $null -ne $registeredInstallDirectory
   New-Item -Path $installRegistryPath -Force | Out-Null
   Set-ItemProperty -Path $installRegistryPath -Name $installRegistryValueName -Value $Path
   Set-ItemProperty -Path $installRegistryPath -Name 'DisplayName' -Value 'Yagu'
@@ -205,7 +206,7 @@ try {
   Stop-RunningYagu -InstallPath $installPath
 
   Write-Host "Building Yagu in Release mode..."
-  & dotnet publish $projectPath --configuration Release --output $tempPublishDir --nologo
+  & dotnet publish $projectPath --configuration Release --output $tempPublishDir --nologo -p:BuildInstallerOnPublish=false
   if ($LASTEXITCODE -ne 0) {
     throw "dotnet publish failed with exit code $LASTEXITCODE"
   }
