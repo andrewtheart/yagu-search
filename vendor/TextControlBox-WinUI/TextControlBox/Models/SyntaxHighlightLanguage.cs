@@ -1,7 +1,5 @@
 ﻿using Newtonsoft.Json;
-using System.Text.RegularExpressions;
 using TextControlBoxNS.Models;
-using Windows.Devices.Power;
 
 namespace TextControlBoxNS;
 

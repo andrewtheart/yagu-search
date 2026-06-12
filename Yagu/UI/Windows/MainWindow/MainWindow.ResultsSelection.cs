@@ -1,25 +1,12 @@
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
-using System.IO;
-using System.Linq;
-using System.Net.Http;
-using System.Security.Principal;
-using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.Win32;
-using Windows.ApplicationModel.DataTransfer;
 using Windows.System;
-using Yagu.Helpers;
 using Yagu.Models;
 using Yagu.Services;
 using Yagu.ViewModels;
@@ -587,7 +574,7 @@ public sealed partial class MainWindow
         // Determine the last rendered line to avoid backwards line numbers when appending forward.
         int lastRenderedLine = isHighlight ? GetSectionLastRenderedLine(section) : 0;
         int firstRenderedLine = isHighlight && section.Blocks.Count > 0 ? GetSectionFirstRenderedLine(section) : 0;
-        bool truncatePreviewLines = ShouldTruncatePreviewLines();
+        bool truncatePreviewLines = ShouldTruncateOverflowPreviewLines();
 
         var lines = GetPreviewLines(result, allLines, previewLines, fullFile: false);
 
@@ -624,7 +611,8 @@ public sealed partial class MainWindow
                     out int addedParagraphs,
                     out int matchEntriesAdded,
                     truncate: truncatePreviewLines,
-                    continuationGutter: true);
+                    continuationGutter: true,
+                    maxParagraphs: MaxPreviewBlocksPerExpandChunk);
                 MoveAppendedPreviewLineBesideExistingLine(
                     section,
                     result.LineNumber,
@@ -669,7 +657,8 @@ public sealed partial class MainWindow
                     foreach (var (line, lineNum) in lines)
                     {
                         bool isMatchLine = lineNum == result.LineNumber;
-                        AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, result, rx, truncate: truncatePreviewLines, _matchParagraphs, sectionNav, out _);
+                        AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, result, rx, truncate: truncatePreviewLines, _matchParagraphs, sectionNav, out _,
+                            maxParagraphs: MaxPreviewBlocksPerExpandChunk);
                     }
 
                     // Add gap indicator between new and old content.
@@ -708,7 +697,8 @@ public sealed partial class MainWindow
             foreach (var (line, lineNum) in lines)
             {
                 bool isMatchLine = lineNum == result.LineNumber;
-                AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, result, rx, truncate: truncatePreviewLines, _matchParagraphs, sectionNav, out _);
+                AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, result, rx, truncate: truncatePreviewLines, _matchParagraphs, sectionNav, out _,
+                    maxParagraphs: MaxPreviewBlocksPerExpandChunk);
             }
         }
 

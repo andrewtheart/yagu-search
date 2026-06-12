@@ -1,16 +1,10 @@
-using System;
-using System.Collections.Generic;
 using System.Runtime.InteropServices;
-using System.Threading.Tasks;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
-using Windows.Graphics;
 using Yagu.Helpers;
-using Yagu.Services;
 
 namespace Yagu;
 
@@ -43,11 +37,9 @@ internal sealed record YaguDialogOptions
     public int Height { get; init; } = 300;
     public double MinContentHeight { get; init; }
     public double MaxContentHeight { get; init; } = 520;
-    public bool IsResizable { get; init; } = true;
+    public bool IsResizable { get; init; }
     public bool ShowTitle { get; init; } = true;
     public bool ShowTitleBar { get; init; } = true;
-    /// <summary>When true, the dialog auto-sizes its height to fit content without scrolling.</summary>
-    public bool SizeToContent { get; init; } = true;
 }
 
 internal sealed class YaguDialog : Window
@@ -73,20 +65,7 @@ internal sealed class YaguDialog : Window
         var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
         var appWindow = AppWindow.GetFromWindowId(windowId);
         appWindow.Title = Title;
-
-        int finalHeight = options.Height;
-        if (options.SizeToContent && Content is FrameworkElement rootElement)
-        {
-            // Measure content at available width minus window border chrome (~16px)
-            double availableWidth = Math.Max(options.Width - 16, 200);
-            rootElement.Measure(new Windows.Foundation.Size(availableWidth, 2000));
-            double desiredHeight = rootElement.DesiredSize.Height;
-            // Add space for title bar chrome (~40px) and bottom border (~8px)
-            int measured = (int)Math.Ceiling(desiredHeight) + 48;
-            finalHeight = Math.Max(measured, 180); // minimum reasonable height
-        }
-
-        WindowForegroundHelper.CenterWindowOverOwner(appWindow, _ownerHwnd, options.Width, finalHeight);
+        WindowForegroundHelper.CenterWindowOverOwner(appWindow, _ownerHwnd, options.Width, options.Height);
         TryConfigurePresenter(appWindow, options.IsResizable, options.ShowTitleBar);
         TrySetIcon(appWindow);
     }
@@ -130,21 +109,13 @@ internal sealed class YaguDialog : Window
         return _completion.Task;
     }
 
-    private static ElementTheme ResolveDialogTheme(ElementTheme requested)
-    {
-        if (requested != ElementTheme.Default)
-            return requested;
-        return AppThemeService.ToElementTheme(AppThemeService.CurrentThemeModeIndex);
-    }
-
     private Grid BuildContent(YaguDialogOptions options)
     {
-        var effectiveTheme = ResolveDialogTheme(options.RequestedTheme);
         var root = new Grid
         {
             Padding = new Thickness(28, 24, 28, 24),
             Background = ResourceBrush("ApplicationPageBackgroundThemeBrush", ColorHelper.FromArgb(0xFF, 0x20, 0x20, 0x20)),
-            RequestedTheme = effectiveTheme,
+            RequestedTheme = options.RequestedTheme,
         };
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });

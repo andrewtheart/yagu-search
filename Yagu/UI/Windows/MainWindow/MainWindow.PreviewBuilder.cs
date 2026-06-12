@@ -1,12 +1,6 @@
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
@@ -126,9 +120,12 @@ public sealed partial class MainWindow
     private bool ShouldTruncatePreviewLines()
         => ViewModel.PreviewWrapModeIndex != (int)Models.PreviewWrapMode.NoWrap;
 
-    private bool ShouldTruncateOverflowPreviewLines()
+    private bool ShouldTruncateInitialPreviewLines()
         => ShouldTruncatePreviewLines()
            || ViewModel.PreviewWrapModeIndex == (int)Models.PreviewWrapMode.NoWrap;
+
+    private bool ShouldTruncateOverflowPreviewLines()
+        => ShouldTruncateInitialPreviewLines();
 
     private int GetEffectiveSegmentSize()
         => ViewModel.PreviewWrapModeIndex == (int)Models.PreviewWrapMode.NoWrap
@@ -696,7 +693,7 @@ public sealed partial class MainWindow
         var buildSw = System.Diagnostics.Stopwatch.StartNew();
         bool truncatePreviewLines = ViewModel.IsSearching
             ? ShouldTruncateOverflowPreviewLines()
-            : ShouldTruncatePreviewLines();
+            : ShouldTruncateInitialPreviewLines();
         int parasBuilt = 0;
         int renderedResults = 0;
         int startingBlocks = section.Blocks.Count;
@@ -752,7 +749,8 @@ public sealed partial class MainWindow
                 bool isMatchLine = !isFileNameOnlyPreview && lineNum == r.LineNumber;
                 _sectionMatchNavs.TryGetValue(section, out var sn);
                 AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, isFileNameOnlyPreview ? null : rx, truncate: !isFileNameOnlyPreview && truncatePreviewLines,
-                    isMatchLine ? _matchParagraphs : null, sn, out int addedParagraphs);
+                    isMatchLine ? _matchParagraphs : null, sn, out int addedParagraphs,
+                    maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks));
                 parasBuilt += addedParagraphs;
             }
 
@@ -799,7 +797,7 @@ public sealed partial class MainWindow
         var buildSw = System.Diagnostics.Stopwatch.StartNew();
         bool truncatePreviewLines = ViewModel.IsSearching
             ? ShouldTruncateOverflowPreviewLines()
-            : ShouldTruncatePreviewLines();
+            : ShouldTruncateInitialPreviewLines();
         int parasBuilt = 0;
         int parasSinceYield = 0;
         int yieldCount = 0;
@@ -848,7 +846,8 @@ public sealed partial class MainWindow
                             out addedParagraphs,
                             out _,
                             truncate: truncatePreviewLines,
-                            targetOnlyMatchEntry: true);
+                            targetOnlyMatchEntry: true,
+                            maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks));
                     }
                     else
                     {
@@ -862,7 +861,8 @@ public sealed partial class MainWindow
                             truncate: truncatePreviewLines,
                             null,
                             singleLineSectionNav,
-                            out addedParagraphs);
+                            out addedParagraphs,
+                            maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks));
                     }
                     lastRenderedLine1 = lineNum;
                     parasBuilt += addedParagraphs;
@@ -917,7 +917,8 @@ public sealed partial class MainWindow
                     bool isMatchLine = matchByLine.TryGetValue(lineNum, out var matchResult);
                     matchResult ??= cappedResults[0];
                     _sectionMatchNavs.TryGetValue(section, out var sn);
-                    AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatchLine, matchResult, rx, truncate: truncatePreviewLines, _matchParagraphs, sn, out int addedParagraphs);
+                    AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatchLine, matchResult, rx, truncate: truncatePreviewLines, _matchParagraphs, sn, out int addedParagraphs,
+                        maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks));
                     lastRenderedLine1 = lineNum;
                     parasBuilt += addedParagraphs;
                     parasSinceYield += addedParagraphs;
@@ -948,7 +949,8 @@ public sealed partial class MainWindow
                     bool isMatchLine = matchLineNums.Contains(lineNum);
                     _sectionMatchNavs.TryGetValue(section, out var sn);
                     AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: truncatePreviewLines,
-                        lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs);
+                        lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs,
+                        maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks));
                     parasBuilt += addedParagraphs;
                     parasSinceYield += addedParagraphs;
                     if (parasSinceYield >= BuildHighlightYieldEvery)
@@ -1458,7 +1460,7 @@ public sealed partial class MainWindow
             : BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
 
         int lineCount = 0;
-        bool truncatePreviewLines = !fullFile && ShouldTruncatePreviewLines();
+        bool truncatePreviewLines = !fullFile && ShouldTruncateInitialPreviewLines();
         var lines = GetPreviewLines(r, allLines, ViewModel.PreviewContextLines, fullFile);
         int maxLineLen = 0;
         foreach (var (l, _) in lines)
@@ -2568,7 +2570,8 @@ public sealed partial class MainWindow
         bool truncate,
         List<(RichTextBlock block, Paragraph para, int matchInPara)>? matchParagraphs,
         SectionMatchNav? sectionNav,
-        out int paragraphsAdded)
+        out int paragraphsAdded,
+        int? maxParagraphs = null)
     {
         line ??= string.Empty;
         var window = truncate
@@ -2584,6 +2587,9 @@ public sealed partial class MainWindow
 
         foreach (var segment in EnumeratePreviewLineLayoutSegments(window.Text))
         {
+            if (maxParagraphs is int limit && paragraphsAdded >= limit)
+                break;
+
             bool isContinuation = firstParagraph is not null;
             var para = MakePreviewParagraph(segment, lineNum, isMatchLine, result, rx, truncate: false, continuationGutter: isContinuation, gutterBlock: gutterBlock, truncationState: isContinuation ? null : expansionState);
             section.Blocks.Add(para);
@@ -2782,7 +2788,8 @@ public sealed partial class MainWindow
         out int matchEntriesAdded,
         bool truncate = true,
         bool continuationGutter = false,
-        bool targetOnlyMatchEntry = false)
+        bool targetOnlyMatchEntry = false,
+        int? maxParagraphs = null)
     {
         line ??= string.Empty;
         var window = truncate
@@ -2798,6 +2805,9 @@ public sealed partial class MainWindow
 
         foreach (var segment in EnumeratePreviewLineLayoutSegments(window.Text))
         {
+            if (maxParagraphs is int limit && paragraphsAdded >= limit)
+                break;
+
             bool isContinuation = firstParagraph is not null || continuationGutter;
             var para = MakePreviewParagraph(segment, lineNum, isMatchLine: true, result, rx, truncate: false, continuationGutter: isContinuation, gutterBlock: gutterBlock, truncationState: isContinuation ? null : expansionState);
             section.Blocks.Add(para);
@@ -3054,7 +3064,8 @@ public sealed partial class MainWindow
                     out int matchEntriesAdded,
                     truncate: truncatePreviewLines,
                     continuationGutter: true,
-                    targetOnlyMatchEntry: true);
+                    targetOnlyMatchEntry: true,
+                    maxParagraphs: maxAdditionalBlocks - paragraphsAdded);
                 MoveAppendedPreviewLineBesideExistingLine(
                     section,
                     result.LineNumber,
@@ -3112,7 +3123,8 @@ public sealed partial class MainWindow
                     truncate: truncatePreviewLines,
                     _matchParagraphs,
                     sectionNav,
-                    out int addedParagraphs);
+                    out int addedParagraphs,
+                    maxParagraphs: maxAdditionalBlocks - paragraphsAdded);
 
                 paragraphsAdded += addedParagraphs;
                 if (isMatchLine)

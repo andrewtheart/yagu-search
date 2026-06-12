@@ -183,6 +183,8 @@ public sealed class AppSettings
     public bool HasShownCloseToTrayNotification { get; set; }
     /// <summary>When true, maximize the window on startup. Default false.</summary>
     public bool MaximizeOnStartup { get; set; }
+    /// <summary>Advanced Options collapsed drawer width. 0 = full width (default), 1 = compact when collapsed.</summary>
+    public int AdvancedOptionsCollapsedWidthModeIndex { get; set; }
     /// <summary>Optional default working directory for the embedded terminal. Empty uses the Yagu launch directory.</summary>
     public string TerminalDefaultWorkingDirectory { get; set; } = string.Empty;
     /// <summary>When true (default), checking a file header checkbox immediately adds it to the preview pane.</summary>

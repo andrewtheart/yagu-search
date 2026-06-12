@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Text.RegularExpressions;
 using TextControlBoxNS.Core.Selection;
 using TextControlBoxNS.Core.Text;
 using TextControlBoxNS.Extensions;

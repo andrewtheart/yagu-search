@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
-using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
@@ -213,6 +212,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         StartInLauncherMode = _settings.StartInLauncherMode;
         CloseToTray = _settings.CloseToTray;
         MaximizeOnStartup = _settings.MaximizeOnStartup;
+        AdvancedOptionsCollapsedWidthModeIndex = NormalizeAdvancedOptionsCollapsedWidthModeIndex(_settings.AdvancedOptionsCollapsedWidthModeIndex);
         TerminalDefaultWorkingDirectory = _settings.TerminalDefaultWorkingDirectory ?? string.Empty;
         FileHeaderCheckAddsToPreview = _settings.FileHeaderCheckAddsToPreview;
         MatchLineCheckAddsToPreview = _settings.MatchLineCheckAddsToPreview;
@@ -252,6 +252,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             ? (int)PreviewWrapMode.Wrap
             : (int)PreviewWrapMode.NoWrap;
     }
+
+    private static int NormalizeAdvancedOptionsCollapsedWidthModeIndex(int modeIndex) =>
+        modeIndex == 1 ? 1 : 0;
 
     public void Dispose()
     {
@@ -684,6 +687,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial bool StartInLauncherMode { get; set; } = true;
     [ObservableProperty] public partial bool CloseToTray { get; set; } = true;
     [ObservableProperty] public partial bool MaximizeOnStartup { get; set; }
+    [ObservableProperty] public partial int AdvancedOptionsCollapsedWidthModeIndex { get; set; }
     [ObservableProperty] public partial string TerminalDefaultWorkingDirectory { get; set; } = string.Empty;
     [ObservableProperty] public partial bool FileHeaderCheckAddsToPreview { get; set; } = true;
     [ObservableProperty] public partial bool MatchLineCheckAddsToPreview { get; set; } = true;
@@ -2442,6 +2446,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.StartInLauncherMode = StartInLauncherMode;
         _settings.CloseToTray = CloseToTray;
         _settings.MaximizeOnStartup = MaximizeOnStartup;
+        _settings.AdvancedOptionsCollapsedWidthModeIndex = NormalizeAdvancedOptionsCollapsedWidthModeIndex(AdvancedOptionsCollapsedWidthModeIndex);
         _settings.TerminalDefaultWorkingDirectory = string.IsNullOrWhiteSpace(TerminalDefaultWorkingDirectory)
             ? string.Empty
             : TerminalDefaultWorkingDirectory.Trim();
@@ -2689,12 +2694,24 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 readProgress,
                 cancellationToken).ConfigureAwait(false);
 
-            var loadedStatus = $"Loaded session: {loadedCount:N0} match(es) from {fileName}";
             void finish()
             {
+                int actualFileCount = _resultCollection.AllGroups.Count;
+                var displaySummary = new SearchSummary(
+                    TotalFiles: header.Stats.FilesScanned,
+                    FilesScanned: header.Stats.FilesScanned,
+                    FilesSkipped: 0,
+                    FilesWithMatches: actualFileCount,
+                    TotalMatches: loadedCount,
+                    BytesScanned: header.Stats.BytesScanned,
+                    Elapsed: header.Stats.Elapsed,
+                    Cancelled: false,
+                    Truncated: false,
+                    Degraded: false,
+                    FallbackReason: null);
+                StatusText = BuildCompletionStatus(displaySummary, header.Stats.Elapsed);
                 ApplySortAndFilter();
                 NotifyResultAvailabilityChanged();
-                StatusText = loadedStatus;
                 OnPropertyChanged(nameof(HasResults));
                 OnPropertyChanged(nameof(ShowEmptyState));
             }

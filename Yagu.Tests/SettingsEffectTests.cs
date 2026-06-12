@@ -1,6 +1,5 @@
 using System.Text;
 using Yagu.Models;
-using Yagu.Native;
 using Yagu.Services;
 
 namespace Yagu.Tests;
@@ -823,6 +822,7 @@ public sealed class SettingsEffectTests : IDisposable
             AdminProtectedPathSegments = @"\test\path",
             BackupBeforeSave = false,
             WindowFocusBehavior = 2,
+            AdvancedOptionsCollapsedWidthModeIndex = 1,
             PreviewEditorMaxSizeMB = 64,
             PreviewEditorMaxTextLength = 50_000_000,
             PreviewEditorMaxLineLength = 5_000_000,
@@ -860,6 +860,7 @@ public sealed class SettingsEffectTests : IDisposable
         Assert.Equal(original.AdminProtectedPathSegments, loaded.AdminProtectedPathSegments);
         Assert.Equal(original.BackupBeforeSave, loaded.BackupBeforeSave);
         Assert.Equal(original.WindowFocusBehavior, loaded.WindowFocusBehavior);
+        Assert.Equal(original.AdvancedOptionsCollapsedWidthModeIndex, loaded.AdvancedOptionsCollapsedWidthModeIndex);
         Assert.Equal(original.PreviewEditorMaxSizeMB, loaded.PreviewEditorMaxSizeMB);
         Assert.Equal(original.PreviewEditorMaxTextLength, loaded.PreviewEditorMaxTextLength);
         Assert.Equal(original.PreviewEditorMaxLineLength, loaded.PreviewEditorMaxLineLength);
@@ -920,6 +921,7 @@ public sealed class SettingsEffectTests : IDisposable
         Assert.Equal(75, s.MemoryPressurePercent);
         Assert.Equal(4096, s.SdkChannelBufferSize);
         Assert.Equal(0, s.MaxMatchesPerFile);
+        Assert.Equal(0, s.AdvancedOptionsCollapsedWidthModeIndex);
         Assert.True(s.BackupBeforeSave);
         Assert.True(s.ExcludeAdminProtectedPaths);
         Assert.False(s.GlobalHotkeyEnabled);

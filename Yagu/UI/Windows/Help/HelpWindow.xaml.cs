@@ -1,14 +1,10 @@
-using System;
-using System.IO;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.Web.WebView2.Core;
-using Windows.Graphics;
 using Yagu.Helpers;
 
 namespace Yagu;

@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using TextControlBoxNS;
-using TextControlBoxNS.Models;
 
 internal sealed class CsvColumnHighlightRule : IHighlightRule
 {

@@ -1,4 +1,3 @@
-using System.Diagnostics.CodeAnalysis;
 using Yagu.Models;
 
 namespace Yagu.Helpers;

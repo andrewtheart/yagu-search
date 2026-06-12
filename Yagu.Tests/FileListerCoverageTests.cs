@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using Yagu.Native;
 using Yagu.Services;
-using static Yagu.Services.FileLister;
 
 namespace Yagu.Tests;
 

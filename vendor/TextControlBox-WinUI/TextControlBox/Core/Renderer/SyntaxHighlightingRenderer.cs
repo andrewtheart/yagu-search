@@ -4,7 +4,6 @@ using Newtonsoft.Json;
 using System;
 using TextControlBoxNS.Models;
 using Windows.UI.Text;
-using static TextControlBoxNS.Core.Text.TextManager;
 
 namespace TextControlBoxNS.Core.Renderer;
 

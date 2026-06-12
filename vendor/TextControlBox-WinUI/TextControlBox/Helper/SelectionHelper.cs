@@ -1,5 +1,4 @@
 ﻿using Microsoft.Graphics.Canvas.Text;
-using System.Diagnostics;
 using TextControlBoxNS.Core.Renderer;
 using TextControlBoxNS.Core.Selection;
 using TextControlBoxNS.Core.Text;

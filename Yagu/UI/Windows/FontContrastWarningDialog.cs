@@ -1,4 +1,3 @@
-using System.Threading;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -114,9 +113,8 @@ internal static class FontContrastWarningDialogView
                 DefaultButton = YaguDialogDefaultButton.Primary,
                 RequestedTheme = ToElementTheme(issue.Theme),
                 Width = 760,
-                Height = 780,
-                SizeToContent = false,
-                ShowTitleBar = false,
+                Height = 720,
+                MaxContentHeight = 560,
                 IsResizable = true,
             });
     }
@@ -245,6 +243,7 @@ internal static class FontContrastWarningDialogView
         {
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            MaxHeight = 520,
             Content = body,
         };
     }

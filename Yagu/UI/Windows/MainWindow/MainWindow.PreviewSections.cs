@@ -1,24 +1,11 @@
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Net.Http;
-using System.Security.Principal;
-using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.Win32;
-using Windows.ApplicationModel.DataTransfer;
 using Windows.System;
-using Yagu.Helpers;
 using Yagu.Models;
 using Yagu.Services;
 namespace Yagu;
@@ -102,7 +89,7 @@ public sealed partial class MainWindow
     private bool _previewViewChangedHooked;
     private bool _viewportMaterializePending;
     private static readonly Windows.UI.Color s_defaultSelectedPreviewContentBackground = Windows.UI.Color.FromArgb(0xFF, 0x00, 0x00, 0x00);
-    private static readonly Windows.UI.Color s_defaultUnselectedPreviewContentBackground = Windows.UI.Color.FromArgb(0xFF, 0x1E, 0x1E, 0x1E);
+    private static readonly Windows.UI.Color s_defaultUnselectedPreviewContentBackground = Windows.UI.Color.FromArgb(0x00, 0x00, 0x00, 0x00);
 
     // Tracks remaining (un-rendered) matches for sections that were truncated to
     // avoid UI freezes on huge files (see MaxMatchesPerSection). Each click of
@@ -1233,7 +1220,8 @@ public sealed partial class MainWindow
                         out int addedParagraphs, out _,
                         truncate: truncatePreviewLines,
                         continuationGutter: true,
-                        targetOnlyMatchEntry: true);
+                        targetOnlyMatchEntry: true,
+                        maxParagraphs: MaxPreviewBlocksPerExpandChunk - blocksAdded);
                     MoveAppendedPreviewLineBesideExistingLine(
                         section,
                         r.LineNumber,
@@ -1281,7 +1269,8 @@ public sealed partial class MainWindow
 
                     bool isMatchLine = matchLineNums.Contains(lineNum);
                     AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, ov.Rx, truncate: truncatePreviewLines,
-                        lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs);
+                        lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs,
+                        maxParagraphs: MaxPreviewBlocksPerExpandChunk - blocksAdded);
                     blocksAdded += addedParagraphs;
                 }
                 consumed++;

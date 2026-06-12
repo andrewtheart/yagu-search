@@ -8,9 +8,7 @@
 #define MyAppExeName "Yagu.exe"
 #define MyAppPublisher "Yagu"
 #define MyAppURL "https://github.com/yagu"
-#define DotNetRuntimeArchitecture "x64"
-#define DotNet10RuntimeDownloadUrl "https://dotnet.microsoft.com/download/dotnet/10.0"
-#define DotNet10RuntimeDirectUrl "https://aka.ms/dotnet/10.0/dotnet-runtime-win-" + DotNetRuntimeArchitecture + ".exe"
+#define DotNet10RuntimeDownloadUrl "https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-10.0.9-windows-x64-installer?cid=getdotnetcore"
 #define DotNet10RuntimeRegistrySubkey "SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.NETCore.App"
 
 ; Version is read from the build-version.txt file produced by the build.
@@ -40,8 +38,6 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-; The staged app, native search DLL, .NET runtime check, and Windows App Runtime prerequisite are x64.
-; Intel/AMD 64-bit CPUs use this same x64 runtime; 32-bit x86 Windows is not a supported target for this installer.
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
@@ -110,178 +106,19 @@ begin
   end;
 end;
 
-function ShellExecUrl(const Url: String): Boolean;
-var
-  ErrorCode: Integer;
-begin
-  Result := ShellExec('open', Url, '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode);
-end;
-
-function DownloadAndInstallDotNetRuntime(): Boolean;
-var
-  TempDir, TempFile, DoneFlag: String;
-  ResultCode: Integer;
-  DownloadCmd: String;
-  ProgressForm: TSetupForm;
-  ProgressLabel: TNewStaticText;
-  ProgressBar: TNewProgressBar;
-  WaitCount: Integer;
-  FileSize: Int64;
-  Pct: Integer;
-  ExpectedSize: Int64;
-begin
-  Result := False;
-  TempDir := GetTempDir;
-  TempFile := TempDir + 'dotnet-runtime-10.0-win-{#DotNetRuntimeArchitecture}.exe';
-  DoneFlag := TempFile + '.done';
-  ExpectedSize := 30500000; { ~30 MB .NET 10 runtime installer }
-
-  { Delete stale files from previous attempts }
-  if FileExists(TempFile) then
-    DeleteFile(TempFile);
-  if FileExists(DoneFlag) then
-    DeleteFile(DoneFlag);
-
-  { Create a progress dialog }
-  ProgressForm := CreateCustomForm(ScaleX(420), ScaleY(110), False, False);
-  ProgressForm.Caption := 'Downloading .NET 10.0 Runtime';
-  ProgressForm.Position := poScreenCenter;
-
-  ProgressLabel := TNewStaticText.Create(ProgressForm);
-  ProgressLabel.Parent := ProgressForm;
-  ProgressLabel.Left := ScaleX(20);
-  ProgressLabel.Top := ScaleY(20);
-  ProgressLabel.Caption := 'Downloading .NET 10.0 Runtime... 0%';
-  ProgressLabel.AutoSize := True;
-
-  ProgressBar := TNewProgressBar.Create(ProgressForm);
-  ProgressBar.Parent := ProgressForm;
-  ProgressBar.Left := ScaleX(20);
-  ProgressBar.Top := ScaleY(50);
-  ProgressBar.Width := ScaleX(380);
-  ProgressBar.Height := ScaleY(20);
-  ProgressBar.Min := 0;
-  ProgressBar.Max := 100;
-  ProgressBar.Position := 0;
-
-  ProgressForm.Show();
-  ProgressForm.Refresh();
-
-  { Start download in background using streaming .NET WebClient so the file grows on disk }
-  DownloadCmd := '/c start /min "" powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "' +
-    '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ' +
-    '$wc = New-Object System.Net.WebClient; ' +
-    '$wc.DownloadFile(''{#DotNet10RuntimeDirectUrl}'', ''' + TempFile + '''); ' +
-    'New-Item -Path ''' + DoneFlag + ''' -ItemType File -Force | Out-Null"';
-
-  if not Exec(ExpandConstant('{cmd}'), DownloadCmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
-  begin
-    ProgressForm.Close();
-    ProgressForm.Free();
-    MsgBox('Failed to launch download process.', mbError, MB_OK);
-    exit;
-  end;
-
-  { Poll for completion, updating progress bar based on file size }
-  WaitCount := 0;
-  while (not FileExists(DoneFlag)) and (WaitCount < 360) do
-  begin
-    Sleep(500);
-    if FileExists(TempFile) then
-    begin
-      if FileSize64(TempFile, FileSize) and (FileSize > 0) then
-      begin
-        Pct := FileSize * 100 div ExpectedSize;
-        if Pct > 99 then
-          Pct := 99;
-        ProgressBar.Position := Pct;
-        ProgressLabel.Caption := 'Downloading .NET 10.0 Runtime... ' + IntToStr(Pct) + '%';
-      end;
-    end;
-    ProgressForm.Refresh();
-    WaitCount := WaitCount + 1;
-  end;
-
-  ProgressBar.Position := 100;
-  ProgressLabel.Caption := 'Download complete.';
-  ProgressForm.Refresh();
-
-  ProgressForm.Close();
-  ProgressForm.Free();
-
-  if not FileExists(TempFile) then
-  begin
-    MsgBox('Download failed or timed out.' + #13#10 +
-      'Please download and install the .NET 10 Runtime manually.', mbError, MB_OK);
-    exit;
-  end;
-
-  { Clean up done flag }
-  DeleteFile(DoneFlag);
-
-  { Run the .NET installer with UI so the user can see progress }
-  if not Exec(TempFile, '/install /norestart', '', SW_SHOWNORMAL, ewWaitUntilTerminated, ResultCode) then
-  begin
-    MsgBox('Failed to launch the .NET Runtime installer.', mbError, MB_OK);
-    exit;
-  end;
-
-  if ResultCode = 0 then
-    Result := True
-  else if ResultCode = 3010 then
-    Result := True  { Success but reboot required }
-  else
-    MsgBox('.NET Runtime installer exited with code ' + IntToStr(ResultCode) + '.', mbError, MB_OK);
-
-  { Clean up downloaded file }
-  DeleteFile(TempFile);
-end;
-
 function InitializeSetup(): Boolean;
-var
-  Choice: Integer;
-  ButtonLabels: TArrayOfString;
 begin
   Result := True;
   if not IsDotNet10RuntimeInstalled() then
   begin
-    SetArrayLength(ButtonLabels, 3);
-    ButtonLabels[0] := 'Download && Install Now';
-    ButtonLabels[1] := 'Open Download Page';
-    ButtonLabels[2] := 'Cancel';
-
-    Choice := TaskDialogMsgBox(
-      'Missing .NET 10.0 Runtime',
-      'Yagu requires the .NET 10.0 Runtime for Windows {#DotNetRuntimeArchitecture}.' + #13#10 + #13#10 +
+    MsgBox(
+      'Yagu requires the .NET 10.0 Runtime for Windows x64.' + #13#10 + #13#10 +
       'The installer did not find a .NET 10 runtime on this computer.' + #13#10 + #13#10 +
-      'Intel and AMD 64-bit processors both use the x64 runtime; 32-bit x86 Windows is not supported by this installer.' + #13#10 + #13#10 +
-      'Choose an option below to install it, or cancel to exit.',
+      'Download and install .NET 10.0 Runtime (v10.0.9) - Windows x64 Installer, then run this installer again:' + #13#10 +
+      '{#DotNet10RuntimeDownloadUrl}',
       mbCriticalError,
-      MB_YESNOCANCEL, ButtonLabels, 0);
-
-    case Choice of
-      IDYES:
-        begin
-          DownloadAndInstallDotNetRuntime();
-          { Re-check after install attempt }
-          if IsDotNet10RuntimeInstalled() then
-            Result := True
-          else
-          begin
-            MsgBox('.NET 10 Runtime installation did not complete successfully.' + #13#10 +
-              'Please install it manually and run this installer again.', mbError, MB_OK);
-            Result := False;
-          end;
-        end;
-      IDNO:
-        begin
-          ShellExecUrl('{#DotNet10RuntimeDownloadUrl}');
-          MsgBox('After installing the .NET 10 Runtime, run this installer again.', mbInformation, MB_OK);
-          Result := False;
-        end;
-    else
-      Result := False;
-    end;
+      MB_OK);
+    Result := False;
   end;
 end;
 

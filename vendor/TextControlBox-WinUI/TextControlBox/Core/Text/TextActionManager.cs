@@ -500,8 +500,14 @@ namespace TextControlBoxNS.Core.Text
             }
 
             eventsManager.CallTextChanged();
-            scrollManager.ScrollLineIntoViewIfOutside(cursorManager.LineNumber, false);
-            
+            // Use the visual-row-aware scroll (matching Backspace/Delete/Undo/Redo/AddNewLine)
+            // so the caret's wrapped row is brought into view after typing. Line-granularity
+            // ScrollLineIntoViewIfOutside never scrolls within a single long wrapped/virtualized
+            // line (the line is always "in view"), which left the caret outside the rendered
+            // slice (renderedCharacterPos < 0 -> caret not drawn) so subsequent keystrokes
+            // landed off-screen.
+            scrollManager.UpdateScrollToShowCursor(false);
+
             canvasUpdateManager.UpdateAll();
         }
 

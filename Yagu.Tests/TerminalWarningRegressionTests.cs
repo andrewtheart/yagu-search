@@ -27,21 +27,6 @@ public sealed class TerminalWarningRegressionTests
         Assert.DoesNotContain("sb.Append($\"\\\\u{(int)c:X4}\");", source);
     }
 
-    [Fact]
-    public void TypedClsCommand_ClearsTerminalScrollback()
-    {
-        string terminalSource = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
-        string terminalHtml = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Assets", "terminal.html"));
-
-        Assert.Contains("TrackTerminalInputForClearCommand(data)", terminalSource);
-        Assert.Contains("IsTerminalClearCommand", terminalSource);
-        Assert.Contains("ScheduleTerminalScrollbackClear();", terminalSource);
-        Assert.Contains("PostTerminalClearToWebView();", terminalSource);
-        Assert.Contains("PostWebMessageAsJson(\"{\\\"type\\\":\\\"clear\\\"}\")", terminalSource);
-        Assert.Contains("msg.type === 'clear'", terminalHtml);
-        Assert.Contains("term.clear();", terminalHtml);
-    }
-
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

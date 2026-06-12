@@ -35,7 +35,6 @@ The main screen has six working areas:
 - Click the **?** button or press **F1** to open Help.
 - Click the **gear** to open Settings.
 - Click the **pin** button to cycle window modes (Tray / Stay open / Always on top / Traditional).
-- Click **Load session** in the search card to restore a saved `.yagu-session` file without starting a new search first.
 
 ---
 
@@ -136,8 +135,6 @@ When an expanded file's header scrolls out of view, a compact sticky strip at th
 | Auto-scroll | Scrolls to follow new results during a search. Uncheck or scroll up to freeze. |
 | Context lines | Lines before/after each match in the result row. Higher = more context but more memory. |
 | Clear results | Removes all results (trash icon, or **Ctrl+Shift+Delete**). |
-| Save session | Saves the current result set to a `.yagu-session` file. |
-| Load session | Restores a saved `.yagu-session` file. This command is also available in the search card before results are shown, including launcher mode. The saved-session picker can sort by file name, parent directory, file size, or modified time. |
 | Expand/Collapse panel | Toggles between expanded result list and split view with preview. |
 
 ### Filtering Results

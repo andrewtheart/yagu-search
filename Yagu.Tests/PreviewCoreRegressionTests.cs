@@ -78,7 +78,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("FontSize=\"24\"", emptyState);
         Assert.Contains("Text=\"Add files to this preview by selecting one or more files on the left panel, right clicking, and selecting the preview option.\"", emptyState);
         Assert.Contains("FontSize=\"13\"", emptyState);
-        Assert.DoesNotContain("TextTrimming=\"CharacterEllipsis\"", emptyState);
+        Assert.Contains("TextWrapping=\"WrapWholeWords\"", emptyState);
 
         string update = ExtractMethodWindow(MainWindowSource, "UpdatePreviewEmptyState", 1600);
         Assert.Contains("PreviewPanelBorder.Visibility == Visibility.Visible", update);
@@ -86,10 +86,11 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("PreviewSectionsPanel.Children.OfType<Expander>().Any()", update);
         Assert.Contains("PreviewEmptyState.Visibility = showEmptyState ? Visibility.Visible : Visibility.Collapsed;", update);
 
-        string remove = ExtractMethodWindow(MainWindowSource, "RemovePreviewSection", 8000);
-        Assert.Contains("PreviewSectionsPanel.Children.OfType<Expander>().Any()", remove);
-        Assert.Contains("PreviewToolbarContent.Visibility = Visibility.Collapsed;", remove);
-        Assert.Contains("UpdatePreviewEmptyState();", remove);
+        string remove = ExtractMethodWindow(MainWindowSource, "RemovePreviewSection", 2600);
+        AssertContainsInOrder(remove,
+            "if (!PreviewSectionsPanel.Children.OfType<Expander>().Any())",
+            "PreviewToolbarContent.Visibility = Visibility.Collapsed;",
+            "UpdatePreviewEmptyState();");
     }
 
     [Fact]
@@ -152,7 +153,7 @@ public sealed class PreviewCoreRegressionTests
             "EnsurePreviewPanelVisible();",
             "await ShowSingleFilePreviewAsync(r, fullFile: false);");
 
-        string singlePreview = ExtractMethodWindow(MainWindowSource, "ShowSingleFilePreviewAsync", 4200);
+        string singlePreview = ExtractMethodWindow(MainWindowSource, "ShowSingleFilePreviewAsync", 2300);
         AssertContainsInOrder(singlePreview,
             "BeginPreviewContentUpdate();",
             "ShowPreviewBlockSurface();",
@@ -165,7 +166,7 @@ public sealed class PreviewCoreRegressionTests
             "BeginPreviewContentUpdate();",
             "EnsurePreviewPanelVisible();");
 
-        string prepend = ExtractMethodWindow(MainWindowSource, "PrependPreviewSectionsForFilesAsync", 10000);
+        string prepend = ExtractMethodWindow(MainWindowSource, "PrependPreviewSectionsForFilesAsync", 5200);
         AssertContainsInOrder(prepend,
             "BeginPreviewContentUpdate();",
             "EnsurePreviewPanelVisible();",
@@ -175,9 +176,10 @@ public sealed class PreviewCoreRegressionTests
             "if (i == 0)",
             "CompletePreviewContentUpdate();");
 
-        string addSection = ExtractMethodWindow(MainWindowSource, "AddPreviewSection", 14000);
-        Assert.Contains("PreviewSectionsPanel.Children.Add(expander);", addSection);
-        Assert.Contains("CompletePreviewContentUpdate();", addSection);
+        string addSection = ExtractMethodWindow(MainWindowSource, "AddPreviewSection", 6500);
+        AssertContainsInOrder(addSection,
+            "PreviewSectionsPanel.Children.Add(expander);",
+            "CompletePreviewContentUpdate();");
     }
 
     [Fact]
@@ -195,29 +197,6 @@ public sealed class PreviewCoreRegressionTests
 
         string updateMulti = ExtractMethodWindow(MainWindowSource, "UpdateMultiSelectPreviewAsync", 900);
         Assert.Contains("SearchResult? scrollTarget", updateMulti);
-
-        string concatenated = ExtractMethodWindow(MainWindowSource, "ShowConcatenatedPreviewAsync", 12000);
-        AssertContainsInOrder(concatenated,
-            "TryFindPreviewMatchParagraph(scrollBlock, scrollTarget, out var targetPara, out var targetMatchInPara)",
-            "scrollPara = targetPara;",
-            "SetCurrentMatchToMatch(scrollBlock, targetPara, targetMatchInPara);");
-
-        string multiHighlight = ExtractMethodWindow(MainWindowSource, "ShowMultiHighlightPreviewAsync", 14000);
-        AssertContainsInOrder(multiHighlight,
-            "TryFindPreviewMatchParagraph(scrollBlock, scrollTarget, out var targetPara, out var targetMatchInPara)",
-            "scrollPara = targetPara;",
-            "SetCurrentMatchToMatch(scrollBlock, targetPara, targetMatchInPara);");
-
-        string updateMatchNav = ExtractMethodWindow(MainWindowSource, "UpdateMatchNavPanel", 4200);
-        AssertContainsInOrder(updateMatchNav,
-            "if (_activeMatchHighlight is not null)",
-            "int activeIndex = FindActiveMatchIndex();",
-            "_currentMatchIndex = activeIndex;",
-            "MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);",
-            "ScrollPreviewToLine(block, para);",
-            "return;",
-            "_currentMatchIndex = -1;",
-            "_ = GoToNextMatchAsync();");
     }
 
     [Fact]
@@ -321,10 +300,10 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void AdvancedOptionsDrawer_IsCompactWhenCollapsedAndFullWidthWhenExpanded()
+    public void AdvancedOptionsDrawer_CollapsedWidthIsConfigurableAndDefaultsFullWidth()
     {
         string expander = ExtractXamlWindow("x:Name=\"AdvancedOptionsExpander\"", 1200);
-        Assert.Contains("IsExpanded=\"False\" HorizontalAlignment=\"Left\"", expander);
+        Assert.Contains("IsExpanded=\"False\" HorizontalAlignment=\"Stretch\"", expander);
         Assert.Contains("HorizontalContentAlignment=\"Stretch\"", expander);
         Assert.Contains("<TextBlock Text=\"Advanced Options\"", expander);
         Assert.DoesNotContain("x:Name=\"ChevronRotate\"", expander);
@@ -340,38 +319,26 @@ public sealed class PreviewCoreRegressionTests
 
         string widthState = ExtractMethodWindow(MainWindowSource, "SetAdvancedOptionsDrawerExpandedWidthState", 900);
         AssertContainsInOrder(widthState,
-            "AdvancedOptionsExpander.HorizontalAlignment = isExpanded",
+            "AdvancedOptionsExpander.HorizontalAlignment = isExpanded || ViewModel.AdvancedOptionsCollapsedWidthModeIndex == 0",
             "? HorizontalAlignment.Stretch",
             ": HorizontalAlignment.Left;",
             "AdvancedOptionsExpander.Width = double.NaN;",
             "AdvancedOptionsExpander.InvalidateMeasure();");
-    }
 
-    [Fact]
-    public void AdvancedOptionsContent_UsesCompactRowsForPathAndDateFilters()
-    {
-        string advancedOptions = ExtractXamlWindow("x:Name=\"AdvancedOptionsExpander\"", 32000);
+        Assert.Contains("SetAdvancedOptionsDrawerExpandedWidthState(AdvancedOptionsExpander.IsExpanded);", MainWindowSource);
+        Assert.Contains("nameof(ViewModel.AdvancedOptionsCollapsedWidthModeIndex)", MainWindowSource);
 
-        Assert.Contains("Padding=\"24,12,12,12\"", advancedOptions);
-        AssertContainsInOrder(advancedOptions,
-            "<Grid ColumnSpacing=\"10\">",
-            "<TextBlock Text=\"Include\"",
-            "x:Name=\"IncludeFilterBox\"",
-            "PlaceholderForeground=\"{ThemeResource TextFillColorPrimaryBrush}\"",
-            "<Grid Grid.Column=\"1\" RowSpacing=\"4\" ColumnSpacing=\"6\">",
-            "<TextBlock Text=\"Exclude\"",
-            "x:Name=\"ExcludeFilterBox\"");
+        string settingsSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "Services", "SettingsService.cs"));
+        Assert.Contains("public int AdvancedOptionsCollapsedWidthModeIndex { get; set; }", settingsSource);
 
-        string propertyFilters = advancedOptions[advancedOptions.IndexOf("<TextBlock Text=\"Property filters\"", StringComparison.Ordinal)..];
-        AssertContainsInOrder(propertyFilters,
-            "<ColumnDefinition Width=\"*\" />",
-            "<ColumnDefinition Width=\"*\" />",
-            "<TextBlock Text=\"Created Date\"",
-            "<StackPanel Grid.Column=\"1\" Spacing=\"4\">",
-            "<TextBlock Text=\"Modified Date\"");
+        string viewModelSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
+        Assert.Contains("[ObservableProperty] public partial int AdvancedOptionsCollapsedWidthModeIndex { get; set; }", viewModelSource);
+        Assert.Contains("AdvancedOptionsCollapsedWidthModeIndex = NormalizeAdvancedOptionsCollapsedWidthModeIndex(_settings.AdvancedOptionsCollapsedWidthModeIndex);", viewModelSource);
+        Assert.Contains("_settings.AdvancedOptionsCollapsedWidthModeIndex = NormalizeAdvancedOptionsCollapsedWidthModeIndex(AdvancedOptionsCollapsedWidthModeIndex);", viewModelSource);
 
-        string filterChanged = ExtractMethodWindow(MainWindowSource, "OnFilterBoxTextChanged", 600);
-        Assert.Contains("string.IsNullOrEmpty(tb.Text) || IsFilterExampleText(tb)", filterChanged);
+        Assert.Contains("Advanced Options drawer width:", SettingsWindowSource);
+        Assert.Contains("Full width when collapsed and expanded (default)", SettingsWindowSource);
+        Assert.Contains("Compact when collapsed, full width when expanded", SettingsWindowSource);
     }
 
     [Fact]
@@ -394,7 +361,7 @@ public sealed class PreviewCoreRegressionTests
 
         string glyphSync = ExtractMethodWindow(MainWindowSource, "UpdateTerminalChevronGlyphs", 800);
         AssertContainsInOrder(glyphSync,
-            "string glyph = _terminalPaneExpanded ? \"\\uE70E\" : \"\\uE70D\";",
+            "string glyph = _terminalPaneExpanded ? \"\\uE70D\" : \"\\uE70E\";",
             "TerminalChevronIcon.Glyph = glyph;",
             "PreSearchTerminalChevronIcon.Glyph = glyph;");
 
@@ -454,19 +421,19 @@ public sealed class PreviewCoreRegressionTests
     {
         string previewScrollViewer = ExtractXamlWindow("x:Name=\"PreviewScrollViewer\"", 500);
         Assert.Contains("HorizontalScrollMode=\"Enabled\"", previewScrollViewer);
-        Assert.Contains("HorizontalScrollBarVisibility=\"Visible\"", previewScrollViewer);
+        Assert.Contains("HorizontalScrollBarVisibility=\"Auto\"", previewScrollViewer);
         Assert.Contains("VerticalScrollBarVisibility=\"Auto\"", previewScrollViewer);
 
         string horizontalScrollHelper = ExtractMethodWindow(MainWindowSource, "SetHorizontalPreviewScroll", 700);
         AssertContainsInOrder(horizontalScrollHelper,
             "scrollViewer.HorizontalScrollMode = enabled ? ScrollMode.Enabled : ScrollMode.Disabled;",
-            "scrollViewer.HorizontalScrollBarVisibility = enabled ? ScrollBarVisibility.Visible : ScrollBarVisibility.Disabled;");
+            "scrollViewer.HorizontalScrollBarVisibility = enabled ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled;");
 
-        string addSection = ExtractMethodWindow(MainWindowSource, "AddPreviewSection", 14000);
+        string addSection = ExtractMethodWindow(MainWindowSource, "AddPreviewSection", 6500);
         AssertContainsInOrder(addSection,
             "var sectionScroller = new ScrollViewer",
-            "HorizontalScrollMode = wrap ? ScrollMode.Disabled : ScrollMode.Enabled",
-            "HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Hidden");
+            "HorizontalScrollMode = ViewModel.PreviewWordWrap ? ScrollMode.Disabled : ScrollMode.Enabled",
+            "HorizontalScrollBarVisibility = ViewModel.PreviewWordWrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto");
 
         string hook = ExtractMethodWindow(MainWindowSource, "EnsurePreviewViewChangedHooked", 1800);
         AssertContainsInOrder(hook,
@@ -491,7 +458,7 @@ public sealed class PreviewCoreRegressionTests
     [Fact]
     public void NoWrapPreviewSelectionDrag_AutoScrollsHorizontally()
     {
-        string ctor = ExtractMethodWindow(MainWindowSource, "MainWindow", window: 3200);
+        string ctor = ExtractMethodWindow(MainWindowSource, "MainWindow", window: 2200);
         Assert.Contains("AttachPreviewSelectionAutoScroll(PreviewBlock);", ctor);
         Assert.Contains("ConfigurePreviewSelectionMode(PreviewBlock);", ctor);
 
@@ -558,13 +525,13 @@ public sealed class PreviewCoreRegressionTests
     [Fact]
     public void ResultsListScroll_PreservesPinnedTopDuringLiveUpdates()
     {
-        string ctor = ExtractMethodWindow(MainWindowSource, "MainWindow", window: 3600);
+        string ctor = ExtractMethodWindow(MainWindowSource, "MainWindow", window: 2600);
         Assert.Contains("InitializeResultsListSmartScroll();", ctor);
 
         string initialize = ExtractMethodWindow(MainWindowSource, "InitializeResultsListSmartScroll", window: 2200);
         AssertContainsInOrder(initialize,
-            "ViewModel.ResultRows.CollectionChanging += OnResultGroupsChanging;",
-            "ViewModel.ResultRows.CollectionChanged += OnResultGroupsCollectionChanged;",
+            "ViewModel.ResultGroupsChanging += OnResultGroupsChanging;",
+            "ViewModel.ResultGroups.CollectionChanged += OnResultGroupsCollectionChanged;",
             "ResultsList.Loaded +=",
             "EnsureResultsListScrollViewerHooked();",
             "CaptureResultsListScrollPosition();");
@@ -573,7 +540,7 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(changing,
             "CaptureResultsListScrollPosition();",
             "ResultsListSmartScrollIntent intent = ResolveResultsListSmartScrollIntent();",
-            "ResultRowsChanging: intent={intent}",
+            "ResultGroupsChanging: intent={intent}",
             "QueueResultsListSmartScrollRestore(intent);");
 
         string collectionChanged = ExtractMethodWindow(MainWindowSource, "OnResultGroupsCollectionChanged", window: 1800);
@@ -592,10 +559,10 @@ public sealed class PreviewCoreRegressionTests
 
         string capture = ExtractMethodWindow(MainWindowSource, "CaptureResultsListScrollPosition", window: 1400);
         AssertContainsInOrder(capture,
-            "bool hasGroupsWithoutScroller = ViewModel.ResultRows.Count > 0;",
+            "bool hasGroupsWithoutScroller = ViewModel.ResultGroups.Count > 0;",
             "_resultsListWasAtTop = hasGroupsWithoutScroller;",
             "_resultsListWasAtBottom = hasGroupsWithoutScroller;",
-            "bool hasVisibleGroups = ViewModel.ResultRows.Count > 0;",
+            "bool hasVisibleGroups = ViewModel.ResultGroups.Count > 0;",
             "_resultsListWasAtTop = hasVisibleGroups && IsResultsListAtTop(scroller);",
             "_resultsListWasAtBottom = hasVisibleGroups && IsResultsListAtBottom(scroller);");
         Assert.DoesNotContain("IsFirstResultGroupAtTop", MainWindowSource);
@@ -609,9 +576,9 @@ public sealed class PreviewCoreRegressionTests
 
         string scrollTop = ExtractMethodWindow(MainWindowSource, "ScrollResultsListToTop", window: 1400);
         AssertContainsInOrder(scrollTop,
-            "ResultsList.ScrollIntoView(ViewModel.ResultRows[0], ScrollIntoViewAlignment.Leading);",
+            "ResultsList.ScrollIntoView(ViewModel.ResultGroups[0], ScrollIntoViewAlignment.Leading);",
             "_resultsListScrollViewer?.ChangeView(null, 0, null, disableAnimation: true);",
-            "ScrollResultsListToTop: rows={ViewModel.ResultRows.Count}, groups={ViewModel.ResultGroups.Count}");
+            "ScrollResultsListToTop: groups={ViewModel.ResultGroups.Count}");
 
         string autoScroll = ExtractMethodWindow(MainWindowSource, "OnAutoScrollTick", window: 600);
         Assert.Contains("if (_resultsListTopRestoreInProgress) return;", autoScroll);
@@ -662,18 +629,11 @@ public sealed class PreviewCoreRegressionTests
         string showMoreTapped = ExtractMethodWindow(MainWindowSource, "OnShowMoreTapped", window: 500);
         Assert.Contains("e.Handled = true;", showMoreTapped);
 
-        string collapsed = ExtractMethodWindow(MainWindowSource, "OnFileGroupCollapsed", window: 900);
+        string collapsed = ExtractMethodWindow(MainWindowSource, "OnFileGroupCollapsed", window: 1600);
         AssertContainsInOrder(collapsed,
-            "if (sender.DataContext is FileGroup g)",
-            "_ = ClearVisibleResultsAfterCollapseAsync(g);");
-
-        string deferredClear = ExtractMethodWindow(MainWindowSource, "ClearVisibleResultsAfterCollapseAsync", window: 2600);
-        AssertContainsInOrder(deferredClear,
-            "await Task.Delay(FileGroupCollapseVisibleResultsClearDelayMs).ConfigureAwait(false);",
             "DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low",
-            "if (!group.IsExpanded)",
-            "group.ClearVisibleResults();");
-        Assert.Contains("catch (Exception ex)", deferredClear);
+            "if (!g.IsExpanded)",
+            "g.ClearVisibleResults();");
 
         string expanding = ExtractMethodWindow(MainWindowSource, "OnFileGroupExpanding", window: 2200);
         AssertContainsInOrder(expanding,
@@ -707,7 +667,7 @@ public sealed class PreviewCoreRegressionTests
     {
         string settingsSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "Services", "SettingsService.cs"));
         Assert.Contains("DefaultSelectedPreviewContentBackgroundColor = \"#FF000000\"", settingsSource);
-        Assert.Contains("DefaultUnselectedPreviewContentBackgroundColor = \"#FF1E1E1E\"", settingsSource);
+        Assert.Contains("DefaultUnselectedPreviewContentBackgroundColor = \"#00000000\"", settingsSource);
 
         Assert.Contains("Selected preview content background:", SettingsWindowSource);
         Assert.Contains("Unselected preview content background:", SettingsWindowSource);
@@ -845,19 +805,6 @@ public sealed class PreviewCoreRegressionTests
     [Fact]
     public void ResultsToolbar_OptionsAreHostedInEllipsisFlyout()
     {
-        string searchCard = ExtractXamlWindow("x:Name=\"SearchCardLoadSessionButton\"", 900);
-        Assert.Contains("Click=\"OnLoadSession\"", searchCard);
-        Assert.Contains("IsEnabled=\"{x:Bind ViewModel.IsSessionIdle, Mode=OneWay}\"", searchCard);
-        Assert.Contains("ToolTipService.ToolTip=\"Load a previously saved .yagu-session file\"", searchCard);
-        Assert.Contains("Width=\"32\"", searchCard);
-        Assert.Contains("Height=\"32\"", searchCard);
-        Assert.Contains("Glyph=\"&#xE8E5;\"", searchCard);
-        Assert.DoesNotContain("Text=\"Load session\"", searchCard);
-        AssertContainsInOrder(MainWindowXaml,
-            "x:Name=\"SearchCardLoadSessionButton\"",
-            "x:Name=\"SearchCancelButton\"",
-            "<!-- Advanced options (collapsed by default) -->");
-
         string toolbar = ExtractXamlWindow("x:Name=\"AutoScrollResultsCheckBox\"", 5200);
         Assert.Contains("x:Name=\"ResultsOptionsButton\"", toolbar);
         Assert.Contains("Glyph=\"&#xE700;\"", toolbar);
@@ -959,7 +906,7 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(toolbar,
             "<FontIcon Glyph=\"&#xE71C;\"",
             "<TextBlock Text=\"Filter\"",
-            "<MenuFlyout Placement=\"BottomEdgeAlignedLeft\" Opening=\"OnFilterFlyoutOpening\">",
+            "<MenuFlyout Opening=\"OnFilterFlyoutOpening\">",
             "<MenuFlyoutSubItem Text=\"By date\">",
             "<MenuFlyoutItem Text=\"Any date\" Click=\"OnDateFilterNone\" />",
             "<MenuFlyoutItem Text=\"Last 5 years\" Click=\"OnDateFilterPastFiveYears\" />",
@@ -1010,30 +957,6 @@ public sealed class PreviewCoreRegressionTests
             "height: 100%;",
             "box-sizing: border-box;",
             "padding: 8px 12px;");
-    }
-
-    [Fact]
-    public void EmbeddedTerminal_CtrlShortcutsUseTerminalClipboardAndSelectionSemantics()
-    {
-        Assert.Contains("function handleTerminalShortcut(event)", TerminalHtml);
-        Assert.Contains("if (lower === 'c')", TerminalHtml);
-        Assert.Contains("if (term.hasSelection())", TerminalHtml);
-        Assert.Contains("copyTerminalSelection();", TerminalHtml);
-        Assert.Contains("sendTerminalInput('\\x03');", TerminalHtml);
-        Assert.Contains("else if (lower === 'a')", TerminalHtml);
-        Assert.Contains("term.selectAll();", TerminalHtml);
-        Assert.Contains("else if (lower === 'v')", TerminalHtml);
-        Assert.Contains("postHostMessage({ type: 'requestPaste' });", TerminalHtml);
-        Assert.Contains("event.preventDefault();", TerminalHtml);
-        Assert.Contains("event.stopPropagation();", TerminalHtml);
-        Assert.Contains("document.addEventListener('paste'", TerminalHtml);
-
-        AssertContainsInOrder(TerminalHtml,
-            "function copyTerminalSelection()",
-            "function handleTerminalShortcut(event)",
-            "window.addEventListener('keydown'",
-            "if (handleTerminalShortcut(event))",
-            "var input = translateKeyEventToInput(event);");
     }
 
     [Fact]
@@ -1151,13 +1074,14 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(buildHighlight,
             "bool truncatePreviewLines = ViewModel.IsSearching",
             "? ShouldTruncateOverflowPreviewLines()",
-            ": ShouldTruncatePreviewLines();");
+            ": ShouldTruncateInitialPreviewLines();");
 
         AssertContainsInOrder(buildHighlight,
             "if (distinctMatchLines.Length == 1)",
             "if (section.Blocks.Count - startingBlocks >= maxBlocks)",
             "AddPreviewLineParagraphsAroundResult(",
-            "targetOnlyMatchEntry: true);");
+            "targetOnlyMatchEntry: true,",
+            "maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks));");
 
         string aroundResult = ExtractMethodWindow(MainWindowSource, "AddPreviewLineParagraphsAroundResult", window: 3600);
         Assert.Contains("targetOnlyMatchEntry ? null : rx", aroundResult);
@@ -1242,7 +1166,7 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void PlainFileClicks_DoNotAddFilesToPreviewPanel_ButMatchRowsSelectAndPreview()
+    public void PlainResultClicks_DoNotAddFilesToPreviewPanel()
     {
         string itemClick = ExtractMethodWindow(MainWindowSource, "OnResultItemClick", window: 450);
         Assert.Contains("OnResultItemClick: no preview change", itemClick);
@@ -1251,42 +1175,12 @@ public sealed class PreviewCoreRegressionTests
         Assert.DoesNotContain("OnFileGroupHeaderTapped", MainWindowSource);
         Assert.DoesNotContain("SelectFileGroupMatchesAndPreviewAsync(g, \"single click\")", MainWindowSource);
 
-        string tapped = ExtractMethodWindow(MainWindowSource, "OnMatchLineTapped", window: 1200);
-        Assert.Contains("result.IsSelected = !result.IsSelected;", tapped);
-        Assert.Contains("UpdateSelectionForMatchLine(result, nameof(OnMatchLineTapped));", tapped);
-        Assert.Contains("await UpdatePreviewForMatchSelectionAsync(result);", tapped);
+        string tapped = ExtractMethodWindow(MainWindowSource, "OnMatchLineTapped", window: 900);
+        Assert.Contains("OnMatchLineTapped: no preview change", tapped);
+        Assert.DoesNotContain("UpdatePreviewAsync", tapped);
+        Assert.DoesNotContain("UpdateMultiSelectPreviewAsync", tapped);
         Assert.DoesNotContain("PrependPreviewSectionsForFilesAsync", tapped);
-    }
-
-    [Fact]
-    public void ResultsFileOverlay_SingleClickCollapsesAssociatedFileDrawer()
-    {
-        string overlayXaml = ExtractXamlWindow("x:Name=\"ResultsFileOverlay\"", 2400);
-        Assert.Contains("Tapped=\"OnResultsFileOverlayTapped\"", overlayXaml);
-        Assert.Contains("DoubleTapped=\"OnResultsFileOverlayDoubleTapped\"", overlayXaml);
-        Assert.Contains("Click=\"OnShowFileGroupInExplorer\"", overlayXaml);
-
-        string tapped = ExtractMethodWindow(MainWindowSource, "OnResultsFileOverlayTapped", window: 600);
-        AssertContainsInOrder(tapped,
-            "CollapseResultsFileOverlayFromInput(e.OriginalSource as DependencyObject)",
-            "e.Handled = true;");
-
-        string doubleTapped = ExtractMethodWindow(MainWindowSource, "OnResultsFileOverlayDoubleTapped", window: 600);
-        AssertContainsInOrder(doubleTapped,
-            "CollapseResultsFileOverlayFromInput(e.OriginalSource as DependencyObject)",
-            "e.Handled = true;");
-
-        string collapse = ExtractMethodWindow(MainWindowSource, "CollapseResultsFileOverlayFromInput", window: 1600);
-        AssertContainsInOrder(collapse,
-            "if (IsInsideHeaderCommand(originalSource, ResultsFileOverlay))",
-            "return false;",
-            "var group = _resultsFileOverlayGroup;",
-            "HideResultsFileOverlay();",
-            "if (group.IsExpanded)",
-            "DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low",
-            "groupToCollapse.IsExpanded = false;",
-            "QueueResultsFileOverlayUpdate();",
-            "return true;");
+        Assert.DoesNotContain("EnsureCheckedMatchInPreviewAsync", tapped);
     }
 
     [Fact]
@@ -1382,12 +1276,40 @@ public sealed class PreviewCoreRegressionTests
     [Fact]
     public void FileGroupChevronExpand_DoesNotSelectOrAddPreview()
     {
-        string expanding = ExtractMethodWindow(MainWindowSource, "OnFileGroupExpanding", window: 1800);
+        string expanding = ExtractMethodWindow(MainWindowSource, "OnFileGroupExpanding", window: 900);
         Assert.Contains("expand only", expanding);
         Assert.DoesNotContain("g.SelectAll();", expanding);
         Assert.DoesNotContain("SelectFileGroupMatches", expanding);
         Assert.DoesNotContain("TryScrollToPreviewSection", expanding);
         Assert.DoesNotContain("PrependPreviewSectionsForFilesAsync", expanding);
+    }
+
+    [Fact]
+    public void ResultsFileOverlay_ClickCollapsesMatchingDrawer()
+    {
+        string overlayXaml = ExtractXamlWindow("x:Name=\"ResultsFileOverlay\"", 1500);
+        Assert.Contains("Tapped=\"OnResultsFileOverlayTapped\"", overlayXaml);
+        Assert.Contains("DoubleTapped=\"OnResultsFileOverlayDoubleTapped\"", overlayXaml);
+
+        string tapped = ExtractMethodWindow(MainWindowSource, "OnResultsFileOverlayTapped", window: 700);
+        Assert.Contains("CollapseResultsFileOverlayFromInput(e.OriginalSource as DependencyObject)", tapped);
+        Assert.Contains("e.Handled = true;", tapped);
+
+        string doubleTapped = ExtractMethodWindow(MainWindowSource, "OnResultsFileOverlayDoubleTapped", window: 700);
+        Assert.Contains("CollapseResultsFileOverlayFromInput(e.OriginalSource as DependencyObject)", doubleTapped);
+
+        string collapse = ExtractMethodWindow(MainWindowSource, "CollapseResultsFileOverlayFromInput", window: 1600);
+        AssertContainsInOrder(collapse,
+            "IsInsideHeaderCommand(originalSource, ResultsFileOverlay)",
+            "return false;",
+            "var group = _resultsFileOverlayGroup;",
+            "if (group.IsExpanded)",
+            "group.IsExpanded = false;",
+            "HideResultsFileOverlay();",
+            "QueueResultsFileOverlayUpdate();",
+            "return true;");
+        Assert.DoesNotContain("SelectFileGroupMatches", collapse);
+        Assert.DoesNotContain("PrependPreviewSectionsForFilesAsync", collapse);
     }
 
     [Fact]
@@ -1420,7 +1342,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("await YieldLowAsync();", prepend);
         Assert.Contains("PreviewSectionsPanel.Children.Insert", prepend);
 
-        string highlight = ExtractMethodWindow(MainWindowSource, "BuildHighlightSectionAsync", window: 18000);
+        string highlight = ExtractMethodWindow(MainWindowSource, "BuildHighlightSectionAsync");
         Assert.Contains("MaxMatchesPerSection", highlight);
         Assert.Contains("MaxPreviewBlocksPerSection", highlight);
         Assert.Contains("cappedResults", highlight);
@@ -1435,10 +1357,13 @@ public sealed class PreviewCoreRegressionTests
             "truncate: truncatePreviewLines",
             "fall through to AppendHighlightMatchWindows");
         Assert.Contains("bool truncatePreviewLines = ViewModel.IsSearching", highlight);
-        Assert.Contains("ShouldTruncateOverflowPreviewLines()", highlight);
-        Assert.Contains("ShouldTruncatePreviewLines()", highlight);
+        Assert.Contains(": ShouldTruncateInitialPreviewLines();", highlight);
         string previewLineTruncation = ExtractMethodWindow(MainWindowSource, "ShouldTruncatePreviewLines", window: 400);
         Assert.Contains("PreviewWrapMode.NoWrap", previewLineTruncation);
+        string initialPreviewLineTruncation = ExtractMethodWindow(MainWindowSource, "ShouldTruncateInitialPreviewLines", window: 500);
+        Assert.Contains("ShouldTruncatePreviewLines()", initialPreviewLineTruncation);
+        Assert.Contains("PreviewWrapMode.NoWrap", initialPreviewLineTruncation);
+        Assert.Contains("maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks)", highlight);
         Assert.DoesNotContain("allLines is { Length: 1 }", MainWindowSource);
         Assert.DoesNotContain("_singleLineSections", MainWindowSource);
 
@@ -1469,8 +1394,7 @@ public sealed class PreviewCoreRegressionTests
             "consumedResults = CapConsumedResultsToVisibleEntriesForTruncatedWindow");
 
         string overflowTruncation = ExtractMethodWindow(MainWindowSource, "ShouldTruncateOverflowPreviewLines", window: 900);
-        Assert.Contains("ShouldTruncatePreviewLines()", overflowTruncation);
-        Assert.Contains("PreviewWrapMode.NoWrap", overflowTruncation);
+        Assert.Contains("ShouldTruncateInitialPreviewLines()", overflowTruncation);
 
         string aroundResult = ExtractMethodWindow(MainWindowSource, "AddPreviewLineParagraphsAroundResult");
         Assert.Contains("bool truncate = true", aroundResult);
@@ -1809,22 +1733,15 @@ public sealed class PreviewCoreRegressionTests
 
         string tapped = ExtractMethodWindow(MainWindowSource, "OnMatchLineTapped");
         Assert.Contains("e.OriginalSource is DependencyObject source && IsInsideButton(source)", tapped);
-        Assert.Contains("result.IsSelected = !result.IsSelected;", tapped);
-        Assert.Contains("await UpdatePreviewForMatchSelectionAsync(result);", tapped);
+        Assert.Contains("OnMatchLineTapped: no preview change", tapped);
 
-        string checkboxClicked = ExtractMethodWindow(MainWindowSource, "OnMatchLineCheckBoxClicked", window: 550);
+        string checkboxClicked = ExtractMethodWindow(MainWindowSource, "OnMatchLineCheckBoxClicked", window: 1000);
         Assert.Contains("result.IsSelected = isChecked;", checkboxClicked);
         Assert.Contains("UpdateSelectionForMatchLine(result, nameof(OnMatchLineCheckBoxClicked));", checkboxClicked);
-        Assert.Contains("await UpdatePreviewForMatchSelectionAsync(result);", checkboxClicked);
+        Assert.Contains("if (result.IsSelected)", checkboxClicked);
+        Assert.Contains("await EnsureCheckedMatchInPreviewAsync(result);", checkboxClicked);
         Assert.DoesNotContain("UpdatePreviewAsync", checkboxClicked);
         Assert.DoesNotContain("UpdateMultiSelectPreviewAsync", checkboxClicked);
-
-        string selectionPreview = ExtractMethodWindow(MainWindowSource, "UpdatePreviewForMatchSelectionAsync", window: 2600);
-        Assert.Contains("if (result.IsSelected)", selectionPreview);
-        Assert.Contains("await UpdateMultiSelectPreviewAsync(result);", selectionPreview);
-        Assert.Contains("await EnsureCheckedMatchInPreviewAsync(result);", selectionPreview);
-        Assert.Contains("await UpdateMultiSelectPreviewAsync();", selectionPreview);
-        Assert.Contains("await ShowSingleFilePreviewAsync(remainingSelected[0], fullFile: false);", selectionPreview);
 
         string selectionForLine = ExtractMethodWindow(MainWindowSource, "UpdateSelectionForMatchLine", window: 900);
         Assert.Contains("FindParentGroup(result)?.NotifySelectionChanged();", selectionForLine);
@@ -1848,12 +1765,12 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("SetCurrentMatchToMatch(section, paragraph, matchInPara);", ensureChecked);
         Assert.Contains("ScrollPreviewToLine(section, paragraph);", ensureChecked);
 
-        string appendContext = ExtractMethodWindow(MainWindowSource, "AppendCheckedMatchContextAsync", window: 8000);
+        string appendContext = ExtractMethodWindow(MainWindowSource, "AppendCheckedMatchContextAsync", window: 5000);
         Assert.Contains("int previewLines = ViewModel.PreviewContextLines;", appendContext);
         Assert.Contains("ReadAllLinesWithEncodingSync(result.FilePath)", appendContext);
         Assert.Contains("var lines = GetPreviewLines(result, allLines, previewLines, fullFile: false);", appendContext);
         Assert.Contains("bool isMatchLine = lineNum == result.LineNumber;", appendContext);
-        Assert.Contains("AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, result, rx, truncate: truncatePreviewLines, _matchParagraphs, sectionNav, out _);", appendContext);
+        Assert.Contains("AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, result, rx, truncate: true, _matchParagraphs, sectionNav, out _);", appendContext);
     }
 
     [Fact]
@@ -1893,9 +1810,9 @@ public sealed class PreviewCoreRegressionTests
             "_initialMatchScrolled = true;");
         AssertContainsInOrder(updateMatchNav,
             "DispatcherQueue.TryEnqueue",
+            "ScrollPreviewToLine(_matchParagraphs[0].block, _matchParagraphs[0].para);",
             "_currentMatchIndex = -1;",
             "_ = GoToNextMatchAsync();");
-        Assert.Contains("ScrollPreviewToLine(block, para);", updateMatchNav);
         Assert.DoesNotContain("OnNextMatch(this, new RoutedEventArgs())", updateMatchNav);
 
         string nextMatch = ExtractMethodWindow(MainWindowSource, "OnNextMatch");
@@ -1920,14 +1837,15 @@ public sealed class PreviewCoreRegressionTests
         string scroll = ExtractMethodWindow(MainWindowSource, "TryScrollPreviewToLine", window: 5200);
         AssertContainsInOrder(scroll,
             "TryGetPreviewParagraphTargetVerticalOffset(block, targetPara",
-            "ChangePreviewViewForMatchNavigation(null, paragraphOffset)",
+            "PreviewScrollViewer.ChangeView(null, paragraphOffset, null, disableAnimation: true)",
             "mode=actual-paragraph",
             "double lineHeight = EstimatePreviewLineHeight(block)");
 
         string actual = ExtractMethodWindow(MainWindowSource, "TryGetPreviewParagraphTargetVerticalOffset", window: 2800);
         AssertContainsInOrder(actual,
+            "GetPreviewWrapTextWidth(block)",
+            "block.Measure(new Windows.Foundation.Size(measureWidth, double.PositiveInfinity));",
             "TryGetPreviewParagraphLineRect(targetPara",
-            "block.TransformToVisual(PreviewScrollViewer)",
             "targetLineTop + markerHeight / 2 - viewportHeight / 2",
             "Math.Clamp(candidate, 0, PreviewScrollViewer.ScrollableHeight)");
     }
@@ -1935,26 +1853,24 @@ public sealed class PreviewCoreRegressionTests
     [Fact]
     public void ActiveMatchOverlay_UsesActualOverlayCoordinatesAndWaitsForSettledScroll()
     {
-        string updateOverlay = ExtractMethodWindow(MainWindowSource, "TryUpdateActiveMatchOverlayFromActualRun", window: 24000);
+        string updateOverlay = ExtractMethodWindow(MainWindowSource, "TryUpdateActiveMatchOverlayFromActualRun", window: 18000);
         string transform = ExtractMethodWindow(MainWindowSource, "TransformRunRectToOverlay");
         Assert.Contains("TransformToVisual(ActiveMatchOverlay)", transform);
         Assert.Contains("TransformRunRectToOverlay(block, targetPara, rect)", updateOverlay);
         Assert.Contains("IsPreviewSectionBodySettledForActiveOverlay(block, out var layoutReason)", updateOverlay);
         Assert.Contains("ActiveMatchOverlay.Visibility = Visibility.Visible;", updateOverlay);
-        Assert.DoesNotContain("block.Measure(new Windows.Foundation.Size(block.ActualWidth, double.PositiveInfinity));", updateOverlay);
+        Assert.Contains("block.Measure(new Windows.Foundation.Size(block.ActualWidth, double.PositiveInfinity));", updateOverlay);
         Assert.Contains("targetRun.ContentEnd.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Backward)", updateOverlay);
         Assert.Contains("usedEndRect", updateOverlay);
         Assert.Contains("TryBuildMeasuredWrappedActiveMatchMarkerRects(", updateOverlay);
-        Assert.Contains("TryGetEstimatedWrappedMatchPoint", updateOverlay);
-        Assert.Contains("ShouldUseEstimatedWrappedMatchPoint", updateOverlay);
-        Assert.Contains("else if (!measuredEndSameRow && TryBuildWrappedActiveMatchMarkerRects(", updateOverlay);
+        Assert.Contains("else if (TryBuildWrappedActiveMatchMarkerRects(", updateOverlay);
+        Assert.DoesNotContain("TryGetEstimatedWrappedMatchPoint", updateOverlay);
         Assert.Contains("ClampOverlayMarkerLeft", updateOverlay);
         AssertContainsInOrder(updateOverlay,
             "if (actualCenterAccepted)",
             "waiting for settled layout",
             "return false;",
             "if (!actualCenterNeeded)");
-        Assert.Contains("ApplyActiveMatchMarkerRect(ActiveMatchWordMarker, effectiveWrappedMarkerRects[0]);", updateOverlay);
         Assert.Contains("Canvas.SetTop(ActiveMatchWordMarker, overlayTop);", updateOverlay);
         Assert.Contains("Canvas.SetLeft(ActiveMatchWordMarker, markerLeft);", updateOverlay);
         Assert.Contains("if (overlayTop < viewportTop || overlayTop + markerHeight > viewportBottom)", updateOverlay);
@@ -1972,17 +1888,17 @@ public sealed class PreviewCoreRegressionTests
     [Fact]
     public void FirstFileWrappedOverlay_TrustsMeasuredRunWhenItIsAlreadyVisible()
     {
-        string updateOverlay = ExtractMethodWindow(MainWindowSource, "TryUpdateActiveMatchOverlayFromActualRun", window: 24000);
+        string updateOverlay = ExtractMethodWindow(MainWindowSource, "TryUpdateActiveMatchOverlayFromActualRun", window: 18000);
 
         AssertContainsInOrder(updateOverlay,
             "var point = TransformRunRectToOverlay(block, targetPara, rect);",
             "if (ViewModel.PreviewWordWrap)",
-            "TryGetEstimatedWrappedMatchPoint(",
             "TryBuildMeasuredWrappedActiveMatchMarkerRects(",
             "wrappedMarkerRects = measuredMarkerRects;",
-            "else if (!measuredEndSameRow && TryBuildWrappedActiveMatchMarkerRects(",
+            "else if (TryBuildWrappedActiveMatchMarkerRects(",
             "wrappedMarkerRects = estimatedMarkerRects;");
-        Assert.Contains("ShouldUseEstimatedWrappedMatchPoint", updateOverlay);
+
+        Assert.DoesNotContain("TryGetEstimatedWrappedMatchPoint", updateOverlay);
     }
 
     [Fact]
@@ -2030,8 +1946,7 @@ public sealed class PreviewCoreRegressionTests
         string updateOverlay = ExtractMethodWindow(MainWindowSource, "TryUpdateActiveMatchOverlayFromActualRun", window: 18000);
         string estimate = ExtractMethodWindow(MainWindowSource, "TryGetEstimatedWrappedMatchPoint");
 
-        Assert.Contains("TryGetEstimatedWrappedMatchPoint", updateOverlay);
-        Assert.Contains("ShouldUseEstimatedWrappedMatchPoint", updateOverlay);
+        Assert.DoesNotContain("TryGetEstimatedWrappedMatchPoint", updateOverlay);
         AssertContainsInOrder(estimate,
             "double expectedTop = firstPoint.Y + wrappedLineIndex * lineHeight;",
             "double expectedLeft = firstPoint.X + (column % charsPerWrappedLine) * charWidth;",
@@ -2044,17 +1959,16 @@ public sealed class PreviewCoreRegressionTests
     {
         Assert.Contains("private readonly List<Border> _activeMatchExtraWordMarkers = new();", MainWindowSource);
 
-        string updateOverlay = ExtractMethodWindow(MainWindowSource, "TryUpdateActiveMatchOverlayFromActualRun", window: 24000);
+        string updateOverlay = ExtractMethodWindow(MainWindowSource, "TryUpdateActiveMatchOverlayFromActualRun", window: 18000);
         AssertContainsInOrder(updateOverlay,
-            "TryGetEstimatedWrappedMatchPoint(",
             "TryBuildMeasuredWrappedActiveMatchMarkerRects(",
             "wrappedMarkerRects = measuredMarkerRects;",
-            "else if (!measuredEndSameRow && TryBuildWrappedActiveMatchMarkerRects(",
+            "else if (TryBuildWrappedActiveMatchMarkerRects(",
             "wrappedMarkerRects = estimatedMarkerRects;",
             "double markerTopDelta = overlayTop - point.Y;",
-            "effectiveWrappedMarkerRects.Add(new Windows.Foundation.Rect(");
-        Assert.Contains("ApplyActiveMatchMarkerRect(ActiveMatchWordMarker, effectiveWrappedMarkerRects[0]);", updateOverlay);
-        AssertContainsInOrder(updateOverlay,
+            "effectiveWrappedMarkerRects.Add(new Windows.Foundation.Rect(",
+            "if (effectiveWrappedMarkerRects is { Count: > 1 })",
+            "ApplyActiveMatchMarkerRect(ActiveMatchWordMarker, effectiveWrappedMarkerRects[0]);",
             "var marker = CreateActiveMatchWordMarker();",
             "_activeMatchExtraWordMarkers.Add(marker);",
             "ActiveMatchOverlay.Children.Add(marker);");
@@ -2130,16 +2044,16 @@ public sealed class PreviewCoreRegressionTests
     [Fact]
     public void NoWrapOverlay_RetriesInsteadOfClampingHorizontallyOffscreenMarker()
     {
-        string updateOverlay = ExtractMethodWindow(MainWindowSource, "TryUpdateActiveMatchOverlayFromActualRun", window: 24000);
+        string updateOverlay = ExtractMethodWindow(MainWindowSource, "TryUpdateActiveMatchOverlayFromActualRun", window: 18000);
 
         AssertContainsInOrder(updateOverlay,
-            "bool markerFullyOutside = point.X + markerWidth <= 0 || point.X >= viewportWidth;",
-            "if (!ViewModel.PreviewWordWrap && markerFullyOutside)",
+            "bool markerHorizontallyOutside = point.X < 0 || point.X + markerWidth > viewportWidth;",
+            "if (!ViewModel.PreviewWordWrap && markerHorizontallyOutside)",
             "if (retryIfCenterRejected)",
             "ScrollMatchHorizontallyIntoView(block, targetPara);",
             "rejecting horizontally offscreen marker",
             "return false;",
-            "double markerLeft = clippedMarkerLeft;");
+            "double markerLeft = ClampOverlayMarkerLeft(point.X, markerWidth, viewportWidth);");
     }
 
     [Fact]
@@ -2312,15 +2226,6 @@ public sealed class PreviewCoreRegressionTests
             int lineEnd = source.IndexOf('\n', index);
             lineEnd = lineEnd < 0 ? source.Length : lineEnd;
             string line = source[lineStart..lineEnd];
-            if (string.Equals(methodName, "MainWindow", StringComparison.Ordinal))
-            {
-                if (line.TrimStart().StartsWith("public MainWindow(", StringComparison.Ordinal))
-                    return lineStart;
-
-                search = index + needle.Length;
-                continue;
-            }
-
             if (line.Contains("private ", StringComparison.Ordinal)
                 || line.Contains("public ", StringComparison.Ordinal)
                 || line.Contains("internal ", StringComparison.Ordinal)

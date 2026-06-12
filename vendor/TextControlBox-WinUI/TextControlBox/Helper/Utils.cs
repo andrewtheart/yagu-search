@@ -2,11 +2,9 @@
 using Microsoft.Graphics.Canvas.Text;
 using Microsoft.UI.Xaml;
 using System;
-using System.Threading.Tasks;
 using Windows.Foundation;
 using Windows.System;
 using Windows.UI.Core;
-using Windows.UI.Popups;
 
 namespace TextControlBoxNS.Helper;
 

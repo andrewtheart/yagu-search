@@ -1,8 +1,6 @@
 using System;
-using System.Diagnostics;
 using System.Linq;
 using System.Text;
-using TextControlBoxNS.Core.Renderer;
 using TextControlBoxNS.Core.Text;
 using TextControlBoxNS.Extensions;
 using TextControlBoxNS.Helper;

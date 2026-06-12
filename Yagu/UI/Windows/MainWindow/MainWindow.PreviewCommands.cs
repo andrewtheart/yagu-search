@@ -1,21 +1,11 @@
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Net.Http;
-using System.Security.Principal;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.Win32;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.System;
 using Yagu.Helpers;
@@ -478,8 +468,6 @@ public sealed partial class MainWindow
 
     private async void OnLoadSession(object sender, RoutedEventArgs e)
     {
-        ResultsOptionsFlyout.Hide();
-
         string? path = await ChooseSessionFileToLoadAsync();
         if (path is null) return;
 
@@ -539,7 +527,6 @@ public sealed partial class MainWindow
 
     private async Task LoadSessionFileAsync(string path)
     {
-        EnsureResultsListVisibleForSessionLoad();
         ClearPreviewStateForSessionLoad();
 
         try
@@ -553,19 +540,6 @@ public sealed partial class MainWindow
             LogService.Instance.Warning("MainWindow", $"Load session failed: {path}", ex);
             ViewModel.ErrorText = $"Load session failed: {ex.Message}";
         }
-    }
-
-    private void EnsureResultsListVisibleForSessionLoad()
-    {
-        if (_launcherMode)
-            ExitLauncherMode();
-
-        _resultsPaneCollapsed = false;
-        SplitPaneRow.Height = new GridLength(1, GridUnitType.Star);
-        ProgressRow.Height = GridLength.Auto;
-        SplitPaneGrid.Visibility = Visibility.Visible;
-        ApplySplitLayout(SplitLayoutMode.ResultsMaximized);
-        UpdateBottomStatusBarVisibility();
     }
 
     private void ClearPreviewStateForSessionLoad()
@@ -793,7 +767,7 @@ public sealed partial class MainWindow
     {
         _resultMatchTextBrush = new SolidColorBrush(ColorStringHelper.Parse(
             ViewModel.ResultListMatchHighlightColor,
-            Windows.UI.Color.FromArgb(0xFF, 0xB8, 0x86, 0x0B)));
+            Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00)));
     }
 
     private void ApplyResultMatchTextStyle(RichTextBlock rtb)
@@ -2403,7 +2377,7 @@ public sealed partial class MainWindow
             var (section, _) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
 
             fileContents.TryGetValue(filePath, out string[]? allLines);
-            bool truncatePreviewLines = ShouldTruncatePreviewLines();
+            bool truncatePreviewLines = ShouldTruncateInitialPreviewLines();
             int parasInFile = 0;
 
             int renderedResults = 0;
@@ -2448,7 +2422,8 @@ public sealed partial class MainWindow
                     bool isMatchLine = !isFileNameOnlyPreview && matchLineNums.Contains(lineNum);
                     _sectionMatchNavs.TryGetValue(section, out var sn);
                     var firstPara = AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, isFileNameOnlyPreview ? null : rx, truncate: !isFileNameOnlyPreview && truncatePreviewLines,
-                        isMatchLine ? _matchParagraphs : null, sn, out int addedParagraphs);
+                        isMatchLine ? _matchParagraphs : null, sn, out int addedParagraphs,
+                        maxParagraphs: MaxPreviewBlocksPerSection - (section.Blocks.Count - startingBlocks));
                     parasInFile += addedParagraphs;
 
                     if (scrollTarget is not null && lineNum == r.LineNumber
@@ -2499,17 +2474,8 @@ public sealed partial class MainWindow
         UpdateMatchNavPanel();
         UpdateSectionMatchNavPanels();
 
-        if (scrollTarget is not null
-            && scrollBlock is not null
-            && TryFindPreviewMatchParagraph(scrollBlock, scrollTarget, out var targetPara, out var targetMatchInPara))
-        {
-            scrollPara = targetPara;
-            SetCurrentMatchToMatch(scrollBlock, targetPara, targetMatchInPara);
-        }
-        else if (scrollBlock is not null && scrollPara is not null)
-        {
+        if (scrollBlock is not null && scrollPara is not null)
             SetCurrentMatchToParagraph(scrollBlock, scrollPara);
-        }
 
         if (scrollToTop)
             PreviewScrollViewer.ChangeView(null, 0, null, disableAnimation: true);
@@ -2559,7 +2525,7 @@ public sealed partial class MainWindow
             int startingBlocks = section.Blocks.Count;
 
             fileContents.TryGetValue(filePath, out string[]? allLines);
-            bool truncatePreviewLines = ShouldTruncatePreviewLines();
+            bool truncatePreviewLines = ShouldTruncateInitialPreviewLines();
             if (results.All(result => result.LineNumber <= 0))
             {
                 BuildConcatenatedSection(section, results, allLines, ViewModel.PreviewContextLines, rx: null);
@@ -2623,7 +2589,8 @@ public sealed partial class MainWindow
                         bool isMatchLine = matchByLine.TryGetValue(lineNum, out var matchResult);
                         matchResult ??= cappedResults[0];
                         _sectionMatchNavs.TryGetValue(section, out var sn);
-                        var firstPara = AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatchLine, matchResult, rx, truncate: truncatePreviewLines, _matchParagraphs, sn, out _);
+                        var firstPara = AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatchLine, matchResult, rx, truncate: truncatePreviewLines, _matchParagraphs, sn, out _,
+                            maxParagraphs: MaxPreviewBlocksPerSection - (section.Blocks.Count - startingBlocks));
                         lastRenderedLine1 = lineNum;
 
                         if (scrollTarget is not null && isMatchLine && lineNum == scrollTarget.LineNumber
@@ -2654,7 +2621,8 @@ public sealed partial class MainWindow
                         bool isMatchLine = fallbackMatchLines.Contains(lineNum);
                         _sectionMatchNavs.TryGetValue(section, out var sn);
                         var firstPara = AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: truncatePreviewLines,
-                            lineNum == r.LineNumber ? _matchParagraphs : null, sn, out _);
+                            lineNum == r.LineNumber ? _matchParagraphs : null, sn, out _,
+                            maxParagraphs: MaxPreviewBlocksPerSection - (section.Blocks.Count - startingBlocks));
 
                         if (scrollTarget is not null && lineNum == r.LineNumber
                             && r.LineNumber == scrollTarget.LineNumber
@@ -2745,22 +2713,11 @@ public sealed partial class MainWindow
         UpdateMatchNavPanel();
         UpdateSectionMatchNavPanels();
 
-        // Activate the selected result and align global nav with it.
-        if (scrollTarget is not null
-            && scrollBlock is not null
-            && TryFindPreviewMatchParagraph(scrollBlock, scrollTarget, out var targetPara, out var targetMatchInPara))
-        {
-            scrollPara = targetPara;
-            SetCurrentMatchToMatch(scrollBlock, targetPara, targetMatchInPara);
-        }
-        else if (scrollBlock is not null && scrollPara is not null)
-        {
+        // Activate the section for the clicked file and align global nav with it.
+        if (scrollBlock is not null && scrollPara is not null)
             SetCurrentMatchToParagraph(scrollBlock, scrollPara);
-        }
         else if (scrollBlock is not null)
-        {
             ActivateSectionForBlock(scrollBlock);
-        }
 
         if (scrollToTop)
             PreviewScrollViewer.ChangeView(null, 0, null, disableAnimation: true);

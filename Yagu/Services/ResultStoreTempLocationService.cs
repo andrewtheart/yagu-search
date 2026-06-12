@@ -1,5 +1,3 @@
-using System.IO;
-
 namespace Yagu.Services;
 
 public sealed record ResultStoreTempDriveOption(

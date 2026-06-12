@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
@@ -3075,9 +3071,12 @@ public sealed partial class MainWindow
             if (truncatePreviewLines && consumed == 0 && ov.RemainingResults.Count > 0)
             {
                 int entriesBefore = _matchParagraphs.Count;
+                int blocksAdded = 0;
                 int maxResults = Math.Min(chunkSize, ov.RemainingResults.Count);
                 for (int ri = 0; ri < maxResults; ri++)
                 {
+                    if (blocksAdded >= MaxPreviewBlocksPerExpandChunk)
+                        break;
                     if (_matchParagraphs.Count - entriesBefore >= MaxMatchEntriesPerExpandChunk)
                         break;
 
@@ -3100,13 +3099,15 @@ public sealed partial class MainWindow
                         out _,
                         truncate: truncatePreviewLines,
                         continuationGutter: true,
-                        targetOnlyMatchEntry: true);
+                        targetOnlyMatchEntry: true,
+                        maxParagraphs: MaxPreviewBlocksPerExpandChunk - blocksAdded);
                     MoveAppendedPreviewLineBesideExistingLine(
                         section,
                         r.LineNumber,
                         contentStartIndex,
                         gutterStartIndex,
                         addedParagraphs);
+                    blocksAdded += addedParagraphs;
                     consumed++;
                 }
             }
@@ -3138,7 +3139,8 @@ public sealed partial class MainWindow
 
                     bool isMatchLine = matchLineNums.Contains(lineNum);
                     AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, ov.Rx, truncate: truncatePreviewLines,
-                        lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs);
+                        lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs,
+                        maxParagraphs: MaxPreviewBlocksPerExpandChunk - blocksAdded);
                     blocksAdded += addedParagraphs;
                 }
                 consumed++;

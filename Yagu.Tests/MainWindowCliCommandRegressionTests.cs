@@ -99,7 +99,8 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("TrimEnd('\\r', '\\n')", terminalSource);
         Assert.Contains("_terminalShellReadyCompletion", terminalSource);
         Assert.Contains("ContainsPrintableShellText", terminalSource);
-        Assert.Contains("_terminalService?.WriteInput(commandText);", terminalSource);
+        Assert.Contains("PostTerminalPasteTextToWebView(commandText);", terminalSource);
+        Assert.Contains("msg.type === 'pasteText'", terminalHtml);
         Assert.Contains("PostWebMessageAsJson(\"{\\\"type\\\":\\\"focus\\\"}\")", terminalSource);
         Assert.Contains("msg.type === 'focus'", terminalHtml);
 

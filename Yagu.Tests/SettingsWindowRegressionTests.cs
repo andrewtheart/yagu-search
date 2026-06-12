@@ -337,7 +337,10 @@ public sealed class SettingsWindowRegressionTests
     [InlineData("Display")]
     [InlineData("Editor")]
     [InlineData("Window")]
-    [InlineData("General")]
+    [InlineData("Interaction")]
+    [InlineData("Terminal Emulator")]
+    [InlineData("Developer Options")]
+    [InlineData("Shortcuts & History")]
     public void SettingsWindow_ContainsAllSettingsGroups(string groupName)
     {
         Assert.Contains($"AddTab(\"{groupName}\")", SettingsWindowSource);
@@ -445,9 +448,10 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("AddSettingsGroupBox", SettingsWindowSource);
         AssertContainsInOrder(SettingsWindowSource,
             "var g = AddTab(\"Display\");",
+            "var appAppearanceGroup = AddSettingsGroupBox(g, \"Application Appearance\");",
             "var fileMatchListGroup = AddSettingsGroupBox(g, \"File Match List\");",
             "var previewViewerGroup = AddSettingsGroupBox(g, \"Preview Viewer\");",
-            "var editorAppearanceGroup = AddSettingsGroupBox(g, \"Editor\");");
+            "var editorAppearanceGroup = AddSettingsGroupBox(g, \"Built-In Editor Appearance\");");
 
         int displayStart = SettingsWindowSource.IndexOf("// ── Display ──", StringComparison.Ordinal);
         int editorTabStart = SettingsWindowSource.IndexOf("// ── Editor ──", StringComparison.Ordinal);
@@ -469,7 +473,7 @@ public sealed class SettingsWindowRegressionTests
 
         Assert.Contains("CaptureTabPageRootElements();", SettingsWindowSource);
         Assert.Contains("OriginalPlacements = capturedPlacements", SettingsWindowSource);
-        Assert.Contains("RestoreOriginalPlacements(_settingEntries.SelectMany(entry => entry.OriginalPlacements));", SettingsWindowSource);
+        Assert.Contains("RestoreOriginalPlacements(entry.OriginalPlacements)", SettingsWindowSource);
         AssertContainsInOrder(SettingsWindowSource,
             "if (child is Border { Child: UIElement groupChild })",
             "EnumerateSearchableGroupChild(groupChild)");
@@ -496,12 +500,12 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("App.LaunchWorkingDirectory", SettingsWindowSource);
 
         AssertContainsInOrder(SettingsWindowSource,
-            "var g = AddTab(\"UI Behaviors\");",
+            "var g = AddTab(\"Interaction\");",
             "var g = AddTab(\"Terminal Emulator\");",
-            "AddTerminalEmulationSetting(g);",
+            "AddTerminalEmulationSetting(workingDirectoryGroup);",
             "var g = AddTab(\"Developer Options\");");
 
-        int uiBehaviorStart = SettingsWindowSource.IndexOf("var g = AddTab(\"UI Behaviors\");", StringComparison.Ordinal);
+        int uiBehaviorStart = SettingsWindowSource.IndexOf("var g = AddTab(\"Interaction\");", StringComparison.Ordinal);
         int terminalEmulatorStart = SettingsWindowSource.IndexOf("var g = AddTab(\"Terminal Emulator\");", StringComparison.Ordinal);
         Assert.True(uiBehaviorStart >= 0 && terminalEmulatorStart > uiBehaviorStart);
         string uiBehaviorBlock = SettingsWindowSource[uiBehaviorStart..terminalEmulatorStart];
@@ -681,31 +685,11 @@ public sealed class SettingsWindowRegressionTests
     [Fact]
     public void SettingsWindow_SearchReparentsElementsFromAllSupportedParentTypes()
     {
-        string searchChanged = ExtractMethod(SettingsWindowSource, "OnSearchTextChanged", window: 4600);
-        AssertContainsInOrder(searchChanged,
-            "if (!DetachFromParent(element))",
-            "LogCouldNotDetach(element, \"showing settings search results\");",
-            "continue;",
-            "TryAddSearchResultElement(container, element);");
-        Assert.Contains("var renderedElements = new List<UIElement>();", SettingsWindowSource);
-        Assert.Contains("if (!AddElementIfNotSeen(renderedElements, element))", SettingsWindowSource);
-        Assert.Contains("if (container.Children.Count == 0)", SettingsWindowSource);
+        string searchChanged = ExtractMethod(SettingsWindowSource, "OnSearchTextChanged", window: 2600);
+        Assert.Contains("DetachFromParent(element);", searchChanged);
         Assert.DoesNotContain("fe.Parent is Panel", searchChanged);
 
-        string restore = ExtractMethod(SettingsWindowSource, "RestoreTabPageElements", window: 1800);
-        Assert.Contains("RestoreOriginalPlacements(_settingEntries.SelectMany(entry => entry.OriginalPlacements));", restore);
-
-        string restorePlacements = ExtractMethod(SettingsWindowSource, "RestoreOriginalPlacements", window: 1200);
-        Assert.Contains("var restoredElements = new List<UIElement>();", restorePlacements);
-        Assert.Contains("if (!AddElementIfNotSeen(restoredElements, placement.Element))", restorePlacements);
-        Assert.Contains("if (!DetachFromParent(placement.Element))", restorePlacements);
-        Assert.Contains("LogCouldNotDetach(placement.Element, \"restoring setting placement\");", restorePlacements);
-
-        string dedupe = ExtractMethod(SettingsWindowSource, "AddElementIfNotSeen", window: 900);
-        Assert.Contains("ReferenceEquals(seen, element)", dedupe);
-
         string detach = ExtractMethod(SettingsWindowSource, "DetachFromParent", window: 1800);
-        Assert.Contains("private static bool DetachFromParent", detach);
         Assert.Contains("case Panel parentPanel:", detach);
         Assert.Contains("parentPanel.Children.Remove(element);", detach);
         Assert.Contains("case Border border when ReferenceEquals(border.Child, element):", detach);
@@ -714,17 +698,6 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("contentControl.Content = null;", detach);
         Assert.Contains("case ScrollViewer scrollViewer when ReferenceEquals(scrollViewer.Content, element):", detach);
         Assert.Contains("scrollViewer.Content = null;", detach);
-        Assert.Contains("case ItemsControl itemsControl when itemsControl.Items.Contains(element):", detach);
-        Assert.Contains("return fe.Parent is null;", detach);
-
-        string logCouldNotDetach = ExtractMethod(SettingsWindowSource, "LogCouldNotDetach", window: 900);
-        Assert.Contains("skipping reparent to avoid WinUI child-parent crash", logCouldNotDetach);
-
-        string tryAdd = ExtractMethod(SettingsWindowSource, "TryAddSearchResultElement", window: 1400);
-        Assert.Contains("container.Children.Add(element);", tryAdd);
-        Assert.Contains("catch (Exception ex)", tryAdd);
-        Assert.Contains("Could not add {element.GetType().Name} to settings search results", tryAdd);
-        Assert.Contains("return false;", tryAdd);
     }
 
     [Fact]

@@ -2,8 +2,6 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.UI.Dispatching;
 using WinRT;
-using Yagu;
-using Yagu.Services;
 
 namespace Yagu;
 

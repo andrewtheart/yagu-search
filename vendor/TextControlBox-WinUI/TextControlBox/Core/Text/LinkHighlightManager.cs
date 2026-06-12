@@ -2,7 +2,6 @@
 using Microsoft.Graphics.Canvas.Text;
 using Microsoft.UI.Xaml;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;

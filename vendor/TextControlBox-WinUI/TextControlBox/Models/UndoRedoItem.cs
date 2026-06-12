@@ -1,7 +1,4 @@
-﻿
-using TextControlBoxNS.Core.Text;
-
-namespace TextControlBoxNS.Models;
+﻿namespace TextControlBoxNS.Models;
 
 internal class UndoRedoItem
 {

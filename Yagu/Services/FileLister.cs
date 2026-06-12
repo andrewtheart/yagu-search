@@ -4,7 +4,6 @@ using System.Globalization;
 using System.Threading.Channels;
 using Microsoft.Win32;
 using Yagu.Native;
-using Yagu.Services;
 
 namespace Yagu.Services;
 

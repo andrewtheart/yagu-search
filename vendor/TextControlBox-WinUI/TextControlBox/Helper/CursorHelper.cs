@@ -4,7 +4,6 @@ using System;
 using TextControlBoxNS.Core;
 using TextControlBoxNS.Core.Renderer;
 using TextControlBoxNS.Core.Text;
-using TextControlBoxNS.Extensions;
 using Windows.Foundation;
 
 namespace TextControlBoxNS.Helper;

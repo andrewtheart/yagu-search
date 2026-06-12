@@ -398,33 +398,21 @@
                             <FontIcon Glyph="&#xE894;" FontSize="12" />
                         </Button>
                     </Grid>
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
-                        <Button x:Name="SearchCardLoadSessionButton"
-                                Click="OnLoadSession"
-                                Width="32"
-                                Height="32"
-                                Padding="0"
-                                MinWidth="0"
-                                IsEnabled="{x:Bind ViewModel.IsSessionIdle, Mode=OneWay}"
-                                ToolTipService.ToolTip="Load a previously saved .yagu-session file">
-                            <FontIcon Glyph="&#xE8E5;" FontSize="14" />
-                        </Button>
-                        <Button x:Name="SearchCancelButton" Click="OnSearchCancelClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,6" MinWidth="0"
-                                ToolTipService.ToolTip="Search (F5)">
-                            <Button.KeyboardAccelerators>
-                                <KeyboardAccelerator Key="F5" />
-                            </Button.KeyboardAccelerators>
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <FontIcon x:Name="SearchCancelIcon" Glyph="&#xE721;" FontSize="14" />
-                                <TextBlock x:Name="SearchCancelLabel" Text="Search" />
-                            </StackPanel>
-                        </Button>
-                    </StackPanel>
+                        <Button x:Name="SearchCancelButton" Grid.Column="2" Click="OnSearchCancelClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,6" MinWidth="0"
+                            ToolTipService.ToolTip="Search (F5)">
+                        <Button.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="F5" />
+                        </Button.KeyboardAccelerators>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon x:Name="SearchCancelIcon" Glyph="&#xE721;" FontSize="14" />
+                            <TextBlock x:Name="SearchCancelLabel" Text="Search" />
+                        </StackPanel>
+                    </Button>
                 </Grid>
 
                 <!-- Advanced options (collapsed by default) -->
                 <Expander x:Name="AdvancedOptionsExpander"
-                          IsExpanded="False" HorizontalAlignment="Left"
+                          IsExpanded="False" HorizontalAlignment="Stretch"
                           HorizontalContentAlignment="Stretch" Padding="0"
                           MinHeight="0" FontSize="12"
                           Expanding="OnAdvancedOptionsExpanding"
@@ -434,7 +422,7 @@
                     </Expander.Header>
                         <Border Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                            BorderThickness="1" CornerRadius="4" Padding="24,12,12,12">
+                            BorderThickness="1" CornerRadius="4" Padding="24,16,12,16">
                     <Grid>
                         <Button x:Name="GenerateCliCommandButton"
                                 Click="OnGenerateCliCommandClick"
@@ -468,11 +456,7 @@
                         <StackPanel Spacing="6">
                             <TextBlock Text="Path filters" Opacity="0.7"
                                        FontWeight="SemiBold" />
-                            <Grid ColumnSpacing="10">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="8">
                                 <Grid RowSpacing="4" ColumnSpacing="6">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
@@ -500,13 +484,12 @@
                                     <TextBox x:Name="IncludeFilterBox" Grid.Row="1" Grid.ColumnSpan="3"
                                              PlaceholderText="{x:Bind ViewModel.IncludeFilterPlaceholder, Mode=OneWay}"
                                              Text="{x:Bind ViewModel.IncludeGlobs, Mode=TwoWay}"
-                                             PlaceholderForeground="{ThemeResource TextFillColorPrimaryBrush}"
                                              Padding="8,4" FontStyle="Italic"
                                              TextChanged="OnFilterBoxTextChanged"
                                              GotFocus="OnFilterBoxGotFocus"
                                              LostFocus="OnFilterBoxLostFocus" />
                                 </Grid>
-                                <Grid Grid.Column="1" RowSpacing="4" ColumnSpacing="6">
+                                <Grid RowSpacing="4" ColumnSpacing="6">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
@@ -538,7 +521,7 @@
                                              GotFocus="OnFilterBoxGotFocus"
                                              LostFocus="OnFilterBoxLostFocus" />
                                 </Grid>
-                            </Grid>
+                            </StackPanel>
                         </StackPanel>
 
                         <!-- File type filters -->
@@ -718,44 +701,38 @@
                                                ToolTipService.ToolTip="Maximum file size in MB. Leave blank for no upper limit." />
                                 </StackPanel>
                             </Grid>
-                            <Grid ColumnSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Spacing="4">
-                                    <TextBlock Text="Created Date" FontSize="11" Opacity="0.75" />
-                                    <Grid ColumnSpacing="8">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <CalendarDatePicker Date="{x:Bind ViewModel.CreatedAfterDate, Mode=TwoWay}"
-                                                            PlaceholderText="From" HorizontalAlignment="Stretch"
-                                                            ToolTipService.ToolTip="Only include files created on or after this date." />
-                                        <CalendarDatePicker Grid.Column="1"
-                                                            Date="{x:Bind ViewModel.CreatedBeforeDate, Mode=TwoWay}"
-                                                            PlaceholderText="To" HorizontalAlignment="Stretch"
-                                                            ToolTipService.ToolTip="Only include files created on or before this date." />
-                                    </Grid>
-                                </StackPanel>
-                                <StackPanel Grid.Column="1" Spacing="4">
-                                    <TextBlock Text="Modified Date" FontSize="11" Opacity="0.75" />
-                                    <Grid ColumnSpacing="8">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <CalendarDatePicker Date="{x:Bind ViewModel.ModifiedAfterDate, Mode=TwoWay}"
-                                                            PlaceholderText="From" HorizontalAlignment="Stretch"
-                                                            ToolTipService.ToolTip="Only include files modified on or after this date." />
-                                        <CalendarDatePicker Grid.Column="1"
-                                                            Date="{x:Bind ViewModel.ModifiedBeforeDate, Mode=TwoWay}"
-                                                            PlaceholderText="To" HorizontalAlignment="Stretch"
-                                                            ToolTipService.ToolTip="Only include files modified on or before this date." />
-                                    </Grid>
-                                </StackPanel>
-                            </Grid>
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Created Date" FontSize="11" Opacity="0.75" />
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <CalendarDatePicker Date="{x:Bind ViewModel.CreatedAfterDate, Mode=TwoWay}"
+                                                        PlaceholderText="From" HorizontalAlignment="Stretch"
+                                                        ToolTipService.ToolTip="Only include files created on or after this date." />
+                                    <CalendarDatePicker Grid.Column="1"
+                                                        Date="{x:Bind ViewModel.CreatedBeforeDate, Mode=TwoWay}"
+                                                        PlaceholderText="To" HorizontalAlignment="Stretch"
+                                                        ToolTipService.ToolTip="Only include files created on or before this date." />
+                                </Grid>
+                            </StackPanel>
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="Modified Date" FontSize="11" Opacity="0.75" />
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <CalendarDatePicker Date="{x:Bind ViewModel.ModifiedAfterDate, Mode=TwoWay}"
+                                                        PlaceholderText="From" HorizontalAlignment="Stretch"
+                                                        ToolTipService.ToolTip="Only include files modified on or after this date." />
+                                    <CalendarDatePicker Grid.Column="1"
+                                                        Date="{x:Bind ViewModel.ModifiedBeforeDate, Mode=TwoWay}"
+                                                        PlaceholderText="To" HorizontalAlignment="Stretch"
+                                                        ToolTipService.ToolTip="Only include files modified on or before this date." />
+                                </Grid>
+                            </StackPanel>
                         </StackPanel>
                         <!-- Max search depth -->
                         <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">

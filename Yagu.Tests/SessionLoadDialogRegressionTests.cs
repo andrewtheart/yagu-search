@@ -5,6 +5,8 @@ public sealed class SessionLoadDialogRegressionTests
     private static readonly string RepoRoot = FindRepoRoot();
     private static readonly string PreviewCommandsSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewCommands.cs"));
+    private static readonly string MainViewModelSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
     private static readonly string SessionLoadDialogSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "SessionLoadDialog.cs"));
     private static readonly string YaguDialogSource = File.ReadAllText(
@@ -26,8 +28,6 @@ public sealed class SessionLoadDialogRegressionTests
     {
         Assert.Contains("YaguDialog.ShowAsync", SessionLoadDialogSource);
         Assert.Contains("WindowForegroundHelper.CenterWindowOverOwner", YaguDialogSource);
-        Assert.Contains("Pick a saved session", SessionLoadDialogSource);
-        Assert.Contains("Use the column headers to sort by file name, parent folder, size, or last modified time.", SessionLoadDialogSource);
         Assert.Contains("SelectionMode = ListViewSelectionMode.Single", SessionLoadDialogSource);
         Assert.Contains("IsItemClickEnabled = true", SessionLoadDialogSource);
         Assert.Contains("item.Tapped += (_, _) => loadPath(session.Path);", SessionLoadDialogSource);
@@ -36,31 +36,6 @@ public sealed class SessionLoadDialogRegressionTests
         Assert.Contains("completed = true;", SessionLoadDialogSource);
         Assert.Contains("dialog?.AcceptSecondary();", SessionLoadDialogSource);
         Assert.Contains("PrimaryButtonText = \"Browse...\"", SessionLoadDialogSource);
-    }
-
-    [Fact]
-    public void LoadSession_CustomModalUsesSortableTableColumns()
-    {
-        Assert.Contains("internal enum SessionLoadSortColumn", SessionLoadDialogSource);
-        Assert.Contains("BuildSessionTable", SessionLoadDialogSource);
-        Assert.Contains("CreateSortHeaderButton(\"File name\", HorizontalAlignment.Left)", SessionLoadDialogSource);
-        Assert.Contains("CreateSortHeaderButton(\"Parent folder\", HorizontalAlignment.Left)", SessionLoadDialogSource);
-        Assert.Contains("CreateSortHeaderButton(\"Size\", HorizontalAlignment.Right)", SessionLoadDialogSource);
-        Assert.Contains("CreateSortHeaderButton(\"Modified\", HorizontalAlignment.Right)", SessionLoadDialogSource);
-        Assert.Contains("HorizontalContentAlignment = contentAlignment", SessionLoadDialogSource);
-        Assert.Contains("SortSessionCandidates", SessionLoadDialogSource);
-        Assert.Contains("GetParentDirectory(session.Path)", SessionLoadDialogSource);
-        Assert.Contains("FormatSize(session.SizeBytes)", SessionLoadDialogSource);
-        Assert.Contains("FormatModified(session.ModifiedUtc)", SessionLoadDialogSource);
-        Assert.DoesNotContain("FormatMetadata", SessionLoadDialogSource);
-
-        AssertContainsInOrder(SessionLoadDialogSource,
-            "var currentSortColumn = SessionLoadSortColumn.Modified;",
-            "var sortAscending = false;",
-            "CreateSortHeaderButton(\"File name\", HorizontalAlignment.Left)",
-            "CreateSortHeaderButton(\"Parent folder\", HorizontalAlignment.Left)",
-            "CreateSortHeaderButton(\"Size\", HorizontalAlignment.Right)",
-            "CreateSortHeaderButton(\"Modified\", HorizontalAlignment.Right)");
     }
 
     [Fact]
@@ -79,18 +54,36 @@ public sealed class SessionLoadDialogRegressionTests
     {
         Assert.Contains("private async Task LoadSessionFileAsync(string path)", PreviewCommandsSource);
         AssertContainsInOrder(PreviewCommandsSource,
-            "EnsureResultsListVisibleForSessionLoad();",
             "ClearPreviewStateForSessionLoad();",
             "var header = await ViewModel.LoadSessionAsync(path);",
             "Load session failed: {path}");
-        AssertContainsInOrder(PreviewCommandsSource,
-            "private void EnsureResultsListVisibleForSessionLoad()",
-            "if (_launcherMode)",
-            "ExitLauncherMode();",
-            "_resultsPaneCollapsed = false;",
-            "SplitPaneGrid.Visibility = Visibility.Visible;",
-            "ApplySplitLayout(SplitLayoutMode.ResultsMaximized);",
-            "UpdateBottomStatusBarVisibility();");
+    }
+
+    [Fact]
+    public void LoadSession_RestoresNormalCompletionStatusFromSavedStats()
+    {
+        string loadMethod = ExtractWindow(
+            MainViewModelSource,
+            "public async Task<SessionFileService.SessionHeader> LoadSessionAsync",
+            "private void BeginSessionProgress(string initialText)");
+
+        Assert.Contains("StatusText = BuildCompletionStatus(displaySummary, header.Stats.Elapsed);", loadMethod);
+        Assert.Contains("FilesScanned: header.Stats.FilesScanned", loadMethod);
+        Assert.Contains("BytesScanned: header.Stats.BytesScanned", loadMethod);
+        Assert.Contains("FilesWithMatches: actualFileCount", loadMethod);
+        Assert.Contains("TotalMatches: loadedCount", loadMethod);
+        Assert.DoesNotContain("StatusText = loadedStatus", loadMethod);
+        Assert.DoesNotContain("Loaded session:", loadMethod);
+    }
+
+    private static string ExtractWindow(string source, string startMarker, string endMarker)
+    {
+        int start = source.IndexOf(startMarker, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Could not find start marker '{startMarker}'.");
+
+        int end = source.IndexOf(endMarker, start, StringComparison.Ordinal);
+        Assert.True(end >= 0, $"Could not find end marker '{endMarker}'.");
+        return source[start..end];
     }
 
     private static void AssertContainsInOrder(string text, params string[] parts)

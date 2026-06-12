@@ -1,5 +1,3 @@
-using System;
-using System.Collections.Generic;
 using System.Collections.Specialized;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -257,24 +255,11 @@ public sealed partial class MainWindow
             return true;
         }
 
-        HideResultsFileOverlay();
-
         if (group.IsExpanded)
-        {
-            var groupToCollapse = group;
-            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
-            {
-                if (groupToCollapse.IsExpanded)
-                    groupToCollapse.IsExpanded = false;
+            group.IsExpanded = false;
 
-                QueueResultsFileOverlayUpdate();
-            });
-        }
-        else
-        {
-            QueueResultsFileOverlayUpdate();
-        }
-
+        HideResultsFileOverlay();
+        QueueResultsFileOverlayUpdate();
         return true;
     }
 

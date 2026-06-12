@@ -1,5 +1,4 @@
 ﻿using Microsoft.UI.Input;
-using Microsoft.UI.Xaml;
 using TextControlBoxNS.Controls;
 
 namespace TextControlBoxNS.Core;

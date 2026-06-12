@@ -1,5 +1,4 @@
-﻿using System.Diagnostics;
-using TextControlBoxNS.Core.Text;
+﻿using TextControlBoxNS.Core.Text;
 using TextControlBoxNS.Extensions;
 using TextControlBoxNS.Helper;
 

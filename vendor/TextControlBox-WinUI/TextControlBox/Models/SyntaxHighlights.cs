@@ -2,7 +2,6 @@
 using System.Drawing;
 using System.Text.RegularExpressions;
 using TextControlBoxNS.Extensions;
-using TextControlBoxNS.Models;
 
 namespace TextControlBoxNS;
 
