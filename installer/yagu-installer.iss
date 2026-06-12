@@ -8,8 +8,9 @@
 #define MyAppExeName "Yagu.exe"
 #define MyAppPublisher "Yagu"
 #define MyAppURL "https://github.com/yagu"
+#define DotNetRuntimeArchitecture "x64"
 #define DotNet10RuntimeDownloadUrl "https://dotnet.microsoft.com/download/dotnet/10.0"
-#define DotNet10RuntimeDirectUrl "https://aka.ms/dotnet/10.0/dotnet-runtime-win-x64.exe"
+#define DotNet10RuntimeDirectUrl "https://aka.ms/dotnet/10.0/dotnet-runtime-win-" + DotNetRuntimeArchitecture + ".exe"
 #define DotNet10RuntimeRegistrySubkey "SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.NETCore.App"
 
 ; Version is read from the build-version.txt file produced by the build.
@@ -39,6 +40,8 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
+; The staged app, native search DLL, .NET runtime check, and Windows App Runtime prerequisite are x64.
+; Intel/AMD 64-bit CPUs use this same x64 runtime; 32-bit x86 Windows is not a supported target for this installer.
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
@@ -129,7 +132,7 @@ var
 begin
   Result := False;
   TempDir := GetTempDir;
-  TempFile := TempDir + 'dotnet-runtime-10.0-win-x64.exe';
+  TempFile := TempDir + 'dotnet-runtime-10.0-win-{#DotNetRuntimeArchitecture}.exe';
   DoneFlag := TempFile + '.done';
   ExpectedSize := 30500000; { ~30 MB .NET 10 runtime installer }
 
@@ -249,8 +252,9 @@ begin
 
     Choice := TaskDialogMsgBox(
       'Missing .NET 10.0 Runtime',
-      'Yagu requires the .NET 10.0 Runtime for Windows x64.' + #13#10 + #13#10 +
+      'Yagu requires the .NET 10.0 Runtime for Windows {#DotNetRuntimeArchitecture}.' + #13#10 + #13#10 +
       'The installer did not find a .NET 10 runtime on this computer.' + #13#10 + #13#10 +
+      'Intel and AMD 64-bit processors both use the x64 runtime; 32-bit x86 Windows is not supported by this installer.' + #13#10 + #13#10 +
       'Choose an option below to install it, or cancel to exit.',
       mbCriticalError,
       MB_YESNOCANCEL, ButtonLabels, 0);

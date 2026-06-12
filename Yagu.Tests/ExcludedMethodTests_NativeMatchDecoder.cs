@@ -119,6 +119,37 @@ public sealed class ExcludedMethodTests_NativeMatchDecoder
     }
 
     [Fact]
+    public unsafe void DecodeMatchLine_NativeTruncatedLine_KeepsAbsoluteSourceMatchStart()
+    {
+        int oldLength = Yagu.Helpers.LineTruncator.TruncatedLength;
+        Yagu.Helpers.LineTruncator.TruncatedLength = 0;
+        try
+        {
+            string text = Yagu.Helpers.LineTruncator.Ellipsis + new string('a', 2497) + "THE_NEEDLE" + new string('b', 1000);
+            byte[] data = Encoding.UTF8.GetBytes(text);
+            fixed (byte* ptr = data)
+            {
+                int matchStart = text.IndexOf("THE_NEEDLE", StringComparison.Ordinal);
+                int matchStartBytes = Encoding.UTF8.GetByteCount(text.AsSpan(0, matchStart));
+                var decoded = ContentSearcher.NativeMatchDecoder.DecodeMatchLine(
+                    ptr,
+                    data.Length,
+                    matchStartBytes,
+                    "THE_NEEDLE".Length,
+                    sourceMatchStartBytes: 2500);
+
+                Assert.Contains("THE_NEEDLE", decoded.Line);
+                Assert.Equal(matchStart, decoded.MatchStart);
+                Assert.Equal(2500, decoded.SourceMatchStart);
+            }
+        }
+        finally
+        {
+            Yagu.Helpers.LineTruncator.TruncatedLength = oldLength;
+        }
+    }
+
+    [Fact]
     public unsafe void DecodeAndTruncate_NullPtr_ReturnsEmpty()
     {
         string result = ContentSearcher.NativeMatchDecoder.DecodeAndTruncate(null, 0);

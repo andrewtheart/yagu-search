@@ -456,25 +456,28 @@ public class SearchResultCollectionCoverageTests
     }
 
     [Fact]
-    public void PagingSource_QueuesSingleMatchEvictionAndChunksBulkEviction()
+    public void PagingSource_PreEvictsNewMatchesAndQueuesBulkEviction()
     {
         string repoRoot = FindRepoRoot();
         string viewModelSource = File.ReadAllText(Path.Combine(repoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
         string collectionSource = File.ReadAllText(Path.Combine(repoRoot, "Yagu", "Models", "SearchResultCollection.cs"));
         string storeSource = File.ReadAllText(Path.Combine(repoRoot, "Yagu", "Services", "ResultStore.cs"));
 
-        // Degraded-mode single-match eviction is routed through the ResultStore's
-        // single drain task instead of a per-match Task.Run + WriteBatch lock.
-        string addMatch = ExtractMethodWindow(viewModelSource, "AddMatch", window: 900);
-        Assert.Contains("_resultStore.EnqueueEvict(result)", addMatch);
-        Assert.DoesNotContain("Task.Run", addMatch);
-        Assert.DoesNotContain("WriteBatch", addMatch);
+        string addMatch = ExtractMethodWindow(viewModelSource, "AddMatchAsync", window: 900);
+        Assert.Contains("await EvictNewResultsBeforeUiAsync([result], cancellationToken).ConfigureAwait(true);", addMatch);
+        Assert.Contains("AddMatchCore(result, evictedResultWriter: null)", addMatch);
+
+        string evictNewResults = ExtractMethodWindow(viewModelSource, "EvictNewResultsBeforeUiAsync", window: 900);
+        Assert.Contains("Task.Run(() => _resultStore.EvictManyNow(results), cancellationToken)", evictNewResults);
+        Assert.DoesNotContain("WriteBatch", evictNewResults);
 
         // The ResultStore exposes EnqueueEvict + Drain backed by a Channel and a
         // single background drain task — this is what eliminates the writer-lock
         // contention between bulk EvictAll and degraded-mode AddMatch writes.
         Assert.Contains("EnqueueEvict", storeSource);
-        Assert.Contains("Channel.CreateUnbounded<SearchResult>", storeSource);
+        Assert.Contains("EvictManyNow", storeSource);
+        Assert.Contains("Channel.CreateBounded<SearchResult>", storeSource);
+        Assert.Contains("BoundedChannelOptions", storeSource);
         Assert.Contains("DrainLoopAsync", storeSource);
 
         // Bulk eviction enqueues into the same queue and returns immediately —

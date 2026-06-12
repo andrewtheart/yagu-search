@@ -531,8 +531,13 @@ public sealed partial class SettingsWindow : Window
                 if (!AddElementIfNotSeen(renderedElements, element))
                     continue;
 
-                DetachFromParent(element);
-                container.Children.Add(element);
+                if (!DetachFromParent(element))
+                {
+                    LogCouldNotDetach(element, "showing settings search results");
+                    continue;
+                }
+
+                TryAddSearchResultElement(container, element);
             }
 
             if (container.Children.Count == 0)
@@ -594,7 +599,15 @@ public sealed partial class SettingsWindow : Window
             if (t >= _tabPageRootElements.Count) continue;
             foreach (var element in _tabPageRootElements[t])
             {
-                DetachFromParent(element);
+                if (element is FrameworkElement { Parent: Panel currentParent } && ReferenceEquals(currentParent, sp))
+                    continue;
+
+                if (!DetachFromParent(element))
+                {
+                    LogCouldNotDetach(element, "restoring settings tab roots");
+                    continue;
+                }
+
                 sp.Children.Add(element);
             }
         }
@@ -610,7 +623,15 @@ public sealed partial class SettingsWindow : Window
             if (!AddElementIfNotSeen(restoredElements, placement.Element))
                 continue;
 
-            DetachFromParent(placement.Element);
+            if (!DetachFromParent(placement.Element))
+            {
+                if (placement.Element is FrameworkElement { Parent: Panel currentParent } && ReferenceEquals(currentParent, placement.Parent))
+                    continue;
+
+                LogCouldNotDetach(placement.Element, "restoring setting placement");
+                continue;
+            }
+
             int index = Math.Clamp(placement.Index, 0, placement.Parent.Children.Count);
             placement.Parent.Children.Insert(index, placement.Element);
         }
@@ -628,10 +649,10 @@ public sealed partial class SettingsWindow : Window
         return true;
     }
 
-    private static void DetachFromParent(UIElement element)
+    private static bool DetachFromParent(UIElement element)
     {
         if (element is not FrameworkElement fe || fe.Parent is null)
-            return;
+            return true;
 
         switch (fe.Parent)
         {
@@ -647,6 +668,45 @@ public sealed partial class SettingsWindow : Window
             case ScrollViewer scrollViewer when ReferenceEquals(scrollViewer.Content, element):
                 scrollViewer.Content = null;
                 break;
+            case ItemsControl itemsControl when itemsControl.Items.Contains(element):
+                itemsControl.Items.Remove(element);
+                break;
+            default:
+                return false;
+        }
+
+        return fe.Parent is null;
+    }
+
+    private static void LogCouldNotDetach(UIElement element, string operation)
+    {
+        string parentType = element is FrameworkElement { Parent: not null } fe
+            ? fe.Parent.GetType().Name
+            : "unknown parent";
+
+        LogService.Instance.Warning(
+            "SettingsWindow",
+            $"Could not detach {element.GetType().Name} from {parentType} while {operation}; skipping reparent to avoid WinUI child-parent crash.");
+    }
+
+    private static bool TryAddSearchResultElement(Panel container, UIElement element)
+    {
+        try
+        {
+            container.Children.Add(element);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            string parentType = element is FrameworkElement { Parent: not null } fe
+                ? fe.Parent.GetType().Name
+                : "unknown parent";
+
+            LogService.Instance.Warning(
+                "SettingsWindow",
+                $"Could not add {element.GetType().Name} to settings search results; current parent is {parentType}.",
+                ex);
+            return false;
         }
     }
 

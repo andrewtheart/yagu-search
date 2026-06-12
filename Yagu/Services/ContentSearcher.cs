@@ -782,10 +782,7 @@ public sealed class ContentSearcher
             int sourceMatchStart = -1;
             if (sourceMatchStartBytes.HasValue)
             {
-                int safeSourceStartBytes = Math.Clamp(sourceMatchStartBytes.Value, 0, len);
-                sourceMatchStart = IsAsciiRegion(ptr, safeSourceStartBytes)
-                    ? safeSourceStartBytes
-                    : Encoding.UTF8.GetCharCount(ptr, safeSourceStartBytes);
+                sourceMatchStart = Math.Max(0, sourceMatchStartBytes.Value);
             }
 
             if (LineTruncator.TruncatedLength == 0 || len <= LineTruncator.MaxDisplayLength * 4)

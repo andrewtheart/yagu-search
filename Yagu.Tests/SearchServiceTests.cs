@@ -1580,55 +1580,49 @@ public class ComputeAutoProcessMemoryCapTests
     public void SixteenGB_ReturnsOneQuarter()
     {
         long result = SearchService.ComputeAutoProcessMemoryCap(16UL * 1024 * 1024 * 1024);
-        // 16 GB / 4 = 4 GB (between floor and ceiling)
-        Assert.Equal(4L * 1024 * 1024 * 1024, result);
+        Assert.Equal(768L * 1024 * 1024, result);
     }
 
     [Fact]
     public void SixtyFourGB_ReturnsCeiling()
     {
         long result = SearchService.ComputeAutoProcessMemoryCap(64UL * 1024 * 1024 * 1024);
-        // 64 GB / 4 = 16 GB → clamped to 6 GB ceiling
-        Assert.Equal(6L * 1024 * 1024 * 1024, result);
+        Assert.Equal(768L * 1024 * 1024, result);
     }
 
     [Fact]
     public void OneHundredTwentyEightGB_ReturnsCeiling()
     {
         long result = SearchService.ComputeAutoProcessMemoryCap(128UL * 1024 * 1024 * 1024);
-        // 128 GB / 4 = 32 GB → clamped to 6 GB ceiling
-        Assert.Equal(6L * 1024 * 1024 * 1024, result);
+        Assert.Equal(768L * 1024 * 1024, result);
     }
 
     [Fact]
     public void FourGB_ReturnsFloor()
     {
         long result = SearchService.ComputeAutoProcessMemoryCap(4UL * 1024 * 1024 * 1024);
-        // 4 GB / 4 = 1 GB → clamped to 2 GB floor
-        Assert.Equal(2L * 1024 * 1024 * 1024, result);
+        Assert.Equal(768L * 1024 * 1024, result);
     }
 
     [Fact]
     public void TenGB_ReturnsQuarter()
     {
         long result = SearchService.ComputeAutoProcessMemoryCap(10UL * 1024 * 1024 * 1024);
-        // 10 GB / 4 = 2.5 GB (between floor and ceiling)
-        long expected = (long)(10UL * 1024 * 1024 * 1024 / 4);
-        Assert.Equal(expected, result);
+        Assert.Equal(768L * 1024 * 1024, result);
     }
 
     [Fact]
     public void OneGB_ReturnsFloor()
     {
         long result = SearchService.ComputeAutoProcessMemoryCap(1UL * 1024 * 1024 * 1024);
-        Assert.Equal(2L * 1024 * 1024 * 1024, result);
+        Assert.Equal(512L * 1024 * 1024, result);
     }
 
     [Fact]
     public void Zero_ReturnsFloor()
     {
         long result = SearchService.ComputeAutoProcessMemoryCap(0);
-        Assert.Equal(2L * 1024 * 1024 * 1024, result);
+        Assert.Equal(512L * 1024 * 1024, result);
     }
 }
 

@@ -285,6 +285,7 @@ public class NativeSearchOutcomeFromBufferTests
             WriteU64(buf, (ulong)(i + 1));
             WriteU32(buf, 0);
             WriteU32(buf, 1);
+            WriteU32(buf, 5);
             var lb = Encoding.UTF8.GetBytes($"line{i}");
             WriteU32(buf, (uint)lb.Length);
             buf.AddRange(lb);

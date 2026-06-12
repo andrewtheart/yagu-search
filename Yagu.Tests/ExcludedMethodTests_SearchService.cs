@@ -117,7 +117,7 @@ public sealed class ExcludedMethodTests_SearchService
     public void AutoProcessMemoryCap_ReturnsPositiveValue()
     {
         long cap = SearchService.AutoProcessMemoryCap();
-        Assert.True(cap >= 2L * 1024 * 1024 * 1024); // at least 2 GB
+        Assert.InRange(cap, 512L * 1024 * 1024, 768L * 1024 * 1024);
     }
 
     private static string ExtractMethodWindow(string source, string methodName, int window)

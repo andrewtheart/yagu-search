@@ -7,8 +7,11 @@ namespace Yagu.Tests;
 /// </summary>
 public class PreviewSectionLayoutTests
 {
-    private static readonly string MainWindowSource = File.ReadAllText(
+    private static readonly string PreviewSectionsSource = File.ReadAllText(
         Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewSections.cs"));
+
+    private static readonly string PreviewBuilderSource = File.ReadAllText(
+        Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewBuilder.cs"));
 
     [Fact]
     public void AddPreviewSection_Expander_HasHorizontalContentAlignmentStretch()
@@ -16,7 +19,7 @@ public class PreviewSectionLayoutTests
         // Regression: without HorizontalContentAlignment = Stretch, short content
         // (e.g. a file with only 1 match) gets centered in the Expander instead of
         // left-aligned, pushing line numbers to the middle of the panel.
-        var expanderBlock = ExtractMethodBody(MainWindowSource, "AddPreviewSection");
+        var expanderBlock = ExtractMethodBody(PreviewBuilderSource, "AddPreviewSection");
         Assert.Contains("HorizontalContentAlignment", expanderBlock);
         Assert.Contains("HorizontalAlignment.Stretch", expanderBlock);
     }
@@ -24,21 +27,22 @@ public class PreviewSectionLayoutTests
     [Fact]
     public void AddPreviewSection_Expander_HasHorizontalAlignmentStretch()
     {
-        var expanderBlock = ExtractMethodBody(MainWindowSource, "AddPreviewSection");
+        var expanderBlock = ExtractMethodBody(PreviewBuilderSource, "AddPreviewSection");
         Assert.Contains("HorizontalAlignment = HorizontalAlignment.Stretch", expanderBlock);
     }
 
     [Fact]
     public void BottomStatusBar_ShowsOnlyWhenBothBottomPanelsAreVisible()
     {
-        var visibilityMethod = ExtractMethodBody(MainWindowSource, "UpdateBottomStatusBarVisibility");
+        var visibilityMethod = ExtractMethodBody(PreviewSectionsSource, "UpdateBottomStatusBarVisibility");
 
-        Assert.Contains("_splitLayoutMode == SplitLayoutMode.Split", visibilityMethod);
+        Assert.Contains("!_resultsPaneCollapsed", visibilityMethod);
+        Assert.Contains("SplitPaneGrid.Visibility == Visibility.Visible", visibilityMethod);
         Assert.Contains("ResultsPanelBorder.Visibility == Visibility.Visible", visibilityMethod);
         Assert.Contains("PreviewPanelBorder.Visibility == Visibility.Visible", visibilityMethod);
         Assert.Contains("StatusBarRow.Height = showStatusBar ? GridLength.Auto : new GridLength(0);", visibilityMethod);
 
-        string sourceWithoutHelper = MainWindowSource.Replace(visibilityMethod, string.Empty, StringComparison.Ordinal);
+        string sourceWithoutHelper = PreviewSectionsSource.Replace(visibilityMethod, string.Empty, StringComparison.Ordinal);
         Assert.DoesNotContain("StatusBarRow.Height = GridLength.Auto;", sourceWithoutHelper);
     }
 
@@ -61,10 +65,10 @@ public class PreviewSectionLayoutTests
                 search = pos + 1;
             }
         }
-        Assert.True(idx >= 0, $"Method definition '{methodName}' not found in MainWindow.xaml.cs");
+        Assert.True(idx >= 0, $"Method definition '{methodName}' not found in source file");
 
         // Take a generous window from the method signature to capture the full body
-        int end = Math.Min(source.Length, idx + 5000);
+        int end = Math.Min(source.Length, idx + 9000);
         return source[idx..end];
     }
 

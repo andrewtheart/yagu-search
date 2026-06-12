@@ -543,7 +543,19 @@ public sealed class ResultStore : IDisposable
         _writer.Dispose();
         _stream.Dispose();
         _readStream.Dispose();
-        try { File.Delete(_path); } catch { /* best-effort cleanup */ }
+        DeleteTempFile(_path);
+    }
+
+    private static void DeleteTempFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("ResultStore", $"Could not delete temp result file '{path}'", ex);
+        }
     }
 
     /// <summary>

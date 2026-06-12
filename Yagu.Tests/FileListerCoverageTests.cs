@@ -550,7 +550,7 @@ public class FileListerSdkTests : IDisposable
     }
 
     [Fact]
-    public async Task Sdk_NoMaxFiles_SetsMaxToMaxUint()
+    public async Task Sdk_NoMaxFiles_UsesDefaultPageSize()
     {
         var sdk = new MockEverythingSdkOps
         {
@@ -558,7 +558,7 @@ public class FileListerSdkTests : IDisposable
         };
         var lister = CreateSdkLister(sdk);
         await foreach (var _ in lister.ListFilesAsync(_root, Array.Empty<string>(), 0, default)) { }
-        Assert.Equal(0xFFFFFFFF, sdk.CapturedMax);
+        Assert.Equal(10_000u, sdk.CapturedMax);
     }
 
     [Fact]

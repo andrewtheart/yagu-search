@@ -361,4 +361,134 @@ public class ResultStoreDisposeTests
         Assert.Equal("short match line", result.MatchLine);
         Assert.Equal("short match line", result.ShortPreview);
     }
+
+    [Fact]
+    public void Dispose_WithQueuedEviction_DeletesTempFile()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), "qg-result-close-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDirectory);
+
+        try
+        {
+            string path;
+            var store = new ResultStore(tempDirectory);
+            try
+            {
+                path = store.TempFilePath;
+                var result = new SearchResult(
+                    FilePath: @"C:\repo\file.txt",
+                    LineNumber: 1,
+                    MatchLine: "needle",
+                    MatchStartColumn: 0,
+                    MatchLength: 6,
+                    ContextBefore: ["before"],
+                    ContextAfter: ["after"]);
+
+                Assert.True(store.EnqueueEvict(result));
+                Assert.True(File.Exists(path));
+            }
+            finally
+            {
+                store.Dispose();
+            }
+
+            Assert.False(File.Exists(path));
+        }
+        finally
+        {
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+}
+
+public class ResultStoreAppCloseRegressionTests
+{
+    [Fact]
+    public void MainWindowCloseDisposesViewModelResultStore()
+    {
+        string root = FindRepoRoot();
+        string mainWindowSource = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml.cs"));
+        string viewModelSource = File.ReadAllText(Path.Combine(root, "Yagu", "ViewModels", "MainViewModel.cs"));
+        string resultStoreSource = File.ReadAllText(Path.Combine(root, "Yagu", "Services", "ResultStore.cs"));
+
+        string closedHandler = ExtractWindowAfter(mainWindowSource, "this.Closed += (_, _) =>", 400);
+        AssertContainsInOrder(closedHandler,
+            "Dispose();",
+            "LogService.Instance.Flush();");
+
+        string mainWindowDispose = ExtractMethodWindow(mainWindowSource, "Dispose", 1600);
+        Assert.Contains("ViewModel.Dispose();", mainWindowDispose);
+
+        string viewModelDispose = ExtractMethodWindow(viewModelSource, "Dispose", 1200);
+        Assert.Contains("_resultStore?.Dispose();", viewModelDispose);
+
+        string resultStoreDispose = ExtractMethodWindow(resultStoreSource, "Dispose", 1200);
+        Assert.Contains("DeleteTempFile(_path);", resultStoreDispose);
+
+        string deleteTempFile = ExtractMethodWindow(resultStoreSource, "DeleteTempFile", 800);
+        Assert.Contains("File.Delete(path);", deleteTempFile);
+        Assert.Contains("LogService.Instance.Warning(\"ResultStore\"", deleteTempFile);
+    }
+
+    private static string ExtractWindowAfter(string source, string marker, int window)
+    {
+        int index = source.IndexOf(marker, StringComparison.Ordinal);
+        if (index < 0) throw new InvalidOperationException($"Marker '{marker}' not found.");
+        int end = Math.Min(source.Length, index + window);
+        return source[index..end];
+    }
+
+    private static string ExtractMethodWindow(string source, string methodName, int window)
+    {
+        int index = FindMethodDefinition(source, methodName);
+        int end = Math.Min(source.Length, index + window);
+        return source[index..end];
+    }
+
+    private static int FindMethodDefinition(string source, string methodName)
+    {
+        string needle = methodName + "(";
+        int search = 0;
+        while (true)
+        {
+            int index = source.IndexOf(needle, search, StringComparison.Ordinal);
+            if (index < 0) break;
+
+            int lineStart = source.LastIndexOf('\n', index);
+            lineStart = lineStart < 0 ? 0 : lineStart + 1;
+            int lineEnd = source.IndexOf('\n', index);
+            if (lineEnd < 0) lineEnd = source.Length;
+            string line = source[lineStart..lineEnd];
+            if (line.Contains("public ", StringComparison.Ordinal) ||
+                line.Contains("private ", StringComparison.Ordinal) ||
+                line.Contains("protected ", StringComparison.Ordinal))
+            {
+                return lineStart;
+            }
+
+            search = index + needle.Length;
+        }
+
+        throw new InvalidOperationException($"Method definition '{methodName}' not found.");
+    }
+
+    private static void AssertContainsInOrder(string text, params string[] expected)
+    {
+        int offset = 0;
+        foreach (string item in expected)
+        {
+            int index = text.IndexOf(item, offset, StringComparison.Ordinal);
+            Assert.True(index >= 0, $"Expected to find '{item}' after offset {offset}.");
+            offset = index + item.Length;
+        }
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+            dir = dir.Parent;
+
+        return dir?.FullName ?? throw new InvalidOperationException("Cannot find repo root (Yagu.sln).");
+    }
 }

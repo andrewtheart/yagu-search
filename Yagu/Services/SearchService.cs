@@ -652,14 +652,17 @@ public sealed class SearchService
                                 bool streamingFailed = false;
                                 // Use unmanaged alloc for counters (can't use fixed in async).
                                 // We sync back to the local counters after the scan completes.
+                                int filesScannedBaseline = Volatile.Read(ref filesScanned);
+                                int totalMatchesBaseline = Volatile.Read(ref totalMatches);
+                                int filesWithMatchesBaseline = Volatile.Read(ref filesWithMatches);
                                 IntPtr filesScannedAlloc = Marshal.AllocHGlobal(sizeof(int));
                                 IntPtr totalMatchesAlloc = Marshal.AllocHGlobal(sizeof(int));
                                 IntPtr filesWithMatchesAlloc = Marshal.AllocHGlobal(sizeof(int));
                                 unsafe
                                 {
-                                    *(int*)filesScannedAlloc = Volatile.Read(ref filesScanned);
-                                    *(int*)totalMatchesAlloc = Volatile.Read(ref totalMatches);
-                                    *(int*)filesWithMatchesAlloc = Volatile.Read(ref filesWithMatches);
+                                    *(int*)filesScannedAlloc = filesScannedBaseline;
+                                    *(int*)totalMatchesAlloc = totalMatchesBaseline;
+                                    *(int*)filesWithMatchesAlloc = filesWithMatchesBaseline;
                                 }
                                 activeFilesScannedPtr = filesScannedAlloc;
                                 try
@@ -870,9 +873,12 @@ public sealed class SearchService
                                     // Sync back counters from unmanaged memory
                                     unsafe
                                     {
-                                        filesScanned = *(int*)filesScannedAlloc;
-                                        totalMatches = *(int*)totalMatchesAlloc;
-                                        filesWithMatches = *(int*)filesWithMatchesAlloc;
+                                        int filesScannedDelta = *(int*)filesScannedAlloc - filesScannedBaseline;
+                                        int totalMatchesDelta = *(int*)totalMatchesAlloc - totalMatchesBaseline;
+                                        int filesWithMatchesDelta = *(int*)filesWithMatchesAlloc - filesWithMatchesBaseline;
+                                        if (filesScannedDelta != 0) Interlocked.Add(ref filesScanned, filesScannedDelta);
+                                        if (totalMatchesDelta != 0) Interlocked.Add(ref totalMatches, totalMatchesDelta);
+                                        if (filesWithMatchesDelta != 0) Interlocked.Add(ref filesWithMatches, filesWithMatchesDelta);
                                     }
                                 }
                                 finally

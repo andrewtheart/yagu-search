@@ -1483,6 +1483,7 @@ public class FileGroupCoverageTests
     public void ShowMore_PaginatesResults()
     {
         var group = new FileGroup(@"C:\test.txt");
+        group.IsExpanded = true;
         // Add more than PageSize items
         for (int i = 0; i < FileGroup.PageSize + 50; i++)
             group.Add(new SearchResult(@"C:\test.txt", i + 1, $"line{i}", 0, 4, [], []));
@@ -1522,6 +1523,7 @@ public class FileGroupCoverageTests
     public void Remove_UpdatesVisibleResults()
     {
         var group = new FileGroup(@"C:\test.txt");
+        group.IsExpanded = true;
         var r = new SearchResult(@"C:\test.txt", 1, "line", 0, 4, [], []);
         group.Add(r);
         Assert.Single(group.VisibleResults);

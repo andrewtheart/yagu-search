@@ -401,14 +401,14 @@ public class SettingsServiceNewFieldTests
     }
 
     [Fact]
-    public void Defaults_GutterColors_UseSharedBlueDefault()
+    public void Defaults_GutterColors_UseSharedPreviewAndContrastEditorDefaults()
     {
         var settings = new AppSettings();
 
         Assert.Equal("#FF9CDCFE", AppSettings.DefaultPreviewGutterColor);
         Assert.Equal(AppSettings.DefaultPreviewGutterColor, settings.PreviewGutterContextColor);
         Assert.Equal(AppSettings.DefaultPreviewGutterColor, settings.PreviewGutterMatchColor);
-        Assert.Equal(AppSettings.DefaultPreviewGutterColor, settings.PreviewEditorGutterColor);
+        Assert.Equal(AppSettings.DefaultPreviewEditorGutterColor, settings.PreviewEditorGutterColor);
     }
 
     [Fact]
@@ -452,10 +452,10 @@ public class SettingsServiceNewFieldTests
     }
 
     [Fact]
-    public void Defaults_SkipExtensions_UsesExpandedBinaryPrefilter()
+    public void Defaults_ExtensionPrefilters_SeparateMediaDataAndBinaryExtensions()
     {
         var s = new AppSettings();
-        Assert.Contains("wasm", s.SkipExtensions);
+        Assert.Contains("wasm", s.BinaryExtensions);
         Assert.Contains("sqlite", s.SkipExtensions);
         Assert.Contains("etl", s.SkipExtensions);
     }
@@ -488,7 +488,7 @@ public class SettingsServiceNewFieldTests
 
             Assert.Equal(AppSettings.DefaultPreviewGutterColor, loaded.PreviewGutterContextColor);
             Assert.Equal(AppSettings.DefaultPreviewGutterColor, loaded.PreviewGutterMatchColor);
-            Assert.Equal(AppSettings.DefaultPreviewGutterColor, loaded.PreviewEditorGutterColor);
+            Assert.Equal(AppSettings.DefaultPreviewEditorGutterColor, loaded.PreviewEditorGutterColor);
         }
         finally { try { File.Delete(tmp); } catch { } }
     }

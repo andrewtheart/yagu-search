@@ -4,7 +4,7 @@
     <DataCollectors>
       <DataCollector friendlyName="XPlat Code Coverage">
         <Configuration>
-          <ExcludeByAttribute>ExcludeFromCodeCoverage</ExcludeByAttribute>
+          <ExcludeByAttribute>ExcludeFromCodeCoverage,CompilerGeneratedAttribute,GeneratedCodeAttribute</ExcludeByAttribute>
           <SkipAutoProps>true</SkipAutoProps>
         </Configuration>
       </DataCollector>
