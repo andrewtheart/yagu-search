@@ -60,6 +60,7 @@ public sealed partial class MainWindow
             return;
 
         CloseGeneratedCliCommandOverlay();
+        CollapseAdvancedOptionsForSearch();
 
         try
         {

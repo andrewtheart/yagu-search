@@ -13,6 +13,12 @@ public enum AppThemeMode
 
 public static class AppThemeService
 {
+    /// <summary>
+    /// The current app-wide theme mode index (0=Auto, 1=Dark, 2=Light).
+    /// Set by the main window when the theme changes; read by dialogs to match the theme.
+    /// </summary>
+    public static int CurrentThemeModeIndex { get; set; }
+
     public static int NormalizeThemeModeIndex(int value) => value is >= 0 and <= 2 ? value : 0;
 
     public static ElementTheme ToElementTheme(int themeModeIndex)

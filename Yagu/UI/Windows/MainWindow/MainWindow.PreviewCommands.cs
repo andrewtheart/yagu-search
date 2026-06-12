@@ -777,7 +777,7 @@ public sealed partial class MainWindow
     {
         _resultMatchTextBrush = new SolidColorBrush(ColorStringHelper.Parse(
             ViewModel.ResultListMatchHighlightColor,
-            Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00)));
+            Windows.UI.Color.FromArgb(0xFF, 0xB8, 0x86, 0x0B)));
     }
 
     private void ApplyResultMatchTextStyle(RichTextBlock rtb)
@@ -2483,8 +2483,17 @@ public sealed partial class MainWindow
         UpdateMatchNavPanel();
         UpdateSectionMatchNavPanels();
 
-        if (scrollBlock is not null && scrollPara is not null)
+        if (scrollTarget is not null
+            && scrollBlock is not null
+            && TryFindPreviewMatchParagraph(scrollBlock, scrollTarget, out var targetPara, out var targetMatchInPara))
+        {
+            scrollPara = targetPara;
+            SetCurrentMatchToMatch(scrollBlock, targetPara, targetMatchInPara);
+        }
+        else if (scrollBlock is not null && scrollPara is not null)
+        {
             SetCurrentMatchToParagraph(scrollBlock, scrollPara);
+        }
 
         if (scrollToTop)
             PreviewScrollViewer.ChangeView(null, 0, null, disableAnimation: true);
@@ -2720,11 +2729,22 @@ public sealed partial class MainWindow
         UpdateMatchNavPanel();
         UpdateSectionMatchNavPanels();
 
-        // Activate the section for the clicked file and align global nav with it.
-        if (scrollBlock is not null && scrollPara is not null)
+        // Activate the selected result and align global nav with it.
+        if (scrollTarget is not null
+            && scrollBlock is not null
+            && TryFindPreviewMatchParagraph(scrollBlock, scrollTarget, out var targetPara, out var targetMatchInPara))
+        {
+            scrollPara = targetPara;
+            SetCurrentMatchToMatch(scrollBlock, targetPara, targetMatchInPara);
+        }
+        else if (scrollBlock is not null && scrollPara is not null)
+        {
             SetCurrentMatchToParagraph(scrollBlock, scrollPara);
+        }
         else if (scrollBlock is not null)
+        {
             ActivateSectionForBlock(scrollBlock);
+        }
 
         if (scrollToTop)
             PreviewScrollViewer.ChangeView(null, 0, null, disableAnimation: true);

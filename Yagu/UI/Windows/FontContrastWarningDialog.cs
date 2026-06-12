@@ -114,8 +114,9 @@ internal static class FontContrastWarningDialogView
                 DefaultButton = YaguDialogDefaultButton.Primary,
                 RequestedTheme = ToElementTheme(issue.Theme),
                 Width = 760,
-                Height = 720,
-                MaxContentHeight = 560,
+                Height = 780,
+                SizeToContent = false,
+                ShowTitleBar = false,
                 IsResizable = true,
             });
     }
@@ -244,7 +245,6 @@ internal static class FontContrastWarningDialogView
         {
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            MaxHeight = 520,
             Content = body,
         };
     }

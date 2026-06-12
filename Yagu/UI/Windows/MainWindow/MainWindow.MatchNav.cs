@@ -2307,12 +2307,16 @@ public sealed partial class MainWindow
                     DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
                     {
                         if (_matchParagraphs.Count == 0) return;
-                        if (_activeMatchHighlight is not null
-                            && _activeMatchHighlight.Value.para is var ap
-                            && ReferenceEquals(ap, _matchParagraphs[0].para))
+                        if (_activeMatchHighlight is not null)
                         {
-                            // Already on first match — just make sure it's visible.
-                            ScrollPreviewToLine(_matchParagraphs[0].block, _matchParagraphs[0].para);
+                            int activeIndex = FindActiveMatchIndex();
+                            if (activeIndex >= 0 && activeIndex < _matchParagraphs.Count)
+                            {
+                                _currentMatchIndex = activeIndex;
+                                MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
+                                var (block, para, _) = _matchParagraphs[activeIndex];
+                                ScrollPreviewToLine(block, para);
+                            }
                             return;
                         }
                         _currentMatchIndex = -1;

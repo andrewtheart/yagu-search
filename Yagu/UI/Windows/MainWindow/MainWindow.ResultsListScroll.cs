@@ -271,6 +271,11 @@ public sealed partial class MainWindow
             if (bottom <= 0 || top >= viewportBottom)
                 continue;
 
+            // If the entire expander (header + content) fits within the viewport,
+            // the header is already visible — no overlay needed.
+            if (top >= -ResultsListScrollEdgeEpsilon && bottom <= viewportBottom + ResultsListScrollEdgeEpsilon)
+                continue;
+
             if (!TryGetFileGroupHeaderBoundsInResultsList(expander, fallbackTop: top, out double headerTop, out double headerBottom))
                 continue;
 

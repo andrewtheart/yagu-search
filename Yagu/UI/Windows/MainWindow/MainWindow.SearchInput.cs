@@ -104,7 +104,7 @@ public sealed partial class MainWindow
     private void OnFilterBoxTextChanged(object sender, TextChangedEventArgs e)
     {
         if (sender is TextBox tb)
-            tb.FontStyle = string.IsNullOrEmpty(tb.Text)
+            tb.FontStyle = string.IsNullOrEmpty(tb.Text) || IsFilterExampleText(tb)
                 ? Windows.UI.Text.FontStyle.Italic
                 : Windows.UI.Text.FontStyle.Normal;
     }

@@ -2503,7 +2503,7 @@ public sealed partial class MainWindow
         s_contextGutterBrush.Color = previewGutterColor;
         s_gutterSepBrush.Color = previewGutterColor;
         s_matchGutterBrush.Color = ColorStringHelper.Parse(vm.PreviewGutterMatchColor, Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE));
-        PreviewEditor.LineNumberColor = ColorStringHelper.Parse(vm.PreviewEditorGutterColor, Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE));
+        PreviewEditor.LineNumberColor = ColorStringHelper.Parse(vm.PreviewEditorGutterColor, Windows.UI.Color.FromArgb(0xFF, 0x3A, 0x8F, 0xD6));
         var matchTextColor = ColorStringHelper.Parse(vm.PreviewMatchTextColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00));
         _matchTextBrush = new SolidColorBrush(matchTextColor);
         _overlayColor = ColorStringHelper.Parse(vm.PreviewOverlayColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x45, 0x00));

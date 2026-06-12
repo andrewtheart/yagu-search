@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using Microsoft.UI.Xaml;
 using Microsoft.Web.WebView2.Core;
@@ -19,7 +20,9 @@ public sealed partial class MainWindow
     private bool _terminalLoggedFirstOutputPost;
     private bool _terminalLoggedFirstInput;
     private bool _terminalStartupPromptNudged;
+    private readonly StringBuilder _terminalCurrentInputLine = new();
     private readonly TaskCompletionSource<bool> _terminalReadyCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource<bool> _terminalShellReadyCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private void OnToggleTerminalPane(object sender, RoutedEventArgs e)
     {
@@ -69,15 +72,47 @@ public sealed partial class MainWindow
 
     private async Task SendTextToTerminalAsync(string text)
     {
-        if (string.IsNullOrEmpty(text)) return;
+        string commandText = text.TrimEnd('\r', '\n');
+        if (string.IsNullOrEmpty(commandText)) return;
 
         await EnsureTerminalPaneExpandedAsync();
         await WaitForTerminalReadyAsync();
 
         StartConPtySession();
-        _terminalService?.WriteInput(text);
+        await WaitForTerminalShellReadyAsync();
+        await ChangeTerminalDirectoryToYaguExecutableDirectoryAsync();
+        _terminalService?.WriteInput(commandText);
         FocusTerminal();
     }
+
+    private async Task ChangeTerminalDirectoryToYaguExecutableDirectoryAsync()
+    {
+        if (_terminalService is null)
+            return;
+
+        string executableDirectory = ResolveYaguExecutableDirectoryForTerminalCommand();
+        _terminalShellReadyCompletion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _terminalService.WriteInput($"cd /d {QuoteCmdArgument(executableDirectory)}\r", echoInput: false);
+        await WaitForTerminalShellReadyAsync();
+    }
+
+    private static string ResolveYaguExecutableDirectoryForTerminalCommand()
+    {
+        string? processDirectory = !string.IsNullOrWhiteSpace(Environment.ProcessPath)
+            ? Path.GetDirectoryName(Environment.ProcessPath)
+            : null;
+
+        if (TryResolveExistingDirectory(processDirectory, out string executableDirectory))
+            return executableDirectory;
+
+        if (TryResolveExistingDirectory(AppContext.BaseDirectory, out string appDirectory))
+            return appDirectory;
+
+        return AppContext.BaseDirectory;
+    }
+
+    private static string QuoteCmdArgument(string value)
+        => $"\"{value.Replace("\"", "\"\"")}\"";
 
     private async Task EnsureTerminalPaneExpandedAsync()
     {
@@ -103,6 +138,21 @@ public sealed partial class MainWindow
         catch (TimeoutException ex)
         {
             System.Diagnostics.Debug.WriteLine($"Timed out waiting for terminal readiness: {ex.Message}");
+        }
+    }
+
+    private async Task WaitForTerminalShellReadyAsync()
+    {
+        if (_terminalShellReadyCompletion.Task.IsCompleted)
+            return;
+
+        try
+        {
+            await _terminalShellReadyCompletion.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch (TimeoutException ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Timed out waiting for terminal shell readiness: {ex.Message}");
         }
     }
 
@@ -217,12 +267,15 @@ public sealed partial class MainWindow
                 case "input":
                     string data = root.GetProperty("data").GetString() ?? "";
                     LogTerminalInput(data);
+                    bool shouldClearScrollback = TrackTerminalInputForClearCommand(data);
                     if (_terminalService is null)
                     {
                         LogService.Instance.Warning("Terminal", "Terminal input received before the shell session was available; starting a terminal session.");
                         StartConPtySession();
                     }
                     _terminalService?.WriteInput(data);
+                    if (shouldClearScrollback)
+                        ScheduleTerminalScrollbackClear();
                     break;
                 case "resize":
                     _terminalColumns = Math.Max(1, root.GetProperty("cols").GetInt32());
@@ -270,6 +323,7 @@ public sealed partial class MainWindow
         if (_terminalService is not null) return;
 
         int sessionGeneration = ++_terminalSessionGeneration;
+        _terminalShellReadyCompletion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _terminalStartupPromptNudged = false;
         _terminalLoggedFirstOutputPost = false;
         _terminalLoggedFirstInput = false;
@@ -296,8 +350,58 @@ public sealed partial class MainWindow
 
     private void ResetTerminalSession()
     {
+        _terminalCurrentInputLine.Clear();
         DisposeTerminal();
         StartConPtySession();
+    }
+
+    private bool TrackTerminalInputForClearCommand(string data)
+    {
+        bool shouldClearScrollback = false;
+
+        foreach (char c in data)
+        {
+            switch (c)
+            {
+                case '\r':
+                case '\n':
+                    if (IsTerminalClearCommand(_terminalCurrentInputLine.ToString()))
+                        shouldClearScrollback = true;
+                    _terminalCurrentInputLine.Clear();
+                    break;
+                case '\b':
+                case '\u007f':
+                    if (_terminalCurrentInputLine.Length > 0)
+                        _terminalCurrentInputLine.Length--;
+                    break;
+                case '\u0003':
+                case '\u001b':
+                    _terminalCurrentInputLine.Clear();
+                    break;
+                default:
+                    if (!char.IsControl(c))
+                        _terminalCurrentInputLine.Append(c);
+                    break;
+            }
+        }
+
+        return shouldClearScrollback;
+    }
+
+    private static bool IsTerminalClearCommand(string line)
+        => string.Equals(line.Trim(), "cls", StringComparison.OrdinalIgnoreCase);
+
+    private void ScheduleTerminalScrollbackClear()
+    {
+        var timer = DispatcherQueue.CreateTimer();
+        timer.Interval = TimeSpan.FromMilliseconds(120);
+        timer.IsRepeating = false;
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            PostTerminalClearToWebView();
+        };
+        timer.Start();
     }
 
     private static void CopyTextToClipboard(string text)
@@ -391,6 +495,8 @@ public sealed partial class MainWindow
                     return;
                 }
                 PostTerminalOutputToWebView(terminalText);
+                if (ContainsPrintableShellText(terminalText))
+                    _terminalShellReadyCompletion.TrySetResult(true);
             }
             catch (Exception ex)
             {
@@ -398,6 +504,18 @@ public sealed partial class MainWindow
                 System.Diagnostics.Debug.WriteLine($"Terminal output error: {ex.Message}");
             }
         });
+    }
+
+
+    private static bool ContainsPrintableShellText(string text)
+    {
+        foreach (char c in text)
+        {
+            if (!char.IsControl(c) && !char.IsWhiteSpace(c))
+                return true;
+        }
+
+        return false;
     }
 
     private static string FilterTerminalOutputForXterm(string text)
@@ -430,6 +548,13 @@ public sealed partial class MainWindow
             _terminalLoggedFirstOutputPost = true;
             LogService.Instance.Info("Terminal", $"Posted first terminal output to WebView: chars={terminalText.Length}");
         }
+    }
+
+    private void PostTerminalClearToWebView()
+    {
+        if (TerminalWebView.CoreWebView2 is null) return;
+
+        TerminalWebView.CoreWebView2.PostWebMessageAsJson("{\"type\":\"clear\"}");
     }
 
     private void LogTerminalInput(string data)

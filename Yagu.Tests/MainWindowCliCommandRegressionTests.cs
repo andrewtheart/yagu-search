@@ -90,7 +90,16 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("EnsureGeneratedCliCommandText(commandText);", source);
         Assert.Contains("private async Task SendTextToTerminalAsync(string text)", terminalSource);
         Assert.Contains("EnsureTerminalPaneExpandedAsync", terminalSource);
-        Assert.Contains("_terminalService?.WriteInput(text);", terminalSource);
+        Assert.Contains("await WaitForTerminalShellReadyAsync();", terminalSource);
+        Assert.Contains("await ChangeTerminalDirectoryToYaguExecutableDirectoryAsync();", terminalSource);
+        Assert.Contains("cd /d", terminalSource);
+        Assert.Contains("Environment.ProcessPath", terminalSource);
+        Assert.Contains("Path.GetDirectoryName(Environment.ProcessPath)", terminalSource);
+        Assert.Contains("echoInput: false", terminalSource);
+        Assert.Contains("TrimEnd('\\r', '\\n')", terminalSource);
+        Assert.Contains("_terminalShellReadyCompletion", terminalSource);
+        Assert.Contains("ContainsPrintableShellText", terminalSource);
+        Assert.Contains("_terminalService?.WriteInput(commandText);", terminalSource);
         Assert.Contains("PostWebMessageAsJson(\"{\\\"type\\\":\\\"focus\\\"}\")", terminalSource);
         Assert.Contains("msg.type === 'focus'", terminalHtml);
 

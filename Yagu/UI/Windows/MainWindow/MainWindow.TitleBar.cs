@@ -133,6 +133,7 @@ public sealed partial class MainWindow
 
     private void ApplyAppTheme()
     {
+        AppThemeService.CurrentThemeModeIndex = ViewModel.ThemeModeIndex;
         AppThemeService.ApplyRequestedTheme(RootGrid, ViewModel.ThemeModeIndex);
         ApplyTitleBarButtonTheme();
     }

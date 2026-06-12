@@ -197,6 +197,29 @@ public sealed class PreviewCoreRegressionTests
 
         string updateMulti = ExtractMethodWindow(MainWindowSource, "UpdateMultiSelectPreviewAsync", 900);
         Assert.Contains("SearchResult? scrollTarget", updateMulti);
+
+        string concatenated = ExtractMethodWindow(MainWindowSource, "ShowConcatenatedPreviewAsync", 12000);
+        AssertContainsInOrder(concatenated,
+            "TryFindPreviewMatchParagraph(scrollBlock, scrollTarget, out var targetPara, out var targetMatchInPara)",
+            "scrollPara = targetPara;",
+            "SetCurrentMatchToMatch(scrollBlock, targetPara, targetMatchInPara);");
+
+        string multiHighlight = ExtractMethodWindow(MainWindowSource, "ShowMultiHighlightPreviewAsync", 14000);
+        AssertContainsInOrder(multiHighlight,
+            "TryFindPreviewMatchParagraph(scrollBlock, scrollTarget, out var targetPara, out var targetMatchInPara)",
+            "scrollPara = targetPara;",
+            "SetCurrentMatchToMatch(scrollBlock, targetPara, targetMatchInPara);");
+
+        string updateMatchNav = ExtractMethodWindow(MainWindowSource, "UpdateMatchNavPanel", 4200);
+        AssertContainsInOrder(updateMatchNav,
+            "if (_activeMatchHighlight is not null)",
+            "int activeIndex = FindActiveMatchIndex();",
+            "_currentMatchIndex = activeIndex;",
+            "MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);",
+            "ScrollPreviewToLine(block, para);",
+            "return;",
+            "_currentMatchIndex = -1;",
+            "_ = GoToNextMatchAsync();");
     }
 
     [Fact]
@@ -324,6 +347,33 @@ public sealed class PreviewCoreRegressionTests
             ": HorizontalAlignment.Left;",
             "AdvancedOptionsExpander.Width = double.NaN;",
             "AdvancedOptionsExpander.InvalidateMeasure();");
+    }
+
+    [Fact]
+    public void AdvancedOptionsContent_UsesCompactRowsForPathAndDateFilters()
+    {
+        string advancedOptions = ExtractXamlWindow("x:Name=\"AdvancedOptionsExpander\"", 32000);
+
+        Assert.Contains("Padding=\"24,12,12,12\"", advancedOptions);
+        AssertContainsInOrder(advancedOptions,
+            "<Grid ColumnSpacing=\"10\">",
+            "<TextBlock Text=\"Include\"",
+            "x:Name=\"IncludeFilterBox\"",
+            "PlaceholderForeground=\"{ThemeResource TextFillColorPrimaryBrush}\"",
+            "<Grid Grid.Column=\"1\" RowSpacing=\"4\" ColumnSpacing=\"6\">",
+            "<TextBlock Text=\"Exclude\"",
+            "x:Name=\"ExcludeFilterBox\"");
+
+        string propertyFilters = advancedOptions[advancedOptions.IndexOf("<TextBlock Text=\"Property filters\"", StringComparison.Ordinal)..];
+        AssertContainsInOrder(propertyFilters,
+            "<ColumnDefinition Width=\"*\" />",
+            "<ColumnDefinition Width=\"*\" />",
+            "<TextBlock Text=\"Created Date\"",
+            "<StackPanel Grid.Column=\"1\" Spacing=\"4\">",
+            "<TextBlock Text=\"Modified Date\"");
+
+        string filterChanged = ExtractMethodWindow(MainWindowSource, "OnFilterBoxTextChanged", 600);
+        Assert.Contains("string.IsNullOrEmpty(tb.Text) || IsFilterExampleText(tb)", filterChanged);
     }
 
     [Fact]
@@ -1150,7 +1200,7 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void PlainResultClicks_DoNotAddFilesToPreviewPanel()
+    public void PlainFileClicks_DoNotAddFilesToPreviewPanel_ButMatchRowsSelectAndPreview()
     {
         string itemClick = ExtractMethodWindow(MainWindowSource, "OnResultItemClick", window: 450);
         Assert.Contains("OnResultItemClick: no preview change", itemClick);
@@ -1159,12 +1209,11 @@ public sealed class PreviewCoreRegressionTests
         Assert.DoesNotContain("OnFileGroupHeaderTapped", MainWindowSource);
         Assert.DoesNotContain("SelectFileGroupMatchesAndPreviewAsync(g, \"single click\")", MainWindowSource);
 
-        string tapped = ExtractMethodWindow(MainWindowSource, "OnMatchLineTapped", window: 900);
-        Assert.Contains("OnMatchLineTapped: no preview change", tapped);
-        Assert.DoesNotContain("UpdatePreviewAsync", tapped);
-        Assert.DoesNotContain("UpdateMultiSelectPreviewAsync", tapped);
+        string tapped = ExtractMethodWindow(MainWindowSource, "OnMatchLineTapped", window: 1200);
+        Assert.Contains("result.IsSelected = !result.IsSelected;", tapped);
+        Assert.Contains("UpdateSelectionForMatchLine(result, nameof(OnMatchLineTapped));", tapped);
+        Assert.Contains("await UpdatePreviewForMatchSelectionAsync(result);", tapped);
         Assert.DoesNotContain("PrependPreviewSectionsForFilesAsync", tapped);
-        Assert.DoesNotContain("EnsureCheckedMatchInPreviewAsync", tapped);
     }
 
     [Fact]
@@ -1685,15 +1734,22 @@ public sealed class PreviewCoreRegressionTests
 
         string tapped = ExtractMethodWindow(MainWindowSource, "OnMatchLineTapped");
         Assert.Contains("e.OriginalSource is DependencyObject source && IsInsideButton(source)", tapped);
-        Assert.Contains("OnMatchLineTapped: no preview change", tapped);
+        Assert.Contains("result.IsSelected = !result.IsSelected;", tapped);
+        Assert.Contains("await UpdatePreviewForMatchSelectionAsync(result);", tapped);
 
-        string checkboxClicked = ExtractMethodWindow(MainWindowSource, "OnMatchLineCheckBoxClicked", window: 1000);
+        string checkboxClicked = ExtractMethodWindow(MainWindowSource, "OnMatchLineCheckBoxClicked", window: 550);
         Assert.Contains("result.IsSelected = isChecked;", checkboxClicked);
         Assert.Contains("UpdateSelectionForMatchLine(result, nameof(OnMatchLineCheckBoxClicked));", checkboxClicked);
-        Assert.Contains("if (result.IsSelected)", checkboxClicked);
-        Assert.Contains("await EnsureCheckedMatchInPreviewAsync(result);", checkboxClicked);
+        Assert.Contains("await UpdatePreviewForMatchSelectionAsync(result);", checkboxClicked);
         Assert.DoesNotContain("UpdatePreviewAsync", checkboxClicked);
         Assert.DoesNotContain("UpdateMultiSelectPreviewAsync", checkboxClicked);
+
+        string selectionPreview = ExtractMethodWindow(MainWindowSource, "UpdatePreviewForMatchSelectionAsync", window: 2600);
+        Assert.Contains("if (result.IsSelected)", selectionPreview);
+        Assert.Contains("await UpdateMultiSelectPreviewAsync(result);", selectionPreview);
+        Assert.Contains("await EnsureCheckedMatchInPreviewAsync(result);", selectionPreview);
+        Assert.Contains("await UpdateMultiSelectPreviewAsync();", selectionPreview);
+        Assert.Contains("await ShowSingleFilePreviewAsync(remainingSelected[0], fullFile: false);", selectionPreview);
 
         string selectionForLine = ExtractMethodWindow(MainWindowSource, "UpdateSelectionForMatchLine", window: 900);
         Assert.Contains("FindParentGroup(result)?.NotifySelectionChanged();", selectionForLine);
@@ -1717,12 +1773,12 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("SetCurrentMatchToMatch(section, paragraph, matchInPara);", ensureChecked);
         Assert.Contains("ScrollPreviewToLine(section, paragraph);", ensureChecked);
 
-        string appendContext = ExtractMethodWindow(MainWindowSource, "AppendCheckedMatchContextAsync", window: 5000);
+        string appendContext = ExtractMethodWindow(MainWindowSource, "AppendCheckedMatchContextAsync", window: 8000);
         Assert.Contains("int previewLines = ViewModel.PreviewContextLines;", appendContext);
         Assert.Contains("ReadAllLinesWithEncodingSync(result.FilePath)", appendContext);
         Assert.Contains("var lines = GetPreviewLines(result, allLines, previewLines, fullFile: false);", appendContext);
         Assert.Contains("bool isMatchLine = lineNum == result.LineNumber;", appendContext);
-        Assert.Contains("AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, result, rx, truncate: true, _matchParagraphs, sectionNav, out _);", appendContext);
+        Assert.Contains("AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, result, rx, truncate: truncatePreviewLines, _matchParagraphs, sectionNav, out _);", appendContext);
     }
 
     [Fact]

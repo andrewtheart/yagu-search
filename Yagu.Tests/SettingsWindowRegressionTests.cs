@@ -469,7 +469,7 @@ public sealed class SettingsWindowRegressionTests
 
         Assert.Contains("CaptureTabPageRootElements();", SettingsWindowSource);
         Assert.Contains("OriginalPlacements = capturedPlacements", SettingsWindowSource);
-        Assert.Contains("RestoreOriginalPlacements(entry.OriginalPlacements)", SettingsWindowSource);
+        Assert.Contains("RestoreOriginalPlacements(_settingEntries.SelectMany(entry => entry.OriginalPlacements));", SettingsWindowSource);
         AssertContainsInOrder(SettingsWindowSource,
             "if (child is Border { Child: UIElement groupChild })",
             "EnumerateSearchableGroupChild(groupChild)");
@@ -681,9 +681,22 @@ public sealed class SettingsWindowRegressionTests
     [Fact]
     public void SettingsWindow_SearchReparentsElementsFromAllSupportedParentTypes()
     {
-        string searchChanged = ExtractMethod(SettingsWindowSource, "OnSearchTextChanged", window: 2600);
+        string searchChanged = ExtractMethod(SettingsWindowSource, "OnSearchTextChanged", window: 4600);
         Assert.Contains("DetachFromParent(element);", searchChanged);
+        Assert.Contains("var renderedElements = new List<UIElement>();", SettingsWindowSource);
+        Assert.Contains("if (!AddElementIfNotSeen(renderedElements, element))", SettingsWindowSource);
+        Assert.Contains("if (container.Children.Count == 0)", SettingsWindowSource);
         Assert.DoesNotContain("fe.Parent is Panel", searchChanged);
+
+        string restore = ExtractMethod(SettingsWindowSource, "RestoreTabPageElements", window: 1800);
+        Assert.Contains("RestoreOriginalPlacements(_settingEntries.SelectMany(entry => entry.OriginalPlacements));", restore);
+
+        string restorePlacements = ExtractMethod(SettingsWindowSource, "RestoreOriginalPlacements", window: 1200);
+        Assert.Contains("var restoredElements = new List<UIElement>();", restorePlacements);
+        Assert.Contains("if (!AddElementIfNotSeen(restoredElements, placement.Element))", restorePlacements);
+
+        string dedupe = ExtractMethod(SettingsWindowSource, "AddElementIfNotSeen", window: 900);
+        Assert.Contains("ReferenceEquals(seen, element)", dedupe);
 
         string detach = ExtractMethod(SettingsWindowSource, "DetachFromParent", window: 1800);
         Assert.Contains("case Panel parentPanel:", detach);

@@ -18,7 +18,7 @@ public sealed class AppSettings
     public const string DefaultArchiveExtensions = "zip;jar;war;ear;nupkg;vsix;apk;aab;aar;appx;msix;appxbundle;msixbundle;docx;xlsx;pptx;odt;ods;odp;epub;whl;gz;tar;7z;rar;bz2;xz;iso;cab;msi;tgz;tbz2;txz;zst;zstd;br;lz4;lzma";
     public const string DefaultExcludeGlobs = "node_modules;bin;obj;.git";
     public const string DefaultSelectedPreviewContentBackgroundColor = "#FF000000";
-    public const string DefaultUnselectedPreviewContentBackgroundColor = "#00000000";
+    public const string DefaultUnselectedPreviewContentBackgroundColor = "#FF1E1E1E";
 
     // Preview editor font colors (ARGB hex strings)
     public const string LegacyDefaultPreviewGutterContextColor = "#FF505050";
@@ -26,7 +26,7 @@ public sealed class AppSettings
     public const string DefaultPreviewGutterColor = "#FF9CDCFE";
     public const string DefaultPreviewGutterContextColor = DefaultPreviewGutterColor;
     public const string DefaultPreviewGutterMatchColor = DefaultPreviewGutterColor;
-    public const string DefaultPreviewEditorGutterColor = DefaultPreviewGutterColor;
+    public const string DefaultPreviewEditorGutterColor = "#FF3A8FD6"; // Darker blue (passes light+dark)
     public const string DefaultPreviewMatchTextColor = "#FFFFD700"; // Gold
     public const string DefaultPreviewOverlayColor = "#FFFF4500"; // OrangeRed
     public const string DefaultPreviewMatchLineColor = "#FFFFFFFF"; // White
@@ -36,7 +36,7 @@ public sealed class AppSettings
     public const int DefaultPreviewEditorFontSize = 13;
     public const string DefaultResultListMatchTextFontFamily = "Consolas";
     public const int DefaultResultListMatchTextFontSize = 12;
-    public const string DefaultResultListMatchHighlightColor = DefaultPreviewMatchTextColor;
+    public const string DefaultResultListMatchHighlightColor = "#FFB8860B"; // DarkGoldenrod (passes light+dark)
 
     public string? LastDirectory { get; set; }
     public List<string> RecentDirectories { get; set; } = [];

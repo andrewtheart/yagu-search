@@ -55,6 +55,7 @@ internal sealed class ResultStoreTempLocationWindow : Window
                 presenter.IsMaximizable = false;
                 presenter.IsMinimizable = false;
                 presenter.IsResizable = false;
+                presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);
             }
         }
         catch { }
@@ -82,6 +83,19 @@ internal sealed class ResultStoreTempLocationWindow : Window
         return _completion.Task;
     }
 
+    private static ElementTheme ResolveTheme()
+    {
+        var theme = AppThemeService.ToElementTheme(AppThemeService.CurrentThemeModeIndex);
+        return theme == ElementTheme.Default ? ElementTheme.Default : theme;
+    }
+
+    private static Brush ThemeBrush(string key, Windows.UI.Color fallback)
+    {
+        if (Application.Current.Resources.TryGetValue(key, out object resource) && resource is Brush brush)
+            return brush;
+        return new SolidColorBrush(fallback);
+    }
+
     private Grid BuildContent(
         string? launchDrive,
         IReadOnlyList<ResultStoreTempDriveOption> options,
@@ -90,7 +104,8 @@ internal sealed class ResultStoreTempLocationWindow : Window
         var root = new Grid
         {
             Padding = new Thickness(32, 28, 32, 28),
-            Background = new SolidColorBrush(ColorHelper.FromArgb(0xFF, 0x20, 0x20, 0x20)),
+            Background = ThemeBrush("ApplicationPageBackgroundThemeBrush", ColorHelper.FromArgb(0xFF, 0x20, 0x20, 0x20)),
+            RequestedTheme = ResolveTheme(),
         };
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -101,7 +116,6 @@ internal sealed class ResultStoreTempLocationWindow : Window
             Text = "Search Result Temp Files",
             FontSize = 24,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Foreground = new SolidColorBrush(Colors.White),
         };
         Grid.SetRow(title, 0);
         root.Children.Add(title);
@@ -180,7 +194,6 @@ internal sealed class ResultStoreTempLocationWindow : Window
         TextWrapping = TextWrapping.Wrap,
         FontSize = 15,
         LineHeight = 22,
-        Foreground = new SolidColorBrush(Colors.White),
     };
 
     private static TextBlock CreateMutedText(string text) => new()
@@ -189,7 +202,6 @@ internal sealed class ResultStoreTempLocationWindow : Window
         TextWrapping = TextWrapping.Wrap,
         FontSize = 13,
         Opacity = 0.75,
-        Foreground = new SolidColorBrush(Colors.White),
     };
 
     private static void AddFooter(Grid root, string buttonText, Action onClick)

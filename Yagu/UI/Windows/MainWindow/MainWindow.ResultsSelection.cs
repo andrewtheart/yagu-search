@@ -399,7 +399,7 @@ public sealed partial class MainWindow
         }
     }
 
-    private void OnMatchLineTapped(object sender, TappedRoutedEventArgs e)
+    private async void OnMatchLineTapped(object sender, TappedRoutedEventArgs e)
     {
         // Don't trigger preview when user clicks the checkbox itself
         if (e.OriginalSource is DependencyObject source && IsInsideButton(source))
@@ -407,8 +407,11 @@ public sealed partial class MainWindow
 
         if (sender is FrameworkElement { DataContext: SearchResult result })
         {
+            result.IsSelected = !result.IsSelected;
+            UpdateSelectionForMatchLine(result, nameof(OnMatchLineTapped));
             LogService.Instance.Info("Preview",
-                $"OnMatchLineTapped: no preview change file='{result.FilePath}', line={result.LineNumber}");
+                $"OnMatchLineTapped: selection preview file='{result.FilePath}', line={result.LineNumber}, isSelected={result.IsSelected}");
+            await UpdatePreviewForMatchSelectionAsync(result);
         }
     }
 
@@ -420,47 +423,50 @@ public sealed partial class MainWindow
                 result.IsSelected = isChecked;
 
             UpdateSelectionForMatchLine(result, nameof(OnMatchLineCheckBoxClicked));
+            await UpdatePreviewForMatchSelectionAsync(result);
+        }
+    }
 
-            if (result.IsSelected)
-            {
-                if (!ViewModel.MatchLineCheckAddsToPreview) return;
-                try
-                {
-                    var selected = ViewModel.GetAllSelectedResults();
-                    if (selected.Count > 1)
-                        await UpdateMultiSelectPreviewAsync(result);
-                    else
-                        await EnsureCheckedMatchInPreviewAsync(result);
-                }
-                catch (Exception ex)
-                {
-                    LogService.Instance.Warning("Preview",
-                        $"OnMatchLineCheckBoxClicked: failed to add checked line to preview for '{result.FilePath}' line {result.LineNumber}: {ex.GetType().Name}: {ex.Message}");
-                }
-            }
-            else
+    private async Task UpdatePreviewForMatchSelectionAsync(SearchResult result)
+    {
+        if (result.IsSelected)
+        {
+            if (!ViewModel.MatchLineCheckAddsToPreview) return;
+            try
             {
                 var selected = ViewModel.GetAllSelectedResults();
-                if (selected.Count >= 2)
-                    await UpdateMultiSelectPreviewAsync();
-                else if (selected.Count == 1)
-                    await ShowSingleFilePreviewAsync(selected[0], fullFile: false);
+                if (selected.Count > 1)
+                    await UpdateMultiSelectPreviewAsync(result);
                 else
-                {
-                    // No matches selected — clear the preview panel.
-                    _previewResult = null;
-                    SetPreviewFileLabel(string.Empty);
-                    ShowPreviewBlockSurface();
-                    PreviewBlock.Blocks.Clear();
-                    PreviewSectionsPanel.Children.Clear();
-                    PreviewToolbarContent.Visibility = Visibility.Collapsed;
-                    _matchParagraphs.Clear();
-                    InvalidateParagraphIndexCache();
-                    _currentMatchIndex = -1;
-                    HideMatchNavPanel();
-                    CompletePreviewContentUpdate();
-                }
+                    await EnsureCheckedMatchInPreviewAsync(result);
             }
+            catch (Exception ex)
+            {
+                LogService.Instance.Warning("Preview",
+                    $"UpdatePreviewForMatchSelectionAsync: failed to add selected line to preview for '{result.FilePath}' line {result.LineNumber}: {ex.GetType().Name}: {ex.Message}");
+            }
+
+            return;
+        }
+
+        var remainingSelected = ViewModel.GetAllSelectedResults();
+        if (remainingSelected.Count >= 2)
+            await UpdateMultiSelectPreviewAsync();
+        else if (remainingSelected.Count == 1)
+            await ShowSingleFilePreviewAsync(remainingSelected[0], fullFile: false);
+        else
+        {
+            _previewResult = null;
+            SetPreviewFileLabel(string.Empty);
+            ShowPreviewBlockSurface();
+            PreviewBlock.Blocks.Clear();
+            PreviewSectionsPanel.Children.Clear();
+            PreviewToolbarContent.Visibility = Visibility.Collapsed;
+            _matchParagraphs.Clear();
+            InvalidateParagraphIndexCache();
+            _currentMatchIndex = -1;
+            HideMatchNavPanel();
+            CompletePreviewContentUpdate();
         }
     }
 

@@ -102,7 +102,7 @@ public sealed partial class MainWindow
     private bool _previewViewChangedHooked;
     private bool _viewportMaterializePending;
     private static readonly Windows.UI.Color s_defaultSelectedPreviewContentBackground = Windows.UI.Color.FromArgb(0xFF, 0x00, 0x00, 0x00);
-    private static readonly Windows.UI.Color s_defaultUnselectedPreviewContentBackground = Windows.UI.Color.FromArgb(0x00, 0x00, 0x00, 0x00);
+    private static readonly Windows.UI.Color s_defaultUnselectedPreviewContentBackground = Windows.UI.Color.FromArgb(0xFF, 0x1E, 0x1E, 0x1E);
 
     // Tracks remaining (un-rendered) matches for sections that were truncated to
     // avoid UI freezes on huge files (see MaxMatchesPerSection). Each click of

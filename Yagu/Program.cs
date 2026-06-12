@@ -20,6 +20,7 @@ internal static class Program
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint hWnd, out uint lpdwProcessId);
 
     private const int SW_RESTORE = 9;
+    private const int SW_HIDE = 0;
     private const string GuiChildFlag = "--yagu-gui-child";
 
     /// <summary>
@@ -30,6 +31,17 @@ internal static class Program
     private static void Main(string[] args)
     {
         bool isGuiChild = ConsumeGuiChildFlag(ref args);
+
+        bool isCli = args.Any(a => string.Equals(a, "--cli", StringComparison.OrdinalIgnoreCase))
+                  || args.Any(a => IsHelpFlag(a));
+
+        // Hide the console window immediately for GUI launches to prevent a brief flash.
+        if (!isCli)
+        {
+            nint consoleWnd = GetConsoleWindow();
+            if (consoleWnd != 0)
+                ShowWindow(consoleWnd, SW_HIDE);
+        }
 
         // Help flags: print CLI help and exit without launching GUI.
         if (args.Any(a => IsHelpFlag(a)))

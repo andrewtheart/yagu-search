@@ -516,10 +516,26 @@ public sealed partial class SettingsWindow : Window
         // Detach all elements from their tab page parents so they can be re-parented.
         DetachAllTabPageElements();
 
+        var renderedElements = new List<UIElement>();
         string? lastHeader = null;
         foreach (var entry in _settingEntries)
         {
             if (!entry.Matches(query))
+                continue;
+
+            // Build the setting's UI elements, skipping anything already rendered
+            // by an overlapping searchable entry.
+            var container = new StackPanel { Spacing = 4, Margin = new Thickness(0, 4, 0, 8) };
+            foreach (var element in entry.BuildElements())
+            {
+                if (!AddElementIfNotSeen(renderedElements, element))
+                    continue;
+
+                DetachFromParent(element);
+                container.Children.Add(element);
+            }
+
+            if (container.Children.Count == 0)
                 continue;
 
             // Show tab header as a group header when it changes.
@@ -536,13 +552,6 @@ public sealed partial class SettingsWindow : Window
                 });
             }
 
-            // Add the setting's UI elements.
-            var container = new StackPanel { Spacing = 4, Margin = new Thickness(0, 4, 0, 8) };
-            foreach (var element in entry.BuildElements())
-            {
-                DetachFromParent(element);
-                container.Children.Add(element);
-            }
             _searchResultContainers.Add(container);
             SettingsContent.Children.Add(container);
         }
@@ -590,18 +599,33 @@ public sealed partial class SettingsWindow : Window
             }
         }
 
-        foreach (var entry in _settingEntries)
-            RestoreOriginalPlacements(entry.OriginalPlacements);
+        RestoreOriginalPlacements(_settingEntries.SelectMany(entry => entry.OriginalPlacements));
     }
 
     private static void RestoreOriginalPlacements(IEnumerable<ElementPlacement> placements)
     {
+        var restoredElements = new List<UIElement>();
         foreach (var placement in placements.OrderBy(p => p.Index))
         {
+            if (!AddElementIfNotSeen(restoredElements, placement.Element))
+                continue;
+
             DetachFromParent(placement.Element);
             int index = Math.Clamp(placement.Index, 0, placement.Parent.Children.Count);
             placement.Parent.Children.Insert(index, placement.Element);
         }
+    }
+
+    private static bool AddElementIfNotSeen(List<UIElement> seenElements, UIElement element)
+    {
+        foreach (var seen in seenElements)
+        {
+            if (ReferenceEquals(seen, element))
+                return false;
+        }
+
+        seenElements.Add(element);
+        return true;
     }
 
     private static void DetachFromParent(UIElement element)
@@ -970,7 +994,7 @@ public sealed partial class SettingsWindow : Window
             theme);
         var unselectedBackground = ResolvePreviewContentBackground(
             _viewModel.UnselectedPreviewContentBackgroundColor,
-            FontContrastColor.FromArgb(0x00, 0x00, 0x00, 0x00),
+            FontContrastColor.FromArgb(0xFF, 0x1E, 0x1E, 0x1E),
             theme);
         double selectedRatio = FontContrastWarningService.GetContrastRatio(foreground, selectedBackground);
         double unselectedRatio = FontContrastWarningService.GetContrastRatio(foreground, unselectedBackground);
@@ -1843,7 +1867,7 @@ public sealed partial class SettingsWindow : Window
                 "Highlighted match text:",
                 "Color of the matched substring inside each result-list match line. Default is gold.",
                 _viewModel.ResultListMatchHighlightColor,
-                Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00),
+                Windows.UI.Color.FromArgb(0xFF, 0xB8, 0x86, 0x0B),
                 value => _viewModel.ResultListMatchHighlightColor = value,
                 contrastThemeProvider: ResolveFontContrastTheme,
                 registerContrastStatusRefresher: _fontContrastStatusRefreshers.Add);
@@ -1942,9 +1966,9 @@ public sealed partial class SettingsWindow : Window
             AddPreviewContentColorSetting(
                 previewViewerGroup,
                 "Unselected preview content background:",
-                "Background for preview section content that is not active. Default is transparent so it follows the app theme.",
+                "Background for preview section content that is not active. Default is dark gray (#1E1E1E).",
                 _viewModel.UnselectedPreviewContentBackgroundColor,
-                Windows.UI.Color.FromArgb(0x00, 0x00, 0x00, 0x00),
+                Windows.UI.Color.FromArgb(0xFF, 0x1E, 0x1E, 0x1E),
                 value => _viewModel.UnselectedPreviewContentBackgroundColor = value);
 
             previewViewerGroup.Children.Add(new TextBlock { Text = "Preview font colors", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 12, 0, 0) });
@@ -2066,7 +2090,7 @@ public sealed partial class SettingsWindow : Window
                 "Editor gutter text:",
                 "Color of line numbers in the built-in editor gutter.",
                 _viewModel.PreviewEditorGutterColor,
-                Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE),
+                Windows.UI.Color.FromArgb(0xFF, 0x3A, 0x8F, 0xD6),
                 value => _viewModel.PreviewEditorGutterColor = value,
                 showContrastStatus: true);
         }

@@ -79,7 +79,7 @@ internal sealed class ConPtyTerminalService : IDisposable
             return;
     }
 
-    public void WriteInput(string text)
+    public void WriteInput(string text, bool echoInput = true)
     {
         if (_input is null)
         {
@@ -95,7 +95,7 @@ internal sealed class ConPtyTerminalService : IDisposable
                 LogService.Instance.Info("Terminal", $"First terminal input written: chars={text.Length}");
             }
 
-            string echo = BuildLocalEcho(text);
+            string echo = echoInput ? BuildLocalEcho(text) : string.Empty;
             if (echo.Length > 0)
                 OutputReceived?.Invoke(echo);
 

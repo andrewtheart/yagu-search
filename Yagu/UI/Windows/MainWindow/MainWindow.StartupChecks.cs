@@ -201,6 +201,7 @@ public sealed partial class MainWindow
                 DefaultButton = YaguDialogDefaultButton.Primary,
                 Width = 560,
                 Height = 280,
+                ShowTitleBar = false,
             }) == YaguDialogResult.Primary;
 
         if (!installEverything) return;
