@@ -357,6 +357,32 @@
     term.focus();
   });
 
+  function handleTerminalShortcut(event) {
+    if (!event.ctrlKey || event.altKey || event.metaKey || event.key.length !== 1)
+      return false;
+
+    var lower = event.key.toLowerCase();
+    if (lower === 'c') {
+      if (term.hasSelection())
+        copyTerminalSelection();
+      else
+        sendTerminalInput('\x03');
+    } else if (lower === 'a') {
+      hideTerminalMenu();
+      term.selectAll();
+    } else if (lower === 'v') {
+      hideTerminalMenu();
+      postHostMessage({ type: 'requestPaste' });
+    } else {
+      return false;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    term.focus();
+    return true;
+  }
+
   terminalClearButton.addEventListener('click', function() {
     hideTerminalMenu();
     // Run a real clear command in the shell, then clear xterm's scrollback so the
@@ -432,6 +458,9 @@
       hideTerminalMenu();
       return;
     }
+
+    if (handleTerminalShortcut(event))
+      return;
 
     var input = translateKeyEventToInput(event);
     if (input !== null) {

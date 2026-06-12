@@ -478,6 +478,8 @@ public sealed partial class MainWindow
 
     private async void OnLoadSession(object sender, RoutedEventArgs e)
     {
+        ResultsOptionsFlyout.Hide();
+
         string? path = await ChooseSessionFileToLoadAsync();
         if (path is null) return;
 
@@ -537,6 +539,7 @@ public sealed partial class MainWindow
 
     private async Task LoadSessionFileAsync(string path)
     {
+        EnsureResultsListVisibleForSessionLoad();
         ClearPreviewStateForSessionLoad();
 
         try
@@ -550,6 +553,19 @@ public sealed partial class MainWindow
             LogService.Instance.Warning("MainWindow", $"Load session failed: {path}", ex);
             ViewModel.ErrorText = $"Load session failed: {ex.Message}";
         }
+    }
+
+    private void EnsureResultsListVisibleForSessionLoad()
+    {
+        if (_launcherMode)
+            ExitLauncherMode();
+
+        _resultsPaneCollapsed = false;
+        SplitPaneRow.Height = new GridLength(1, GridUnitType.Star);
+        ProgressRow.Height = GridLength.Auto;
+        SplitPaneGrid.Visibility = Visibility.Visible;
+        ApplySplitLayout(SplitLayoutMode.ResultsMaximized);
+        UpdateBottomStatusBarVisibility();
     }
 
     private void ClearPreviewStateForSessionLoad()

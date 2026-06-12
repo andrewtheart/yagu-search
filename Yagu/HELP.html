@@ -327,6 +327,9 @@ open Help.</li>
 <li>Click the <strong>gear</strong> to open Settings.</li>
 <li>Click the <strong>pin</strong> button to cycle window modes (Tray /
 Stay open / Always on top / Traditional).</li>
+<li>Click <strong>Load session</strong> in the search card to restore a
+saved <code>.yagu-session</code> file without starting a new search
+first.</li>
 </ul>
 <hr />
 <h2 id="search-modes">Search Modes</h2>
@@ -597,8 +600,8 @@ command at the prompt without pressing Enter.</td>
 <h3 id="embedded-terminal">Embedded Terminal</h3>
 <p>Right-click inside the terminal pane and choose <strong>Reset
 terminal session</strong> to clear the xterm.js surface, dispose the
-current ConPTY session, and start a fresh command shell session. Use this
-if the terminal appears disconnected, stuck, or out of sync.</p>
+current ConPTY session, and start a fresh command shell session. Use
+this if the terminal appears disconnected, stuck, or out of sync.</p>
 <hr />
 <h2 id="results-pane-left-panel">Results Pane (Left Panel)</h2>
 <p>Results are grouped by file. Each group header shows the file name,
@@ -645,6 +648,18 @@ context but more memory.</td>
 <td>Clear results</td>
 <td>Removes all results (trash icon, or
 <strong>Ctrl+Shift+Delete</strong>).</td>
+</tr>
+<tr>
+<td>Save session</td>
+<td>Saves the current result set to a <code>.yagu-session</code>
+file.</td>
+</tr>
+<tr>
+<td>Load session</td>
+<td>Restores a saved <code>.yagu-session</code> file. This command is
+also available in the search card before results are shown, including
+launcher mode. The saved-session picker can sort by file name, parent
+directory, file size, or modified time.</td>
 </tr>
 <tr>
 <td>Expand/Collapse panel</td>

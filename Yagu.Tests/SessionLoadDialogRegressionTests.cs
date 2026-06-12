@@ -26,6 +26,8 @@ public sealed class SessionLoadDialogRegressionTests
     {
         Assert.Contains("YaguDialog.ShowAsync", SessionLoadDialogSource);
         Assert.Contains("WindowForegroundHelper.CenterWindowOverOwner", YaguDialogSource);
+        Assert.Contains("Pick a saved session", SessionLoadDialogSource);
+        Assert.Contains("Use the column headers to sort by file name, parent folder, size, or last modified time.", SessionLoadDialogSource);
         Assert.Contains("SelectionMode = ListViewSelectionMode.Single", SessionLoadDialogSource);
         Assert.Contains("IsItemClickEnabled = true", SessionLoadDialogSource);
         Assert.Contains("item.Tapped += (_, _) => loadPath(session.Path);", SessionLoadDialogSource);
@@ -34,6 +36,31 @@ public sealed class SessionLoadDialogRegressionTests
         Assert.Contains("completed = true;", SessionLoadDialogSource);
         Assert.Contains("dialog?.AcceptSecondary();", SessionLoadDialogSource);
         Assert.Contains("PrimaryButtonText = \"Browse...\"", SessionLoadDialogSource);
+    }
+
+    [Fact]
+    public void LoadSession_CustomModalUsesSortableTableColumns()
+    {
+        Assert.Contains("internal enum SessionLoadSortColumn", SessionLoadDialogSource);
+        Assert.Contains("BuildSessionTable", SessionLoadDialogSource);
+        Assert.Contains("CreateSortHeaderButton(\"File name\", HorizontalAlignment.Left)", SessionLoadDialogSource);
+        Assert.Contains("CreateSortHeaderButton(\"Parent folder\", HorizontalAlignment.Left)", SessionLoadDialogSource);
+        Assert.Contains("CreateSortHeaderButton(\"Size\", HorizontalAlignment.Right)", SessionLoadDialogSource);
+        Assert.Contains("CreateSortHeaderButton(\"Modified\", HorizontalAlignment.Right)", SessionLoadDialogSource);
+        Assert.Contains("HorizontalContentAlignment = contentAlignment", SessionLoadDialogSource);
+        Assert.Contains("SortSessionCandidates", SessionLoadDialogSource);
+        Assert.Contains("GetParentDirectory(session.Path)", SessionLoadDialogSource);
+        Assert.Contains("FormatSize(session.SizeBytes)", SessionLoadDialogSource);
+        Assert.Contains("FormatModified(session.ModifiedUtc)", SessionLoadDialogSource);
+        Assert.DoesNotContain("FormatMetadata", SessionLoadDialogSource);
+
+        AssertContainsInOrder(SessionLoadDialogSource,
+            "var currentSortColumn = SessionLoadSortColumn.Modified;",
+            "var sortAscending = false;",
+            "CreateSortHeaderButton(\"File name\", HorizontalAlignment.Left)",
+            "CreateSortHeaderButton(\"Parent folder\", HorizontalAlignment.Left)",
+            "CreateSortHeaderButton(\"Size\", HorizontalAlignment.Right)",
+            "CreateSortHeaderButton(\"Modified\", HorizontalAlignment.Right)");
     }
 
     [Fact]
@@ -52,9 +79,18 @@ public sealed class SessionLoadDialogRegressionTests
     {
         Assert.Contains("private async Task LoadSessionFileAsync(string path)", PreviewCommandsSource);
         AssertContainsInOrder(PreviewCommandsSource,
+            "EnsureResultsListVisibleForSessionLoad();",
             "ClearPreviewStateForSessionLoad();",
             "var header = await ViewModel.LoadSessionAsync(path);",
             "Load session failed: {path}");
+        AssertContainsInOrder(PreviewCommandsSource,
+            "private void EnsureResultsListVisibleForSessionLoad()",
+            "if (_launcherMode)",
+            "ExitLauncherMode();",
+            "_resultsPaneCollapsed = false;",
+            "SplitPaneGrid.Visibility = Visibility.Visible;",
+            "ApplySplitLayout(SplitLayoutMode.ResultsMaximized);",
+            "UpdateBottomStatusBarVisibility();");
     }
 
     private static void AssertContainsInOrder(string text, params string[] parts)

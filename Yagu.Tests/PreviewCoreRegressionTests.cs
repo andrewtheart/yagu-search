@@ -662,11 +662,18 @@ public sealed class PreviewCoreRegressionTests
         string showMoreTapped = ExtractMethodWindow(MainWindowSource, "OnShowMoreTapped", window: 500);
         Assert.Contains("e.Handled = true;", showMoreTapped);
 
-        string collapsed = ExtractMethodWindow(MainWindowSource, "OnFileGroupCollapsed", window: 1600);
+        string collapsed = ExtractMethodWindow(MainWindowSource, "OnFileGroupCollapsed", window: 900);
         AssertContainsInOrder(collapsed,
+            "if (sender.DataContext is FileGroup g)",
+            "_ = ClearVisibleResultsAfterCollapseAsync(g);");
+
+        string deferredClear = ExtractMethodWindow(MainWindowSource, "ClearVisibleResultsAfterCollapseAsync", window: 2600);
+        AssertContainsInOrder(deferredClear,
+            "await Task.Delay(FileGroupCollapseVisibleResultsClearDelayMs).ConfigureAwait(false);",
             "DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low",
-            "if (!g.IsExpanded)",
-            "g.ClearVisibleResults();");
+            "if (!group.IsExpanded)",
+            "group.ClearVisibleResults();");
+        Assert.Contains("catch (Exception ex)", deferredClear);
 
         string expanding = ExtractMethodWindow(MainWindowSource, "OnFileGroupExpanding", window: 2200);
         AssertContainsInOrder(expanding,
@@ -838,6 +845,19 @@ public sealed class PreviewCoreRegressionTests
     [Fact]
     public void ResultsToolbar_OptionsAreHostedInEllipsisFlyout()
     {
+        string searchCard = ExtractXamlWindow("x:Name=\"SearchCardLoadSessionButton\"", 900);
+        Assert.Contains("Click=\"OnLoadSession\"", searchCard);
+        Assert.Contains("IsEnabled=\"{x:Bind ViewModel.IsSessionIdle, Mode=OneWay}\"", searchCard);
+        Assert.Contains("ToolTipService.ToolTip=\"Load a previously saved .yagu-session file\"", searchCard);
+        Assert.Contains("Width=\"32\"", searchCard);
+        Assert.Contains("Height=\"32\"", searchCard);
+        Assert.Contains("Glyph=\"&#xE8E5;\"", searchCard);
+        Assert.DoesNotContain("Text=\"Load session\"", searchCard);
+        AssertContainsInOrder(MainWindowXaml,
+            "x:Name=\"SearchCardLoadSessionButton\"",
+            "x:Name=\"SearchCancelButton\"",
+            "<!-- Advanced options (collapsed by default) -->");
+
         string toolbar = ExtractXamlWindow("x:Name=\"AutoScrollResultsCheckBox\"", 5200);
         Assert.Contains("x:Name=\"ResultsOptionsButton\"", toolbar);
         Assert.Contains("Glyph=\"&#xE700;\"", toolbar);
@@ -990,6 +1010,30 @@ public sealed class PreviewCoreRegressionTests
             "height: 100%;",
             "box-sizing: border-box;",
             "padding: 8px 12px;");
+    }
+
+    [Fact]
+    public void EmbeddedTerminal_CtrlShortcutsUseTerminalClipboardAndSelectionSemantics()
+    {
+        Assert.Contains("function handleTerminalShortcut(event)", TerminalHtml);
+        Assert.Contains("if (lower === 'c')", TerminalHtml);
+        Assert.Contains("if (term.hasSelection())", TerminalHtml);
+        Assert.Contains("copyTerminalSelection();", TerminalHtml);
+        Assert.Contains("sendTerminalInput('\\x03');", TerminalHtml);
+        Assert.Contains("else if (lower === 'a')", TerminalHtml);
+        Assert.Contains("term.selectAll();", TerminalHtml);
+        Assert.Contains("else if (lower === 'v')", TerminalHtml);
+        Assert.Contains("postHostMessage({ type: 'requestPaste' });", TerminalHtml);
+        Assert.Contains("event.preventDefault();", TerminalHtml);
+        Assert.Contains("event.stopPropagation();", TerminalHtml);
+        Assert.Contains("document.addEventListener('paste'", TerminalHtml);
+
+        AssertContainsInOrder(TerminalHtml,
+            "function copyTerminalSelection()",
+            "function handleTerminalShortcut(event)",
+            "window.addEventListener('keydown'",
+            "if (handleTerminalShortcut(event))",
+            "var input = translateKeyEventToInput(event);");
     }
 
     [Fact]
@@ -1212,6 +1256,37 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("UpdateSelectionForMatchLine(result, nameof(OnMatchLineTapped));", tapped);
         Assert.Contains("await UpdatePreviewForMatchSelectionAsync(result);", tapped);
         Assert.DoesNotContain("PrependPreviewSectionsForFilesAsync", tapped);
+    }
+
+    [Fact]
+    public void ResultsFileOverlay_SingleClickCollapsesAssociatedFileDrawer()
+    {
+        string overlayXaml = ExtractXamlWindow("x:Name=\"ResultsFileOverlay\"", 2400);
+        Assert.Contains("Tapped=\"OnResultsFileOverlayTapped\"", overlayXaml);
+        Assert.Contains("DoubleTapped=\"OnResultsFileOverlayDoubleTapped\"", overlayXaml);
+        Assert.Contains("Click=\"OnShowFileGroupInExplorer\"", overlayXaml);
+
+        string tapped = ExtractMethodWindow(MainWindowSource, "OnResultsFileOverlayTapped", window: 600);
+        AssertContainsInOrder(tapped,
+            "CollapseResultsFileOverlayFromInput(e.OriginalSource as DependencyObject)",
+            "e.Handled = true;");
+
+        string doubleTapped = ExtractMethodWindow(MainWindowSource, "OnResultsFileOverlayDoubleTapped", window: 600);
+        AssertContainsInOrder(doubleTapped,
+            "CollapseResultsFileOverlayFromInput(e.OriginalSource as DependencyObject)",
+            "e.Handled = true;");
+
+        string collapse = ExtractMethodWindow(MainWindowSource, "CollapseResultsFileOverlayFromInput", window: 1600);
+        AssertContainsInOrder(collapse,
+            "if (IsInsideHeaderCommand(originalSource, ResultsFileOverlay))",
+            "return false;",
+            "var group = _resultsFileOverlayGroup;",
+            "HideResultsFileOverlay();",
+            "if (group.IsExpanded)",
+            "DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low",
+            "groupToCollapse.IsExpanded = false;",
+            "QueueResultsFileOverlayUpdate();",
+            "return true;");
     }
 
     [Fact]

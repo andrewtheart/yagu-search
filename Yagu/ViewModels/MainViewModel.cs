@@ -1379,8 +1379,23 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             long uiMatchesReceived = 0;
             long uiYieldCount = 0;
             long uiLastLogTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            long uiLastStatusRefreshTicks = uiLastLogTicks;
             const long UiLogIntervalSec = 10;
+            long uiStatusRefreshIntervalTicks = System.Diagnostics.Stopwatch.Frequency / 4;
             var uiEventSw = new System.Diagnostics.Stopwatch();
+
+            void RefreshStatusFromReceivedMatches(bool force = false)
+            {
+                long statusNow = System.Diagnostics.Stopwatch.GetTimestamp();
+                if (!force && statusNow - uiLastStatusRefreshTicks < uiStatusRefreshIntervalTicks)
+                    return;
+
+                uiLastStatusRefreshTicks = statusNow;
+                int receivedMatches = ClampMatchCount(uiMatchesReceived);
+                if (receivedMatches > MatchesFound)
+                    MatchesFound = receivedMatches;
+                UpdateFilesPerSecond();
+            }
 
             await foreach (var evt in _search.SearchAsync(options, token).ConfigureAwait(true))
             {
@@ -1422,6 +1437,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                     case SearchEvent.Match m:
                         uiMatchesReceived++;
                         await AddMatchAsync(m.Result, token).ConfigureAwait(true);
+                        RefreshStatusFromReceivedMatches();
                         break;
                     case SearchEvent.MatchBatch mb:
                         // Drain the whole batch under a single dispatcher tick. AddMatch is
@@ -1433,6 +1449,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                         uiEventSw.Restart();
                         await AddMatchesAsync(mb.Results, token).ConfigureAwait(true);
                         uiEventSw.Stop();
+                        RefreshStatusFromReceivedMatches();
                         if (uiEventSw.ElapsedMilliseconds > 200)
                         {
                             LogService.Instance.Warning("UIConsumer",
@@ -1443,7 +1460,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                     case SearchEvent.Progress p:
                         FilesScanned = p.Snapshot.FilesScanned;
                         TotalFiles = p.Snapshot.TotalFiles;
-                        MatchesFound = p.Snapshot.MatchesFound;
+                        MatchesFound = Math.Max(p.Snapshot.MatchesFound, ClampMatchCount(uiMatchesReceived));
                         FilesSkipped = p.Snapshot.FilesSkipped;
                         AccessDeniedCount = p.Snapshot.AccessDenied;
                         _bytesScanned = p.Snapshot.BytesScanned;
@@ -1496,9 +1513,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                             $"groups={_resultCollection.AllGroups.Count:N0}, yields={uiYieldCount:N0}, " +
                             $"diskEvicted={_resultStore?.EvictedCount ?? 0:N0}");
                         var completedElapsed = StopSearchTimer();
+                        int actualTotalMatches = Math.Max(c.Summary.TotalMatches, ClampMatchCount(uiMatchesReceived));
                         FilesScanned = c.Summary.FilesScanned;
                         TotalFiles = c.Summary.TotalFiles;
-                        MatchesFound = c.Summary.TotalMatches;
+                        MatchesFound = actualTotalMatches;
                         FilesSkipped = c.Summary.FilesSkipped;
                         AccessDeniedCount = c.Summary.SkipReasons?.AccessDenied ?? 0;
                         UpdateSkipBreakdown(c.Summary.SkipReasons);
@@ -1509,7 +1527,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                         // groups but aren't tracked by the engine's filesWithMatches
                         // counter when content search is also active.
                         var actualFileCount = Math.Max(c.Summary.FilesWithMatches, _resultCollection.AllGroups.Count);
-                        var displaySummary = c.Summary with { FilesWithMatches = actualFileCount };
+                        var displaySummary = c.Summary with { TotalMatches = actualTotalMatches, FilesWithMatches = actualFileCount };
                         StatusText = BuildCompletionStatus(displaySummary, completedElapsed);
                         ApplySortAndFilter();
                         ShowSearchCompleteToast(displaySummary, completedElapsed);
@@ -2225,6 +2243,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         return $"{filesProcessed / seconds:N1} files/sec";
     }
 
+    private static int ClampMatchCount(long matchCount) =>
+        matchCount >= int.MaxValue ? int.MaxValue : (int)Math.Max(0, matchCount);
+
     private double _instantFilesPerSec;
     private double _instantMbPerSec;
     private double _prevDisplayTime;
@@ -2233,7 +2254,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private void UpdateFilesPerSecond()
     {
-        if (_searchTimer is null || FilesScanned == 0)
+        if (_searchTimer is null)
         {
             return;
         }
@@ -2242,7 +2263,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         // Update instantaneous rate display (~2s window, like Task Manager)
         double displayDt = seconds - _prevDisplayTime;
-        if (displayDt >= 2.0)
+        if (displayDt >= 2.0 && FilesScanned > 0)
         {
             int deltaFiles = FilesScanned - _prevDisplayFiles;
             long deltaBytes = _bytesScanned - _prevDisplayBytes;
@@ -2257,7 +2278,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         // Collect incremental sample for sparkline (~0.15s window, rolling 30s)
         double dt = seconds - _prevSampleTime;
-        if (dt >= 0.15) // sample ~6-7x per second
+        if (dt >= 0.15 && FilesScanned > 0) // sample ~6-7x per second
         {
             int deltaFiles = FilesScanned - _prevFilesScanned;
             long deltaBytes = _bytesScanned - _prevBytesScanned;

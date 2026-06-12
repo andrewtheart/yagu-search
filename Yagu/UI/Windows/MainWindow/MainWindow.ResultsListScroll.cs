@@ -233,24 +233,49 @@ public sealed partial class MainWindow
         ResultsFileOverlayExplorerButton.Tag = null;
     }
 
+    private void OnResultsFileOverlayTapped(object sender, TappedRoutedEventArgs e)
+    {
+        if (CollapseResultsFileOverlayFromInput(e.OriginalSource as DependencyObject))
+            e.Handled = true;
+    }
+
     private void OnResultsFileOverlayDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
     {
-        if (IsInsideHeaderCommand(e.OriginalSource as DependencyObject, ResultsFileOverlay))
-            return;
+        if (CollapseResultsFileOverlayFromInput(e.OriginalSource as DependencyObject))
+            e.Handled = true;
+    }
+
+    private bool CollapseResultsFileOverlayFromInput(DependencyObject? originalSource)
+    {
+        if (IsInsideHeaderCommand(originalSource, ResultsFileOverlay))
+            return false;
 
         var group = _resultsFileOverlayGroup;
         if (group is null)
         {
             HideResultsFileOverlay();
-            return;
+            return true;
         }
 
-        if (group.IsExpanded)
-            group.IsExpanded = false;
-
         HideResultsFileOverlay();
-        QueueResultsFileOverlayUpdate();
-        e.Handled = true;
+
+        if (group.IsExpanded)
+        {
+            var groupToCollapse = group;
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                if (groupToCollapse.IsExpanded)
+                    groupToCollapse.IsExpanded = false;
+
+                QueueResultsFileOverlayUpdate();
+            });
+        }
+        else
+        {
+            QueueResultsFileOverlayUpdate();
+        }
+
+        return true;
     }
 
     private FileGroup? FindCurrentResultsFileGroupWithHiddenHeader()

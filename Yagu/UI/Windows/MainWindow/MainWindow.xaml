@@ -398,16 +398,28 @@
                             <FontIcon Glyph="&#xE894;" FontSize="12" />
                         </Button>
                     </Grid>
-                        <Button x:Name="SearchCancelButton" Grid.Column="2" Click="OnSearchCancelClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,6" MinWidth="0"
-                            ToolTipService.ToolTip="Search (F5)">
-                        <Button.KeyboardAccelerators>
-                            <KeyboardAccelerator Key="F5" />
-                        </Button.KeyboardAccelerators>
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <FontIcon x:Name="SearchCancelIcon" Glyph="&#xE721;" FontSize="14" />
-                            <TextBlock x:Name="SearchCancelLabel" Text="Search" />
-                        </StackPanel>
-                    </Button>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
+                        <Button x:Name="SearchCardLoadSessionButton"
+                                Click="OnLoadSession"
+                                Width="32"
+                                Height="32"
+                                Padding="0"
+                                MinWidth="0"
+                                IsEnabled="{x:Bind ViewModel.IsSessionIdle, Mode=OneWay}"
+                                ToolTipService.ToolTip="Load a previously saved .yagu-session file">
+                            <FontIcon Glyph="&#xE8E5;" FontSize="14" />
+                        </Button>
+                        <Button x:Name="SearchCancelButton" Click="OnSearchCancelClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,6" MinWidth="0"
+                                ToolTipService.ToolTip="Search (F5)">
+                            <Button.KeyboardAccelerators>
+                                <KeyboardAccelerator Key="F5" />
+                            </Button.KeyboardAccelerators>
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon x:Name="SearchCancelIcon" Glyph="&#xE721;" FontSize="14" />
+                                <TextBlock x:Name="SearchCancelLabel" Text="Search" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
                 </Grid>
 
                 <!-- Advanced options (collapsed by default) -->
@@ -1127,6 +1139,7 @@
                             BorderBrush="{ThemeResource SystemAccentColor}"
                             BorderThickness="0,0,0,1"
                             Padding="10,5"
+                            Tapped="OnResultsFileOverlayTapped"
                             DoubleTapped="OnResultsFileOverlayDoubleTapped"
                             Canvas.ZIndex="30">
                         <Grid ColumnSpacing="8">

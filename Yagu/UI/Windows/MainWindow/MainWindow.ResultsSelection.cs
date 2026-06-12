@@ -30,6 +30,8 @@ namespace Yagu;
 /// </summary>
 public sealed partial class MainWindow
 {
+    private const int FileGroupCollapseVisibleResultsClearDelayMs = 250;
+
     private readonly HashSet<FileGroup> _visibleResultsEnsureInProgress = new();
 
     private async void OnFileGroupExpanding(Expander sender, ExpanderExpandingEventArgs args)
@@ -85,20 +87,42 @@ public sealed partial class MainWindow
     private void OnFileGroupCollapsed(Expander sender, ExpanderCollapsedEventArgs args)
     {
         if (sender.DataContext is FileGroup g)
+            _ = ClearVisibleResultsAfterCollapseAsync(g);
+    }
+
+    private async Task ClearVisibleResultsAfterCollapseAsync(FileGroup group)
+    {
+        try
         {
-            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            await Task.Delay(FileGroupCollapseVisibleResultsClearDelayMs).ConfigureAwait(false);
+
+            bool enqueued = DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
             {
-                if (!g.IsExpanded)
+                try
                 {
-                    LogService.Instance.Info("Preview", $"OnFileGroupCollapsed: clearing visible results file='{g.FilePath}', matchCount={g.Count}");
-                    g.ClearVisibleResults();
-                    QueueResultsFileOverlayUpdate();
+                    if (!group.IsExpanded)
+                    {
+                        LogService.Instance.Info("Preview", $"OnFileGroupCollapsed: clearing visible results file='{group.FilePath}', matchCount={group.Count}");
+                        group.ClearVisibleResults();
+                        QueueResultsFileOverlayUpdate();
+                    }
+                    else if (LogService.Instance.IsVerboseEnabled)
+                    {
+                        LogService.Instance.Verbose("Preview", $"OnFileGroupCollapsed: ignored transient collapse file='{group.FilePath}', matchCount={group.Count}");
+                    }
                 }
-                else if (LogService.Instance.IsVerboseEnabled)
+                catch (Exception ex)
                 {
-                    LogService.Instance.Verbose("Preview", $"OnFileGroupCollapsed: ignored transient collapse file='{g.FilePath}', matchCount={g.Count}");
+                    LogService.Instance.Warning("Preview", $"OnFileGroupCollapsed clear failed for '{group.FilePath}': {ex.GetType().Name}: {ex.Message}", ex);
                 }
             });
+
+            if (!enqueued)
+                LogService.Instance.Warning("Preview", $"OnFileGroupCollapsed clear was skipped because the dispatcher rejected the callback for '{group.FilePath}'");
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("Preview", $"OnFileGroupCollapsed clear scheduling failed for '{group.FilePath}': {ex.GetType().Name}: {ex.Message}", ex);
         }
     }
 
