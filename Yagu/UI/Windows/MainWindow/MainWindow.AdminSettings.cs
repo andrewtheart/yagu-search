@@ -162,7 +162,7 @@ public sealed partial class MainWindow
         }
 
         var helpPath = Path.Combine(AppContext.BaseDirectory, "HELP.html");
-        _helpWindow = new HelpWindow(_hwnd, helpPath);
+        _helpWindow = new HelpWindow(_hwnd, helpPath, CurrentAppWindowTitle);
         _helpWindow.Closed += (_, _) => _helpWindow = null;
         _helpWindow.Activate();
         _helpWindow.BringInFrontOfMainWindow(_hwnd);

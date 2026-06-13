@@ -70,6 +70,7 @@
     <Compile Include="..\Yagu\Services\HtmlReportExportService.cs" Link="Source\Services\HtmlReportExportService.cs" />
     <Compile Include="..\Yagu\Services\ReportExportService.cs" Link="Source\Services\ReportExportService.cs" />
     <Compile Include="..\Yagu\Services\LogService.cs" Link="Source\Services\LogService.cs" />
+    <Compile Include="..\Yagu\Services\LowDiskSpaceMonitor.cs" Link="Source\Services\LowDiskSpaceMonitor.cs" />
     <Compile Include="..\Yagu\Services\ConPtyTerminalService.cs" Link="Source\Services\ConPtyTerminalService.cs" />
     <Compile Include="..\Yagu\Services\DirectoryAutoCompleteService.cs" Link="Source\Services\DirectoryAutoCompleteService.cs" />
     <Compile Include="..\Yagu\Services\GitignoreService.cs" Link="Source\Services\GitignoreService.cs" />

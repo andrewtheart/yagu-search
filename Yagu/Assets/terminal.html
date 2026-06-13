@@ -118,6 +118,13 @@
   let receivedOutputCount = 0;
   let sentFirstInputLog = false;
   let sentReady = false;
+  let inputBuffer = '';
+  let inputCursor = 0;
+  let renderedInputLength = 0;
+  let renderedCursorIndex = 0;
+  let commandHistory = [];
+  let historyIndex = -1;
+  let historyDraft = '';
 
   function showTerminalStartupFailure(error) {
     terminalElement.textContent = 'Terminal failed to initialize. Check yagu.log for details.';
@@ -234,7 +241,7 @@
     return data === '\x1b[I' || data === '\x1b[O';
   }
 
-  function sendTerminalInput(data) {
+  function sendTerminalInput(data, echoInput) {
     hideTerminalMenu();
     if (isTerminalFocusReport(data))
       return;
@@ -242,41 +249,233 @@
       sentFirstInputLog = true;
       logToHost('info', 'Terminal page sent first input: chars=' + data.length);
     }
-    postHostMessage({ type: 'input', data: data });
+    postHostMessage({ type: 'input', data: data, echoInput: echoInput !== false });
+  }
+
+  function moveRenderedCursorRight(count) {
+    if (count <= 0)
+      return;
+
+    term.write('\x1b[' + count + 'C');
+    renderedCursorIndex += count;
+  }
+
+  function moveRenderedCursorLeft(count) {
+    if (count <= 0)
+      return;
+
+    term.write('\b'.repeat(count));
+    renderedCursorIndex = Math.max(0, renderedCursorIndex - count);
+  }
+
+  function moveRenderedCursorToEnd() {
+    moveRenderedCursorRight(renderedInputLength - renderedCursorIndex);
+  }
+
+  function clearRenderedInput() {
+    if (renderedInputLength <= 0)
+      return;
+
+    moveRenderedCursorToEnd();
+    var backspaces = '\b'.repeat(renderedInputLength);
+    var spaces = ' '.repeat(renderedInputLength);
+    term.write(backspaces + spaces + backspaces);
+    renderedInputLength = 0;
+    renderedCursorIndex = 0;
+  }
+
+  function renderInputLine() {
+    clearRenderedInput();
+    if (inputBuffer.length > 0) {
+      term.write(inputBuffer);
+      renderedInputLength = inputBuffer.length;
+      renderedCursorIndex = inputBuffer.length;
+    }
+
+    moveRenderedCursorLeft(inputBuffer.length - inputCursor);
+    renderedCursorIndex = inputCursor;
+  }
+
+  function setInputBuffer(text, cursor) {
+    inputBuffer = text || '';
+    inputCursor = Math.max(0, Math.min(cursor ?? inputBuffer.length, inputBuffer.length));
+    renderInputLine();
+  }
+
+  function clearInputState() {
+    inputBuffer = '';
+    inputCursor = 0;
+    renderedInputLength = 0;
+    renderedCursorIndex = 0;
+    historyIndex = -1;
+    historyDraft = '';
+  }
+
+  function insertInputText(text) {
+    if (!text)
+      return;
+
+    var before = inputBuffer.slice(0, inputCursor);
+    var after = inputBuffer.slice(inputCursor);
+    inputBuffer = before + text + after;
+    inputCursor += text.length;
+
+    if (after.length === 0) {
+      term.write(text);
+      renderedInputLength += text.length;
+      renderedCursorIndex += text.length;
+    } else {
+      renderInputLine();
+    }
+  }
+
+  function backspaceInput() {
+    if (inputCursor <= 0)
+      return;
+
+    var removedAtEnd = inputCursor === inputBuffer.length;
+    inputBuffer = inputBuffer.slice(0, inputCursor - 1) + inputBuffer.slice(inputCursor);
+    inputCursor--;
+
+    if (removedAtEnd) {
+      term.write('\b \b');
+      renderedInputLength = Math.max(0, renderedInputLength - 1);
+      renderedCursorIndex = Math.max(0, renderedCursorIndex - 1);
+    } else {
+      renderInputLine();
+    }
+  }
+
+  function deleteInput() {
+    if (inputCursor >= inputBuffer.length)
+      return;
+
+    inputBuffer = inputBuffer.slice(0, inputCursor) + inputBuffer.slice(inputCursor + 1);
+    renderInputLine();
+  }
+
+  function moveInputCursor(offset) {
+    var nextCursor = Math.max(0, Math.min(inputCursor + offset, inputBuffer.length));
+    var delta = nextCursor - inputCursor;
+    if (delta > 0)
+      moveRenderedCursorRight(delta);
+    else if (delta < 0)
+      moveRenderedCursorLeft(-delta);
+    inputCursor = nextCursor;
+    renderedCursorIndex = inputCursor;
+  }
+
+  function pushHistory(line) {
+    if (!line || !line.trim())
+      return;
+
+    if (commandHistory.length === 0 || commandHistory[commandHistory.length - 1] !== line)
+      commandHistory.push(line);
+    if (commandHistory.length > 100)
+      commandHistory.shift();
+  }
+
+  function recallHistory(direction) {
+    if (commandHistory.length === 0)
+      return;
+
+    if (historyIndex === -1) {
+      historyDraft = inputBuffer;
+      historyIndex = commandHistory.length;
+    }
+
+    historyIndex = Math.max(0, Math.min(historyIndex + direction, commandHistory.length));
+    if (historyIndex === commandHistory.length)
+      setInputBuffer(historyDraft, historyDraft.length);
+    else
+      setInputBuffer(commandHistory[historyIndex], commandHistory[historyIndex].length);
+  }
+
+  function isClearCommand(line) {
+    return line.trim().toLowerCase() === 'cls';
+  }
+
+  function submitInputLine() {
+    var line = inputBuffer;
+    pushHistory(line);
+    clearInputState();
+
+    if (isClearCommand(line)) {
+      term.clear();
+      sendTerminalInput(line + '\r', false);
+      return;
+    }
+
+    term.write('\r\n');
+    sendTerminalInput(line + '\r', false);
+  }
+
+  function insertPastedText(text) {
+    if (!text)
+      return;
+
+    var normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    var lines = normalized.split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].length > 0)
+        insertInputText(lines[i]);
+      if (i < lines.length - 1)
+        submitInputLine();
+    }
+  }
+
+  function cancelInputLine() {
+    clearRenderedInput();
+    clearInputState();
+    term.write('^C\r\n');
+    postHostMessage({ type: 'cancelInput' });
   }
 
   // WebView2 frequently fails to deliver printable keystrokes to xterm's hidden
-  // textarea, so every key is translated here and forwarded to the host shell.
-  // This window-level capture handler is the single, reliable input path.
+  // textarea, so every key is translated here and applied to the page-side prompt
+  // editor. The host shell only receives submitted lines.
   function translateKeyEventToInput(event) {
-    if (event.altKey || event.metaKey)
+    if (event.altKey || event.metaKey || event.ctrlKey)
       return null;
-
-    if (event.ctrlKey) {
-      if (event.key.length === 1) {
-        var lower = event.key.toLowerCase();
-        if (lower === 'v')
-          return null; // Paste is handled by the DOM 'paste' event.
-        if (lower >= 'a' && lower <= 'z')
-          return String.fromCharCode(lower.charCodeAt(0) - 96); // Ctrl+A..Z -> 0x01..0x1A
-      }
-      return null;
-    }
 
     switch (event.key) {
-      case 'Enter': return '\r';
-      case 'Backspace': return '\x7f';
-      case 'Tab': return '\t';
-      case 'Escape': return '\x1b';
-      case 'ArrowUp': return '\x1b[A';
-      case 'ArrowDown': return '\x1b[B';
-      case 'ArrowRight': return '\x1b[C';
-      case 'ArrowLeft': return '\x1b[D';
-      case 'Home': return '\x1b[H';
-      case 'End': return '\x1b[F';
-      case 'Delete': return '\x1b[3~';
+      case 'Backspace': return { kind: 'backspace' };
+      case 'Tab': return { kind: 'insert', text: '\t' };
+      case 'ArrowUp': return { kind: 'history', direction: -1 };
+      case 'ArrowDown': return { kind: 'history', direction: 1 };
+      case 'ArrowRight': return { kind: 'move', offset: 1 };
+      case 'ArrowLeft': return { kind: 'move', offset: -1 };
+      case 'Home': return { kind: 'home' };
+      case 'End': return { kind: 'end' };
+      case 'Delete': return { kind: 'delete' };
       default:
-        return event.key.length === 1 ? event.key : null;
+        return event.key.length === 1 ? { kind: 'insert', text: event.key } : null;
+    }
+  }
+
+  function handleTranslatedInput(input) {
+    switch (input.kind) {
+      case 'insert':
+        insertInputText(input.text);
+        break;
+      case 'backspace':
+        backspaceInput();
+        break;
+      case 'delete':
+        deleteInput();
+        break;
+      case 'move':
+        moveInputCursor(input.offset);
+        break;
+      case 'home':
+        moveInputCursor(-inputCursor);
+        break;
+      case 'end':
+        moveInputCursor(inputBuffer.length - inputCursor);
+        break;
+      case 'history':
+        recallHistory(input.direction);
+        break;
     }
   }
 
@@ -286,7 +485,7 @@
 
     event.preventDefault();
     event.stopPropagation();
-    sendTerminalInput('\r');
+    submitInputLine();
     return true;
   }
 
@@ -359,17 +558,17 @@
 
   terminalClearButton.addEventListener('click', function() {
     hideTerminalMenu();
-    // Run a real clear command in the shell, then clear xterm's scrollback so the
-    // display is actually empty (the redirected cmd.exe 'cls' does not emit an
-    // escape sequence that xterm honors on its own).
-    sendTerminalInput('cls\r');
-    window.setTimeout(function() { term.clear(); }, 120);
+    clearRenderedInput();
+    clearInputState();
+    term.clear();
+    sendTerminalInput('cls\r', false);
     term.focus();
   });
 
   resetTerminalSessionButton.addEventListener('click', function() {
     hideTerminalMenu();
     term.reset();
+    clearInputState();
     postHostMessage({ type: 'resetTerminal' });
     term.focus();
   });
@@ -381,7 +580,7 @@
 
   // Send user input to C# host
   term.onData(function(data) {
-    sendTerminalInput(data);
+    insertPastedText(data);
   });
 
   // Send resize events to C# host
@@ -413,6 +612,8 @@
       term.clear();
     } else if (msg && msg.type === 'focus') {
       focusTerminal();
+    } else if (msg && msg.type === 'pasteText') {
+      insertPastedText(msg.text || '');
     }
   });
 
@@ -433,21 +634,51 @@
       return;
     }
 
+    if (event.ctrlKey && !event.altKey && !event.metaKey) {
+      var key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+      if (key === 'c') {
+        event.preventDefault();
+        event.stopPropagation();
+        if (term.hasSelection())
+          copyTerminalSelection();
+        else
+          cancelInputLine();
+        return;
+      }
+
+      if (key === 'a') {
+        event.preventDefault();
+        event.stopPropagation();
+        term.selectAll();
+        return;
+      }
+
+      if (key === 'v') {
+        event.preventDefault();
+        event.stopPropagation();
+        postHostMessage({ type: 'requestPaste' });
+        return;
+      }
+    }
+
+    if (forwardEnterKey(event))
+      return;
+
     var input = translateKeyEventToInput(event);
     if (input !== null) {
       event.preventDefault();
       event.stopPropagation();
-      sendTerminalInput(input);
+      handleTranslatedInput(input);
     }
   }, true);
 
-  // Ctrl+V / context-menu paste: forward clipboard text to the host shell.
+  // Ctrl+V / context-menu paste: insert clipboard text into the page-side prompt editor.
   document.addEventListener('paste', function(event) {
     var text = event.clipboardData ? event.clipboardData.getData('text') : '';
     if (text) {
       event.preventDefault();
       event.stopPropagation();
-      sendTerminalInput(text.replace(/\r\n/g, '\r').replace(/\n/g, '\r'));
+      insertPastedText(text);
     }
   }, true);
 

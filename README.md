@@ -6,55 +6,79 @@ The name means "Yet Another Grep Utility". The goal is the speed of command-line
 
 For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
 
+## Download Installer
+
+To install Yagu without building from source, download [YaguSetup-1.0.0.2278.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2278.exe) from GitHub and run it. The installer checks for the x64 .NET 10 Runtime and includes the Windows App Runtime payloads needed by the desktop app.
+
 ## Current Project Status
 
 Use [Yagu.sln](Yagu.sln) for current development.
 
-The [PLANS](PLANS/) directory contains design notes, performance investigations, and future optimization plans. Treat those files as engineering history and roadmap material, not as the canonical build instructions. This README is the entry point for new contributors.
+This README is the entry point for new contributors.
 
 ## Important Features
 
-- Fast recursive text search across a directory and all subdirectories.
-- Literal and regex search, with optional case-sensitive matching.
+- Fast recursive text search across a directory and all subdirectories, with streaming results while the scan is still running.
+- Literal, exact-match, and .NET regex search, with optional case-sensitive matching.
 - Search modes for content plus file names, content only, file names only, or file-name-gated content search.
-- Streaming results: matches appear while the scan is still running.
-- voidtools Everything support for file discovery, with automatic fallback to built-in .NET enumeration.
-- Optional Rust native scanner for fast per-file matching, with managed C# fallback when the DLL is unavailable.
-- Include and exclude filters with glob/path or regex modes, skip-extension lists, optional binary-file inclusion, and max-file-size limits.
-- Configurable result cap, per-file match cap, maximum search depth, content-search parallelism, and memory limits.
-- Memory-pressure mode that pages result payloads to disk and keeps searching instead of exhausting RAM.
-- Grouped result list with optional no-sort mode plus sorting by match count, modified date, file size, or file name.
-- Result filtering by file name/path and by match text without rerunning the search.
-- Context preview with match highlighting, line numbers, optional word wrap, and lightweight syntax coloring for common source files.
-- Multi-select preview modes for reviewing selected matches together.
-- Highlighted full-file previews for selected result groups or checked match lines.
-- Open files in the default Windows app or in a configurable external editor command.
-- Copy or export selected match lines, selected file paths, or selected files with content.
-- Explorer context menu registration for "Search with Yagu".
-- Startup directory argument via `--dir` or `--dir=...`.
-- Recent directory and search-query history.
-- Drag-and-drop folders onto the window to set the search directory.
-- Optional global `Ctrl+Shift+letter` hotkey to bring Yagu forward and focus the search box.
-- Admin elevation banner with a "Restart as Admin" action when some files may be inaccessible.
-- Persisted settings, rotating logs, and crash logging.
+- Advanced include/exclude filters with glob/path or regex modes, `.gitignore` support, skip-extension lists, optional binary-file inclusion, size/date filters, and maximum search depth.
+- ZIP-format archive search for ZIP, DOCX, XLSX, JAR, NUPKG, and other configured archive-like containers, including nesting and entry-size safeguards.
+- voidtools Everything support for file discovery through the in-process SDK or `es.exe`, with automatic fallback to built-in .NET enumeration.
+- Optional Rust native scanner for fast per-file matching, with managed C# fallback when the DLL is unavailable or a file needs the managed path.
+- Configurable result cap, hard result ceiling, per-file match cap, content-search parallelism, SDK buffer size, content file-size ceiling, and native/MMF concurrency limits.
+- Memory-pressure mode that pages result payloads to a configurable temp-file drive instead of exhausting RAM.
+- Low temp-drive disk-space monitor that terminates active searches when the configured temp drive is too full, with a configurable warning threshold.
+- HDD-aware parallelism guard that can warn and reduce scanning to one worker on rotational drives.
+- Grouped result list with no-sort arrival order plus sorting/grouping by folder, date, extension, file size, match count, modified date, or file name.
+- Result filtering by file name/path, match text, and date range without rerunning the search.
+- Selectable file groups and match lines with right-click actions for preview, open, copy, export, and Explorer navigation.
+- Context preview with match highlighting, line numbers, match navigation, optional word wrap, lazy loading, and lightweight syntax coloring for common source files.
+- Multi-file preview layouts for reviewing selected files or checked match lines together.
+- Highlighted full-file previews for selected result groups, checked match lines, or entire files, with configurable full-file preview limits.
+- Built-in editor with find/replace, save, `.yagubak` backups, large-file chunk loading, and double-click navigation from highlighted matches.
+- External editor integration with configurable commands such as `code -g {file}:{line}`.
+- Export selected match lines, selected file paths, selected files with content, or styled HTML preview reports; CLI export supports HTML, JSON, and CSV.
+- GUI command generation that builds reproducible `Yagu.exe --cli` commands from the current search state, with an option to omit settings already saved in `%APPDATA%\Yagu\settings.json`.
+- Embedded xterm.js terminal with configurable working directory, context menu actions, clear/reset support, and a "Send command to terminal" path from generated CLI commands.
+- CLI mode for scripted search/export, startup arguments such as `--dir` and `--query`, and local `.yagu.json` settings discovery with CLI flags taking precedence.
+- Explorer context menu registration for "Search with Yagu" and single-instance forwarding when Yagu is already running.
+- Compact launcher, traditional window, stay-open, always-on-top, close-to-tray, system tray, and taskbar-progress behavior.
+- Recent directory and search-query history, directory autocomplete, drag-and-drop folders, and optional global `Ctrl+Shift+letter` hotkey.
+- Admin elevation banner with a "Restart as Admin" action, access-denied/skipped-file breakdowns, and optional admin-protected path skipping.
+- Searchable Settings window with persisted settings, reset/use-default actions, theme/display controls, developer diagnostics, rotating logs, and crash logging.
 
 ## Prerequisites
 
 Yagu is Windows-only.
 
+### Running The Installed App
+
+For someone who only wants to install and run Yagu:
+
+- Windows 10 version 1809 / build 17763 or newer.
+- The x64 .NET 10 Runtime. The installer checks for it and, if missing, offers to download and install it with progress before continuing.
+- Windows App Runtime 1.8. The installer packages the required runtime MSIX payloads and installs them when needed.
+- voidtools Everything is optional but strongly recommended for fastest file discovery. If Everything is not available, Yagu falls back to built-in recursive .NET file enumeration.
+
+The installed app does not require the .NET SDK, Rust, Visual Studio, Build Tools, Inno Setup, or PowerShell just to run. The native `yagu_core.dll` fast path is shipped with normal builds; if that DLL is missing or incompatible, Yagu falls back to the managed scanner.
+
+### Building And Developing
+
+For contributors building, testing, or packaging Yagu from this repository:
+
 - Windows 10 version 1809 / build 17763 or newer.
 - .NET 10 SDK. The repo pins SDK `10.0.107` with `rollForward: latestFeature` in [global.json](global.json).
-- PowerShell for the helper scripts.
-- Rust stable toolchain if you want the native `yagu_core.dll` fast path. The app still builds and runs without Rust if you pass `-p:BuildRustCore=false`; it will use the managed scanner.
-- voidtools Everything is optional but strongly recommended. Yagu can use the in-process Everything SDK or `es.exe`; if neither is available, it falls back to recursive .NET file enumeration.
-
-For app development, Visual Studio 2022 or Build Tools with Windows desktop/Windows SDK components is recommended because the main app is an unpackaged WinUI 3 application. The test project avoids WinUI dependencies and can run on a normal Windows .NET SDK installation.
+- Visual Studio 2022 or Build Tools with Windows desktop/Windows SDK components is recommended because the main app is an unpackaged WinUI 3 application. The test project avoids WinUI dependencies and can run on a normal Windows .NET SDK installation.
+- PowerShell for helper scripts such as install, publish, profiling, cleanup, and Windows App Runtime prerequisite staging.
+- Rust stable toolchain if you want to build and test the native `yagu_core.dll` fast path. The app still builds and runs without Rust if you pass `-p:BuildRustCore=false`; it will use the managed scanner.
+- Inno Setup 6 only when building the installer EXE with [build-installer.ps1](build-installer.ps1).
+- voidtools Everything is optional for development and testing of the Everything-backed discovery path; otherwise Yagu uses recursive .NET file enumeration.
 
 ## Quick Start
 
 ```powershell
 git clone <repo-url>
-cd agentRansackAlternative
+cd Yagu
 
 dotnet restore Yagu.sln
 dotnet build Yagu.sln -c Release

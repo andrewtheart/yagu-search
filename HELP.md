@@ -112,11 +112,15 @@ Click the **Advanced Options** expander below the search bar to reveal additiona
 
 | Control | Effect |
 | --- | --- |
-| Generate CLI command | Builds a `Yagu.exe --cli` command from the current directory, query, search toggles, and Advanced Options. The command appears in a closable code-styled overlay with buttons to copy it or send it to the embedded terminal, plus a toggle for including or omitting options already saved in the current settings file. The toggle defaults to **Omit** so matching saved settings are left out unless you switch it to Include. Sending to the terminal places the command at the prompt without pressing Enter. |
+| Generate CLI command | Builds a `Yagu.exe --cli` command from the current directory, query, search toggles, and Advanced Options. The command appears in a closable code-styled overlay with Copy, Send to terminal, and Close buttons. The **Options already saved in settings** toggle controls whether the generated command includes options that already match `%APPDATA%\Yagu\settings.json`; it defaults to **Omit** to keep commands short. Sending to the terminal expands the embedded terminal if needed and places the command at the prompt without pressing Enter. |
+
+The generated command includes supported CLI flags for directory, pattern, regex/case/exact-match state, context, search mode, include/exclude mode and patterns, gitignore behavior, size/date filters, binary/archive search, skip/archive extensions, result caps, max depth, thread count, memory limits, file-listing backend, SDK buffer size, and admin-protected path handling.
 
 ### Embedded Terminal
 
-Right-click inside the terminal pane and choose **Reset terminal session** to clear the xterm.js surface, dispose the current ConPTY session, and start a fresh command shell session. Use this if the terminal appears disconnected, stuck, or out of sync.
+The embedded terminal is a command shell hosted inside Yagu below the main content. Use the chevron in the status area, or the inline chevron beside Advanced Options when the status bar is hidden, to expand or collapse it.
+
+Right-click inside the terminal pane for **Copy**, **Paste**, **Cut**, **Select all**, **Clear**, and **Reset terminal session**. **Clear** runs `cls` and clears the xterm surface. **Reset terminal session** disposes the current shell session and starts a fresh one; use it if the terminal appears disconnected, stuck, or out of sync. The generated CLI command overlay can send commands into this terminal without executing them, which gives you a chance to review or edit before pressing Enter.
 
 ---
 
@@ -286,82 +290,83 @@ Open with **Ctrl+F** (find only) or **Ctrl+H** (find and replace).
 
 Open Settings from the **gear** button in the title bar. Settings are saved to `%APPDATA%\Yagu\settings.json`. Reset and Use default buttons are disabled when the current value already matches the default.
 
+Use the search box at the top of Settings to filter settings by tab name, setting label, helper text, current value, or available option text.
+
 ### Search Defaults Tab
 
 | Setting | What It Controls |
 | --- | --- |
-| Case sensitive | Default state of case-sensitive matching on launch. |
-| Regex | Default state of regex mode on launch. |
-| Exact match | Default state of whole-word matching on launch. |
 | Context lines | Default match context lines stored in result rows. |
 | Preview context lines | Default match context lines shown in preview. |
-| Default include globs | Include filter applied by default on app start. |
-| Default exclude globs | Exclude filter applied by default on app start. |
+| Default include pattern mode | Whether default include patterns are interpreted as Glob or Regex. |
+| Default include patterns | Include filter applied by default on app start. Leave blank to include every eligible file. |
+| Default exclude pattern mode | Whether default exclude patterns are interpreted as Glob or Regex. |
+| Default exclude patterns | Exclude filter applied by default before content scanning. |
 
 ### Search Limits Tab
 
 | Setting | What It Controls |
 | --- | --- |
-| Max results | Stops after this many matches (0 = unlimited, non-zero capped at 50,000). |
-| Default file size filter | Min/Max MB applied by default. Both 0 = any size. |
-| Default date filters | Created/Modified date ranges applied by default. |
-| Search binary files | Includes binary-looking files in the scan. |
+| Max results | Stops after this many matches. 0 = unlimited, subject to the hard ceiling and memory safeguards. |
+| Max results ceiling | Hard cap applied to Max results. Values below 1,000 are not allowed. |
+| Default file size filter | Minimum and maximum MB applied by default. Both 0 = any size. |
+| Default created date filter | Created-after and created-before defaults for Advanced Options. Blank = any date. |
+| Default modified date filter | Modified-after and modified-before defaults for Advanced Options. Blank = any date. |
+| Clear date defaults | Clears all saved created/modified date defaults. |
+| Search binary files | Includes files detected as binary by null bytes or magic bytes. Off by default. |
 | Skip admin-protected paths | Excludes system directories that deny access when not elevated. |
 | Admin-protected path segments | Custom path segments to skip (semicolon-separated). |
-| Skip extensions | Extensions skipped before contents are read. |
-| Archive extensions | Extensions treated as ZIP containers when archive search is on. |
-| Archive max nesting depth | How deep to recurse into nested archives (default: 5). |
-| Archive max entry size (MB) | Largest individual entry to extract from an archive (default: 64 MB). |
+| Skip extensions | Extensions skipped before contents are read. Use semicolon-separated names without dots. |
+| Binary extensions | Extensions that remain classified as binary/build artifacts, and populate the Binary ext dropdown when binary search is enabled. |
+| Reset binary extensions | Restores the default binary extension list. |
+| Archive extensions | Extensions treated as ZIP-like containers when archive search is on. Detection still checks file-header magic bytes. |
+| Max archive nesting depth | How deep to recurse into nested archives. 0 = default 5. |
+| Max archive entry size (MB) | Largest individual entry to extract from an archive. 0 = default 64 MB. |
 
 ### Performance Tab
 
 | Setting | What It Controls |
 | --- | --- |
-| Content-search parallelism | Concurrent file scan workers: Safe cap, 1 thread, Half cores, 2× cores, All cores. Default: All cores. |
-| Native concurrency limit | Max concurrent Rust native scanner operations (default: min(64, cores×2)). |
-| MMF concurrency limit | Max concurrent memory-mapped file views (default: 16). |
 | File-listing backend | Auto, Everything SDK, `es.exe`, or .NET enumeration. |
+| Content-search parallelism | Concurrent file scan workers: Safe cap, 1 thread, Half cores, 2x cores, or All cores. |
+| Limit parallelism on HDD | When the search target is on a rotational drive, warn and force 1 thread. |
+| SDK channel buffer size | Number of file paths buffered between Everything SDK discovery and search workers. |
+| Search result temp-file drive | Drive used for disk-backed result temp files during memory-saving mode. Only writable drives with enough free space are listed. |
+| Temp-drive full warning threshold (%) | Active searches are terminated when the search result temp-file drive is more than this full. Default 98%; valid range 1-99. Checked every 30 seconds. |
+| System memory pressure limit (%) | System RAM usage threshold for memory-saving mode. 0 = disabled. |
 | Process memory hard cap (MB) | Working-set limit before memory-saving activates. |
-| System memory pressure limit (%) | System RAM usage threshold for memory-saving mode (default: 75%). |
-| Search result temp-file drive | Drive used for disk-backed result temp files during memory-saving mode. Only writable drives with at least 50 GB free are listed. |
-| SDK channel buffer size | Path buffer between Everything SDK discovery and search workers (default: 4096). |
-| Content-search file size (MB) | Max individual file size for content search (default: 100 MB). |
 | Max matches per file | Cap on stored matches per file (0 = unlimited). |
-| Line truncation length | Result-list line cap for UI responsiveness with very long lines. |
-| Limit parallelism on HDD | Auto-reduce thread count on rotational drives. |
+| Content-search file size ceiling (MB) | Max individual file size for content search when no explicit max-size filter is set. 0 = no ceiling. |
+| MMF concurrency limit | Max concurrent memory-mapped file views. 0 = default 16. |
+| Native scanner concurrency limit | Max concurrent Rust native scanner operations. 0 = default `min(64, CPU cores x 2)`. |
 
 ### Display Tab
 
 | Setting | What It Controls |
 | --- | --- |
+| Theme | Auto follows Windows app theme; Dark and Light pin Yagu to that theme. |
+| Line truncation length | Result-list line cap for UI responsiveness with very long lines. 0 = disabled. |
+| Results list match text font family | Typeface used by match lines in the left results pane. |
+| Results list match text font size | Base size used by match lines in the left results pane. |
+| Highlighted match text | Color of the matched substring inside each result-list match line. |
 | Preview layout | Default layout: Concatenated or Multi-highlight. |
 | Word wrap | Default word-wrap state in preview. |
 | Preview text font family | Typeface used by preview pane line text and line-number gutters. |
 | Preview text font size | Base size used by preview pane line text and line-number gutters. |
+| Selected preview content background | Background for the active preview section body. |
+| Unselected preview content background | Background for inactive preview section bodies. |
+| Preview gutter text | Color of preview line numbers and separator pipes. |
+| Matched preview gutter text | Color of preview gutter line numbers for matched lines. |
+| Match highlight text | Color of highlighted match text in the preview pane. |
+| Active match overlay | Color of the overlay border/underline on the current navigated match. |
+| Matched line text | Color of non-highlighted text on matched lines. |
 | Auto-load matches on scroll | Number of matches to auto-load when scrolling (default: 50). |
 | Max matches per section | Matches shown per file section before an overflow "show more" button (default: 500). |
 | Preview section page size | Initial file sections loaded per page, more loaded on scroll (default: 50). |
 | Full-file preview limit (MB) | Largest file size for full-file preview mode (default: 1024 MB). |
-| Selected section background | Background color for the active preview section. |
-| Unselected section background | Background color for inactive preview sections. |
-| Results match text font family | Typeface used by match lines in the left results pane. |
-| Results match text font size | Base size used by match lines in the left results pane. |
 | Built-in editor font family | Typeface used by the built-in full-file editor. |
 | Built-in editor font size | Base size used by the built-in full-file editor; zoom scales from this value. |
-
-### Preview Colors Tab
-
-Customize the colors used in the preview pane's rendered content.
-
-| Setting | What It Controls | Default |
-| --- | --- | --- |
-| Gutter (context lines) | Line number color for non-matched lines in the gutter. | Grey (#505050) |
-| Gutter (matched lines) | Line number color for matched lines in the gutter. | Lime green (#32CD32) |
-| Match text | Foreground color of matched text within a line. | Gold (#FFD700) |
-| Active match overlay | Color of the overlay band highlighting the currently navigated match. | Orange-red (#FF4500) |
-| Matched line text | Foreground color of the full line containing a match. | White (#FFFFFF) |
-
-All colors are specified as ARGB hex strings (e.g. `#FFFFD700`). Use the color picker in Settings to choose custom values. Changes take effect on the next preview render.
+| Editor gutter text | Color of line numbers in the built-in editor gutter. |
 
 ### Editor Tab
 
@@ -377,21 +382,75 @@ All colors are specified as ARGB hex strings (e.g. `#FFFFD700`). Use the color p
 
 | Setting | What It Controls |
 | --- | --- |
-| Window focus behavior | Minimize to tray, Stay open, Always on top, or Traditional (default). |
+| Start in compact launcher mode | Launches as a small search bar when enabled, or as a traditional window when disabled. |
+| Launcher focus-loss behavior | Minimize to tray, Stay open, or Always on top when the compact launcher loses focus. |
 | Close to tray | Closing the window minimizes to tray instead of exiting (on by default). |
+| Maximize window on startup | Starts the main window maximized instead of at the default size. |
+| Advanced Options drawer width | Uses full width when collapsed and expanded, or compact width when collapsed and full width when expanded. |
 
-### General Tab
+### Interaction Tab
 
 | Setting | What It Controls |
 | --- | --- |
-| Global hotkey enabled | Enable a system-wide hotkey to summon Yagu from any app. |
-| Global hotkey key | The Ctrl+Shift+[letter] combination for the global hotkey. |
+| Checking a file header adds it to the preview pane | Selecting a file-group checkbox immediately previews that file's matches. |
+| Checking a match line adds it to the preview pane | Selecting an individual match-line checkbox immediately previews that match. |
+
+### Terminal Emulator Tab
+
+| Setting | What It Controls |
+| --- | --- |
+| Default working directory | Starting directory for the embedded terminal shell. Leave blank to use the directory Yagu was launched from. |
+| Browse | Picks a terminal working directory. |
+| Use default | Clears the saved terminal working directory so launch directory is used again. |
 
 ### Developer Options Tab
 
 | Setting | What It Controls |
 | --- | --- |
 | Show memory pressure warning | Display the orange toolbar warning when memory-saving mode activates. Hidden by default. |
+| Stats for nerds | Shows files/sec, MB/s, disk throughput sparkline, and utilization percentage in the bottom status bar. |
+| Show build number in title bar | Adds the current Yagu version to the main title bar for diagnostics and screenshots. Hidden by default. |
+| Show Auto-scroll checkbox | Shows the results-toolbar Auto-scroll checkbox for testing continuously appended result rows. Hidden by default. |
+| Reset font contrast reminders | Allows theme/font contrast warnings to appear again after Remind me later or Don't remind me again. |
+| Re-enable admin privilege warning | Re-enables the non-administrator warning after it was dismissed. Visible only after the warning has been suppressed. |
+| File log level | Controls file logging: None, Critical, Warning, Info, or Verbose. Verbose can degrade performance. |
+| Console log level | Controls console logging with the same levels as file logging. |
+| Log file | Shows the path to the active Yagu log file. |
+
+---
+
+## CLI Command Generation
+
+Click **Generate CLI command** in Advanced Options to turn the current UI state into a reproducible `Yagu.exe --cli` command. The overlay is selectable text and includes three icon buttons:
+
+| Button | Action |
+| --- | --- |
+| Copy command | Copies the generated command to the clipboard and closes the overlay. |
+| Send command to terminal | Opens the embedded terminal if needed, collapses Advanced Options, inserts the generated command at the prompt, and leaves it unexecuted for review. |
+| Close | Closes the overlay without copying or sending. |
+
+The **Options already saved in settings** toggle defaults to **Omit**. With Omit, Yagu compares the UI state to `%APPDATA%\Yagu\settings.json` and leaves out flags that already match saved defaults. Switch it to **Include** when you want a fully explicit command that does not rely on the current settings file.
+
+Generated commands cover supported CLI equivalents for search behavior, filters, size/date limits, binary/archive handling, result limits, max depth, threading, memory settings, file-listing backend, and admin-protected path handling. Display-only settings, window behavior, and editor appearance are not included because they do not affect CLI search results.
+
+---
+
+## Embedded Terminal
+
+Yagu includes an embedded command shell rendered with xterm.js in a WebView2 panel. Use the terminal chevron to expand or collapse it. The terminal starts on first use and uses the **Terminal Emulator -> Default working directory** setting, or the directory Yagu was launched from when that setting is blank.
+
+The terminal supports normal typing, command history navigation, paste, and Ctrl+C cancellation. Right-click inside the terminal for:
+
+| Menu item | Action |
+| --- | --- |
+| Copy | Copies the current terminal selection. |
+| Paste | Pastes clipboard text at the prompt. |
+| Cut | Copies the current selection and clears the terminal selection. |
+| Select all | Selects the terminal buffer. |
+| Clear | Sends `cls` and clears the visible terminal surface. |
+| Reset terminal session | Starts a fresh shell session and clears terminal state. |
+
+When using generated CLI commands, **Send command to terminal** inserts the command text into the prompt without pressing Enter. This is useful for reviewing, editing, or adding shell redirection before running the command.
 
 ---
 
@@ -682,10 +741,11 @@ If the native DLL is missing or incompatible, Yagu logs the reason and uses the 
 | Max file size | Prevents accidental reads of enormous files. |
 | Skip binary / extensions | Reduces unnecessary reads. |
 | Memory-pressure mode | Pages result payloads to the configured search result temp-file drive. |
+| Temp-drive low-space monitor | Checks the search result temp-file drive every 30 seconds during search and terminates the search if that drive is more than the configured Performance threshold full. Default 98%. |
 | Process memory cap | Hard limit on working set before eviction kicks in. |
 | System memory pressure | Activates when system-wide RAM usage exceeds threshold. |
 
-If memory-saving mode appears often, reduce result volume with narrower queries, fewer context lines, or stricter filters.
+If memory-saving mode appears often, reduce result volume with narrower queries, fewer context lines, or stricter filters. If a search is terminated due to low disk space, free space on the configured temp-file drive, choose a different drive in Settings -> Performance -> Search result temp-file drive, or adjust Settings -> Performance -> Temp-drive full warning threshold (%) before searching again.
 
 ---
 

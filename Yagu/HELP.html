@@ -585,20 +585,37 @@ folders. This value is per-search and is not saved to settings.</td>
 <td>Generate CLI command</td>
 <td>Builds a <code>Yagu.exe --cli</code> command from the current
 directory, query, search toggles, and Advanced Options. The command
-appears in a closable code-styled overlay with buttons to copy it or
-send it to the embedded terminal, plus a toggle for including or
-omitting options already saved in the current settings file. The toggle
-defaults to <strong>Omit</strong> so matching saved settings are left
-out unless you switch it to Include. Sending to the terminal places the
-command at the prompt without pressing Enter.</td>
+appears in a closable code-styled overlay with Copy, Send to terminal,
+and Close buttons. The <strong>Options already saved in
+settings</strong> toggle controls whether the generated command includes
+options that already match <code>%APPDATA%\Yagu\settings.json</code>; it
+defaults to <strong>Omit</strong> to keep commands short. Sending to the
+terminal expands the embedded terminal if needed and places the command
+at the prompt without pressing Enter.</td>
 </tr>
 </tbody>
 </table>
+<p>The generated command includes supported CLI flags for directory,
+pattern, regex/case/exact-match state, context, search mode,
+include/exclude mode and patterns, gitignore behavior, size/date
+filters, binary/archive search, skip/archive extensions, result caps,
+max depth, thread count, memory limits, file-listing backend, SDK buffer
+size, and admin-protected path handling.</p>
 <h3 id="embedded-terminal">Embedded Terminal</h3>
-<p>Right-click inside the terminal pane and choose <strong>Reset
-terminal session</strong> to clear the xterm.js surface, dispose the
-current ConPTY session, and start a fresh command shell session. Use
-this if the terminal appears disconnected, stuck, or out of sync.</p>
+<p>The embedded terminal is a command shell hosted inside Yagu below the
+main content. Use the chevron in the status area, or the inline chevron
+beside Advanced Options when the status bar is hidden, to expand or
+collapse it.</p>
+<p>Right-click inside the terminal pane for <strong>Copy</strong>,
+<strong>Paste</strong>, <strong>Cut</strong>, <strong>Select
+all</strong>, <strong>Clear</strong>, and <strong>Reset terminal
+session</strong>. <strong>Clear</strong> runs <code>cls</code> and
+clears the xterm surface. <strong>Reset terminal session</strong>
+disposes the current shell session and starts a fresh one; use it if the
+terminal appears disconnected, stuck, or out of sync. The generated CLI
+command overlay can send commands into this terminal without executing
+them, which gives you a chance to review or edit before pressing
+Enter.</p>
 <hr />
 <h2 id="results-pane-left-panel">Results Pane (Left Panel)</h2>
 <p>Results are grouped by file. Each group header shows the file name,
@@ -1063,6 +1080,9 @@ occurrences and files that will be affected.</p>
 Settings are saved to <code>%APPDATA%\Yagu\settings.json</code>. Reset
 and Use default buttons are disabled when the current value already
 matches the default.</p>
+<p>Use the search box at the top of Settings to filter settings by tab
+name, setting label, helper text, current value, or available option
+text.</p>
 <h3 id="search-defaults-tab">Search Defaults Tab</h3>
 <table>
 <colgroup>
@@ -1077,18 +1097,6 @@ matches the default.</p>
 </thead>
 <tbody>
 <tr>
-<td>Case sensitive</td>
-<td>Default state of case-sensitive matching on launch.</td>
-</tr>
-<tr>
-<td>Regex</td>
-<td>Default state of regex mode on launch.</td>
-</tr>
-<tr>
-<td>Exact match</td>
-<td>Default state of whole-word matching on launch.</td>
-</tr>
-<tr>
 <td>Context lines</td>
 <td>Default match context lines stored in result rows.</td>
 </tr>
@@ -1097,12 +1105,23 @@ matches the default.</p>
 <td>Default match context lines shown in preview.</td>
 </tr>
 <tr>
-<td>Default include globs</td>
-<td>Include filter applied by default on app start.</td>
+<td>Default include pattern mode</td>
+<td>Whether default include patterns are interpreted as Glob or
+Regex.</td>
 </tr>
 <tr>
-<td>Default exclude globs</td>
-<td>Exclude filter applied by default on app start.</td>
+<td>Default include patterns</td>
+<td>Include filter applied by default on app start. Leave blank to
+include every eligible file.</td>
+</tr>
+<tr>
+<td>Default exclude pattern mode</td>
+<td>Whether default exclude patterns are interpreted as Glob or
+Regex.</td>
+</tr>
+<tr>
+<td>Default exclude patterns</td>
+<td>Exclude filter applied by default before content scanning.</td>
 </tr>
 </tbody>
 </table>
@@ -1121,20 +1140,36 @@ matches the default.</p>
 <tbody>
 <tr>
 <td>Max results</td>
-<td>Stops after this many matches (0 = unlimited, non-zero capped at
-50,000).</td>
+<td>Stops after this many matches. 0 = unlimited, subject to the hard
+ceiling and memory safeguards.</td>
+</tr>
+<tr>
+<td>Max results ceiling</td>
+<td>Hard cap applied to Max results. Values below 1,000 are not
+allowed.</td>
 </tr>
 <tr>
 <td>Default file size filter</td>
-<td>Min/Max MB applied by default. Both 0 = any size.</td>
+<td>Minimum and maximum MB applied by default. Both 0 = any size.</td>
 </tr>
 <tr>
-<td>Default date filters</td>
-<td>Created/Modified date ranges applied by default.</td>
+<td>Default created date filter</td>
+<td>Created-after and created-before defaults for Advanced Options.
+Blank = any date.</td>
+</tr>
+<tr>
+<td>Default modified date filter</td>
+<td>Modified-after and modified-before defaults for Advanced Options.
+Blank = any date.</td>
+</tr>
+<tr>
+<td>Clear date defaults</td>
+<td>Clears all saved created/modified date defaults.</td>
 </tr>
 <tr>
 <td>Search binary files</td>
-<td>Includes binary-looking files in the scan.</td>
+<td>Includes files detected as binary by null bytes or magic bytes. Off
+by default.</td>
 </tr>
 <tr>
 <td>Skip admin-protected paths</td>
@@ -1146,20 +1181,31 @@ matches the default.</p>
 </tr>
 <tr>
 <td>Skip extensions</td>
-<td>Extensions skipped before contents are read.</td>
+<td>Extensions skipped before contents are read. Use semicolon-separated
+names without dots.</td>
+</tr>
+<tr>
+<td>Binary extensions</td>
+<td>Extensions that remain classified as binary/build artifacts, and
+populate the Binary ext dropdown when binary search is enabled.</td>
+</tr>
+<tr>
+<td>Reset binary extensions</td>
+<td>Restores the default binary extension list.</td>
 </tr>
 <tr>
 <td>Archive extensions</td>
-<td>Extensions treated as ZIP containers when archive search is on.</td>
+<td>Extensions treated as ZIP-like containers when archive search is on.
+Detection still checks file-header magic bytes.</td>
 </tr>
 <tr>
-<td>Archive max nesting depth</td>
-<td>How deep to recurse into nested archives (default: 5).</td>
+<td>Max archive nesting depth</td>
+<td>How deep to recurse into nested archives. 0 = default 5.</td>
 </tr>
 <tr>
-<td>Archive max entry size (MB)</td>
-<td>Largest individual entry to extract from an archive (default: 64
-MB).</td>
+<td>Max archive entry size (MB)</td>
+<td>Largest individual entry to extract from an archive. 0 = default 64
+MB.</td>
 </tr>
 </tbody>
 </table>
@@ -1177,58 +1223,61 @@ MB).</td>
 </thead>
 <tbody>
 <tr>
-<td>Content-search parallelism</td>
-<td>Concurrent file scan workers: Safe cap, 1 thread, Half cores, 2×
-cores, All cores. Default: All cores.</td>
-</tr>
-<tr>
-<td>Native concurrency limit</td>
-<td>Max concurrent Rust native scanner operations (default: min(64,
-cores×2)).</td>
-</tr>
-<tr>
-<td>MMF concurrency limit</td>
-<td>Max concurrent memory-mapped file views (default: 16).</td>
-</tr>
-<tr>
 <td>File-listing backend</td>
 <td>Auto, Everything SDK, <code>es.exe</code>, or .NET enumeration.</td>
+</tr>
+<tr>
+<td>Content-search parallelism</td>
+<td>Concurrent file scan workers: Safe cap, 1 thread, Half cores, 2x
+cores, or All cores.</td>
+</tr>
+<tr>
+<td>Limit parallelism on HDD</td>
+<td>When the search target is on a rotational drive, warn and force 1
+thread.</td>
+</tr>
+<tr>
+<td>SDK channel buffer size</td>
+<td>Number of file paths buffered between Everything SDK discovery and
+search workers.</td>
+</tr>
+<tr>
+<td>Search result temp-file drive</td>
+<td>Drive used for disk-backed result temp files during memory-saving
+mode. Only writable drives with enough free space are listed.</td>
+</tr>
+<tr>
+<td>Temp-drive full warning threshold (%)</td>
+<td>Active searches are terminated when the search result temp-file
+drive is more than this full. Default 98%; valid range 1-99. Checked
+every 30 seconds.</td>
+</tr>
+<tr>
+<td>System memory pressure limit (%)</td>
+<td>System RAM usage threshold for memory-saving mode. 0 =
+disabled.</td>
 </tr>
 <tr>
 <td>Process memory hard cap (MB)</td>
 <td>Working-set limit before memory-saving activates.</td>
 </tr>
 <tr>
-<td>System memory pressure limit (%)</td>
-<td>System RAM usage threshold for memory-saving mode (default:
-75%).</td>
-</tr>
-<tr>
-<td>Search result temp-file drive</td>
-<td>Drive used for disk-backed result temp files during memory-saving
-mode. Only writable drives with at least 50 GB free are listed.</td>
-</tr>
-<tr>
-<td>SDK channel buffer size</td>
-<td>Path buffer between Everything SDK discovery and search workers
-(default: 4096).</td>
-</tr>
-<tr>
-<td>Content-search file size (MB)</td>
-<td>Max individual file size for content search (default: 100 MB).</td>
-</tr>
-<tr>
 <td>Max matches per file</td>
 <td>Cap on stored matches per file (0 = unlimited).</td>
 </tr>
 <tr>
-<td>Line truncation length</td>
-<td>Result-list line cap for UI responsiveness with very long
-lines.</td>
+<td>Content-search file size ceiling (MB)</td>
+<td>Max individual file size for content search when no explicit
+max-size filter is set. 0 = no ceiling.</td>
 </tr>
 <tr>
-<td>Limit parallelism on HDD</td>
-<td>Auto-reduce thread count on rotational drives.</td>
+<td>MMF concurrency limit</td>
+<td>Max concurrent memory-mapped file views. 0 = default 16.</td>
+</tr>
+<tr>
+<td>Native scanner concurrency limit</td>
+<td>Max concurrent Rust native scanner operations. 0 = default
+<code>min(64, CPU cores x 2)</code>.</td>
 </tr>
 </tbody>
 </table>
@@ -1246,6 +1295,29 @@ lines.</td>
 </thead>
 <tbody>
 <tr>
+<td>Theme</td>
+<td>Auto follows Windows app theme; Dark and Light pin Yagu to that
+theme.</td>
+</tr>
+<tr>
+<td>Line truncation length</td>
+<td>Result-list line cap for UI responsiveness with very long lines. 0 =
+disabled.</td>
+</tr>
+<tr>
+<td>Results list match text font family</td>
+<td>Typeface used by match lines in the left results pane.</td>
+</tr>
+<tr>
+<td>Results list match text font size</td>
+<td>Base size used by match lines in the left results pane.</td>
+</tr>
+<tr>
+<td>Highlighted match text</td>
+<td>Color of the matched substring inside each result-list match
+line.</td>
+</tr>
+<tr>
 <td>Preview layout</td>
 <td>Default layout: Concatenated or Multi-highlight.</td>
 </tr>
@@ -1262,6 +1334,35 @@ gutters.</td>
 <td>Preview text font size</td>
 <td>Base size used by preview pane line text and line-number
 gutters.</td>
+</tr>
+<tr>
+<td>Selected preview content background</td>
+<td>Background for the active preview section body.</td>
+</tr>
+<tr>
+<td>Unselected preview content background</td>
+<td>Background for inactive preview section bodies.</td>
+</tr>
+<tr>
+<td>Preview gutter text</td>
+<td>Color of preview line numbers and separator pipes.</td>
+</tr>
+<tr>
+<td>Matched preview gutter text</td>
+<td>Color of preview gutter line numbers for matched lines.</td>
+</tr>
+<tr>
+<td>Match highlight text</td>
+<td>Color of highlighted match text in the preview pane.</td>
+</tr>
+<tr>
+<td>Active match overlay</td>
+<td>Color of the overlay border/underline on the current navigated
+match.</td>
+</tr>
+<tr>
+<td>Matched line text</td>
+<td>Color of non-highlighted text on matched lines.</td>
 </tr>
 <tr>
 <td>Auto-load matches on scroll</td>
@@ -1283,22 +1384,6 @@ gutters.</td>
 MB).</td>
 </tr>
 <tr>
-<td>Selected section background</td>
-<td>Background color for the active preview section.</td>
-</tr>
-<tr>
-<td>Unselected section background</td>
-<td>Background color for inactive preview sections.</td>
-</tr>
-<tr>
-<td>Results match text font family</td>
-<td>Typeface used by match lines in the left results pane.</td>
-</tr>
-<tr>
-<td>Results match text font size</td>
-<td>Base size used by match lines in the left results pane.</td>
-</tr>
-<tr>
 <td>Built-in editor font family</td>
 <td>Typeface used by the built-in full-file editor.</td>
 </tr>
@@ -1307,56 +1392,12 @@ MB).</td>
 <td>Base size used by the built-in full-file editor; zoom scales from
 this value.</td>
 </tr>
-</tbody>
-</table>
-<h3 id="preview-colors-tab">Preview Colors Tab</h3>
-<p>Customize the colors used in the preview pane’s rendered content.</p>
-<table>
-<colgroup>
-<col style="width: 33%" />
-<col style="width: 33%" />
-<col style="width: 33%" />
-</colgroup>
-<thead>
 <tr>
-<th>Setting</th>
-<th>What It Controls</th>
-<th>Default</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Gutter (context lines)</td>
-<td>Line number color for non-matched lines in the gutter.</td>
-<td>Grey (#505050)</td>
-</tr>
-<tr>
-<td>Gutter (matched lines)</td>
-<td>Line number color for matched lines in the gutter.</td>
-<td>Lime green (#32CD32)</td>
-</tr>
-<tr>
-<td>Match text</td>
-<td>Foreground color of matched text within a line.</td>
-<td>Gold (#FFD700)</td>
-</tr>
-<tr>
-<td>Active match overlay</td>
-<td>Color of the overlay band highlighting the currently navigated
-match.</td>
-<td>Orange-red (#FF4500)</td>
-</tr>
-<tr>
-<td>Matched line text</td>
-<td>Foreground color of the full line containing a match.</td>
-<td>White (#FFFFFF)</td>
+<td>Editor gutter text</td>
+<td>Color of line numbers in the built-in editor gutter.</td>
 </tr>
 </tbody>
 </table>
-<p>All colors are specified as ARGB hex strings
-(e.g. <code>#FFFFD700</code>). Use the color picker in Settings to
-choose custom values. Changes take effect on the next preview
-render.</p>
 <h3 id="editor-tab">Editor Tab</h3>
 <table>
 <colgroup>
@@ -1410,18 +1451,33 @@ default).</td>
 </thead>
 <tbody>
 <tr>
-<td>Window focus behavior</td>
-<td>Minimize to tray, Stay open, Always on top, or Traditional
-(default).</td>
+<td>Start in compact launcher mode</td>
+<td>Launches as a small search bar when enabled, or as a traditional
+window when disabled.</td>
+</tr>
+<tr>
+<td>Launcher focus-loss behavior</td>
+<td>Minimize to tray, Stay open, or Always on top when the compact
+launcher loses focus.</td>
 </tr>
 <tr>
 <td>Close to tray</td>
 <td>Closing the window minimizes to tray instead of exiting (on by
 default).</td>
 </tr>
+<tr>
+<td>Maximize window on startup</td>
+<td>Starts the main window maximized instead of at the default
+size.</td>
+</tr>
+<tr>
+<td>Advanced Options drawer width</td>
+<td>Uses full width when collapsed and expanded, or compact width when
+collapsed and full width when expanded.</td>
+</tr>
 </tbody>
 </table>
-<h3 id="general-tab">General Tab</h3>
+<h3 id="interaction-tab">Interaction Tab</h3>
 <table>
 <colgroup>
 <col style="width: 50%" />
@@ -1435,12 +1491,43 @@ default).</td>
 </thead>
 <tbody>
 <tr>
-<td>Global hotkey enabled</td>
-<td>Enable a system-wide hotkey to summon Yagu from any app.</td>
+<td>Checking a file header adds it to the preview pane</td>
+<td>Selecting a file-group checkbox immediately previews that file’s
+matches.</td>
 </tr>
 <tr>
-<td>Global hotkey key</td>
-<td>The Ctrl+Shift+[letter] combination for the global hotkey.</td>
+<td>Checking a match line adds it to the preview pane</td>
+<td>Selecting an individual match-line checkbox immediately previews
+that match.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="terminal-emulator-tab">Terminal Emulator Tab</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Setting</th>
+<th>What It Controls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Default working directory</td>
+<td>Starting directory for the embedded terminal shell. Leave blank to
+use the directory Yagu was launched from.</td>
+</tr>
+<tr>
+<td>Browse</td>
+<td>Picks a terminal working directory.</td>
+</tr>
+<tr>
+<td>Use default</td>
+<td>Clears the saved terminal working directory so launch directory is
+used again.</td>
 </tr>
 </tbody>
 </table>
@@ -1462,8 +1549,144 @@ default).</td>
 <td>Display the orange toolbar warning when memory-saving mode
 activates. Hidden by default.</td>
 </tr>
+<tr>
+<td>Stats for nerds</td>
+<td>Shows files/sec, MB/s, disk throughput sparkline, and utilization
+percentage in the bottom status bar.</td>
+</tr>
+<tr>
+<td>Show build number in title bar</td>
+<td>Adds the current Yagu version to the main title bar for diagnostics
+and screenshots. Hidden by default.</td>
+</tr>
+<tr>
+<td>Show Auto-scroll checkbox</td>
+<td>Shows the results-toolbar Auto-scroll checkbox for testing
+continuously appended result rows. Hidden by default.</td>
+</tr>
+<tr>
+<td>Reset font contrast reminders</td>
+<td>Allows theme/font contrast warnings to appear again after Remind me
+later or Don’t remind me again.</td>
+</tr>
+<tr>
+<td>Re-enable admin privilege warning</td>
+<td>Re-enables the non-administrator warning after it was dismissed.
+Visible only after the warning has been suppressed.</td>
+</tr>
+<tr>
+<td>File log level</td>
+<td>Controls file logging: None, Critical, Warning, Info, or Verbose.
+Verbose can degrade performance.</td>
+</tr>
+<tr>
+<td>Console log level</td>
+<td>Controls console logging with the same levels as file logging.</td>
+</tr>
+<tr>
+<td>Log file</td>
+<td>Shows the path to the active Yagu log file.</td>
+</tr>
 </tbody>
 </table>
+<hr />
+<h2 id="cli-command-generation">CLI Command Generation</h2>
+<p>Click <strong>Generate CLI command</strong> in Advanced Options to
+turn the current UI state into a reproducible
+<code>Yagu.exe --cli</code> command. The overlay is selectable text and
+includes three icon buttons:</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Button</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Copy command</td>
+<td>Copies the generated command to the clipboard and closes the
+overlay.</td>
+</tr>
+<tr>
+<td>Send command to terminal</td>
+<td>Opens the embedded terminal if needed, collapses Advanced Options,
+inserts the generated command at the prompt, and leaves it unexecuted
+for review.</td>
+</tr>
+<tr>
+<td>Close</td>
+<td>Closes the overlay without copying or sending.</td>
+</tr>
+</tbody>
+</table>
+<p>The <strong>Options already saved in settings</strong> toggle
+defaults to <strong>Omit</strong>. With Omit, Yagu compares the UI state
+to <code>%APPDATA%\Yagu\settings.json</code> and leaves out flags that
+already match saved defaults. Switch it to <strong>Include</strong> when
+you want a fully explicit command that does not rely on the current
+settings file.</p>
+<p>Generated commands cover supported CLI equivalents for search
+behavior, filters, size/date limits, binary/archive handling, result
+limits, max depth, threading, memory settings, file-listing backend, and
+admin-protected path handling. Display-only settings, window behavior,
+and editor appearance are not included because they do not affect CLI
+search results.</p>
+<hr />
+<h2 id="embedded-terminal-1">Embedded Terminal</h2>
+<p>Yagu includes an embedded command shell rendered with xterm.js in a
+WebView2 panel. Use the terminal chevron to expand or collapse it. The
+terminal starts on first use and uses the <strong>Terminal Emulator
+-&gt; Default working directory</strong> setting, or the directory Yagu
+was launched from when that setting is blank.</p>
+<p>The terminal supports normal typing, command history navigation,
+paste, and Ctrl+C cancellation. Right-click inside the terminal for:</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Menu item</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Copy</td>
+<td>Copies the current terminal selection.</td>
+</tr>
+<tr>
+<td>Paste</td>
+<td>Pastes clipboard text at the prompt.</td>
+</tr>
+<tr>
+<td>Cut</td>
+<td>Copies the current selection and clears the terminal selection.</td>
+</tr>
+<tr>
+<td>Select all</td>
+<td>Selects the terminal buffer.</td>
+</tr>
+<tr>
+<td>Clear</td>
+<td>Sends <code>cls</code> and clears the visible terminal surface.</td>
+</tr>
+<tr>
+<td>Reset terminal session</td>
+<td>Starts a fresh shell session and clears terminal state.</td>
+</tr>
+</tbody>
+</table>
+<p>When using generated CLI commands, <strong>Send command to
+terminal</strong> inserts the command text into the prompt without
+pressing Enter. This is useful for reviewing, editing, or adding shell
+redirection before running the command.</p>
 <hr />
 <h2 id="keyboard-shortcuts">Keyboard Shortcuts</h2>
 <table>
@@ -2008,6 +2231,12 @@ and uses the managed scanner transparently.</p>
 drive.</td>
 </tr>
 <tr>
+<td>Temp-drive low-space monitor</td>
+<td>Checks the search result temp-file drive every 30 seconds during
+search and terminates the search if that drive is more than the
+configured Performance threshold full. Default 98%.</td>
+</tr>
+<tr>
 <td>Process memory cap</td>
 <td>Hard limit on working set before eviction kicks in.</td>
 </tr>
@@ -2018,7 +2247,12 @@ drive.</td>
 </tbody>
 </table>
 <p>If memory-saving mode appears often, reduce result volume with
-narrower queries, fewer context lines, or stricter filters.</p>
+narrower queries, fewer context lines, or stricter filters. If a search
+is terminated due to low disk space, free space on the configured
+temp-file drive, choose a different drive in Settings -&gt; Performance
+-&gt; Search result temp-file drive, or adjust Settings -&gt;
+Performance -&gt; Temp-drive full warning threshold (%) before searching
+again.</p>
 <hr />
 <h2 id="logs-and-diagnostics">Logs and Diagnostics</h2>
 <table>

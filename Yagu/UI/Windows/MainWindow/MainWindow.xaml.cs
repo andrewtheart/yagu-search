@@ -78,6 +78,19 @@ public sealed partial class MainWindow : Window, IDisposable
     private const uint VkF1 = 0x70;
     private const uint MonitorDefaultToNearest = 0x00000002;
     private const int SW_RESTORE = 9;
+
+    private static string AppTitleWithoutBuildNumber => $"{AppInfo.Name} - {AppInfo.Description}";
+    private static string BuildAppWindowTitle(bool showBuildNumberInTitleBar)
+        => showBuildNumberInTitleBar ? $"{AppTitleWithoutBuildNumber} {AppInfo.Version}" : AppTitleWithoutBuildNumber;
+    private string CurrentAppWindowTitle => BuildAppWindowTitle(ViewModel.ShowBuildNumberInTitleBar);
+
+    private void ApplyAppWindowTitle()
+    {
+        var title = CurrentAppWindowTitle;
+        Title = title;
+        if (AppTitleText is not null)
+            AppTitleText.Text = title;
+    }
     private const int SW_HIDE = 0;
 
     private delegate IntPtr SubclassProc(IntPtr hWnd, uint message, UIntPtr wParam, IntPtr lParam, UIntPtr subclassId, UIntPtr refData);
@@ -191,7 +204,7 @@ public sealed partial class MainWindow : Window, IDisposable
         SearchCancelButton.SizeChanged += (_, _) => AlignBrowseButtonToSearchButton();
         SyncLayoutToggles(ViewModel.PreviewModeIndex);
         SetAdvancedOptionsDrawerExpandedWidthState(AdvancedOptionsExpander.IsExpanded);
-        Title = AppInfo.WindowTitle;
+        ApplyAppWindowTitle();
 
         // PreviewBlock's built-in text-selection swallows DoubleTapped by
         // marking it handled. AddHandler with handledEventsToo: true is the
@@ -211,7 +224,7 @@ public sealed partial class MainWindow : Window, IDisposable
         // Extend content into the title bar for a modern Windows 11 look
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
-        AppTitleText.Text = AppInfo.WindowTitle;
+        ApplyAppWindowTitle();
 
         ApplyTitleBarButtonTheme();
 
@@ -251,6 +264,11 @@ public sealed partial class MainWindow : Window, IDisposable
             if (e.PropertyName == nameof(ViewModel.ThemeModeIndex))
             {
                 ApplyAppTheme();
+            }
+
+            if (e.PropertyName == nameof(ViewModel.ShowBuildNumberInTitleBar))
+            {
+                ApplyAppWindowTitle();
             }
 
             if (e.PropertyName == nameof(ViewModel.AdvancedOptionsCollapsedWidthModeIndex))

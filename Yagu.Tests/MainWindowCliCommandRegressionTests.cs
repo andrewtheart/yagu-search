@@ -113,11 +113,83 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.DoesNotContain("SettingsBacked", source);
     }
 
+    [Fact]
+    public void EmbeddedTerminal_UsesPageSideLineEditorForPromptSafeInputAndShortcuts()
+    {
+        string root = FindRepoRoot();
+        string terminalSource = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
+        string terminalHtml = File.ReadAllText(Path.Combine(root, "Yagu", "Assets", "terminal.html"));
+        string terminalServiceSource = File.ReadAllText(Path.Combine(root, "Yagu", "Services", "ConPtyTerminalService.cs"));
+
+        Assert.Contains("let inputBuffer = '';", terminalHtml);
+        Assert.Contains("let inputCursor = 0;", terminalHtml);
+        Assert.Contains("function renderInputLine()", terminalHtml);
+        Assert.Contains("function insertInputText(text)", terminalHtml);
+        Assert.Contains("function backspaceInput()", terminalHtml);
+        Assert.Contains("function deleteInput()", terminalHtml);
+        Assert.Contains("function recallHistory(direction)", terminalHtml);
+        Assert.Contains("function insertPastedText(text)", terminalHtml);
+        Assert.Contains("function cancelInputLine()", terminalHtml);
+
+        Assert.Contains("case 'Backspace': return { kind: 'backspace' };", terminalHtml);
+        Assert.Contains("case 'Delete': return { kind: 'delete' };", terminalHtml);
+        Assert.Contains("case 'ArrowUp': return { kind: 'history', direction: -1 };", terminalHtml);
+        Assert.Contains("case 'ArrowDown': return { kind: 'history', direction: 1 };", terminalHtml);
+        Assert.Contains("case 'ArrowRight': return { kind: 'move', offset: 1 };", terminalHtml);
+        Assert.Contains("case 'ArrowLeft': return { kind: 'move', offset: -1 };", terminalHtml);
+        Assert.DoesNotContain("Ctrl+A..Z ->", terminalHtml);
+        Assert.DoesNotContain(@"case 'Backspace': return '\x7f';", terminalHtml);
+        Assert.DoesNotContain(@"case 'ArrowUp': return '\x1b[A';", terminalHtml);
+
+        AssertContainsInOrder(terminalHtml,
+            "if (event.ctrlKey && !event.altKey && !event.metaKey)",
+            "if (key === 'c')",
+            "copyTerminalSelection();",
+            "cancelInputLine();",
+            "if (key === 'a')",
+            "term.selectAll();",
+            "if (key === 'v')",
+            "postHostMessage({ type: 'requestPaste' });");
+
+        Assert.Contains("postHostMessage({ type: 'cancelInput' });", terminalHtml);
+        Assert.Contains("msg.type === 'pasteText'", terminalHtml);
+        Assert.Contains("insertPastedText(msg.text || '')", terminalHtml);
+        Assert.Contains("sendTerminalInput(line + '\\r', false);", terminalHtml);
+        Assert.Contains("sendTerminalInput('cls\\r', false);", terminalHtml);
+        Assert.Contains("term.clear();", terminalHtml);
+
+        Assert.Contains("case \"cancelInput\":", terminalSource);
+        Assert.Contains("_terminalService?.CancelCurrentCommand();", terminalSource);
+        Assert.Contains("PostTerminalPasteTextToWebView(text);", terminalSource);
+        Assert.Contains("PostTerminalPasteTextToWebView(commandText);", terminalSource);
+
+        Assert.Contains("public void WriteInput(string text, bool echoInput)", terminalServiceSource);
+        Assert.Contains("BuildLocalEcho(text)", terminalServiceSource);
+        Assert.Contains("echoInput: false", terminalSource);
+        Assert.Contains("public void CancelCurrentCommand()", terminalServiceSource);
+        Assert.Contains("CreateToolhelp32Snapshot", terminalServiceSource);
+        Assert.Contains("Process32First", terminalServiceSource);
+        Assert.Contains("Process32Next", terminalServiceSource);
+        Assert.DoesNotContain("Stop-Process", terminalServiceSource);
+        Assert.DoesNotContain("taskkill", terminalServiceSource, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
             dir = dir.Parent;
         return dir?.FullName ?? Directory.GetCurrentDirectory();
+    }
+
+    private static void AssertContainsInOrder(string text, params string[] expected)
+    {
+        int index = 0;
+        foreach (string part in expected)
+        {
+            int found = text.IndexOf(part, index, StringComparison.Ordinal);
+            Assert.True(found >= 0, $"Expected to find '{part}' after index {index}.");
+            index = found + part.Length;
+        }
     }
 }

@@ -14,12 +14,12 @@ public sealed partial class HelpWindow : Window
     private static nint s_webView2LoaderHandle;
     private readonly string _helpPath;
 
-    public HelpWindow(IntPtr mainHwnd, string helpPath)
+    public HelpWindow(IntPtr mainHwnd, string helpPath, string appTitle)
     {
         _helpPath = helpPath;
         InitializeComponent();
 
-        AppTitleText.Text = AppInfo.WindowTitle;
+        AppTitleText.Text = appTitle;
         HelpPathText.Text = helpPath;
         HelpWebView.Loaded += OnHelpWebViewLoaded;
 

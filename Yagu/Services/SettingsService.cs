@@ -37,6 +37,13 @@ public sealed class AppSettings
     public const string DefaultResultListMatchTextFontFamily = "Consolas";
     public const int DefaultResultListMatchTextFontSize = 12;
     public const string DefaultResultListMatchHighlightColor = "#FFB8860B"; // DarkGoldenrod (passes light+dark)
+    public const int DefaultLowDiskSpaceWarningPercent = 98;
+    public const int MinimumLowDiskSpaceWarningPercent = 1;
+    public const int MaximumLowDiskSpaceWarningPercent = 99;
+
+    public static int NormalizeLowDiskSpaceWarningPercent(int value) => value <= 0
+        ? DefaultLowDiskSpaceWarningPercent
+        : Math.Clamp(value, MinimumLowDiskSpaceWarningPercent, MaximumLowDiskSpaceWarningPercent);
 
     public string? LastDirectory { get; set; }
     public List<string> RecentDirectories { get; set; } = [];
@@ -102,10 +109,14 @@ public sealed class AppSettings
     public string? SearchResultTempDirectory { get; set; }
     /// <summary>Whether the user has chosen the search result temp-file location.</summary>
     public bool HasChosenSearchResultTempDirectory { get; set; }
+    /// <summary>Terminates active searches when the search result temp-file drive is more than this full. Valid range 1-99.</summary>
+    public int LowDiskSpaceWarningPercent { get; set; } = DefaultLowDiskSpaceWarningPercent;
     /// <summary>When true, show the memory pressure warning label in the results toolbar. Hidden by default.</summary>
     public bool ShowMemoryPressureWarningLabel { get; set; }
     /// <summary>When true, show throughput labels and disk utilization sparkline in the bottom status bar.</summary>
     public bool ShowStatsForNerds { get; set; }
+    /// <summary>When true, append the app version/build number to the main title bar.</summary>
+    public bool ShowBuildNumberInTitleBar { get; set; }
     /// <summary>When true, show the Auto-scroll checkbox in the results toolbar. Hidden by default.</summary>
     public bool ShowAutoScrollResultsCheckbox { get; set; }
     /// <summary>Bounded channel buffer size for the Everything SDK streaming path. Higher values use more memory but can improve throughput.</summary>
@@ -268,6 +279,7 @@ public sealed class SettingsService
             NormalizePreviewTextFontSettings(settings);
             NormalizePreviewEditorFontSettings(settings);
             NormalizeResultListMatchTextSettings(settings);
+            settings.LowDiskSpaceWarningPercent = AppSettings.NormalizeLowDiskSpaceWarningPercent(settings.LowDiskSpaceWarningPercent);
             settings.TerminalDefaultWorkingDirectory ??= string.Empty;
             return settings;
         }

@@ -44,18 +44,21 @@ public sealed class InstallerPackagingRegressionTests
         string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
 
         Assert.Contains("DotNet10RuntimeDownloadUrl", inno);
-        Assert.Contains("https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-10.0.9-windows-x64-installer?cid=getdotnetcore", inno);
+        Assert.Contains("https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.9/dotnet-runtime-10.0.9-win-x64.exe", inno);
         Assert.Contains("DotNet10RuntimeRegistrySubkey", inno);
         Assert.Contains(@"SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.NETCore.App", inno);
         Assert.Contains("RegGetValueNames(HKLM64, '{#DotNet10RuntimeRegistrySubkey}', RuntimeVersions)", inno);
         Assert.Contains("RegGetValueNames(HKLM32, '{#DotNet10RuntimeRegistrySubkey}', RuntimeVersions)", inno);
         Assert.Contains("Copy(RuntimeVersions[I], 1, 3) = '10.'", inno);
-        Assert.Contains("function InitializeSetup(): Boolean;", inno);
-        Assert.Contains("if not IsDotNet10RuntimeInstalled() then", inno);
+        Assert.Contains("function EnsureDotNet10RuntimeInstalled(): Boolean;", inno);
+        Assert.Contains("function NextButtonClick(CurPageID: Integer): Boolean;", inno);
+        Assert.Contains("if CurPageID = wpReady then", inno);
+        Assert.Contains("Result := EnsureDotNet10RuntimeInstalled()", inno);
+        Assert.Contains("if IsDotNet10RuntimeInstalled() then", inno);
         Assert.Contains("Yagu requires the .NET 10.0 Runtime for Windows x64.", inno);
-        Assert.Contains("Download and install .NET 10.0 Runtime (v10.0.9) - Windows x64 Installer", inno);
+        Assert.Contains("Download and install {#DotNet10RuntimeDisplayName} now?", inno);
 
-        int dotNetCheck = inno.IndexOf("if not IsDotNet10RuntimeInstalled() then", StringComparison.Ordinal);
+        int dotNetCheck = inno.IndexOf("function EnsureDotNet10RuntimeInstalled(): Boolean;", StringComparison.Ordinal);
         int windowsAppRuntimeInstall = inno.IndexOf("function InstallWindowsAppRuntime(): Boolean;", StringComparison.Ordinal);
         Assert.True(dotNetCheck >= 0, "Installer should check .NET 10 before installing files.");
         Assert.True(windowsAppRuntimeInstall >= 0, "Installer should still include the Windows App Runtime prerequisite installer.");

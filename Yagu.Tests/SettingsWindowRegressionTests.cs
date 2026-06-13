@@ -618,7 +618,8 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("term.attachCustomKeyEventHandler", TerminalHtml);
         Assert.Contains("function translateKeyEventToInput(event)", TerminalHtml);
         Assert.Contains("document.addEventListener('paste'", TerminalHtml);
-        Assert.Contains("sendTerminalInput('\\r');", TerminalHtml);
+        Assert.Contains("submitInputLine();", TerminalHtml);
+        Assert.Contains("sendTerminalInput(line + '\\r', false);", TerminalHtml);
         Assert.Contains("term.focus();", TerminalHtml);
         Assert.Contains("term.writeSync(msg.data || '')", TerminalHtml);
         Assert.Contains("type: 'hostLog'", TerminalHtml);
@@ -802,11 +803,11 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("term.getSelection()", TerminalHtml);
         Assert.Contains("type: 'copyText'", TerminalHtml);
         Assert.Contains("term.clearSelection();", TerminalHtml);
-        // Paste asks the host to read the clipboard and write it to the shell.
+        // Paste asks the host to read the clipboard and return it to the page-side line editor.
         Assert.Contains("type: 'requestPaste'", TerminalHtml);
         // Select all and clear act on the terminal directly.
         Assert.Contains("term.selectAll();", TerminalHtml);
-        Assert.Contains("sendTerminalInput('cls\\r');", TerminalHtml);
+        Assert.Contains("sendTerminalInput('cls\\r', false);", TerminalHtml);
         Assert.Contains("term.clear();", TerminalHtml);
 
         Assert.Contains("case \"copyText\":", MainWindowTerminalSource);

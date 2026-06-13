@@ -20,6 +20,7 @@ public sealed partial class MainWindow
     private bool _terminalLoggedFirstInput;
     private bool _terminalStartupPromptNudged;
     private readonly TaskCompletionSource<bool> _terminalReadyCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource<bool> _terminalShellReadyCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private void OnToggleTerminalPane(object sender, RoutedEventArgs e)
     {
@@ -75,7 +76,11 @@ public sealed partial class MainWindow
         await WaitForTerminalReadyAsync();
 
         StartConPtySession();
-        _terminalService?.WriteInput(text);
+        await WaitForTerminalShellReadyAsync();
+        await ChangeTerminalDirectoryToYaguExecutableDirectoryAsync();
+
+        string commandText = text.TrimEnd('\r', '\n');
+        PostTerminalPasteTextToWebView(commandText);
         FocusTerminal();
     }
 
@@ -104,6 +109,37 @@ public sealed partial class MainWindow
         {
             System.Diagnostics.Debug.WriteLine($"Timed out waiting for terminal readiness: {ex.Message}");
         }
+    }
+
+    private async Task WaitForTerminalShellReadyAsync()
+    {
+        if (_terminalShellReadyCompletion.Task.IsCompleted)
+            return;
+
+        try
+        {
+            await _terminalShellReadyCompletion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (TimeoutException ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Timed out waiting for terminal shell readiness: {ex.Message}");
+        }
+    }
+
+    private async Task ChangeTerminalDirectoryToYaguExecutableDirectoryAsync()
+    {
+        if (_terminalService is null)
+            return;
+
+        string? executableDirectory = Path.GetDirectoryName(Environment.ProcessPath);
+        if (!TryResolveExistingDirectory(executableDirectory, out string directory))
+            return;
+
+        string escapedDirectory = directory.Replace("\"", "\"\"", StringComparison.Ordinal);
+        string commandText = $"cd /d \"{escapedDirectory}\"".TrimEnd('\r', '\n');
+        _terminalShellReadyCompletion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _terminalService.WriteInput(commandText + "\r", echoInput: false);
+        await WaitForTerminalShellReadyAsync();
     }
 
     private void FocusTerminal()
@@ -216,13 +252,17 @@ public sealed partial class MainWindow
                     break;
                 case "input":
                     string data = root.GetProperty("data").GetString() ?? "";
+                    bool echoInput = !root.TryGetProperty("echoInput", out var echoInputElement) || echoInputElement.GetBoolean();
                     LogTerminalInput(data);
                     if (_terminalService is null)
                     {
                         LogService.Instance.Warning("Terminal", "Terminal input received before the shell session was available; starting a terminal session.");
                         StartConPtySession();
                     }
-                    _terminalService?.WriteInput(data);
+                    _terminalService?.WriteInput(data, echoInput);
+                    break;
+                case "cancelInput":
+                    _terminalService?.CancelCurrentCommand();
                     break;
                 case "resize":
                     _terminalColumns = Math.Max(1, root.GetProperty("cols").GetInt32());
@@ -277,6 +317,7 @@ public sealed partial class MainWindow
         terminalService.OutputReceived += text => OnTerminalOutput(text, sessionGeneration);
         terminalService.ProcessExited += exitCode => OnTerminalProcessExited(exitCode, sessionGeneration);
         _terminalService = terminalService;
+        _terminalShellReadyCompletion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             string workingDirectory = ResolveTerminalWorkingDirectory();
@@ -332,7 +373,7 @@ public sealed partial class MainWindow
             if (_terminalService is null)
                 StartConPtySession();
 
-            _terminalService?.WriteInput(text);
+            PostTerminalPasteTextToWebView(text);
         }
         catch (Exception ex)
         {
@@ -390,6 +431,8 @@ public sealed partial class MainWindow
                     NudgeCommandShellPromptAfterStartupControlPacket(text);
                     return;
                 }
+                if (ContainsPrintableShellText(terminalText))
+                    _terminalShellReadyCompletion.TrySetResult(true);
                 PostTerminalOutputToWebView(terminalText);
             }
             catch (Exception ex)
@@ -405,6 +448,17 @@ public sealed partial class MainWindow
         return text
             .Replace("\u001b[?9001h", string.Empty, StringComparison.Ordinal)
             .Replace("\u001b[?1004h", string.Empty, StringComparison.Ordinal);
+    }
+
+    private static bool ContainsPrintableShellText(string text)
+    {
+        foreach (char c in text)
+        {
+            if (!char.IsControl(c) && !char.IsWhiteSpace(c))
+                return true;
+        }
+
+        return false;
     }
 
     private void NudgeCommandShellPromptAfterStartupControlPacket(string originalText)
@@ -430,6 +484,14 @@ public sealed partial class MainWindow
             _terminalLoggedFirstOutputPost = true;
             LogService.Instance.Info("Terminal", $"Posted first terminal output to WebView: chars={terminalText.Length}");
         }
+    }
+
+    private void PostTerminalPasteTextToWebView(string text)
+    {
+        if (TerminalWebView.CoreWebView2 is null) return;
+
+        string escaped = EscapeForJson(text);
+        TerminalWebView.CoreWebView2.PostWebMessageAsJson($"{{\"type\":\"pasteText\",\"text\":\"{escaped}\"}}");
     }
 
     private void LogTerminalInput(string data)

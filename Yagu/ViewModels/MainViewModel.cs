@@ -67,6 +67,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private readonly DirectoryAutoCompleteService _dirAutoComplete = new();
     private CancellationTokenSource? _dirAutoCompleteCts;
     private bool _disposed;
+    private DiskSpaceSnapshot? _lowDiskSpaceCancellation;
     private static int s_postEvictionCompactingGcInFlight;
     private static long s_lastPostEvictionCompactingGcTicks;
     private static readonly TimeSpan PostEvictionCompactingGcCooldown = TimeSpan.FromSeconds(15);
@@ -184,8 +185,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         MemoryPressurePercent = _settings.MemoryPressurePercent;
         SearchResultTempDirectory = ResultStoreTempLocationService.NormalizeTempDirectory(_settings.SearchResultTempDirectory);
         HasChosenSearchResultTempDirectory = _settings.HasChosenSearchResultTempDirectory;
+        LowDiskSpaceWarningPercent = AppSettings.NormalizeLowDiskSpaceWarningPercent(_settings.LowDiskSpaceWarningPercent);
         ShowMemoryPressureWarningLabel = _settings.ShowMemoryPressureWarningLabel;
         ShowStatsForNerds = _settings.ShowStatsForNerds;
+        ShowBuildNumberInTitleBar = _settings.ShowBuildNumberInTitleBar;
         ShowAutoScrollResultsCheckbox = _settings.ShowAutoScrollResultsCheckbox;
         SdkChannelBufferSize = _settings.SdkChannelBufferSize;
         MaxMatchesPerFile = _settings.MaxMatchesPerFile;
@@ -540,8 +543,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial bool GlobalHotkeyEnabled { get; set; }
     [ObservableProperty] public partial int MemoryLimitMB { get; set; }
     [ObservableProperty] public partial int MemoryPressurePercent { get; set; } = 75;
+    [ObservableProperty] public partial int LowDiskSpaceWarningPercent { get; set; } = AppSettings.DefaultLowDiskSpaceWarningPercent;
     [ObservableProperty] public partial bool ShowMemoryPressureWarningLabel { get; set; }
     [ObservableProperty] public partial bool ShowStatsForNerds { get; set; }
+    [ObservableProperty] public partial bool ShowBuildNumberInTitleBar { get; set; }
     [ObservableProperty] public partial bool ShowAutoScrollResultsCheckbox { get; set; }
     [ObservableProperty] public partial int SdkChannelBufferSize { get; set; } = 4096;
     [ObservableProperty] public partial int MaxMatchesPerFile { get; set; }
@@ -1317,6 +1322,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         await _searchLifecycleGate.WaitAsync();
 
         CancellationTokenSource? cts = null;
+        Task? lowDiskMonitorTask = null;
         try
         {
             if (runId != Volatile.Read(ref _searchRunId))
@@ -1369,6 +1375,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             cts = new CancellationTokenSource();
             _cts = cts;
             var token = cts.Token;
+            lowDiskMonitorTask = StartLowDiskSpaceMonitor(runId, cts, _resultStore);
             LogService.Instance.Warning("Search", $"Starting search #{runId}: query='{Query}', dir='{Directory}', regex={UseRegex}, caseSensitive={CaseSensitive}, mode={SearchModeIndex}");
 
             // Yield to the UI message pump periodically so the app stays responsive
@@ -1544,9 +1551,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             if (cts is not null && IsCurrentSearch(runId, cts))
             {
                 var cancelledElapsed = StopSearchTimer();
-                StatusText = BuildCancelledStatus(cancelledElapsed);
+                if (_lowDiskSpaceCancellation is { } lowDiskSpace)
+                {
+                    var message = LowDiskSpaceMonitor.BuildTerminationMessage(lowDiskSpace);
+                    StatusText = message;
+                    ErrorText = message;
+                    LogService.Instance.Warning("Search", $"Search #{runId} terminated because temp-file drive {lowDiskSpace.DriveDisplayName} is {lowDiskSpace.UsedPercent:F1}% full");
+                }
+                else
+                {
+                    StatusText = BuildCancelledStatus(cancelledElapsed);
+                    LogService.Instance.Info("Search", $"Search #{runId} cancelled");
+                }
                 DegradedNoticeText = string.Empty;
-                LogService.Instance.Info("Search", $"Search #{runId} cancelled by user");
             }
         }
         catch (Exception ex)
@@ -1568,6 +1585,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(ShowEmptyState));
                 _cts = null;
             }
+
+            try { cts?.Cancel(); } catch { }
+            if (lowDiskMonitorTask is not null)
+                await lowDiskMonitorTask.ConfigureAwait(true);
 
             cts?.Dispose();
             _searchLifecycleGate.Release();
@@ -1634,6 +1655,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Truncated = false;
         Degraded = false;
         DegradedNoticeText = string.Empty;
+        _lowDiskSpaceCancellation = null;
         IsSearching = true;
         _bytesScanned = 0;
         _prevBytesScanned = 0;
@@ -1655,6 +1677,29 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private bool IsCurrentSearch(int runId, CancellationTokenSource cts) =>
         runId == Volatile.Read(ref _searchRunId) && ReferenceEquals(_cts, cts);
+
+    private Task StartLowDiskSpaceMonitor(int runId, CancellationTokenSource cts, ResultStore? resultStore)
+    {
+        var tempFilePath = resultStore?.TempFilePath;
+        if (string.IsNullOrWhiteSpace(tempFilePath))
+            return Task.CompletedTask;
+
+        var fullThreshold = LowDiskSpaceMonitor.PercentToThreshold(LowDiskSpaceWarningPercent);
+
+        return LowDiskSpaceMonitor.StartAsync(
+            tempFilePath,
+            fullThreshold,
+            LowDiskSpaceMonitor.DefaultCheckInterval,
+            lowDiskSpace =>
+        {
+            if (!IsCurrentSearch(runId, cts))
+                return;
+
+            _lowDiskSpaceCancellation = lowDiskSpace;
+            try { cts.Cancel(); }
+            catch (Exception ex) { LogService.Instance.Warning("Search", "Low disk-space cancellation failed", ex); }
+        }, cts.Token);
+    }
 
     private ResultStore CreateResultStore()
     {
@@ -2424,8 +2469,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.MemoryPressurePercent = MemoryPressurePercent;
         _settings.SearchResultTempDirectory = ResultStoreTempLocationService.NormalizeTempDirectory(SearchResultTempDirectory);
         _settings.HasChosenSearchResultTempDirectory = HasChosenSearchResultTempDirectory;
+        _settings.LowDiskSpaceWarningPercent = AppSettings.NormalizeLowDiskSpaceWarningPercent(LowDiskSpaceWarningPercent);
         _settings.ShowMemoryPressureWarningLabel = ShowMemoryPressureWarningLabel;
         _settings.ShowStatsForNerds = ShowStatsForNerds;
+        _settings.ShowBuildNumberInTitleBar = ShowBuildNumberInTitleBar;
         _settings.ShowAutoScrollResultsCheckbox = ShowAutoScrollResultsCheckbox;
         _settings.SdkChannelBufferSize = SdkChannelBufferSize;
         _settings.MaxMatchesPerFile = MaxMatchesPerFile;

@@ -1770,6 +1770,16 @@ public sealed partial class SettingsWindow : Window
 
             AddResultTempDriveSetting(memoryGroup);
 
+            memoryGroup.Children.Add(NextSearchLabel("Temp-drive full warning threshold (%):"));
+            var lowDiskWarning = new NumberBox { Value = _viewModel.LowDiskSpaceWarningPercent, Minimum = AppSettings.MinimumLowDiskSpaceWarningPercent, Maximum = AppSettings.MaximumLowDiskSpaceWarningPercent };
+            lowDiskWarning.ValueChanged += (_, args) =>
+            {
+                if (!double.IsNaN(args.NewValue))
+                    _viewModel.LowDiskSpaceWarningPercent = AppSettings.NormalizeLowDiskSpaceWarningPercent((int)args.NewValue);
+            };
+            memoryGroup.Children.Add(lowDiskWarning);
+            memoryGroup.Children.Add(new TextBlock { Text = "Yagu terminates the active search if the search result temp-file drive is more than this full. Checked every 30 seconds. Default 98%.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
             memoryGroup.Children.Add(NextSearchLabel("System memory pressure limit (%, 0 = disabled):"));
             var memPressure = new NumberBox { Value = _viewModel.MemoryPressurePercent, Minimum = 0, Maximum = 100 };
             memPressure.ValueChanged += (_, args) => _viewModel.MemoryPressurePercent = (int)args.NewValue;
@@ -2245,6 +2255,22 @@ public sealed partial class SettingsWindow : Window
             diagnosticsGroup.Children.Add(new TextBlock
             {
                 Text = "Shows the files/second and MB/s text, plus the disk throughput sparkline, MB/s, and utilization percentage in the bottom status bar.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var showBuildNumberInTitleBar = new CheckBox
+            {
+                Content = "Show build number in title bar",
+                IsChecked = _viewModel.ShowBuildNumberInTitleBar,
+            };
+            showBuildNumberInTitleBar.Checked += (_, _) => _viewModel.ShowBuildNumberInTitleBar = true;
+            showBuildNumberInTitleBar.Unchecked += (_, _) => _viewModel.ShowBuildNumberInTitleBar = false;
+            diagnosticsGroup.Children.Add(showBuildNumberInTitleBar);
+            diagnosticsGroup.Children.Add(new TextBlock
+            {
+                Text = "Adds the current Yagu version to the main title bar for diagnostics and screenshots. Hidden by default.",
                 FontSize = 11,
                 Opacity = 0.6,
                 TextWrapping = TextWrapping.Wrap,

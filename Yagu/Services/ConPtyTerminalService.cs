@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Yagu.Services;
@@ -17,6 +18,8 @@ internal sealed class ConPtyTerminalService : IDisposable
     private bool _loggedFirstOutput;
     private bool _loggedFirstInput;
     private bool _disposed;
+    private const uint TH32CS_SNAPPROCESS = 0x00000002;
+    private static readonly IntPtr InvalidHandleValue = new(-1);
 
     public int ProcessId { get; private set; }
 
@@ -77,6 +80,11 @@ internal sealed class ConPtyTerminalService : IDisposable
 
     public void WriteInput(string text)
     {
+        WriteInput(text, echoInput: true);
+    }
+
+    public void WriteInput(string text, bool echoInput)
+    {
         if (_input is null)
         {
             LogService.Instance.Warning("Terminal", "Ignored terminal input because the shell input stream is not ready.");
@@ -91,8 +99,8 @@ internal sealed class ConPtyTerminalService : IDisposable
                 LogService.Instance.Info("Terminal", $"First terminal input written: chars={text.Length}");
             }
 
-            string echo = BuildLocalEcho(text);
-            if (echo.Length > 0)
+            string echo = echoInput ? BuildLocalEcho(text) : string.Empty;
+            if (echoInput && echo.Length > 0)
                 OutputReceived?.Invoke(echo);
 
             // The redirected cmd.exe reads its stdin pipe line-by-line and only
@@ -106,6 +114,123 @@ internal sealed class ConPtyTerminalService : IDisposable
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
         {
             LogService.Instance.Warning("Terminal", "Failed to write terminal input", ex);
+        }
+    }
+
+    public void CancelCurrentCommand()
+    {
+        if (_process is null)
+            return;
+
+        try
+        {
+            if (_process.HasExited)
+                return;
+        }
+        catch
+        {
+            return;
+        }
+
+        bool killedDescendant = TryKillDescendantProcesses(_process.Id);
+        if (killedDescendant)
+            return;
+
+        try
+        {
+            _input?.Write("\u0003\r");
+            _input?.Flush();
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+        {
+            LogService.Instance.Warning("Terminal", "Failed to send terminal cancellation input", ex);
+        }
+    }
+
+    private static bool TryKillDescendantProcesses(int rootProcessId)
+    {
+        var descendants = GetDescendantProcessIds(rootProcessId);
+        if (descendants.Count == 0)
+            return false;
+
+        bool attemptedKill = false;
+        foreach (int processId in descendants.OrderByDescending(id => id))
+        {
+            try
+            {
+                using Process process = Process.GetProcessById(processId);
+                if (process.HasExited)
+                    continue;
+
+                attemptedKill = true;
+                process.Kill(entireProcessTree: true);
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Win32Exception)
+            {
+                LogService.Instance.Verbose("Terminal", $"Terminal cancellation skipped process {processId}", ex);
+            }
+        }
+
+        return attemptedKill;
+    }
+
+    private static List<int> GetDescendantProcessIds(int rootProcessId)
+    {
+        var childrenByParent = new Dictionary<int, List<int>>();
+        foreach ((int ProcessId, int ParentProcessId) process in EnumerateProcessParents())
+        {
+            if (!childrenByParent.TryGetValue(process.ParentProcessId, out List<int>? children))
+            {
+                children = [];
+                childrenByParent[process.ParentProcessId] = children;
+            }
+
+            children.Add(process.ProcessId);
+        }
+
+        var descendants = new List<int>();
+        var stack = new Stack<int>();
+        if (childrenByParent.TryGetValue(rootProcessId, out List<int>? directChildren))
+        {
+            foreach (int child in directChildren)
+                stack.Push(child);
+        }
+
+        while (stack.Count > 0)
+        {
+            int processId = stack.Pop();
+            descendants.Add(processId);
+            if (!childrenByParent.TryGetValue(processId, out List<int>? children))
+                continue;
+
+            foreach (int child in children)
+                stack.Push(child);
+        }
+
+        return descendants;
+    }
+
+    private static IEnumerable<(int ProcessId, int ParentProcessId)> EnumerateProcessParents()
+    {
+        IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snapshot == InvalidHandleValue)
+            yield break;
+
+        try
+        {
+            var entry = new ProcessEntry32 { dwSize = (uint)Marshal.SizeOf<ProcessEntry32>() };
+            if (!Process32First(snapshot, ref entry))
+                yield break;
+
+            do
+            {
+                yield return ((int)entry.th32ProcessID, (int)entry.th32ParentProcessID);
+            }
+            while (Process32Next(snapshot, ref entry));
+        }
+        finally
+        {
+            CloseHandle(snapshot);
         }
     }
 
@@ -232,6 +357,35 @@ internal sealed class ConPtyTerminalService : IDisposable
         }
 
         return string.Empty;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool Process32First(IntPtr hSnapshot, ref ProcessEntry32 lppe);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool Process32Next(IntPtr hSnapshot, ref ProcessEntry32 lppe);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hObject);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ProcessEntry32
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szExeFile;
     }
 
     public void Dispose()

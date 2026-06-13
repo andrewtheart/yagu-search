@@ -78,6 +78,40 @@ public sealed class ConPtyTerminalServiceTests
             "The command shell did not execute the command after a carriage-return Enter. Output: " + output + " Hex: " + ToHex(output.ToString()));
     }
 
+    [Fact]
+    public void CommandShell_CanExecuteInputWithoutLocalEcho()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        using var terminal = new ConPtyTerminalService();
+        var output = new StringBuilder();
+        using var receivedExpectedOutput = new ManualResetEventSlim(false);
+        using var receivedAnyOutput = new ManualResetEventSlim(false);
+
+        terminal.OutputReceived += text =>
+        {
+            lock (output)
+            {
+                output.Append(text);
+            }
+
+            receivedAnyOutput.Set();
+            if (text.Contains("HIDDEN_ECHO_SENTINEL", StringComparison.OrdinalIgnoreCase))
+                receivedExpectedOutput.Set();
+        };
+
+        terminal.Start(cols: 120, rows: 24, workingDirectory: Directory.GetCurrentDirectory());
+        Assert.True(receivedAnyOutput.Wait(TimeSpan.FromSeconds(5)), "The command shell did not produce any startup output.");
+
+        terminal.WriteInput("echo HIDDEN_ECHO_SENTINEL\r", echoInput: false);
+
+        Assert.True(receivedExpectedOutput.Wait(TimeSpan.FromSeconds(5)),
+            "The command shell did not execute hidden terminal input. Output: " + output + " Hex: " + ToHex(output.ToString()));
+
+        Assert.DoesNotContain("echo HIDDEN_ECHO_SENTINEL", output.ToString());
+    }
+
     private static string ToHex(string value)
     {
         return string.Join(' ', value.Select(c => ((int)c).ToString("X4")));
