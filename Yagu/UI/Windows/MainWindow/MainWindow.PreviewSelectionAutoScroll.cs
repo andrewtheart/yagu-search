@@ -23,21 +23,27 @@ public sealed partial class MainWindow
     private const double PreviewSelectionAutoScrollMaxFrameSeconds = 0.20;
     private const long PreviewSelectionAutoScrollLogIntervalMs = 250;
     private const double PreviewSelectionAutoScrollDelayedFrameMs = 24;
+    private const int PreviewCustomSelectionOverlayMaxMarkers = 512;
 
     private RichTextBlock? _previewSelectionAutoScrollBlock;
     private ScrollViewer? _previewSelectionAutoScrollScroller;
     private Timer? _previewSelectionAutoScrollTimer;
     private RichTextBlock? _previewCustomSelectionBlock;
     private TextHighlighter? _previewCustomSelectionHighlighter;
+    private readonly List<Border> _previewCustomSelectionOverlayMarkers = new();
+    private readonly SolidColorBrush _previewCustomSelectionOverlayBrush = new(Windows.UI.Color.FromArgb(135, 0, 120, 215));
     private uint _previewSelectionAutoScrollPointerId;
     private int _previewSelectionAutoScrollTickQueued;
     private bool _previewSelectionAutoScrollTimerRunning;
     private bool _previewSelectionAutoScrollWasAtEdge;
     private bool _previewCustomSelectionDragging;
+    private RichTextBlock? _previewCustomSelectionLastRangeBlock;
     private Point _previewSelectionAutoScrollPointerPointInScroller;
     private double _previewSelectionAutoScrollPointerX;
     private int _previewCustomSelectionAnchorIndex = -1;
     private int _previewCustomSelectionCurrentIndex = -1;
+    private int _previewCustomSelectionLastRangeStart = -1;
+    private int _previewCustomSelectionLastRangeEnd = -1;
     private long _previewSelectionAutoScrollLastTick;
     private long _previewSelectionAutoScrollStartedTick;
     private long _previewSelectionAutoScrollLastLogTick;
@@ -97,6 +103,12 @@ public sealed partial class MainWindow
         if (scroller is null)
             return;
 
+        if (!ShouldUseCustomPreviewSelection(block, scroller))
+        {
+            ClearPreviewCustomSelection();
+            return;
+        }
+
         _previewSelectionAutoScrollBlock = block;
         _previewSelectionAutoScrollScroller = scroller;
         _previewSelectionAutoScrollPointerId = e.Pointer.PointerId;
@@ -106,11 +118,8 @@ public sealed partial class MainWindow
         _previewSelectionAutoScrollWasAtEdge = false;
         ResetPreviewSelectionAutoScrollDiagnostics(_previewSelectionAutoScrollLastTick);
         bool pointerCaptured = block.CapturePointer(e.Pointer);
-        if (ShouldUseCustomPreviewSelection(block, scroller))
-        {
-            BeginPreviewCustomSelection(block, scroller);
-            e.Handled = true;
-        }
+        BeginPreviewCustomSelection(block, scroller);
+        e.Handled = true;
         LogPreviewSelectionAutoScrollStart(block, scroller, pointerCaptured);
     }
 
@@ -390,8 +399,7 @@ public sealed partial class MainWindow
     }
 
     private static bool ShouldUseCustomPreviewSelection(RichTextBlock block, ScrollViewer scroller)
-        => block.TextWrapping == TextWrapping.NoWrap
-           && scroller.HorizontalScrollMode == ScrollMode.Enabled;
+        => block.TextWrapping == TextWrapping.NoWrap;
 
     private void BeginPreviewCustomSelection(RichTextBlock block, ScrollViewer scroller)
     {
@@ -416,6 +424,9 @@ public sealed partial class MainWindow
             return;
 
         if (!TryResolvePreviewSelectionIndexFromCurrentPointer(block, scroller, out int index))
+            return;
+
+        if (index == _previewCustomSelectionCurrentIndex)
             return;
 
         _previewCustomSelectionCurrentIndex = index;
@@ -468,7 +479,7 @@ public sealed partial class MainWindow
                 return blockIndex;
             if (pointerOffset <= paragraphEnd)
             {
-                int localIndex = Math.Clamp(pointerOffset - paragraphStart, 0, paragraphLength);
+                int localIndex = MapPreviewTextPointerToParagraphIndex(paragraph, pointerOffset, paragraphLength);
                 return blockIndex + localIndex;
             }
 
@@ -478,6 +489,28 @@ public sealed partial class MainWindow
         return blockIndex;
     }
 
+    private static int MapPreviewTextPointerToParagraphIndex(Paragraph paragraph, int pointerOffset, int paragraphLength)
+    {
+        int localIndex = 0;
+        foreach (var inline in paragraph.Inlines)
+        {
+            if (inline is not Run run)
+                continue;
+
+            int runLength = run.Text?.Length ?? 0;
+            int runStart = run.ContentStart.Offset;
+            int runEnd = run.ContentEnd.Offset;
+            if (pointerOffset <= runStart)
+                return localIndex;
+            if (pointerOffset <= runEnd)
+                return Math.Clamp(localIndex + pointerOffset - runStart, 0, paragraphLength);
+
+            localIndex += runLength;
+        }
+
+        return Math.Clamp(pointerOffset - paragraph.ContentStart.Offset, 0, paragraphLength);
+    }
+
     private void UpdatePreviewCustomSelectionHighlighter()
     {
         var block = _previewCustomSelectionBlock;
@@ -485,8 +518,15 @@ public sealed partial class MainWindow
             return;
 
         int startIndex = Math.Min(_previewCustomSelectionAnchorIndex, _previewCustomSelectionCurrentIndex);
-        int length = Math.Abs(_previewCustomSelectionCurrentIndex - _previewCustomSelectionAnchorIndex);
-        if (startIndex < 0 || length <= 0)
+        int endIndex = Math.Max(_previewCustomSelectionAnchorIndex, _previewCustomSelectionCurrentIndex);
+        if (ReferenceEquals(_previewCustomSelectionLastRangeBlock, block)
+            && startIndex == _previewCustomSelectionLastRangeStart
+            && endIndex == _previewCustomSelectionLastRangeEnd)
+        {
+            return;
+        }
+
+        if (startIndex < 0 || endIndex <= startIndex)
         {
             RemovePreviewCustomSelectionHighlighter();
             return;
@@ -495,19 +535,146 @@ public sealed partial class MainWindow
         if (!ReferenceEquals(_previewCustomSelectionHighlighterBlock, block))
             RemovePreviewCustomSelectionHighlighter();
 
-        _previewCustomSelectionHighlighter ??= new TextHighlighter
-        {
-            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(135, 0, 120, 215)),
-        };
-        _previewCustomSelectionHighlighter.Ranges.Clear();
-        _previewCustomSelectionHighlighter.Ranges.Add(new TextRange
-        {
-            StartIndex = startIndex,
-            Length = length,
-        });
-        if (!block.TextHighlighters.Contains(_previewCustomSelectionHighlighter))
-            block.TextHighlighters.Add(_previewCustomSelectionHighlighter);
+        DrawPreviewCustomSelectionOverlay(block, startIndex, endIndex);
         _previewCustomSelectionHighlighterBlock = block;
+        _previewCustomSelectionLastRangeBlock = block;
+        _previewCustomSelectionLastRangeStart = startIndex;
+        _previewCustomSelectionLastRangeEnd = endIndex;
+    }
+
+    private void RefreshPreviewCustomSelectionOverlay()
+    {
+        var block = _previewCustomSelectionBlock;
+        if (block is null || !HasPreviewCustomSelection(block))
+        {
+            ClearPreviewCustomSelectionOverlay();
+            return;
+        }
+
+        int startIndex = Math.Min(_previewCustomSelectionAnchorIndex, _previewCustomSelectionCurrentIndex);
+        int endIndex = Math.Max(_previewCustomSelectionAnchorIndex, _previewCustomSelectionCurrentIndex);
+        DrawPreviewCustomSelectionOverlay(block, startIndex, endIndex);
+    }
+
+    private void DrawPreviewCustomSelectionOverlay(
+        RichTextBlock block,
+        int selectionStart,
+        int selectionEnd)
+    {
+        double overlayWidth = PreviewSelectionOverlay.ActualWidth > 0
+            ? PreviewSelectionOverlay.ActualWidth
+            : PreviewScrollViewer.ActualWidth;
+        double overlayHeight = PreviewSelectionOverlay.ActualHeight > 0
+            ? PreviewSelectionOverlay.ActualHeight
+            : PreviewScrollViewer.ActualHeight;
+        if (overlayWidth <= 0 || overlayHeight <= 0)
+        {
+            ClearPreviewCustomSelectionOverlay();
+            return;
+        }
+
+        int markerIndex = 0;
+        int blockIndex = 0;
+        foreach (var textBlock in block.Blocks)
+        {
+            if (textBlock is not Paragraph paragraph)
+                continue;
+
+            int paragraphLength = GetParagraphTextLength(paragraph);
+            int paragraphStart = blockIndex;
+            int paragraphEnd = paragraphStart + paragraphLength;
+            blockIndex += paragraphLength + 1;
+
+            if (paragraphEnd <= selectionStart)
+                continue;
+            if (paragraphStart >= selectionEnd)
+                break;
+
+            int rangeStart = Math.Max(selectionStart, paragraphStart);
+            int rangeEnd = Math.Min(selectionEnd, paragraphEnd);
+            if (rangeEnd <= rangeStart)
+                continue;
+
+            var firstRun = paragraph.Inlines.OfType<Run>().FirstOrDefault(run => !string.IsNullOrEmpty(run.Text));
+            if (firstRun is null)
+                continue;
+
+            Windows.Foundation.Rect rect;
+            try { rect = firstRun.ContentStart.GetCharacterRect(LogicalDirection.Forward); }
+            catch { continue; }
+            if (!IsUsableTextRect(rect))
+                continue;
+
+            Point origin;
+            try
+            {
+                origin = block.TransformToVisual(PreviewSelectionOverlay).TransformPoint(new Point(rect.X, rect.Y));
+            }
+            catch
+            {
+                continue;
+            }
+
+            double charWidth = Math.Max(1, GetPreviewCharWidth(block, paragraph));
+            double markerHeight = Math.Max(12, rect.Height > 0 ? rect.Height : block.LineHeight);
+            double top = origin.Y;
+            if (top + markerHeight < 0 || top > overlayHeight)
+                continue;
+
+            int localStart = rangeStart - paragraphStart;
+            int localEnd = rangeEnd - paragraphStart;
+            double left = origin.X + localStart * charWidth;
+            double right = origin.X + localEnd * charWidth;
+            if (double.IsNaN(left) || double.IsNaN(right) || double.IsInfinity(left) || double.IsInfinity(right))
+                continue;
+
+            double visibleLeft = Math.Max(0, left);
+            double visibleRight = Math.Min(overlayWidth, right);
+            double width = visibleRight - visibleLeft;
+            if (width <= 0)
+                continue;
+
+            var marker = GetPreviewCustomSelectionOverlayMarker(markerIndex++);
+            marker.Width = width;
+            marker.Height = markerHeight;
+            marker.Visibility = Visibility.Visible;
+            Canvas.SetLeft(marker, visibleLeft);
+            Canvas.SetTop(marker, top);
+
+            if (markerIndex >= PreviewCustomSelectionOverlayMaxMarkers)
+                break;
+        }
+
+        for (int index = markerIndex; index < _previewCustomSelectionOverlayMarkers.Count; index++)
+            _previewCustomSelectionOverlayMarkers[index].Visibility = Visibility.Collapsed;
+
+        PreviewSelectionOverlay.Visibility = Visibility.Visible;
+    }
+
+    private Border GetPreviewCustomSelectionOverlayMarker(int markerIndex)
+    {
+        while (_previewCustomSelectionOverlayMarkers.Count <= markerIndex)
+        {
+            var marker = new Border
+            {
+                Background = _previewCustomSelectionOverlayBrush,
+                CornerRadius = new CornerRadius(1),
+                IsHitTestVisible = false,
+                Visibility = Visibility.Collapsed,
+            };
+            Canvas.SetZIndex(marker, 1);
+            _previewCustomSelectionOverlayMarkers.Add(marker);
+            PreviewSelectionOverlay.Children.Add(marker);
+        }
+
+        return _previewCustomSelectionOverlayMarkers[markerIndex];
+    }
+
+    private void ClearPreviewCustomSelectionOverlay()
+    {
+        foreach (var marker in _previewCustomSelectionOverlayMarkers)
+            marker.Visibility = Visibility.Collapsed;
+        PreviewSelectionOverlay.Visibility = Visibility.Visible;
     }
 
     private RichTextBlock? _previewCustomSelectionHighlighterBlock;
@@ -527,6 +694,10 @@ public sealed partial class MainWindow
             _previewCustomSelectionHighlighterBlock.TextHighlighters.Remove(_previewCustomSelectionHighlighter);
         _previewCustomSelectionHighlighterBlock = null;
         _previewCustomSelectionHighlighter = null;
+        ClearPreviewCustomSelectionOverlay();
+        _previewCustomSelectionLastRangeBlock = null;
+        _previewCustomSelectionLastRangeStart = -1;
+        _previewCustomSelectionLastRangeEnd = -1;
     }
 
     private bool HasPreviewCustomSelection(RichTextBlock block)

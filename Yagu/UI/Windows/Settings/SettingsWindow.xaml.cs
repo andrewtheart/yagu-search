@@ -35,6 +35,7 @@ public sealed partial class SettingsWindow : Window
     private readonly MainViewModel _viewModel;
     private readonly HotkeyService _hotkeyService;
     private readonly IntPtr _mainHwnd;
+    private readonly IntPtr _settingsHwnd;
     private readonly AppWindow _appWindow;
     private readonly Action<bool>? _applyWordWrap;
     private readonly Action? _applyPreviewSectionBackgrounds;
@@ -48,6 +49,8 @@ public sealed partial class SettingsWindow : Window
     private bool _settingsDirty;
     private bool _settingDirtyTrackingEnabled;
     private DispatcherTimer? _fontContrastCheckTimer;
+    private bool _settingsCloseConfirmed;
+    private bool _settingsClosePromptOpen;
 
     private static readonly Windows.UI.Color ContrastReadableGreen = Windows.UI.Color.FromArgb(0xFF, 0x2E, 0xA0, 0x43);
     private static readonly Windows.UI.Color ContrastUnreadableRed = Windows.UI.Color.FromArgb(0xFF, 0xD1, 0x34, 0x38);
@@ -102,6 +105,7 @@ public sealed partial class SettingsWindow : Window
 
         // Size and center over the owner window
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        _settingsHwnd = hwnd;
         WindowForegroundHelper.ConfigureOwnedWindow(hwnd, mainHwnd);
         var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
         var appWindow = AppWindow.GetFromWindowId(windowId);
@@ -117,11 +121,8 @@ public sealed partial class SettingsWindow : Window
             QueueFontContrastCheck();
         };
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
-        Closed += (_, _) =>
-        {
-            _fontContrastCheckTimer?.Stop();
-            _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
-        };
+        appWindow.Closing += OnSettingsAppWindowClosing;
+        Closed += OnSettingsWindowClosed;
 
         // Set window icon to match the main Yagu window
         var icoPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "yagu.ico");
@@ -357,6 +358,51 @@ public sealed partial class SettingsWindow : Window
         CaptureCleanSettingValues();
     }
 
+    private void OnSettingsWindowClosed(object sender, WindowEventArgs e)
+    {
+        RestoreUnsavedSettingsIfNeeded();
+        _appWindow.Closing -= OnSettingsAppWindowClosing;
+        _fontContrastCheckTimer?.Stop();
+        _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+    }
+
+    private void RestoreUnsavedSettingsIfNeeded()
+    {
+        if (!HasSettingValueChanges())
+            return;
+
+        _settingDirtyTrackingEnabled = false;
+        try
+        {
+            foreach (var (element, cleanValue) in _cleanSettingValues.ToArray())
+                RestoreSettingValue(element, cleanValue);
+        }
+        finally
+        {
+            _settingsDirty = false;
+            _settingDirtyTrackingEnabled = true;
+        }
+    }
+
+    private bool HasSettingValueChanges()
+    {
+        if (_settingsDirty)
+            return true;
+
+        foreach (var element in _dirtyTrackedElements)
+        {
+            if (!TryGetSettingValue(element, out var currentValue))
+                continue;
+            if (!_cleanSettingValues.TryGetValue(element, out var cleanValue)
+                || !Equals(cleanValue, currentValue))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private void OnSettingsContentPointerPressed(object sender, PointerRoutedEventArgs e)
     {
         if (e.OriginalSource is DependencyObject source && IsInsideSettingEditor(source))
@@ -450,6 +496,36 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
+    private static void RestoreSettingValue(UIElement element, object? value)
+    {
+        switch (element)
+        {
+            case TextBox textBox:
+                textBox.Text = value as string ?? string.Empty;
+                break;
+            case NumberBox numberBox when value is ValueTuple<double, string> numberValue:
+                numberBox.Value = numberValue.Item1;
+                if (!string.Equals(numberBox.Text, numberValue.Item2, StringComparison.Ordinal))
+                    numberBox.Text = numberValue.Item2;
+                break;
+            case ComboBox comboBox when value is int selectedIndex:
+                comboBox.SelectedIndex = selectedIndex;
+                break;
+            case CheckBox checkBox:
+                checkBox.IsChecked = value is bool isChecked ? isChecked : null;
+                break;
+            case ToggleSwitch toggleSwitch when value is bool isOn:
+                toggleSwitch.IsOn = isOn;
+                break;
+            case CalendarDatePicker calendarDatePicker:
+                calendarDatePicker.Date = value is DateTimeOffset date ? date : null;
+                break;
+            case ColorPicker colorPicker when value is Windows.UI.Color color:
+                colorPicker.Color = color;
+                break;
+        }
+    }
+
     private void RootGrid_Loaded(object sender, RoutedEventArgs e)
     {
         var fadeIn = new DoubleAnimation
@@ -466,8 +542,79 @@ public sealed partial class SettingsWindow : Window
         sb.Begin();
     }
 
-    private void OnCloseClick(object sender, RoutedEventArgs e)
+    private async void OnCloseClick(object sender, RoutedEventArgs e)
     {
+        await RequestSettingsWindowCloseAsync();
+    }
+
+    private async void OnSettingsAppWindowClosing(AppWindow sender, AppWindowClosingEventArgs args)
+    {
+        if (_settingsCloseConfirmed || !HasSettingValueChanges())
+            return;
+
+        args.Cancel = true;
+        await ShowUnsavedSettingsClosePromptAsync();
+    }
+
+    private async Task RequestSettingsWindowCloseAsync()
+    {
+        if (_settingsCloseConfirmed || !HasSettingValueChanges())
+        {
+            CloseSettingsWindowWithoutPrompt();
+            return;
+        }
+
+        await ShowUnsavedSettingsClosePromptAsync();
+    }
+
+    private async Task ShowUnsavedSettingsClosePromptAsync()
+    {
+        if (_settingsClosePromptOpen)
+            return;
+
+        _settingsClosePromptOpen = true;
+        try
+        {
+            var result = await YaguDialog.ShowAsync(
+                _settingsHwnd,
+                new YaguDialogOptions
+                {
+                    Title = "Unsaved settings",
+                    Content = "You have unsaved settings changes. Save them before closing Settings?",
+                    PrimaryButtonText = "Save and close",
+                    SecondaryButtonText = "Discard changes",
+                    CloseButtonText = "Keep editing",
+                    DefaultButton = YaguDialogDefaultButton.Primary,
+                    RequestedTheme = RootGrid.ActualTheme,
+                    Width = 500,
+                    Height = 230,
+                    ShowTitle = false,
+                    ShowTitleBar = false,
+                    ShowTopRightCloseButton = true,
+                });
+
+            if (result == YaguDialogResult.Primary)
+            {
+                SaveButton.IsEnabled = false;
+                await _viewModel.PersistSettingsAsync();
+                MarkSettingsClean();
+                CloseSettingsWindowWithoutPrompt();
+            }
+            else if (result == YaguDialogResult.Secondary)
+            {
+                RestoreUnsavedSettingsIfNeeded();
+                CloseSettingsWindowWithoutPrompt();
+            }
+        }
+        finally
+        {
+            _settingsClosePromptOpen = false;
+        }
+    }
+
+    private void CloseSettingsWindowWithoutPrompt()
+    {
+        _settingsCloseConfirmed = true;
         Close();
     }
 
@@ -513,9 +660,16 @@ public sealed partial class SettingsWindow : Window
         DetachAllTabPageElements();
 
         string? lastHeader = null;
+        var renderedElements = new HashSet<UIElement>();
         foreach (var entry in _settingEntries)
         {
             if (!entry.Matches(query))
+                continue;
+
+            var entryElements = entry.BuildElements()
+                .Where(element => renderedElements.Add(element))
+                .ToList();
+            if (entryElements.Count == 0)
                 continue;
 
             // Show tab header as a group header when it changes.
@@ -534,7 +688,7 @@ public sealed partial class SettingsWindow : Window
 
             // Add the setting's UI elements.
             var container = new StackPanel { Spacing = 4, Margin = new Thickness(0, 4, 0, 8) };
-            foreach (var element in entry.BuildElements())
+            foreach (var element in entryElements)
             {
                 DetachFromParent(element);
                 container.Children.Add(element);

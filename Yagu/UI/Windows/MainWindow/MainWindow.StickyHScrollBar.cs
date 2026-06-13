@@ -109,6 +109,7 @@ public partial class MainWindow
     /// </summary>
     private void OnSectionScrollerViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
+        RefreshPreviewCustomSelectionOverlay();
         if (_stickyHScrollSyncing) return;
         if (!ReferenceEquals(sender, _stickyHScrollSource))
         {

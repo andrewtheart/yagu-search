@@ -128,6 +128,55 @@ function Find-AllElements {
     return $Parent.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
 }
 
+function Find-YaguWindow {
+    param(
+        [System.Windows.Automation.AutomationElement]$Root,
+        [int]$LaunchedProcessId,
+        [string]$ExecutablePath,
+        [int]$TimeoutSeconds = 15
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $window = Find-Element -Parent $Root -Name "Yagu" -ControlType ([System.Windows.Automation.ControlType]::Window) -TimeoutSeconds 1
+        if ($window) { return $window }
+
+        $candidateProcessIds = @($LaunchedProcessId)
+        try {
+            $candidateProcessIds += Get-CimInstance Win32_Process -Filter "Name = 'Yagu.exe'" |
+                Where-Object { $_.ExecutablePath -eq $ExecutablePath } |
+                Select-Object -ExpandProperty ProcessId
+        } catch { }
+        $candidateProcessIds = @($candidateProcessIds | Where-Object { $_ -gt 0 } | Select-Object -Unique)
+
+        foreach ($candidatePid in $candidateProcessIds) {
+            $pidCondition = [System.Windows.Automation.PropertyCondition]::new(
+                [System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$candidatePid)
+            $window = $Root.FindFirst([System.Windows.Automation.TreeScope]::Children, $pidCondition)
+            if ($window) { return $window }
+        }
+
+        $windows = $Root.FindAll(
+            [System.Windows.Automation.TreeScope]::Children,
+            [System.Windows.Automation.PropertyCondition]::new(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::Window))
+        foreach ($candidate in $windows) {
+            try {
+                if ($candidate.Current.Name -like "Yagu*") {
+                    if ($candidateProcessIds.Count -eq 0 -or $candidateProcessIds -contains $candidate.Current.ProcessId) {
+                        return $candidate
+                    }
+                }
+            } catch { }
+        }
+
+        Start-Sleep -Milliseconds 500
+    }
+
+    return $null
+}
+
 function Click-Element([System.Windows.Automation.AutomationElement]$Element) {
     $invokePattern = $Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
     if ($invokePattern) {
@@ -179,7 +228,8 @@ Write-Host ""
 
 # 1. Launch Yagu with directory and query
 Write-Host "[1] Launching Yagu..."
-$proc = Start-Process -FilePath "C:\src\Yagu\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe" `
+$yaguExe = "C:\src\Yagu\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe"
+$proc = Start-Process -FilePath $yaguExe `
     -ArgumentList "--dir `"$Directory`" --query `"$Query`" --window-mode traditional" `
     -PassThru
 
@@ -188,19 +238,7 @@ Start-Sleep -Seconds 5
 # 2. Find the main window
 Write-Host "[2] Finding Yagu window..."
 $root = [System.Windows.Automation.AutomationElement]::RootElement
-$yaguWindow = $null
-$deadline = (Get-Date).AddSeconds(15)
-while ((Get-Date) -lt $deadline) {
-    $yaguWindow = Find-Element -Parent $root -Name "Yagu" -ControlType ([System.Windows.Automation.ControlType]::Window) -TimeoutSeconds 2
-    if (-not $yaguWindow) {
-        # Try by process ID
-        $pidCondition = [System.Windows.Automation.PropertyCondition]::new(
-            [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $proc.Id)
-        $yaguWindow = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $pidCondition)
-    }
-    if ($yaguWindow) { break }
-    Start-Sleep -Milliseconds 500
-}
+$yaguWindow = Find-YaguWindow -Root $root -LaunchedProcessId $proc.Id -ExecutablePath $yaguExe -TimeoutSeconds 15
 
 if (-not $yaguWindow) {
     Write-Error "Could not find Yagu window!"

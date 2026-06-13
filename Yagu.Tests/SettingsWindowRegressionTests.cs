@@ -43,6 +43,8 @@ public sealed class SettingsWindowRegressionTests
         Path.Combine(RepoRoot, "Yagu", "ResultStoreTempLocationWindow.cs"));
     private static readonly string AdminProtectedPathsDialogSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "AdminProtectedPathsDialog.cs"));
+    private static readonly string YaguDialogSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "YaguDialog.cs"));
     private static readonly string WindowForegroundHelperSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "Helpers", "WindowForegroundHelper.cs"));
     private static readonly string SelectionRendererSource = File.ReadAllText(
@@ -286,6 +288,44 @@ public sealed class SettingsWindowRegressionTests
             "_viewModel.SuppressAdminWarning = false;",
             "MarkSettingsDirty();",
             "resetAdmin.IsEnabled = false;");
+    }
+
+    [Fact]
+    public void SettingsWindow_CloseWithoutSaveRestoresLiveAppliedSettings()
+    {
+        Assert.Contains("Closed += OnSettingsWindowClosed;", SettingsWindowSource);
+
+        string closedMethod = ExtractMethod(SettingsWindowSource, "OnSettingsWindowClosed", window: 900);
+        AssertContainsInOrder(closedMethod,
+            "RestoreUnsavedSettingsIfNeeded();",
+            "_fontContrastCheckTimer?.Stop();",
+            "_viewModel.PropertyChanged -= OnViewModelPropertyChanged;");
+
+        string restoreMethod = ExtractMethod(SettingsWindowSource, "RestoreUnsavedSettingsIfNeeded", window: 1800);
+        AssertContainsInOrder(restoreMethod,
+            "if (!HasSettingValueChanges())",
+            "_settingDirtyTrackingEnabled = false;",
+            "foreach (var (element, cleanValue) in _cleanSettingValues.ToArray())",
+            "RestoreSettingValue(element, cleanValue);",
+            "_settingsDirty = false;",
+            "_settingDirtyTrackingEnabled = true;");
+
+        string hasChangesMethod = ExtractMethod(SettingsWindowSource, "HasSettingValueChanges", window: 1600);
+        AssertContainsInOrder(hasChangesMethod,
+            "if (_settingsDirty)",
+            "foreach (var element in _dirtyTrackedElements)",
+            "TryGetSettingValue(element, out var currentValue)",
+            "!Equals(cleanValue, currentValue)",
+            "return true;");
+
+        string restoreValueMethod = ExtractMethod(SettingsWindowSource, "RestoreSettingValue", window: 2400);
+        Assert.Contains("textBox.Text = value as string ?? string.Empty;", restoreValueMethod);
+        Assert.Contains("numberBox.Value = numberValue.Item1;", restoreValueMethod);
+        Assert.Contains("comboBox.SelectedIndex = selectedIndex;", restoreValueMethod);
+        Assert.Contains("checkBox.IsChecked = value is bool isChecked ? isChecked : null;", restoreValueMethod);
+        Assert.Contains("toggleSwitch.IsOn = isOn;", restoreValueMethod);
+        Assert.Contains("calendarDatePicker.Date = value is DateTimeOffset date ? date : null;", restoreValueMethod);
+        Assert.Contains("colorPicker.Color = color;", restoreValueMethod);
     }
 
     [Fact]
@@ -687,6 +727,9 @@ public sealed class SettingsWindowRegressionTests
     public void SettingsWindow_SearchReparentsElementsFromAllSupportedParentTypes()
     {
         string searchChanged = ExtractMethod(SettingsWindowSource, "OnSearchTextChanged", window: 2600);
+        Assert.Contains("var renderedElements = new HashSet<UIElement>();", searchChanged);
+        Assert.Contains(".Where(element => renderedElements.Add(element))", searchChanged);
+        Assert.Contains("if (entryElements.Count == 0)", searchChanged);
         Assert.Contains("DetachFromParent(element);", searchChanged);
         Assert.DoesNotContain("fe.Parent is Panel", searchChanged);
 
@@ -699,6 +742,48 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("contentControl.Content = null;", detach);
         Assert.Contains("case ScrollViewer scrollViewer when ReferenceEquals(scrollViewer.Content, element):", detach);
         Assert.Contains("scrollViewer.Content = null;", detach);
+    }
+
+    [Fact]
+    public void SettingsWindow_CloseWithUnsavedChangesShowsTitlelessModal()
+    {
+        Assert.Contains("appWindow.Closing += OnSettingsAppWindowClosing;", SettingsWindowSource);
+        Assert.Contains("_appWindow.Closing -= OnSettingsAppWindowClosing;", SettingsWindowSource);
+
+        string closeButton = ExtractMethod(SettingsWindowSource, "OnCloseClick", window: 500);
+        Assert.Contains("await RequestSettingsWindowCloseAsync();", closeButton);
+
+        string appClosing = ExtractMethod(SettingsWindowSource, "OnSettingsAppWindowClosing", window: 1200);
+        AssertContainsInOrder(appClosing,
+            "if (_settingsCloseConfirmed || !HasSettingValueChanges())",
+            "args.Cancel = true;",
+            "await ShowUnsavedSettingsClosePromptAsync();");
+
+        string prompt = ExtractMethod(SettingsWindowSource, "ShowUnsavedSettingsClosePromptAsync", window: 3600);
+        AssertContainsInOrder(prompt,
+            "if (_settingsClosePromptOpen)",
+            "YaguDialog.ShowAsync(",
+            "_settingsHwnd",
+            "Title = \"Unsaved settings\"",
+            "PrimaryButtonText = \"Save and close\"",
+            "SecondaryButtonText = \"Discard changes\"",
+            "CloseButtonText = \"Keep editing\"",
+            "ShowTitle = false",
+            "ShowTitleBar = false",
+            "ShowTopRightCloseButton = true");
+        AssertContainsInOrder(prompt,
+            "if (result == YaguDialogResult.Primary)",
+            "await _viewModel.PersistSettingsAsync();",
+            "MarkSettingsClean();",
+            "CloseSettingsWindowWithoutPrompt();",
+            "else if (result == YaguDialogResult.Secondary)",
+            "RestoreUnsavedSettingsIfNeeded();",
+            "CloseSettingsWindowWithoutPrompt();");
+
+        Assert.Contains("public bool ShowTopRightCloseButton { get; init; }", YaguDialogSource);
+        Assert.Contains("if (options.ShowTopRightCloseButton)", YaguDialogSource);
+        Assert.Contains("ToolTipService.SetToolTip(topRightClose, \"Close\");", YaguDialogSource);
+        Assert.Contains("topRightClose.Click += (_, _) => Complete(YaguDialogResult.Close);", YaguDialogSource);
     }
 
     [Fact]

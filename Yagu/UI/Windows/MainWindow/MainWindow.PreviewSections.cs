@@ -817,6 +817,7 @@ public sealed partial class MainWindow
     private void OnPreviewScrollViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
         QueueActiveMatchOverlayRefresh();
+        RefreshPreviewCustomSelectionOverlay();
         UpdateStickyFileHeader();
         TryAutoLoadMoreOnScroll();
         TryAutoLoadOverflowOnScroll();

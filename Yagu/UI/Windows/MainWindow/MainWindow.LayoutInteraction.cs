@@ -158,12 +158,16 @@ public sealed partial class MainWindow
         if (compact)
         {
             BrowseDirectoryButton.Padding = new Thickness(0);
+            SearchCardLoadSessionButton.Width = CompactTopSearchActionButtonWidth;
+            SearchCardLoadSessionButton.Height = CompactTopSearchActionButtonWidth;
             SearchCancelButton.Padding = new Thickness(0);
             BrowseDirectoryButton.Width = CompactTopSearchActionButtonWidth;
             SearchCancelButton.Width = CompactTopSearchActionButtonWidth;
             return;
         }
 
+        SearchCardLoadSessionButton.Width = 32;
+        SearchCardLoadSessionButton.Height = 32;
         BrowseDirectoryButton.Padding = new Thickness(8, 6, 8, 6);
         SearchCancelButton.Padding = new Thickness(12, 6, 12, 6);
         SearchCancelButton.Width = double.NaN;

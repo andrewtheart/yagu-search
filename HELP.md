@@ -288,7 +288,7 @@ Open with **Ctrl+F** (find only) or **Ctrl+H** (find and replace).
 
 ## Settings
 
-Open Settings from the **gear** button in the title bar. Settings are saved to `%APPDATA%\Yagu\settings.json`. Reset and Use default buttons are disabled when the current value already matches the default.
+Open Settings from the **gear** button in the title bar. Settings are saved to `%APPDATA%\Yagu\settings.json`. Reset and Use default buttons are disabled when the current value already matches the default. If you close Settings with unsaved changes, Yagu asks whether to save, discard, or keep editing.
 
 Use the search box at the top of Settings to filter settings by tab name, setting label, helper text, current value, or available option text.
 

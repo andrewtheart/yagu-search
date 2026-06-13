@@ -40,6 +40,7 @@ internal sealed record YaguDialogOptions
     public bool IsResizable { get; init; }
     public bool ShowTitle { get; init; } = true;
     public bool ShowTitleBar { get; init; } = true;
+    public bool ShowTopRightCloseButton { get; init; }
 }
 
 internal sealed class YaguDialog : Window
@@ -132,6 +133,27 @@ internal sealed class YaguDialog : Window
             };
             Grid.SetRow(title, 0);
             root.Children.Add(title);
+        }
+
+        if (options.ShowTopRightCloseButton)
+        {
+            var topRightClose = new Button
+            {
+                Content = new FontIcon { Glyph = "\uE711", FontSize = 12 },
+                Width = 32,
+                Height = 32,
+                MinWidth = 0,
+                MinHeight = 0,
+                Padding = new Thickness(0),
+                Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0, 0, 0, 0)),
+                BorderThickness = new Thickness(0),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+            };
+            ToolTipService.SetToolTip(topRightClose, "Close");
+            topRightClose.Click += (_, _) => Complete(YaguDialogResult.Close);
+            Grid.SetRow(topRightClose, 0);
+            root.Children.Add(topRightClose);
         }
 
         var bodyContent = CreateBodyContent(options.Content);

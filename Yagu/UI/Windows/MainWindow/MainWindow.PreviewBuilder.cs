@@ -1790,51 +1790,70 @@ public sealed partial class MainWindow
             },
         };
 
-        var infoPanel = new StackPanel
+        var infoPanel = new Grid
         {
-            Orientation = Orientation.Horizontal,
-            Spacing = 8,
+            MinWidth = 0,
+            ColumnSpacing = 8,
             VerticalAlignment = VerticalAlignment.Center,
+            ColumnDefinitions =
+            {
+                new ColumnDefinition { Width = GridLength.Auto },
+                new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) },
+                new ColumnDefinition { Width = GridLength.Auto },
+            },
         };
 
-        infoPanel.Children.Add(new FontIcon
+        var fileIcon = new FontIcon
         {
             Glyph = "\uE8B7",
             FontSize = 13,
             Opacity = 0.7,
             VerticalAlignment = VerticalAlignment.Center,
-        });
+        };
+        Grid.SetColumn(fileIcon, 0);
+        infoPanel.Children.Add(fileIcon);
 
-        infoPanel.Children.Add(new TextBlock
+        var fileNameText = new TextBlock
         {
             Text = Path.GetFileName(filePath),
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
             TextTrimming = TextTrimming.CharacterEllipsis,
+            MinWidth = 0,
             MaxWidth = 360,
             VerticalAlignment = VerticalAlignment.Center,
-        });
+        };
+        Grid.SetColumn(fileNameText, 1);
+        infoPanel.Children.Add(fileNameText);
 
         if (!string.IsNullOrWhiteSpace(detail))
         {
-            infoPanel.Children.Add(new TextBlock
+            var detailText = new TextBlock
             {
                 Text = detail,
                 Opacity = 0.65,
                 FontSize = 12,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                MaxWidth = 180,
                 VerticalAlignment = VerticalAlignment.Center,
-            });
+            };
+            Grid.SetColumn(detailText, 2);
+            infoPanel.Children.Add(detailText);
         }
 
+        Grid.SetColumn(infoPanel, 0);
         grid.Children.Add(infoPanel);
 
-        // Per-file action buttons — right-aligned
+        // Per-file action buttons — right-aligned near the Expander chevron.
         var buttonPanel = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 4,
+            Margin = new Thickness(8, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
         };
         Grid.SetColumn(buttonPanel, 1);
+        Canvas.SetZIndex(buttonPanel, 1);
 
         var path = filePath; // capture for lambdas
 

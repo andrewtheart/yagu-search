@@ -64,8 +64,8 @@ public sealed partial class MainWindow
     private void UpdateTerminalChevronVisibility()
     {
         bool statusBarChevronVisible = StatusBarRow.Height.IsAuto || StatusBarRow.Height.Value > 0;
-        TerminalChevron.Visibility = statusBarChevronVisible ? Visibility.Visible : Visibility.Collapsed;
-        PreSearchTerminalChevron.Visibility = statusBarChevronVisible ? Visibility.Collapsed : Visibility.Visible;
+        PreSearchTerminalChevron.Visibility = Visibility.Visible;
+        TerminalChevron.Visibility = statusBarChevronVisible ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private async Task SendTextToTerminalAsync(string text)
