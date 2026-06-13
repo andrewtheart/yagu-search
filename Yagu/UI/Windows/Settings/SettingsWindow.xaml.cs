@@ -6,8 +6,10 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
+using Microsoft.UI.Xaml.Automation;
 using Windows.System;
 using Yagu.Helpers;
+using Yagu.Models;
 using Yagu.Services;
 using Yagu.ViewModels;
 using XamlFontFamily = Microsoft.UI.Xaml.Media.FontFamily;
@@ -40,37 +42,44 @@ public sealed partial class SettingsWindow : Window
     private readonly Action<bool>? _applyWordWrap;
     private readonly Action? _applyPreviewSectionBackgrounds;
     private readonly Action _openHelp;
+    private readonly Action? _suppressOwnerHideToTray;
     private readonly List<UIElement> _tabPages = new();
-    private readonly List<List<UIElement>> _tabPageRootElements = new();
     private readonly HashSet<UIElement> _dirtyTrackedElements = new();
     private readonly Dictionary<UIElement, object?> _cleanSettingValues = new();
+    private readonly List<LazyColorSettingState> _lazyColorSettings = new();
     private readonly List<Action> _fontContrastStatusRefreshers = new();
     private readonly List<Action> _defaultResetButtonRefreshers = new();
     private bool _settingsDirty;
     private bool _settingDirtyTrackingEnabled;
+    private bool _settingsContentBuilt;
+    private int? _pendingSelectTabIndex;
+    private bool _cleanHasShownFileDrawerIntroTip;
+    private bool _cleanHasShownFileDrawerLineNumberIntroTip;
+    private bool _cleanHasShownPreviewMatchIntroTip;
     private DispatcherTimer? _fontContrastCheckTimer;
+    private DispatcherTimer? _deferredSettingsContentBuildTimer;
     private bool _settingsCloseConfirmed;
     private bool _settingsClosePromptOpen;
+    private bool _searchableEntriesExtracted;
 
     private static readonly Windows.UI.Color ContrastReadableGreen = Windows.UI.Color.FromArgb(0xFF, 0x2E, 0xA0, 0x43);
     private static readonly Windows.UI.Color ContrastUnreadableRed = Windows.UI.Color.FromArgb(0xFF, 0xD1, 0x34, 0x38);
+    private const int MaxComboBoxItemsIndexedForSettingsSearch = 80;
 
     /// <summary>Flat registry of every setting built during BuildSettingsContent for search filtering.</summary>
     private readonly List<SettingEntry> _settingEntries = new();
 
-    private readonly List<Panel> _searchResultContainers = new();
+    private readonly List<UIElement> _searchResultContainers = new();
 
     /// <summary>Represents a single setting item with searchable text and its UI elements.</summary>
     private sealed class SettingEntry
     {
         public required string TabHeader { get; init; }
+        public required int TabIndex { get; init; }
         public required string Label { get; init; }
         public string? Description { get; init; }
         public string? ControlText { get; init; }
-        public required IReadOnlyList<ElementPlacement> OriginalPlacements { get; init; }
-        /// <summary>Factory that returns the setting UI elements for display in search results.</summary>
-        public required Func<IEnumerable<UIElement>> BuildElements { get; init; }
-
+        public UIElement? TargetElement { get; init; }
         public bool Matches(string query)
         {
             return Label.Contains(query, StringComparison.OrdinalIgnoreCase)
@@ -80,14 +89,26 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
-    private sealed class ElementPlacement
+    private sealed class LazyColorSettingState
     {
-        public required UIElement Element { get; init; }
-        public required Panel Parent { get; init; }
-        public required int Index { get; init; }
+        public required Func<Windows.UI.Color> GetColor { get; init; }
+        public required Action<Windows.UI.Color> RestoreColor { get; init; }
+        public Windows.UI.Color CleanColor { get; set; }
     }
 
-    public SettingsWindow(MainViewModel viewModel, HotkeyService hotkeyService, IntPtr mainHwnd, Action<bool>? applyWordWrap, Action? applyPreviewSectionBackgrounds, Action openHelp)
+    private sealed class LazyColorSettingHandle
+    {
+        public required Func<Windows.UI.Color> GetColor { get; init; }
+        public required Action<Windows.UI.Color> SetColor { get; init; }
+
+        public Windows.UI.Color Color
+        {
+            get => GetColor();
+            set => SetColor(value);
+        }
+    }
+
+    public SettingsWindow(MainViewModel viewModel, HotkeyService hotkeyService, IntPtr mainHwnd, Action<bool>? applyWordWrap, Action? applyPreviewSectionBackgrounds, Action openHelp, Action? suppressOwnerHideToTray = null)
     {
         _viewModel = viewModel;
         _hotkeyService = hotkeyService;
@@ -95,6 +116,7 @@ public sealed partial class SettingsWindow : Window
         _applyWordWrap = applyWordWrap;
         _applyPreviewSectionBackgrounds = applyPreviewSectionBackgrounds;
         _openHelp = openHelp;
+        _suppressOwnerHideToTray = suppressOwnerHideToTray;
         InitializeComponent();
 
         InitializeHelpKeyboardShortcut();
@@ -129,15 +151,14 @@ public sealed partial class SettingsWindow : Window
         if (System.IO.File.Exists(icoPath))
             appWindow.SetIcon(icoPath);
 
-        BuildSettingsContent();
-        AttachSettingDirtyHandlers();
-        MarkSettingsClean();
-        ExtractSearchableEntries();
-        TabList.SelectedIndex = 0;
+        ShowSettingsLoadingPlaceholder();
     }
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
+        if (IsFirstTimeIntroductoryTooltipProperty(e.PropertyName) && !_settingsDirty)
+            CaptureCleanFirstTimeIntroductoryTooltipValues();
+
         RefreshDefaultResetButtons();
 
         if (e.PropertyName == nameof(MainViewModel.ThemeModeIndex))
@@ -267,7 +288,16 @@ public sealed partial class SettingsWindow : Window
     /// <summary>Navigate to a specific tab by zero-based index.</summary>
     public void SelectTab(int index)
     {
-        if (index < 0 || index >= TabList.Items.Count)
+        if (index < 0)
+            return;
+
+        if (!_settingsContentBuilt)
+        {
+            _pendingSelectTabIndex = index;
+            return;
+        }
+
+        if (index >= TabList.Items.Count)
             return;
 
         bool restoreNormalTabView = _isSearchActive
@@ -280,13 +310,12 @@ public sealed partial class SettingsWindow : Window
             _isSearchActive = false;
             TabList.Visibility = Visibility.Visible;
             ClearSearchResultContainers();
-            RestoreTabPageElements();
         }
 
         TabList.SelectedIndex = index;
         SettingsContent.Children.Clear();
         if (index < _tabPages.Count)
-            SettingsContent.Children.Add(_tabPages[index]);
+            AddSettingsContentChild(_tabPages[index]);
     }
 
     private async void OnSaveClick(object sender, RoutedEventArgs e)
@@ -300,8 +329,6 @@ public sealed partial class SettingsWindow : Window
     {
         foreach (var page in _tabPages)
             AttachSettingDirtyHandlers(page);
-
-        _settingDirtyTrackingEnabled = true;
     }
 
     private void AttachSettingDirtyHandlers(UIElement element)
@@ -330,8 +357,7 @@ public sealed partial class SettingsWindow : Window
             case CalendarDatePicker calendarDatePicker:
                 calendarDatePicker.DateChanged += (_, _) => MarkSettingsDirty();
                 break;
-            case ColorPicker colorPicker:
-                colorPicker.ColorChanged += (_, _) => MarkSettingsDirty();
+            case ColorPicker:
                 break;
         }
 
@@ -342,9 +368,12 @@ public sealed partial class SettingsWindow : Window
                 AttachSettingDirtyHandlers(childElement);
     }
 
-    private void MarkSettingsDirty()
+    private void MarkSettingsDirty(bool requireValueChanges = true)
     {
         if (!_settingDirtyTrackingEnabled || _settingsDirty)
+            return;
+
+        if (requireValueChanges && !HaveTrackedSettingValueChanges())
             return;
 
         _settingsDirty = true;
@@ -360,6 +389,8 @@ public sealed partial class SettingsWindow : Window
 
     private void OnSettingsWindowClosed(object sender, WindowEventArgs e)
     {
+        _suppressOwnerHideToTray?.Invoke();
+        StopDeferredSettingsContentBuildTimer();
         RestoreUnsavedSettingsIfNeeded();
         _appWindow.Closing -= OnSettingsAppWindowClosing;
         _fontContrastCheckTimer?.Stop();
@@ -376,6 +407,9 @@ public sealed partial class SettingsWindow : Window
         {
             foreach (var (element, cleanValue) in _cleanSettingValues.ToArray())
                 RestoreSettingValue(element, cleanValue);
+            foreach (var lazyColor in _lazyColorSettings)
+                lazyColor.RestoreColor(lazyColor.CleanColor);
+            RestoreCleanFirstTimeIntroductoryTooltipValues();
         }
         finally
         {
@@ -389,6 +423,11 @@ public sealed partial class SettingsWindow : Window
         if (_settingsDirty)
             return true;
 
+        return HaveTrackedSettingValueChanges();
+    }
+
+    private bool HaveTrackedSettingValueChanges()
+    {
         foreach (var element in _dirtyTrackedElements)
         {
             if (!TryGetSettingValue(element, out var currentValue))
@@ -400,7 +439,13 @@ public sealed partial class SettingsWindow : Window
             }
         }
 
-        return false;
+        foreach (var lazyColor in _lazyColorSettings)
+        {
+            if (!lazyColor.GetColor().Equals(lazyColor.CleanColor))
+                return true;
+        }
+
+        return HaveFirstTimeIntroductoryTooltipValuesChanged();
     }
 
     private void OnSettingsContentPointerPressed(object sender, PointerRoutedEventArgs e)
@@ -445,24 +490,48 @@ public sealed partial class SettingsWindow : Window
             if (TryGetSettingValue(element, out var value))
                 _cleanSettingValues[element] = value;
         }
+
+        foreach (var lazyColor in _lazyColorSettings)
+            lazyColor.CleanColor = lazyColor.GetColor();
+
+        CaptureCleanFirstTimeIntroductoryTooltipValues();
     }
+
+    private void CaptureCleanFirstTimeIntroductoryTooltipValues()
+    {
+        _cleanHasShownFileDrawerIntroTip = _viewModel.HasShownFileDrawerIntroTip;
+        _cleanHasShownFileDrawerLineNumberIntroTip = _viewModel.HasShownFileDrawerLineNumberIntroTip;
+        _cleanHasShownPreviewMatchIntroTip = _viewModel.HasShownPreviewMatchIntroTip;
+    }
+
+    private bool HaveFirstTimeIntroductoryTooltipValuesChanged()
+        => _viewModel.HasShownFileDrawerIntroTip != _cleanHasShownFileDrawerIntroTip
+           || _viewModel.HasShownFileDrawerLineNumberIntroTip != _cleanHasShownFileDrawerLineNumberIntroTip
+           || _viewModel.HasShownPreviewMatchIntroTip != _cleanHasShownPreviewMatchIntroTip;
+
+    private void RestoreCleanFirstTimeIntroductoryTooltipValues()
+        => _viewModel.RestoreFirstTimeIntroductoryTooltips(
+            _cleanHasShownFileDrawerIntroTip,
+            _cleanHasShownFileDrawerLineNumberIntroTip,
+            _cleanHasShownPreviewMatchIntroTip);
+
+    private static bool IsFirstTimeIntroductoryTooltipProperty(string? propertyName)
+        => propertyName is nameof(MainViewModel.HasShownFileDrawerIntroTip)
+            or nameof(MainViewModel.HasShownFileDrawerLineNumberIntroTip)
+            or nameof(MainViewModel.HasShownPreviewMatchIntroTip);
+
+    private bool AreFirstTimeIntroductoryTooltipsReset()
+        => !_viewModel.HasShownFileDrawerIntroTip
+           && !_viewModel.HasShownFileDrawerLineNumberIntroTip
+           && !_viewModel.HasShownPreviewMatchIntroTip;
 
     private void MarkSettingsDirtyIfCurrentValuesChanged()
     {
         if (!_settingDirtyTrackingEnabled || _settingsDirty)
             return;
 
-        foreach (var element in _dirtyTrackedElements)
-        {
-            if (!TryGetSettingValue(element, out var currentValue))
-                continue;
-            if (!_cleanSettingValues.TryGetValue(element, out var cleanValue)
-                || !Equals(cleanValue, currentValue))
-            {
-                MarkSettingsDirty();
-                return;
-            }
-        }
+        if (HaveTrackedSettingValueChanges())
+            MarkSettingsDirty();
     }
 
     private static bool TryGetSettingValue(UIElement element, out object? value)
@@ -473,7 +542,10 @@ public sealed partial class SettingsWindow : Window
                 value = textBox.Text ?? string.Empty;
                 return true;
             case NumberBox numberBox:
-                value = (numberBox.Value, numberBox.Text ?? string.Empty);
+                // Capture only the committed numeric Value. NumberBox.Text is formatted
+                // asynchronously after the control template loads, so comparing it would
+                // report a spurious change when Settings is closed without any edits.
+                value = numberBox.Value;
                 return true;
             case ComboBox comboBox:
                 value = comboBox.SelectedIndex;
@@ -503,10 +575,8 @@ public sealed partial class SettingsWindow : Window
             case TextBox textBox:
                 textBox.Text = value as string ?? string.Empty;
                 break;
-            case NumberBox numberBox when value is ValueTuple<double, string> numberValue:
-                numberBox.Value = numberValue.Item1;
-                if (!string.Equals(numberBox.Text, numberValue.Item2, StringComparison.Ordinal))
-                    numberBox.Text = numberValue.Item2;
+            case NumberBox numberBox when value is double numberValue:
+                numberBox.Value = numberValue;
                 break;
             case ComboBox comboBox when value is int selectedIndex:
                 comboBox.SelectedIndex = selectedIndex;
@@ -540,6 +610,77 @@ public sealed partial class SettingsWindow : Window
         var sb = new Storyboard();
         sb.Children.Add(fadeIn);
         sb.Begin();
+
+        QueueDeferredSettingsContentBuild();
+    }
+
+    private void ShowSettingsLoadingPlaceholder()
+    {
+        SearchBox.IsEnabled = false;
+        TabList.IsEnabled = false;
+        SaveButton.IsEnabled = false;
+        SettingsContent.Children.Clear();
+        SettingsContent.Children.Add(new TextBlock
+        {
+            Text = "Loading settings...",
+            Opacity = 0.65,
+            FontSize = 14,
+            Margin = new Thickness(0, 12, 0, 0),
+        });
+    }
+
+    private void QueueDeferredSettingsContentBuild()
+    {
+        if (_settingsContentBuilt || _deferredSettingsContentBuildTimer is not null)
+            return;
+
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(75) };
+        timer.Tick += OnDeferredSettingsContentBuildTimerTick;
+        _deferredSettingsContentBuildTimer = timer;
+        timer.Start();
+    }
+
+    private void OnDeferredSettingsContentBuildTimerTick(object? sender, object e)
+    {
+        StopDeferredSettingsContentBuildTimer();
+        BuildDeferredSettingsContent();
+    }
+
+    private void StopDeferredSettingsContentBuildTimer()
+    {
+        var timer = _deferredSettingsContentBuildTimer;
+        if (timer is null)
+            return;
+
+        timer.Stop();
+        timer.Tick -= OnDeferredSettingsContentBuildTimerTick;
+        _deferredSettingsContentBuildTimer = null;
+    }
+
+    private void BuildDeferredSettingsContent()
+    {
+        if (_settingsContentBuilt)
+            return;
+
+        SettingsContent.Children.Clear();
+        BuildSettingsContent();
+        AttachSettingDirtyHandlers();
+        _settingsContentBuilt = true;
+
+        int selectedIndex = _pendingSelectTabIndex.GetValueOrDefault(0);
+        _pendingSelectTabIndex = null;
+        if (selectedIndex < 0 || selectedIndex >= TabList.Items.Count)
+            selectedIndex = 0;
+
+        SearchBox.IsEnabled = true;
+        TabList.IsEnabled = true;
+        TabList.SelectedIndex = selectedIndex;
+        SettingsContent.Children.Clear();
+        if (selectedIndex < _tabPages.Count)
+            AddSettingsContentChild(_tabPages[selectedIndex]);
+
+        MarkSettingsClean();
+        _settingDirtyTrackingEnabled = true;
     }
 
     private async void OnCloseClick(object sender, RoutedEventArgs e)
@@ -615,61 +756,51 @@ public sealed partial class SettingsWindow : Window
     private void CloseSettingsWindowWithoutPrompt()
     {
         _settingsCloseConfirmed = true;
+        _suppressOwnerHideToTray?.Invoke();
         Close();
     }
 
     private void OnTabSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (!_settingsContentBuilt) return;
         if (_isSearchActive) return;
         int idx = TabList.SelectedIndex;
         SettingsContent.Children.Clear();
         if (idx >= 0 && idx < _tabPages.Count)
-            SettingsContent.Children.Add(_tabPages[idx]);
+            AddSettingsContentChild(_tabPages[idx]);
     }
 
     private bool _isSearchActive;
 
     private void OnSearchTextChanged(object sender, TextChangedEventArgs e)
     {
+        if (!_settingsContentBuilt) return;
+
         var query = SearchBox.Text.Trim();
         if (string.IsNullOrEmpty(query))
         {
             // Restore normal tab view.
             _isSearchActive = false;
             TabList.Visibility = Visibility.Visible;
-
-            // Detach any elements currently in the search results panel.
             ClearSearchResultContainers();
             SettingsContent.Children.Clear();
 
-            // Re-parent all elements back to their owning tab pages.
-            RestoreTabPageElements();
-
             int idx = TabList.SelectedIndex;
             if (idx >= 0 && idx < _tabPages.Count)
-                SettingsContent.Children.Add(_tabPages[idx]);
+                AddSettingsContentChild(_tabPages[idx]);
             return;
         }
 
         _isSearchActive = true;
         TabList.Visibility = Visibility.Collapsed;
+        EnsureSearchableEntriesExtracted();
         ClearSearchResultContainers();
         SettingsContent.Children.Clear();
 
-        // Detach all elements from their tab page parents so they can be re-parented.
-        DetachAllTabPageElements();
-
         string? lastHeader = null;
-        var renderedElements = new HashSet<UIElement>();
         foreach (var entry in _settingEntries)
         {
             if (!entry.Matches(query))
-                continue;
-
-            var entryElements = entry.BuildElements()
-                .Where(element => renderedElements.Add(element))
-                .ToList();
-            if (entryElements.Count == 0)
                 continue;
 
             // Show tab header as a group header when it changes.
@@ -686,13 +817,7 @@ public sealed partial class SettingsWindow : Window
                 });
             }
 
-            // Add the setting's UI elements.
-            var container = new StackPanel { Spacing = 4, Margin = new Thickness(0, 4, 0, 8) };
-            foreach (var element in entryElements)
-            {
-                DetachFromParent(element);
-                container.Children.Add(element);
-            }
+            var container = CreateSearchResultEntry(entry);
             _searchResultContainers.Add(container);
             SettingsContent.Children.Add(container);
         }
@@ -708,50 +833,120 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
-    private void DetachAllTabPageElements()
+    private Border CreateSearchResultEntry(SettingEntry entry)
     {
-        foreach (var page in _tabPages)
+        var content = new StackPanel { Spacing = 4 };
+        content.Children.Add(new TextBlock
         {
-            if (page is StackPanel sp)
-                sp.Children.Clear();
+            Text = entry.Label,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            FontSize = 14,
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        if (!string.IsNullOrWhiteSpace(entry.Description))
+        {
+            content.Children.Add(new TextBlock
+            {
+                Text = entry.Description,
+                FontSize = 12,
+                Opacity = 0.72,
+                TextWrapping = TextWrapping.Wrap,
+            });
         }
+
+        if (!string.IsNullOrWhiteSpace(entry.ControlText))
+        {
+            content.Children.Add(new TextBlock
+            {
+                Text = TrimSearchResultText(entry.ControlText),
+                FontSize = 12,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+
+        var jumpButton = new Button
+        {
+            Width = 32,
+            Height = 32,
+            Padding = new Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            Content = new FontIcon
+            {
+                Glyph = "\uE8A7",
+                FontFamily = new XamlFontFamily("Segoe MDL2 Assets"),
+                FontSize = 16,
+            },
+        };
+        ToolTipService.SetToolTip(jumpButton, "Open section");
+        AutomationProperties.SetName(jumpButton, "Open section");
+        jumpButton.Click += (_, _) => JumpToSetting(entry);
+
+        var row = new Grid { ColumnSpacing = 8 };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.Children.Add(content);
+        Grid.SetColumn(jumpButton, 1);
+        row.Children.Add(jumpButton);
+
+        return new Border
+        {
+            Padding = new Thickness(10, 8, 10, 8),
+            Margin = new Thickness(0, 4, 0, 8),
+            CornerRadius = new CornerRadius(6),
+            BorderThickness = new Thickness(1),
+            BorderBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(0x30, 0x80, 0x80, 0x80)),
+            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x08, 0x80, 0x80, 0x80)),
+            Child = row,
+        };
+    }
+
+    private void JumpToSetting(SettingEntry entry)
+    {
+        SelectTab(entry.TabIndex);
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            entry.TargetElement?.StartBringIntoView(new BringIntoViewOptions
+            {
+                AnimationDesired = true,
+                VerticalAlignmentRatio = 0.15,
+            });
+        });
+    }
+
+    private static string TrimSearchResultText(string text)
+    {
+        const int maxLength = 220;
+        string normalized = string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return normalized.Length <= maxLength ? normalized : normalized[..maxLength] + "...";
     }
 
     private void ClearSearchResultContainers()
     {
         foreach (var container in _searchResultContainers)
-            container.Children.Clear();
+        {
+            DetachFromParent(container);
+            if (container is Panel panel)
+                panel.Children.Clear();
+        }
         _searchResultContainers.Clear();
     }
 
-    private void RestoreTabPageElements()
+    private void AddSettingsContentChild(UIElement element)
     {
-        // Restore each tab's original root children first, including grouped panels.
-        for (int t = 0; t < _tabPages.Count; t++)
-        {
-            if (_tabPages[t] is not StackPanel sp) continue;
-            sp.Children.Clear();
-
-            if (t >= _tabPageRootElements.Count) continue;
-            foreach (var element in _tabPageRootElements[t])
-            {
-                DetachFromParent(element);
-                sp.Children.Add(element);
-            }
-        }
-
-        foreach (var entry in _settingEntries)
-            RestoreOriginalPlacements(entry.OriginalPlacements);
+        if (TryDetachForReparent(element))
+            SettingsContent.Children.Add(element);
     }
 
-    private static void RestoreOriginalPlacements(IEnumerable<ElementPlacement> placements)
+    private static bool TryDetachForReparent(UIElement element)
     {
-        foreach (var placement in placements.OrderBy(p => p.Index))
-        {
-            DetachFromParent(placement.Element);
-            int index = Math.Clamp(placement.Index, 0, placement.Parent.Children.Count);
-            placement.Parent.Children.Insert(index, placement.Element);
-        }
+        if (element is not FrameworkElement frameworkElement)
+            return true;
+
+        DetachFromParent(element);
+        return frameworkElement.Parent is null;
     }
 
     private static void DetachFromParent(UIElement element)
@@ -783,8 +978,7 @@ public sealed partial class SettingsWindow : Window
     /// </summary>
     private void ExtractSearchableEntries()
     {
-        CaptureTabPageRootElements();
-
+        _settingEntries.Clear();
         for (int t = 0; t < _tabPages.Count && t < TabHeaders.Length; t++)
         {
             string tabHeader = TabHeaders[t];
@@ -809,15 +1003,14 @@ public sealed partial class SettingsWindow : Window
                     string? capturedDesc = entryDescription;
                     string capturedControlText = ExtractControlSearchText(captured);
                     string capturedTab = tabHeader;
-                    var capturedPlacements = CaptureOriginalPlacements(captured);
                     _settingEntries.Add(new SettingEntry
                     {
                         TabHeader = capturedTab,
+                        TabIndex = t,
                         Label = capturedLabel,
                         Description = capturedDesc,
                         ControlText = capturedControlText,
-                        OriginalPlacements = capturedPlacements,
-                        BuildElements = () => captured,
+                        TargetElement = captured.FirstOrDefault(IsLabelElement) ?? captured.FirstOrDefault(),
                     });
                     entryElements.Clear();
                     entryDescription = null;
@@ -841,64 +1034,26 @@ public sealed partial class SettingsWindow : Window
                 string? capturedDesc = entryDescription;
                 string capturedControlText = ExtractControlSearchText(captured);
                 string capturedTab = tabHeader;
-                var capturedPlacements = CaptureOriginalPlacements(captured);
                 _settingEntries.Add(new SettingEntry
                 {
                     TabHeader = capturedTab,
+                    TabIndex = t,
                     Label = capturedLabel,
                     Description = capturedDesc,
                     ControlText = capturedControlText,
-                    OriginalPlacements = capturedPlacements,
-                    BuildElements = () => captured,
+                    TargetElement = captured.FirstOrDefault(IsLabelElement) ?? captured.FirstOrDefault(),
                 });
             }
         }
     }
 
-    private void CaptureTabPageRootElements()
+    private void EnsureSearchableEntriesExtracted()
     {
-        _tabPageRootElements.Clear();
-        foreach (var page in _tabPages)
-        {
-            if (page is StackPanel sp)
-                _tabPageRootElements.Add(sp.Children.ToList());
-            else
-                _tabPageRootElements.Add(new List<UIElement>());
-        }
-    }
+        if (_searchableEntriesExtracted)
+            return;
 
-    private static List<ElementPlacement> CaptureOriginalPlacements(IEnumerable<UIElement> elements)
-    {
-        var placements = new List<ElementPlacement>();
-        foreach (var element in elements)
-        {
-            if (element is not FrameworkElement { Parent: Panel parent })
-                continue;
-
-            int index = IndexOfChild(parent, element);
-            if (index < 0)
-                continue;
-
-            placements.Add(new ElementPlacement
-            {
-                Element = element,
-                Parent = parent,
-                Index = index,
-            });
-        }
-
-        return placements;
-    }
-
-    private static int IndexOfChild(Panel parent, UIElement element)
-    {
-        for (int i = 0; i < parent.Children.Count; i++)
-        {
-            if (ReferenceEquals(parent.Children[i], element))
-                return i;
-        }
-
-        return -1;
+        ExtractSearchableEntries();
+        _searchableEntriesExtracted = true;
     }
 
     private static IEnumerable<UIElement> EnumerateSearchableChildren(Panel parent)
@@ -992,8 +1147,11 @@ public sealed partial class SettingsWindow : Window
             case ComboBox comboBox:
                 AddSearchTextPart(parts, comboBox.PlaceholderText);
                 CollectObjectSearchText(comboBox.SelectedItem, parts);
-                foreach (var item in comboBox.Items)
-                    CollectObjectSearchText(item, parts);
+                if (comboBox.Items.Count <= MaxComboBoxItemsIndexedForSettingsSearch)
+                {
+                    foreach (var item in comboBox.Items)
+                        CollectObjectSearchText(item, parts);
+                }
                 break;
             case ToggleSwitch toggleSwitch:
                 CollectObjectSearchText(toggleSwitch.OnContent, parts);
@@ -1072,6 +1230,84 @@ public sealed partial class SettingsWindow : Window
         return page;
     }
 
+    private void QueueHotkeyAvailabilityLoad(CheckBox hotkey, ComboBox hotkeyCombo, TextBlock availabilityStatus)
+    {
+        var hwnd = _mainHwnd;
+        _ = Task.Run(() => _hotkeyService.GetAvailableCtrlShiftLetterKeys(hwnd))
+            .ContinueWith(task =>
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (!task.IsCompletedSuccessfully)
+                    {
+                        availabilityStatus.Text = "Unable to check available shortcuts right now.";
+                        availabilityStatus.Visibility = Visibility.Visible;
+                        return;
+                    }
+
+                    ApplyHotkeyAvailability(task.Result, hotkey, hotkeyCombo, availabilityStatus);
+                });
+            });
+    }
+
+    private void ApplyHotkeyAvailability(IReadOnlyList<char> availableHotkeyKeys, CheckBox hotkey, ComboBox hotkeyCombo, TextBlock availabilityStatus)
+    {
+        bool wasDirtyTrackingEnabled = _settingDirtyTrackingEnabled;
+        _settingDirtyTrackingEnabled = false;
+
+        try
+        {
+            var selectedHotkeyKey = HotkeyService.ChooseAvailableKey(availableHotkeyKeys, _viewModel.GlobalHotkeyKey);
+            if (selectedHotkeyKey is char selectedKey && !string.Equals(_viewModel.GlobalHotkeyKey, selectedKey.ToString(), StringComparison.OrdinalIgnoreCase))
+                _viewModel.GlobalHotkeyKey = selectedKey.ToString();
+
+            hotkey.IsEnabled = availableHotkeyKeys.Count > 0;
+            hotkeyCombo.IsEnabled = availableHotkeyKeys.Count > 0;
+            hotkeyCombo.Items.Clear();
+
+            foreach (var key in availableHotkeyKeys)
+            {
+                hotkeyCombo.Items.Add(new ComboBoxItem
+                {
+                    Content = HotkeyService.FormatCtrlShift(key),
+                    Tag = key.ToString(),
+                });
+            }
+
+            if (selectedHotkeyKey is char hotkeyKey)
+            {
+                for (int itemIndex = 0; itemIndex < hotkeyCombo.Items.Count; itemIndex++)
+                {
+                    if (hotkeyCombo.Items[itemIndex] is ComboBoxItem item &&
+                        string.Equals(item.Tag as string, hotkeyKey.ToString(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        hotkeyCombo.SelectedIndex = itemIndex;
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                hotkeyCombo.Items.Add("No Ctrl+Shift+letter combinations available");
+                hotkeyCombo.SelectedIndex = 0;
+            }
+
+            availabilityStatus.Text = availableHotkeyKeys.Count == 0
+                ? "No Ctrl+Shift+letter combinations are currently available. Close the app using one or change another app's shortcut, then reopen Settings."
+                : string.Empty;
+            availabilityStatus.Visibility = availableHotkeyKeys.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+            if (TryGetSettingValue(hotkey, out var hotkeyValue))
+                _cleanSettingValues[hotkey] = hotkeyValue;
+            if (TryGetSettingValue(hotkeyCombo, out var hotkeyComboValue))
+                _cleanSettingValues[hotkeyCombo] = hotkeyComboValue;
+        }
+        finally
+        {
+            _settingDirtyTrackingEnabled = wasDirtyTrackingEnabled;
+        }
+    }
+
     private static StackPanel NextSearchLabel(string text)
     {
         var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
@@ -1148,7 +1384,7 @@ public sealed partial class SettingsWindow : Window
             : currentValue.Trim();
         ComboBoxItem? selectedItem = null;
 
-        foreach (string fontFamily in BuildFontFamilyOptions(selectedValue, defaultValue))
+        foreach (string fontFamily in BuildInitialFontFamilyOptions(selectedValue, defaultValue))
         {
             var item = CreateFontFamilyItem(fontFamily);
             picker.Items.Add(item);
@@ -1164,16 +1400,38 @@ public sealed partial class SettingsWindow : Window
                 assign(fontFamily);
         };
 
+        bool systemFontsLoaded = false;
+        picker.DropDownOpened += (_, _) =>
+        {
+            if (systemFontsLoaded)
+                return;
+
+            systemFontsLoaded = true;
+            PopulateFontFamilyPicker(picker, defaultValue);
+        };
+
         return picker;
+    }
+
+    private static void PopulateFontFamilyPicker(ComboBox picker, string defaultValue)
+    {
+        string selectedValue = picker.SelectedItem is ComboBoxItem { Tag: string selectedFontFamily }
+            ? selectedFontFamily
+            : defaultValue.Trim();
+
+        foreach (string fontFamily in BuildFontFamilyOptions(selectedValue, defaultValue))
+        {
+            if (FindFontFamilyItem(picker, fontFamily) is null)
+                picker.Items.Add(CreateFontFamilyItem(fontFamily));
+        }
+
+        SelectFontFamily(picker, selectedValue);
     }
 
     private static void SelectFontFamily(ComboBox picker, string fontFamily)
     {
         string normalized = fontFamily.Trim();
-        ComboBoxItem? item = picker.Items
-            .OfType<ComboBoxItem>()
-            .FirstOrDefault(candidate => candidate.Tag is string candidateFontFamily
-                && string.Equals(candidateFontFamily, normalized, StringComparison.OrdinalIgnoreCase));
+        ComboBoxItem? item = FindFontFamilyItem(picker, normalized);
 
         if (item is null)
         {
@@ -1183,6 +1441,12 @@ public sealed partial class SettingsWindow : Window
 
         picker.SelectedItem = item;
     }
+
+    private static ComboBoxItem? FindFontFamilyItem(ComboBox picker, string fontFamily)
+        => picker.Items
+            .OfType<ComboBoxItem>()
+            .FirstOrDefault(candidate => candidate.Tag is string candidateFontFamily
+                && string.Equals(candidateFontFamily, fontFamily, StringComparison.OrdinalIgnoreCase));
 
     private static ComboBoxItem CreateFontFamilyItem(string fontFamily)
     {
@@ -1227,12 +1491,19 @@ public sealed partial class SettingsWindow : Window
 
     private static List<string> BuildFontFamilyOptions(string currentValue, string defaultValue)
     {
-        var options = new List<string>();
-        AddFontFamilyOption(options, currentValue);
-        AddFontFamilyOption(options, defaultValue);
+        var options = BuildInitialFontFamilyOptions(currentValue, defaultValue);
 
         foreach (string fontFamily in GetSystemFontFamilyNames())
             AddFontFamilyOption(options, fontFamily);
+
+        return options;
+    }
+
+    private static List<string> BuildInitialFontFamilyOptions(string currentValue, string defaultValue)
+    {
+        var options = new List<string>();
+        AddFontFamilyOption(options, currentValue);
+        AddFontFamilyOption(options, defaultValue);
 
         return options;
     }
@@ -1277,7 +1548,7 @@ public sealed partial class SettingsWindow : Window
         return _systemFontFamilyNames;
     }
 
-    private ColorPicker AddColorSetting(
+    private LazyColorSettingHandle AddColorSetting(
         StackPanel parent,
         string label,
         string description,
@@ -1296,14 +1567,50 @@ public sealed partial class SettingsWindow : Window
             Margin = new Thickness(0, 8, 0, 0),
         });
 
-        var picker = new ColorPicker
+        var selectedColor = ColorStringHelper.Parse(currentHex, fallback);
+
+        var colorSwatch = new Border
         {
-            Color = ColorStringHelper.Parse(currentHex, fallback),
-            IsAlphaEnabled = true,
-            Width = 160,
-            MaxWidth = 180,
-            HorizontalAlignment = HorizontalAlignment.Left,
+            Width = 18,
+            Height = 18,
+            CornerRadius = new CornerRadius(3),
+            BorderThickness = new Thickness(1),
+            BorderBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(0x60, 0x80, 0x80, 0x80)),
+            Background = new SolidColorBrush(selectedColor),
+            VerticalAlignment = VerticalAlignment.Center,
         };
+        var colorText = new TextBlock
+        {
+            Text = ColorStringHelper.ToHex(selectedColor),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var buttonContent = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+        };
+        buttonContent.Children.Add(colorSwatch);
+        buttonContent.Children.Add(colorText);
+
+        var editColorButton = new Button
+        {
+            Content = buttonContent,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Padding = new Thickness(10, 4, 10, 4),
+        };
+        parent.Children.Add(editColorButton);
+
+        ColorPicker? picker = null;
+        bool suppressColorDirty = false;
+
+        Windows.UI.Color currentColor() => picker?.Color ?? selectedColor;
+
+        void refreshColorButton()
+        {
+            colorSwatch.Background = new SolidColorBrush(selectedColor);
+            colorText.Text = ColorStringHelper.ToHex(selectedColor);
+        }
+
         FontIcon? contrastIcon = null;
         TextBlock? contrastText = null;
         void refreshContrastStatus()
@@ -1312,8 +1619,9 @@ public sealed partial class SettingsWindow : Window
                 return;
 
             var theme = contrastThemeProvider();
-            var status = contrastStatusProvider?.Invoke(picker.Color, theme)
-                ?? GetThemeSampleContrastStatus(picker.Color, theme);
+            var color = currentColor();
+            var status = contrastStatusProvider?.Invoke(color, theme)
+                ?? GetThemeSampleContrastStatus(color, theme);
             double ratio = status.Ratio;
             bool readable = ratio >= FontContrastWarningService.MinimumReadableContrastRatio;
             var statusColor = readable ? ContrastReadableGreen : ContrastUnreadableRed;
@@ -1325,13 +1633,71 @@ public sealed partial class SettingsWindow : Window
                 : $"{status.Label}: {ratio:F1}:1";
         }
 
-        picker.ColorChanged += (_, args) =>
+        void setColor(Windows.UI.Color color, bool markDirty)
         {
-            assign(ColorStringHelper.ToHex(args.NewColor));
+            selectedColor = color;
+            assign(ColorStringHelper.ToHex(color));
             afterChange?.Invoke();
+            refreshColorButton();
+            if (markDirty)
+                MarkSettingsDirty();
             refreshContrastStatus();
+        }
+
+        var colorState = new LazyColorSettingState
+        {
+            GetColor = currentColor,
+            RestoreColor = color =>
+            {
+                suppressColorDirty = true;
+                try
+                {
+                    if (picker is not null)
+                        picker.Color = color;
+                    setColor(color, markDirty: false);
+                }
+                finally
+                {
+                    suppressColorDirty = false;
+                }
+            },
+            CleanColor = selectedColor,
         };
-        parent.Children.Add(picker);
+        _lazyColorSettings.Add(colorState);
+        var colorHandle = new LazyColorSettingHandle
+        {
+            GetColor = currentColor,
+            SetColor = color =>
+            {
+                if (picker is not null)
+                    picker.Color = color;
+                else
+                    setColor(color, markDirty: true);
+            },
+        };
+
+        editColorButton.Click += (_, _) =>
+        {
+            if (picker is null)
+            {
+                picker = new ColorPicker
+                {
+                    Color = selectedColor,
+                    IsAlphaEnabled = true,
+                    Width = 160,
+                    MaxWidth = 180,
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                };
+                picker.ColorChanged += (_, args) => setColor(args.NewColor, markDirty: !suppressColorDirty);
+                editColorButton.Flyout = new Flyout { Content = picker };
+            }
+            else
+            {
+                picker.Color = selectedColor;
+            }
+
+            editColorButton.Flyout.ShowAt(editColorButton);
+        };
 
         if (contrastThemeProvider is not null)
         {
@@ -1365,8 +1731,14 @@ public sealed partial class SettingsWindow : Window
             HorizontalAlignment = HorizontalAlignment.Left,
             Padding = new Thickness(10, 4, 10, 4),
         };
-        reset.Click += (_, _) => picker.Color = fallback;
-        RegisterDefaultResetButton(reset, () => picker.Color.Equals(fallback));
+        reset.Click += (_, _) =>
+        {
+            if (picker is not null)
+                picker.Color = fallback;
+            else
+                setColor(fallback, markDirty: true);
+        };
+        RegisterDefaultResetButton(reset, () => currentColor().Equals(fallback));
         parent.Children.Add(reset);
 
         parent.Children.Add(new TextBlock
@@ -1377,7 +1749,7 @@ public sealed partial class SettingsWindow : Window
             TextWrapping = TextWrapping.Wrap,
         });
 
-        return picker;
+        return colorHandle;
     }
 
     private static FontContrastColor ToFontContrastColor(Windows.UI.Color color)
@@ -2068,8 +2440,18 @@ public sealed partial class SettingsWindow : Window
             previewViewerGroup.Children.Add(previewMode);
 
             var wordWrap = new CheckBox { Content = "Word wrap in preview panel", IsChecked = _viewModel.PreviewWordWrap };
-            wordWrap.Checked += (_, _) => { _viewModel.PreviewWordWrap = true; _applyWordWrap?.Invoke(true); };
-            wordWrap.Unchecked += (_, _) => { _viewModel.PreviewWordWrap = false; _applyWordWrap?.Invoke(false); };
+            wordWrap.Checked += (_, _) =>
+            {
+                _viewModel.PreviewWordWrap = true;
+                _viewModel.PreviewWrapModeIndex = (int)PreviewWrapMode.Wrap;
+                _applyWordWrap?.Invoke(true);
+            };
+            wordWrap.Unchecked += (_, _) =>
+            {
+                _viewModel.PreviewWordWrap = false;
+                _viewModel.PreviewWrapModeIndex = (int)PreviewWrapMode.NoWrap;
+                _applyWordWrap?.Invoke(false);
+            };
             previewViewerGroup.Children.Add(wordWrap);
 
             previewViewerGroup.Children.Add(new TextBlock { Text = "Preview text font", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 12, 0, 0) });
@@ -2275,6 +2657,12 @@ public sealed partial class SettingsWindow : Window
             saveSafetyGroup.Children.Add(backup);
             saveSafetyGroup.Children.Add(new TextBlock { Text = "When enabled, the original file is copied to <filename>.yagubak before saving changes from the built-in editor. If a .yagubak already exists, uses .yagubak-2, .yagubak-3, etc.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
+            var savedOverlay = new CheckBox { Content = "Show saved confirmation after saving", IsChecked = _viewModel.ShowEditorSavedOverlay };
+            savedOverlay.Checked += (_, _) => _viewModel.ShowEditorSavedOverlay = true;
+            savedOverlay.Unchecked += (_, _) => _viewModel.ShowEditorSavedOverlay = false;
+            saveSafetyGroup.Children.Add(savedOverlay);
+            saveSafetyGroup.Children.Add(new TextBlock { Text = "When enabled, the built-in editor briefly shows a Saved confirmation after the file has been written successfully.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
             fileLimitGroup.Children.Add(new TextBlock { Text = "Files exceeding any of these limits will not open in the built-in editor. Use the external editor or Show in Explorer for very large files.", FontSize = 11, Opacity = 0.7, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
 
             fileLimitGroup.Children.Add(new TextBlock { Text = "Max file size (MB):" });
@@ -2456,7 +2844,7 @@ public sealed partial class SettingsWindow : Window
             resetFontContrastReminder.Click += (_, _) =>
             {
                 _viewModel.ResetFontContrastReminderState();
-                MarkSettingsDirty();
+                MarkSettingsDirty(requireValueChanges: false);
                 resetFontContrastReminder.Content = "Font contrast reminders reset";
                 resetFontContrastReminder.IsEnabled = false;
             };
@@ -2471,6 +2859,30 @@ public sealed partial class SettingsWindow : Window
                 TextWrapping = TextWrapping.Wrap,
             });
 
+            var resetFirstTimeIntroTips = new Button
+            {
+                Content = "Reset first-time introductory tooltips",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetFirstTimeIntroTips.Click += (_, _) =>
+            {
+                _viewModel.ResetFirstTimeIntroductoryTooltips();
+                MarkSettingsDirty();
+                RefreshDefaultResetButtons();
+                resetFirstTimeIntroTips.Content = "First-time introductory tooltips reset";
+            };
+            RegisterDefaultResetButton(resetFirstTimeIntroTips, AreFirstTimeIntroductoryTooltipsReset);
+            remindersGroup.Children.Add(resetFirstTimeIntroTips);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Allows the file drawer, line-number, and preview-match introductory tooltips to appear again.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
             // Reset admin warning
             if (_viewModel.SuppressAdminWarning)
             {
@@ -2478,7 +2890,7 @@ public sealed partial class SettingsWindow : Window
                 resetAdmin.Click += (_, _) =>
                 {
                     _viewModel.SuppressAdminWarning = false;
-                    MarkSettingsDirty();
+                    MarkSettingsDirty(requireValueChanges: false);
                     resetAdmin.Content = "Admin warning re-enabled ✓";
                     resetAdmin.IsEnabled = false;
                 };
@@ -2540,46 +2952,16 @@ public sealed partial class SettingsWindow : Window
             var hotkeyGroup = AddSettingsGroupBox(g, "Global Hotkey");
             var historyGroup = AddSettingsGroupBox(g, "Recent Items");
 
-            var availableHotkeyKeys = _hotkeyService.GetAvailableCtrlShiftLetterKeys(_mainHwnd);
-            var selectedHotkeyKey = HotkeyService.ChooseAvailableKey(availableHotkeyKeys, _viewModel.GlobalHotkeyKey);
-            if (selectedHotkeyKey is char selectedKey && !string.Equals(_viewModel.GlobalHotkeyKey, selectedKey.ToString(), StringComparison.OrdinalIgnoreCase))
-                _viewModel.GlobalHotkeyKey = selectedKey.ToString();
-
-            var hotkey = new CheckBox { Content = "Enable global hotkey", IsChecked = _viewModel.GlobalHotkeyEnabled, IsEnabled = availableHotkeyKeys.Count > 0 };
+            var hotkey = new CheckBox { Content = "Enable global hotkey", IsChecked = _viewModel.GlobalHotkeyEnabled, IsEnabled = false };
             hotkey.Checked += (_, _) => _viewModel.GlobalHotkeyEnabled = true;
             hotkey.Unchecked += (_, _) => _viewModel.GlobalHotkeyEnabled = false;
             hotkeyGroup.Children.Add(hotkey);
             hotkeyGroup.Children.Add(new TextBlock { Text = "Yagu registers Ctrl+Shift+letter combinations that are not already taken by Windows or another app.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             hotkeyGroup.Children.Add(new TextBlock { Text = "Global hotkey:" });
-            var hotkeyCombo = new ComboBox { IsEnabled = availableHotkeyKeys.Count > 0 };
-            foreach (var key in availableHotkeyKeys)
-            {
-                hotkeyCombo.Items.Add(new ComboBoxItem
-                {
-                    Content = HotkeyService.FormatCtrlShift(key),
-                    Tag = key.ToString(),
-                });
-            }
-
-            if (selectedHotkeyKey is char hotkeyKey)
-            {
-                for (int itemIndex = 0; itemIndex < hotkeyCombo.Items.Count; itemIndex++)
-                {
-                    if (hotkeyCombo.Items[itemIndex] is ComboBoxItem item &&
-                        string.Equals(item.Tag as string, hotkeyKey.ToString(), StringComparison.OrdinalIgnoreCase))
-                    {
-                        hotkeyCombo.SelectedIndex = itemIndex;
-                        break;
-                    }
-                }
-            }
-            else
-            {
-                hotkeyCombo.Items.Add("No Ctrl+Shift+letter combinations available");
-                hotkeyCombo.SelectedIndex = 0;
-            }
-
+            var hotkeyCombo = new ComboBox { IsEnabled = false };
+            hotkeyCombo.Items.Add("Checking available shortcuts...");
+            hotkeyCombo.SelectedIndex = 0;
             hotkeyCombo.SelectionChanged += (_, _) =>
             {
                 if (hotkeyCombo.SelectedItem is ComboBoxItem item && item.Tag is string key)
@@ -2587,10 +2969,15 @@ public sealed partial class SettingsWindow : Window
             };
             hotkeyGroup.Children.Add(hotkeyCombo);
 
-            if (availableHotkeyKeys.Count == 0)
+            var hotkeyAvailabilityStatus = new TextBlock
             {
-                hotkeyGroup.Children.Add(new TextBlock { Text = "No Ctrl+Shift+letter combinations are currently available. Close the app using one or change another app's shortcut, then reopen Settings.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
-            }
+                Text = "Checking available shortcuts...",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            };
+            hotkeyGroup.Children.Add(hotkeyAvailabilityStatus);
+            QueueHotkeyAvailabilityLoad(hotkey, hotkeyCombo, hotkeyAvailabilityStatus);
 
             historyGroup.Children.Add(new TextBlock { Text = "Max recent directories / queries to remember:" });
             var recent = new NumberBox { Value = _viewModel.MaxRecentItems, Minimum = 1, Maximum = 100 };

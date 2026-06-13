@@ -6,6 +6,58 @@ namespace Yagu.Tests;
 public sealed class ConPtyTerminalServiceTests
 {
     [Fact]
+    public void CommandShell_VerifiesChangedDirectoryBeforeGeneratedCommandInsertion()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "yagu-terminal-cwd-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDirectory);
+        try
+        {
+            using var terminal = new ConPtyTerminalService();
+            var output = new StringBuilder();
+            string marker = TerminalDirectoryGuard.CreateMarker();
+            using var verifiedDirectory = new ManualResetEventSlim(false);
+            using var receivedAnyOutput = new ManualResetEventSlim(false);
+
+            terminal.OutputReceived += text =>
+            {
+                lock (output)
+                {
+                    output.Append(text);
+                    if (TerminalDirectoryGuard.TryExtractPromptDirectory(output.ToString(), marker, out string actualDirectory)
+                        && TerminalDirectoryGuard.DirectoriesEqual(tempDirectory, actualDirectory))
+                    {
+                        verifiedDirectory.Set();
+                    }
+                }
+
+                receivedAnyOutput.Set();
+            };
+
+            terminal.Start(cols: 120, rows: 24, workingDirectory: Directory.GetCurrentDirectory());
+            Assert.True(receivedAnyOutput.Wait(TimeSpan.FromSeconds(5)), "The command shell did not produce any startup output.");
+
+            terminal.WriteInput(TerminalDirectoryGuard.BuildChangeDirectoryProbeCommand(tempDirectory, marker) + "\r", echoInput: false);
+
+            Assert.True(verifiedDirectory.Wait(TimeSpan.FromSeconds(5)),
+                "The command shell did not prove the generated-command cwd guard changed directories. Output: " + output + " Hex: " + ToHex(output.ToString()));
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(tempDirectory))
+                    Directory.Delete(tempDirectory, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    [Fact]
     public void CommandShell_ReceivesInputAndReturnsCommandOutput()
     {
         if (!OperatingSystem.IsWindows())

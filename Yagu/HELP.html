@@ -590,8 +590,9 @@ and Close buttons. The <strong>Options already saved in
 settings</strong> toggle controls whether the generated command includes
 options that already match <code>%APPDATA%\Yagu\settings.json</code>; it
 defaults to <strong>Omit</strong> to keep commands short. Sending to the
-terminal expands the embedded terminal if needed and places the command
-at the prompt without pressing Enter.</td>
+terminal expands the embedded terminal if needed, verifies the shell
+changed to the running Yagu executable directory, and then places the
+command at the prompt without pressing Enter.</td>
 </tr>
 </tbody>
 </table>
@@ -610,12 +611,13 @@ collapse it.</p>
 <strong>Paste</strong>, <strong>Cut</strong>, <strong>Select
 all</strong>, <strong>Clear</strong>, and <strong>Reset terminal
 session</strong>. <strong>Clear</strong> runs <code>cls</code> and
-clears the xterm surface. <strong>Reset terminal session</strong>
-disposes the current shell session and starts a fresh one; use it if the
-terminal appears disconnected, stuck, or out of sync. The generated CLI
-command overlay can send commands into this terminal without executing
-them, which gives you a chance to review or edit before pressing
-Enter.</p>
+clears the xterm surface; typing <code>cls</code> at the prompt clears
+the surface and erases the typed command line too. <strong>Reset
+terminal session</strong> disposes the current shell session and starts
+a fresh one; use it if the terminal appears disconnected, stuck, or out
+of sync. The generated CLI command overlay can send commands into this
+terminal without executing them, which gives you a chance to review or
+edit before pressing Enter.</p>
 <hr />
 <h2 id="results-pane-left-panel">Results Pane (Left Panel)</h2>
 <p>Results are grouped by file. Each group header shows the file name,
@@ -660,7 +662,7 @@ context but more memory.</td>
 </tr>
 <tr>
 <td>Clear results</td>
-<td>Removes all results (trash icon, or
+<td>Removes all results (clear-selection icon, or
 <strong>Ctrl+Shift+Delete</strong>).</td>
 </tr>
 <tr>
@@ -1005,6 +1007,11 @@ first (configurable).</td>
 <td>Backup on save</td>
 <td>Automatically creates <code>{filename}.yagubak</code>. Numbered
 backups if one already exists.</td>
+</tr>
+<tr>
+<td>Saved confirmation</td>
+<td>Shows a brief Saved confirmation after the editor successfully
+writes the file.</td>
 </tr>
 <tr>
 <td>Large file chunking</td>
@@ -1425,6 +1432,11 @@ this value.</td>
 default).</td>
 </tr>
 <tr>
+<td>Show saved confirmation after saving</td>
+<td>Show a brief confirmation overlay after the built-in editor
+successfully writes the file.</td>
+</tr>
+<tr>
 <td>Preview editor max size (MB)</td>
 <td>Maximum file size the built-in editor loads (default: 32 MB).</td>
 </tr>
@@ -1571,6 +1583,11 @@ continuously appended result rows. Hidden by default.</td>
 later or Don’t remind me again.</td>
 </tr>
 <tr>
+<td>Reset first-time introductory tooltips</td>
+<td>Allows the file drawer, line-number, and preview-match introductory
+tooltips to appear again.</td>
+</tr>
+<tr>
 <td>Re-enable admin privilege warning</td>
 <td>Re-enables the non-administrator warning after it was dismissed.
 Visible only after the warning has been suppressed.</td>
@@ -1616,6 +1633,7 @@ overlay.</td>
 <tr>
 <td>Send command to terminal</td>
 <td>Opens the embedded terminal if needed, collapses Advanced Options,
+verifies the shell changed to the running Yagu executable directory,
 inserts the generated command at the prompt, and leaves it unexecuted
 for review.</td>
 </tr>
@@ -1676,7 +1694,9 @@ paste, and Ctrl+C cancellation. Right-click inside the terminal for:</p>
 </tr>
 <tr>
 <td>Clear</td>
-<td>Sends <code>cls</code> and clears the visible terminal surface.</td>
+<td>Sends <code>cls</code> and clears the visible terminal surface.
+Typing <code>cls</code> also erases the command line before the blank
+prompt returns.</td>
 </tr>
 <tr>
 <td>Reset terminal session</td>
@@ -1685,9 +1705,10 @@ paste, and Ctrl+C cancellation. Right-click inside the terminal for:</p>
 </tbody>
 </table>
 <p>When using generated CLI commands, <strong>Send command to
-terminal</strong> inserts the command text into the prompt without
-pressing Enter. This is useful for reviewing, editing, or adding shell
-redirection before running the command.</p>
+terminal</strong> first verifies that the embedded shell changed to the
+running Yagu executable directory, then inserts the command text into
+the prompt without pressing Enter. This is useful for reviewing,
+editing, or adding shell redirection before running the command.</p>
 <hr />
 <h2 id="keyboard-shortcuts">Keyboard Shortcuts</h2>
 <table>
@@ -1741,10 +1762,6 @@ redirection before running the command.</p>
 <tr>
 <td><strong>Ctrl+Shift+Delete</strong></td>
 <td>Clear all results.</td>
-</tr>
-<tr>
-<td><strong>Ctrl+Shift+S</strong></td>
-<td>Copy window screenshot to clipboard.</td>
 </tr>
 <tr>
 <td><strong>Enter</strong> (preview)</td>
@@ -2035,11 +2052,6 @@ newlines. Better for tools that don’t handle multi-line CSV fields.</td>
 <td>Save files with content</td>
 <td>Right-click → Save Selected Files With Content…</td>
 <td>Text file</td>
-</tr>
-<tr>
-<td>Copy window screenshot</td>
-<td><strong>Ctrl+Shift+S</strong></td>
-<td>Clipboard: PNG image of the Yagu window</td>
 </tr>
 </tbody>
 </table>

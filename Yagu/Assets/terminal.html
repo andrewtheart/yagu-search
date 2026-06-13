@@ -125,6 +125,10 @@
   let commandHistory = [];
   let historyIndex = -1;
   let historyDraft = '';
+  let completionRequestId = 0;
+  let latestCompletionRequestId = 0;
+  let shellCommandActive = false;
+  let lastPromptText = '';
 
   function showTerminalStartupFailure(error) {
     terminalElement.textContent = 'Terminal failed to initialize. Check yagu.log for details.';
@@ -311,6 +315,11 @@
     historyDraft = '';
   }
 
+  function markShellIdleIfPromptVisible() {
+    var promptText = getCurrentPromptText();
+    rememberPromptText(promptText);
+  }
+
   function insertInputText(text) {
     if (!text)
       return;
@@ -395,18 +404,149 @@
     return line.trim().toLowerCase() === 'cls';
   }
 
-  function submitInputLine() {
-    var line = inputBuffer;
-    pushHistory(line);
-    clearInputState();
+  function requestInputCompletion() {
+    var requestId = ++completionRequestId;
+    latestCompletionRequestId = requestId;
+    postHostMessage({
+      type: 'completeInput',
+      requestId: requestId,
+      input: inputBuffer,
+      cursor: inputCursor,
+      promptText: getCurrentPromptText()
+    });
+  }
 
-    if (isClearCommand(line)) {
-      term.clear();
-      sendTerminalInput(line + '\r', false);
+  function replaceInputRange(start, length, text) {
+    start = Math.max(0, Math.min(start || 0, inputBuffer.length));
+    length = Math.max(0, Math.min(length || 0, inputBuffer.length - start));
+    text = text || '';
+    var next = inputBuffer.slice(0, start) + text + inputBuffer.slice(start + length);
+    setInputBuffer(next, start + text.length);
+  }
+
+  function formatCompletionSuggestions(suggestions) {
+    var values = (suggestions || []).slice(0, 80);
+    if (values.length === 0)
+      return '';
+
+    var longest = values.reduce(function(max, value) { return Math.max(max, value.length); }, 0);
+    var columnWidth = Math.min(44, Math.max(14, longest + 2));
+    var columns = Math.max(1, Math.floor((term.cols || 80) / columnWidth));
+    var lines = [];
+    for (var i = 0; i < values.length; i += columns) {
+      var line = [];
+      for (var c = 0; c < columns && i + c < values.length; c++) {
+        var value = values[i + c];
+        line.push(c === columns - 1 ? value : value.padEnd(columnWidth, ' '));
+      }
+      lines.push(line.join('').trimEnd());
+    }
+    return lines.join('\r\n');
+  }
+
+  function showCompletionSuggestions(suggestions) {
+    var formatted = formatCompletionSuggestions(suggestions);
+    if (!formatted)
+      return;
+
+    var promptText = getCurrentPromptText();
+    clearRenderedInput();
+    term.write('\r\n' + formatted + '\r\n');
+    if (promptText)
+      term.write(formatPromptForInput(promptText));
+    renderInputLine();
+    refreshTerminalRows();
+  }
+
+  function applyCompletionResult(result) {
+    if (!result || result.requestId !== latestCompletionRequestId)
+      return;
+
+    if (!result.hasMatches) {
+      term.write('\x07');
       return;
     }
 
+    if (typeof result.replacementStart === 'number' && typeof result.replacementLength === 'number')
+      replaceInputRange(result.replacementStart, result.replacementLength, result.replacementText || '');
+
+    if (result.suggestions && result.suggestions.length > 1)
+      showCompletionSuggestions(result.suggestions);
+  }
+
+  function getCurrentPromptText() {
+    var activeBuffer = term && term.buffer ? term.buffer.active : null;
+    if (!activeBuffer || typeof activeBuffer.getLine !== 'function')
+      return '';
+
+    var line = activeBuffer.getLine(activeBuffer.baseY + activeBuffer.cursorY);
+    var text = line && typeof line.translateToString === 'function'
+      ? line.translateToString(true)
+      : '';
+    return inputBuffer && text.endsWith(inputBuffer)
+      ? text.slice(0, text.length - inputBuffer.length)
+      : text;
+  }
+
+  function looksLikePromptText(text) {
+    return /(?:^|[\s\S]*\r?\n)?[A-Za-z]:\\[^\r\n]*>$/.test(text)
+      || /^[^\r\n>]+>$/.test(text);
+  }
+
+  function stripTerminalControlSequences(text) {
+    return (text || '')
+      .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+  }
+
+  function rememberPromptText(text) {
+    if (!text || !looksLikePromptText(text))
+      return false;
+
+    lastPromptText = text;
+    shellCommandActive = false;
+    return true;
+  }
+
+  function rememberPromptFromOutput(text) {
+    var normalized = stripTerminalControlSequences(text).replace(/\r/g, '\n');
+    var lines = normalized.split('\n');
+    for (var i = lines.length - 1; i >= 0; i--) {
+      var candidate = lines[i].trimEnd();
+      if (rememberPromptText(candidate))
+        return;
+    }
+  }
+
+  function formatPromptForInput(promptText) {
+    if (!promptText)
+      return '';
+
+    return /\s$/.test(promptText) ? promptText : promptText + ' ';
+  }
+
+  function clearTerminalSurface(promptText) {
+    term.write('\x1b[2J\x1b[3J\x1b[H');
+    if (promptText)
+      term.write(formatPromptForInput(promptText));
+    refreshTerminalRows();
+  }
+
+  function submitInputLine() {
+    var line = inputBuffer;
+    pushHistory(line);
+
+    if (isClearCommand(line)) {
+      var promptText = getCurrentPromptText();
+      clearRenderedInput();
+      clearInputState();
+      clearTerminalSurface(promptText);
+      return;
+    }
+
+    clearInputState();
     term.write('\r\n');
+    shellCommandActive = true;
     sendTerminalInput(line + '\r', false);
   }
 
@@ -425,9 +565,28 @@
   }
 
   function cancelInputLine() {
+    var promptText = getCurrentPromptText();
+    var shouldRedrawPrompt = rememberPromptText(promptText);
+    if (!shouldRedrawPrompt && !shellCommandActive && lastPromptText.length > 0) {
+      promptText = lastPromptText;
+      shouldRedrawPrompt = true;
+    }
+
+    if (!shellCommandActive) {
+      moveRenderedCursorToEnd();
+      term.write('^C\r\n');
+      clearInputState();
+      if (shouldRedrawPrompt)
+        term.write(formatPromptForInput(promptText));
+      refreshTerminalRows();
+      return;
+    }
+
     clearRenderedInput();
     clearInputState();
     term.write('^C\r\n');
+    if (shouldRedrawPrompt)
+      term.write(formatPromptForInput(promptText));
     postHostMessage({ type: 'cancelInput' });
   }
 
@@ -440,7 +599,7 @@
 
     switch (event.key) {
       case 'Backspace': return { kind: 'backspace' };
-      case 'Tab': return { kind: 'insert', text: '\t' };
+      case 'Tab': return { kind: 'completion' };
       case 'ArrowUp': return { kind: 'history', direction: -1 };
       case 'ArrowDown': return { kind: 'history', direction: 1 };
       case 'ArrowRight': return { kind: 'move', offset: 1 };
@@ -475,6 +634,9 @@
         break;
       case 'history':
         recallHistory(input.direction);
+        break;
+      case 'completion':
+        requestInputCompletion();
         break;
     }
   }
@@ -558,10 +720,10 @@
 
   terminalClearButton.addEventListener('click', function() {
     hideTerminalMenu();
+    var promptText = getCurrentPromptText();
     clearRenderedInput();
     clearInputState();
-    term.clear();
-    sendTerminalInput('cls\r', false);
+    clearTerminalSurface(promptText);
     term.focus();
   });
 
@@ -569,6 +731,7 @@
     hideTerminalMenu();
     term.reset();
     clearInputState();
+    shellCommandActive = false;
     postHostMessage({ type: 'resetTerminal' });
     term.focus();
   });
@@ -593,6 +756,7 @@
     var msg = normalizeHostMessage(event.data);
     if (msg && msg.type === 'output') {
       var firstOutput = receivedOutputCount === 0;
+      rememberPromptFromOutput(msg.data || '');
       if (firstOutput) {
         safeFit();
         scheduleInitialTerminalPaintRefresh();
@@ -603,9 +767,11 @@
       if (firstOutput && typeof term.writeSync === 'function') {
         term.writeSync(msg.data || '');
         refreshTerminalRows();
+        markShellIdleIfPromptVisible();
       } else {
         term.write(msg.data || '', function() {
           refreshTerminalRows();
+          markShellIdleIfPromptVisible();
         });
       }
     } else if (msg && msg.type === 'clear') {
@@ -614,6 +780,8 @@
       focusTerminal();
     } else if (msg && msg.type === 'pasteText') {
       insertPastedText(msg.text || '');
+    } else if (msg && msg.type === 'completionResult') {
+      applyCompletionResult(msg);
     }
   });
 

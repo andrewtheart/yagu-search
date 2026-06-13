@@ -1184,6 +1184,7 @@ public sealed partial class MainWindow
             }
 
             ActiveMatchOverlay.Visibility = Visibility.Visible;
+            TryShowPreviewMatchIntroTip();
             LogWordWrapOverlayDiagnostic(
                 "applied",
                 block,

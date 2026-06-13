@@ -72,8 +72,13 @@ public sealed partial class MainWindow
             catch { _settingsWindow = null; }
         }
 
-        _settingsWindow = new SettingsWindow(ViewModel, _hotkeyService, _hwnd, ApplyWordWrap, ApplyPreviewSectionBackgrounds, OpenHelpWindow);
-        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+        _settingsWindow = new SettingsWindow(ViewModel, _hotkeyService, _hwnd, ApplyWordWrap, ApplyPreviewSectionBackgrounds, OpenHelpWindow, SuppressLauncherHideToTrayForOwnedWindowClose);
+        _settingsWindow.Closed += (_, _) =>
+        {
+            SuppressLauncherHideToTrayForOwnedWindowClose();
+            _settingsWindow = null;
+            Activate();
+        };
         _settingsWindow.Activate();
         _settingsWindow.BringInFrontOfMainWindow();
         if (tabIndex.HasValue)

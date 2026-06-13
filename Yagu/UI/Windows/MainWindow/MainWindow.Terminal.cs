@@ -1,4 +1,6 @@
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.UI.Xaml;
 using Microsoft.Web.WebView2.Core;
@@ -21,6 +23,7 @@ public sealed partial class MainWindow
     private bool _terminalStartupPromptNudged;
     private readonly TaskCompletionSource<bool> _terminalReadyCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private TaskCompletionSource<bool> _terminalShellReadyCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TerminalDirectoryProbe? _terminalDirectoryProbe;
 
     private void OnToggleTerminalPane(object sender, RoutedEventArgs e)
     {
@@ -45,6 +48,7 @@ public sealed partial class MainWindow
             TerminalHost.Visibility = Visibility.Collapsed;
         }
 
+        SetAdvancedOptionsDrawerExpandedWidthState(AdvancedOptionsExpander.IsExpanded);
         UpdateTerminalChevronGlyphs();
         UpdateTerminalChevronVisibility();
 
@@ -63,9 +67,10 @@ public sealed partial class MainWindow
 
     private void UpdateTerminalChevronVisibility()
     {
-        bool statusBarChevronVisible = StatusBarRow.Height.IsAuto || StatusBarRow.Height.Value > 0;
-        PreSearchTerminalChevron.Visibility = Visibility.Visible;
-        TerminalChevron.Visibility = statusBarChevronVisible ? Visibility.Collapsed : Visibility.Visible;
+        PreSearchTerminalChevron.Visibility = !_terminalPaneExpanded && !_advancedOptionsDrawerExpandedWidth
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        TerminalChevron.Visibility = _terminalPaneExpanded ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private async Task SendTextToTerminalAsync(string text)
@@ -77,7 +82,7 @@ public sealed partial class MainWindow
 
         StartConPtySession();
         await WaitForTerminalShellReadyAsync();
-        await ChangeTerminalDirectoryToYaguExecutableDirectoryAsync();
+        await VerifyTerminalDirectoryIsYaguExecutableDirectoryAsync();
 
         string commandText = text.TrimEnd('\r', '\n');
         PostTerminalPasteTextToWebView(commandText);
@@ -126,20 +131,37 @@ public sealed partial class MainWindow
         }
     }
 
-    private async Task ChangeTerminalDirectoryToYaguExecutableDirectoryAsync()
+    private async Task VerifyTerminalDirectoryIsYaguExecutableDirectoryAsync()
     {
         if (_terminalService is null)
-            return;
+            throw new InvalidOperationException("The terminal shell is not available.");
 
-        string? executableDirectory = Path.GetDirectoryName(Environment.ProcessPath);
+        string? executableDirectory = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
         if (!TryResolveExistingDirectory(executableDirectory, out string directory))
-            return;
+            throw new InvalidOperationException("Could not resolve the running Yagu executable directory.");
 
-        string escapedDirectory = directory.Replace("\"", "\"\"", StringComparison.Ordinal);
-        string commandText = $"cd /d \"{escapedDirectory}\"".TrimEnd('\r', '\n');
-        _terminalShellReadyCompletion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var probe = new TerminalDirectoryProbe(directory, TerminalDirectoryGuard.CreateMarker());
+        _terminalDirectoryProbe = probe;
+        string commandText = TerminalDirectoryGuard.BuildChangeDirectoryProbeCommand(directory, probe.Marker).TrimEnd('\r', '\n');
         _terminalService.WriteInput(commandText + "\r", echoInput: false);
-        await WaitForTerminalShellReadyAsync();
+
+        TerminalDirectoryProbeResult result;
+        try
+        {
+            result = await probe.Completion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (TimeoutException ex)
+        {
+            throw new InvalidOperationException($"The terminal did not confirm it changed to '{directory}'.", ex);
+        }
+        finally
+        {
+            if (ReferenceEquals(_terminalDirectoryProbe, probe))
+                _terminalDirectoryProbe = null;
+        }
+
+        if (!result.Verified)
+            throw new InvalidOperationException($"The terminal reported '{result.ActualDirectory}' after cd, expected '{directory}'.");
     }
 
     private void FocusTerminal()
@@ -264,6 +286,9 @@ public sealed partial class MainWindow
                 case "cancelInput":
                     _terminalService?.CancelCurrentCommand();
                     break;
+                case "completeInput":
+                    CompleteTerminalInput(root);
+                    break;
                 case "resize":
                     _terminalColumns = Math.Max(1, root.GetProperty("cols").GetInt32());
                     _terminalRows = Math.Max(1, root.GetProperty("rows").GetInt32());
@@ -291,6 +316,44 @@ public sealed partial class MainWindow
             LogService.Instance.Warning("Terminal", $"Failed to process terminal web message: {json}", ex);
         }
     }
+
+    private void CompleteTerminalInput(JsonElement root)
+    {
+        int requestId = root.TryGetProperty("requestId", out var requestIdElement) ? requestIdElement.GetInt32() : 0;
+        string input = root.TryGetProperty("input", out var inputElement) ? inputElement.GetString() ?? string.Empty : string.Empty;
+        int cursor = root.TryGetProperty("cursor", out var cursorElement) ? cursorElement.GetInt32() : input.Length;
+        string promptText = root.TryGetProperty("promptText", out var promptElement) ? promptElement.GetString() ?? string.Empty : string.Empty;
+
+        var result = TerminalCompletionService.Complete(
+            requestId,
+            input,
+            cursor,
+            promptText,
+            ResolveTerminalWorkingDirectory());
+
+        PostTerminalCompletionResultToWebView(result);
+    }
+
+    private void PostTerminalCompletionResultToWebView(TerminalCompletionService.Result result)
+    {
+        if (TerminalWebView.CoreWebView2 is null)
+            return;
+
+        string suggestionsJson = "[" + string.Join(",", result.Suggestions.Select(EncodeJsonString)) + "]";
+        string json = "{"
+            + "\"type\":\"completionResult\","
+            + "\"requestId\":" + result.RequestId + ","
+            + "\"replacementStart\":" + result.ReplacementStart + ","
+            + "\"replacementLength\":" + result.ReplacementLength + ","
+            + "\"replacementText\":" + EncodeJsonString(result.ReplacementText) + ","
+            + "\"suggestions\":" + suggestionsJson + ","
+            + "\"hasMatches\":" + (result.HasMatches ? "true" : "false")
+            + "}";
+        TerminalWebView.CoreWebView2.PostWebMessageAsJson(json);
+    }
+
+    private static string EncodeJsonString(string value)
+        => "\"" + JavaScriptEncoder.Default.Encode(value ?? string.Empty) + "\"";
 
     private static void LogTerminalPageMessage(JsonElement root)
     {
@@ -431,6 +494,10 @@ public sealed partial class MainWindow
                     NudgeCommandShellPromptAfterStartupControlPacket(text);
                     return;
                 }
+                if (TryHandleTerminalDirectoryProbeOutput(terminalText, out string probeFilteredText))
+                    terminalText = probeFilteredText;
+                if (string.IsNullOrEmpty(terminalText))
+                    return;
                 if (ContainsPrintableShellText(terminalText))
                     _terminalShellReadyCompletion.TrySetResult(true);
                 PostTerminalOutputToWebView(terminalText);
@@ -441,6 +508,31 @@ public sealed partial class MainWindow
                 System.Diagnostics.Debug.WriteLine($"Terminal output error: {ex.Message}");
             }
         });
+    }
+
+    private bool TryHandleTerminalDirectoryProbeOutput(string terminalText, out string filteredText)
+    {
+        filteredText = terminalText;
+        TerminalDirectoryProbe? probe = _terminalDirectoryProbe;
+        if (probe is null)
+            return false;
+
+        probe.Output.Append(terminalText);
+        string bufferedOutput = probe.Output.ToString();
+        if (!TerminalDirectoryGuard.TryExtractPromptDirectory(bufferedOutput, probe.Marker, out string actualDirectory))
+        {
+            filteredText = string.Empty;
+            return true;
+        }
+
+        bool verified = TerminalDirectoryGuard.DirectoriesEqual(probe.ExpectedDirectory, actualDirectory);
+        filteredText = TerminalDirectoryGuard.RemoveMarkerLine(bufferedOutput, probe.Marker);
+        _terminalDirectoryProbe = null;
+        probe.Completion.TrySetResult(new TerminalDirectoryProbeResult(verified, actualDirectory));
+        LogService.Instance.Info("Terminal", verified
+            ? $"Verified terminal cwd before generated CLI command: '{actualDirectory}'"
+            : $"Terminal cwd verification failed before generated CLI command: expected '{probe.ExpectedDirectory}', actual '{actualDirectory}'");
+        return true;
     }
 
     private static string FilterTerminalOutputForXterm(string text)
@@ -556,4 +648,14 @@ public sealed partial class MainWindow
         if (File.Exists(loaderPath))
             NativeLibrary.Load(loaderPath);
     }
+
+    private sealed class TerminalDirectoryProbe(string expectedDirectory, string marker)
+    {
+        public string ExpectedDirectory { get; } = expectedDirectory;
+        public string Marker { get; } = marker;
+        public StringBuilder Output { get; } = new();
+        public TaskCompletionSource<TerminalDirectoryProbeResult> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private readonly record struct TerminalDirectoryProbeResult(bool Verified, string ActualDirectory);
 }

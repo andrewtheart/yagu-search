@@ -165,12 +165,20 @@ public sealed class AppSettings
         @"\Config.Msi";
     /// <summary>Whether the first-run experience has been completed (context menu prompt, etc.).</summary>
     public bool HasCompletedFirstRun { get; set; }
+    /// <summary>Whether the first file-drawer introductory tooltip has been shown.</summary>
+    public bool HasShownFileDrawerIntroTip { get; set; }
+    /// <summary>Whether the first expanded-drawer line-number introductory tooltip has been shown.</summary>
+    public bool HasShownFileDrawerLineNumberIntroTip { get; set; }
+    /// <summary>Whether the first preview-match introductory tooltip has been shown.</summary>
+    public bool HasShownPreviewMatchIntroTip { get; set; }
     /// <summary>When true, do not show the "another instance is already running" dialog on startup.</summary>
     public bool SuppressMultiInstanceWarning { get; set; }
     /// <summary>When true (default), automatically limit parallelism to 1 on HDD drives and warn the user. When false, no auto-limit or warning.</summary>
     public bool LimitParallelismOnHdd { get; set; } = true;
     /// <summary>When true, back up the file to .yagubak before saving in the built-in editor. Default true.</summary>
     public bool BackupBeforeSave { get; set; } = true;
+    /// <summary>When true, show a brief confirmation overlay after the built-in editor successfully saves. Default true.</summary>
+    public bool ShowEditorSavedOverlay { get; set; } = true;
     /// <summary>When true (default), Yagu starts in the compact launcher window (single search bar,
     /// no results pane). When false, Yagu starts in the traditional full window with title bar and
     /// results pane visible.</summary>

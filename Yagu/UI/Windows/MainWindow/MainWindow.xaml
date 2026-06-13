@@ -63,7 +63,7 @@
         <DataTemplate x:Key="FileGroupResultTemplate" x:DataType="models:FileGroup">
             <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}" Expanding="OnFileGroupExpanding" Collapsed="OnFileGroupCollapsed">
                 <Expander.Header>
-                    <Grid PointerPressed="OnFileGroupHeaderPointerPressed" PointerReleased="OnFileGroupHeaderPointerReleased" DoubleTapped="OnFileGroupHeaderDoubleTapped" Tag="{x:Bind FilePath}" Background="Transparent">
+                    <Grid PointerPressed="OnFileGroupHeaderPointerPressed" PointerReleased="OnFileGroupHeaderPointerReleased" DoubleTapped="OnFileGroupHeaderDoubleTapped" Loaded="OnFileGroupHeaderLoaded" Tag="{x:Bind FilePath}" Background="Transparent">
                         <Grid.ContextFlyout>
                             <MenuFlyout Opening="OnFileHeaderContextMenuOpening">
                                 <MenuFlyoutItem Text="Preview" Click="OnPreviewSingleFile" Tag="{x:Bind FilePath}">
@@ -177,6 +177,7 @@
                                         </Grid.ColumnDefinitions>
                                         <ToggleButton Grid.Column="0" IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
                                                       Click="OnMatchLineCheckBoxClicked"
+                                                      Loaded="OnMatchLineNumberLoaded"
                                                       MinWidth="34" MinHeight="22" Padding="5,1" Margin="4,0,2,0"
                                                       CornerRadius="4"
                                                       VerticalAlignment="Center"
@@ -1041,7 +1042,7 @@
                                                 Padding="8,6" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
                                                 ToolTipService.ToolTip="Clear all results (Ctrl+Shift+Delete)">
                                             <StackPanel Orientation="Horizontal" Spacing="10">
-                                                <FontIcon Glyph="&#xE74D;" FontSize="14" />
+                                                <FontIcon Glyph="&#xE8E6;" FontSize="14" />
                                                 <TextBlock Text="Clear all results" FontSize="12" VerticalAlignment="Center" />
                                             </StackPanel>
                                         </Button>
@@ -1086,14 +1087,16 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <CheckBox x:Name="SelectAllFilesCheckBox"
-                                  ToolTipService.ToolTip="Select / deselect all files"
-                                  IsThreeState="False"
-                                  IsChecked="False"
-                                  MinWidth="32" MinHeight="0" Padding="0"
-                                  VerticalAlignment="Center"
-                                  Checked="OnSelectAllFilesChecked"
-                                  Unchecked="OnSelectAllFilesUnchecked" />
+                        <Grid Width="38" VerticalAlignment="Center">
+                            <CheckBox x:Name="SelectAllFilesCheckBox"
+                                      ToolTipService.ToolTip="Select / deselect all files"
+                                      IsThreeState="False"
+                                      IsChecked="False"
+                                      Width="24" Height="24" MinWidth="0" MinHeight="0" Padding="0"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                                      Checked="OnSelectAllFilesChecked"
+                                      Unchecked="OnSelectAllFilesUnchecked" />
+                        </Grid>
                         <Grid Grid.Column="1">
                             <TextBox PlaceholderText="Filter files…"
                                      Text="{x:Bind ViewModel.FileNameFilter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
@@ -1636,13 +1639,32 @@
                                     </Button>
                                 </Grid>
                             </Border>
-                            <tcb:TextControlBox x:Name="PreviewEditor" Grid.Row="1" Visibility="Collapsed"
-                                                FontFamily="Consolas, Cascadia Mono, Segoe UI, Segoe UI Symbol, Segoe UI Emoji"
-                                                FontSize="13"
-                                                ShowLineNumbers="True"
-                                                ShowLineHighlighter="True"
-                                                EnableSyntaxHighlighting="False"
-                                                TextChanged="OnPreviewEditorTextChanged" />
+                            <Grid Grid.Row="1">
+                                <tcb:TextControlBox x:Name="PreviewEditor" Visibility="Collapsed"
+                                                    FontFamily="Consolas, Cascadia Mono, Segoe UI, Segoe UI Symbol, Segoe UI Emoji"
+                                                    FontSize="13"
+                                                    ShowLineNumbers="True"
+                                                    ShowLineHighlighter="True"
+                                                    EnableSyntaxHighlighting="False"
+                                                    TextChanged="OnPreviewEditorTextChanged" />
+                                <Border x:Name="PreviewEditorSavedOverlay"
+                                        Visibility="Collapsed"
+                                        IsHitTestVisible="False"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Top"
+                                        Margin="0,14,0,0"
+                                        Padding="10,6"
+                                        CornerRadius="6"
+                                        Background="#CC181818"
+                                        BorderBrush="#8022C55E"
+                                        BorderThickness="1"
+                                        Canvas.ZIndex="10">
+                                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                        <FontIcon Glyph="&#xE8FB;" FontSize="14" Foreground="#FF22C55E" />
+                                        <TextBlock Text="Saved" Foreground="White" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
                         </Grid>
                     </Grid>
                 </Grid>
@@ -1686,13 +1708,6 @@
             <TextBlock Grid.Column="4" Foreground="DarkOrange" FontSize="12"
                        Visibility="{x:Bind ViewModel.Truncated, Mode=OneWay}"
                        Text="Results truncated — refine your query" />
-            <Button x:Name="TerminalChevron" Grid.Column="5" Click="OnToggleTerminalPane"
-                    Background="Transparent" BorderThickness="0" Padding="6,2"
-                    VerticalAlignment="Center"
-                    ToolTipService.ToolTip="Toggle embedded terminal">
-                <FontIcon x:Name="TerminalChevronIcon" FontFamily="{StaticResource SymbolThemeFontFamily}"
-                          Glyph="&#xE70D;" FontSize="12" />
-            </Button>
         </Grid>
 
         <!-- Generated CLI command overlay -->
@@ -1806,7 +1821,32 @@
         <!-- Embedded terminal panel (ConPTY + xterm.js in WebView2) -->
         <Grid x:Name="TerminalHost" Grid.Row="5" Visibility="Collapsed" Background="#1E1E1E">
             <WebView2 x:Name="TerminalWebView" DefaultBackgroundColor="#1E1E1E" IsTabStop="True" />
+            <Button x:Name="TerminalChevron"
+                    Click="OnToggleTerminalPane"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Bottom"
+                    Margin="0,0,32,10"
+                    Width="36" Height="32" MinWidth="0" MinHeight="0"
+                    Padding="0"
+                    Background="#CC252526"
+                    BorderBrush="#66454545"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Canvas.ZIndex="10"
+                    ToolTipService.ToolTip="Toggle embedded terminal">
+                <FontIcon x:Name="TerminalChevronIcon"
+                          FontFamily="{StaticResource SymbolThemeFontFamily}"
+                          Glyph="&#xE70D;" FontSize="12" />
+            </Button>
         </Grid>
+
+        <TeachingTip x:Name="IntroTeachingTip"
+                     IsOpen="False"
+                     CloseButtonContent="Got it"
+                     PreferredPlacement="Bottom"
+                     ShouldConstrainToRootBounds="True"
+                     MaxWidth="360"
+                     Canvas.ZIndex="300" />
 
     </Grid>
 </Window>

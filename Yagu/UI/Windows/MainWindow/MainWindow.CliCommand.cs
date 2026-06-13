@@ -56,15 +56,16 @@ public sealed partial class MainWindow
         if (string.IsNullOrWhiteSpace(commandText.Text))
             return;
 
-        CloseGeneratedCliCommandOverlay();
-        CollapseAdvancedOptionsForSearch();
-
         try
         {
+            CollapseAdvancedOptionsForSearch();
             await SendTextToTerminalAsync(commandText.Text);
+            CloseGeneratedCliCommandOverlay();
         }
         catch (Exception ex)
         {
+            ViewModel.StatusText = $"Could not send generated CLI command to terminal: {ex.Message}";
+            LogService.Instance.Warning("Terminal", "Failed to send generated CLI command to terminal", ex);
             System.Diagnostics.Debug.WriteLine($"Failed to send generated CLI command to terminal: {ex}");
         }
     }

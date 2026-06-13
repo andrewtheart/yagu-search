@@ -112,7 +112,7 @@ Click the **Advanced Options** expander below the search bar to reveal additiona
 
 | Control | Effect |
 | --- | --- |
-| Generate CLI command | Builds a `Yagu.exe --cli` command from the current directory, query, search toggles, and Advanced Options. The command appears in a closable code-styled overlay with Copy, Send to terminal, and Close buttons. The **Options already saved in settings** toggle controls whether the generated command includes options that already match `%APPDATA%\Yagu\settings.json`; it defaults to **Omit** to keep commands short. Sending to the terminal expands the embedded terminal if needed and places the command at the prompt without pressing Enter. |
+| Generate CLI command | Builds a `Yagu.exe --cli` command from the current directory, query, search toggles, and Advanced Options. The command appears in a closable code-styled overlay with Copy, Send to terminal, and Close buttons. The **Options already saved in settings** toggle controls whether the generated command includes options that already match `%APPDATA%\Yagu\settings.json`; it defaults to **Omit** to keep commands short. Sending to the terminal expands the embedded terminal if needed, verifies the shell changed to the running Yagu executable directory, and then places the command at the prompt without pressing Enter. |
 
 The generated command includes supported CLI flags for directory, pattern, regex/case/exact-match state, context, search mode, include/exclude mode and patterns, gitignore behavior, size/date filters, binary/archive search, skip/archive extensions, result caps, max depth, thread count, memory limits, file-listing backend, SDK buffer size, and admin-protected path handling.
 
@@ -120,7 +120,7 @@ The generated command includes supported CLI flags for directory, pattern, regex
 
 The embedded terminal is a command shell hosted inside Yagu below the main content. Use the chevron in the status area, or the inline chevron beside Advanced Options when the status bar is hidden, to expand or collapse it.
 
-Right-click inside the terminal pane for **Copy**, **Paste**, **Cut**, **Select all**, **Clear**, and **Reset terminal session**. **Clear** runs `cls` and clears the xterm surface. **Reset terminal session** disposes the current shell session and starts a fresh one; use it if the terminal appears disconnected, stuck, or out of sync. The generated CLI command overlay can send commands into this terminal without executing them, which gives you a chance to review or edit before pressing Enter.
+Right-click inside the terminal pane for **Copy**, **Paste**, **Cut**, **Select all**, **Clear**, and **Reset terminal session**. **Clear** runs `cls` and clears the xterm surface; typing `cls` at the prompt clears the surface and erases the typed command line too. **Reset terminal session** disposes the current shell session and starts a fresh one; use it if the terminal appears disconnected, stuck, or out of sync. The generated CLI command overlay can send commands into this terminal without executing them, which gives you a chance to review or edit before pressing Enter.
 
 ---
 
@@ -138,7 +138,7 @@ When an expanded file's header scrolls out of view, a compact sticky strip at th
 | Group | Groups results into collapsible sections: None, Folder A–Z/Z–A, Date range (Modified/Created/Both), Extension A–Z/Z–A, File size range. |
 | Auto-scroll | Scrolls to follow new results during a search. Uncheck or scroll up to freeze. |
 | Context lines | Lines before/after each match in the result row. Higher = more context but more memory. |
-| Clear results | Removes all results (trash icon, or **Ctrl+Shift+Delete**). |
+| Clear results | Removes all results (clear-selection icon, or **Ctrl+Shift+Delete**). |
 | Expand/Collapse panel | Toggles between expanded result list and split view with preview. |
 
 ### Filtering Results
@@ -262,6 +262,7 @@ Click the **Edit** (pencil) button in the preview toolbar to enter editor mode.
 | Save | Write changes back to disk. Creates a `.yagubak` backup first (configurable). |
 | Back | Return to preview mode (prompts if unsaved changes exist). |
 | Backup on save | Automatically creates `{filename}.yagubak`. Numbered backups if one already exists. |
+| Saved confirmation | Shows a brief Saved confirmation after the editor successfully writes the file. |
 | Large file chunking | Files over ~10 MB load in chunks with a "Load More" button. |
 | Max file size | Controlled by the "Preview editor max size" setting (default 32 MB). |
 | Forced wrap | Lines longer than 50,000 characters are force-wrapped for display. |
@@ -374,6 +375,7 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 | --- | --- |
 | Editor command | External editor command. Supports `{file}` and `{line}` placeholders. Examples: `code -g {file}:{line}`, `notepad++ {file} -n{line}`. |
 | Backup before save | Create `.yagubak` file before overwriting (on by default). |
+| Show saved confirmation after saving | Show a brief confirmation overlay after the built-in editor successfully writes the file. |
 | Preview editor max size (MB) | Maximum file size the built-in editor loads (default: 32 MB). |
 | Preview editor max text length | Character limit for the built-in editor (default: 20 million). |
 | Preview editor max line length | Single-line character limit (default: 1 million). |
@@ -412,6 +414,7 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 | Show build number in title bar | Adds the current Yagu version to the main title bar for diagnostics and screenshots. Hidden by default. |
 | Show Auto-scroll checkbox | Shows the results-toolbar Auto-scroll checkbox for testing continuously appended result rows. Hidden by default. |
 | Reset font contrast reminders | Allows theme/font contrast warnings to appear again after Remind me later or Don't remind me again. |
+| Reset first-time introductory tooltips | Allows the file drawer, line-number, and preview-match introductory tooltips to appear again. |
 | Re-enable admin privilege warning | Re-enables the non-administrator warning after it was dismissed. Visible only after the warning has been suppressed. |
 | File log level | Controls file logging: None, Critical, Warning, Info, or Verbose. Verbose can degrade performance. |
 | Console log level | Controls console logging with the same levels as file logging. |
@@ -426,7 +429,7 @@ Click **Generate CLI command** in Advanced Options to turn the current UI state 
 | Button | Action |
 | --- | --- |
 | Copy command | Copies the generated command to the clipboard and closes the overlay. |
-| Send command to terminal | Opens the embedded terminal if needed, collapses Advanced Options, inserts the generated command at the prompt, and leaves it unexecuted for review. |
+| Send command to terminal | Opens the embedded terminal if needed, collapses Advanced Options, verifies the shell changed to the running Yagu executable directory, inserts the generated command at the prompt, and leaves it unexecuted for review. |
 | Close | Closes the overlay without copying or sending. |
 
 The **Options already saved in settings** toggle defaults to **Omit**. With Omit, Yagu compares the UI state to `%APPDATA%\Yagu\settings.json` and leaves out flags that already match saved defaults. Switch it to **Include** when you want a fully explicit command that does not rely on the current settings file.
@@ -447,10 +450,10 @@ The terminal supports normal typing, command history navigation, paste, and Ctrl
 | Paste | Pastes clipboard text at the prompt. |
 | Cut | Copies the current selection and clears the terminal selection. |
 | Select all | Selects the terminal buffer. |
-| Clear | Sends `cls` and clears the visible terminal surface. |
+| Clear | Sends `cls` and clears the visible terminal surface. Typing `cls` also erases the command line before the blank prompt returns. |
 | Reset terminal session | Starts a fresh shell session and clears terminal state. |
 
-When using generated CLI commands, **Send command to terminal** inserts the command text into the prompt without pressing Enter. This is useful for reviewing, editing, or adding shell redirection before running the command.
+When using generated CLI commands, **Send command to terminal** first verifies that the embedded shell changed to the running Yagu executable directory, then inserts the command text into the prompt without pressing Enter. This is useful for reviewing, editing, or adding shell redirection before running the command.
 
 ---
 
@@ -468,7 +471,6 @@ When using generated CLI commands, **Send command to terminal** inserts the comm
 | **Ctrl+C** (preview) | Copy selected text without line numbers. |
 | **Ctrl+A** (results) | Select all file groups. |
 | **Ctrl+Shift+Delete** | Clear all results. |
-| **Ctrl+Shift+S** | Copy window screenshot to clipboard. |
 | **Enter** (preview) | Jump to next match. |
 | **Shift+Enter** (preview) | Jump to previous match. |
 | **Ctrl+Click** Next/Prev | Bulk match jump (configurable step size). |
@@ -627,8 +629,6 @@ Access via the Preview toolbar's **Export Report** button, or right-click a file
 | Copy files with content | Right-click → Copy Selected Files With Content | Clipboard: paths + matched lines |
 | Save file paths to file | Right-click → Save Selected File Paths… | Text file |
 | Save files with content | Right-click → Save Selected Files With Content… | Text file |
-| Copy window screenshot | **Ctrl+Shift+S** | Clipboard: PNG image of the Yagu window |
-
 ---
 
 ## Performance Overview

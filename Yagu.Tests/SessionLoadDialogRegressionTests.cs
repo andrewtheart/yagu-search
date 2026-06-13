@@ -15,12 +15,50 @@ public sealed class SessionLoadDialogRegressionTests
     [Fact]
     public void LoadSession_UsesFastDiscoveryBeforeNativePickerFallback()
     {
-        Assert.Contains("private async Task<string?> ChooseSessionFileToLoadAsync()", PreviewCommandsSource);
+        Assert.Contains("private async Task<string?> ChooseSessionFileToLoadAsync(string previousStatusText)", PreviewCommandsSource);
         AssertContainsInOrder(PreviewCommandsSource,
             "new SessionFileDiscoveryService().FindSessionFilesAsync(discoveryCts.Token)",
             "if (!discovery.FastSearchAvailable)",
-            "return await PickSessionFileWithWindowsDialogAsync();",
+            "return await PickSessionFileWithWindowsDialogAsync(previousStatusText);",
             "SessionLoadDialog.ShowAsync");
+    }
+
+    [Fact]
+    public void LoadSession_CancelRestoresPreviousStatusText()
+    {
+        Assert.Contains("private const string FindingSavedYaguSessionsStatus = \"Finding saved Yagu sessions...\";", PreviewCommandsSource);
+
+        string loadCommand = ExtractWindow(
+            PreviewCommandsSource,
+            "private async void OnLoadSession",
+            "private async Task<string?> ChooseSessionFileToLoadAsync");
+        AssertContainsInOrder(loadCommand,
+            "string previousStatusText = ViewModel.StatusText;",
+            "string? path = await ChooseSessionFileToLoadAsync(previousStatusText);",
+            "if (path is null) return;");
+
+        string chooseMethod = ExtractWindow(
+            PreviewCommandsSource,
+            "private async Task<string?> ChooseSessionFileToLoadAsync",
+            "private async Task<string?> PickSessionFileWithWindowsDialogAsync");
+        AssertContainsInOrder(chooseMethod,
+            "ViewModel.StatusText = FindingSavedYaguSessionsStatus;",
+            "SessionLoadDialogAction.Browse => await PickSessionFileWithWindowsDialogAsync(previousStatusText),",
+            "_ => RestoreStatusAfterCanceledSessionLoad(previousStatusText),");
+
+        string pickerMethod = ExtractWindow(
+            PreviewCommandsSource,
+            "private async Task<string?> PickSessionFileWithWindowsDialogAsync",
+            "private async Task LoadSessionFileAsync");
+        AssertContainsInOrder(pickerMethod,
+            "var file = await picker.PickSingleFileAsync();",
+            "return file?.Path ?? RestoreStatusAfterCanceledSessionLoad(previousStatusText);");
+
+        AssertContainsInOrder(PreviewCommandsSource,
+            "private string? RestoreStatusAfterCanceledSessionLoad(string previousStatusText)",
+            "if (ViewModel.StatusText == FindingSavedYaguSessionsStatus)",
+            "ViewModel.StatusText = previousStatusText;",
+            "return null;");
     }
 
     [Fact]
@@ -47,6 +85,21 @@ public sealed class SessionLoadDialogRegressionTests
         Assert.Contains("public bool ShowTitleBar { get; init; } = true;", YaguDialogSource);
         Assert.Contains("if (options.ShowTitle)", YaguDialogSource);
         Assert.Contains("presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);", YaguDialogSource);
+    }
+
+    [Fact]
+    public void LoadSession_CustomModalHasInContentTitleAndGuidance()
+    {
+        AssertContainsInOrder(SessionLoadDialogSource,
+            "var header = new StackPanel",
+            "Text = \"Load session\"",
+            "Saved sessions reopen previous Yagu results without rerunning the search.",
+            "Select a .yagu-session file from the list, or choose Browse... to pick one manually.",
+            "No .yagu-session files found by Everything.",
+            "root.Children.Add(header);");
+
+        Assert.Contains("FontWeight = Microsoft.UI.Text.FontWeights.SemiBold", SessionLoadDialogSource);
+        Assert.Contains("TextWrapping = TextWrapping.WrapWholeWords", SessionLoadDialogSource);
     }
 
     [Fact]

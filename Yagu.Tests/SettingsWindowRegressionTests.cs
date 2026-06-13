@@ -21,6 +21,10 @@ public sealed class SettingsWindowRegressionTests
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml.cs"));
     private static readonly string MainWindowKeyboardSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Keyboard.cs"));
+    private static readonly string MainWindowIntroTipsSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.IntroTips.cs"));
+    private static readonly string MainWindowMatchNavSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.MatchNav.cs"));
     private static readonly string MainWindowXaml = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
     private static readonly string SettingsWindowSource = File.ReadAllText(
@@ -202,6 +206,22 @@ public sealed class SettingsWindowRegressionTests
     }
 
     [Fact]
+    public void EditorSavedOverlaySetting_IsPersistedAndShownInEditorSettings()
+    {
+        Assert.Contains("public bool ShowEditorSavedOverlay { get; set; } = true;", SettingsServiceSource);
+        Assert.Contains("[ObservableProperty] public partial bool ShowEditorSavedOverlay { get; set; } = true;", MainViewModelSource);
+        Assert.Contains("ShowEditorSavedOverlay = _settings.ShowEditorSavedOverlay;", MainViewModelSource);
+        Assert.Contains("_settings.ShowEditorSavedOverlay = ShowEditorSavedOverlay;", MainViewModelSource);
+
+        string editorSettings = ExtractMethod(SettingsWindowSource, "BuildSettingsContent", window: 90000);
+        AssertContainsInOrder(editorSettings,
+            "var saveSafetyGroup = AddSettingsGroupBox(g, \"Built-In Editor Saves\");",
+            "Content = \"Show saved confirmation after saving\"",
+            "_viewModel.ShowEditorSavedOverlay = true;",
+            "_viewModel.ShowEditorSavedOverlay = false;");
+    }
+
+    [Fact]
     public void ThemeMode_IsPersistedAndAppliedFromUiSettings()
     {
         Assert.Contains("public int ThemeModeIndex { get; set; } // 0 = Auto (system theme), 1 = Dark, 2 = Light", SettingsServiceSource);
@@ -240,11 +260,53 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("x:Name=\"SettingsContentScrollViewer\"", SettingsWindowXaml);
         Assert.Contains("Background=\"Transparent\"", SettingsWindowXaml);
         Assert.Contains("PointerPressed=\"OnSettingsContentPointerPressed\"", SettingsWindowXaml);
-        AssertContainsInOrder(SettingsWindowSource,
+        Assert.Contains("private bool _settingsContentBuilt;", SettingsWindowSource);
+        Assert.Contains("private int? _pendingSelectTabIndex;", SettingsWindowSource);
+        Assert.Contains("private DispatcherTimer? _deferredSettingsContentBuildTimer;", SettingsWindowSource);
+
+        string constructor = ExtractMethod(SettingsWindowSource, "SettingsWindow", window: 3200);
+        Assert.Contains("ShowSettingsLoadingPlaceholder();", constructor);
+        Assert.DoesNotContain("BuildSettingsContent();", constructor);
+        Assert.DoesNotContain("AttachSettingDirtyHandlers();", constructor);
+        Assert.DoesNotContain("ExtractSearchableEntries();", constructor);
+
+        string loaded = ExtractMethod(SettingsWindowSource, "RootGrid_Loaded", window: 1200);
+        Assert.Contains("QueueDeferredSettingsContentBuild();", loaded);
+
+        string loadingPlaceholder = ExtractMethod(SettingsWindowSource, "ShowSettingsLoadingPlaceholder", window: 1200);
+        AssertContainsInOrder(loadingPlaceholder,
+            "SearchBox.IsEnabled = false;",
+            "TabList.IsEnabled = false;",
+            "SettingsContent.Children.Clear();",
+            "Text = \"Loading settings...\"");
+
+        string deferredBuild = ExtractMethod(SettingsWindowSource, "BuildDeferredSettingsContent", window: 2600);
+        AssertContainsInOrder(deferredBuild,
             "BuildSettingsContent();",
             "AttachSettingDirtyHandlers();",
+            "_settingsContentBuilt = true;",
+            "int selectedIndex = _pendingSelectTabIndex.GetValueOrDefault(0);",
+            "SearchBox.IsEnabled = true;",
+            "TabList.IsEnabled = true;",
+            "TabList.SelectedIndex = selectedIndex;",
             "MarkSettingsClean();",
-            "ExtractSearchableEntries();");
+            "_settingDirtyTrackingEnabled = true;");
+
+        string searchChanged = ExtractMethod(SettingsWindowSource, "OnSearchTextChanged", window: 3000);
+        Assert.Contains("if (!_settingsContentBuilt) return;", searchChanged);
+        AssertContainsInOrder(searchChanged,
+            "TabList.Visibility = Visibility.Collapsed;",
+            "EnsureSearchableEntriesExtracted();",
+            "ClearSearchResultContainers();");
+
+        string ensureSearchEntries = ExtractMethod(SettingsWindowSource, "EnsureSearchableEntriesExtracted", window: 800);
+        AssertContainsInOrder(ensureSearchEntries,
+            "if (_searchableEntriesExtracted)",
+            "ExtractSearchableEntries();",
+            "_searchableEntriesExtracted = true;");
+
+        string collectControlText = ExtractMethod(SettingsWindowSource, "CollectControlSearchText", window: 1600);
+        Assert.Contains("comboBox.Items.Count <= MaxComboBoxItemsIndexedForSettingsSearch", collectControlText);
 
         string attachMethod = ExtractMethod(SettingsWindowSource, "AttachSettingDirtyHandlers", window: 3000);
         Assert.Contains("textBox.TextChanged += (_, _) => MarkSettingsDirty();", attachMethod);
@@ -253,11 +315,14 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("checkBox.Checked += (_, _) => MarkSettingsDirty();", attachMethod);
         Assert.Contains("toggleSwitch.Toggled += (_, _) => MarkSettingsDirty();", attachMethod);
         Assert.Contains("calendarDatePicker.DateChanged += (_, _) => MarkSettingsDirty();", attachMethod);
-        Assert.Contains("colorPicker.ColorChanged += (_, _) => MarkSettingsDirty();", attachMethod);
+        Assert.Contains("case ColorPicker:", attachMethod);
+        Assert.DoesNotContain("colorPicker.ColorChanged += (_, _) => MarkSettingsDirty();", attachMethod);
 
         string dirtyMethod = ExtractMethod(SettingsWindowSource, "MarkSettingsDirty", window: 900);
         AssertContainsInOrder(dirtyMethod,
+            "private void MarkSettingsDirty(bool requireValueChanges = true)",
             "if (!_settingDirtyTrackingEnabled || _settingsDirty)",
+            "if (requireValueChanges && !HaveTrackedSettingValueChanges())",
             "_settingsDirty = true;",
             "SaveButton.IsEnabled = true;");
 
@@ -276,17 +341,15 @@ public sealed class SettingsWindowRegressionTests
         string valueCheckMethod = ExtractMethod(SettingsWindowSource, "MarkSettingsDirtyIfCurrentValuesChanged", window: 1400);
         AssertContainsInOrder(valueCheckMethod,
             "if (!_settingDirtyTrackingEnabled || _settingsDirty)",
-            "foreach (var element in _dirtyTrackedElements)",
-            "TryGetSettingValue(element, out var currentValue)",
-            "!Equals(cleanValue, currentValue)",
+            "if (HaveTrackedSettingValueChanges())",
             "MarkSettingsDirty();");
 
         string settingValueMethod = ExtractMethod(SettingsWindowSource, "TryGetSettingValue", window: 1600);
-        Assert.Contains("value = (numberBox.Value, numberBox.Text ?? string.Empty);", settingValueMethod);
+        Assert.Contains("value = numberBox.Value;", settingValueMethod);
 
         AssertContainsInOrder(SettingsWindowSource,
             "_viewModel.SuppressAdminWarning = false;",
-            "MarkSettingsDirty();",
+            "MarkSettingsDirty(requireValueChanges: false);",
             "resetAdmin.IsEnabled = false;");
     }
 
@@ -297,9 +360,16 @@ public sealed class SettingsWindowRegressionTests
 
         string closedMethod = ExtractMethod(SettingsWindowSource, "OnSettingsWindowClosed", window: 900);
         AssertContainsInOrder(closedMethod,
+            "_suppressOwnerHideToTray?.Invoke();",
             "RestoreUnsavedSettingsIfNeeded();",
             "_fontContrastCheckTimer?.Stop();",
             "_viewModel.PropertyChanged -= OnViewModelPropertyChanged;");
+
+        string closeWithoutPrompt = ExtractMethod(SettingsWindowSource, "CloseSettingsWindowWithoutPrompt", window: 500);
+        AssertContainsInOrder(closeWithoutPrompt,
+            "_settingsCloseConfirmed = true;",
+            "_suppressOwnerHideToTray?.Invoke();",
+            "Close();");
 
         string restoreMethod = ExtractMethod(SettingsWindowSource, "RestoreUnsavedSettingsIfNeeded", window: 1800);
         AssertContainsInOrder(restoreMethod,
@@ -313,19 +383,55 @@ public sealed class SettingsWindowRegressionTests
         string hasChangesMethod = ExtractMethod(SettingsWindowSource, "HasSettingValueChanges", window: 1600);
         AssertContainsInOrder(hasChangesMethod,
             "if (_settingsDirty)",
+            "return HaveTrackedSettingValueChanges();");
+
+        string trackedChangesMethod = ExtractMethod(SettingsWindowSource, "HaveTrackedSettingValueChanges", window: 1800);
+        AssertContainsInOrder(trackedChangesMethod,
             "foreach (var element in _dirtyTrackedElements)",
             "TryGetSettingValue(element, out var currentValue)",
             "!Equals(cleanValue, currentValue)",
             "return true;");
+        Assert.Contains("foreach (var lazyColor in _lazyColorSettings)", trackedChangesMethod);
 
         string restoreValueMethod = ExtractMethod(SettingsWindowSource, "RestoreSettingValue", window: 2400);
         Assert.Contains("textBox.Text = value as string ?? string.Empty;", restoreValueMethod);
-        Assert.Contains("numberBox.Value = numberValue.Item1;", restoreValueMethod);
+        Assert.Contains("numberBox.Value = numberValue;", restoreValueMethod);
         Assert.Contains("comboBox.SelectedIndex = selectedIndex;", restoreValueMethod);
         Assert.Contains("checkBox.IsChecked = value is bool isChecked ? isChecked : null;", restoreValueMethod);
         Assert.Contains("toggleSwitch.IsOn = isOn;", restoreValueMethod);
         Assert.Contains("calendarDatePicker.Date = value is DateTimeOffset date ? date : null;", restoreValueMethod);
         Assert.Contains("colorPicker.Color = color;", restoreValueMethod);
+    }
+
+    [Fact]
+    public void SettingsWindow_CloseWithoutChangesDoesNotPromptForNumberBoxText()
+    {
+        // Regression: closing Settings without any edits used to show the
+        // "unsaved settings" prompt because the clean-value snapshot captured
+        // NumberBox.Text, which is formatted asynchronously after the control
+        // template loads. The captured baseline ("") then differed from the
+        // settled display text (e.g. "0"), so HaveTrackedSettingValueChanges
+        // returned true even though nothing changed. The snapshot must compare
+        // only the committed numeric Value.
+        string settingValueMethod = ExtractMethod(SettingsWindowSource, "TryGetSettingValue", window: 1600);
+        Assert.Contains("value = numberBox.Value;", settingValueMethod);
+        Assert.DoesNotContain("numberBox.Text", settingValueMethod);
+
+        string restoreValueMethod = ExtractMethod(SettingsWindowSource, "RestoreSettingValue", window: 2400);
+        Assert.Contains("case NumberBox numberBox when value is double numberValue:", restoreValueMethod);
+        Assert.Contains("numberBox.Value = numberValue;", restoreValueMethod);
+        Assert.DoesNotContain("numberBox.Text", restoreValueMethod);
+
+        // Both close paths must gate the unsaved-changes prompt on a real change:
+        // the AppWindow X button (OnSettingsAppWindowClosing) and the in-window
+        // Close/Cancel button (RequestSettingsWindowCloseAsync).
+        string appWindowClosing = ExtractMethod(SettingsWindowSource, "OnSettingsAppWindowClosing", window: 700);
+        Assert.Contains("if (_settingsCloseConfirmed || !HasSettingValueChanges())", appWindowClosing);
+        Assert.Contains("await ShowUnsavedSettingsClosePromptAsync();", appWindowClosing);
+
+        string requestClose = ExtractMethod(SettingsWindowSource, "RequestSettingsWindowCloseAsync", window: 900);
+        Assert.Contains("if (_settingsCloseConfirmed || !HasSettingValueChanges())", requestClose);
+        Assert.Contains("CloseSettingsWindowWithoutPrompt();", requestClose);
     }
 
     [Fact]
@@ -342,7 +448,7 @@ public sealed class SettingsWindowRegressionTests
             "_defaultResetButtonRefreshers.Add(Refresh);",
             "Refresh();");
 
-        Assert.Contains("RegisterDefaultResetButton(reset, () => picker.Color.Equals(fallback));", SettingsWindowSource);
+        Assert.Contains("RegisterDefaultResetButton(reset, () => currentColor().Equals(fallback));", SettingsWindowSource);
         Assert.Contains("RegisterDefaultResetButton(useDefault, () => SettingStringEquals(_viewModel.TerminalDefaultWorkingDirectory, string.Empty));", SettingsWindowSource);
         Assert.Contains("RegisterDefaultResetButton(clearDateDefaults,", SettingsWindowSource);
         Assert.Contains("_viewModel.DefaultCreatedAfterDate is null", SettingsWindowSource);
@@ -511,9 +617,9 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("_viewModel.PreviewEditorFontFamily", displayBlock);
         Assert.Contains("Editor gutter text:", displayBlock);
 
-        Assert.Contains("CaptureTabPageRootElements();", SettingsWindowSource);
-        Assert.Contains("OriginalPlacements = capturedPlacements", SettingsWindowSource);
-        Assert.Contains("RestoreOriginalPlacements(entry.OriginalPlacements)", SettingsWindowSource);
+        Assert.DoesNotContain("CaptureTabPageRootElements();", SettingsWindowSource);
+        Assert.DoesNotContain("OriginalPlacements = capturedPlacements", SettingsWindowSource);
+        Assert.DoesNotContain("RestoreOriginalPlacements(entry.OriginalPlacements)", SettingsWindowSource);
         AssertContainsInOrder(SettingsWindowSource,
             "if (child is Border { Child: UIElement groupChild })",
             "EnumerateSearchableGroupChild(groupChild)");
@@ -525,7 +631,29 @@ public sealed class SettingsWindowRegressionTests
     [Fact]
     public void SettingsWindow_HotkeySection_QueriesAvailableKeys()
     {
-        Assert.Contains("GetAvailableCtrlShiftLetterKeys(_mainHwnd)", SettingsWindowSource);
+        int shortcutsStart = SettingsWindowSource.IndexOf("// ── Shortcuts & History ──", StringComparison.Ordinal);
+        Assert.True(shortcutsStart >= 0, "Shortcuts & History block not found.");
+        string shortcutsBlock = SettingsWindowSource[shortcutsStart..];
+        Assert.DoesNotContain("GetAvailableCtrlShiftLetterKeys(_mainHwnd)", shortcutsBlock);
+        Assert.Contains("QueueHotkeyAvailabilityLoad(hotkey, hotkeyCombo, hotkeyAvailabilityStatus);", shortcutsBlock);
+        Assert.Contains("Checking available shortcuts...", shortcutsBlock);
+
+        string queueMethod = ExtractMethod(SettingsWindowSource, "QueueHotkeyAvailabilityLoad", window: 1600);
+        AssertContainsInOrder(queueMethod,
+            "Task.Run(() => _hotkeyService.GetAvailableCtrlShiftLetterKeys(hwnd))",
+            "DispatcherQueue.TryEnqueue",
+            "ApplyHotkeyAvailability(task.Result, hotkey, hotkeyCombo, availabilityStatus);");
+
+        string applyMethod = ExtractMethod(SettingsWindowSource, "ApplyHotkeyAvailability", window: 3600);
+        AssertContainsInOrder(applyMethod,
+            "bool wasDirtyTrackingEnabled = _settingDirtyTrackingEnabled;",
+            "_settingDirtyTrackingEnabled = false;",
+            "HotkeyService.ChooseAvailableKey(availableHotkeyKeys, _viewModel.GlobalHotkeyKey);",
+            "hotkey.IsEnabled = availableHotkeyKeys.Count > 0;",
+            "hotkeyCombo.Items.Clear();",
+            "HotkeyService.FormatCtrlShift(key)",
+            "_cleanSettingValues[hotkeyCombo] = hotkeyComboValue;",
+            "_settingDirtyTrackingEnabled = wasDirtyTrackingEnabled;");
         Assert.Contains("ChooseAvailableKey(", SettingsWindowSource);
     }
 
@@ -686,6 +814,7 @@ public sealed class SettingsWindowRegressionTests
 
         string helper = ExtractMethod(MainWindowSource, "OpenSettingsTab", window: 1800);
         Assert.Contains("new SettingsWindow(", helper);
+        Assert.Contains("SuppressLauncherHideToTrayForOwnedWindowClose", helper);
         Assert.Contains("_settingsWindow.Activate()", helper);
     }
 
@@ -705,43 +834,98 @@ public sealed class SettingsWindowRegressionTests
     {
         string method = ExtractMethod(MainWindowSource, "OpenSettingsTab");
         Assert.Contains("_settingsWindow.Closed += ", method);
+        Assert.Contains("SuppressLauncherHideToTrayForOwnedWindowClose();", method);
         Assert.Contains("_settingsWindow = null", method);
     }
 
     [Fact]
     public void SettingsWindow_SelectTab_RestoresNormalTabViewBeforeSelecting()
     {
-        string method = ExtractMethod(SettingsWindowSource, "SelectTab", window: 1800);
+        string method = ExtractMethod(SettingsWindowSource, "SelectTab", window: 2200);
+        AssertContainsInOrder(method,
+            "if (index < 0)",
+            "if (!_settingsContentBuilt)",
+            "_pendingSelectTabIndex = index;",
+            "if (index >= TabList.Items.Count)");
         Assert.Contains("_isSearchActive", method);
         Assert.Contains("SearchBox.Text = string.Empty;", method);
         Assert.Contains("TabList.Visibility = Visibility.Visible;", method);
         Assert.Contains("ClearSearchResultContainers();", method);
-        Assert.Contains("RestoreTabPageElements();", method);
+        Assert.DoesNotContain("RestoreTabPageElements();", method);
         AssertContainsInOrder(method,
             "TabList.SelectedIndex = index;",
             "SettingsContent.Children.Clear();",
-            "SettingsContent.Children.Add(_tabPages[index]);");
+            "AddSettingsContentChild(_tabPages[index]);");
+
+        string tabSelectionChanged = ExtractMethod(SettingsWindowSource, "OnTabSelectionChanged", window: 900);
+        Assert.Contains("if (!_settingsContentBuilt) return;", tabSelectionChanged);
     }
 
     [Fact]
-    public void SettingsWindow_SearchReparentsElementsFromAllSupportedParentTypes()
+    public void SettingsWindow_SearchRendersFreshRowsInsteadOfReparentingControls()
     {
         string searchChanged = ExtractMethod(SettingsWindowSource, "OnSearchTextChanged", window: 2600);
-        Assert.Contains("var renderedElements = new HashSet<UIElement>();", searchChanged);
-        Assert.Contains(".Where(element => renderedElements.Add(element))", searchChanged);
-        Assert.Contains("if (entryElements.Count == 0)", searchChanged);
-        Assert.Contains("DetachFromParent(element);", searchChanged);
-        Assert.DoesNotContain("fe.Parent is Panel", searchChanged);
+        Assert.Contains("CreateSearchResultEntry(entry);", searchChanged);
+        Assert.DoesNotContain("new HashSet<UIElement>()", searchChanged);
+        Assert.DoesNotContain("entry.BuildElements()", searchChanged);
+        Assert.DoesNotContain("TryRegisterRenderedElement", searchChanged);
+        Assert.DoesNotContain("DetachAllTabPageElements();", searchChanged);
+        Assert.DoesNotContain("RestoreTabPageElements();", searchChanged);
 
-        string detach = ExtractMethod(SettingsWindowSource, "DetachFromParent", window: 1800);
-        Assert.Contains("case Panel parentPanel:", detach);
-        Assert.Contains("parentPanel.Children.Remove(element);", detach);
-        Assert.Contains("case Border border when ReferenceEquals(border.Child, element):", detach);
-        Assert.Contains("border.Child = null;", detach);
-        Assert.Contains("case ContentControl contentControl when ReferenceEquals(contentControl.Content, element):", detach);
-        Assert.Contains("contentControl.Content = null;", detach);
-        Assert.Contains("case ScrollViewer scrollViewer when ReferenceEquals(scrollViewer.Content, element):", detach);
-        Assert.Contains("scrollViewer.Content = null;", detach);
+        string clearContainers = ExtractMethod(SettingsWindowSource, "ClearSearchResultContainers", window: 800);
+        AssertContainsInOrder(clearContainers,
+            "DetachFromParent(container);",
+            "if (container is Panel panel)",
+            "panel.Children.Clear();",
+            "_searchResultContainers.Clear();");
+
+        string resultEntry = ExtractMethod(SettingsWindowSource, "CreateSearchResultEntry", window: 2400);
+        Assert.Contains("return new Border", resultEntry);
+        Assert.Contains("Text = entry.Label", resultEntry);
+        Assert.Contains("Text = entry.Description", resultEntry);
+        Assert.Contains("Text = TrimSearchResultText(entry.ControlText)", resultEntry);
+        Assert.Contains("Glyph = \"\\uE8A7\"", resultEntry);
+        Assert.Contains("FontFamily = new XamlFontFamily(\"Segoe MDL2 Assets\")", resultEntry);
+        Assert.Contains("ToolTipService.SetToolTip(jumpButton, \"Open section\");", resultEntry);
+        Assert.Contains("AutomationProperties.SetName(jumpButton, \"Open section\");", resultEntry);
+
+        Assert.DoesNotContain("OriginalPlacements", SettingsWindowSource);
+        Assert.DoesNotContain("BuildElements", SettingsWindowSource);
+        Assert.DoesNotContain("RestoreOriginalPlacements", SettingsWindowSource);
+        Assert.DoesNotContain("TryRegisterRenderedElement", SettingsWindowSource);
+    }
+
+    [Fact]
+    public void SettingsWindow_FontFamilyPickersLazyLoadInstalledFonts()
+    {
+        string createPicker = ExtractMethod(SettingsWindowSource, "CreateFontFamilyPicker", window: 2600);
+        Assert.Contains("BuildInitialFontFamilyOptions(selectedValue, defaultValue)", createPicker);
+        Assert.Contains("picker.DropDownOpened +=", createPicker);
+        Assert.Contains("PopulateFontFamilyPicker(picker, defaultValue);", createPicker);
+        Assert.DoesNotContain("GetSystemFontFamilyNames()", createPicker);
+
+        string populatePicker = ExtractMethod(SettingsWindowSource, "PopulateFontFamilyPicker", window: 1200);
+        Assert.Contains("BuildFontFamilyOptions(selectedValue, defaultValue)", populatePicker);
+        Assert.Contains("FindFontFamilyItem(picker, fontFamily) is null", populatePicker);
+
+        string buildInitial = ExtractMethod(SettingsWindowSource, "BuildInitialFontFamilyOptions", window: 700);
+        Assert.Contains("AddFontFamilyOption(options, currentValue);", buildInitial);
+        Assert.Contains("AddFontFamilyOption(options, defaultValue);", buildInitial);
+        Assert.DoesNotContain("GetSystemFontFamilyNames()", buildInitial);
+    }
+
+    [Fact]
+    public void SettingsWindow_ColorPickersLoadInFlyouts()
+    {
+        string addColorSetting = ExtractMethod(SettingsWindowSource, "AddColorSetting", window: 9000);
+        Assert.Contains("ColorPicker? picker = null;", addColorSetting);
+        Assert.Contains("var colorState = new LazyColorSettingState", addColorSetting);
+        Assert.Contains("_lazyColorSettings.Add(colorState);", addColorSetting);
+        Assert.Contains("editColorButton.Flyout = new Flyout { Content = picker };", addColorSetting);
+        Assert.Contains("parent.Children.Add(editColorButton);", addColorSetting);
+        Assert.Contains("refreshColorButton();", addColorSetting);
+        Assert.Contains("MarkSettingsDirty();", addColorSetting);
+        Assert.DoesNotContain("parent.Children.Add(picker);", addColorSetting);
     }
 
     [Fact]
@@ -787,6 +971,76 @@ public sealed class SettingsWindowRegressionTests
     }
 
     [Fact]
+    public void MainWindow_FirstTimeIntroductoryTooltipsUseClosableTeachingTip()
+    {
+        Assert.Contains("<TeachingTip x:Name=\"IntroTeachingTip\"", MainWindowXaml);
+        Assert.Contains("CloseButtonContent=\"Got it\"", MainWindowXaml);
+        Assert.Contains("ShouldConstrainToRootBounds=\"True\"", MainWindowXaml);
+        Assert.Contains("Loaded=\"OnFileGroupHeaderLoaded\"", MainWindowXaml);
+        Assert.Contains("Loaded=\"OnMatchLineNumberLoaded\"", MainWindowXaml);
+
+        Assert.Contains("Double click or right click to preview this file", MainWindowIntroTipsSource);
+        Assert.Contains("private static readonly TimeSpan FileDrawerIntroTipDelay = TimeSpan.FromSeconds(2);", MainWindowIntroTipsSource);
+        Assert.Contains("QueueDelayedFileDrawerIntroTip(target);", MainWindowIntroTipsSource);
+        Assert.Contains("new DispatcherTimer { Interval = FileDrawerIntroTipDelay }", MainWindowIntroTipsSource);
+        Assert.Contains("TryOpenIntroTip(\r\n                IntroTipKind.FileDrawer", MainWindowIntroTipsSource);
+        Assert.Contains("Select a line number to preview just that line number + context", MainWindowIntroTipsSource);
+        Assert.Contains("Double click to jump to this text in the editor", MainWindowIntroTipsSource);
+        Assert.Contains("IntroTeachingTip.Target = target;", MainWindowIntroTipsSource);
+        Assert.Contains("IntroTeachingTip.IsOpen = true;", MainWindowIntroTipsSource);
+        Assert.Contains("_ = MarkIntroTipShownAsync(kind);", MainWindowIntroTipsSource);
+        Assert.Contains("CloseButtonContent=\"Got it\"", MainWindowXaml);
+
+        Assert.Contains("TryShowPreviewMatchIntroTip();", MainWindowMatchNavSource);
+        Assert.Contains("ActiveMatchOverlay.Visibility = Visibility.Visible;\r\n            TryShowPreviewMatchIntroTip();\r\n            LogWordWrapOverlayDiagnostic(", MainWindowMatchNavSource);
+    }
+
+    [Fact]
+    public void SettingsWindow_CanResetFirstTimeIntroductoryTooltipsWithoutImmediatePersistence()
+    {
+        Assert.Contains("public bool HasShownFileDrawerIntroTip { get; set; }", SettingsServiceSource);
+        Assert.Contains("public bool HasShownFileDrawerLineNumberIntroTip { get; set; }", SettingsServiceSource);
+        Assert.Contains("public bool HasShownPreviewMatchIntroTip { get; set; }", SettingsServiceSource);
+
+        Assert.Contains("[ObservableProperty] public partial bool HasShownFileDrawerIntroTip { get; set; }", MainViewModelSource);
+        Assert.Contains("[ObservableProperty] public partial bool HasShownFileDrawerLineNumberIntroTip { get; set; }", MainViewModelSource);
+        Assert.Contains("[ObservableProperty] public partial bool HasShownPreviewMatchIntroTip { get; set; }", MainViewModelSource);
+        Assert.Contains("public void ResetFirstTimeIntroductoryTooltips()", MainViewModelSource);
+        Assert.Contains("public void RestoreFirstTimeIntroductoryTooltips(bool fileDrawer, bool fileDrawerLineNumber, bool previewMatch)", MainViewModelSource);
+        Assert.Contains("public Task MarkFileDrawerIntroTipShownAsync()", MainViewModelSource);
+        Assert.Contains("_settings.HasShownFileDrawerIntroTip = HasShownFileDrawerIntroTip;", MainViewModelSource);
+        Assert.Contains("_settings.HasShownFileDrawerLineNumberIntroTip = HasShownFileDrawerLineNumberIntroTip;", MainViewModelSource);
+        Assert.Contains("_settings.HasShownPreviewMatchIntroTip = HasShownPreviewMatchIntroTip;", MainViewModelSource);
+
+        Assert.Contains("Content = \"Reset first-time introductory tooltips\"", SettingsWindowSource);
+        Assert.Contains("_viewModel.ResetFirstTimeIntroductoryTooltips();", SettingsWindowSource);
+        Assert.Contains("RegisterDefaultResetButton(resetFirstTimeIntroTips, AreFirstTimeIntroductoryTooltipsReset);", SettingsWindowSource);
+
+        int resetClickStart = SettingsWindowSource.IndexOf("resetFirstTimeIntroTips.Click", StringComparison.Ordinal);
+        Assert.True(resetClickStart >= 0, "Reset first-time intro tips click handler not found.");
+        int resetClickEnd = SettingsWindowSource.IndexOf("RegisterDefaultResetButton(resetFirstTimeIntroTips", resetClickStart, StringComparison.Ordinal);
+        Assert.True(resetClickEnd > resetClickStart, "Reset first-time intro tips click handler end not found.");
+        string resetClick = SettingsWindowSource[resetClickStart..resetClickEnd];
+        AssertContainsInOrder(resetClick,
+            "_viewModel.ResetFirstTimeIntroductoryTooltips();",
+            "MarkSettingsDirty();");
+
+        string propertyChanged = ExtractMethod(SettingsWindowSource, "OnViewModelPropertyChanged", window: 900);
+        AssertContainsInOrder(propertyChanged,
+            "CaptureCleanFirstTimeIntroductoryTooltipValues();",
+            "RefreshDefaultResetButtons();");
+
+        string captureClean = ExtractMethod(SettingsWindowSource, "CaptureCleanSettingValues", window: 1000);
+        Assert.Contains("CaptureCleanFirstTimeIntroductoryTooltipValues();", captureClean);
+
+        string restoreUnsaved = ExtractMethod(SettingsWindowSource, "RestoreUnsavedSettingsIfNeeded", window: 1400);
+        Assert.Contains("RestoreCleanFirstTimeIntroductoryTooltipValues();", restoreUnsaved);
+
+        string trackedChanges = ExtractMethod(SettingsWindowSource, "HaveTrackedSettingValueChanges", window: 2200);
+        Assert.Contains("return HaveFirstTimeIntroductoryTooltipValuesChanged();", trackedChanges);
+    }
+
+    [Fact]
     public void MainWindow_SettingsHelperCanOpenPerformanceAndDisplayTabs()
     {
         Assert.Contains("private const int SettingsPerformanceTabIndex = 2;", MainWindowSource);
@@ -805,9 +1059,14 @@ public sealed class SettingsWindowRegressionTests
             "HideToTray()");
 
         string helper = ExtractMethod(MainWindowLauncherSource, "HasOpenAppOwnedWindowOrModal", window: 800);
+        Assert.Contains("IsLauncherHideTemporarilySuppressed()", helper);
         Assert.Contains("_settingsWindow is not null", helper);
         Assert.Contains("_helpWindow is not null", helper);
         Assert.Contains("_ownedModalWindowDepth > 0", helper);
+
+        string suppress = ExtractMethod(MainWindowLauncherSource, "SuppressLauncherHideToTrayForOwnedWindowClose", window: 500);
+        Assert.Contains("DateTimeOffset.UtcNow.AddSeconds(10)", suppress);
+        Assert.Contains("private DateTimeOffset _suppressLauncherHideUntilUtc;", MainWindowWindowSource);
 
         Assert.Contains("_ownedModalWindowDepth++;", MainWindowStartupChecksSource);
         Assert.Contains("_ownedModalWindowDepth = Math.Max(0, _ownedModalWindowDepth - 1);", MainWindowStartupChecksSource);
@@ -890,10 +1149,10 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("term.clearSelection();", TerminalHtml);
         // Paste asks the host to read the clipboard and return it to the page-side line editor.
         Assert.Contains("type: 'requestPaste'", TerminalHtml);
-        // Select all and clear act on the terminal directly.
+        // Select all and clear act on the terminal surface directly.
         Assert.Contains("term.selectAll();", TerminalHtml);
-        Assert.Contains("sendTerminalInput('cls\\r', false);", TerminalHtml);
-        Assert.Contains("term.clear();", TerminalHtml);
+        Assert.Contains("clearTerminalSurface(promptText);", TerminalHtml);
+        Assert.DoesNotContain("sendTerminalInput('cls\\r', false);", TerminalHtml);
 
         Assert.Contains("case \"copyText\":", MainWindowTerminalSource);
         Assert.Contains("CopyTextToClipboard(", MainWindowTerminalSource);

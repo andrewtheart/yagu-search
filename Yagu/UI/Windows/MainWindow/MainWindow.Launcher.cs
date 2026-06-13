@@ -265,12 +265,6 @@ public sealed partial class MainWindow
 
         if (message == HotkeyService.WmHotkey)
         {
-            if (_hotkeyService.RegisteredKey == 'S' && GetForegroundWindow() == _hwnd)
-            {
-                _ = CopyWindowScreenshotToClipboardAsync();
-                return IntPtr.Zero;
-            }
-
             _hotkeyService.OnWmHotkey((int)wParam);
             return IntPtr.Zero;
         }
@@ -467,7 +461,13 @@ public sealed partial class MainWindow
     }
 
     private bool HasOpenAppOwnedWindowOrModal()
-        => _settingsWindow is not null || _helpWindow is not null || _ownedModalWindowDepth > 0 || YaguDialog.HasOpenOwnedWindow(_hwnd);
+        => IsLauncherHideTemporarilySuppressed() || _settingsWindow is not null || _helpWindow is not null || _ownedModalWindowDepth > 0 || YaguDialog.HasOpenOwnedWindow(_hwnd);
+
+    private void SuppressLauncherHideToTrayForOwnedWindowClose()
+        => _suppressLauncherHideUntilUtc = DateTimeOffset.UtcNow.AddSeconds(10);
+
+    private bool IsLauncherHideTemporarilySuppressed()
+        => _suppressLauncherHideUntilUtc > DateTimeOffset.UtcNow;
 
     private void OnAppWindowClosing(Microsoft.UI.Windowing.AppWindow sender, Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
     {

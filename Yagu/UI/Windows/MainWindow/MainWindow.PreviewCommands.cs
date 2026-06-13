@@ -18,6 +18,8 @@ namespace Yagu;
 /// </summary>
 public sealed partial class MainWindow
 {
+    private const string FindingSavedYaguSessionsStatus = "Finding saved Yagu sessions...";
+
     private async void OnShowFullFile(object sender, RoutedEventArgs e)
     {
         LogService.Instance.Info("Preview", "OnShowFullFile: button clicked");
@@ -43,8 +45,10 @@ public sealed partial class MainWindow
 
         int previousMode = ViewModel.PreviewWrapModeIndex;
         ViewModel.PreviewWrapModeIndex = mode;
-        ViewModel.PreviewWordWrap = mode == 0;
+        bool wrap = mode == (int)Models.PreviewWrapMode.Wrap;
+        ViewModel.PreviewWordWrap = wrap;
         SyncWrapModeToggles(mode);
+        ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || wrap);
 
         // Switching to/from NoWrap requires a full preview rebuild because the
         // paragraph segmentation (4096-char chunks) is baked into the content.
@@ -468,36 +472,37 @@ public sealed partial class MainWindow
 
     private async void OnLoadSession(object sender, RoutedEventArgs e)
     {
-        string? path = await ChooseSessionFileToLoadAsync();
+        string previousStatusText = ViewModel.StatusText;
+        string? path = await ChooseSessionFileToLoadAsync(previousStatusText);
         if (path is null) return;
 
         await LoadSessionFileAsync(path);
     }
 
-    private async Task<string?> ChooseSessionFileToLoadAsync()
+    private async Task<string?> ChooseSessionFileToLoadAsync(string previousStatusText)
     {
         SessionFileDiscoveryResult discovery;
         try
         {
-            ViewModel.StatusText = "Finding saved Yagu sessions...";
+            ViewModel.StatusText = FindingSavedYaguSessionsStatus;
             using var discoveryCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             discovery = await new SessionFileDiscoveryService().FindSessionFilesAsync(discoveryCts.Token);
         }
         catch (OperationCanceledException ex)
         {
             LogService.Instance.Warning("MainWindow", "Fast session discovery timed out; falling back to Windows picker.", ex);
-            return await PickSessionFileWithWindowsDialogAsync();
+            return await PickSessionFileWithWindowsDialogAsync(previousStatusText);
         }
         catch (Exception ex)
         {
             LogService.Instance.Warning("MainWindow", "Fast session discovery failed; falling back to Windows picker.", ex);
-            return await PickSessionFileWithWindowsDialogAsync();
+            return await PickSessionFileWithWindowsDialogAsync(previousStatusText);
         }
 
         if (!discovery.FastSearchAvailable)
         {
             LogService.Instance.Info("MainWindow", $"Fast session discovery unavailable: {discovery.Error ?? "unknown reason"}");
-            return await PickSessionFileWithWindowsDialogAsync();
+            return await PickSessionFileWithWindowsDialogAsync(previousStatusText);
         }
 
         LogService.Instance.Info("MainWindow", $"Fast session discovery found {discovery.Files.Count:N0} session file(s) via {discovery.Backend}.");
@@ -506,12 +511,12 @@ public sealed partial class MainWindow
         return result.Action switch
         {
             SessionLoadDialogAction.Load when !string.IsNullOrWhiteSpace(result.Path) => result.Path,
-            SessionLoadDialogAction.Browse => await PickSessionFileWithWindowsDialogAsync(),
-            _ => null,
+            SessionLoadDialogAction.Browse => await PickSessionFileWithWindowsDialogAsync(previousStatusText),
+            _ => RestoreStatusAfterCanceledSessionLoad(previousStatusText),
         };
     }
 
-    private async Task<string?> PickSessionFileWithWindowsDialogAsync()
+    private async Task<string?> PickSessionFileWithWindowsDialogAsync(string previousStatusText)
     {
         var picker = new Windows.Storage.Pickers.FileOpenPicker();
         picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
@@ -522,7 +527,15 @@ public sealed partial class MainWindow
         WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
 
         var file = await picker.PickSingleFileAsync();
-        return file?.Path;
+        return file?.Path ?? RestoreStatusAfterCanceledSessionLoad(previousStatusText);
+    }
+
+    private string? RestoreStatusAfterCanceledSessionLoad(string previousStatusText)
+    {
+        if (ViewModel.StatusText == FindingSavedYaguSessionsStatus)
+            ViewModel.StatusText = previousStatusText;
+
+        return null;
     }
 
     private async Task LoadSessionFileAsync(string path)

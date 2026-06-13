@@ -35,6 +35,8 @@ public sealed partial class MainWindow
     private ScrollViewer? _previewEditorScrollViewer;
     private int _previewEditorRevealVersion;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _previewEditorRevealRetryTimer;
+    private const int PreviewEditorSavedOverlayDurationMs = 700;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _previewEditorSavedOverlayTimer;
 
     private async void OnSavePreviewEdit(object sender, RoutedEventArgs e)
     {
@@ -58,6 +60,7 @@ public sealed partial class MainWindow
     {
         if (_suppressPreviewEditorTextChanged) return;
         if (PreviewEditor.Visibility != Visibility.Visible) return;
+        HidePreviewEditorSavedOverlay();
         _previewEditorDirty = true;
         UpdatePreviewEditorButtons();
     }
@@ -1094,6 +1097,7 @@ public sealed partial class MainWindow
             }
 
             await SavePreviewEditorTextToDiskAsync(textToSave).ConfigureAwait(true);
+            await VerifyPreviewEditorSavedTextAsync(textToSave).ConfigureAwait(true);
             _previewEditorOriginalText = _previewEditorChunked ? null : textToSave;
             _previewEditorDirty = false;
             UpdatePreviewEditorButtons();
@@ -1101,7 +1105,7 @@ public sealed partial class MainWindow
             if (!_previewEditorChunked || _previewEditorLoadedByteLength >= _previewEditorTotalByteLength)
             {
                 // Re-validate search results for this file against the saved content.
-                bool fileStillHasMatches = ViewModel.RevalidateFileResults(_previewEditorPath, GetPreviewEditorText());
+                bool fileStillHasMatches = ViewModel.RevalidateFileResults(_previewEditorPath, textToSave);
                 if (!fileStillHasMatches && _previewResult?.FilePath is not null &&
                     string.Equals(_previewResult.FilePath, _previewEditorPath, StringComparison.OrdinalIgnoreCase))
                 {
@@ -1110,6 +1114,7 @@ public sealed partial class MainWindow
             }
 
             ViewModel.StatusText = $"Saved {_previewEditorPath}.";
+            ShowPreviewEditorSavedOverlay();
             return true;
         }
         catch (Exception ex)
@@ -1180,6 +1185,50 @@ public sealed partial class MainWindow
         }
     }
 
+    private async Task VerifyPreviewEditorSavedTextAsync(string expectedText)
+    {
+        if (_previewEditorPath is null || _previewEditorEncoding is null || _previewEditorChunked)
+            return;
+
+        var savedText = await File.ReadAllTextAsync(_previewEditorPath, _previewEditorEncoding).ConfigureAwait(true);
+        if (!string.Equals(savedText, expectedText, StringComparison.Ordinal))
+            throw new IOException("Saved file verification failed: the file contents on disk do not match the editor text.");
+    }
+
+    private void ShowPreviewEditorSavedOverlay()
+    {
+        _previewEditorSavedOverlayTimer?.Stop();
+        _previewEditorSavedOverlayTimer = null;
+
+        if (!ViewModel.ShowEditorSavedOverlay || PreviewEditor.Visibility != Visibility.Visible)
+        {
+            PreviewEditorSavedOverlay.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        PreviewEditorSavedOverlay.Visibility = Visibility.Visible;
+
+        var timer = DispatcherQueue.CreateTimer();
+        _previewEditorSavedOverlayTimer = timer;
+        timer.Interval = TimeSpan.FromMilliseconds(PreviewEditorSavedOverlayDurationMs);
+        timer.IsRepeating = false;
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            if (ReferenceEquals(_previewEditorSavedOverlayTimer, timer))
+                _previewEditorSavedOverlayTimer = null;
+            PreviewEditorSavedOverlay.Visibility = Visibility.Collapsed;
+        };
+        timer.Start();
+    }
+
+    private void HidePreviewEditorSavedOverlay()
+    {
+        _previewEditorSavedOverlayTimer?.Stop();
+        _previewEditorSavedOverlayTimer = null;
+        PreviewEditorSavedOverlay.Visibility = Visibility.Collapsed;
+    }
+
     /// <summary>Returns true if the caller should proceed (edits were saved or discarded), false to cancel.</summary>
     private async Task<bool> ConfirmDiscardPreviewEditAsync()
     {
@@ -1233,6 +1282,7 @@ public sealed partial class MainWindow
         }
 
         SetPreviewEditorVisible(false);
+        HidePreviewEditorSavedOverlay();
         _previewEditorRevealVersion++;
         _previewEditorRevealRetryTimer?.Stop();
         _previewEditorRevealRetryTimer = null;
@@ -1311,6 +1361,9 @@ public sealed partial class MainWindow
     {
         bool before = PreviewEditor.WordWrap;
         PreviewEditor.WordWrap = wrap;
+        if (wrap)
+            PreviewEditor.HorizontalScroll = 0;
+        PreviewEditor.UpdateLayout();
         if (LogService.Instance.IsVerboseEnabled)
         {
             LogService.Instance.Verbose("PreviewEditor", $"ApplyPreviewEditorWordWrap: before={before}, requested={wrap}, after={PreviewEditor.WordWrap}, forced={_previewEditorForcedWrap}, setting={ViewModel.PreviewWordWrap}, visible={PreviewEditor.Visibility == Visibility.Visible}");

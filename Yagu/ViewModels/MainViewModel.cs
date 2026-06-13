@@ -209,8 +209,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             ? AppSettings.DefaultAdminProtectedPathSegments
             : _settings.AdminProtectedPathSegments;
         HasCompletedFirstRun = _settings.HasCompletedFirstRun;
+        HasShownFileDrawerIntroTip = _settings.HasShownFileDrawerIntroTip;
+        HasShownFileDrawerLineNumberIntroTip = _settings.HasShownFileDrawerLineNumberIntroTip;
+        HasShownPreviewMatchIntroTip = _settings.HasShownPreviewMatchIntroTip;
         LimitParallelismOnHdd = _settings.LimitParallelismOnHdd;
         BackupBeforeSave = _settings.BackupBeforeSave;
+        ShowEditorSavedOverlay = _settings.ShowEditorSavedOverlay;
         WindowFocusBehavior = _settings.WindowFocusBehavior;
         StartInLauncherMode = _settings.StartInLauncherMode;
         CloseToTray = _settings.CloseToTray;
@@ -684,10 +688,64 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial string AdminProtectedPathSegments { get; set; } = AppSettings.DefaultAdminProtectedPathSegments;
 
     [ObservableProperty] public partial bool HasCompletedFirstRun { get; set; }
+    [ObservableProperty] public partial bool HasShownFileDrawerIntroTip { get; set; }
+    [ObservableProperty] public partial bool HasShownFileDrawerLineNumberIntroTip { get; set; }
+    [ObservableProperty] public partial bool HasShownPreviewMatchIntroTip { get; set; }
+
+    public void ResetFirstTimeIntroductoryTooltips()
+    {
+        HasShownFileDrawerIntroTip = false;
+        HasShownFileDrawerLineNumberIntroTip = false;
+        HasShownPreviewMatchIntroTip = false;
+    }
+
+    public void RestoreFirstTimeIntroductoryTooltips(bool fileDrawer, bool fileDrawerLineNumber, bool previewMatch)
+    {
+        HasShownFileDrawerIntroTip = fileDrawer;
+        HasShownFileDrawerLineNumberIntroTip = fileDrawerLineNumber;
+        HasShownPreviewMatchIntroTip = previewMatch;
+    }
+
+    public Task MarkFileDrawerIntroTipShownAsync()
+        => MarkIntroTipShownAsync(nameof(HasShownFileDrawerIntroTip));
+
+    public Task MarkFileDrawerLineNumberIntroTipShownAsync()
+        => MarkIntroTipShownAsync(nameof(HasShownFileDrawerLineNumberIntroTip));
+
+    public Task MarkPreviewMatchIntroTipShownAsync()
+        => MarkIntroTipShownAsync(nameof(HasShownPreviewMatchIntroTip));
+
+    private async Task MarkIntroTipShownAsync(string propertyName)
+    {
+        switch (propertyName)
+        {
+            case nameof(HasShownFileDrawerIntroTip):
+                if (HasShownFileDrawerIntroTip) return;
+                HasShownFileDrawerIntroTip = true;
+                _settings.HasShownFileDrawerIntroTip = true;
+                break;
+            case nameof(HasShownFileDrawerLineNumberIntroTip):
+                if (HasShownFileDrawerLineNumberIntroTip) return;
+                HasShownFileDrawerLineNumberIntroTip = true;
+                _settings.HasShownFileDrawerLineNumberIntroTip = true;
+                break;
+            case nameof(HasShownPreviewMatchIntroTip):
+                if (HasShownPreviewMatchIntroTip) return;
+                HasShownPreviewMatchIntroTip = true;
+                _settings.HasShownPreviewMatchIntroTip = true;
+                break;
+            default:
+                return;
+        }
+
+        await _settingsService.SaveAsync(_settings).ConfigureAwait(false);
+    }
+
     [ObservableProperty] public partial string SearchResultTempDirectory { get; set; } = string.Empty;
     [ObservableProperty] public partial bool HasChosenSearchResultTempDirectory { get; set; }
     [ObservableProperty] public partial bool LimitParallelismOnHdd { get; set; } = true;
     [ObservableProperty] public partial bool BackupBeforeSave { get; set; } = true;
+    [ObservableProperty] public partial bool ShowEditorSavedOverlay { get; set; } = true;
     [ObservableProperty] public partial int WindowFocusBehavior { get; set; } = 1; // 0 = MinimizeToTray, 1 = StayOpen (default), 2 = AlwaysOnTop
     [ObservableProperty] public partial bool StartInLauncherMode { get; set; } = true;
     [ObservableProperty] public partial bool CloseToTray { get; set; } = true;
@@ -2487,8 +2545,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.ExcludeAdminProtectedPaths = ExcludeAdminProtectedPaths;
         _settings.AdminProtectedPathSegments = AdminProtectedPathSegments;
         _settings.HasCompletedFirstRun = HasCompletedFirstRun;
+        _settings.HasShownFileDrawerIntroTip = HasShownFileDrawerIntroTip;
+        _settings.HasShownFileDrawerLineNumberIntroTip = HasShownFileDrawerLineNumberIntroTip;
+        _settings.HasShownPreviewMatchIntroTip = HasShownPreviewMatchIntroTip;
         _settings.LimitParallelismOnHdd = LimitParallelismOnHdd;
         _settings.BackupBeforeSave = BackupBeforeSave;
+        _settings.ShowEditorSavedOverlay = ShowEditorSavedOverlay;
         _settings.WindowFocusBehavior = WindowFocusBehavior;
         _settings.StartInLauncherMode = StartInLauncherMode;
         _settings.CloseToTray = CloseToTray;

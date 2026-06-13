@@ -52,6 +52,7 @@ public sealed class MainWindowCliCommandRegressionTests
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.CliCommand.cs"));
         string terminalSource = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
+        string terminalDirectoryGuardSource = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "TerminalDirectoryGuard.cs"));
         string terminalHtml = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Assets", "terminal.html"));
 
         Assert.Contains("\"--directory\"", source);
@@ -86,13 +87,23 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("CloseGeneratedCliCommandOverlay", source);
         Assert.Contains("Visibility.Collapsed", source);
         Assert.Contains("OnSendGeneratedCliCommandToTerminalClick", source);
+        Assert.Contains("CollapseAdvancedOptionsForSearch();", source);
         Assert.Contains("await SendTextToTerminalAsync(commandText.Text);", source);
+        Assert.Contains("CloseGeneratedCliCommandOverlay();", source);
+        Assert.Contains("Could not send generated CLI command to terminal", source);
         Assert.Contains("EnsureGeneratedCliCommandText(commandText);", source);
         Assert.Contains("private async Task SendTextToTerminalAsync(string text)", terminalSource);
         Assert.Contains("EnsureTerminalPaneExpandedAsync", terminalSource);
         Assert.Contains("await WaitForTerminalShellReadyAsync();", terminalSource);
-        Assert.Contains("await ChangeTerminalDirectoryToYaguExecutableDirectoryAsync();", terminalSource);
-        Assert.Contains("cd /d", terminalSource);
+        Assert.Contains("await VerifyTerminalDirectoryIsYaguExecutableDirectoryAsync();", terminalSource);
+        Assert.Contains("cd /d", terminalDirectoryGuardSource);
+        Assert.Contains("&& echo", terminalDirectoryGuardSource);
+        Assert.Contains("TerminalDirectoryGuard.BuildChangeDirectoryProbeCommand", terminalSource);
+        Assert.Contains("TerminalDirectoryGuard.CreateMarker", terminalSource);
+        Assert.Contains("TerminalDirectoryGuard.TryExtractPromptDirectory", terminalSource);
+        Assert.Contains("TerminalDirectoryGuard.DirectoriesEqual", terminalSource);
+        Assert.Contains("TerminalDirectoryGuard.RemoveMarkerLine", terminalSource);
+        Assert.Contains("_terminalDirectoryProbe", terminalSource);
         Assert.Contains("Environment.ProcessPath", terminalSource);
         Assert.Contains("Path.GetDirectoryName(Environment.ProcessPath)", terminalSource);
         Assert.Contains("echoInput: false", terminalSource);
@@ -103,6 +114,11 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("msg.type === 'pasteText'", terminalHtml);
         Assert.Contains("PostWebMessageAsJson(\"{\\\"type\\\":\\\"focus\\\"}\")", terminalSource);
         Assert.Contains("msg.type === 'focus'", terminalHtml);
+
+        AssertContainsInOrder(terminalSource,
+            "await VerifyTerminalDirectoryIsYaguExecutableDirectoryAsync();",
+            "string commandText = text.TrimEnd('\\r', '\\n');",
+            "PostTerminalPasteTextToWebView(commandText);");
 
         string ensureTerminalPane = terminalSource.Substring(
             terminalSource.IndexOf("private async Task EnsureTerminalPaneExpandedAsync()", StringComparison.Ordinal),
@@ -123,6 +139,8 @@ public sealed class MainWindowCliCommandRegressionTests
 
         Assert.Contains("let inputBuffer = '';", terminalHtml);
         Assert.Contains("let inputCursor = 0;", terminalHtml);
+        Assert.Contains("let shellCommandActive = false;", terminalHtml);
+        Assert.Contains("let lastPromptText = '';", terminalHtml);
         Assert.Contains("function renderInputLine()", terminalHtml);
         Assert.Contains("function insertInputText(text)", terminalHtml);
         Assert.Contains("function backspaceInput()", terminalHtml);
@@ -130,8 +148,15 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("function recallHistory(direction)", terminalHtml);
         Assert.Contains("function insertPastedText(text)", terminalHtml);
         Assert.Contains("function cancelInputLine()", terminalHtml);
+        Assert.Contains("function markShellIdleIfPromptVisible()", terminalHtml);
+        Assert.Contains("function rememberPromptText(text)", terminalHtml);
+        Assert.Contains("function rememberPromptFromOutput(text)", terminalHtml);
+        Assert.Contains("function formatPromptForInput(promptText)", terminalHtml);
+        Assert.Contains("function requestInputCompletion()", terminalHtml);
+        Assert.Contains("function applyCompletionResult(result)", terminalHtml);
 
         Assert.Contains("case 'Backspace': return { kind: 'backspace' };", terminalHtml);
+        Assert.Contains("case 'Tab': return { kind: 'completion' };", terminalHtml);
         Assert.Contains("case 'Delete': return { kind: 'delete' };", terminalHtml);
         Assert.Contains("case 'ArrowUp': return { kind: 'history', direction: -1 };", terminalHtml);
         Assert.Contains("case 'ArrowDown': return { kind: 'history', direction: 1 };", terminalHtml);
@@ -152,14 +177,83 @@ public sealed class MainWindowCliCommandRegressionTests
             "postHostMessage({ type: 'requestPaste' });");
 
         Assert.Contains("postHostMessage({ type: 'cancelInput' });", terminalHtml);
+    Assert.Contains("type: 'completeInput'", terminalHtml);
         Assert.Contains("msg.type === 'pasteText'", terminalHtml);
         Assert.Contains("insertPastedText(msg.text || '')", terminalHtml);
+    Assert.Contains("msg.type === 'completionResult'", terminalHtml);
         Assert.Contains("sendTerminalInput(line + '\\r', false);", terminalHtml);
-        Assert.Contains("sendTerminalInput('cls\\r', false);", terminalHtml);
-        Assert.Contains("term.clear();", terminalHtml);
+    Assert.Contains("getCurrentPromptText()", terminalHtml);
+    Assert.Contains("clearTerminalSurface(promptText);", terminalHtml);
+    Assert.DoesNotContain("sendTerminalInput('cls\\r', false);", terminalHtml);
+
+        string submitInputLine = terminalHtml.Substring(
+            terminalHtml.IndexOf("function submitInputLine()", StringComparison.Ordinal),
+            terminalHtml.IndexOf("function insertPastedText(text)", StringComparison.Ordinal) - terminalHtml.IndexOf("function submitInputLine()", StringComparison.Ordinal));
+        AssertContainsInOrder(submitInputLine,
+            "if (isClearCommand(line))",
+            "var promptText = getCurrentPromptText();",
+            "clearRenderedInput();",
+            "clearInputState();",
+            "clearTerminalSurface(promptText);",
+            "return;",
+            "clearInputState();",
+            "term.write('\\r\\n');",
+            "shellCommandActive = true;",
+            "sendTerminalInput(line + '\\r', false);");
+
+        string cancelInputLine = terminalHtml.Substring(
+            terminalHtml.IndexOf("function cancelInputLine()", StringComparison.Ordinal),
+            terminalHtml.IndexOf("// WebView2 frequently fails", StringComparison.Ordinal) - terminalHtml.IndexOf("function cancelInputLine()", StringComparison.Ordinal));
+        AssertContainsInOrder(cancelInputLine,
+            "var promptText = getCurrentPromptText();",
+            "var shouldRedrawPrompt = rememberPromptText(promptText);",
+            "if (!shouldRedrawPrompt && !shellCommandActive && lastPromptText.length > 0)",
+            "promptText = lastPromptText;",
+            "shouldRedrawPrompt = true;",
+            "if (!shellCommandActive)",
+            "moveRenderedCursorToEnd();",
+            "term.write('^C\\r\\n');",
+            "clearInputState();",
+            "if (shouldRedrawPrompt)",
+            "term.write(formatPromptForInput(promptText));",
+            "return;",
+            "clearRenderedInput();",
+            "term.write('^C\\r\\n');",
+            "if (shouldRedrawPrompt)",
+            "term.write(formatPromptForInput(promptText));",
+            "postHostMessage({ type: 'cancelInput' });");
+
+        AssertContainsInOrder(terminalHtml,
+            "if (msg && msg.type === 'output')",
+            "var firstOutput = receivedOutputCount === 0;",
+            "rememberPromptFromOutput(msg.data || '');",
+            "term.writeSync(msg.data || '');");
+
+        AssertContainsInOrder(terminalHtml,
+            "function markShellIdleIfPromptVisible()",
+            "var promptText = getCurrentPromptText();",
+            "rememberPromptText(promptText);");
+
+        AssertContainsInOrder(terminalHtml,
+            "function rememberPromptText(text)",
+            "lastPromptText = text;",
+            "shellCommandActive = false;",
+            "return true;");
+
+        AssertContainsInOrder(terminalHtml,
+            "function formatPromptForInput(promptText)",
+            "if (!promptText)",
+            "return '';",
+            "return /\\s$/.test(promptText) ? promptText : promptText + ' ';");
+        AssertContainsInOrder(terminalHtml,
+            "refreshTerminalRows();",
+            "markShellIdleIfPromptVisible();");
 
         Assert.Contains("case \"cancelInput\":", terminalSource);
         Assert.Contains("_terminalService?.CancelCurrentCommand();", terminalSource);
+        Assert.Contains("case \"completeInput\":", terminalSource);
+        Assert.Contains("TerminalCompletionService.Complete(", terminalSource);
+        Assert.Contains("PostTerminalCompletionResultToWebView(result);", terminalSource);
         Assert.Contains("PostTerminalPasteTextToWebView(text);", terminalSource);
         Assert.Contains("PostTerminalPasteTextToWebView(commandText);", terminalSource);
 

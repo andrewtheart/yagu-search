@@ -821,6 +821,7 @@ public sealed class SettingsEffectTests : IDisposable
             ExcludeAdminProtectedPaths = false,
             AdminProtectedPathSegments = @"\test\path",
             BackupBeforeSave = false,
+            ShowEditorSavedOverlay = false,
             WindowFocusBehavior = 2,
             AdvancedOptionsCollapsedWidthModeIndex = 1,
             PreviewEditorMaxSizeMB = 64,
@@ -859,6 +860,7 @@ public sealed class SettingsEffectTests : IDisposable
         Assert.Equal(original.ExcludeAdminProtectedPaths, loaded.ExcludeAdminProtectedPaths);
         Assert.Equal(original.AdminProtectedPathSegments, loaded.AdminProtectedPathSegments);
         Assert.Equal(original.BackupBeforeSave, loaded.BackupBeforeSave);
+        Assert.Equal(original.ShowEditorSavedOverlay, loaded.ShowEditorSavedOverlay);
         Assert.Equal(original.WindowFocusBehavior, loaded.WindowFocusBehavior);
         Assert.Equal(original.AdvancedOptionsCollapsedWidthModeIndex, loaded.AdvancedOptionsCollapsedWidthModeIndex);
         Assert.Equal(original.PreviewEditorMaxSizeMB, loaded.PreviewEditorMaxSizeMB);
@@ -923,6 +925,7 @@ public sealed class SettingsEffectTests : IDisposable
         Assert.Equal(0, s.MaxMatchesPerFile);
         Assert.Equal(0, s.AdvancedOptionsCollapsedWidthModeIndex);
         Assert.True(s.BackupBeforeSave);
+        Assert.True(s.ShowEditorSavedOverlay);
         Assert.True(s.ExcludeAdminProtectedPaths);
         Assert.False(s.GlobalHotkeyEnabled);
         Assert.Equal(1, s.PreviewModeIndex);

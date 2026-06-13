@@ -14,8 +14,18 @@ public sealed partial class MainWindow
     private double _col0StartWidth;
     private double _col2StartWidth;
     private bool _topSearchDrawerCompact;
+    private bool _advancedOptionsDrawerExpandedWidth;
     private const double CompactTopSearchDrawerThreshold = 440;
     private const double CompactTopSearchActionButtonWidth = 38;
+
+    private void InitializeAdvancedOptionsDrawerStateTracking()
+    {
+        AdvancedOptionsExpander.RegisterPropertyChangedCallback(Expander.IsExpandedProperty, (_, _) =>
+        {
+            if (!AdvancedOptionsExpander.IsExpanded)
+                SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: false);
+        });
+    }
 
     private void OnAdvancedOptionsExpanding(Expander sender, ExpanderExpandingEventArgs args)
     {
@@ -37,11 +47,15 @@ public sealed partial class MainWindow
 
     private void SetAdvancedOptionsDrawerExpandedWidthState(bool isExpanded)
     {
-        AdvancedOptionsExpander.HorizontalAlignment = isExpanded || ViewModel.AdvancedOptionsCollapsedWidthModeIndex == 0
+        _advancedOptionsDrawerExpandedWidth = isExpanded;
+        bool shouldFillSearchCardWidth = isExpanded || _terminalPaneExpanded;
+        Grid.SetColumnSpan(AdvancedOptionsExpander, shouldFillSearchCardWidth ? 2 : 1);
+        AdvancedOptionsExpander.HorizontalAlignment = shouldFillSearchCardWidth || ViewModel.AdvancedOptionsCollapsedWidthModeIndex == 0
             ? HorizontalAlignment.Stretch
             : HorizontalAlignment.Left;
         AdvancedOptionsExpander.Width = double.NaN;
         AdvancedOptionsExpander.InvalidateMeasure();
+        UpdateTerminalChevronVisibility();
     }
 
     /// <summary>

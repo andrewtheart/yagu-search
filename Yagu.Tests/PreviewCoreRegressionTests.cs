@@ -370,15 +370,25 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: false);", collapsed);
         Assert.DoesNotContain("ChevronRotate.Angle", collapsed);
 
-        string widthState = ExtractMethodWindow(MainWindowSource, "SetAdvancedOptionsDrawerExpandedWidthState", 900);
+        string widthState = ExtractMethodWindow(MainWindowSource, "SetAdvancedOptionsDrawerExpandedWidthState", 1200);
         AssertContainsInOrder(widthState,
-            "AdvancedOptionsExpander.HorizontalAlignment = isExpanded || ViewModel.AdvancedOptionsCollapsedWidthModeIndex == 0",
+            "_advancedOptionsDrawerExpandedWidth = isExpanded;",
+            "bool shouldFillSearchCardWidth = isExpanded || _terminalPaneExpanded;",
+            "Grid.SetColumnSpan(AdvancedOptionsExpander, shouldFillSearchCardWidth ? 2 : 1);",
+            "AdvancedOptionsExpander.HorizontalAlignment = shouldFillSearchCardWidth || ViewModel.AdvancedOptionsCollapsedWidthModeIndex == 0",
             "? HorizontalAlignment.Stretch",
             ": HorizontalAlignment.Left;",
             "AdvancedOptionsExpander.Width = double.NaN;",
-            "AdvancedOptionsExpander.InvalidateMeasure();");
+            "AdvancedOptionsExpander.InvalidateMeasure();",
+            "UpdateTerminalChevronVisibility();");
 
         Assert.Contains("SetAdvancedOptionsDrawerExpandedWidthState(AdvancedOptionsExpander.IsExpanded);", MainWindowSource);
+        Assert.Contains("InitializeAdvancedOptionsDrawerStateTracking();", MainWindowSource);
+        string stateTracking = ExtractMethodWindow(MainWindowSource, "InitializeAdvancedOptionsDrawerStateTracking", 900);
+        AssertContainsInOrder(stateTracking,
+            "AdvancedOptionsExpander.RegisterPropertyChangedCallback(Expander.IsExpandedProperty",
+            "if (!AdvancedOptionsExpander.IsExpanded)",
+            "SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: false);");
         Assert.Contains("nameof(ViewModel.AdvancedOptionsCollapsedWidthModeIndex)", MainWindowSource);
 
         string settingsSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "Services", "SettingsService.cs"));
@@ -395,7 +405,7 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void TerminalChevron_StaysInlineBesideAdvancedOptions()
+    public void TerminalChevron_MovesIntoExpandedTerminalAndFreesSearchPanelSpace()
     {
         string preSearchChevron = ExtractXamlWindow("x:Name=\"PreSearchTerminalChevron\"", 900);
         Assert.Contains("Grid.Row=\"2\"", preSearchChevron);
@@ -408,12 +418,23 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("x:Name=\"PreSearchTerminalChevronIcon\"", preSearchChevron);
         Assert.Contains("ToolTipService.ToolTip=\"Toggle embedded terminal\"", preSearchChevron);
 
+        string terminalHost = ExtractXamlWindow("x:Name=\"TerminalHost\"", 1800);
+        AssertContainsInOrder(terminalHost,
+            "<WebView2 x:Name=\"TerminalWebView\"",
+            "<Button x:Name=\"TerminalChevron\"",
+            "HorizontalAlignment=\"Right\"",
+            "VerticalAlignment=\"Bottom\"",
+            "Margin=\"0,0,32,10\"",
+            "Canvas.ZIndex=\"10\"",
+            "<FontIcon x:Name=\"TerminalChevronIcon\"");
+
         Assert.Contains("<Grid Grid.Row=\"0\" Grid.ColumnSpan=\"2\" ColumnSpacing=\"8\">", MainWindowXaml);
         Assert.Contains("<Grid Grid.Row=\"1\" Grid.ColumnSpan=\"2\" ColumnSpacing=\"8\">", MainWindowXaml);
         Assert.Contains("Grid.Row=\"2\" Grid.Column=\"0\"", ExtractXamlWindow("x:Name=\"AdvancedOptionsExpander\"", 400));
 
         string terminalToggle = ExtractMethodWindow(MainWindowSource, "SetTerminalPaneExpanded", 1200);
         AssertContainsInOrder(terminalToggle,
+            "SetAdvancedOptionsDrawerExpandedWidthState(AdvancedOptionsExpander.IsExpanded);",
             "UpdateTerminalChevronGlyphs();",
             "UpdateTerminalChevronVisibility();",
             "if (_launcherMode)",
@@ -427,9 +448,10 @@ public sealed class PreviewCoreRegressionTests
 
         string visibilitySync = ExtractMethodWindow(MainWindowSource, "UpdateTerminalChevronVisibility", 1000);
         AssertContainsInOrder(visibilitySync,
-            "bool statusBarChevronVisible = StatusBarRow.Height.IsAuto || StatusBarRow.Height.Value > 0;",
-            "PreSearchTerminalChevron.Visibility = Visibility.Visible;",
-            "TerminalChevron.Visibility = statusBarChevronVisible ? Visibility.Collapsed : Visibility.Visible;");
+            "PreSearchTerminalChevron.Visibility = !_terminalPaneExpanded && !_advancedOptionsDrawerExpandedWidth",
+            "? Visibility.Visible",
+            ": Visibility.Collapsed;",
+            "TerminalChevron.Visibility = _terminalPaneExpanded ? Visibility.Visible : Visibility.Collapsed;");
 
         string statusBarVisibility = ExtractMethodWindow(MainWindowSource, "UpdateBottomStatusBarVisibility", 900);
         Assert.Contains("UpdateTerminalChevronVisibility();", statusBarVisibility);
@@ -976,6 +998,7 @@ public sealed class PreviewCoreRegressionTests
             "Text=\"Load session\"");
 
         Assert.DoesNotContain("SpinButtonPlacementMode=\"Compact\"", toolbar);
+        Assert.Contains("<FontIcon Glyph=\"&#xE8E6;\" FontSize=\"14\" />", toolbar);
         Assert.DoesNotContain("ToolTipService.ToolTip=\"Clear all results (Ctrl+Shift+Delete)\">\r\n                                <FontIcon Glyph=\"&#xE74D;\"", toolbar);
 
         string clearResults = ExtractMethodWindow(MainWindowSource, "OnClearResults", 1400);
@@ -1062,6 +1085,14 @@ public sealed class PreviewCoreRegressionTests
 
         string filterRow = ExtractXamlWindow("PlaceholderText=\"Filter files…\"", 1700);
         Assert.DoesNotContain("Content=\"{x:Bind ViewModel.DateRangeFilterLabel", filterRow);
+
+        string selectAllFiles = ExtractXamlWindow("x:Name=\"SelectAllFilesCheckBox\"", 700);
+        Assert.Contains("Width=\"24\" Height=\"24\" MinWidth=\"0\" MinHeight=\"0\" Padding=\"0\"", selectAllFiles);
+        Assert.Contains("HorizontalAlignment=\"Center\" VerticalAlignment=\"Center\"", selectAllFiles);
+        AssertContainsInOrder(MainWindowXaml,
+            "<Grid Width=\"38\" VerticalAlignment=\"Center\">",
+            "x:Name=\"SelectAllFilesCheckBox\"",
+            "<Grid Grid.Column=\"1\">");
 
         string extensionMenu = ExtractMethodWindow(MainWindowSource, "RebuildExtensionFilterSubMenu", window: 3200);
         AssertContainsInOrder(extensionMenu,
@@ -2316,9 +2347,58 @@ public sealed class PreviewCoreRegressionTests
 
         string applyEditorWrap = ExtractMethodWindow(PreviewEditorSource, "ApplyPreviewEditorWordWrap");
         Assert.Contains("PreviewEditor.WordWrap = wrap;", applyEditorWrap);
+        Assert.Contains("PreviewEditor.UpdateLayout();", applyEditorWrap);
 
         string applyWrap = ExtractMethodWindow(MainWindowSource, "ApplyWordWrap");
         Assert.Contains("ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || wrap);", applyWrap);
+    }
+
+    [Fact]
+    public void EditorWrapToolbar_AppliesCurrentEditorBeforePreviewRefresh()
+    {
+        string wrapCommand = ExtractMethodWindow(MainWindowSource, "OnWrapModeOptionClicked", window: 1400);
+
+        AssertContainsInOrder(wrapCommand,
+            "ViewModel.PreviewWrapModeIndex = mode;",
+            "bool wrap = mode == (int)Models.PreviewWrapMode.Wrap;",
+            "ViewModel.PreviewWordWrap = wrap;",
+            "SyncWrapModeToggles(mode);",
+            "ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || wrap);",
+            "RefreshCurrentPreview(preserveScroll: true);");
+    }
+
+    [Fact]
+    public void PreviewEditorSave_VerifiesDiskWriteAndShowsTimedOverlay()
+    {
+        string save = ExtractMethodWindow(PreviewEditorSource, "SavePreviewEditAsync", window: 4200);
+        AssertContainsInOrder(save,
+            "var textToSave = GetPreviewEditorText();",
+            "await SavePreviewEditorTextToDiskAsync(textToSave).ConfigureAwait(true);",
+            "await VerifyPreviewEditorSavedTextAsync(textToSave).ConfigureAwait(true);",
+            "_previewEditorOriginalText = _previewEditorChunked ? null : textToSave;",
+            "bool fileStillHasMatches = ViewModel.RevalidateFileResults(_previewEditorPath, textToSave);",
+            "ViewModel.StatusText = $\"Saved {_previewEditorPath}.\";",
+            "ShowPreviewEditorSavedOverlay();",
+            "return true;");
+        Assert.DoesNotContain("ViewModel.RevalidateFileResults(_previewEditorPath, GetPreviewEditorText())", save);
+
+        string verify = ExtractMethodWindow(PreviewEditorSource, "VerifyPreviewEditorSavedTextAsync", window: 1200);
+        Assert.Contains("File.ReadAllTextAsync(_previewEditorPath, _previewEditorEncoding)", verify);
+        Assert.Contains("Saved file verification failed", verify);
+
+        string overlay = ExtractXamlWindow("x:Name=\"PreviewEditorSavedOverlay\"", 1200);
+        Assert.Contains("Visibility=\"Collapsed\"", overlay);
+        Assert.Contains("IsHitTestVisible=\"False\"", overlay);
+        Assert.Contains("Glyph=\"&#xE8FB;\"", overlay);
+        Assert.Contains("Text=\"Saved\"", overlay);
+
+        Assert.Contains("private const int PreviewEditorSavedOverlayDurationMs = 700;", PreviewEditorSource);
+        string showOverlay = ExtractMethodWindow(PreviewEditorSource, "ShowPreviewEditorSavedOverlay", window: 2200);
+        AssertContainsInOrder(showOverlay,
+            "if (!ViewModel.ShowEditorSavedOverlay || PreviewEditor.Visibility != Visibility.Visible)",
+            "PreviewEditorSavedOverlay.Visibility = Visibility.Visible;",
+            "timer.Interval = TimeSpan.FromMilliseconds(PreviewEditorSavedOverlayDurationMs);",
+            "PreviewEditorSavedOverlay.Visibility = Visibility.Collapsed;");
     }
 
     [Fact]

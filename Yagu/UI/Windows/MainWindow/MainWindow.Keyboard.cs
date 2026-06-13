@@ -7,7 +7,7 @@ using Windows.System;
 namespace Yagu;
 
 /// <summary>
-/// Window-level keyboard routing for find/replace, go-to-line, screenshots, and match navigation.
+/// Window-level keyboard routing for find/replace, go-to-line, and match navigation.
 /// </summary>
 public sealed partial class MainWindow
 {
@@ -37,11 +37,6 @@ public sealed partial class MainWindow
         {
             e.Handled = true;
             OpenHelpWindow();
-        }
-        else if (e.Key == Windows.System.VirtualKey.S && ctrl && shift)
-        {
-            e.Handled = true;
-            _ = CopyWindowScreenshotToClipboardAsync();
         }
         else if (e.Key == Windows.System.VirtualKey.F && ctrl)
         {

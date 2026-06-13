@@ -3,7 +3,6 @@ using System.Diagnostics.CodeAnalysis;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
-using Windows.ApplicationModel.DataTransfer;
 using Windows.System;
 using Yagu.Services;
 namespace Yagu;
@@ -200,53 +199,6 @@ public sealed partial class MainWindow
             target.IsSuggestionListOpen = false;
             DispatcherQueue.TryEnqueue(() => target.IsSuggestionListOpen = false);
         });
-    }
-
-    private async Task CopyWindowScreenshotToClipboardAsync()
-    {
-        if (_screenshotCaptureInFlight)
-            return;
-
-        _screenshotCaptureInFlight = true;
-
-        try
-        {
-            RootGrid.UpdateLayout();
-            await YieldLowAsync();
-
-            var capture = ScreenshotCaptureService.CaptureWindow(_hwnd);
-
-            var stream = new Windows.Storage.Streams.InMemoryRandomAccessStream();
-            var encoder = await Windows.Graphics.Imaging.BitmapEncoder.CreateAsync(
-                Windows.Graphics.Imaging.BitmapEncoder.PngEncoderId,
-                stream);
-            encoder.SetPixelData(
-                Windows.Graphics.Imaging.BitmapPixelFormat.Bgra8,
-                Windows.Graphics.Imaging.BitmapAlphaMode.Ignore,
-                (uint)capture.Width,
-                (uint)capture.Height,
-                capture.Dpi,
-                capture.Dpi,
-                capture.Pixels);
-            await encoder.FlushAsync();
-            stream.Seek(0);
-
-            var package = new DataPackage();
-            package.SetBitmap(Windows.Storage.Streams.RandomAccessStreamReference.CreateFromStream(stream));
-            Clipboard.SetContent(package);
-            Clipboard.Flush();
-
-            ViewModel.StatusText = $"Screenshot copied to clipboard ({capture.Width:N0}x{capture.Height:N0}).";
-        }
-        catch (Exception ex)
-        {
-            LogService.Instance.Warning("Screenshot", "Could not copy window screenshot to clipboard", ex);
-            ViewModel.StatusText = "Could not copy screenshot to clipboard.";
-        }
-        finally
-        {
-            _screenshotCaptureInFlight = false;
-        }
     }
 
     private void RestoreQuerySuggestions(AutoSuggestBox? box = null)

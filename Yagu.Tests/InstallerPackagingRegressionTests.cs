@@ -38,6 +38,33 @@ public sealed class InstallerPackagingRegressionTests
     }
 
     [Fact]
+    public void AzurePublish_UploadsInstallerAndAddsItToYaguCard()
+    {
+        string root = FindRepoRoot();
+        string publishScript = File.ReadAllText(Path.Combine(root, "scripts", "publish-to-azure.ps1"));
+        string deployPrompt = File.ReadAllText(Path.Combine(root, ".github", "prompts", "deploy-to-azurestaticsite.prompt.md"));
+
+        Assert.Contains("$installerName = \"YaguSetup-$version.exe\"", publishScript);
+        Assert.Contains("$buildInstallerScript = Join-Path $root \"build-installer.ps1\"", publishScript);
+        Assert.Contains("& $buildInstallerScript -SkipBuild", publishScript);
+        Assert.Contains("--name $installerName", publishScript);
+        Assert.Contains("--content-type \"application/octet-stream\"", publishScript);
+        Assert.Contains("data-blob=\"$installerName\"", publishScript);
+        Assert.Contains("Download Installer", publishScript);
+        Assert.Contains("data-blob=\"$zipName\"", publishScript);
+        Assert.Contains("Download ZIP", publishScript);
+        Assert.Contains("Installer: in '$DownloadsContainer' container as $installerName", publishScript);
+        Assert.Contains("ZIP:       in '$DownloadsContainer' container as $zipName", publishScript);
+
+        Assert.Contains("uploads ZIP and installer EXE", deployPrompt);
+        Assert.Contains("installer build", deployPrompt);
+        Assert.Contains("Download Installer", deployPrompt);
+        Assert.Contains("YaguSetup-<version>.exe", deployPrompt);
+        Assert.Contains("Download ZIP", deployPrompt);
+        Assert.Contains("Yagu-<version>.zip", deployPrompt);
+    }
+
+    [Fact]
     public void InnoInstaller_RequiresDotNet10RuntimeBeforeInstall()
     {
         string root = FindRepoRoot();

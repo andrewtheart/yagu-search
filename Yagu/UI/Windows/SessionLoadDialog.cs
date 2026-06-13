@@ -78,6 +78,25 @@ internal static class SessionLoadDialog
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
+        var header = new StackPanel
+        {
+            Spacing = 6,
+        };
+        header.Children.Add(new TextBlock
+        {
+            Text = "Load session",
+            FontSize = 22,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            TextWrapping = TextWrapping.WrapWholeWords,
+        });
+        header.Children.Add(new TextBlock
+        {
+            Text = "Saved sessions reopen previous Yagu results without rerunning the search. Select a .yagu-session file from the list, or choose Browse... to pick one manually.",
+            FontSize = 13,
+            Opacity = 0.78,
+            TextWrapping = TextWrapping.WrapWholeWords,
+        });
+
         var summary = new TextBlock
         {
             Text = sessions.Count == 0
@@ -87,8 +106,9 @@ internal static class SessionLoadDialog
             Opacity = 0.72,
             TextWrapping = TextWrapping.WrapWholeWords,
         };
-        Grid.SetRow(summary, 0);
-        root.Children.Add(summary);
+        header.Children.Add(summary);
+        Grid.SetRow(header, 0);
+        root.Children.Add(header);
 
         FrameworkElement body = sessions.Count == 0
             ? BuildEmptyState()

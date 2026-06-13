@@ -67,7 +67,7 @@ public sealed partial class MainWindow : Window, IDisposable
     private bool _suppressHotkeySettingChange;
     private Helpers.TrayIcon? _trayIcon;
     private int _ownedModalWindowDepth;
-    private bool _screenshotCaptureInFlight;
+    private DateTimeOffset _suppressLauncherHideUntilUtc;
     private bool _forceClose;
     private bool _disposed;
 
@@ -109,9 +109,6 @@ public sealed partial class MainWindow : Window, IDisposable
 
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetForegroundWindow();
 
     [DllImport("user32.dll")]
     private static extern int GetDpiForWindow(IntPtr hWnd);
@@ -203,6 +200,7 @@ public sealed partial class MainWindow : Window, IDisposable
         InitializeHelpKeyboardShortcut();
         SearchCancelButton.SizeChanged += (_, _) => AlignBrowseButtonToSearchButton();
         SyncLayoutToggles(ViewModel.PreviewModeIndex);
+        InitializeAdvancedOptionsDrawerStateTracking();
         SetAdvancedOptionsDrawerExpandedWidthState(AdvancedOptionsExpander.IsExpanded);
         ApplyAppWindowTitle();
 

@@ -72,6 +72,8 @@
     <Compile Include="..\Yagu\Services\LogService.cs" Link="Source\Services\LogService.cs" />
     <Compile Include="..\Yagu\Services\LowDiskSpaceMonitor.cs" Link="Source\Services\LowDiskSpaceMonitor.cs" />
     <Compile Include="..\Yagu\Services\ConPtyTerminalService.cs" Link="Source\Services\ConPtyTerminalService.cs" />
+    <Compile Include="..\Yagu\Services\TerminalDirectoryGuard.cs" Link="Source\Services\TerminalDirectoryGuard.cs" />
+    <Compile Include="..\Yagu\Services\TerminalCompletionService.cs" Link="Source\Services\TerminalCompletionService.cs" />
     <Compile Include="..\Yagu\Services\DirectoryAutoCompleteService.cs" Link="Source\Services\DirectoryAutoCompleteService.cs" />
     <Compile Include="..\Yagu\Services\GitignoreService.cs" Link="Source\Services\GitignoreService.cs" />
     <Compile Include="..\Yagu\Services\DynamicGitignoreMatcher.cs" Link="Source\Services\DynamicGitignoreMatcher.cs" />
