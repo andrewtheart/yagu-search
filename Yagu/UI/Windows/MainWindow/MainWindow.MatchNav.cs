@@ -111,9 +111,21 @@ public sealed partial class MainWindow
     }
 
     private bool IsSearchMatchRun(Run run)
-        => run.FontWeight.Weight == Microsoft.UI.Text.FontWeights.Bold.Weight
+        => s_previewSearchMatchRuns.TryGetValue(run, out _)
+           || run.FontWeight.Weight == Microsoft.UI.Text.FontWeights.Bold.Weight
            && run.Foreground is SolidColorBrush brush
            && brush.Color == _matchTextBrush.Color;
+
+    private void ApplyMatchColorToParagraphMatch(Paragraph para, int matchInPara)
+    {
+        var matches = GetMatchRunsForParagraph(para);
+        if ((uint)matchInPara >= (uint)matches.Count)
+            return;
+
+        var run = matches[matchInPara].run;
+        run.FontWeight = Microsoft.UI.Text.FontWeights.Bold;
+        run.Foreground = _matchTextBrush;
+    }
 
     private void UnboxCurrentMatch([System.Runtime.CompilerServices.CallerMemberName] string caller = "")
     {

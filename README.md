@@ -8,7 +8,7 @@ For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
 
 ## Download Installer
 
-To install Yagu without building from source, download [YaguSetup-1.0.0.2278.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2278.exe) from GitHub and run it. The installer checks for the x64 .NET 10 Runtime and includes the Windows App Runtime payloads needed by the desktop app.
+To install Yagu without building from source, download [YaguSetup-1.0.0.2278.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2278.exe) from GitHub and run it. The installer checks for the x64 .NET 10 Runtime, can install .NET 10 with `winget` when needed, and includes the Windows App Runtime payloads needed by the desktop app.
 
 ## Current Project Status
 
@@ -56,7 +56,7 @@ Yagu is Windows-only.
 For someone who only wants to install and run Yagu:
 
 - Windows 10 version 1809 / build 17763 or newer.
-- The x64 .NET 10 Runtime. The installer checks for it and, if missing, offers to download and install it with progress before continuing.
+- The x64 .NET 10 Runtime. The installer checks for it and, if missing, offers to run `winget install Microsoft.DotNet.SDK.10` with progress before continuing.
 - Windows App Runtime 1.8. The installer packages the required runtime MSIX payloads and installs them when needed.
 - voidtools Everything is optional but strongly recommended for fastest file discovery. If Everything is not available, Yagu falls back to built-in recursive .NET file enumeration.
 
@@ -214,13 +214,17 @@ This builds Yagu in Release, stages the output, compiles an installer EXE at `in
 
 Running `dotnet publish` for the Yagu project also builds the installer after publish completes. To publish without rebuilding the installer, pass `-p:BuildInstallerOnPublish=false`.
 
-At install time, the setup program checks for the x64 .NET 10 runtime before copying files. If it is missing, setup offers to download [.NET 10.0 Runtime (v10.0.9) - Windows x64 Installer](https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-10.0.9-windows-x64-installer?cid=getdotnetcore), shows download progress, and runs the runtime installer before continuing.
+At install time, the setup program checks for the x64 .NET 10 runtime before copying files. If it is missing, setup offers to run `winget install Microsoft.DotNet.SDK.10`, shells out through a hidden PowerShell process, shows live `winget` status in the installer progress dialog, and verifies the runtime before continuing.
 
-To skip the build step and use existing Release output:
+#### Build Only The Installer
+
+If the Release app output already exists and you only want to compile the installer EXE, run the installer script with `-SkipBuild` from the repo root:
 
 ```powershell
 .\build-installer.ps1 -SkipBuild
 ```
+
+This skips the `dotnet build` step, reuses the existing files under `Yagu\bin\Release\<target-framework>`, refreshes the installer staging directory, stages the Windows App Runtime prerequisite payloads, and runs Inno Setup. The output is written to `installer\output\YaguSetup-<version>.exe` and copied to `installer\YaguSetup-<version>.exe`.
 
 To specify a custom Inno Setup path:
 

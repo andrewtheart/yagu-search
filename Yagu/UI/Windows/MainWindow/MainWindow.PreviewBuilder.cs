@@ -2497,6 +2497,7 @@ public sealed partial class MainWindow
     /// the full untruncated line was rendered, which contains every occurrence.
     /// </summary>
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphMatchWindows = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Run, object> s_previewSearchMatchRuns = new();
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DependencyObject, object> s_previewShowMoreActions = new();
     private const int PreviewShowMoreTooltipHideDelayMs = 700;
     private const double PreviewShowMoreTooltipCursorGapDip = 12;
@@ -2861,6 +2862,14 @@ public sealed partial class MainWindow
         var window = truncate
             ? TruncatePreviewLineAroundResult(line, result, rx)
             : new PreviewLineWindow(line, 0, line.Length);
+        // Dense same-line occurrences each render their own match-centered window and are
+        // stacked beside the existing physical-line window. Two neighboring windows whose
+        // source-column ranges overlap would otherwise draw the shared text in both blocks
+        // (the visible duplicated-content artifact). Clip this window so it abuts—but never
+        // overlaps—already-rendered sibling windows for the same line, keeping the match
+        // itself fully visible.
+        if (truncate)
+            window = ClipMatchWindowToRenderedSiblings(section, lineNum, line, result, rx, window);
         var expansionState = CreatePreviewTruncatedLineState(window, line, lineNum, isMatchLine: true, result, rx);
         _sectionGutterBlocks.TryGetValue(section, out var gutterBlock);
         Paragraph? firstParagraph = null;
@@ -2882,7 +2891,19 @@ public sealed partial class MainWindow
             // keeps its clickable prefix/suffix ellipsis.
             bool isContinuationSegment = firstParagraph is not null;
             bool useContinuationGutter = isContinuationSegment || continuationGutter;
-            var para = MakePreviewParagraph(segment, lineNum, isMatchLine: true, result, rx, truncate: false, continuationGutter: useContinuationGutter, gutterBlock: gutterBlock, truncationState: isContinuationSegment ? null : expansionState);
+            HashSet<int>? matchOrdinalsToColor = null;
+            int? targetMatchOrdinal = null;
+            if (targetOnlyMatchEntry)
+            {
+                matchOrdinalsToColor = [];
+                if (TryGetTargetMatchOrdinalInSegment(line, result, rx, window, segment, segmentDisplayStart, out int colorOrdinal))
+                {
+                    targetMatchOrdinal = colorOrdinal;
+                    matchOrdinalsToColor.Add(colorOrdinal);
+                }
+            }
+
+            var para = MakePreviewParagraph(segment, lineNum, isMatchLine: true, result, rx, truncate: false, continuationGutter: useContinuationGutter, gutterBlock: gutterBlock, truncationState: isContinuationSegment ? null : expansionState, matchOrdinalsToColor: matchOrdinalsToColor);
             section.Blocks.Add(para);
             firstParagraph ??= para;
             paragraphsAdded++;
@@ -2897,8 +2918,7 @@ public sealed partial class MainWindow
             }
 
             int beforeCount = matchParagraphs.Count;
-            if (targetOnlyMatchEntry
-                && TryGetTargetMatchOrdinalInSegment(line, result, rx, window, segment, segmentDisplayStart, out int matchOrdinal))
+            if (targetOnlyMatchEntry && targetMatchOrdinal is int matchOrdinal)
             {
                 matchParagraphs.Add((section, para, matchOrdinal));
                 sectionNav?.Matches.Add((para, matchOrdinal));
@@ -2934,6 +2954,73 @@ public sealed partial class MainWindow
         ScheduleGutterSync(section);
 
         return firstParagraph ?? throw new InvalidOperationException("Preview line renderer did not create a paragraph.");
+    }
+
+    /// <summary>
+    /// Clips <paramref name="window"/> so it does not overlap any already-rendered sibling
+    /// window for the same physical line in <paramref name="section"/>. Dense same-line
+    /// matches each render an independent match-centered window; when two neighbors'
+    /// source-column ranges overlap, the shared text is drawn in both blocks (the
+    /// duplicated-content artifact). Clipping pulls this window's start past the end of any
+    /// left sibling and its end before the start of any right sibling, while always keeping
+    /// the occurrence's own match span visible. Returns the window unchanged when there is
+    /// no overlap or when clipping would hide the match.
+    /// </summary>
+    private static PreviewLineWindow ClipMatchWindowToRenderedSiblings(
+        RichTextBlock section,
+        int lineNum,
+        string line,
+        SearchResult result,
+        Regex? rx,
+        PreviewLineWindow window)
+    {
+        int matchStart = ResolveSourceMatchStart(line, result, rx);
+        int matchLength = result.MatchLength;
+        if (matchStart < 0 || matchLength <= 0 || matchStart >= line.Length)
+        {
+            var fallback = rx?.Match(line);
+            if (fallback is { Success: true, Length: > 0 })
+            {
+                matchStart = fallback.Index;
+                matchLength = fallback.Length;
+            }
+        }
+
+        if (matchStart < 0 || matchStart >= line.Length)
+            return window;
+
+        int matchEnd = Math.Min(line.Length, matchStart + Math.Max(0, matchLength));
+
+        int newStart = window.SourceStart;
+        int newEnd = window.SourceEnd;
+
+        for (int i = 0; i < section.Blocks.Count; i++)
+        {
+            if (section.Blocks[i] is not Paragraph para
+                || !s_paragraphLineNumbers.TryGetValue(para, out var lineObj)
+                || lineObj is not int renderedLine
+                || renderedLine != lineNum
+                || !TryGetParagraphMatchWindow(para, out int siblingStart, out int siblingEnd))
+            {
+                continue;
+            }
+
+            // Sibling window entirely left of this occurrence: start after its end.
+            if (siblingEnd > newStart && siblingEnd <= matchStart)
+                newStart = siblingEnd;
+
+            // Sibling window entirely right of this occurrence: end before its start.
+            if (siblingStart < newEnd && siblingStart >= matchEnd)
+                newEnd = siblingStart;
+        }
+
+        if (newStart >= newEnd || newStart > matchStart || newEnd < matchEnd)
+            return window;
+
+        if (newStart == window.SourceStart && newEnd == window.SourceEnd)
+            return window;
+
+        return CreatePreviewLineWindow(line, newStart, newEnd);
     }
 
     private static bool TryGetTargetMatchOrdinalInSegment(
@@ -3240,7 +3327,7 @@ public sealed partial class MainWindow
         }
     }
 
-    private Paragraph MakePreviewParagraph(string line, int lineNum, bool isMatchLine, SearchResult r, Regex? rx, bool truncate = true, bool continuationGutter = false, RichTextBlock? gutterBlock = null, PreviewTruncatedLineState? truncationState = null)
+    private Paragraph MakePreviewParagraph(string line, int lineNum, bool isMatchLine, SearchResult r, Regex? rx, bool truncate = true, bool continuationGutter = false, RichTextBlock? gutterBlock = null, PreviewTruncatedLineState? truncationState = null, HashSet<int>? matchOrdinalsToColor = null)
     {
         line ??= string.Empty;
         if (truncate)
@@ -3282,12 +3369,12 @@ public sealed partial class MainWindow
         if (truncationState is not null)
             truncationState.ContentInlineStart = para.Inlines.Count;
 
-        AddPreviewTextRuns(para, line, isMatchLine, rx, truncationState);
+        AddPreviewTextRuns(para, line, isMatchLine, rx, truncationState, matchOrdinalsToColor);
 
         return para;
     }
 
-    private void AddPreviewTextRuns(Paragraph para, string line, bool isMatchLine, Regex? rx, PreviewTruncatedLineState? truncationState)
+    private void AddPreviewTextRuns(Paragraph para, string line, bool isMatchLine, Regex? rx, PreviewTruncatedLineState? truncationState, HashSet<int>? matchOrdinalsToColor = null)
     {
         bool hasPrefixEllipsis = truncationState is not null
             && truncationState.SourceStart > 0
@@ -3303,19 +3390,21 @@ public sealed partial class MainWindow
             para.Inlines.Add(CreatePreviewShowMoreInline(para, truncationState!, PreviewShowMoreEdge.Prefix));
 
         if (end > start)
-            AddPreviewTextSpanRuns(para, line[start..end], isMatchLine, rx);
+            AddPreviewTextSpanRuns(para, line[start..end], isMatchLine, rx, matchOrdinalsToColor);
 
         if (hasSuffixEllipsis)
             para.Inlines.Add(CreatePreviewShowMoreInline(para, truncationState!, PreviewShowMoreEdge.Suffix));
     }
 
-    private void AddPreviewTextSpanRuns(Paragraph para, string text, bool isMatchLine, Regex? rx)
+    private void AddPreviewTextSpanRuns(Paragraph para, string text, bool isMatchLine, Regex? rx, HashSet<int>? matchOrdinalsToColor = null)
     {
-        // Keep gutter/nav semantics tied to actual match lines, but color every
-        // visible regex hit yellow so context lines don't show unhighlighted matches.
+        // Keep match-colored text tied to actual search-result rows added from
+        // the results list. Context lines may contain the query text, but they
+        // should not look like selected/registered matches in the preview.
         if (rx != null)
         {
             int lastIdx = 0;
+            int matchOrdinal = 0;
             foreach (System.Text.RegularExpressions.Match m in rx.Matches(text))
             {
                 if (m.Index > lastIdx)
@@ -3326,10 +3415,24 @@ public sealed partial class MainWindow
                     para.Inlines.Add(before);
                 }
                 var hit = new Run { Text = m.Value };
-                hit.FontWeight = Microsoft.UI.Text.FontWeights.Bold;
-                hit.Foreground = _matchTextBrush;
+                s_previewSearchMatchRuns.AddOrUpdate(hit, new object());
+                bool useMatchColor = isMatchLine && (matchOrdinalsToColor is null || matchOrdinalsToColor.Contains(matchOrdinal));
+                if (useMatchColor)
+                {
+                    hit.FontWeight = Microsoft.UI.Text.FontWeights.Bold;
+                    hit.Foreground = _matchTextBrush;
+                }
+                else if (!isMatchLine)
+                {
+                    hit.Foreground = s_contextTextBrush;
+                }
+                else
+                {
+                    hit.Foreground = _matchLineBrush;
+                }
                 para.Inlines.Add(hit);
                 lastIdx = m.Index + m.Length;
+                matchOrdinal++;
             }
             if (lastIdx < text.Length)
             {

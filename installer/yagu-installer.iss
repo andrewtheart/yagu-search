@@ -8,9 +8,8 @@
 #define MyAppExeName "Yagu.exe"
 #define MyAppPublisher "Yagu"
 #define MyAppURL "https://github.com/yagu"
-#define DotNet10RuntimeDisplayName ".NET 10.0 Runtime (v10.0.9) - Windows x64 Installer"
-#define DotNet10RuntimeInstallerName "dotnet-runtime-10.0.9-win-x64.exe"
-#define DotNet10RuntimeDownloadUrl "https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.9/dotnet-runtime-10.0.9-win-x64.exe"
+#define DotNet10WingetPackageId "Microsoft.DotNet.SDK.10"
+#define DotNet10WingetCommandDisplayName "winget install Microsoft.DotNet.SDK.10"
 #define DotNet10RuntimeRegistrySubkey "SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.NETCore.App"
 
 ; Version is read from the build-version.txt file produced by the build.
@@ -86,16 +85,14 @@ Type: filesandordirs; Name: "{app}"
 
 [Code]
 var
-  DownloadPage: TDownloadWizardPage;
+  DotNetProgressPage: TOutputProgressWizardPage;
   DotNetRuntimeNeedsRestart: Boolean;
 
 procedure InitializeWizard;
 begin
-  DownloadPage := CreateDownloadPage(
-    'Downloading .NET 10 Runtime',
-    'Setup is downloading the required Microsoft .NET 10 Runtime.',
-    nil);
-  DownloadPage.ShowBaseNameInsteadOfUrl := True;
+  DotNetProgressPage := CreateOutputProgressPage(
+    'Installing .NET 10',
+    'Setup is using winget to install Microsoft .NET 10.');
 end;
 
 function IsDotNet10RuntimeInstalled(): Boolean;
@@ -121,68 +118,181 @@ begin
   end;
 end;
 
-function DownloadDotNet10RuntimeInstaller(): Boolean;
+function QuotePowerShellString(Value: String): String;
 var
-  Error: String;
+  Escaped: String;
 begin
-  Result := False;
-  DownloadPage.Clear;
-  DownloadPage.Add('{#DotNet10RuntimeDownloadUrl}', '{#DotNet10RuntimeInstallerName}', '');
-  DownloadPage.Show;
+  Escaped := Value;
+  StringChangeEx(Escaped, '''', '''''', True);
+  Result := '''' + Escaped + '''';
+end;
 
-  try
-    try
-      DownloadPage.Download;
-      Result := True;
-    except
-      if DownloadPage.AbortedByUser then
-        Log('.NET 10 Runtime download aborted by user.')
-      else
-      begin
-        Error := Format('%s: %s', [DownloadPage.LastBaseNameOrUrl, GetExceptionMessage]);
-        SuppressibleMsgBox(AddPeriod(Error), mbCriticalError, MB_OK, IDOK);
-      end;
-    end;
-  finally
-    DownloadPage.Hide;
+function LoadTrimmedStringFromFile(FileName: String; var Value: String): Boolean;
+var
+  RawValue: AnsiString;
+begin
+  Result := LoadStringFromFile(FileName, RawValue);
+  if Result then
+  begin
+    Value := RawValue;
+    Value := Trim(Value);
+    StringChangeEx(Value, #13, ' ', True);
+    StringChangeEx(Value, #10, ' ', True);
+    if Length(Value) > 160 then
+      Value := Copy(Value, Length(Value) - 159, 160);
   end;
 end;
 
-function InstallDotNet10Runtime(): Boolean;
+function WriteDotNetWingetRunnerScript(ScriptPath, StatusPath, ExitPath, LogPath: String): Boolean;
+var
+  Script: String;
+begin
+  Script :=
+    '$ErrorActionPreference = ''Continue''' + #13#10 +
+    '$statusFile = ' + QuotePowerShellString(StatusPath) + #13#10 +
+    '$exitFile = ' + QuotePowerShellString(ExitPath) + #13#10 +
+    '$logFile = ' + QuotePowerShellString(LogPath) + #13#10 +
+    'function Write-Status([string]$message) {' + #13#10 +
+    '  if ([string]::IsNullOrWhiteSpace($message)) { return }' + #13#10 +
+    '  $clean = [regex]::Replace($message, "$([char]27)\[[0-9;?]*[ -/]*[@-~]", "")' + #13#10 +
+    '  $clean = ($clean -replace "[`r`n]+", " " -replace "\s{2,}", " ").Trim()' + #13#10 +
+    '  if ($clean.Length -eq 0) { return }' + #13#10 +
+    '  Add-Content -LiteralPath $logFile -Value $clean -Encoding UTF8' + #13#10 +
+    '  Set-Content -LiteralPath $statusFile -Value $clean -Encoding UTF8' + #13#10 +
+    '}' + #13#10 +
+    '$exitCode = 1' + #13#10 +
+    'try {' + #13#10 +
+    '  Write-Status "Checking for winget..."' + #13#10 +
+    '  $wingetCommand = Get-Command winget.exe -ErrorAction SilentlyContinue' + #13#10 +
+    '  if ($null -eq $wingetCommand) { $wingetCommand = Get-Command winget -ErrorAction SilentlyContinue }' + #13#10 +
+    '  if ($null -eq $wingetCommand) {' + #13#10 +
+    '    Write-Status "winget was not found. Install App Installer from Microsoft Store, then run setup again."' + #13#10 +
+    '    $exitCode = 9009' + #13#10 +
+    '  } else {' + #13#10 +
+    '    $env:WINGET_DISABLE_INTERACTIVITY = "1"' + #13#10 +
+    '    Write-Status "Running {#DotNet10WingetCommandDisplayName}..."' + #13#10 +
+    '    & $wingetCommand.Source install {#DotNet10WingetPackageId} --silent --accept-package-agreements --accept-source-agreements --disable-interactivity 2>&1 | ForEach-Object {' + #13#10 +
+    '      Write-Status ($_ | Out-String)' + #13#10 +
+    '    }' + #13#10 +
+    '    if ($null -ne $global:LASTEXITCODE) { $exitCode = [int]$global:LASTEXITCODE } else { $exitCode = 0 }' + #13#10 +
+    '    Write-Status ("winget finished with exit code {0}." -f $exitCode)' + #13#10 +
+    '  }' + #13#10 +
+    '} catch {' + #13#10 +
+    '  Write-Status ("winget install failed: {0}" -f $_.Exception.Message)' + #13#10 +
+    '  $exitCode = 1' + #13#10 +
+    '} finally {' + #13#10 +
+    '  Set-Content -LiteralPath $exitFile -Value $exitCode -Encoding UTF8' + #13#10 +
+    '}' + #13#10 +
+    'exit $exitCode' + #13#10;
+
+  Result := SaveStringToFile(ScriptPath, Script, False);
+end;
+
+procedure UpdateDotNetWingetProgress(StatusPath: String; var ProgressValue: Integer);
+var
+  Status: String;
+begin
+  if not LoadTrimmedStringFromFile(StatusPath, Status) or (Status = '') then
+    Status := 'Waiting for winget output...';
+
+  DotNetProgressPage.SetText(Status, 'This can take several minutes. Please leave setup open.');
+
+  ProgressValue := ProgressValue + 2;
+  if ProgressValue > 95 then
+    ProgressValue := 10;
+
+  DotNetProgressPage.SetProgress(ProgressValue, 100);
+  WizardForm.Refresh;
+end;
+
+function ReadWingetExitCode(ExitPath: String; var ExitCode: Integer): Boolean;
+var
+  ExitText: String;
+begin
+  Result := LoadTrimmedStringFromFile(ExitPath, ExitText);
+  if Result then
+    ExitCode := StrToIntDef(ExitText, -1);
+end;
+
+function InstallDotNet10RuntimeWithWinget(): Boolean;
 var
   ResultCode: Integer;
-  InstallerPath: String;
+  ExitCode: Integer;
+  ScriptPath: String;
+  StatusPath: String;
+  ExitPath: String;
+  LogPath: String;
   Params: String;
+  ProgressValue: Integer;
+  WaitIterations: Integer;
 begin
-  InstallerPath := ExpandConstant('{tmp}\{#DotNet10RuntimeInstallerName}');
-  if not FileExists(InstallerPath) then
+  Result := False;
+  ScriptPath := ExpandConstant('{tmp}\yagu-install-dotnet10-winget.ps1');
+  StatusPath := ExpandConstant('{tmp}\yagu-install-dotnet10-winget.status.txt');
+  ExitPath := ExpandConstant('{tmp}\yagu-install-dotnet10-winget.exit.txt');
+  LogPath := ExpandConstant('{tmp}\yagu-install-dotnet10-winget.log.txt');
+
+  DeleteFile(StatusPath);
+  DeleteFile(ExitPath);
+  DeleteFile(LogPath);
+
+  if not WriteDotNetWingetRunnerScript(ScriptPath, StatusPath, ExitPath, LogPath) then
   begin
-    MsgBox('The .NET 10 Runtime installer was not downloaded:' + #13#10 + InstallerPath, mbError, MB_OK);
-    Result := False;
+    MsgBox('Could not create the .NET 10 winget installer helper script.', mbError, MB_OK);
     exit;
   end;
 
-  WizardForm.StatusLabel.Caption := 'Installing .NET 10 Runtime...';
-  Params := '/install /passive /norestart';
-  Result := Exec(InstallerPath, Params, '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
-  if not Result then
+  ProgressValue := 5;
+  DotNetProgressPage.SetProgress(ProgressValue, 100);
+  DotNetProgressPage.SetText('Starting {#DotNet10WingetCommandDisplayName}...', 'This can take several minutes. Please leave setup open.');
+  DotNetProgressPage.Show;
+
+  try
+    WizardForm.StatusLabel.Caption := 'Installing .NET 10 with winget...';
+    Params := '-NoProfile -ExecutionPolicy Bypass -File "' + ScriptPath + '"';
+    if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, '', SW_HIDE, ewNoWait, ResultCode) then
+    begin
+      MsgBox('Could not start winget to install .NET 10.', mbError, MB_OK);
+      exit;
+    end;
+
+    WaitIterations := 0;
+    while not FileExists(ExitPath) and (WaitIterations < 14400) do
+    begin
+      UpdateDotNetWingetProgress(StatusPath, ProgressValue);
+      Sleep(250);
+      WaitIterations := WaitIterations + 1;
+    end;
+
+    if not FileExists(ExitPath) then
+    begin
+      MsgBox('winget did not finish within one hour. Setup cannot continue.' + #13#10 + #13#10 + 'Log: ' + LogPath, mbError, MB_OK);
+      exit;
+    end;
+
+    UpdateDotNetWingetProgress(StatusPath, ProgressValue);
+    DotNetProgressPage.SetProgress(100, 100);
+
+    if not ReadWingetExitCode(ExitPath, ExitCode) then
+    begin
+      MsgBox('winget finished, but setup could not read its exit code.' + #13#10 + 'Log: ' + LogPath, mbError, MB_OK);
+      exit;
+    end;
+  finally
+    DotNetProgressPage.Hide;
+  end;
+
+  if (ExitCode <> 0) and (ExitCode <> 3010) then
   begin
-    MsgBox('Could not start the .NET 10 Runtime installer.', mbError, MB_OK);
+    MsgBox('winget failed to install .NET 10. Exit code: ' + IntToStr(ExitCode) + '.' + #13#10 + #13#10 + 'Log: ' + LogPath, mbError, MB_OK);
     exit;
   end;
 
-  if (ResultCode <> 0) and (ResultCode <> 3010) then
-  begin
-    MsgBox('.NET 10 Runtime installation failed with exit code ' + IntToStr(ResultCode) + '.', mbError, MB_OK);
-    Result := False;
-    exit;
-  end;
-
-  DotNetRuntimeNeedsRestart := ResultCode = 3010;
+  DotNetRuntimeNeedsRestart := ExitCode = 3010;
   Result := IsDotNet10RuntimeInstalled();
   if not Result then
   begin
-    MsgBox('The .NET 10 Runtime installer completed, but setup still could not detect a .NET 10 x64 runtime.', mbError, MB_OK);
+    MsgBox('winget completed, but setup still could not detect a .NET 10 x64 runtime.', mbError, MB_OK);
   end;
 end;
 
@@ -198,7 +308,7 @@ begin
      (MsgBox(
        'Yagu requires the .NET 10.0 Runtime for Windows x64.' + #13#10 + #13#10 +
        'Setup did not find a .NET 10 runtime on this computer.' + #13#10 + #13#10 +
-       'Download and install {#DotNet10RuntimeDisplayName} now?',
+      'Install it now by running {#DotNet10WingetCommandDisplayName}?',
        mbConfirmation,
        MB_YESNO) <> IDYES) then
   begin
@@ -206,7 +316,7 @@ begin
     exit;
   end;
 
-  Result := DownloadDotNet10RuntimeInstaller() and InstallDotNet10Runtime();
+  Result := InstallDotNet10RuntimeWithWinget();
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;

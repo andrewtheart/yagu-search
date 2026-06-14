@@ -1739,7 +1739,7 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(textRuns,
             "line.StartsWith(LineTruncator.Ellipsis, StringComparison.Ordinal)",
             "CreatePreviewShowMoreInline(para, truncationState!, PreviewShowMoreEdge.Prefix)",
-            "AddPreviewTextSpanRuns(para, line[start..end], isMatchLine, rx)",
+            "AddPreviewTextSpanRuns(para, line[start..end], isMatchLine, rx, matchOrdinalsToColor)",
             "CreatePreviewShowMoreInline(para, truncationState!, PreviewShowMoreEdge.Suffix)");
 
         string inline = ExtractMethodWindow(previewBuilder, "CreatePreviewShowMoreInline", window: 2600);
@@ -1915,22 +1915,51 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void VisibleRegexMatches_AreYellowEvenOnContextLines()
+    public void PreviewMatchColor_IsOnlyUsedForResultMatchLines()
     {
         string matchLineLoaded = ExtractMethodWindow(MainWindowSource, "OnMatchLineLoaded", window: 900);
         Assert.Contains("int matchStart = r.IsEvicted ? r.ShortPreviewMatchStart : r.MatchStartColumn;", matchLineLoaded);
         Assert.Contains("HighlightInline(para, r.MatchLine, matchStart, r.MatchLength);", matchLineLoaded);
 
-        string makeParagraph = ExtractMethodWindow(MainWindowSource, "MakePreviewParagraph");
-        Assert.Contains("if (rx != null)", makeParagraph);
-        Assert.DoesNotContain("if (rx != null && isMatchLine)", makeParagraph);
-        Assert.Contains("hit.Foreground = _matchTextBrush;", makeParagraph);
-        Assert.Contains("if (!isMatchLine) before.Foreground = s_contextTextBrush;", makeParagraph);
-        Assert.Contains("if (!isMatchLine) tail.Foreground = s_contextTextBrush;", makeParagraph);
+        string textRuns = ExtractMethodWindow(MainWindowSource, "AddPreviewTextSpanRuns", window: 2600);
+        Assert.Contains("s_previewSearchMatchRuns.AddOrUpdate(hit, new object());", textRuns);
+        Assert.Contains("bool useMatchColor = isMatchLine && (matchOrdinalsToColor is null || matchOrdinalsToColor.Contains(matchOrdinal));", textRuns);
+        Assert.Contains("hit.Foreground = _matchTextBrush;", textRuns);
+        Assert.Contains("hit.Foreground = s_contextTextBrush;", textRuns);
+        Assert.Contains("hit.Foreground = _matchLineBrush;", textRuns);
+
+        string aroundResult = ExtractMethodWindow(MainWindowSource, "AddPreviewLineParagraphsAroundResult", window: 4200);
+        Assert.Contains("HashSet<int>? matchOrdinalsToColor = null;", aroundResult);
+        Assert.Contains("matchOrdinalsToColor.Add(colorOrdinal);", aroundResult);
+        Assert.Contains("matchOrdinalsToColor: matchOrdinalsToColor", aroundResult);
 
         string addParagraphs = ExtractMethodWindow(MainWindowSource, "AddPreviewLineParagraphs");
         Assert.Contains("if (!isMatchLine || matchParagraphs is null)", addParagraphs);
         Assert.Contains("AddMatchEntries(", addParagraphs);
+
+        string matchRuns = ExtractMethodWindow(MainWindowSource, "IsSearchMatchRun", window: 900);
+        Assert.Contains("s_previewSearchMatchRuns.TryGetValue(run, out _)", matchRuns);
+
+        string selection = ExtractMethodWindow(MainWindowSource, "EnsureCheckedMatchInPreviewAsync", window: 2600);
+        Assert.Contains("ApplyMatchColorToParagraphMatch(paragraph, matchInPara);", selection);
+    }
+
+    [Fact]
+    public void PreviewFindHighlighter_UsesPreviewFindColorAndCrlfOffsets()
+    {
+        string highlight = ExtractMethodWindow(MainWindowSource, "HighlightFindMatchInPreviewBlock", window: 2600);
+        Assert.Contains("int searchParaLen = paraLen + 2; // paragraph text + \\r\\n", highlight);
+        Assert.Contains("blockTextLen += searchParaLen;", highlight);
+        Assert.DoesNotContain("blockTextLen += paraLen + 1", highlight);
+
+        string map = ExtractMethodWindow(MainWindowSource, "MapSearchOffsetToBlockOffset", window: 1200);
+        Assert.Contains("searchPos += paraLen + 2; // \\r\\n", map);
+        Assert.Contains("blockPos += paraLen + 2;  // \\r\\n", map);
+        Assert.DoesNotContain("blockPos += paraLen + 1", map);
+
+        string apply = ExtractMethodWindow(MainWindowSource, "ApplyFindHighlighter", window: 1200);
+        Assert.Contains("Windows.UI.Color.FromArgb(130, 64, 156, 255)", apply);
+        Assert.DoesNotContain("Windows.UI.Color.FromArgb(180, 255, 185, 0)", apply);
     }
 
     [Fact]

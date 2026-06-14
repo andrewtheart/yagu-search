@@ -535,6 +535,7 @@ public sealed partial class MainWindow
         // same-line window whose resolved run is a sibling occurrence without its own
         // nav entry, register it on demand so the overlay can actually move to it.
         EnsureNavEntryForParagraphMatch(section, paragraph, matchInPara);
+        ApplyMatchColorToParagraphMatch(paragraph, matchInPara);
         SetCurrentMatchToMatch(section, paragraph, matchInPara);
         try
         {
@@ -607,6 +608,11 @@ public sealed partial class MainWindow
 
                 int contentStartIndex = section.Blocks.Count;
                 int gutterStartIndex = GetGutterBlockCount(section);
+                // Color/register ONLY the checked occurrence in this same-line window.
+                // Without targetOnlyMatchEntry the window colors every regex match it
+                // spans, so an unselected sibling occurrence sharing the window (e.g. a
+                // second "test" inside "vitest") would wrongly render in the match color.
+                // Mirrors the initial-build, overflow, and match-nav same-line windows.
                 AddPreviewLineParagraphsAroundResult(
                     section,
                     lineForWindow,
@@ -619,6 +625,7 @@ public sealed partial class MainWindow
                     out int matchEntriesAdded,
                     truncate: truncatePreviewLines,
                     continuationGutter: true,
+                    targetOnlyMatchEntry: true,
                     maxParagraphs: MaxPreviewBlocksPerExpandChunk);
                 MoveAppendedPreviewLineBesideExistingLine(
                     section,
@@ -804,6 +811,11 @@ public sealed partial class MainWindow
             ? allLines[result.LineNumber - 1]
             : result.MatchLine;
         AddMatchEntries(_matchParagraphs, sectionNav, section, existingPara, lineText, rx, minimumOne: true);
+        int sourceColumn = result.SourceMatchStartColumn >= 0
+            ? result.SourceMatchStartColumn
+            : result.MatchStartColumn;
+        if (TryResolveMatchInParaBySourceColumn(existingPara, sourceColumn, out int matchInPara, out _, out _))
+            ApplyMatchColorToParagraphMatch(existingPara, matchInPara);
 
         InvalidateParagraphIndexCache(section);
         if (sectionNav is not null)

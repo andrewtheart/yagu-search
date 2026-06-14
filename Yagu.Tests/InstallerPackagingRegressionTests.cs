@@ -70,20 +70,28 @@ public sealed class InstallerPackagingRegressionTests
         string root = FindRepoRoot();
         string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
 
-        Assert.Contains("DotNet10RuntimeDownloadUrl", inno);
-        Assert.Contains("https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.9/dotnet-runtime-10.0.9-win-x64.exe", inno);
+        Assert.Contains("DotNet10WingetPackageId", inno);
+        Assert.Contains("Microsoft.DotNet.SDK.10", inno);
+        Assert.Contains("DotNet10WingetCommandDisplayName", inno);
         Assert.Contains("DotNet10RuntimeRegistrySubkey", inno);
         Assert.Contains(@"SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.NETCore.App", inno);
         Assert.Contains("RegGetValueNames(HKLM64, '{#DotNet10RuntimeRegistrySubkey}', RuntimeVersions)", inno);
         Assert.Contains("RegGetValueNames(HKLM32, '{#DotNet10RuntimeRegistrySubkey}', RuntimeVersions)", inno);
         Assert.Contains("Copy(RuntimeVersions[I], 1, 3) = '10.'", inno);
+        Assert.Contains("CreateOutputProgressPage", inno);
+        Assert.Contains("function InstallDotNet10RuntimeWithWinget(): Boolean;", inno);
+        Assert.Contains("SW_HIDE, ewNoWait", inno);
+        Assert.Contains("UpdateDotNetWingetProgress(StatusPath, ProgressValue)", inno);
+        Assert.Contains("--accept-package-agreements --accept-source-agreements --disable-interactivity", inno);
         Assert.Contains("function EnsureDotNet10RuntimeInstalled(): Boolean;", inno);
         Assert.Contains("function NextButtonClick(CurPageID: Integer): Boolean;", inno);
         Assert.Contains("if CurPageID = wpReady then", inno);
         Assert.Contains("Result := EnsureDotNet10RuntimeInstalled()", inno);
         Assert.Contains("if IsDotNet10RuntimeInstalled() then", inno);
         Assert.Contains("Yagu requires the .NET 10.0 Runtime for Windows x64.", inno);
-        Assert.Contains("Download and install {#DotNet10RuntimeDisplayName} now?", inno);
+        Assert.Contains("Install it now by running {#DotNet10WingetCommandDisplayName}?", inno);
+        Assert.DoesNotContain("DotNet10RuntimeDownloadUrl", inno);
+        Assert.DoesNotContain("dotnet-runtime-10.0.9-win-x64.exe", inno);
 
         int dotNetCheck = inno.IndexOf("function EnsureDotNet10RuntimeInstalled(): Boolean;", StringComparison.Ordinal);
         int windowsAppRuntimeInstall = inno.IndexOf("function InstallWindowsAppRuntime(): Boolean;", StringComparison.Ordinal);

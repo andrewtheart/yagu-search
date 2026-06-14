@@ -434,8 +434,8 @@ public sealed partial class MainWindow
         int offset = 0;
         foreach (var block in blocks)
         {
-            int blockSearchLen = 0; // length in the search text (\r\n separators)
-            int blockTextLen = 0;   // length in block's text model (1-char separators)
+            int blockSearchLen = 0; // length in the search text and RichTextBlock text model (\r\n separators)
+            int blockTextLen = 0;
 
             foreach (var b in block.Blocks)
             {
@@ -453,7 +453,7 @@ public sealed partial class MainWindow
                 }
 
                 blockSearchLen += searchParaLen;
-                blockTextLen += paraLen + 1; // +1 for paragraph separator in text model
+                blockTextLen += searchParaLen;
             }
 
             // Check if match starts in this block but spans across paragraphs
@@ -490,7 +490,6 @@ public sealed partial class MainWindow
 
     private static int MapSearchOffsetToBlockOffset(RichTextBlock block, int searchOffset)
     {
-        // searchOffset uses \r\n (2) per paragraph separator; block model uses 1.
         int searchPos = 0;
         int blockPos = 0;
         foreach (var b in block.Blocks)
@@ -500,7 +499,7 @@ public sealed partial class MainWindow
             if (searchOffset < searchPos + paraLen)
                 return blockPos + (searchOffset - searchPos);
             searchPos += paraLen + 2; // \r\n
-            blockPos += paraLen + 1;  // paragraph separator
+            blockPos += paraLen + 2;  // \r\n
         }
         return blockPos;
     }
@@ -512,7 +511,7 @@ public sealed partial class MainWindow
         var highlighter = new Microsoft.UI.Xaml.Documents.TextHighlighter
         {
             Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(
-                Windows.UI.Color.FromArgb(180, 255, 185, 0)),
+                Windows.UI.Color.FromArgb(130, 64, 156, 255)),
         };
         highlighter.Ranges.Add(new Microsoft.UI.Xaml.Documents.TextRange
         {

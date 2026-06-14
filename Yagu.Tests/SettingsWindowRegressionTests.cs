@@ -164,6 +164,7 @@ public sealed class SettingsWindowRegressionTests
 
         Assert.Contains("WindowForegroundHelper.ConfigureOwnedWindow(hwnd, _ownerHwnd);", ResultStoreTempLocationWindowSource);
         Assert.Contains("WindowForegroundHelper.BringOwnedWindowToFront(this, _ownerHwnd);", ResultStoreTempLocationWindowSource);
+        Assert.Contains("presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);", ResultStoreTempLocationWindowSource);
 
         Assert.Contains("WindowForegroundHelper.ConfigureOwnedWindow(dialogHwnd, _ownerHwnd);", AdminProtectedPathsDialogSource);
         Assert.Contains("WindowForegroundHelper.BringOwnedWindowToFront(this, _ownerHwnd);", AdminProtectedPathsDialogSource);

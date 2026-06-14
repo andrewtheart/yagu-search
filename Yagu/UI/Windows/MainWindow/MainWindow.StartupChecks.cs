@@ -180,6 +180,7 @@ public sealed partial class MainWindow
                 PrimaryButtonText = "Install",
                 CloseButtonText = "Skip",
                 DefaultButton = YaguDialogDefaultButton.Primary,
+                ShowTitleBar = false,
                 Width = 560,
                 Height = 280,
             }) == YaguDialogResult.Primary;

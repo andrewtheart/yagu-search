@@ -12,9 +12,11 @@ public sealed class EverythingSearchDialogRegressionTests
         Assert.Contains("Title = \"Everything Search Not Found\"", startupChecks);
         Assert.Contains("YaguDialog.ShowAsync(", startupChecks);
         Assert.Contains("PrimaryButtonText = \"Install\"", startupChecks);
+        Assert.Contains("ShowTitleBar = false", startupChecks);
         Assert.DoesNotContain("EverythingSearchNotFoundDialog", startupChecks);
 
         Assert.Contains("internal sealed class YaguDialog : Window", dialog);
+        Assert.Contains("presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);", dialog);
         Assert.Contains("WindowForegroundHelper.ConfigureOwnedWindow(hwnd, _ownerHwnd);", dialog);
         Assert.Contains("EnableWindow(_ownerHwnd, false);", dialog);
         Assert.Contains("WindowForegroundHelper.CenterWindowOverOwner(appWindow, _ownerHwnd, options.Width, options.Height);", dialog);

@@ -80,12 +80,13 @@ public sealed partial class MainWindow
             var wa = displayArea.WorkArea;
             double scale = (Content?.XamlRoot?.RasterizationScale) ?? 1.0;
 
-            // Force a layout pass so DesiredSize reflects only the currently
-            // visible rows (admin banner + search card), then measure. Bound the
-            // Advanced Options drawer first so a tall drawer scrolls internally
-            // instead of pushing the launcher window past the work area.
-            RootGrid.UpdateLayout();
-            UpdateAdvancedOptionsDrawerMaxHeight();
+            // Measure the natural content height with the Advanced Options drawer
+            // unbounded so the window grows to fully cover the expanded panel when
+            // the work area has room. The scroll bound is (re)applied afterward via
+            // UpdateAdvancedOptionsDrawerMaxHeight so a drawer taller than the work
+            // area still scrolls internally instead of being clipped.
+            if (AdvancedOptionsScrollViewer is not null)
+                AdvancedOptionsScrollViewer.MaxHeight = double.PositiveInfinity;
             RootGrid.UpdateLayout();
             RootGrid.Measure(new Windows.Foundation.Size(1400, double.PositiveInfinity));
             double desiredHeightDip = RootGrid.DesiredSize.Height;
@@ -113,6 +114,11 @@ public sealed partial class MainWindow
             int y = wa.Y + (int)(4 * scale);
             AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(x, y, width, height));
 
+            // Apply the scroll bound now that the window has its final height so a
+            // drawer taller than the work area scrolls instead of clipping.
+            RootGrid.UpdateLayout();
+            UpdateAdvancedOptionsDrawerMaxHeight();
+
             // Re-fit once after layout has fully settled (admin banner can wrap
             // and the actual height becomes accurate only on a later tick).
             DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
@@ -132,18 +138,25 @@ public sealed partial class MainWindow
                     catch { }
 
                     RootGrid.UpdateLayout();
-                    UpdateAdvancedOptionsDrawerMaxHeight();
+                    if (AdvancedOptionsScrollViewer is not null)
+                        AdvancedOptionsScrollViewer.MaxHeight = double.PositiveInfinity;
                     RootGrid.UpdateLayout();
                     RootGrid.Measure(new Windows.Foundation.Size(1400, double.PositiveInfinity));
                     double h = RootGrid.DesiredSize.Height;
                     if (h < MinimumLauncherHeightDip) h = MinimumLauncherHeightDip;
                     int newHeight = (int)((h + 2) * deferredScale) + chrome;
                     if (newHeight > wa.Height) newHeight = wa.Height;
-                    if (Math.Abs(newHeight - AppWindow.Size.Height) < 4) return;
+                    if (Math.Abs(newHeight - AppWindow.Size.Height) < 4)
+                    {
+                        UpdateAdvancedOptionsDrawerMaxHeight();
+                        return;
+                    }
                     int newY = wa.Y + (int)(4 * deferredScale);
                     int newWidth = (int)(1400 * deferredScale);
                     int newX = wa.X + Math.Max(0, (wa.Width - newWidth) / 2);
                     AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(newX, newY, newWidth, newHeight));
+                    RootGrid.UpdateLayout();
+                    UpdateAdvancedOptionsDrawerMaxHeight();
                     LogService.Instance.Info("Launcher", $"PositionLauncherWindow (deferred): h={h:F1} dip, scale={deferredScale:F2}, chrome={chrome}px, newHeight={newHeight}px");
                 }
                 catch { }

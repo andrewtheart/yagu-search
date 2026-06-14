@@ -50,6 +50,7 @@ internal sealed class ResultStoreTempLocationWindow : Window
                 presenter.IsMaximizable = false;
                 presenter.IsMinimizable = false;
                 presenter.IsResizable = false;
+                presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);
             }
         }
         catch { }
