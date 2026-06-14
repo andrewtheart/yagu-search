@@ -1,0 +1,54 @@
+#!/bin/sh
+# Yagu pre-commit hook: enforce the "one installer in LFS" policy.
+#
+# Policy:
+#   * Exactly ONE installer/YaguSetup-*.exe may be tracked in git at a time.
+#   * It must be the highest version (the latest build).
+#   * It must be stored as a Git LFS pointer, never a raw 100MB+ blob.
+#
+# Behaviour:
+#   * Older installer EXEs are removed from the index (the files stay on disk).
+#   * A staged installer that is a raw binary instead of an LFS pointer
+#     aborts the commit with instructions.
+#
+# This hook is version-controlled at scripts/git-hooks/pre-commit and installed
+# into .git/hooks/pre-commit by scripts/install-git-hooks.ps1 (so it coexists
+# with the Git LFS hooks instead of replacing them via core.hooksPath).
+
+set -e
+
+pattern='installer/YaguSetup-*.exe'
+
+# All installer EXEs currently in the index (staged additions + already committed).
+exes=$(git ls-files -- "$pattern")
+[ -z "$exes" ] && exit 0
+
+# The latest = highest version, using version-aware sort.
+latest=$(printf '%s\n' "$exes" | sort -V | tail -n 1)
+
+# Remove every other installer EXE from the index (keep the working-tree file).
+printf '%s\n' "$exes" | while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  if [ "$f" != "$latest" ]; then
+    git rm --cached --quiet -- "$f"
+    printf 'pre-commit: untracked older installer (kept on disk): %s\n' "$f" >&2
+  fi
+done
+
+# Verify the retained installer is an LFS pointer, not a raw binary.
+first_line=$(git cat-file -p ":$latest" 2>/dev/null | head -n 1 || true)
+case "$first_line" in
+  "version https://git-lfs.github.com/spec/v1")
+    : # ok: it is an LFS pointer
+    ;;
+  *)
+    printf '\n[pre-commit ABORTED] %s is staged as a RAW file, not a Git LFS pointer.\n' "$latest" >&2
+    printf 'GitHub rejects >100MB raw files. Re-stage it through LFS:\n' >&2
+    printf '    git rm --cached "%s" && git add "%s"\n' "$latest" "$latest" >&2
+    printf '(ensure .gitattributes maps *.exe to lfs).\n\n' >&2
+    exit 1
+    ;;
+esac
+
+printf 'pre-commit: installer policy OK -> only %s tracked (LFS).\n' "$latest" >&2
+exit 0
