@@ -827,6 +827,8 @@ public sealed class SettingsEffectTests : IDisposable
             PreviewEditorMaxSizeMB = 64,
             PreviewEditorMaxTextLength = 50_000_000,
             PreviewEditorMaxLineLength = 5_000_000,
+            PreviewShowMoreEllipsisColor = "#FF112233",
+            PreviewShowMoreEllipsisFontSize = 21,
         };
 
         var json = System.Text.Json.JsonSerializer.Serialize(original, AppSettingsJsonContext.Default.AppSettings);
@@ -866,6 +868,8 @@ public sealed class SettingsEffectTests : IDisposable
         Assert.Equal(original.PreviewEditorMaxSizeMB, loaded.PreviewEditorMaxSizeMB);
         Assert.Equal(original.PreviewEditorMaxTextLength, loaded.PreviewEditorMaxTextLength);
         Assert.Equal(original.PreviewEditorMaxLineLength, loaded.PreviewEditorMaxLineLength);
+        Assert.Equal(original.PreviewShowMoreEllipsisColor, loaded.PreviewShowMoreEllipsisColor);
+        Assert.Equal(original.PreviewShowMoreEllipsisFontSize, loaded.PreviewShowMoreEllipsisFontSize);
     }
 
     // ════════════════════════════════════════════════
@@ -932,6 +936,10 @@ public sealed class SettingsEffectTests : IDisposable
         Assert.False(s.PreviewWordWrap);
         Assert.Equal(AppSettings.DefaultPreviewTextFontFamily, s.PreviewTextFontFamily);
         Assert.Equal(AppSettings.DefaultPreviewTextFontSize, s.PreviewTextFontSize);
+        Assert.Equal(AppSettings.DefaultPreviewShowMoreEllipsisColor, s.PreviewShowMoreEllipsisColor);
+        Assert.Equal(AppSettings.DefaultPreviewShowMoreEllipsisFontSize, s.PreviewShowMoreEllipsisFontSize);
+        Assert.Equal("#FF1E90FF", s.PreviewShowMoreEllipsisColor);
+        Assert.Equal(17, s.PreviewShowMoreEllipsisFontSize);
         Assert.Equal(32, s.PreviewEditorMaxSizeMB);
         Assert.Equal(20_000_000, s.PreviewEditorMaxTextLength);
         Assert.Equal(1_000_000, s.PreviewEditorMaxLineLength);

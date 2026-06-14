@@ -2559,6 +2559,47 @@ public sealed partial class SettingsWindow : Window
                 value => _viewModel.PreviewMatchLineColor = value,
                 showContrastStatus: true);
 
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Show more ellipsis", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 12, 0, 0) });
+            previewViewerGroup.Children.Add(new TextBlock { Text = "The clickable \u2026 markers shown where a preview line or section is truncated and can be expanded.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            previewViewerGroup.Children.Add(new TextBlock { Text = "Font size:" });
+            var ellipsisFontSize = new NumberBox
+            {
+                Value = _viewModel.PreviewShowMoreEllipsisFontSize,
+                Minimum = 6,
+                Maximum = 72,
+                SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
+            };
+            ellipsisFontSize.ValueChanged += (_, args) =>
+            {
+                if (!double.IsNaN(args.NewValue))
+                    _viewModel.PreviewShowMoreEllipsisFontSize = (int)Math.Clamp(args.NewValue, 6, 72);
+            };
+            previewViewerGroup.Children.Add(ellipsisFontSize);
+
+            var resetEllipsisFont = new Button
+            {
+                Content = "Reset ellipsis size",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+            };
+            resetEllipsisFont.Click += (_, _) =>
+            {
+                ellipsisFontSize.Value = AppSettings.DefaultPreviewShowMoreEllipsisFontSize;
+                _viewModel.PreviewShowMoreEllipsisFontSize = AppSettings.DefaultPreviewShowMoreEllipsisFontSize;
+            };
+            RegisterDefaultResetButton(resetEllipsisFont,
+                () => _viewModel.PreviewShowMoreEllipsisFontSize == AppSettings.DefaultPreviewShowMoreEllipsisFontSize);
+            previewViewerGroup.Children.Add(resetEllipsisFont);
+
+            AddPreviewContentColorSetting(
+                previewViewerGroup,
+                "Ellipsis color:",
+                "Color of the clickable \u2026 show-more markers. Default is DodgerBlue.",
+                _viewModel.PreviewShowMoreEllipsisColor,
+                Windows.UI.Color.FromArgb(0xFF, 0x1E, 0x90, 0xFF),
+                value => _viewModel.PreviewShowMoreEllipsisColor = value);
+
             previewViewerGroup.Children.Add(new TextBlock { Text = "Preview section limits", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 8, 0, 0) });
 
             previewViewerGroup.Children.Add(new TextBlock { Text = "Auto-load matches on scroll (matches to load when reaching end of truncated section, 0 = disabled):" });

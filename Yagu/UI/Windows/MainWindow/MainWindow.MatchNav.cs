@@ -475,6 +475,70 @@ public sealed partial class MainWindow
             HideActiveMatchOverlay();
     }
 
+    /// <summary>
+    /// Re-applies the active match overlay after a "Show more"/"Show all" expansion
+    /// rebuilt a truncated line's paragraph. The rebuild replaces the paragraph's
+    /// <see cref="Run"/> inlines (orphaning the boxed run reference), and a Prefix or
+    /// All expansion can reveal additional match occurrences before the active one,
+    /// shifting its ordinal. The active occurrence is re-resolved by its absolute
+    /// source column — which is stable across window expansion — so the overlay tracks
+    /// the same match to its new position instead of being left behind.
+    /// </summary>
+    private void ReapplyActiveMatchOverlayAfterExpansion(Paragraph rebuiltParagraph, int oldWindowStart, int newWindowStart)
+    {
+        if (_activeMatchHighlight is not { para: var activePara, column: var activeColumn })
+            return;
+
+        if (!ReferenceEquals(activePara, rebuiltParagraph))
+        {
+            // The active match lives in a different, untouched paragraph whose run
+            // reference is still valid; expanding this paragraph can still shift it
+            // vertically, so reposition the existing overlay.
+            QueueActiveMatchOverlayRefresh();
+            return;
+        }
+
+        // Source column is preserved across expansion even though the display column
+        // and match ordinal can change as prefix/suffix text is revealed.
+        int activeSourceColumn = oldWindowStart + activeColumn;
+        _paragraphMatchRunCache.Remove(rebuiltParagraph);
+        var matches = GetMatchRunsForParagraph(rebuiltParagraph);
+        int newMatchInPara = -1;
+        for (int i = 0; i < matches.Count; i++)
+        {
+            if (newWindowStart + matches[i].column == activeSourceColumn)
+            {
+                newMatchInPara = i;
+                break;
+            }
+        }
+
+        if (newMatchInPara < 0)
+        {
+            // The active occurrence is no longer present (should not happen for an
+            // expansion that only grows the window); drop the stale overlay rather
+            // than boxing the wrong run.
+            HideActiveMatchOverlay();
+            return;
+        }
+
+        // Keep the navigation entry's ordinal in sync so FindActiveMatchIndex (used by
+        // later overlay refreshes, e.g. on viewport resize) continues to resolve it.
+        if ((uint)_currentMatchIndex < (uint)_matchParagraphs.Count
+            && ReferenceEquals(_matchParagraphs[_currentMatchIndex].para, rebuiltParagraph))
+        {
+            var entry = _matchParagraphs[_currentMatchIndex];
+            _matchParagraphs[_currentMatchIndex] = (entry.block, entry.para, newMatchInPara);
+        }
+
+        BoxMatchRun(rebuiltParagraph, newMatchInPara);
+
+        if (TryFindPreviewBlockForParagraph(rebuiltParagraph, out var block))
+            QueueActiveMatchOverlayUpdate(block, rebuiltParagraph);
+        else
+            QueueActiveMatchOverlayRefresh();
+    }
+
     private bool TryScrollPreviewToLine(RichTextBlock block, Paragraph targetPara, bool verifyAfterScroll, bool forceCenter, out string reason)
     {
         reason = string.Empty;
@@ -903,7 +967,24 @@ public sealed partial class MainWindow
                     estimateReasonForLog = "estimate-unavailable";
                 }
 
-                if (hasEstimatedPoint
+                // When the run's start and end character rects sit on the same
+                // wrapped row and span the expected run width, GetCharacterRect
+                // has produced fully-settled, authoritative geometry. The
+                // uniform chars-per-line estimate drifts badly for matches deep
+                // into long word-wrapped lines (e.g. after a Show-more expansion
+                // pushes the active match many rows down), so it must NOT override
+                // a reliable measured rect — only step in when the actual rect is
+                // unmeasured/stale (multi-row split or bogus coordinates).
+                double measuredRunWidth = endRect.X - rect.X;
+                double expectedRunWidth = (targetRun.Text?.Length ?? 1) * charWidth;
+                bool actualRectReliable =
+                    IsUsableTextRect(endRect)
+                    && Math.Abs(endRect.Y - rect.Y) <= Math.Max(4, markerHeight * 0.6)
+                    && measuredRunWidth > 0
+                    && Math.Abs(measuredRunWidth - expectedRunWidth) <= Math.Max(charWidth, markerWidth * 0.5);
+
+                if (!actualRectReliable
+                    && hasEstimatedPoint
                     && ShouldUseEstimatedWrappedMatchPoint(block, point, estimatedPoint, markerWidth, markerHeight, viewportWidth, out estimateReasonForLog))
                 {
                     point = estimatedPoint;
@@ -912,7 +993,9 @@ public sealed partial class MainWindow
                 }
                 else if (hasEstimatedPoint)
                 {
-                    if (string.IsNullOrEmpty(estimateReasonForLog))
+                    if (actualRectReliable)
+                        estimateReasonForLog = "actual-reliable";
+                    else if (string.IsNullOrEmpty(estimateReasonForLog))
                         estimateReasonForLog = "estimate-rejected";
                 }
 

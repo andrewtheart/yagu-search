@@ -103,6 +103,12 @@ public sealed partial class MainWindow
         public SearchResult Result { get; }
         public Regex? Regex { get; }
         public int ContentInlineStart { get; set; }
+
+        // When true, only the originally-selected occurrence (the result's source
+        // match) is colored as a match; all other regex hits revealed by a
+        // "Show more"/"Show all" expansion stay context-colored. Mirrors the
+        // targetOnlyMatchEntry coloring used when the windowed line was first built.
+        public bool ColorTargetMatchOnly { get; set; }
     }
 
     private sealed record PreviewShowMoreAction(
@@ -2547,6 +2553,7 @@ public sealed partial class MainWindow
         _matchTextBrush = new SolidColorBrush(matchTextColor);
         _overlayColor = ColorStringHelper.Parse(vm.PreviewOverlayColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x45, 0x00));
         _matchLineBrush = new SolidColorBrush(ColorStringHelper.Parse(vm.PreviewMatchLineColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)));
+        _previewShowMoreEllipsisBrush.Color = ColorStringHelper.Parse(vm.PreviewShowMoreEllipsisColor, Windows.UI.Color.FromArgb(0xFF, 0x1E, 0x90, 0xFF));
         s_contextTextBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 110, 110, 110));
         s_matchAccentBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 70, 140, 70));
 
@@ -2565,6 +2572,12 @@ public sealed partial class MainWindow
     private int ResolvePreviewTextFontSize()
         => Math.Clamp(
             ViewModel.PreviewTextFontSize <= 0 ? AppSettings.DefaultPreviewTextFontSize : ViewModel.PreviewTextFontSize,
+            6,
+            72);
+
+    private int ResolvePreviewShowMoreEllipsisFontSize()
+        => Math.Clamp(
+            ViewModel.PreviewShowMoreEllipsisFontSize <= 0 ? AppSettings.DefaultPreviewShowMoreEllipsisFontSize : ViewModel.PreviewShowMoreEllipsisFontSize,
             6,
             72);
 
@@ -2595,6 +2608,33 @@ public sealed partial class MainWindow
         block.FontFamily = new FontFamily(family);
         block.FontSize = size;
         block.LineHeight = lineHeight;
+    }
+
+    private void ApplyPreviewShowMoreEllipsisFontSize()
+    {
+        int size = ResolvePreviewShowMoreEllipsisFontSize();
+        foreach (var block in EnumeratePreviewShowMoreHostBlocks())
+        {
+            foreach (var paragraph in block.Blocks.OfType<Paragraph>())
+            {
+                foreach (var inline in paragraph.Inlines)
+                {
+                    if (inline is InlineUIContainer { Child: Border { Child: TextBlock marker } }
+                        && s_previewShowMoreActions.TryGetValue(marker, out _))
+                    {
+                        marker.FontSize = size;
+                    }
+                }
+            }
+        }
+    }
+
+    private IEnumerable<RichTextBlock> EnumeratePreviewShowMoreHostBlocks()
+    {
+        foreach (var block in EnumeratePreviewSectionBlocks())
+            yield return block;
+        if (PreviewBlock is not null)
+            yield return PreviewBlock;
     }
 
     private Paragraph AddPreviewLineParagraphs(
@@ -2695,7 +2735,8 @@ public sealed partial class MainWindow
         int lineNumber,
         bool isMatchLine,
         SearchResult result,
-        Regex? regex)
+        Regex? regex,
+        bool colorTargetMatchOnly = false)
     {
         if (window.SourceStart <= 0 && window.SourceEnd >= sourceLine.Length)
             return null;
@@ -2713,7 +2754,10 @@ public sealed partial class MainWindow
             lineNumber,
             isMatchLine,
             result,
-            regex);
+            regex)
+        {
+            ColorTargetMatchOnly = colorTargetMatchOnly,
+        };
     }
 
     private static PreviewLineWindow CreatePreviewLineWindow(string sourceLine, int sourceStart, int sourceEnd)
@@ -2870,7 +2914,7 @@ public sealed partial class MainWindow
         // itself fully visible.
         if (truncate)
             window = ClipMatchWindowToRenderedSiblings(section, lineNum, line, result, rx, window);
-        var expansionState = CreatePreviewTruncatedLineState(window, line, lineNum, isMatchLine: true, result, rx);
+        var expansionState = CreatePreviewTruncatedLineState(window, line, lineNum, isMatchLine: true, result, rx, colorTargetMatchOnly: targetOnlyMatchEntry);
         _sectionGutterBlocks.TryGetValue(section, out var gutterBlock);
         Paragraph? firstParagraph = null;
         bool addedMatchEntries = false;
@@ -3451,7 +3495,7 @@ public sealed partial class MainWindow
         }
     }
 
-    private static readonly SolidColorBrush s_previewShowMoreEllipsisBrush = new(Microsoft.UI.Colors.DodgerBlue);
+    private readonly SolidColorBrush _previewShowMoreEllipsisBrush = new(Microsoft.UI.Colors.DodgerBlue);
 
     private InlineUIContainer CreatePreviewShowMoreInline(
         Paragraph paragraph,
@@ -3462,8 +3506,9 @@ public sealed partial class MainWindow
         var marker = new TextBlock
         {
             Text = LineTruncator.Ellipsis,
-            Foreground = s_previewShowMoreEllipsisBrush,
+            Foreground = _previewShowMoreEllipsisBrush,
             FontFamily = new FontFamily("Consolas"),
+            FontSize = ResolvePreviewShowMoreEllipsisFontSize(),
             VerticalAlignment = VerticalAlignment.Center,
             Padding = new Thickness(0),
             Margin = new Thickness(0),
@@ -3784,6 +3829,34 @@ public sealed partial class MainWindow
         _previewShowMorePointerOverPanel = false;
     }
 
+    /// <summary>
+    /// Dismisses the open "Show more"/"Show all" action panel once the ellipsis that
+    /// triggered it has been expanded away, so the panel never lingers over text that
+    /// no longer has a marker. "Show all" reveals the whole line (every ellipsis on it
+    /// disappears), so it always dismisses; "Show more" dismisses only when the marker
+    /// on the panel's own edge is fully expanded. No-op when the panel belongs to a
+    /// different line or is already hidden.
+    /// </summary>
+    private void HidePreviewShowMoreTooltipIfExpandedAway(PreviewShowMoreAction action, PreviewShowMoreExpandMode mode)
+    {
+        if (PreviewShowMoreTooltipOverlay.Visibility != Visibility.Visible)
+            return;
+        if (_previewShowMoreTooltipAction is null
+            || !ReferenceEquals(_previewShowMoreTooltipAction.State, action.State))
+            return;
+
+        var state = action.State;
+        bool prefixMarkerVisible = state.SourceStart > 0;
+        bool suffixMarkerVisible = state.SourceEnd < state.SourceLine.Length;
+
+        bool markerGone = mode == PreviewShowMoreExpandMode.All
+            || (_previewShowMoreTooltipEdge == PreviewShowMoreEdge.Prefix && !prefixMarkerVisible)
+            || (_previewShowMoreTooltipEdge == PreviewShowMoreEdge.Suffix && !suffixMarkerVisible);
+
+        if (markerGone)
+            HidePreviewShowMoreTooltip();
+    }
+
     private void QueuePreviewTruncatedLineExpansion(PreviewShowMoreAction action, PreviewShowMoreExpandMode mode)
     {
         var state = action.State;
@@ -3882,6 +3955,8 @@ public sealed partial class MainWindow
             state.SourceEnd = newEnd;
             RebuildPreviewTruncatedLineParagraph(action.Paragraph, state);
             RestorePreviewShowMoreScrollPosition(scrollSnapshot);
+            ReapplyActiveMatchOverlayAfterExpansion(action.Paragraph, oldStart, newStart);
+            HidePreviewShowMoreTooltipIfExpandedAway(action, mode);
         }
         catch
         {
@@ -4009,11 +4084,13 @@ public sealed partial class MainWindow
         }
 
         var window = CreatePreviewLineWindow(state.SourceLine, state.SourceStart, state.SourceEnd);
-        AddPreviewTextRuns(paragraph, window.Text, state.IsMatchLine, state.Regex, state);
+        var matchOrdinalsToColor = BuildTargetColorOrdinals(state, window, window.Text, segmentDisplayStart: 0);
+        AddPreviewTextRuns(paragraph, window.Text, state.IsMatchLine, state.Regex, state, matchOrdinalsToColor);
     }
 
     private void AddPreviewFullLineSegmentRuns(Paragraph paragraph, PreviewTruncatedLineState state)
     {
+        var fullWindow = CreatePreviewLineWindow(state.SourceLine, 0, state.SourceLine.Length);
         int segmentLength = Math.Max(50, GetEffectiveSegmentSize() - (2 * LineTruncator.Ellipsis.Length));
         bool firstSegment = true;
         for (int index = 0; index < state.SourceLine.Length; index += segmentLength)
@@ -4022,12 +4099,36 @@ public sealed partial class MainWindow
                 paragraph.Inlines.Add(new LineBreak());
 
             int length = Math.Min(segmentLength, state.SourceLine.Length - index);
-            AddPreviewTextSpanRuns(paragraph, state.SourceLine.Substring(index, length), state.IsMatchLine, state.Regex);
+            string segmentText = state.SourceLine.Substring(index, length);
+            var matchOrdinalsToColor = BuildTargetColorOrdinals(state, fullWindow, segmentText, segmentDisplayStart: index);
+            AddPreviewTextSpanRuns(paragraph, segmentText, state.IsMatchLine, state.Regex, matchOrdinalsToColor);
             firstSegment = false;
         }
 
         if (state.SourceLine.Length == 0)
-            AddPreviewTextSpanRuns(paragraph, string.Empty, state.IsMatchLine, state.Regex);
+            AddPreviewTextSpanRuns(paragraph, string.Empty, state.IsMatchLine, state.Regex, BuildTargetColorOrdinals(state, fullWindow, string.Empty, segmentDisplayStart: 0));
+    }
+
+    /// <summary>
+    /// Computes the set of regex-match ordinals (within <paramref name="segment"/>) that
+    /// should be colored as a match after a "Show more"/"Show all" expansion. Returns
+    /// <c>null</c> when the line colors every match (the standard preview path), and an
+    /// empty set for segments that do not contain the originally-selected occurrence so
+    /// that newly revealed, unselected matches stay context-colored.
+    /// </summary>
+    private static HashSet<int>? BuildTargetColorOrdinals(
+        PreviewTruncatedLineState state,
+        PreviewLineWindow window,
+        string segment,
+        int segmentDisplayStart)
+    {
+        if (!state.ColorTargetMatchOnly)
+            return null;
+
+        var ordinals = new HashSet<int>();
+        if (TryGetTargetMatchOrdinalInSegment(state.SourceLine, state.Result, state.Regex, window, segment, segmentDisplayStart, out int ordinal))
+            ordinals.Add(ordinal);
+        return ordinals;
     }
 
     private string TruncatePreviewLine(string line, Regex? rx)

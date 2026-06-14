@@ -291,9 +291,15 @@ public sealed partial class MainWindow : Window, IDisposable
                 e.PropertyName == nameof(ViewModel.PreviewEditorGutterColor) ||
                 e.PropertyName == nameof(ViewModel.PreviewMatchTextColor) ||
                 e.PropertyName == nameof(ViewModel.PreviewOverlayColor) ||
-                e.PropertyName == nameof(ViewModel.PreviewMatchLineColor))
+                e.PropertyName == nameof(ViewModel.PreviewMatchLineColor) ||
+                e.PropertyName == nameof(ViewModel.PreviewShowMoreEllipsisColor))
             {
                 ApplyPreviewColors();
+            }
+
+            if (e.PropertyName == nameof(ViewModel.PreviewShowMoreEllipsisFontSize))
+            {
+                ApplyPreviewShowMoreEllipsisFontSize();
             }
 
             if (e.PropertyName == nameof(ViewModel.PreviewEditorFontFamily) ||

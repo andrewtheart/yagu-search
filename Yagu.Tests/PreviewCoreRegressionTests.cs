@@ -1721,7 +1721,7 @@ public sealed class PreviewCoreRegressionTests
 
         Assert.Contains("private sealed class PreviewTruncatedLineState", previewBuilder);
         Assert.Contains("private sealed record PreviewShowMoreAction", previewBuilder);
-        Assert.Contains("s_previewShowMoreEllipsisBrush = new(Microsoft.UI.Colors.DodgerBlue)", previewBuilder);
+        Assert.Contains("_previewShowMoreEllipsisBrush = new(Microsoft.UI.Colors.DodgerBlue)", previewBuilder);
         AssertContainsInOrder(previewBuilder,
             "private int GetPreviewShowMoreMaxWindowLength()",
             "GetEffectiveSegmentSize() - (2 * LineTruncator.Ellipsis.Length)",
@@ -1747,7 +1747,8 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("var marker = new TextBlock", inline);
         Assert.Contains("var markerHost = new Border", inline);
         Assert.Contains("Background = _transparentBrush", inline);
-        Assert.Contains("Foreground = s_previewShowMoreEllipsisBrush", inline);
+        Assert.Contains("Foreground = _previewShowMoreEllipsisBrush", inline);
+        Assert.Contains("FontSize = ResolvePreviewShowMoreEllipsisFontSize()", inline);
         Assert.Contains("markerHost.PointerEntered", inline);
         Assert.Contains("markerHost.PointerMoved", inline);
         Assert.Contains("markerHost.PointerExited", inline);
@@ -1859,6 +1860,18 @@ public sealed class PreviewCoreRegressionTests
             "var scrollSnapshot = CapturePreviewShowMoreScrollPosition(action)",
             "RebuildPreviewTruncatedLineParagraph(action.Paragraph, state)");
         Assert.Contains("RestorePreviewShowMoreScrollPosition(scrollSnapshot)", expand);
+        Assert.Contains("HidePreviewShowMoreTooltipIfExpandedAway(action, mode)", expand);
+
+        // After an expansion completes, the action panel must dismiss when the ellipsis
+        // that triggered it is gone: "Show all" always (the whole line is revealed), and
+        // "Show more" once its own edge's marker has been fully expanded away.
+        string expandedAway = ExtractMethodWindow(previewBuilder, "HidePreviewShowMoreTooltipIfExpandedAway", window: 1600);
+        Assert.Contains("PreviewShowMoreTooltipOverlay.Visibility != Visibility.Visible", expandedAway);
+        Assert.Contains("ReferenceEquals(_previewShowMoreTooltipAction.State, action.State)", expandedAway);
+        Assert.Contains("mode == PreviewShowMoreExpandMode.All", expandedAway);
+        Assert.Contains("_previewShowMoreTooltipEdge == PreviewShowMoreEdge.Prefix && !prefixMarkerVisible", expandedAway);
+        Assert.Contains("_previewShowMoreTooltipEdge == PreviewShowMoreEdge.Suffix && !suffixMarkerVisible", expandedAway);
+        Assert.Contains("HidePreviewShowMoreTooltip()", expandedAway);
 
         string captureScroll = ExtractMethodWindow(previewBuilder, "CapturePreviewShowMoreScrollPosition", window: 1800);
         Assert.Contains("PreviewScrollViewer.HorizontalOffset", captureScroll);
@@ -1877,9 +1890,19 @@ public sealed class PreviewCoreRegressionTests
 
         string rebuild = ExtractMethodWindow(previewBuilder, "RebuildPreviewTruncatedLineParagraph", window: 2200);
         Assert.Contains("AddPreviewFullLineSegmentRuns(paragraph, state)", rebuild);
+        // A "Show more"/"Show all" rebuild must preserve the originally-selected
+        // occurrence's coloring restriction so newly revealed, unselected matches
+        // stay context-colored instead of being painted as selected matches.
+        Assert.Contains("BuildTargetColorOrdinals(state, window, window.Text, segmentDisplayStart: 0)", rebuild);
+        Assert.Contains("AddPreviewTextRuns(paragraph, window.Text, state.IsMatchLine, state.Regex, state, matchOrdinalsToColor)", rebuild);
         string fullLine = ExtractMethodWindow(previewBuilder, "AddPreviewFullLineSegmentRuns", window: 2200);
         Assert.Contains("paragraph.Inlines.Add(new LineBreak())", fullLine);
         Assert.Contains("AddPreviewTextSpanRuns", fullLine);
+        Assert.Contains("BuildTargetColorOrdinals(state, fullWindow, segmentText, segmentDisplayStart: index)", fullLine);
+        string buildOrdinals = ExtractMethodWindow(previewBuilder, "BuildTargetColorOrdinals", window: 1400);
+        Assert.Contains("if (!state.ColorTargetMatchOnly)", buildOrdinals);
+        Assert.Contains("return null;", buildOrdinals);
+        Assert.Contains("TryGetTargetMatchOrdinalInSegment(state.SourceLine, state.Result, state.Regex, window, segment, segmentDisplayStart, out int ordinal)", buildOrdinals);
 
         Assert.Contains("IsPreviewShowMorePointerSource(e.OriginalSource)", selectionAutoScroll);
         Assert.Contains("CancelPreviewSelectionAutoScrollForShowMore(\"show-more-pointer-pressed\")", selectionAutoScroll);
@@ -1932,6 +1955,10 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("HashSet<int>? matchOrdinalsToColor = null;", aroundResult);
         Assert.Contains("matchOrdinalsToColor.Add(colorOrdinal);", aroundResult);
         Assert.Contains("matchOrdinalsToColor: matchOrdinalsToColor", aroundResult);
+        // The target-only coloring restriction must be carried on the expansion state
+        // so a later "Show more"/"Show all" rebuild keeps coloring only the selected
+        // occurrence instead of every regex hit in the newly revealed text.
+        Assert.Contains("colorTargetMatchOnly: targetOnlyMatchEntry", aroundResult);
 
         string addParagraphs = ExtractMethodWindow(MainWindowSource, "AddPreviewLineParagraphs");
         Assert.Contains("if (!isMatchLine || matchParagraphs is null)", addParagraphs);

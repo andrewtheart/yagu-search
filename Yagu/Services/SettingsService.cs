@@ -30,6 +30,8 @@ public sealed class AppSettings
     public const string DefaultPreviewMatchTextColor = "#FFFFD700"; // Gold
     public const string DefaultPreviewOverlayColor = "#FFFF4500"; // OrangeRed
     public const string DefaultPreviewMatchLineColor = "#FFFFFFFF"; // White
+    public const string DefaultPreviewShowMoreEllipsisColor = "#FF1E90FF"; // DodgerBlue
+    public const int DefaultPreviewShowMoreEllipsisFontSize = 17;
     public const string DefaultPreviewTextFontFamily = "Consolas";
     public const int DefaultPreviewTextFontSize = 14;
     public const string DefaultPreviewEditorFontFamily = "Consolas, Cascadia Mono, Segoe UI, Segoe UI Symbol, Segoe UI Emoji";
@@ -88,6 +90,8 @@ public sealed class AppSettings
     public string PreviewMatchTextColor { get; set; } = DefaultPreviewMatchTextColor;
     public string PreviewOverlayColor { get; set; } = DefaultPreviewOverlayColor;
     public string PreviewMatchLineColor { get; set; } = DefaultPreviewMatchLineColor;
+    public string PreviewShowMoreEllipsisColor { get; set; } = DefaultPreviewShowMoreEllipsisColor;
+    public int PreviewShowMoreEllipsisFontSize { get; set; } = DefaultPreviewShowMoreEllipsisFontSize;
     public string PreviewTextFontFamily { get; set; } = DefaultPreviewTextFontFamily;
     public int PreviewTextFontSize { get; set; } = DefaultPreviewTextFontSize;
     public string PreviewEditorFontFamily { get; set; } = DefaultPreviewEditorFontFamily;
@@ -287,6 +291,7 @@ public sealed class SettingsService
             NormalizePreviewTextFontSettings(settings);
             NormalizePreviewEditorFontSettings(settings);
             NormalizeResultListMatchTextSettings(settings);
+            NormalizePreviewShowMoreSettings(settings);
             settings.LowDiskSpaceWarningPercent = AppSettings.NormalizeLowDiskSpaceWarningPercent(settings.LowDiskSpaceWarningPercent);
             settings.TerminalDefaultWorkingDirectory ??= string.Empty;
             return settings;
@@ -323,6 +328,7 @@ public sealed class SettingsService
             NormalizePreviewTextFontSettings(settings);
             NormalizePreviewEditorFontSettings(settings);
             NormalizeResultListMatchTextSettings(settings);
+            NormalizePreviewShowMoreSettings(settings);
             settings.TerminalDefaultWorkingDirectory ??= string.Empty;
             return settings;
         }
@@ -408,6 +414,18 @@ public sealed class SettingsService
         settings.ResultListMatchHighlightColor = NormalizeArgbHexString(
             settings.ResultListMatchHighlightColor,
             AppSettings.DefaultResultListMatchHighlightColor);
+    }
+
+    private static void NormalizePreviewShowMoreSettings(AppSettings settings)
+    {
+        settings.PreviewShowMoreEllipsisColor = NormalizeArgbHexString(
+            settings.PreviewShowMoreEllipsisColor,
+            AppSettings.DefaultPreviewShowMoreEllipsisColor);
+
+        settings.PreviewShowMoreEllipsisFontSize = Math.Clamp(
+            settings.PreviewShowMoreEllipsisFontSize <= 0 ? AppSettings.DefaultPreviewShowMoreEllipsisFontSize : settings.PreviewShowMoreEllipsisFontSize,
+            6,
+            72);
     }
 
     private static string NormalizeArgbHexString(string? value, string fallback)

@@ -147,6 +147,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         PreviewMatchLineColor = ColorStringHelper.Normalize(
             _settings.PreviewMatchLineColor,
             Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF));
+        PreviewShowMoreEllipsisColor = ColorStringHelper.Normalize(
+            _settings.PreviewShowMoreEllipsisColor,
+            Windows.UI.Color.FromArgb(0xFF, 0x1E, 0x90, 0xFF));
+        PreviewShowMoreEllipsisFontSize = Math.Clamp(
+            _settings.PreviewShowMoreEllipsisFontSize <= 0 ? AppSettings.DefaultPreviewShowMoreEllipsisFontSize : _settings.PreviewShowMoreEllipsisFontSize,
+            6,
+            72);
         PreviewTextFontFamily = string.IsNullOrWhiteSpace(_settings.PreviewTextFontFamily)
             ? AppSettings.DefaultPreviewTextFontFamily
             : _settings.PreviewTextFontFamily;
@@ -475,6 +482,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial string PreviewMatchTextColor { get; set; } = AppSettings.DefaultPreviewMatchTextColor;
     [ObservableProperty] public partial string PreviewOverlayColor { get; set; } = AppSettings.DefaultPreviewOverlayColor;
     [ObservableProperty] public partial string PreviewMatchLineColor { get; set; } = AppSettings.DefaultPreviewMatchLineColor;
+    [ObservableProperty] public partial string PreviewShowMoreEllipsisColor { get; set; } = AppSettings.DefaultPreviewShowMoreEllipsisColor;
+    [ObservableProperty] public partial int PreviewShowMoreEllipsisFontSize { get; set; } = AppSettings.DefaultPreviewShowMoreEllipsisFontSize;
     [ObservableProperty] public partial string PreviewTextFontFamily { get; set; } = AppSettings.DefaultPreviewTextFontFamily;
     [ObservableProperty] public partial int PreviewTextFontSize { get; set; } = AppSettings.DefaultPreviewTextFontSize;
     [ObservableProperty] public partial string PreviewEditorFontFamily { get; set; } = AppSettings.DefaultPreviewEditorFontFamily;
@@ -2489,6 +2498,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.PreviewMatchLineColor = ColorStringHelper.Normalize(
             PreviewMatchLineColor,
             Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF));
+        _settings.PreviewShowMoreEllipsisColor = ColorStringHelper.Normalize(
+            PreviewShowMoreEllipsisColor,
+            Windows.UI.Color.FromArgb(0xFF, 0x1E, 0x90, 0xFF));
+        _settings.PreviewShowMoreEllipsisFontSize = Math.Clamp(
+            PreviewShowMoreEllipsisFontSize <= 0 ? AppSettings.DefaultPreviewShowMoreEllipsisFontSize : PreviewShowMoreEllipsisFontSize,
+            6,
+            72);
         _settings.PreviewTextFontFamily = string.IsNullOrWhiteSpace(PreviewTextFontFamily)
             ? AppSettings.DefaultPreviewTextFontFamily
             : PreviewTextFontFamily.Trim();
