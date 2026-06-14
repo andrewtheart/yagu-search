@@ -52,9 +52,14 @@ internal class TextRenderer
     private LinkHighlightManager linkHighlightManager;
     private readonly Dictionary<int, int> wrappedLineRowCountCache = new();
     private readonly List<int> wrappedLineStartRowsCache = new();
+    // Lines whose text changed (without changing the line count) since the last wrap-metrics
+    // update. They are re-measured incrementally instead of rebuilding metrics for every line.
+    private readonly HashSet<int> dirtyWrapLines = new();
     private float cachedWrapWidth;
     private int cachedTotalVisualRows = 1;
     private bool wrapMetricsDirty = true;
+    // Above this many dirty lines, a full rebuild is cheaper than many incremental patches.
+    private const int IncrementalWrapRemeasureLimit = 64;
     private const int LongWrappedLineVirtualizationThreshold = 100_000;
     private const int VirtualizedWrappedLinePaddingRows = 2;
 
@@ -111,6 +116,7 @@ internal class TextRenderer
         this.linkHighlightManager = linkHighlightManager;
 
         textManager.LinesChanged += InvalidateWrapMetrics;
+        textManager.SingleLineTextChanged += OnSingleLineTextChanged;
     }
 
     public void CheckDispose()
@@ -125,6 +131,7 @@ internal class TextRenderer
     {
         wrappedLineRowCountCache.Clear();
         wrappedLineStartRowsCache.Clear();
+        dirtyWrapLines.Clear();
         cachedWrapWidth = 0;
         cachedTotalVisualRows = 1;
         wrapMetricsDirty = true;
@@ -139,8 +146,26 @@ internal class TextRenderer
     {
         wrappedLineRowCountCache.Clear();
         wrappedLineStartRowsCache.Clear();
+        dirtyWrapLines.Clear();
         cachedTotalVisualRows = Math.Max(1, textManager?.LinesCount ?? 1);
         wrapMetricsDirty = true;
+        ResetVirtualizedWrappedLineState();
+        NeedsUpdateTextLayout = true;
+        lineNumberRenderer?.NeedsUpdateLineNumbers();
+    }
+
+    // A single line's text changed without changing the line count. Re-measuring every line on
+    // each keystroke (the previous full InvalidateWrapMetrics behavior) created a CanvasTextLayout
+    // per document line and caused multi-second "not responding" hangs while typing in word-wrap
+    // mode on large files. Instead, mark just this line dirty and update wrap metrics incrementally.
+    private void OnSingleLineTextChanged(int lineIndex)
+    {
+        // Only track dirty lines while word wrap is on; otherwise EnsureWrapMetrics early-returns
+        // and the set would grow unbounded. A pending full rebuild (wrapMetricsDirty) already covers
+        // every line, so there is no need to record individual lines in that case.
+        if (IsWordWrapEnabled && !wrapMetricsDirty && lineIndex >= 0)
+            dirtyWrapLines.Add(lineIndex);
+
         ResetVirtualizedWrappedLineState();
         NeedsUpdateTextLayout = true;
         lineNumberRenderer?.NeedsUpdateLineNumbers();
@@ -319,21 +344,27 @@ internal class TextRenderer
             cachedWrapWidth = wrapWidth;
             wrappedLineRowCountCache.Clear();
             wrappedLineStartRowsCache.Clear();
+            dirtyWrapLines.Clear();
             wrapMetricsDirty = true;
             NeedsUpdateTextLayout = true;
             lineNumberRenderer.NeedsUpdateLineNumbers();
         }
 
-        if (!wrapMetricsDirty && wrappedLineStartRowsCache.Count == textManager.LinesCount + 1)
+        if (wrapMetricsDirty || wrappedLineStartRowsCache.Count != textManager.LinesCount + 1)
+        {
+            RebuildWrapMetrics(canvasText);
             return;
+        }
 
-        RebuildWrapMetrics(canvasText);
+        if (dirtyWrapLines.Count > 0)
+            ApplyIncrementalWrapMetrics(canvasText);
     }
 
     private void RebuildWrapMetrics(CanvasControl canvasText)
     {
         wrappedLineRowCountCache.Clear();
         wrappedLineStartRowsCache.Clear();
+        dirtyWrapLines.Clear();
 
         int visualRow = 0;
         wrappedLineStartRowsCache.Add(visualRow);
@@ -347,6 +378,42 @@ internal class TextRenderer
 
         cachedTotalVisualRows = Math.Max(1, visualRow);
         wrapMetricsDirty = false;
+    }
+
+    // Re-measures only the lines whose text changed and shifts the cumulative start-row cache by
+    // the per-line row-count delta. This is cheap integer arithmetic plus at most a handful of
+    // CanvasTextLayout measurements, versus a layout per document line in RebuildWrapMetrics.
+    private void ApplyIncrementalWrapMetrics(CanvasControl canvasText)
+    {
+        if (dirtyWrapLines.Count > IncrementalWrapRemeasureLimit ||
+            wrappedLineStartRowsCache.Count != textManager.LinesCount + 1)
+        {
+            RebuildWrapMetrics(canvasText);
+            return;
+        }
+
+        bool changed = false;
+        foreach (int line in dirtyWrapLines)
+        {
+            if (line < 0 || line >= textManager.LinesCount)
+                continue;
+
+            int oldRows = wrappedLineRowCountCache.TryGetValue(line, out int cached) ? cached : 1;
+            int newRows = MeasureWrappedRowCount(canvasText, line);
+            if (newRows == oldRows)
+                continue;
+
+            wrappedLineRowCountCache[line] = newRows;
+            int delta = newRows - oldRows;
+            for (int i = line + 1; i < wrappedLineStartRowsCache.Count; i++)
+                wrappedLineStartRowsCache[i] += delta;
+            changed = true;
+        }
+
+        if (changed && wrappedLineStartRowsCache.Count > 0)
+            cachedTotalVisualRows = Math.Max(1, wrappedLineStartRowsCache[^1]);
+
+        dirtyWrapLines.Clear();
     }
 
     private int MeasureWrappedRowCount(CanvasControl canvasText, int lineIndex)

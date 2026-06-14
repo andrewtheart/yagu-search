@@ -187,17 +187,22 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void MatchLineCheckbox_RebuildsMultiSelectPreviewForAdditionalCheckedMatches()
+    public void MatchLineCheckbox_AddsAdditionalCheckedMatchesIncrementally()
     {
-        string handler = ExtractMethodWindow(MainWindowSource, "OnMatchLineCheckBoxClicked", 2400);
+        // Checking an additional match line must add it to the existing preview
+        // incrementally rather than tearing down and rebuilding every section.
+        // Routing the additive case through UpdateMultiSelectPreviewAsync(result)
+        // cleared and re-rendered all sections, which the user saw as every
+        // preview flickering away and back on each newly checked match.
+        string updateForSelection = ExtractMethodWindow(MainWindowSource, "UpdatePreviewForMatchSelectionAsync", window: 2200);
 
-        AssertContainsInOrder(handler,
+        AssertContainsInOrder(updateForSelection,
             "if (result.IsSelected)",
-            "var selected = ViewModel.GetAllSelectedResults();",
-            "if (selected.Count > 1)",
-            "await UpdateMultiSelectPreviewAsync(result);",
-            "else",
+            "if (!ViewModel.MatchLineCheckAddsToPreview) return;",
             "await EnsureCheckedMatchInPreviewAsync(result);");
+
+        // The additive branch must not rebuild the whole multi-select preview.
+        Assert.DoesNotContain("await UpdateMultiSelectPreviewAsync(result);", updateForSelection);
 
         string updateMulti = ExtractMethodWindow(MainWindowSource, "UpdateMultiSelectPreviewAsync", 900);
         Assert.Contains("SearchResult? scrollTarget", updateMulti);
@@ -237,6 +242,21 @@ public sealed class PreviewCoreRegressionTests
             "HorizontalAlignment = HorizontalAlignment.Right,",
             "Grid.SetColumn(buttonPanel, 1);",
             "Canvas.SetZIndex(buttonPanel, 1);");
+    }
+
+    [Fact]
+    public void PreviewSectionHeader_FileNameHugsFolderIconAtAnyWidth()
+    {
+        string header = ExtractMethodWindow(MainWindowSource, "BuildPreviewSectionHeader", 4200);
+
+        // The file name must be left-aligned so it stays sticky to the folder
+        // icon. A Stretch TextBlock constrained by MaxWidth centers inside its
+        // star column, opening a gap that widens with the window.
+        AssertContainsInOrder(header,
+            "var fileNameText = new TextBlock",
+            "MaxWidth = 360,",
+            "HorizontalAlignment = HorizontalAlignment.Left,",
+            "Grid.SetColumn(fileNameText, 1);");
     }
 
     [Fact]
@@ -1261,7 +1281,7 @@ public sealed class PreviewCoreRegressionTests
             "targetOnlyMatchEntry: true,",
             "maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks));");
 
-        string aroundResult = ExtractMethodWindow(MainWindowSource, "AddPreviewLineParagraphsAroundResult", window: 3600);
+        string aroundResult = ExtractMethodWindow(MainWindowSource, "AddPreviewLineParagraphsAroundResult", window: 6000);
         Assert.Contains("targetOnlyMatchEntry ? null : rx", aroundResult);
         Assert.Contains("minimumOne: true", aroundResult);
     }
@@ -1578,7 +1598,9 @@ public sealed class PreviewCoreRegressionTests
 
         string aroundResult = ExtractMethodWindow(MainWindowSource, "AddPreviewLineParagraphsAroundResult");
         Assert.Contains("bool truncate = true", aroundResult);
-        Assert.Contains("firstParagraph is not null || continuationGutter", aroundResult);
+        Assert.Contains("bool isContinuationSegment = firstParagraph is not null;", aroundResult);
+        Assert.Contains("bool useContinuationGutter = isContinuationSegment || continuationGutter;", aroundResult);
+        Assert.Contains("truncationState: isContinuationSegment ? null : expansionState", aroundResult);
         Assert.Contains("ScheduleGutterSync(section);", aroundResult);
 
         string addParagraphs = ExtractMethodWindow(MainWindowSource, "AddPreviewLineParagraphs");
@@ -1884,7 +1906,12 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("new LineBreak()", helper);
         Assert.Contains("Text = \"       │ \"", helper);
         Assert.Contains("Foreground = s_gutterSepBrush", helper);
-        Assert.Contains("s_gutterWrappedContinuationCounts.Remove(gutterParagraph);", helper);
+        // Idempotency must be derived from the rows actually present (LineBreak count),
+        // not a side table keyed on object identity, otherwise a moved/re-synced gutter
+        // paragraph gets a second full set of continuation rows and renders ~2x too tall.
+        Assert.Contains("if (inline is LineBreak)", helper);
+        Assert.Contains("currentContinuationRows > targetContinuationRows", helper);
+        Assert.DoesNotContain("s_gutterWrappedContinuationCounts", helper);
     }
 
     [Fact]
@@ -1924,8 +1951,8 @@ public sealed class PreviewCoreRegressionTests
         string updatePreviewForSelection = ExtractMethodWindow(MainWindowSource, "UpdatePreviewForMatchSelectionAsync", window: 2200);
         Assert.Contains("if (result.IsSelected)", updatePreviewForSelection);
         Assert.Contains("if (!ViewModel.MatchLineCheckAddsToPreview) return;", updatePreviewForSelection);
-        Assert.Contains("await UpdateMultiSelectPreviewAsync(result);", updatePreviewForSelection);
         Assert.Contains("await EnsureCheckedMatchInPreviewAsync(result);", updatePreviewForSelection);
+        Assert.DoesNotContain("await UpdateMultiSelectPreviewAsync(result);", updatePreviewForSelection);
         Assert.DoesNotContain("UpdatePreviewAsync", checkboxClicked);
 
         string selectionForLine = ExtractMethodWindow(MainWindowSource, "UpdateSelectionForMatchLine", window: 900);

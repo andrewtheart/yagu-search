@@ -17,6 +17,10 @@ internal class TextManager
 
     public event Action LinesChanged;
 
+    // Raised when a single existing line's text changes without altering the line count.
+    // Lets the renderer update wrap metrics incrementally instead of re-measuring every line.
+    public event Action<int> SingleLineTextChanged;
+
     public PooledList<string> totalLines
     {
         get => _totalLines;
@@ -30,6 +34,17 @@ internal class TextManager
     public void NotifyLinesChanged()
     {
         LinesChanged?.Invoke();
+    }
+
+    private void NotifySingleLineChanged(int line)
+    {
+        // Prefer the incremental, single-line notification. Fall back to the full
+        // LinesChanged event when nothing is listening for the incremental one so
+        // behavior is preserved for any other consumer.
+        if (SingleLineTextChanged != null)
+            SingleLineTextChanged.Invoke(line);
+        else
+            LinesChanged?.Invoke();
     }
 
     public int _FontSize = 18;
@@ -116,7 +131,7 @@ internal class TextManager
         if (line == -1)
         {
             totalLines[^1] = text;
-            NotifyLinesChanged();
+            NotifySingleLineChanged(totalLines.Count - 1);
             return;
         }
 
@@ -124,17 +139,17 @@ internal class TextManager
             throw new IndexOutOfRangeException("SetLineText provided line index out of range of valid values.");
 
         totalLines.Span[line] = text;
-        NotifyLinesChanged();
+        NotifySingleLineChanged(line);
     }
     public void String_AddToEnd(int line, string add)
     {
         totalLines.Span[line] += add;
-        NotifyLinesChanged();
+        NotifySingleLineChanged(line);
     }
     public void String_AddToStart(int line, string add)
     {
         totalLines[line] = add + totalLines[line];
-        NotifyLinesChanged();
+        NotifySingleLineChanged(line);
     }
 
     public void DeleteAt(int index)

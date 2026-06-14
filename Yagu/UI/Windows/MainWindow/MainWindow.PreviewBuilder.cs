@@ -227,7 +227,8 @@ public sealed partial class MainWindow
         double lineHeight = contentBlock.LineHeight;
         var contentBlocks = contentBlock.Blocks;
         var gutterBlocks = gutterBlock.Blocks;
-        if (contentBlocks.Count == 0 || contentBlocks.Count != gutterBlocks.Count) return;
+        if (contentBlocks.Count == 0 || contentBlocks.Count != gutterBlocks.Count)
+            return;
 
         bool isWrapped = contentBlock.TextWrapping == TextWrapping.Wrap;
 
@@ -265,35 +266,38 @@ public sealed partial class MainWindow
         }
     }
 
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_gutterWrappedContinuationCounts = new();
-
     private static void SetGutterWrappedContinuationRows(Paragraph gutterParagraph, int visualLineCount)
     {
         int targetContinuationRows = Math.Max(0, visualLineCount - 1);
+
+        // Reconcile against the continuation rows actually present rather than a side table.
+        // Each continuation row is a [LineBreak, Run] pair appended after the leading gutter
+        // runs, so the LineBreak count is the ground-truth current row count. Counting the
+        // real inlines keeps this idempotent even when a gutter paragraph is moved between
+        // blocks or re-synced multiple times. A side table keyed on object identity could
+        // silently lose its entry, causing a second full set of rows to be appended and
+        // leaving the gutter paragraph ~2x taller than its content — which made the gutter
+        // line numbers drift upward and appear beside the wrong content line.
         int currentContinuationRows = 0;
-        if (s_gutterWrappedContinuationCounts.TryGetValue(gutterParagraph, out var raw)
-            && raw is int storedRows
-            && storedRows > 0)
+        foreach (var inline in gutterParagraph.Inlines)
         {
-            currentContinuationRows = storedRows;
+            if (inline is LineBreak)
+                currentContinuationRows++;
         }
 
-        while (currentContinuationRows > 0 && gutterParagraph.Inlines.Count >= 2)
+        while (currentContinuationRows > targetContinuationRows && gutterParagraph.Inlines.Count >= 2)
         {
+            // Remove the trailing [LineBreak, Run] continuation pair.
             gutterParagraph.Inlines.RemoveAt(gutterParagraph.Inlines.Count - 1);
             gutterParagraph.Inlines.RemoveAt(gutterParagraph.Inlines.Count - 1);
             currentContinuationRows--;
         }
 
-        for (int i = 0; i < targetContinuationRows; i++)
+        for (int i = currentContinuationRows; i < targetContinuationRows; i++)
         {
             gutterParagraph.Inlines.Add(new LineBreak());
             gutterParagraph.Inlines.Add(new Run { Text = "       │ ", Foreground = s_gutterSepBrush });
         }
-
-        s_gutterWrappedContinuationCounts.Remove(gutterParagraph);
-        if (targetContinuationRows > 0)
-            s_gutterWrappedContinuationCounts.Add(gutterParagraph, targetContinuationRows);
     }
 
     /// <summary>Adds a spacer paragraph to the gutter block to keep it aligned with non-line paragraphs in the content.</summary>
@@ -1820,6 +1824,11 @@ public sealed partial class MainWindow
             TextTrimming = TextTrimming.CharacterEllipsis,
             MinWidth = 0,
             MaxWidth = 360,
+            // Hug the folder icon. Without an explicit Left alignment a Stretch
+            // TextBlock constrained by MaxWidth gets centered inside its star
+            // column, leaving a gap after the icon that grows as the window
+            // widens. Left keeps the name sticky to the left at any width.
+            HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Center,
         };
         Grid.SetColumn(fileNameText, 1);
@@ -2480,6 +2489,14 @@ public sealed partial class MainWindow
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphPrimaryResults = new();
     /// <summary>Marks paragraphs that are continuation segments of a long source line (no leading line number gutter).</summary>
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphIsContinuation = new();
+    /// <summary>
+    /// Records the source-line column window [SourceStart, SourceEnd) rendered for a
+    /// truncated match-line paragraph. Lets same-line occurrence clicks decide whether a
+    /// clicked occurrence falls inside an already-rendered window (reuse it) or lies
+    /// outside every rendered window (append a dedicated window for it). Absent entry =
+    /// the full untruncated line was rendered, which contains every occurrence.
+    /// </summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphMatchWindows = new();
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DependencyObject, object> s_previewShowMoreActions = new();
     private const int PreviewShowMoreTooltipHideDelayMs = 700;
     private const double PreviewShowMoreTooltipCursorGapDip = 12;
@@ -2615,6 +2632,14 @@ public sealed partial class MainWindow
             firstParagraph ??= para;
             paragraphsAdded++;
 
+            // Record the rendered source-column window for any truncated line, not
+            // only match lines. A context line that is later promoted in place by
+            // TryPromoteContextLineToMatch keeps this window so far-apart same-line
+            // occurrences still append their own dedicated window instead of being
+            // collapsed onto the promoted paragraph's nearest run.
+            if (expansionState is not null)
+                RecordParagraphMatchWindow(para, window.SourceStart, window.SourceEnd);
+
             if (!isMatchLine || matchParagraphs is null)
                 continue;
 
@@ -2640,6 +2665,28 @@ public sealed partial class MainWindow
     }
 
     private readonly record struct PreviewLineWindow(string Text, int SourceStart, int SourceEnd);
+
+    private static void RecordParagraphMatchWindow(Paragraph para, int sourceStart, int sourceEnd)
+        => s_paragraphMatchWindows.AddOrUpdate(para, ValueTuple.Create(sourceStart, sourceEnd));
+
+    /// <summary>
+    /// Gets the source-line column window rendered for a truncated match-line paragraph.
+    /// Returns false when the paragraph rendered the full untruncated line (no window
+    /// recorded), in which case it contains every occurrence on the line.
+    /// </summary>
+    private static bool TryGetParagraphMatchWindow(Paragraph para, out int sourceStart, out int sourceEnd)
+    {
+        if (s_paragraphMatchWindows.TryGetValue(para, out var boxed) && boxed is ValueTuple<int, int> window)
+        {
+            sourceStart = window.Item1;
+            sourceEnd = window.Item2;
+            return true;
+        }
+
+        sourceStart = 0;
+        sourceEnd = 0;
+        return false;
+    }
 
     private PreviewTruncatedLineState? CreatePreviewTruncatedLineState(
         PreviewLineWindow window,
@@ -2827,11 +2874,21 @@ public sealed partial class MainWindow
             if (maxParagraphs is int limit && paragraphsAdded >= limit)
                 break;
 
-            bool isContinuation = firstParagraph is not null || continuationGutter;
-            var para = MakePreviewParagraph(segment, lineNum, isMatchLine: true, result, rx, truncate: false, continuationGutter: isContinuation, gutterBlock: gutterBlock, truncationState: isContinuation ? null : expansionState);
+            // continuationGutter renders the "N+" gutter for dense same-line match
+            // windows; it must NOT suppress the blue show-more ellipsis markers.
+            // Only a real continuation segment (the 2nd+ layout segment of THIS
+            // window) should drop the markers, so the first segment of every
+            // windowed occurrence — including same-line continuation windows —
+            // keeps its clickable prefix/suffix ellipsis.
+            bool isContinuationSegment = firstParagraph is not null;
+            bool useContinuationGutter = isContinuationSegment || continuationGutter;
+            var para = MakePreviewParagraph(segment, lineNum, isMatchLine: true, result, rx, truncate: false, continuationGutter: useContinuationGutter, gutterBlock: gutterBlock, truncationState: isContinuationSegment ? null : expansionState);
             section.Blocks.Add(para);
             firstParagraph ??= para;
             paragraphsAdded++;
+
+            if (expansionState is not null)
+                RecordParagraphMatchWindow(para, window.SourceStart, window.SourceEnd);
 
             if (matchParagraphs is null)
             {

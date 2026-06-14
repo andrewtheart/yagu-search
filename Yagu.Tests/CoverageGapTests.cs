@@ -824,6 +824,31 @@ public class SearchResultCollectionGapTests
     }
 
     [Fact]
+    public void ApplySortAndFilter_FileNameFilterMatchesMatchCount()
+    {
+        var coll = new SearchResultCollection();
+
+        // File whose name contains the filter text but has a different count.
+        coll.Add(MakeResult(@"C:\report-1123.txt", "match", lineNum: 1));
+        coll.Add(MakeResult(@"C:\report-1123.txt", "match", lineNum: 2));
+
+        // File whose match count equals the filter text but name does not contain it.
+        for (int i = 1; i <= 1123; i++)
+            coll.Add(MakeResult(@"C:\data.txt", "match", lineNum: i));
+
+        // File that matches on neither name nor count.
+        coll.Add(MakeResult(@"C:\other.txt", "match"));
+
+        coll.FileNameFilter = "1123";
+        coll.ApplySortAndFilter();
+
+        Assert.Equal(
+            [@"C:\report-1123.txt", @"C:\data.txt"],
+            coll.VisibleGroups.Select(group => group.FilePath).OrderByDescending(p => p).ToArray());
+        Assert.DoesNotContain(coll.VisibleGroups, group => group.FilePath == @"C:\other.txt");
+    }
+
+    [Fact]
     public void AddRange_AppliesActiveFileNameFilterToIncomingGroups()
     {
         var coll = new SearchResultCollection { FileNameFilter = "visible" };

@@ -1905,10 +1905,11 @@ public sealed class SearchService
             int sourceMatchStartBytes = view.SourceMatchStart > int.MaxValue ? matchStartBytes : (int)view.SourceMatchStart;
             int matchLenBytes = view.MatchLen > int.MaxValue ? 0 : (int)view.MatchLen;
             int lineNum = view.LineNumber > int.MaxValue ? int.MaxValue : (int)view.LineNumber;
-            int safeSourceStartBytes = Math.Clamp(sourceMatchStartBytes, 0, lineBytes);
-            int charSourceMatchStart = System.Text.Ascii.IsValid(new ReadOnlySpan<byte>(view.LinePtr, safeSourceStartBytes))
-                ? safeSourceStartBytes
-                : Encoding.UTF8.GetCharCount(view.LinePtr, safeSourceStartBytes);
+            // The core reports source_match_start as a full-line UTF-16 column (the
+            // space the preview disambiguates sibling matches against), already
+            // accounting for any windowing of long lines. It cannot be reconstructed
+            // on the managed side from the emitted (windowed) slice, so use it verbatim.
+            int charSourceMatchStart = Math.Max(0, sourceMatchStartBytes);
 
             // ── Degraded fast-path: write raw UTF-8 directly to disk, skip String alloc ──
             if (Volatile.Read(ref _degraded) != 0 && _resultStore != null)

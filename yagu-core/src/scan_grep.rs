@@ -270,7 +270,7 @@ where
             let rec = MatchRecord {
                 line_number,
                 match_start: display_start,
-                source_match_start: abs_start.min(u32::MAX as usize) as u32,
+                source_match_start: crate::scan::utf16_col(line_view, abs_start),
                 match_len: match_len as u32,
                 line: line_truncated,
                 context_before: self.before.iter().cloned().collect(),

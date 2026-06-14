@@ -1,6 +1,7 @@
 ﻿using Microsoft.Graphics.Canvas.Brushes;
 using Microsoft.Graphics.Canvas.Text;
 using Microsoft.Graphics.Canvas.UI.Xaml;
+using System;
 using System.Numerics;
 using TextControlBoxNS.Core.Text;
 using TextControlBoxNS.Helper;
@@ -9,6 +10,9 @@ namespace TextControlBoxNS.Core.Renderer;
 
 internal class CursorRenderer
 {
+    // Fraction of the inter-line spacing that the caret extends above and below the glyph.
+    private const float CaretOverhangFraction = 0.75f;
+
     public CursorSize _CursorSize = null;
 
     private CursorManager cursorManager;
@@ -57,7 +61,15 @@ internal class CursorRenderer
 
         Vector2 vector = textLayout.GetCaretPosition(characterPosition < 0 ? 0 : characterPosition, false);
         if (customSize == null)
-            args.DrawingSession.FillRectangle(vector.X + xOffset, y + vector.Y, 2, fontSize, cursorColorBrush);
+        {
+            // Draw the caret a little taller than the glyph and centered on it, so it extends
+            // above and below the adjacent character and reaches into the inter-line spacing
+            // (TextRenderer.SingleLineHeight = font size + LineSpacingPadding). The overhang is
+            // derived from the spacing so it scales with the font/zoom.
+            float lineHeight = textRenderer.SingleLineHeight;
+            float overhang = Math.Max(2f, (lineHeight - fontSize) * CaretOverhangFraction);
+            args.DrawingSession.FillRectangle(vector.X + xOffset, y + vector.Y - overhang, 2, fontSize + overhang * 2f, cursorColorBrush);
+        }
         else
             args.DrawingSession.FillRectangle(vector.X + xOffset + customSize.OffsetX, y + vector.Y + customSize.OffsetY, (float)customSize.Width, (float)customSize.Height, cursorColorBrush);
     }

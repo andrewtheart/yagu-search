@@ -9,6 +9,11 @@ namespace TextControlBoxNS.Core;
 
 internal class TextLayoutManager
 {
+    // Extra vertical leading added on top of the font size for each line so there is a little
+    // breathing room between lines. The caret renderer derives its height from this through
+    // TextRenderer.SingleLineHeight (= CanvasTextFormat.LineSpacing).
+    internal const float LineSpacingPadding = 6f;
+
     private TextManager textManager;
     private ZoomManager zoomManager;
     public bool WordWrap { get; set; }
@@ -30,7 +35,7 @@ internal class TextLayoutManager
     }
     public CanvasTextFormat CreateCanvasTextFormat()
     {
-        return CreateCanvasTextFormat(zoomManager.ZoomedFontSize, zoomManager.ZoomedFontSize + 2, textManager._FontFamily);
+        return CreateCanvasTextFormat(zoomManager.ZoomedFontSize, zoomManager.ZoomedFontSize + LineSpacingPadding, textManager._FontFamily);
     }
 
     public CanvasTextFormat CreateCanvasTextFormat(float zoomedFontSize, float lineSpacing, FontFamily fontFamily)
@@ -65,7 +70,7 @@ internal class TextLayoutManager
             HorizontalAlignment = CanvasHorizontalAlignment.Right,
             VerticalAlignment = CanvasVerticalAlignment.Top,
             WordWrapping = CanvasWordWrapping.NoWrap,
-            LineSpacing = zoomManager.ZoomedFontSize + 2,
+            LineSpacing = zoomManager.ZoomedFontSize + LineSpacingPadding,
         };
         textFormat.FontFamily = textManager._FontFamily.Source;
         textFormat.TrimmingGranularity = CanvasTextTrimmingGranularity.None;

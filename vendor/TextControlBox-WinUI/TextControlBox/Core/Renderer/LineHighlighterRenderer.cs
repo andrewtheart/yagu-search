@@ -21,7 +21,10 @@ internal class LineHighlighterRenderer
         if (textRenderer.CurrentLineTextLayout == null)
             return;
 
-        args.DrawingSession.FillRectangle(0, y, canvasWidth, fontSize, backgroundBrush);
+        // Fill the full line slot (font size + inter-line spacing) so the current-line
+        // highlight does not leave a gap below the text once line spacing is added.
+        float lineHeight = textRenderer.SingleLineHeight;
+        args.DrawingSession.FillRectangle(0, y, canvasWidth, lineHeight > fontSize ? lineHeight : fontSize, backgroundBrush);
     }
 
     public bool CanRender(FocusManager focusManager)

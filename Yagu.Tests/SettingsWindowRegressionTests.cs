@@ -985,7 +985,7 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("new DispatcherTimer { Interval = FileDrawerIntroTipDelay }", MainWindowIntroTipsSource);
         Assert.Contains("TryOpenIntroTip(\r\n                IntroTipKind.FileDrawer", MainWindowIntroTipsSource);
         Assert.Contains("Select a line number to preview just that line number + context", MainWindowIntroTipsSource);
-        Assert.Contains("Double click to jump to this text in the editor", MainWindowIntroTipsSource);
+        Assert.Contains("Double click on any match to jump to it in a file editor", MainWindowIntroTipsSource);
         Assert.Contains("IntroTeachingTip.Target = target;", MainWindowIntroTipsSource);
         Assert.Contains("IntroTeachingTip.IsOpen = true;", MainWindowIntroTipsSource);
         Assert.Contains("_ = MarkIntroTipShownAsync(kind);", MainWindowIntroTipsSource);

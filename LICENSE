@@ -26,7 +26,7 @@ https://www.gnu.org/licenses/gpl-3.0.html
 Vendored Code and Bundled Third-Party Assets
 --------------------------------------------
 
-The repository includes third-party code and assets under vendor/. Those
+The repository includes third-party code and assets under vendor/. The components have been modified from their original versions for usage in this application. Those
 components remain under their own licenses and are not relicensed by the Yagu
 project notice above. Upstream license files are retained where included by the
 upstream projects.

@@ -2368,6 +2368,75 @@ public sealed partial class MainWindow
         ActivateSectionForBlock(block);
     }
 
+    /// <summary>
+    /// Ensures a navigable match entry exists for the given paragraph and visual
+    /// match-run index. A truncated window rendered with <c>targetOnlyMatchEntry</c>
+    /// registers only the clicked target occurrence, so a same-line sibling occurrence
+    /// that is visible as another bold run in the same reused paragraph has no nav entry.
+    /// When such a sibling is clicked, register its entry on demand (inserted in reading
+    /// order, immediately after the lower-ordinal sibling) so the active-match overlay can
+    /// move to it instead of <see cref="SetCurrentMatchToMatch"/> silently no-op'ing on a
+    /// missing entry. No-ops when the entry already exists or the run index is out of range.
+    /// </summary>
+    private void EnsureNavEntryForParagraphMatch(RichTextBlock section, Paragraph para, int matchInPara)
+    {
+        if (matchInPara < 0)
+            return;
+
+        // Never register past the actual visible bold runs in the paragraph.
+        int visualRuns = GetMatchRunsForParagraph(para).Count;
+        if (matchInPara >= visualRuns)
+            return;
+
+        int insertAt = -1;
+        for (int i = 0; i < _matchParagraphs.Count; i++)
+        {
+            var e = _matchParagraphs[i];
+            if (!ReferenceEquals(e.block, section) || !ReferenceEquals(e.para, para))
+                continue;
+            if (e.matchInPara == matchInPara)
+                return; // already navigable
+            if (e.matchInPara < matchInPara)
+                insertAt = i + 1;
+            else if (insertAt < 0)
+                insertAt = i;
+        }
+
+        // Only register when the paragraph already has at least one entry; an entirely
+        // unregistered paragraph is handled by the append path, not here.
+        if (insertAt < 0)
+            return;
+
+        _matchParagraphs.Insert(insertAt, (section, para, matchInPara));
+
+        if (_sectionMatchNavs.TryGetValue(section, out var sn))
+        {
+            int snInsertAt = -1;
+            bool present = false;
+            for (int i = 0; i < sn.Matches.Count; i++)
+            {
+                var m = sn.Matches[i];
+                if (!ReferenceEquals(m.para, para))
+                    continue;
+                if (m.matchInPara == matchInPara) { present = true; break; }
+                if (m.matchInPara < matchInPara)
+                    snInsertAt = i + 1;
+                else if (snInsertAt < 0)
+                    snInsertAt = i;
+            }
+            if (!present && snInsertAt >= 0)
+            {
+                sn.Matches.Insert(snInsertAt, (para, matchInPara));
+                sn.IndexByMatch = null; // invalidate O(1) lookup cache
+            }
+        }
+
+        if (LogService.Instance.IsVerboseEnabled)
+            LogService.Instance.Verbose("MatchNav",
+                $"EnsureNavEntryForParagraphMatch: registered on-demand entry matchInPara={matchInPara} at idx={insertAt}, visualRuns={visualRuns}");
+    }
+
+
     private static void SetSectionCurrentMatch(SectionMatchNav sn, Paragraph para, int matchInPara)
     {
         // O(1) lookup once the cache is built. The cache is invalidated by

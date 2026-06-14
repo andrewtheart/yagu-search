@@ -384,7 +384,10 @@ public sealed class SearchResultCollection
         return ContainsFilter(group.FileName, value)
             || ContainsFilter(group.FilePath, value)
             || ContainsFilter(group.FormattedSize, value)
-            || ContainsFilter(group.FormattedDate, value);
+            || ContainsFilter(group.FormattedDate, value)
+            || ContainsFilter(
+                group.MatchCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                value);
     }
 
     private static bool ContainsFilter(string candidate, string filter)

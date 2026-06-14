@@ -81,7 +81,11 @@ public sealed partial class MainWindow
             double scale = (Content?.XamlRoot?.RasterizationScale) ?? 1.0;
 
             // Force a layout pass so DesiredSize reflects only the currently
-            // visible rows (admin banner + search card), then measure.
+            // visible rows (admin banner + search card), then measure. Bound the
+            // Advanced Options drawer first so a tall drawer scrolls internally
+            // instead of pushing the launcher window past the work area.
+            RootGrid.UpdateLayout();
+            UpdateAdvancedOptionsDrawerMaxHeight();
             RootGrid.UpdateLayout();
             RootGrid.Measure(new Windows.Foundation.Size(1400, double.PositiveInfinity));
             double desiredHeightDip = RootGrid.DesiredSize.Height;
@@ -104,6 +108,7 @@ public sealed partial class MainWindow
 
             int width = (int)(1400 * scale);
             int height = (int)((desiredHeightDip + 2) * scale) + chromeHeight;
+            if (height > wa.Height) height = wa.Height; // never extend past the work area
             int x = wa.X + Math.Max(0, (wa.Width - width) / 2);
             int y = wa.Y + (int)(4 * scale);
             AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(x, y, width, height));
@@ -127,10 +132,13 @@ public sealed partial class MainWindow
                     catch { }
 
                     RootGrid.UpdateLayout();
+                    UpdateAdvancedOptionsDrawerMaxHeight();
+                    RootGrid.UpdateLayout();
                     RootGrid.Measure(new Windows.Foundation.Size(1400, double.PositiveInfinity));
                     double h = RootGrid.DesiredSize.Height;
                     if (h < MinimumLauncherHeightDip) h = MinimumLauncherHeightDip;
                     int newHeight = (int)((h + 2) * deferredScale) + chrome;
+                    if (newHeight > wa.Height) newHeight = wa.Height;
                     if (Math.Abs(newHeight - AppWindow.Size.Height) < 4) return;
                     int newY = wa.Y + (int)(4 * deferredScale);
                     int newWidth = (int)(1400 * deferredScale);

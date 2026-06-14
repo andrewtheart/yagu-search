@@ -89,8 +89,19 @@ public sealed partial class MainWindow
         QueueIntroTip(
             IntroTipKind.PreviewMatch,
             ActiveMatchWordMarker,
-            "Double click to jump to this text in the editor",
+            "Double click on any match to jump to it in a file editor",
             TeachingTipPlacementMode.Top);
+    }
+
+    /// <summary>
+    /// Hides the active introductory teaching tip once the user performs the
+    /// action it describes (e.g. double-clicking a preview match to jump to the
+    /// editor). No-op when no tip is currently open.
+    /// </summary>
+    private void DismissActiveIntroTip()
+    {
+        if (IntroTeachingTip.IsOpen)
+            IntroTeachingTip.IsOpen = false;
     }
 
     private void QueueIntroTip(IntroTipKind kind, FrameworkElement target, string title, TeachingTipPlacementMode placement)

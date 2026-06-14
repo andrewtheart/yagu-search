@@ -18,6 +18,16 @@ public sealed partial class MainWindow
     private const double CompactTopSearchDrawerThreshold = 440;
     private const double CompactTopSearchActionButtonWidth = 38;
 
+    // Minimum usable height for the Advanced Options drawer content before a
+    // scrollbar is preferred over shrinking further.
+    private const double MinAdvancedOptionsDrawerHeight = 160;
+    // Space reserved below the drawer in full-window mode so the bottom status
+    // bar stays visible when the drawer is tall.
+    private const double FullModeDrawerBottomReserve = 48;
+    // Space reserved below the drawer in launcher mode for window chrome + a gap,
+    // so the auto-sized launcher window never extends past the monitor work area.
+    private const double LauncherDrawerBottomReserve = 36;
+
     private void InitializeAdvancedOptionsDrawerStateTracking()
     {
         AdvancedOptionsExpander.RegisterPropertyChangedCallback(Expander.IsExpandedProperty, (_, _) =>
@@ -30,6 +40,7 @@ public sealed partial class MainWindow
     private void OnAdvancedOptionsExpanding(Expander sender, ExpanderExpandingEventArgs args)
     {
         SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: true);
+        UpdateAdvancedOptionsDrawerMaxHeight();
         if (_launcherMode)
             ListenForExpanderResize();
         else
@@ -39,6 +50,7 @@ public sealed partial class MainWindow
     private void OnAdvancedOptionsCollapsed(Expander sender, ExpanderCollapsedEventArgs args)
     {
         SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: false);
+        UpdateAdvancedOptionsDrawerMaxHeight();
         if (_launcherMode)
             ListenForExpanderResize();
         else
@@ -59,6 +71,79 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
+    /// Bounds the Advanced Options drawer to the available vertical space so it
+    /// shows an internal scrollbar instead of being clipped at short window
+    /// heights. No-op (unbounded) while the drawer is collapsed.
+    /// </summary>
+    private void UpdateAdvancedOptionsDrawerMaxHeight()
+    {
+        if (AdvancedOptionsScrollViewer is null)
+            return;
+
+        if (!AdvancedOptionsExpander.IsExpanded)
+        {
+            AdvancedOptionsScrollViewer.MaxHeight = double.PositiveInfinity;
+            return;
+        }
+
+        double topY;
+        try
+        {
+            topY = AdvancedOptionsScrollViewer
+                .TransformToVisual(RootGrid)
+                .TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
+        }
+        catch
+        {
+            return;
+        }
+
+        if (double.IsNaN(topY) || topY < 0)
+            return;
+
+        double ceiling = ResolveAdvancedOptionsDrawerCeiling();
+        if (ceiling <= 0)
+            return;
+
+        double maxHeight = ceiling - topY;
+        AdvancedOptionsScrollViewer.MaxHeight =
+            maxHeight > MinAdvancedOptionsDrawerHeight ? maxHeight : MinAdvancedOptionsDrawerHeight;
+    }
+
+    /// <summary>
+    /// Resolves the bottom limit (in DIPs, relative to the window client top) the
+    /// drawer content may reach. Full-window mode uses the visible client height;
+    /// launcher mode uses the monitor work area since the window auto-sizes.
+    /// </summary>
+    private double ResolveAdvancedOptionsDrawerCeiling()
+    {
+        if (!_launcherMode)
+        {
+            double height = RootGrid.ActualHeight;
+            return height > 0 ? height - FullModeDrawerBottomReserve : 0;
+        }
+
+        try
+        {
+            if (AppWindow is null)
+                return RootGrid.ActualHeight;
+
+            var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(
+                AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
+            double scale = Content?.XamlRoot?.RasterizationScale ?? 1.0;
+            if (displayArea is null || scale <= 0)
+                return RootGrid.ActualHeight;
+
+            double workAreaHeightDip = displayArea.WorkArea.Height / scale;
+            return workAreaHeightDip - LauncherDrawerBottomReserve;
+        }
+        catch
+        {
+            return RootGrid.ActualHeight;
+        }
+    }
+
+    /// <summary>
     /// Forces the root grid to re-measure on every frame during the Expander
     /// expand/collapse animation so the split pane resizes in perfect sync.
     /// </summary>
@@ -72,6 +157,7 @@ public sealed partial class MainWindow
         {
             AdvancedOptionsExpander.InvalidateMeasure();
             RootGrid.UpdateLayout();
+            UpdateAdvancedOptionsDrawerMaxHeight();
             UpdateTopExpandedPreviewMeasurements();
         }
 
@@ -81,6 +167,7 @@ public sealed partial class MainWindow
             Microsoft.UI.Xaml.Media.CompositionTarget.Rendering -= handler;
             AdvancedOptionsExpander.InvalidateMeasure();
             RootGrid.UpdateLayout();
+            UpdateAdvancedOptionsDrawerMaxHeight();
             UpdateTopExpandedPreviewMeasurements();
         };
 

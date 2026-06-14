@@ -441,6 +441,15 @@
                     <Expander.Header>
                         <TextBlock Text="Advanced Options" VerticalAlignment="Center" />
                     </Expander.Header>
+                    <!-- ScrollViewer keeps the drawer fully usable at short window
+                         heights: when the options exceed the available space a vertical
+                         scrollbar appears instead of the content being clipped. The
+                         MaxHeight is set dynamically in code-behind. -->
+                    <ScrollViewer x:Name="AdvancedOptionsScrollViewer"
+                                  VerticalScrollBarVisibility="Auto"
+                                  VerticalScrollMode="Auto"
+                                  HorizontalScrollMode="Disabled"
+                                  HorizontalScrollBarVisibility="Disabled">
                         <Border Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                             BorderThickness="1" CornerRadius="4" Padding="24,16,12,16">
@@ -767,6 +776,7 @@
                     </StackPanel>
                     </Grid>
                     </Border>
+                    </ScrollViewer>
                 </Expander>
             <Button x:Name="PreSearchTerminalChevron"
                     Grid.Row="2"
@@ -1681,8 +1691,6 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Text="{x:Bind ViewModel.FilesPerSecondText, Mode=OneWay}"
                      Visibility="{x:Bind ViewModel.StatsForNerdsVisibility, Mode=OneWay}"
@@ -1698,14 +1706,14 @@
                 <TextBlock x:Name="DiskGaugeLabel" VerticalAlignment="Center" HorizontalAlignment="Right"
                            FontFamily="Consolas" FontSize="11" Opacity="0.75" Margin="0,0,6,0" />
             </Grid>
-            <TextBlock Grid.Column="3" FontSize="12" Opacity="0.6" x:Name="SkipCountBlock"
+            <TextBlock Grid.Column="4" FontSize="12" Opacity="0.6" x:Name="SkipCountBlock"
                        FontFamily="Consolas" Width="140" TextAlignment="Right"
                        Tapped="OnSkipCountTapped" PointerEntered="OnSkipCountPointerEntered"
                        PointerExited="OnSkipCountPointerExited">
                 <Run Text="Skipped: " />
                 <Run Text="{x:Bind ViewModel.FilesSkipped, Mode=OneWay}" />
             </TextBlock>
-            <TextBlock Grid.Column="4" Foreground="DarkOrange" FontSize="12"
+            <TextBlock Grid.Column="3" Foreground="DarkOrange" FontSize="12"
                        Visibility="{x:Bind ViewModel.Truncated, Mode=OneWay}"
                        Text="Results truncated — refine your query" />
         </Grid>

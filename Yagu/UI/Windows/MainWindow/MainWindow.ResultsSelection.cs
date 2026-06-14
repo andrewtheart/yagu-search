@@ -445,11 +445,13 @@ public sealed partial class MainWindow
             if (!ViewModel.MatchLineCheckAddsToPreview) return;
             try
             {
-                var selected = ViewModel.GetAllSelectedResults();
-                if (selected.Count > 1)
-                    await UpdateMultiSelectPreviewAsync(result);
-                else
-                    await EnsureCheckedMatchInPreviewAsync(result);
+                // Always add the newly checked match incrementally so the existing
+                // preview sections are preserved. Rebuilding the whole multi-select
+                // preview here tears down and re-renders every section, which the
+                // user sees as all previews flickering away and back. The
+                // incremental path appends to (or prepends) only the affected
+                // section while keeping match totals and nav in sync.
+                await EnsureCheckedMatchInPreviewAsync(result);
             }
             catch (Exception ex)
             {
@@ -528,6 +530,11 @@ public sealed partial class MainWindow
             }
         }
 
+        // A truncated window rendered with targetOnlyMatchEntry registers only the
+        // clicked target occurrence as navigable. When this click reuses an existing
+        // same-line window whose resolved run is a sibling occurrence without its own
+        // nav entry, register it on demand so the overlay can actually move to it.
+        EnsureNavEntryForParagraphMatch(section, paragraph, matchInPara);
         SetCurrentMatchToMatch(section, paragraph, matchInPara);
         try
         {
@@ -887,7 +894,7 @@ public sealed partial class MainWindow
         out int matchInPara)
     {
         (Paragraph paragraph, int matchInPara)? exact = null;
-        (Paragraph paragraph, int matchInPara)? fallback = null;
+        var fallbackCandidates = new List<(Paragraph paragraph, int matchInPara)>();
 
         void ConsiderCandidate(Paragraph candidateParagraph, int candidateMatchInPara)
         {
@@ -903,7 +910,15 @@ public sealed partial class MainWindow
                 return;
             }
 
-            fallback ??= (candidateParagraph, candidateMatchInPara);
+            // Collect each distinct same-line paragraph once; the correct one is
+            // chosen later by window containment.
+            foreach (var existing in fallbackCandidates)
+            {
+                if (ReferenceEquals(existing.paragraph, candidateParagraph))
+                    return;
+            }
+
+            fallbackCandidates.Add((candidateParagraph, candidateMatchInPara));
         }
 
         paragraph = null!;
@@ -936,48 +951,143 @@ public sealed partial class MainWindow
         {
             paragraph = found.paragraph;
             matchInPara = found.matchInPara;
+
+            // The nav entry's stored ordinal can be a fallback (run 0): a freshly-appended
+            // single-target window registers run 0 when TryGetTargetMatchOrdinalInSegment
+            // can't place the target, and IsSameResultTarget collapses distinct source
+            // occurrences that share the same truncated display column. Re-resolve by source
+            // column so the box lands on the run matching THIS occurrence, mirroring the
+            // containing/fullLine path below.
+            int exactWindowStart = 0;
+            string exactRunCols = string.Empty;
+            if (result.SourceMatchStartColumn >= 0
+                && TryResolveMatchInParaBySourceColumn(found.paragraph, result.SourceMatchStartColumn, out int resolvedExact, out exactWindowStart, out exactRunCols))
+            {
+                matchInPara = resolvedExact;
+            }
+
+            if (LogService.Instance.IsVerboseEnabled)
+                LogService.Instance.Verbose("Preview", $"TryFindPreviewMatchParagraph: path=exact, line={result.LineNumber}, srcCol={result.SourceMatchStartColumn}, matchCol={result.MatchStartColumn}, matchLen={result.MatchLength}, windowStart={exactWindowStart}, runSrcCols=[{exactRunCols}], resolvedMatchInPara={matchInPara}, fallbacks={fallbackCandidates.Count}");
             return true;
         }
 
-        if (fallback is { } candidate)
+        if (fallbackCandidates.Count > 0)
         {
+            // A single selected occurrence on the line can always reuse the existing
+            // paragraph; there is no sibling occurrence to disambiguate from.
             if (!HasMultipleSelectedResultsOnLine(result))
             {
-                paragraph = candidate.paragraph;
-                matchInPara = candidate.matchInPara;
+                paragraph = fallbackCandidates[0].paragraph;
+                matchInPara = fallbackCandidates[0].matchInPara;
+                if (LogService.Instance.IsVerboseEnabled)
+                    LogService.Instance.Verbose("Preview", $"TryFindPreviewMatchParagraph: path=single, line={result.LineNumber}, srcCol={result.SourceMatchStartColumn}, matchCol={result.MatchStartColumn}, resolvedMatchInPara={matchInPara}, fallbacks={fallbackCandidates.Count}");
                 return true;
             }
 
-            // Multiple selected results on the same line share one paragraph.
-            // Determine the correct matchInPara by matching the result's column
-            // against the match runs in the paragraph.
-            var runs = GetMatchRunsForParagraph(candidate.paragraph);
-            if (runs.Count > 0 && result.MatchStartColumn >= 0)
+            // Multiple selected occurrences share this line. A long line renders a
+            // bounded window around each occurrence, so reuse an existing paragraph
+            // ONLY when this occurrence's source column actually falls inside that
+            // window (or the paragraph rendered the full untruncated line). Far-apart
+            // occurrences are not in any existing window and must get their own
+            // appended window instead of collapsing onto the nearest rendered run.
+            int sourceColumn = result.SourceMatchStartColumn >= 0
+                ? result.SourceMatchStartColumn
+                : result.MatchStartColumn;
+
+            (Paragraph paragraph, int matchInPara)? containing = null;
+            (Paragraph paragraph, int matchInPara)? fullLine = null;
+            foreach (var candidate in fallbackCandidates)
             {
-                // Find the match run whose column best matches this result's position.
-                int bestIndex = 0;
-                int bestDist = int.MaxValue;
-                for (int i = 0; i < runs.Count; i++)
+                if (TryGetParagraphMatchWindow(candidate.paragraph, out int windowStart, out int windowEnd))
                 {
-                    int dist = Math.Abs(runs[i].column - result.MatchStartColumn);
-                    if (dist < bestDist)
+                    if (sourceColumn >= windowStart && sourceColumn < windowEnd)
                     {
-                        bestDist = dist;
-                        bestIndex = i;
+                        containing = candidate;
+                        break;
                     }
                 }
-                paragraph = candidate.paragraph;
-                matchInPara = bestIndex;
+                else
+                {
+                    // No recorded window => full untruncated line => contains every
+                    // occurrence on the line.
+                    fullLine ??= candidate;
+                }
+            }
+
+            if ((containing ?? fullLine) is not { } chosen)
+            {
+                // This occurrence is not inside any rendered same-line window; signal
+                // the caller to append a dedicated window for it.
+                if (LogService.Instance.IsVerboseEnabled)
+                    LogService.Instance.Verbose("Preview", $"TryFindPreviewMatchParagraph: path=append(no-window), line={result.LineNumber}, srcCol={result.SourceMatchStartColumn}, matchCol={result.MatchStartColumn}, fallbacks={fallbackCandidates.Count}");
+                return false;
+            }
+
+            // Determine the correct matchInPara by matching the result's column
+            // against the match runs in the chosen paragraph.
+            if (TryResolveMatchInParaBySourceColumn(chosen.paragraph, sourceColumn, out int resolvedIdx, out int chosenWindowStart, out string runCols))
+            {
+                paragraph = chosen.paragraph;
+                matchInPara = resolvedIdx;
+                if (LogService.Instance.IsVerboseEnabled)
+                    LogService.Instance.Verbose("Preview", $"TryFindPreviewMatchParagraph: path={(containing is not null ? "containing" : "fullLine")}, line={result.LineNumber}, srcCol={result.SourceMatchStartColumn}, matchCol={result.MatchStartColumn}, sourceColumn={sourceColumn}, windowStart={chosenWindowStart}, runSrcCols=[{runCols}], resolvedMatchInPara={matchInPara}, fallbacks={fallbackCandidates.Count}");
                 return true;
             }
 
             // Fallback: can't determine column, use first match in paragraph.
-            paragraph = candidate.paragraph;
-            matchInPara = candidate.matchInPara;
+            paragraph = chosen.paragraph;
+            matchInPara = chosen.matchInPara;
             return true;
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Resolves which bold match run inside <paramref name="paragraph"/> corresponds to the
+    /// occurrence at <paramref name="sourceColumn"/> (a file-line absolute column). Dense
+    /// same-line windows render several occurrences as separate bold runs in one paragraph,
+    /// so the run nearest the target source column is the correct one. Each run's
+    /// paragraph-relative display column is converted to source space via the paragraph's
+    /// recorded window start (column 0 for full untruncated lines). Returns false when the
+    /// paragraph has no match runs or the column is unknown, leaving the caller's ordinal
+    /// untouched.
+    /// </summary>
+    private bool TryResolveMatchInParaBySourceColumn(
+        Paragraph paragraph,
+        int sourceColumn,
+        out int matchInPara,
+        out int windowStart,
+        out string runSourceColumnsLog)
+    {
+        matchInPara = 0;
+        windowStart = TryGetParagraphMatchWindow(paragraph, out int ws, out _) ? ws : 0;
+        runSourceColumnsLog = string.Empty;
+
+        var runs = GetMatchRunsForParagraph(paragraph);
+        if (runs.Count == 0 || sourceColumn < 0)
+            return false;
+
+        int bestIndex = 0;
+        int bestDist = int.MaxValue;
+        for (int i = 0; i < runs.Count; i++)
+        {
+            int runSourceColumn = windowStart + runs[i].column;
+            int dist = Math.Abs(runSourceColumn - sourceColumn);
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                bestIndex = i;
+            }
+        }
+
+        matchInPara = bestIndex;
+        if (LogService.Instance.IsVerboseEnabled)
+        {
+            int logWindowStart = windowStart;
+            runSourceColumnsLog = string.Join(",", runs.Select(r => logWindowStart + r.column));
+        }
+        return true;
     }
 
     private bool HasMultipleSelectedResultsOnLine(SearchResult result)

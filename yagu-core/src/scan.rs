@@ -61,6 +61,57 @@ pub struct ScanOptions {
 const MAX_EMITTED_LINE_BYTES: usize = 4096;
 const TRUNCATION_MARKER: &[u8] = b"\xE2\x80\xA6";
 
+/// UTF-16 code-unit offset of the prefix `line[..byte_start]`.
+///
+/// This is the column space the .NET preview disambiguates against (C#
+/// `string` indices are UTF-16 code units). Long lines are windowed for
+/// display before crossing the FFI boundary, so the managed side cannot
+/// reconstruct a full-line column from the emitted (windowed) slice — it lacks
+/// the unseen prefix. Computing it here, where the whole line is in hand, lets
+/// every occurrence carry a stable full-line column so sibling matches on one
+/// very long line can be told apart.
+///
+/// The all-ASCII prefix case (the overwhelming majority of matches) is a
+/// SIMD-accelerated `is_ascii()` check that returns the byte offset directly,
+/// keeping the hot streaming path allocation- and scan-cheap. Invalid UTF-8 is
+/// decoded leniently: each maximal invalid subsequence counts as one U+FFFD
+/// replacement char (one UTF-16 unit), matching `Encoding.UTF8` closely enough
+/// for column alignment.
+pub(crate) fn utf16_col(line: &[u8], byte_start: usize) -> u32 {
+    let end = byte_start.min(line.len());
+    let prefix = &line[..end];
+    if prefix.is_ascii() {
+        // 1 ASCII byte == 1 char == 1 UTF-16 code unit.
+        return end.min(u32::MAX as usize) as u32;
+    }
+
+    let mut units: usize = 0;
+    let mut i = 0usize;
+    while i < prefix.len() {
+        match std::str::from_utf8(&prefix[i..]) {
+            Ok(s) => {
+                units += s.chars().map(|c| c.len_utf16()).sum::<usize>();
+                break;
+            }
+            Err(e) => {
+                let valid = e.valid_up_to();
+                if valid > 0 {
+                    // SAFETY: bytes [i, i+valid) are valid UTF-8 per `valid_up_to`.
+                    let s = unsafe { std::str::from_utf8_unchecked(&prefix[i..i + valid]) };
+                    units += s.chars().map(|c| c.len_utf16()).sum::<usize>();
+                }
+                // One U+FFFD replacement unit for the invalid subsequence.
+                units += 1;
+                match e.error_len() {
+                    Some(bad) => i += valid + bad,
+                    None => break, // incomplete trailing sequence; nothing more to count
+                }
+            }
+        }
+    }
+    units.min(u32::MAX as usize) as u32
+}
+
 #[derive(Debug)]
 pub enum ScanError {
     Io(std::io::Error),
@@ -208,7 +259,7 @@ pub fn scan_bytes_with_matcher_ex(
                     let rec = MatchRecord {
                         line_number,
                         match_start: display_start,
-                        source_match_start: start.min(u32::MAX as usize) as u32,
+                        source_match_start: utf16_col(line, start),
                         match_len: len as u32,
                         line: match_line,
                         context_before: before.iter().cloned().collect(),
@@ -389,7 +440,7 @@ where
                         let view = MatchView {
                             line_number,
                             match_start: display_start,
-                            source_match_start: start.min(u32::MAX as usize) as u32,
+                            source_match_start: utf16_col(line, start),
                             match_len: len as u32,
                             line: display_line,
                             context_before: &before_view,
@@ -411,7 +462,7 @@ where
                         pending.push_back(PendingMatchOwned {
                             line_number,
                             match_start: display_start,
-                            source_match_start: start.min(u32::MAX as usize) as u32,
+                            source_match_start: utf16_col(line, start),
                             match_len: len as u32,
                             line: match_line,
                             context_before,

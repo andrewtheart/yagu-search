@@ -343,6 +343,7 @@ public sealed partial class MainWindow
 
     private void OnRootGridSizeChanged(object sender, SizeChangedEventArgs e)
     {
+        UpdateAdvancedOptionsDrawerMaxHeight();
         UpdateTopExpandedPreviewMeasurements();
     }
 

@@ -177,6 +177,9 @@ public sealed partial class MainWindow
         Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e,
         string? filePath)
     {
+        // The double-click is the action the "double click to jump" intro tip
+        // describes, so dismiss the tip if it is still showing.
+        DismissActiveIntroTip();
         if (await TryEnterPreviewEditorAtPointAsync(block, e.GetPosition(block), filePath))
             e.Handled = true;
     }
