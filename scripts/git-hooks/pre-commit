@@ -1,13 +1,17 @@
 #!/bin/sh
-# Yagu pre-commit hook: enforce the "one installer in LFS" policy.
+# Yagu pre-commit hook: enforce the "latest installer per architecture in LFS" policy.
 #
 # Policy:
-#   * Exactly ONE installer/YaguSetup-*.exe may be tracked in git at a time.
-#   * It must be the highest version (the latest build).
-#   * It must be stored as a Git LFS pointer, never a raw 100MB+ blob.
+#   * Yagu ships one installer per CPU architecture: installer/YaguSetup-<version>-<arch>.exe
+#     where <arch> is x64, x86, or arm64.
+#   * At most ONE installer per architecture may be tracked in git at a time, and it
+#     must be the highest version (the latest build) for that architecture.
+#   * Each tracked installer must be a Git LFS pointer, never a raw 100MB+ blob.
 #
 # Behaviour:
-#   * Older installer EXEs are removed from the index (the files stay on disk).
+#   * Older installer EXEs for an architecture are removed from the index (files stay on disk).
+#   * Legacy/unknown installers (e.g. the old YaguSetup-<version>.exe with no arch suffix)
+#     are removed from the index as well.
 #   * A staged installer that is a raw binary instead of an LFS pointer
 #     aborts the commit with instructions.
 #
@@ -23,32 +27,44 @@ pattern='installer/YaguSetup-*.exe'
 exes=$(git ls-files -- "$pattern")
 [ -z "$exes" ] && exit 0
 
-# The latest = highest version, using version-aware sort.
-latest=$(printf '%s\n' "$exes" | sort -V | tail -n 1)
+# Highest-version installer to keep for each known architecture.
+keep_x64=$(printf '%s\n' "$exes" | grep -E '\-x64\.exe$' | sort -V | tail -n 1 || true)
+keep_x86=$(printf '%s\n' "$exes" | grep -E '\-x86\.exe$' | sort -V | tail -n 1 || true)
+keep_arm64=$(printf '%s\n' "$exes" | grep -E '\-arm64\.exe$' | sort -V | tail -n 1 || true)
 
 # Remove every other installer EXE from the index (keep the working-tree file).
 printf '%s\n' "$exes" | while IFS= read -r f; do
   [ -z "$f" ] && continue
-  if [ "$f" != "$latest" ]; then
-    git rm --cached --quiet -- "$f"
-    printf 'pre-commit: untracked older installer (kept on disk): %s\n' "$f" >&2
-  fi
+  case "$f" in
+    "$keep_x64"|"$keep_x86"|"$keep_arm64") continue ;;
+  esac
+  git rm --cached --quiet -- "$f"
+  printf 'pre-commit: untracked superseded/legacy installer (kept on disk): %s\n' "$f" >&2
 done
 
-# Verify the retained installer is an LFS pointer, not a raw binary.
-first_line=$(git cat-file -p ":$latest" 2>/dev/null | head -n 1 || true)
-case "$first_line" in
-  "version https://git-lfs.github.com/spec/v1")
-    : # ok: it is an LFS pointer
-    ;;
-  *)
-    printf '\n[pre-commit ABORTED] %s is staged as a RAW file, not a Git LFS pointer.\n' "$latest" >&2
-    printf 'GitHub rejects >100MB raw files. Re-stage it through LFS:\n' >&2
-    printf '    git rm --cached "%s" && git add "%s"\n' "$latest" "$latest" >&2
-    printf '(ensure .gitattributes maps *.exe to lfs).\n\n' >&2
-    exit 1
-    ;;
-esac
+# Verify a retained installer is an LFS pointer, not a raw binary.
+verify_lfs() {
+  f="$1"
+  [ -z "$f" ] && return 0
+  first_line=$(git cat-file -p ":$f" 2>/dev/null | head -n 1 || true)
+  case "$first_line" in
+    "version https://git-lfs.github.com/spec/v1")
+      : # ok: it is an LFS pointer
+      ;;
+    *)
+      printf '\n[pre-commit ABORTED] %s is staged as a RAW file, not a Git LFS pointer.\n' "$f" >&2
+      printf 'GitHub rejects >100MB raw files. Re-stage it through LFS:\n' >&2
+      printf '    git rm --cached "%s" && git add "%s"\n' "$f" "$f" >&2
+      printf '(ensure .gitattributes maps *.exe to lfs).\n\n' >&2
+      exit 1
+      ;;
+  esac
+}
 
-printf 'pre-commit: installer policy OK -> only %s tracked (LFS).\n' "$latest" >&2
+verify_lfs "$keep_x64"
+verify_lfs "$keep_x86"
+verify_lfs "$keep_arm64"
+
+kept=$(printf '%s\n' "$keep_x64" "$keep_x86" "$keep_arm64" | grep -v '^$' | tr '\n' ' ' || true)
+printf 'pre-commit: installer policy OK -> tracked (LFS): %s\n' "$kept" >&2
 exit 0

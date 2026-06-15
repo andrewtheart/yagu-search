@@ -1638,7 +1638,7 @@ public sealed partial class MainWindow
             TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap,
             LineHeight = previewTextLineHeight,
             LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
-            IsTextSelectionEnabled = wrap,
+            IsTextSelectionEnabled = false,
             Tag = filePath,
         };
         AttachPreviewBlockContextFlyout(block);
@@ -1676,6 +1676,10 @@ public sealed partial class MainWindow
             new Microsoft.UI.Xaml.Input.DoubleTappedEventHandler(async (s, e) =>
             {
                 if (_previewMutating) return;
+                // Skip if the custom selection pointer handler already opened the
+                // editor for this double-click (native DoubleTapped is normally
+                // suppressed, but guard against both firing).
+                if (Environment.TickCount64 - _previewEditorPointerOpenTick < PreviewEditorPointerOpenGuardMs) return;
                 if (s is RichTextBlock rtb)
                     await EnterPreviewEditorAtPointAsync(rtb, e, capturedSectionPath);
             }),
@@ -2230,6 +2234,10 @@ public sealed partial class MainWindow
     private async void OnPreviewBlockDoubleTapped(object sender, Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e)
     {
         if (_previewMutating) return;
+        // Skip if the custom selection pointer handler already opened the editor
+        // for this double-click (native DoubleTapped is normally suppressed, but
+        // guard against both firing).
+        if (Environment.TickCount64 - _previewEditorPointerOpenTick < PreviewEditorPointerOpenGuardMs) return;
         if (sender is RichTextBlock rtb)
             await EnterPreviewEditorAtPointAsync(rtb, e, _previewResult?.FilePath);
     }

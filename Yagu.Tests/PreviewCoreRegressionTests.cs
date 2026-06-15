@@ -209,6 +209,30 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void MatchLineDeselect_DownToSingleMatch_KeepsSectionsSurface()
+    {
+        // Deselecting checked match lines down to a single remaining match must keep
+        // the multi-section sections surface (file drawer, per-section match nav,
+        // selected preview background) so the end state matches the surface produced
+        // by checking a single match. Routing the count==1 deselection case to
+        // ShowSingleFilePreviewAsync switched to the single-file PreviewBlock surface,
+        // which dropped the file drawer and match-nav buttons and showed the per-file
+        // toolbar buttons — the user saw the preview "change to an unexpected version".
+        string updateForSelection = ExtractMethodWindow(MainWindowSource, "UpdatePreviewForMatchSelectionAsync", window: 2200);
+
+        // The deselection rebuild must route a single remaining selection through the
+        // sections-based multi-select preview, not the single-file block surface.
+        AssertContainsInOrder(updateForSelection,
+            "var remainingSelected = ViewModel.GetAllSelectedResults();",
+            "if (remainingSelected.Count >= 1)",
+            "await UpdateMultiSelectPreviewAsync();");
+
+        // It must NOT fall back to the single-file PreviewBlock surface for one match.
+        Assert.DoesNotContain("ShowSingleFilePreviewAsync(remainingSelected", updateForSelection);
+        Assert.DoesNotContain("remainingSelected.Count == 1", updateForSelection);
+    }
+
+    [Fact]
     public void PreviewAndEditorContextMenus_OpenDisplaySettingsWithSurfaceSpecificLabels()
     {
         string previewFlyout = ExtractMethodWindow(MainWindowSource, "AttachPreviewBlockContextFlyout", 3400);
@@ -307,12 +331,17 @@ public sealed class PreviewCoreRegressionTests
             "ResolvePreviewEditorFallbackResult(filePath)",
             "ShowFullFileEditorAsync(target, scrollToMatch: false)");
 
-        string pointEntry = ExtractMethodWindow(PreviewEditorSource, "TryEnterPreviewEditorAtPointAsync", 4600);
+        string pointEntry = ExtractMethodWindow(PreviewEditorSource, "TryEnterPreviewEditorAtPointAsync", 6000);
         AssertContainsInOrder(pointEntry,
+            "IsPreviewSectionBodyLaidOutForPointer(block, out string layoutReason)",
             "block.GetPositionFromPoint(point)",
             "ResolveLineNumberAtPointer(block, tp)",
             "ResolveSearchResultAtPreviewPoint(fileGroup, lineNum, clickedMatchIndex)",
             "ShowFullFileEditorAsync(target, scrollToMatch: true)");
+        // The one-shot double-click gesture must NOT use the stateful overlay-centering
+        // settle ladder, which deliberately returns false on first contact and would
+        // silently swallow the click after a scroll.
+        Assert.DoesNotContain("IsPreviewSectionBodySettledForActiveOverlay", pointEntry);
     }
 
     [Fact]
@@ -589,7 +618,7 @@ public sealed class PreviewCoreRegressionTests
 
         string addSection = ExtractMethodWindow(MainWindowSource, "AddPreviewSection", window: 8000);
         Assert.Contains("AttachPreviewSelectionAutoScroll(block);", addSection);
-        Assert.Contains("IsTextSelectionEnabled = wrap,", addSection);
+        Assert.Contains("IsTextSelectionEnabled = false,", addSection);
 
         string attach = ExtractMethodWindow(MainWindowSource, "AttachPreviewSelectionAutoScroll", window: 2600);
         AssertContainsInOrder(attach,
@@ -627,19 +656,23 @@ public sealed class PreviewCoreRegressionTests
             "DispatcherQueuePriority.High",
             "OnPreviewSelectionAutoScrollTimerTick();");
 
-        string press = ExtractMethodWindow(MainWindowSource, "OnPreviewSelectionAutoScrollPointerPressed", window: 2400);
+        string press = ExtractMethodWindow(MainWindowSource, "OnPreviewSelectionAutoScrollPointerPressed", window: 3800);
         AssertContainsInOrder(press,
             "if (!ShouldUseCustomPreviewSelection(block, scroller))",
             "ClearPreviewCustomSelection();",
             "return;",
+            "bool isDoubleClick =",
+            "_ = EnterPreviewEditorFromPointerDoubleClickAsync(block, pressPoint);",
+            "_previewSelectionLastClickBlock = block;",
             "bool pointerCaptured = block.CapturePointer(e.Pointer);",
             "BeginPreviewCustomSelection(block, scroller);",
             "e.Handled = true;");
 
-        string selectionMode = ExtractMethodWindow(MainWindowSource, "ConfigurePreviewSelectionMode", window: 900);
+        string selectionMode = ExtractMethodWindow(MainWindowSource, "ConfigurePreviewSelectionMode", window: 1200);
         AssertContainsInOrder(selectionMode,
-            "block.TextWrapping == TextWrapping.Wrap",
-            "block.IsTextSelectionEnabled = useNativeSelection;");
+            "if (block.IsTextSelectionEnabled)",
+            "block.IsTextSelectionEnabled = false;");
+        Assert.DoesNotContain("useNativeSelection", selectionMode);
 
         string highlighter = ExtractMethodWindow(MainWindowSource, "UpdatePreviewCustomSelectionHighlighter", window: 2200);
         AssertContainsInOrder(highlighter,
@@ -674,6 +707,90 @@ public sealed class PreviewCoreRegressionTests
 
         string copy = ExtractMethodWindow(MainWindowSource, "CopyPreviewSelection", window: 1200);
         Assert.Contains("TryBuildPreviewCustomSelectionText(block, withLineNumbers, out string customSelectedText)", copy);
+    }
+
+    [Fact]
+    public void PreviewSelection_DisablesNativeSelection_AndUsesCustomOverlayForWrap()
+    {
+        // The native double-tap word-select hit-test (TextSelectionManager::OnDoubleTapped
+        // -> RichTextBlockView::GetCharacterIndex) faults against a mid-reflow
+        // RichTextBlock, so native selection is permanently disabled and the custom
+        // overlay selection drives every mode.
+        string selectionMode = ExtractMethodWindow(MainWindowSource, "ConfigurePreviewSelectionMode", window: 1200);
+        Assert.Contains("block.IsTextSelectionEnabled = false;", selectionMode);
+        Assert.DoesNotContain("useNativeSelection", selectionMode);
+
+        // Content blocks are created with native selection already off.
+        string addSection = ExtractMethodWindow(MainWindowSource, "AddPreviewSection", window: 8000);
+        Assert.Contains("IsTextSelectionEnabled = false,", addSection);
+        Assert.DoesNotContain("IsTextSelectionEnabled = wrap,", addSection);
+
+        // Custom overlay selection applies in both wrap and no-wrap modes.
+        string shouldUse = ExtractMethodWindow(MainWindowSource, "ShouldUseCustomPreviewSelection", window: 700);
+        Assert.Contains("=> true;", shouldUse);
+
+        // The overlay renders wrapped selections row-by-row instead of one flat strip.
+        string overlay = ExtractMethodWindow(MainWindowSource, "DrawPreviewCustomSelectionOverlay", window: 6000);
+        AssertContainsInOrder(overlay,
+            "block.TextWrapping == TextWrapping.Wrap",
+            "TryBuildWrappedPreviewSelectionRows(",
+            "GetPreviewCustomSelectionOverlayMarker(markerIndex++)");
+
+        // The wrapped-row builder resolves real character rects and emits up to three bands.
+        string wrapped = ExtractMethodWindow(MainWindowSource, "TryBuildWrappedPreviewSelectionRows", window: 4000);
+        AssertContainsInOrder(wrapped,
+            "GetPreviewParagraphTextPointerAtIndex(paragraph, localStart)",
+            "startPointer.GetCharacterRect(LogicalDirection.Forward)",
+            "endPointer.GetCharacterRect(LogicalDirection.Backward)",
+            "bool sameRow = Math.Abs(startRect.Y - endRect.Y) <= rowHeight * 0.5;",
+            "AddOverlayBandRect(toOverlay, startRect.X, startRect.Y, contentRightBlock, startRect.Y + rowHeight,");
+
+        // The failed suspend/resume machinery is fully removed.
+        Assert.DoesNotContain("SuspendPreviewNativeSelectionDuringLayoutChurn", MainWindowSource);
+        Assert.DoesNotContain("_previewNativeSelectionSuspended", MainWindowSource);
+    }
+
+    [Fact]
+    public void PreviewDoubleClick_DetectedInPointerHandler_OpensEditor()
+    {
+        // Native text selection is disabled to avoid the word-select crash, which
+        // also suppresses the RichTextBlock DoubleTapped gesture (the custom
+        // selection captures the pointer and marks the press handled). The pointer
+        // handler must therefore detect the double-click itself and open the inline
+        // editor so double-clicking any preview text still jumps to that line.
+        string press = ExtractMethodWindow(MainWindowSource, "OnPreviewSelectionAutoScrollPointerPressed", window: 3800);
+        AssertContainsInOrder(press,
+            "Point pressPoint = e.GetCurrentPoint(block).Position;",
+            "bool isDoubleClick =",
+            "ReferenceEquals(_previewSelectionLastClickBlock, block)",
+            "pressTick - _previewSelectionLastClickTick <= PreviewSelectionDoubleClickMaxMs",
+            "Math.Abs(pressPoint.X - _previewSelectionLastClickPoint.X) <= PreviewSelectionDoubleClickMaxDistance",
+            "StopPreviewSelectionAutoScroll(\"double-click-editor\");",
+            "ClearPreviewCustomSelection();",
+            "e.Handled = true;",
+            "_ = EnterPreviewEditorFromPointerDoubleClickAsync(block, pressPoint);");
+
+        // The helper mirrors the native DoubleTapped path and records the open tick.
+        string helper = ExtractMethodWindow(MainWindowSource, "EnterPreviewEditorFromPointerDoubleClickAsync", window: 1200);
+        AssertContainsInOrder(helper,
+            "if (_previewMutating)",
+            "DismissActiveIntroTip();",
+            "_previewEditorPointerOpenTick = Environment.TickCount64;",
+            "var filePath = ResolvePreviewBlockFilePath(block);",
+            "await TryEnterPreviewEditorAtPointAsync(block, point, filePath);");
+
+        // The native DoubleTapped handler skips when the pointer path already opened
+        // the editor for this double-click, so it never opens twice.
+        string onDouble = ExtractMethodWindow(MainWindowSource, "OnPreviewBlockDoubleTapped", window: 900);
+        Assert.Contains("Environment.TickCount64 - _previewEditorPointerOpenTick < PreviewEditorPointerOpenGuardMs", onDouble);
+
+        // Editor entry uses a side-effect-free layout check that resolves on the FIRST
+        // call — not the stateful overlay-centering settle ladder (which returns false
+        // on first contact and silently swallowed the double-click after a scroll).
+        string laidOut = ExtractMethodWindow(MainWindowSource, "IsPreviewSectionBodyLaidOutForPointer", window: 1800);
+        Assert.Contains("if (!expander.IsExpanded)", laidOut);
+        Assert.DoesNotContain("_activeOverlayStablePasses", laidOut);
+        Assert.DoesNotContain("requiredStablePasses", laidOut);
     }
 
     [Fact]
@@ -1972,6 +2089,33 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void PhantomMatchParagraph_RecoversUnregisteredRunsBeforeColoringAndBoxing()
+    {
+        // A resolved match paragraph can carry a navigation entry while its match Run was
+        // rendered without registration in s_previewSearchMatchRuns (e.g. an unselected
+        // sibling occurrence inside a sibling's context window). Both the coloring path and
+        // the overlay-boxing path must recover run recognition from the live search regex so
+        // the active-match overlay can be positioned and the run colored gold.
+        string recover = ExtractMethodWindow(MainWindowSource, "TryRecoverUnregisteredMatchRuns", window: 2400);
+        Assert.Contains("BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch)", recover);
+        Assert.Contains("foreach (System.Text.RegularExpressions.Match m in rx.Matches(paragraphText))", recover);
+        // Registration restores recognition only for runs fully inside a regex match span,
+        // and never colors them (unselected siblings stay visually plain).
+        Assert.Contains("start >= matchStart && start + length <= matchEnd", recover);
+        Assert.Contains("s_previewSearchMatchRuns.AddOrUpdate(run, new object());", recover);
+        Assert.Contains("_paragraphMatchRunCache.Remove(para);", recover);
+
+        string apply = ExtractMethodWindow(MainWindowSource, "ApplyMatchColorToParagraphMatch", window: 900);
+        Assert.Contains("if (TryRecoverUnregisteredMatchRuns(para))", apply);
+
+        string boxMatch = ExtractMethodWindow(MainWindowSource, "BoxMatchRun", window: 3000);
+        AssertContainsInOrder(boxMatch,
+            "if (TryRecoverUnregisteredMatchRuns(para))",
+            "matches = GetMatchRunsForParagraph(para);",
+            "NO BOXABLE RUN");
+    }
+
+    [Fact]
     public void PreviewFindHighlighter_UsesPreviewFindColorAndCrlfOffsets()
     {
         string highlight = ExtractMethodWindow(MainWindowSource, "HighlightFindMatchInPreviewBlock", window: 2600);
@@ -2295,8 +2439,10 @@ public sealed class PreviewCoreRegressionTests
             "int navIndex = _currentMatchIndex;",
             "TryUpdateActiveMatchOverlayFromActualRun(block, targetPara, targetRun, expectedVerticalOffset");
 
-        string updateOverlay = ExtractMethodWindow(MainWindowSource, "TryUpdateActiveMatchOverlayFromActualRun", window: 2400);
+        string updateOverlay = ExtractMethodWindow(MainWindowSource, "TryUpdateActiveMatchOverlayFromActualRun", window: 3000);
         AssertContainsInOrder(updateOverlay,
+            "if (PreviewScrollViewer.Visibility != Visibility.Visible)",
+            "return false;",
             "if (ActiveMatchOverlay.Visibility != Visibility.Visible)",
             "ActiveMatchOverlay.Visibility = Visibility.Visible;",
             "return false;");
@@ -2394,6 +2540,45 @@ public sealed class PreviewCoreRegressionTests
             "_currentMatchIndex = -1;",
             "_initialMatchScrolled = false;",
             "UpdateMatchNavPanel();");
+    }
+
+    [Fact]
+    public void OpeningFullFileEditor_CancelsPendingMatchNavigationToAvoidNativeAccessViolation()
+    {
+        // Double-tapping a match opens the full-file editor, which collapses the
+        // preview surface. Any match-nav scroll/overlay retries queued by the last
+        // Next/Prev navigation must be cancelled, otherwise the deferred callbacks
+        // fire against the collapsed PreviewScrollViewer and detached preview runs
+        // and fault inside native XAML (access violation in Microsoft.UI.Xaml.dll).
+
+        // The shared cancellation helper performs the full invalidation triad.
+        string cancel = ExtractMethodWindow(MainWindowSource, "CancelPendingPreviewMatchNavigation", 600);
+        AssertContainsInOrder(cancel,
+            "InvalidatePendingMatchScrolls();",
+            "_activeMatchOverlayUpdateRequestId++;",
+            "HideActiveMatchOverlay();");
+
+        // Opening the editor must invoke that cancellation, not just hide the overlay.
+        string setVisible = ExtractMethodWindow(PreviewEditorSource, "SetPreviewEditorVisible", 1200);
+        Assert.Contains("CancelPendingPreviewMatchNavigation();", setVisible);
+
+        // The manual-scroll path (which never reproduced the crash) shares the
+        // exact same cancellation, so the two surface-swap paths cannot drift.
+        string manualScroll = ExtractMethodWindow(MainWindowSource, "NotePreviewManualScrollInput", 600);
+        Assert.Contains("CancelPendingPreviewMatchNavigation();", manualScroll);
+
+        // Defensive depth: the deferred chokepoints that touch native preview
+        // geometry must bail while the surface is collapsed.
+        string changeView = ExtractMethodWindow(MainWindowSource, "ChangePreviewViewForMatchNavigation", 900);
+        AssertContainsInOrder(changeView,
+            "if (PreviewScrollViewer.Visibility != Visibility.Visible)",
+            "return false;",
+            "PreviewScrollViewer.ChangeView(horizontalOffset, verticalOffset, zoomFactor, disableAnimation);");
+
+        string overlayFromRun = ExtractMethodWindow(MainWindowSource, "TryUpdateActiveMatchOverlayFromActualRun", 800);
+        AssertContainsInOrder(overlayFromRun,
+            "if (PreviewScrollViewer.Visibility != Visibility.Visible)",
+            "return false;");
     }
 
     [Fact]

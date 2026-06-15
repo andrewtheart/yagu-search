@@ -25,7 +25,42 @@ public sealed partial class MainWindow
             _paragraphMatchRunCache.Remove(para);
             matches = GetMatchRunsForParagraph(para);
             if ((uint)matchInPara >= (uint)matches.Count)
+            {
+                // The resolved paragraph exposes no boxable match run (e.g. a phantom nav
+                // entry whose match Run was rendered without registration/color). Recover
+                // recognition from the live search regex so the overlay can be positioned.
+                if (TryRecoverUnregisteredMatchRuns(para))
+                    matches = GetMatchRunsForParagraph(para);
+            }
+            if ((uint)matchInPara >= (uint)matches.Count)
+            {
+                // DIAGNOSTIC: the resolved paragraph exposes no boxable match run even after
+                // recovery, so the active-match overlay can never be positioned. Dump the
+                // paragraph composition so the root render path can be identified.
+                // See yagu-preview.md overlay notes.
+                TryGetPreviewParagraphLineNumber(para, out int boxLine);
+                var sb = new System.Text.StringBuilder();
+                int runIdx = 0;
+                foreach (var inline in para.Inlines)
+                {
+                    if (inline is Run r)
+                    {
+                        bool registered = s_previewSearchMatchRuns.TryGetValue(r, out _);
+                        bool bold = r.FontWeight.Weight == Microsoft.UI.Text.FontWeights.Bold.Weight;
+                        string color = (r.Foreground as SolidColorBrush)?.Color.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "n/a";
+                        string text = r.Text.Length > 24 ? r.Text[..24] + "\u2026" : r.Text;
+                        sb.Append(System.FormattableString.Invariant($"[{runIdx}:reg={registered},bold={bold},fg={color},'{text.Replace("\n", "\\n")}'] "));
+                        runIdx++;
+                    }
+                    else
+                    {
+                        sb.Append(System.FormattableString.Invariant($"[{inline.GetType().Name}] "));
+                    }
+                }
+                LogService.Instance.Warning("MatchNav",
+                    $"BoxMatchRun: NO BOXABLE RUN line={boxLine}, matchInPara={matchInPara}, matchRuns={matches.Count}, inlines={para.Inlines.Count}, runs={sb}");
                 return;
+            }
         }
 
         var (run, column) = matches[matchInPara];
@@ -116,11 +151,86 @@ public sealed partial class MainWindow
            && run.Foreground is SolidColorBrush brush
            && brush.Color == _matchTextBrush.Color;
 
+    /// <summary>
+    /// Recovers match-run recognition for a resolved match paragraph whose search-match
+    /// <see cref="Run"/> objects were rendered without registration in
+    /// <see cref="s_previewSearchMatchRuns"/>. This "phantom" state arises when a paragraph
+    /// receives a navigation entry (e.g. via the <c>AddMatchEntries(..., rx: null)</c>
+    /// fallback) but its match run was never colored gold nor registered, so every consumer
+    /// of <see cref="GetMatchRunsForParagraph"/> (coloring, boxing, source-column resolution)
+    /// sees zero match runs and the active-match overlay can never be positioned. Re-scans the
+    /// paragraph's display text with the current search regex and registers every <see cref="Run"/>
+    /// fully contained within a regex match span, then invalidates the cached match-run list.
+    /// Registration only restores recognition (navigability); it does not color any run, so
+    /// unselected sibling occurrences stay visually plain until individually activated.
+    /// Returns true when at least one run was newly recognized.
+    /// </summary>
+    private bool TryRecoverUnregisteredMatchRuns(Paragraph para)
+    {
+        System.Text.RegularExpressions.Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+        if (rx is null)
+            return false;
+
+        var runs = new List<(Run run, int start, int length)>();
+        var builder = new System.Text.StringBuilder();
+        foreach (var inline in para.Inlines)
+        {
+            if (inline is Run run)
+            {
+                int start = builder.Length;
+                string text = run.Text ?? string.Empty;
+                builder.Append(text);
+                runs.Add((run, start, text.Length));
+            }
+            else if (inline is LineBreak)
+            {
+                builder.Append('\n');
+            }
+            // InlineUIContainer (e.g. "Show more" ellipsis markers) contribute no source text.
+        }
+
+        if (runs.Count == 0)
+            return false;
+
+        string paragraphText = builder.ToString();
+        bool recovered = false;
+        foreach (System.Text.RegularExpressions.Match m in rx.Matches(paragraphText))
+        {
+            if (m.Length == 0)
+                continue;
+            int matchStart = m.Index;
+            int matchEnd = m.Index + m.Length;
+            foreach (var (run, start, length) in runs)
+            {
+                if (length == 0)
+                    continue;
+                if (start >= matchStart && start + length <= matchEnd
+                    && !s_previewSearchMatchRuns.TryGetValue(run, out _))
+                {
+                    s_previewSearchMatchRuns.AddOrUpdate(run, new object());
+                    recovered = true;
+                }
+            }
+        }
+
+        if (recovered)
+            _paragraphMatchRunCache.Remove(para);
+        return recovered;
+    }
+
     private void ApplyMatchColorToParagraphMatch(Paragraph para, int matchInPara)
     {
         var matches = GetMatchRunsForParagraph(para);
         if ((uint)matchInPara >= (uint)matches.Count)
-            return;
+        {
+            // The resolved match paragraph exposes no recognized run for this occurrence
+            // (a phantom nav entry whose match run was never registered/colored). Recover
+            // recognition from the live search regex, then retry once.
+            if (TryRecoverUnregisteredMatchRuns(para))
+                matches = GetMatchRunsForParagraph(para);
+            if ((uint)matchInPara >= (uint)matches.Count)
+                return;
+        }
 
         var run = matches[matchInPara].run;
         run.FontWeight = Microsoft.UI.Text.FontWeights.Bold;
@@ -417,8 +527,33 @@ public sealed partial class MainWindow
         _matchScrollRequestId++;
     }
 
+    /// <summary>
+    /// Cancels in-flight match-navigation scroll and active-overlay retry work
+    /// (the deferred dispatcher callbacks and retry timers queued by the last
+    /// Next/Prev navigation) and hides the overlay. Call this whenever the preview
+    /// surface is swapped out from under pending match-nav operations — e.g. when
+    /// opening the full-file editor, which collapses PreviewScrollViewer. Without
+    /// it, queued callbacks keep firing against the collapsed scroller and detached
+    /// preview runs, calling GetCharacterRect/TransformToVisual/ChangeView on
+    /// torn-down native XAML layout and crashing with an access violation in
+    /// Microsoft.UI.Xaml.dll. This is the same invalidation NotePreviewManualScrollInput
+    /// performs, which is why manual scrolling never reproduced the crash.
+    /// </summary>
+    private void CancelPendingPreviewMatchNavigation()
+    {
+        InvalidatePendingMatchScrolls();
+        _activeMatchOverlayUpdateRequestId++;
+        HideActiveMatchOverlay();
+    }
+
     private bool ChangePreviewViewForMatchNavigation(double? horizontalOffset, double? verticalOffset, float? zoomFactor = null, bool disableAnimation = true)
     {
+        // Never drive a programmatic match-nav scroll against a collapsed preview
+        // surface (e.g. while the full-file editor is showing). A queued retry that
+        // calls ChangeView on the torn-down scroller can fault inside native XAML.
+        if (PreviewScrollViewer.Visibility != Visibility.Visible)
+            return false;
+
         SuppressOverflowAutoLoadForMatchNavigation();
         return PreviewScrollViewer.ChangeView(horizontalOffset, verticalOffset, zoomFactor, disableAnimation);
     }
@@ -891,6 +1026,13 @@ public sealed partial class MainWindow
     {
         try
         {
+            // The preview surface may have been collapsed (e.g. the full-file editor
+            // opened) after this overlay update was queued. Reading run geometry
+            // (GetCharacterRect/TransformToVisual) against torn-down preview visuals
+            // can fault inside native XAML, so bail while the surface is hidden.
+            if (PreviewScrollViewer.Visibility != Visibility.Visible)
+                return false;
+
             if (_activeMatchHighlight is not { para: var activePara, run: var activeRun, column: var activeColumn, matchInPara: var matchInPara }
                 || !ReferenceEquals(activePara, targetPara)
                 || !ReferenceEquals(activeRun, targetRun))
@@ -1557,6 +1699,62 @@ public sealed partial class MainWindow
             if (_activeOverlayStablePasses < requiredStablePasses || stableFor < requiredStableMilliseconds)
             {
                 reason = $"section not stable long enough: blockTop={blockPoint.Y:N1}, passes={_activeOverlayStablePasses}, stableFor={stableFor}ms";
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            reason = ex.GetType().Name;
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Side-effect-free check that a preview section's body is laid out enough to
+    /// safely call <see cref="RichTextBlock.GetPositionFromPoint"/> for a one-shot
+    /// user gesture (double-click to open the inline editor).
+    /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="IsPreviewSectionBodySettledForActiveOverlay"/>, this does
+    /// NOT track stability across calls. That method is driven by a retry ladder, so
+    /// it deliberately returns <c>false</c> on first contact and mutates the
+    /// active-overlay stability fields. A double-click must resolve on the FIRST
+    /// call and must not disturb in-flight overlay centering, so it only validates
+    /// static layout state: the section is expanded, its header is measured, and the
+    /// block sits below the header. The crashing native word-select path is already
+    /// disabled (<c>IsTextSelectionEnabled = false</c>), so motion tracking is
+    /// unnecessary here — a deliberate click lands on visible, settled text.
+    /// </remarks>
+    private bool IsPreviewSectionBodyLaidOutForPointer(RichTextBlock block, out string reason)
+    {
+        reason = string.Empty;
+        if (!_blockExpanderCache.TryGetValue(block, out var expander))
+            return true; // single-file PreviewBlock (no expander) is always laid out
+
+        if (!expander.IsExpanded)
+        {
+            reason = "section collapsed";
+            return false;
+        }
+
+        if (expander.Header is not FrameworkElement header || header.ActualHeight <= 0)
+        {
+            reason = "header not measured";
+            return false;
+        }
+
+        try
+        {
+            var expanderPoint = expander.TransformToVisual(ActiveMatchOverlay)
+                .TransformPoint(new Windows.Foundation.Point(0, 0));
+            var blockPoint = block.TransformToVisual(ActiveMatchOverlay)
+                .TransformPoint(new Windows.Foundation.Point(0, 0));
+            double minBodyTop = expanderPoint.Y + Math.Clamp(header.ActualHeight, 24, 80) - 1;
+            if (blockPoint.Y < minBodyTop)
+            {
+                reason = $"blockTop={blockPoint.Y:N1} < minBodyTop={minBodyTop:N1}";
                 return false;
             }
         }

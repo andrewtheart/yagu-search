@@ -37,6 +37,11 @@
     <BuildInstallerOnPublish Condition="'$(BuildInstallerOnPublish)' == ''">true</BuildInstallerOnPublish>
     <YaguBuildVersionFile>$(MSBuildThisFileDirectory)Properties\build-version.txt</YaguBuildVersionFile>
     <YaguGeneratedVersionFile>$(MSBuildThisFileDirectory)Properties\AppInfo.g.cs</YaguGeneratedVersionFile>
+    <!-- Map the published RuntimeIdentifier to the installer architecture token
+         (x64/x86/arm64) consumed by build-installer.ps1 and yagu-installer.iss. -->
+    <YaguInstallerArch Condition="'$(YaguInstallerArch)' == '' And '$(RuntimeIdentifier)' == 'win-x64'">x64</YaguInstallerArch>
+    <YaguInstallerArch Condition="'$(YaguInstallerArch)' == '' And '$(RuntimeIdentifier)' == 'win-x86'">x86</YaguInstallerArch>
+    <YaguInstallerArch Condition="'$(YaguInstallerArch)' == '' And '$(RuntimeIdentifier)' == 'win-arm64'">arm64</YaguInstallerArch>
   </PropertyGroup>
 
   <Target Name="GenerateYaguBuildVersion"
@@ -181,8 +186,8 @@
 
   <Target Name="BuildInstallerAfterPublish"
           AfterTargets="Publish"
-          Condition="'$(BuildInstallerOnPublish)' != 'false' And '$(DesignTimeBuild)' != 'true'">
-    <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\build-installer.ps1&quot; -SkipBuild" />
+          Condition="'$(BuildInstallerOnPublish)' != 'false' And '$(DesignTimeBuild)' != 'true' And '$(YaguInstallerArch)' != ''">
+    <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\build-installer.ps1&quot; -SkipBuild -Architecture $(YaguInstallerArch)" />
   </Target>
 
   <!--
@@ -199,17 +204,33 @@
     <RustCargoProfileArgs Condition="'$(RustProfile)' == 'release'">--release</RustCargoProfileArgs>
     <RustCargoProfileArgs Condition="'$(RustCargoProfileArgs)' == ''">--profile $(RustProfile)</RustCargoProfileArgs>
     <RustCoreDir>$(MSBuildThisFileDirectory)..\yagu-core\</RustCoreDir>
-    <RustTargetDir>$(RustCoreDir)target\$(RustProfile)\</RustTargetDir>
+    <!-- Cross-compile the Rust core to match the .NET RuntimeIdentifier. With no RID
+         (plain build) cargo targets the host and writes to target\<profile>\; with a
+         RID it targets the triple and writes to target\<triple>\<profile>\. -->
+    <RustTargetTriple Condition="'$(RustTargetTriple)' == '' And '$(RuntimeIdentifier)' == 'win-x64'">x86_64-pc-windows-msvc</RustTargetTriple>
+    <RustTargetTriple Condition="'$(RustTargetTriple)' == '' And '$(RuntimeIdentifier)' == 'win-x86'">i686-pc-windows-msvc</RustTargetTriple>
+    <RustTargetTriple Condition="'$(RustTargetTriple)' == '' And '$(RuntimeIdentifier)' == 'win-arm64'">aarch64-pc-windows-msvc</RustTargetTriple>
+    <RustCargoTargetArgs Condition="'$(RustTargetTriple)' != ''">--target $(RustTargetTriple)</RustCargoTargetArgs>
+    <RustTargetDir Condition="'$(RustTargetTriple)' != ''">$(RustCoreDir)target\$(RustTargetTriple)\$(RustProfile)\</RustTargetDir>
+    <RustTargetDir Condition="'$(RustTargetDir)' == ''">$(RustCoreDir)target\$(RustProfile)\</RustTargetDir>
     <RustDllPath>$(RustTargetDir)yagu_core.dll</RustDllPath>
     <RustPdbPath>$(RustTargetDir)yagu_core.pdb</RustPdbPath>
     <CargoExe Condition="'$(CargoExe)' == '' And Exists('$(USERPROFILE)\.cargo\bin\cargo.exe')">$(USERPROFILE)\.cargo\bin\cargo.exe</CargoExe>
     <CargoExe Condition="'$(CargoExe)' == ''">cargo</CargoExe>
+    <RustupExe Condition="'$(RustupExe)' == '' And Exists('$(USERPROFILE)\.cargo\bin\rustup.exe')">$(USERPROFILE)\.cargo\bin\rustup.exe</RustupExe>
+    <RustupExe Condition="'$(RustupExe)' == ''">rustup</RustupExe>
   </PropertyGroup>
 
   <Target Name="BuildYaguCore"
           BeforeTargets="BeforeBuild"
           Condition="'$(BuildRustCore)' == 'true' And Exists('$(RustCoreDir)Cargo.toml')">
-    <Exec Command="&quot;$(CargoExe)&quot; build $(RustCargoProfileArgs) --quiet"
+    <!-- Ensure the cross-compilation target toolchain is installed (no-op if present). -->
+    <Exec Condition="'$(RustTargetTriple)' != ''"
+          Command="&quot;$(RustupExe)&quot; target add $(RustTargetTriple)"
+          WorkingDirectory="$(RustCoreDir)"
+          IgnoreExitCode="true"
+          ContinueOnError="WarnAndContinue" />
+    <Exec Command="&quot;$(CargoExe)&quot; build $(RustCargoTargetArgs) $(RustCargoProfileArgs) --quiet"
           WorkingDirectory="$(RustCoreDir)"
           ConsoleToMSBuild="true"
           IgnoreStandardErrorWarningFormat="true"
@@ -227,6 +248,24 @@
     </ItemGroup>
     <Copy SourceFiles="@(_YaguCoreRuntimeFiles)"
           DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <!--
+    For self-contained publish, also copy the native Rust core (and its PDB)
+    into the publish folder. The <None> items below cover incremental builds,
+    but on a clean per-architecture publish the target-triple output directory
+    may not exist at project-evaluation time, so copy explicitly after Publish.
+  -->
+  <Target Name="CopyYaguCoreToPublish"
+          AfterTargets="Publish"
+          Condition="'$(BuildRustCore)' == 'true' And Exists('$(RustDllPath)')">
+    <ItemGroup>
+      <_YaguCorePublishFiles Include="$(RustDllPath)" />
+      <_YaguCorePublishFiles Include="$(RustPdbPath)" Condition="Exists('$(RustPdbPath)')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_YaguCorePublishFiles)"
+          DestinationFolder="$(PublishDir)"
           SkipUnchangedFiles="true" />
   </Target>
 

@@ -61,6 +61,19 @@ public sealed partial class MainWindow
     private double _previewSelectionAutoScrollPrevBeforeX = double.NaN;
     private int _previewSelectionAutoScrollStuckFrameCount;
 
+    // Native RichTextBlock DoubleTapped is suppressed while the custom selection
+    // handlers capture the pointer and mark PointerPressed handled, so the
+    // double-click-to-open-editor gesture is detected here instead. This keeps
+    // double-click-to-editor working in every wrap mode now that native text
+    // selection (the source of the word-select crash) stays disabled.
+    private long _previewSelectionLastClickTick;
+    private Point _previewSelectionLastClickPoint;
+    private RichTextBlock? _previewSelectionLastClickBlock;
+    private long _previewEditorPointerOpenTick;
+    private const int PreviewSelectionDoubleClickMaxMs = 500;
+    private const double PreviewSelectionDoubleClickMaxDistance = 8;
+    private const int PreviewEditorPointerOpenGuardMs = 700;
+
     private void AttachPreviewSelectionAutoScroll(RichTextBlock block)
     {
         block.AddHandler(UIElement.PointerPressedEvent,
@@ -109,6 +122,34 @@ public sealed partial class MainWindow
             return;
         }
 
+        // Detect the double-click ourselves: the custom selection logic below
+        // captures the pointer and marks the press handled, which suppresses the
+        // native DoubleTapped gesture that normally opens the inline editor.
+        // Double-clicking any preview text (highlighted match or plain text) must
+        // still jump to that line in the editor.
+        Point pressPoint = e.GetCurrentPoint(block).Position;
+        long pressTick = Environment.TickCount64;
+        bool isDoubleClick =
+            ReferenceEquals(_previewSelectionLastClickBlock, block)
+            && pressTick - _previewSelectionLastClickTick <= PreviewSelectionDoubleClickMaxMs
+            && Math.Abs(pressPoint.X - _previewSelectionLastClickPoint.X) <= PreviewSelectionDoubleClickMaxDistance
+            && Math.Abs(pressPoint.Y - _previewSelectionLastClickPoint.Y) <= PreviewSelectionDoubleClickMaxDistance;
+        if (isDoubleClick)
+        {
+            _previewSelectionLastClickTick = 0;
+            _previewSelectionLastClickBlock = null;
+            LogService.Instance.Verbose("PreviewEditor",
+                $"Double-click detected: point=({pressPoint.X:N1},{pressPoint.Y:N1}), wrap={block.TextWrapping}, surface={(ReferenceEquals(block, PreviewBlock) ? "single" : "section")}");
+            StopPreviewSelectionAutoScroll("double-click-editor");
+            ClearPreviewCustomSelection();
+            e.Handled = true;
+            _ = EnterPreviewEditorFromPointerDoubleClickAsync(block, pressPoint);
+            return;
+        }
+        _previewSelectionLastClickTick = pressTick;
+        _previewSelectionLastClickPoint = pressPoint;
+        _previewSelectionLastClickBlock = block;
+
         _previewSelectionAutoScrollBlock = block;
         _previewSelectionAutoScrollScroller = scroller;
         _previewSelectionAutoScrollPointerId = e.Pointer.PointerId;
@@ -121,6 +162,30 @@ public sealed partial class MainWindow
         BeginPreviewCustomSelection(block, scroller);
         e.Handled = true;
         LogPreviewSelectionAutoScrollStart(block, scroller, pointerCaptured);
+    }
+
+    /// <summary>
+    /// Opens the inline editor at <paramref name="point"/> (block coordinates) in
+    /// response to a double-click detected by the custom selection pointer handler.
+    /// Mirrors the native <c>DoubleTapped</c> path, which is suppressed while the
+    /// custom selection captures the pointer.
+    /// </summary>
+    private async Task EnterPreviewEditorFromPointerDoubleClickAsync(RichTextBlock block, Point point)
+    {
+        if (_previewMutating)
+        {
+            LogService.Instance.Verbose("PreviewEditor",
+                "Pointer double-click editor entry skipped: preview is mutating");
+            return;
+        }
+        DismissActiveIntroTip();
+        _previewEditorPointerOpenTick = Environment.TickCount64;
+        var filePath = ResolvePreviewBlockFilePath(block);
+        LogService.Instance.Verbose("PreviewEditor",
+            $"Pointer double-click editor entry: file='{(filePath is null ? "null" : System.IO.Path.GetFileName(filePath))}', point=({point.X:N1},{point.Y:N1})");
+        bool opened = await TryEnterPreviewEditorAtPointAsync(block, point, filePath);
+        LogService.Instance.Verbose("PreviewEditor",
+            $"Pointer double-click editor entry result: opened={opened}");
     }
 
     private static bool IsPreviewShowMorePointerSource(object originalSource)
@@ -393,13 +458,22 @@ public sealed partial class MainWindow
 
     private static void ConfigurePreviewSelectionMode(RichTextBlock block)
     {
-        bool useNativeSelection = block.TextWrapping == TextWrapping.Wrap;
-        if (block.IsTextSelectionEnabled != useNativeSelection)
-            block.IsTextSelectionEnabled = useNativeSelection;
+        // Native RichTextBlock text selection (IsTextSelectionEnabled = true) runs a
+        // native word-select hit-test on double-tap (TextSelectionManager::OnDoubleTapped
+        // -> RichTextBlockView::GetCharacterIndex) that dereferences a stale inline
+        // collection while the block is mid-reflow, faulting the process with a native
+        // access violation (0xc0000005) that managed try/catch cannot trap. The custom
+        // overlay selection below drives BOTH wrap and no-wrap modes, so native
+        // selection stays disabled at all times to remove the crash entirely.
+        if (block.IsTextSelectionEnabled)
+            block.IsTextSelectionEnabled = false;
     }
 
+    // Custom overlay selection now drives both wrap and no-wrap modes (native
+    // selection is permanently disabled in ConfigurePreviewSelectionMode), so the
+    // custom selection pipeline always applies.
     private static bool ShouldUseCustomPreviewSelection(RichTextBlock block, ScrollViewer scroller)
-        => block.TextWrapping == TextWrapping.NoWrap;
+        => true;
 
     private void BeginPreviewCustomSelection(RichTextBlock block, ScrollViewer scroller)
     {
@@ -623,6 +697,31 @@ public sealed partial class MainWindow
 
             int localStart = rangeStart - paragraphStart;
             int localEnd = rangeEnd - paragraphStart;
+
+            if (block.TextWrapping == TextWrapping.Wrap
+                && TryBuildWrappedPreviewSelectionRows(
+                    block, paragraph, localStart, localEnd, rect, markerHeight, overlayWidth, overlayHeight, out var wrappedRows))
+            {
+                bool wrapCapReached = false;
+                foreach (var rowRect in wrappedRows)
+                {
+                    var wrapMarker = GetPreviewCustomSelectionOverlayMarker(markerIndex++);
+                    wrapMarker.Width = rowRect.Width;
+                    wrapMarker.Height = rowRect.Height;
+                    wrapMarker.Visibility = Visibility.Visible;
+                    Canvas.SetLeft(wrapMarker, rowRect.X);
+                    Canvas.SetTop(wrapMarker, rowRect.Y);
+                    if (markerIndex >= PreviewCustomSelectionOverlayMaxMarkers)
+                    {
+                        wrapCapReached = true;
+                        break;
+                    }
+                }
+                if (wrapCapReached)
+                    break;
+                continue;
+            }
+
             double left = origin.X + localStart * charWidth;
             double right = origin.X + localEnd * charWidth;
             if (double.IsNaN(left) || double.IsNaN(right) || double.IsInfinity(left) || double.IsInfinity(right))
@@ -649,6 +748,156 @@ public sealed partial class MainWindow
             _previewCustomSelectionOverlayMarkers[index].Visibility = Visibility.Collapsed;
 
         PreviewSelectionOverlay.Visibility = Visibility.Visible;
+    }
+
+    // Builds the highlight rectangles (in PreviewSelectionOverlay coordinates) for a
+    // wrapped paragraph's selection sub-range. A selection that spans multiple visual
+    // rows is rendered as the partial first row, a full-width middle band, and the
+    // partial last row. Returns false (caller falls back to the single-row path) when
+    // the native character rects cannot be resolved.
+    private bool TryBuildWrappedPreviewSelectionRows(
+        RichTextBlock block,
+        Paragraph paragraph,
+        int localStart,
+        int localEnd,
+        Windows.Foundation.Rect paragraphFirstCharRect,
+        double markerHeight,
+        double overlayWidth,
+        double overlayHeight,
+        out List<Windows.Foundation.Rect> rows)
+    {
+        rows = new List<Windows.Foundation.Rect>(3);
+        if (localEnd <= localStart)
+            return false;
+
+        var startPointer = GetPreviewParagraphTextPointerAtIndex(paragraph, localStart);
+        var endPointer = GetPreviewParagraphTextPointerAtIndex(paragraph, localEnd);
+        if (startPointer is null || endPointer is null)
+            return false;
+
+        Windows.Foundation.Rect startRect, endRect;
+        try
+        {
+            startRect = startPointer.GetCharacterRect(LogicalDirection.Forward);
+            endRect = endPointer.GetCharacterRect(LogicalDirection.Backward);
+        }
+        catch
+        {
+            return false;
+        }
+        if (!IsUsableTextRect(startRect) || !IsUsableTextRect(endRect))
+            return false;
+
+        GeneralTransform toOverlay;
+        try { toOverlay = block.TransformToVisual(PreviewSelectionOverlay); }
+        catch { return false; }
+
+        // Text wraps between the paragraph's first-character X and the block's content
+        // right edge; continuation rows start back at that same left margin.
+        double contentLeftBlock = paragraphFirstCharRect.X;
+        double contentRightBlock = Math.Max(contentLeftBlock + 1, block.ActualWidth);
+        double rowHeight = Math.Max(markerHeight, startRect.Height > 0 ? startRect.Height : markerHeight);
+        bool sameRow = Math.Abs(startRect.Y - endRect.Y) <= rowHeight * 0.5;
+
+        if (sameRow)
+        {
+            AddOverlayBandRect(toOverlay, startRect.X, startRect.Y, endRect.X, startRect.Y + rowHeight,
+                overlayWidth, overlayHeight, rows);
+        }
+        else
+        {
+            // Partial first row: selection start -> content right edge.
+            AddOverlayBandRect(toOverlay, startRect.X, startRect.Y, contentRightBlock, startRect.Y + rowHeight,
+                overlayWidth, overlayHeight, rows);
+            // Full-width middle band covering every row strictly between start and end.
+            double midTopBlock = startRect.Y + rowHeight;
+            if (endRect.Y - midTopBlock > 1)
+                AddOverlayBandRect(toOverlay, contentLeftBlock, midTopBlock, contentRightBlock, endRect.Y,
+                    overlayWidth, overlayHeight, rows);
+            // Partial last row: content left edge -> selection end.
+            AddOverlayBandRect(toOverlay, contentLeftBlock, endRect.Y, endRect.X, endRect.Y + rowHeight,
+                overlayWidth, overlayHeight, rows);
+        }
+
+        return rows.Count > 0;
+    }
+
+    // Transforms a block-space band [leftBlock,topBlock]-[rightBlock,bottomBlock] into
+    // overlay-space and appends it (clamped to the overlay viewport) when it is valid
+    // and visible.
+    private static void AddOverlayBandRect(
+        GeneralTransform toOverlay,
+        double leftBlock,
+        double topBlock,
+        double rightBlock,
+        double bottomBlock,
+        double overlayWidth,
+        double overlayHeight,
+        List<Windows.Foundation.Rect> rows)
+    {
+        if (rightBlock <= leftBlock || bottomBlock <= topBlock)
+            return;
+
+        Point topLeft, bottomRight;
+        try
+        {
+            topLeft = toOverlay.TransformPoint(new Point(leftBlock, topBlock));
+            bottomRight = toOverlay.TransformPoint(new Point(rightBlock, bottomBlock));
+        }
+        catch
+        {
+            return;
+        }
+
+        double left = Math.Min(topLeft.X, bottomRight.X);
+        double right = Math.Max(topLeft.X, bottomRight.X);
+        double top = Math.Min(topLeft.Y, bottomRight.Y);
+        double bottom = Math.Max(topLeft.Y, bottomRight.Y);
+        if (double.IsNaN(left) || double.IsNaN(right) || double.IsNaN(top) || double.IsNaN(bottom)
+            || double.IsInfinity(left) || double.IsInfinity(right) || double.IsInfinity(top) || double.IsInfinity(bottom))
+            return;
+
+        double visibleLeft = Math.Max(0, left);
+        double visibleRight = Math.Min(overlayWidth, right);
+        double width = visibleRight - visibleLeft;
+        double height = bottom - top;
+        if (width <= 0 || height <= 0)
+            return;
+        if (top + height < 0 || top > overlayHeight)
+            return;
+
+        rows.Add(new Windows.Foundation.Rect(visibleLeft, top, width, height));
+    }
+
+    // Resolves a TextPointer at a paragraph-local character index by walking the
+    // paragraph's Run inlines (mirrors MapPreviewTextPointerToParagraphIndex, which
+    // counts only Run text).
+    private static TextPointer? GetPreviewParagraphTextPointerAtIndex(Paragraph paragraph, int localIndex)
+    {
+        if (localIndex <= 0)
+        {
+            var first = paragraph.Inlines.OfType<Run>().FirstOrDefault(r => !string.IsNullOrEmpty(r.Text));
+            try { return first?.ContentStart ?? paragraph.ContentStart; }
+            catch { return null; }
+        }
+
+        int accumulated = 0;
+        foreach (var inline in paragraph.Inlines)
+        {
+            if (inline is not Run run)
+                continue;
+            int runLength = run.Text?.Length ?? 0;
+            if (localIndex <= accumulated + runLength)
+            {
+                try { return run.ContentStart.GetPositionAtOffset(localIndex - accumulated, LogicalDirection.Forward); }
+                catch { return null; }
+            }
+            accumulated += runLength;
+        }
+
+        var last = paragraph.Inlines.OfType<Run>().LastOrDefault(r => !string.IsNullOrEmpty(r.Text));
+        try { return last?.ContentEnd ?? paragraph.ContentEnd; }
+        catch { return null; }
     }
 
     private Border GetPreviewCustomSelectionOverlayMarker(int markerIndex)

@@ -8,7 +8,7 @@ For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
 
 ## Download Installer
 
-To install Yagu without building from source, download [YaguSetup-1.0.0.2278.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2278.exe) from GitHub and run it. The installer checks for the x64 .NET 10 Runtime, can install .NET 10 with `winget` when needed, and includes the Windows App Runtime payloads needed by the desktop app.
+To install Yagu without building from source, download the installer for your CPU architecture from GitHub and run it: [YaguSetup-1.0.0.2278-x64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2278-x64.exe) for most PCs, or the matching `-arm64` or `-x86` build for Arm64 or 32-bit Windows. Yagu ships as a self-contained Native AOT build, so no separate .NET runtime is required; the installer also includes the Windows App Runtime payloads needed by the desktop app.
 
 ## Current Project Status
 
@@ -56,7 +56,7 @@ Yagu is Windows-only.
 For someone who only wants to install and run Yagu:
 
 - Windows 10 version 1809 / build 17763 or newer.
-- The x64 .NET 10 Runtime. The installer checks for it and, if missing, offers to run `winget install Microsoft.DotNet.SDK.10` with progress before continuing.
+- No separate .NET runtime. Yagu is published as a self-contained Native AOT app, so the matching .NET 10 runtime is bundled inside the installer for each architecture (x64, x86, arm64).
 - Windows App Runtime 1.8. The installer packages the required runtime MSIX payloads and installs them when needed.
 - voidtools Everything is optional but strongly recommended for fastest file discovery. If Everything is not available, Yagu falls back to built-in recursive .NET file enumeration.
 
@@ -204,27 +204,27 @@ The installer is built with [Inno Setup 6](https://jrsoftware.org/isdl.php) (fre
 winget install JRSoftware.InnoSetup
 ```
 
-Then build the installer from the repo root:
+Then build the per-architecture installers from the repo root:
 
 ```powershell
 .\build-installer.ps1
 ```
 
-This builds Yagu in Release, stages the output, compiles an installer EXE at `installer\output\YaguSetup-<version>.exe`, and copies the latest versioned installer to `installer\YaguSetup-<version>.exe`.
+This publishes Yagu as a self-contained Native AOT build for each architecture (x64, x86, arm64), stages each output, and compiles one installer EXE per architecture at `installer\output\YaguSetup-<version>-<arch>.exe`, copying the latest versioned installer for each architecture to `installer\YaguSetup-<version>-<arch>.exe`. Build a single architecture with `-Architecture x64` (or `x86` / `arm64`). Building the x86 and arm64 installers from an x64 machine requires the corresponding C++ build tools and Rust targets (the build adds the Rust target automatically).
 
-Running `dotnet publish` for the Yagu project also builds the installer after publish completes. To publish without rebuilding the installer, pass `-p:BuildInstallerOnPublish=false`.
+Running `dotnet publish -r win-<arch>` for the Yagu project also builds that architecture's installer after publish completes. To publish without rebuilding the installer, pass `-p:BuildInstallerOnPublish=false`.
 
-At install time, the setup program checks for the x64 .NET 10 runtime before copying files. If it is missing, setup offers to run `winget install Microsoft.DotNet.SDK.10`, shells out through a hidden PowerShell process, shows live `winget` status in the installer progress dialog, and verifies the runtime before continuing.
+Because Yagu is self-contained, the installer needs no .NET runtime on the target machine. At install time the setup program installs the bundled Windows App Runtime payloads after copying files.
 
 #### Build Only The Installer
 
-If the Release app output already exists and you only want to compile the installer EXE, run the installer script with `-SkipBuild` from the repo root:
+If the published app output already exists and you only want to compile the installer EXEs, run the installer script with `-SkipBuild` from the repo root:
 
 ```powershell
 .\build-installer.ps1 -SkipBuild
 ```
 
-This skips the `dotnet build` step, reuses the existing files under `Yagu\bin\Release\<target-framework>`, refreshes the installer staging directory, stages the Windows App Runtime prerequisite payloads, and runs Inno Setup. The output is written to `installer\output\YaguSetup-<version>.exe` and copied to `installer\YaguSetup-<version>.exe`.
+This skips the `dotnet publish` step, reuses the existing files under `Yagu\bin\Release\<target-framework>\win-<arch>\publish`, refreshes the installer staging directory, stages the Windows App Runtime prerequisite payloads, and runs Inno Setup. The output is written to `installer\output\YaguSetup-<version>-<arch>.exe` and copied to `installer\YaguSetup-<version>-<arch>.exe`.
 
 To specify a custom Inno Setup path:
 

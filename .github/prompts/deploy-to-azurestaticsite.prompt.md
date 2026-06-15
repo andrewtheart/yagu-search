@@ -19,7 +19,7 @@ Run the publish script from the workspace root:
 - All projects sharing the download site use `D:\installationSite\index.html` as the single source of truth.
 - **Never modify the auth gate** — the login overlay (`#login-overlay`), Google script tags, and auth JavaScript must remain intact.
 - Binaries go to the private `downloads` container, NOT `$web`. The auth JS generates SAS download URLs at runtime.
-- The Yagu card should offer both `Download Installer` (`YaguSetup-<version>.exe`) and `Download ZIP` (`Yagu-<version>.zip`).
+- The Yagu card should offer both `Download Installer` (`YaguSetup-<version>-x64.exe`) and `Download ZIP` (`Yagu-<version>.zip`).
 - Download links use `data-blob="filename"` attributes — never hard-code direct blob URLs.
 - Requires `az` CLI to be authenticated (account key auth-mode).
 - If it fails, show the full error output to the user — do not retry automatically.

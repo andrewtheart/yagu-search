@@ -772,9 +772,7 @@ public sealed partial class MainWindow
     {
         _lastPreviewManualScrollTick = Environment.TickCount64;
         _previewManualScrollVersion++;
-        InvalidatePendingMatchScrolls();
-        _activeMatchOverlayUpdateRequestId++;
-        HideActiveMatchOverlay();
+        CancelPendingPreviewMatchNavigation();
         if (LogService.Instance.IsVerboseEnabled)
             LogService.Instance.Verbose("MatchNav", $"Preview manual scroll input: source={source}, version={_previewManualScrollVersion}");
     }

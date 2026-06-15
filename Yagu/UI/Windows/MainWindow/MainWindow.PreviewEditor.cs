@@ -271,19 +271,39 @@ public sealed partial class MainWindow
     {
         try
         {
-            if (filePath is null) return false;
-
-            // Abort if the section layout is still animating/oscillating — calling
-            // GetPositionFromPoint while the native text layout engine is mid-reflow
-            // can trigger an access violation in Microsoft.UI.Xaml.dll.
-            if (!IsPreviewSectionBodySettledForActiveOverlay(block, out _))
+            if (filePath is null)
+            {
+                LogService.Instance.Verbose("PreviewEditor",
+                    $"TryEnterPreviewEditorAtPoint: abort — filePath null, point=({point.X:N1},{point.Y:N1})");
                 return false;
+            }
+
+            // Abort only if the section body is not laid out yet (collapsed/unmeasured).
+            // This is a side-effect-free, resolve-on-first-try check — NOT the stateful
+            // overlay-centering settle ladder, which deliberately returns false on first
+            // contact and would silently swallow a one-shot double-click.
+            if (!IsPreviewSectionBodyLaidOutForPointer(block, out string layoutReason))
+            {
+                LogService.Instance.Verbose("PreviewEditor",
+                    $"TryEnterPreviewEditorAtPoint: abort — section not laid out ({layoutReason}), file='{System.IO.Path.GetFileName(filePath)}', point=({point.X:N1},{point.Y:N1})");
+                return false;
+            }
 
             TextPointer? tp;
             try { tp = block.GetPositionFromPoint(point); }
-            catch { tp = null; }
+            catch (Exception ex)
+            {
+                LogService.Instance.Verbose("PreviewEditor",
+                    $"TryEnterPreviewEditorAtPoint: GetPositionFromPoint threw {ex.GetType().Name}, point=({point.X:N1},{point.Y:N1})");
+                tp = null;
+            }
             int lineNum = tp is null ? -1 : ResolveLineNumberAtPointer(block, tp);
-            if (lineNum <= 0) return false;
+            if (lineNum <= 0)
+            {
+                LogService.Instance.Verbose("PreviewEditor",
+                    $"TryEnterPreviewEditorAtPoint: abort — no line at point=({point.X:N1},{point.Y:N1}), tpOffset={(tp is null ? "null" : tp.Offset.ToString(System.Globalization.CultureInfo.InvariantCulture))}, lineNum={lineNum}, file='{System.IO.Path.GetFileName(filePath)}'");
+                return false;
+            }
 
             var clickedPara = FindParagraphAtOffset(block, tp!.Offset);
             int clickedMatchIndex = clickedPara is null ? -1 : ResolveMatchIndexAtPointer(clickedPara, tp);
@@ -342,6 +362,8 @@ public sealed partial class MainWindow
             }
 
             await ShowFullFileEditorAsync(target, scrollToMatch: true);
+            LogService.Instance.Verbose("PreviewEditor",
+                $"TryEnterPreviewEditorAtPoint: opened editor file='{System.IO.Path.GetFileName(filePath)}', line={lineNum}, matchIndex={clickedMatchIndex}, col={target.MatchStartColumn}, len={target.MatchLength}");
             return true;
         }
         catch (Exception ex)
@@ -1317,7 +1339,12 @@ public sealed partial class MainWindow
         {
             PreviewEmptyState.Visibility = Visibility.Collapsed;
             HideStickyFileHeader();
-            HideActiveMatchOverlay();
+            // Showing the editor collapses the preview surface. Cancel any in-flight
+            // match-navigation scroll/overlay retries queued by the last Next/Prev
+            // navigation; otherwise they keep firing against the now-collapsed
+            // PreviewScrollViewer and detached preview runs, dereferencing torn-down
+            // native XAML layout and crashing (access violation in Microsoft.UI.Xaml.dll).
+            CancelPendingPreviewMatchNavigation();
             SectionNavOverlay.Visibility = Visibility.Collapsed;
             MatchNavPanel.Visibility = Visibility.Collapsed;
         }

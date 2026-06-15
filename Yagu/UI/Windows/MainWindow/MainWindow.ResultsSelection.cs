@@ -463,10 +463,16 @@ public sealed partial class MainWindow
         }
 
         var remainingSelected = ViewModel.GetAllSelectedResults();
-        if (remainingSelected.Count >= 2)
+        if (remainingSelected.Count >= 1)
+            // Deselecting down to a single checked match must keep the multi-section
+            // sections surface (file drawer, per-section match navigation, selected
+            // preview background) so the end state matches the surface produced by
+            // checking a single match (EnsureCheckedMatchInPreviewAsync builds a
+            // section). Routing the count==1 case to ShowSingleFilePreviewAsync used
+            // the single-file PreviewBlock surface instead, which dropped the file
+            // drawer and match-nav buttons and showed the per-file toolbar buttons —
+            // the user saw the preview "change to an unexpected version".
             await UpdateMultiSelectPreviewAsync();
-        else if (remainingSelected.Count == 1)
-            await ShowSingleFilePreviewAsync(remainingSelected[0], fullFile: false);
         else
         {
             _previewResult = null;

@@ -44,9 +44,9 @@ public sealed class InstallerPackagingRegressionTests
         string publishScript = File.ReadAllText(Path.Combine(root, "scripts", "publish-to-azure.ps1"));
         string deployPrompt = File.ReadAllText(Path.Combine(root, ".github", "prompts", "deploy-to-azurestaticsite.prompt.md"));
 
-        Assert.Contains("$installerName = \"YaguSetup-$version.exe\"", publishScript);
+        Assert.Contains("$installerName = \"YaguSetup-$version-x64.exe\"", publishScript);
         Assert.Contains("$buildInstallerScript = Join-Path $root \"build-installer.ps1\"", publishScript);
-        Assert.Contains("& $buildInstallerScript -SkipBuild", publishScript);
+        Assert.Contains("& $buildInstallerScript -Architecture x64", publishScript);
         Assert.Contains("--name $installerName", publishScript);
         Assert.Contains("--content-type \"application/octet-stream\"", publishScript);
         Assert.Contains("data-blob=\"$installerName\"", publishScript);
@@ -59,45 +59,80 @@ public sealed class InstallerPackagingRegressionTests
         Assert.Contains("uploads ZIP and installer EXE", deployPrompt);
         Assert.Contains("installer build", deployPrompt);
         Assert.Contains("Download Installer", deployPrompt);
-        Assert.Contains("YaguSetup-<version>.exe", deployPrompt);
+        Assert.Contains("YaguSetup-<version>-x64.exe", deployPrompt);
         Assert.Contains("Download ZIP", deployPrompt);
         Assert.Contains("Yagu-<version>.zip", deployPrompt);
     }
 
     [Fact]
-    public void InnoInstaller_RequiresDotNet10RuntimeBeforeInstall()
+    public void InnoInstaller_IsArchitectureParameterizedAndSelfContained()
     {
         string root = FindRepoRoot();
         string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
 
-        Assert.Contains("DotNet10WingetPackageId", inno);
-        Assert.Contains("Microsoft.DotNet.SDK.10", inno);
-        Assert.Contains("DotNet10WingetCommandDisplayName", inno);
-        Assert.Contains("DotNet10RuntimeRegistrySubkey", inno);
-        Assert.Contains(@"SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.NETCore.App", inno);
-        Assert.Contains("RegGetValueNames(HKLM64, '{#DotNet10RuntimeRegistrySubkey}', RuntimeVersions)", inno);
-        Assert.Contains("RegGetValueNames(HKLM32, '{#DotNet10RuntimeRegistrySubkey}', RuntimeVersions)", inno);
-        Assert.Contains("Copy(RuntimeVersions[I], 1, 3) = '10.'", inno);
-        Assert.Contains("CreateOutputProgressPage", inno);
-        Assert.Contains("function InstallDotNet10RuntimeWithWinget(): Boolean;", inno);
-        Assert.Contains("SW_HIDE, ewNoWait", inno);
-        Assert.Contains("UpdateDotNetWingetProgress(StatusPath, ProgressValue)", inno);
-        Assert.Contains("--accept-package-agreements --accept-source-agreements --disable-interactivity", inno);
-        Assert.Contains("function EnsureDotNet10RuntimeInstalled(): Boolean;", inno);
-        Assert.Contains("function NextButtonClick(CurPageID: Integer): Boolean;", inno);
-        Assert.Contains("if CurPageID = wpReady then", inno);
-        Assert.Contains("Result := EnsureDotNet10RuntimeInstalled()", inno);
-        Assert.Contains("if IsDotNet10RuntimeInstalled() then", inno);
-        Assert.Contains("Yagu requires the .NET 10.0 Runtime for Windows x64.", inno);
-        Assert.Contains("Install it now by running {#DotNet10WingetCommandDisplayName}?", inno);
-        Assert.DoesNotContain("DotNet10RuntimeDownloadUrl", inno);
-        Assert.DoesNotContain("dotnet-runtime-10.0.9-win-x64.exe", inno);
+        // Per-architecture parametrization: build-installer.ps1 passes /DYaguArch.
+        Assert.Contains("#ifndef YaguArch", inno);
+        Assert.Contains("#define YaguArch \"x64\"", inno);
+        Assert.Contains("OutputBaseFilename=YaguSetup-{#MyAppVersion}-{#YaguArch}", inno);
+        Assert.Contains("#if YaguArch == \"arm64\"", inno);
+        Assert.Contains("ArchitecturesAllowed=arm64", inno);
+        Assert.Contains("ArchitecturesInstallIn64BitMode=arm64", inno);
+        Assert.Contains("#elif YaguArch == \"x86\"", inno);
+        Assert.Contains("ArchitecturesAllowed=x86compatible", inno);
+        Assert.Contains("ArchitecturesAllowed=x64compatible", inno);
+        Assert.Contains("ArchitecturesInstallIn64BitMode=x64compatible", inno);
 
-        int dotNetCheck = inno.IndexOf("function EnsureDotNet10RuntimeInstalled(): Boolean;", StringComparison.Ordinal);
-        int windowsAppRuntimeInstall = inno.IndexOf("function InstallWindowsAppRuntime(): Boolean;", StringComparison.Ordinal);
-        Assert.True(dotNetCheck >= 0, "Installer should check .NET 10 before installing files.");
-        Assert.True(windowsAppRuntimeInstall >= 0, "Installer should still include the Windows App Runtime prerequisite installer.");
-        Assert.True(dotNetCheck < windowsAppRuntimeInstall, ".NET runtime check should happen before post-install prerequisite handling.");
+        // Self-contained Native AOT: no .NET runtime check / winget / download fallback.
+        Assert.DoesNotContain("DotNet10", inno);
+        Assert.DoesNotContain("Microsoft.DotNet.DesktopRuntime", inno);
+        Assert.DoesNotContain("EnsureDotNet10RuntimeInstalled", inno);
+        Assert.DoesNotContain("winget", inno);
+        Assert.DoesNotContain("windowsdesktop-runtime", inno);
+
+        // The Windows App Runtime prerequisite is still installed at post-install.
+        Assert.Contains("function InstallWindowsAppRuntime(): Boolean;", inno);
+        Assert.Contains("if not InstallWindowsAppRuntime() then", inno);
+    }
+
+    [Fact]
+    public void BuildInstaller_ProducesOneInstallerPerArchitecture()
+    {
+        string root = FindRepoRoot();
+        string buildInstaller = File.ReadAllText(Path.Combine(root, "build-installer.ps1"));
+
+        // Accepts an architecture selector defaulting to all three.
+        Assert.Contains("[ValidateSet('x64', 'x86', 'arm64', 'all')]", buildInstaller);
+        Assert.Contains("$architectures = @('x64', 'x86', 'arm64')", buildInstaller);
+
+        // Publishes self-contained per RID and suppresses the recursive installer hook.
+        Assert.Contains("dotnet publish $projectPath -c Release -r $rid", buildInstaller);
+        Assert.Contains("--self-contained", buildInstaller);
+        Assert.Contains("-p:BuildInstallerOnPublish=false", buildInstaller);
+
+        // Compiles one installer per architecture and keeps the latest per arch.
+        Assert.Contains("/DYaguArch=$arch", buildInstaller);
+        Assert.Contains("YaguSetup-$version-$arch.exe", buildInstaller);
+        Assert.Contains("-Filter \"YaguSetup-*-$arch.exe\"", buildInstaller);
+    }
+
+    [Fact]
+    public void Csproj_CrossCompilesRustCoreAndPackagesPerArchitecture()
+    {
+        string root = FindRepoRoot();
+        string csproj = File.ReadAllText(Path.Combine(root, "Yagu", "Yagu.csproj"));
+
+        // RuntimeIdentifier maps to an installer architecture token, and the
+        // AfterPublish hook packages exactly that architecture (only when a RID is set).
+        Assert.Contains("<YaguInstallerArch Condition=\"'$(YaguInstallerArch)' == '' And '$(RuntimeIdentifier)' == 'win-x64'\">x64</YaguInstallerArch>", csproj);
+        Assert.Contains("-SkipBuild -Architecture $(YaguInstallerArch)", csproj);
+        Assert.Contains("And '$(YaguInstallerArch)' != ''", csproj);
+
+        // The Rust core is cross-compiled to match the RID via cargo --target.
+        Assert.Contains("x86_64-pc-windows-msvc", csproj);
+        Assert.Contains("i686-pc-windows-msvc", csproj);
+        Assert.Contains("aarch64-pc-windows-msvc", csproj);
+        Assert.Contains("--target $(RustTargetTriple)", csproj);
+        Assert.Contains("target add $(RustTargetTriple)", csproj);
     }
 
     [Fact]
