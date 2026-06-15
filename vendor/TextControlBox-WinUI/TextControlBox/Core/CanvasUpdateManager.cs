@@ -23,7 +23,20 @@ internal class CanvasUpdateManager
         if (!coreTextbox.canvasCursor.ReadyToDraw)
             return;
 
+        coreTextbox.caretBlinkManager?.NotifyCaretActivity();
+
         //coreTextbox.canvasCursor.Invalidate();
+        _batchRedrawer.RequestRedraw(coreTextbox.canvasCursor);
+    }
+
+    // Redraw the caret canvas for a blink-phase toggle WITHOUT resetting the blink
+    // phase. UpdateCursor resets the phase via NotifyCaretActivity, so the blink
+    // timer must use this path or the caret would never blink.
+    public void RedrawCursorForBlink()
+    {
+        if (!coreTextbox.canvasCursor.ReadyToDraw)
+            return;
+
         _batchRedrawer.RequestRedraw(coreTextbox.canvasCursor);
     }
     public void UpdateText()

@@ -36,6 +36,7 @@ internal sealed partial class CoreTextControlBox : UserControl
     public readonly TextActionManager textActionManager;
     public readonly TextRenderer textRenderer;
     public readonly CursorRenderer cursorRenderer;
+    public readonly CaretBlinkManager caretBlinkManager;
     public readonly ScrollManager scrollManager;
     public readonly CurrentLineManager currentLineManager;
     public readonly LongestLineManager longestLineManager;
@@ -91,6 +92,7 @@ internal sealed partial class CoreTextControlBox : UserControl
         textActionManager = new TextActionManager();
         textRenderer = new TextRenderer();
         cursorRenderer = new CursorRenderer();
+        caretBlinkManager = new CaretBlinkManager();
         scrollManager = new ScrollManager();
         currentLineManager = new CurrentLineManager();
         longestLineManager = new LongestLineManager();
@@ -124,9 +126,10 @@ internal sealed partial class CoreTextControlBox : UserControl
         selectionRenderer.Init(selectionManager, textRenderer, eventsManager, scrollManager, zoomManager, designHelper, textManager);
         flyoutHelper.Init(this);
         canvasUpdateManager.Init(this);
+        caretBlinkManager.Init(canvasUpdateManager);
         textActionManager.Init(this, textRenderer, undoRedo, currentLineManager, longestLineManager, canvasUpdateManager, textManager, selectionRenderer, cursorManager, scrollManager, eventsManager, stringManager, selectionManager, autoIndentionManager);
         textRenderer.Init(cursorManager, designHelper, textLayoutManager, textManager, scrollManager, lineNumberRenderer, longestLineManager, this, searchManager, canvasUpdateManager, zoomManager, invisibleCharactersRenderer, linkRenderer, linkHighlightManager);
-        cursorRenderer.Init(cursorManager, currentLineManager, textRenderer, focusManager, textManager, scrollManager, zoomManager, designHelper, lineHighlighterRenderer, eventsManager, longestLineManager);
+        cursorRenderer.Init(cursorManager, currentLineManager, textRenderer, focusManager, textManager, scrollManager, zoomManager, designHelper, lineHighlighterRenderer, eventsManager, longestLineManager, caretBlinkManager);
         scrollManager.Init(this, canvasUpdateManager, textManager, textRenderer, cursorManager, zoomManager, VerticalScrollbar, HorizontalScrollbar);
         currentLineManager.Init(cursorManager, textManager);
         longestLineManager.Init(selectionManager, textManager, textRenderer);
@@ -996,6 +999,8 @@ internal sealed partial class CoreTextControlBox : UserControl
         {
             horizontalScrollBar.Scroll -= scrollManager.HorizontalScrollBar_Scroll;
         }
+
+        caretBlinkManager.Stop();
 
         textRenderer.CheckDispose();
         lineNumberRenderer.CheckDispose();

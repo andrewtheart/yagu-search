@@ -212,7 +212,7 @@ Then build the per-architecture installers from the repo root:
 
 This publishes Yagu as a self-contained Native AOT build for each architecture (x64, x86, arm64), stages each output, and compiles one installer EXE per architecture at `installer\output\YaguSetup-<version>-<arch>.exe`, copying the latest versioned installer for each architecture to `installer\YaguSetup-<version>-<arch>.exe`. Build a single architecture with `-Architecture x64` (or `x86` / `arm64`). Building the x86 and arm64 installers from an x64 machine requires the corresponding C++ build tools and Rust targets (the build adds the Rust target automatically).
 
-Running `dotnet publish -r win-<arch>` for the Yagu project also builds that architecture's installer after publish completes. To publish without rebuilding the installer, pass `-p:BuildInstallerOnPublish=false`.
+Running `dotnet publish -r win-<arch>` for the Yagu project also builds that architecture's installer after publish completes. A bare `dotnet publish` (no `-r`) builds all three installers (x64, x86, arm64), the same as running `.\build-installer.ps1`. To publish without building any installer, pass `-p:BuildInstallerOnPublish=false`.
 
 Because Yagu is self-contained, the installer needs no .NET runtime on the target machine. At install time the setup program installs the bundled Windows App Runtime payloads after copying files.
 

@@ -136,6 +136,24 @@ public sealed class InstallerPackagingRegressionTests
     }
 
     [Fact]
+    public void Csproj_BarePublishBuildsAllThreeInstallers()
+    {
+        string root = FindRepoRoot();
+        string csproj = File.ReadAllText(Path.Combine(root, "Yagu", "Yagu.csproj"));
+
+        // A bare `dotnet publish` (no -r) lets the SDK auto-infer the host RID, which it
+        // signals via UseCurrentRuntimeIdentifier == 'true'. That case fans out to build
+        // all three installers rather than packaging a single architecture.
+        Assert.Contains("<Target Name=\"BuildAllInstallersAfterPublish\"", csproj);
+        Assert.Contains("'$(UseCurrentRuntimeIdentifier)' == 'true'", csproj);
+        Assert.Contains("build-installer.ps1&quot; -Architecture all", csproj);
+
+        // The fan-out still honors the opt-out flag used by build-installer.ps1 and
+        // the local install/publish scripts so it never recurses.
+        Assert.Contains("'$(BuildInstallerOnPublish)' != 'false' And '$(DesignTimeBuild)' != 'true' And '$(UseCurrentRuntimeIdentifier)' == 'true'", csproj);
+    }
+
+    [Fact]
     public void RuntimePrerequisiteInstaller_UsesMsixManifestIdentity()
     {
         string root = FindRepoRoot();

@@ -191,6 +191,27 @@
   </Target>
 
   <!--
+    Fan-out for a bare `dotnet publish` (no -r / no explicit RuntimeIdentifier).
+    Because PublishAot=true the .NET SDK auto-infers the host RID (UseCurrentRuntimeIdentifier),
+    so we can't distinguish "build all" from a single-arch publish by RuntimeIdentifier
+    alone. UseCurrentRuntimeIdentifier == 'true' is set ONLY when the SDK picked the RID
+    itself (the user did not pass -r), which is exactly the bare-publish case. In that
+    case we build all three installers (x64, x86, arm64) via build-installer.ps1.
+
+    This does NOT recurse and does NOT double-build: build-installer.ps1 performs its own
+    per-architecture publishes with an explicit -r win-<arch> -p:BuildInstallerOnPublish=false,
+    so those inner publishes have UseCurrentRuntimeIdentifier == '' AND the installer hooks
+    disabled. The per-RID BuildInstallerAfterPublish target above never fires for a bare
+    publish because YaguInstallerArch is evaluated before SDK RID inference and stays empty,
+    keeping the two paths mutually exclusive. Opt out with -p:BuildInstallerOnPublish=false.
+  -->
+  <Target Name="BuildAllInstallersAfterPublish"
+          AfterTargets="Publish"
+          Condition="'$(BuildInstallerOnPublish)' != 'false' And '$(DesignTimeBuild)' != 'true' And '$(UseCurrentRuntimeIdentifier)' == 'true'">
+    <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\build-installer.ps1&quot; -Architecture all" />
+  </Target>
+
+  <!--
     yagu-core (Rust) build integration.
     The crate is built before C# compilation so its DLL is available at runtime.
     Set BuildRustCore=false to skip (e.g. when iterating on managed code only or

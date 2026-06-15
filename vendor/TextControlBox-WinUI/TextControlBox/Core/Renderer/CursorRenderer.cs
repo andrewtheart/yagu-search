@@ -26,6 +26,7 @@ internal class CursorRenderer
     private LineHighlighterRenderer lineHighlighterRenderer;
     private EventsManager eventsManager;
     private LongestLineManager longestLineManager;
+    private CaretBlinkManager caretBlinkManager;
 
     public void Init(
         CursorManager cursorManager,
@@ -38,7 +39,8 @@ internal class CursorRenderer
         DesignHelper designHelper,
         LineHighlighterRenderer lineHighlighterRenderer,
         EventsManager eventsManager,
-        LongestLineManager longestLineManager)
+        LongestLineManager longestLineManager,
+        CaretBlinkManager caretBlinkManager)
     {
         this.cursorManager = cursorManager;
         this.currentLineManager = currentLineManager;
@@ -51,6 +53,7 @@ internal class CursorRenderer
         this.lineHighlighterRenderer = lineHighlighterRenderer;
         this.eventsManager = eventsManager;
         this.longestLineManager = longestLineManager;
+        this.caretBlinkManager = caretBlinkManager;
     }
 
     public void RenderCursor(CanvasTextLayout textLayout, int characterPosition, float xOffset, float y, float fontSize, CursorSize customSize, CanvasDrawEventArgs args, CanvasSolidColorBrush cursorColorBrush)
@@ -112,15 +115,18 @@ internal class CursorRenderer
             if (renderedCharacterPos < 0)
                 return;
 
-            RenderCursor(
-                textRenderer.CurrentLineTextLayout,
-                renderedCharacterPos,
-                textRenderer.IsWordWrapEnabled ? 0 : (float)-scrollManager.HorizontalScroll + textRenderer.HorizontalSlicePixelOffset,
-                renderPosY,
-                zoomManager.ZoomedFontSize,
-                _CursorSize,
-                args,
-                designHelper.CursorColorBrush);
+            if (caretBlinkManager.IsCaretVisible)
+            {
+                RenderCursor(
+                    textRenderer.CurrentLineTextLayout,
+                    renderedCharacterPos,
+                    textRenderer.IsWordWrapEnabled ? 0 : (float)-scrollManager.HorizontalScroll + textRenderer.HorizontalSlicePixelOffset,
+                    renderPosY,
+                    zoomManager.ZoomedFontSize,
+                    _CursorSize,
+                    args,
+                    designHelper.CursorColorBrush);
+            }
 
             if (!cursorManager.Equals(cursorManager.currentCursorPosition, cursorManager.oldCursorPosition))
             {

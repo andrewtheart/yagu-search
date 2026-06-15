@@ -26,6 +26,7 @@ internal class FocusManager
 
         HasFocus = true;
         eventsManager.CallGotFocus();
+        coreTextbox.caretBlinkManager.Start();
         canvasUpdateManager.UpdateCursor();
 
         coreTextbox.ChangeCursor(InputSystemCursorShape.IBeam);
@@ -37,6 +38,7 @@ internal class FocusManager
         canvasUpdateManager.UpdateCursor();
 
         HasFocus = false;
+        coreTextbox.caretBlinkManager.Stop();
         coreTextbox.ChangeCursor(InputSystemCursorShape.Arrow);
     }
 }
