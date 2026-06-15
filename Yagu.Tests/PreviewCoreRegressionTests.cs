@@ -141,6 +141,16 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("PreviewPanelBorder.ActualWidth", update);
         Assert.Contains("SearchControlsBorder.MaxWidth = drawerWidth;", update);
         Assert.Contains("SearchStatusPanel.MaxWidth = drawerWidth;", update);
+
+        // The gap between the floating search drawer and the results panel must use the
+        // shared PreviewTopExpandedDrawerGap constant (= the normal stacked layout's
+        // 4px card bottom margin + 2px split-pane top margin) so the gap stays fixed and
+        // does not grow when the preview panel is first revealed. The old magic +10
+        // made the results panel sit 4px lower in PreviewTopExpanded than in the normal
+        // stacked layout.
+        Assert.Contains("SearchStatusPanel.ActualHeight + PreviewTopExpandedDrawerGap;", update);
+        Assert.DoesNotContain("SearchStatusPanel.ActualHeight + 10;", update);
+        Assert.Contains("private const double PreviewTopExpandedDrawerGap = 6;", MainWindowSource);
     }
 
     [Fact]
@@ -230,6 +240,56 @@ public sealed class PreviewCoreRegressionTests
         // It must NOT fall back to the single-file PreviewBlock surface for one match.
         Assert.DoesNotContain("ShowSingleFilePreviewAsync(remainingSelected", updateForSelection);
         Assert.DoesNotContain("remainingSelected.Count == 1", updateForSelection);
+    }
+
+    [Fact]
+    public void ScrollMaterializedSection_DoesNotStealSelectedBackgroundFromActiveSection()
+    {
+        // Scrolling a long file far enough to pull a sibling section into the
+        // pre-materialization buffer must NOT change which section is "active" (the
+        // one painted with the selected/black preview background). The scroll-driven
+        // MaterializeVisibleLazySections sweep expands lazy sections by setting
+        // IsExpanded = true, which fires the Expander.Expanding handler; that handler
+        // used to unconditionally call ActivateSectionForBlock, so scrolling stole the
+        // selected background from the file the user was reading. The bug only showed
+        // with 2+ documents (a single document has no sibling to steal "active").
+
+        // The scroll sweep tags each block before expanding it so the Expanding handler
+        // can tell scroll-driven auto-materialization apart from a real user expansion.
+        string sweep = ExtractMethodWindow(MainWindowSource, "MaterializeVisibleLazySections", 4000);
+        AssertContainsInOrder(sweep,
+            "if (!captured.IsExpanded)",
+            "_autoMaterializingSections.Add(lazyBlock);",
+            "captured.IsExpanded = true;");
+
+        // The Expanding handler (built in AddPreviewSection) consumes the tag
+        // synchronously before its first await and only activates the section when it
+        // was NOT an auto-materialization (manual expand / match nav / scroll-to-section
+        // still activate, because they leave the block untagged).
+        string addSection = ExtractMethodWindow(MainWindowSource, "AddPreviewSection", 10000);
+        AssertContainsInOrder(addSection,
+            "bool autoMaterialized = _autoMaterializingSections.Remove(b);",
+            "if (!autoMaterialized)",
+            "ActivateSectionForBlock(b);");
+    }
+
+    [Fact]
+    public void UpdateSectionMatchNavPanels_PreservesActiveSectionInMultiFileView()
+    {
+        // UpdateSectionMatchNavPanels runs from many scroll-driven paths (auto-load-more,
+        // overflow auto-load, section materialization). In a multi-file view it must NOT
+        // unconditionally null the active section — doing so deselected the file the user
+        // was reading (its black "selected" background flipped to unselected on scroll).
+        // It may only drop a stale active section (one removed from _sectionMatchNavs or
+        // no longer holding >1 navigable matches).
+        string method = ExtractMethodWindow(MainWindowSource, "UpdateSectionMatchNavPanels", 2400);
+        AssertContainsInOrder(method,
+            "else",
+            "if (_activeSectionNav is not null",
+            "_sectionMatchNavs.TryGetValue(_activeSectionNav.Block, out var cur)",
+            "ReferenceEquals(cur, _activeSectionNav)",
+            "GetSectionMatchTotal(_activeSectionNav) <= 1",
+            "_activeSectionNav = null;");
     }
 
     [Fact]

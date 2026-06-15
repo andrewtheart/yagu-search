@@ -2803,7 +2803,20 @@ public sealed partial class MainWindow
         }
         else
         {
-            _activeSectionNav = null;
+            // Multi-file: never auto-pick an active section, but PRESERVE the one
+            // the user explicitly activated (click / expand / match-nav) when it is
+            // still present and still has navigable matches. This method is called
+            // from many scroll-driven paths (auto-load-more, overflow auto-load,
+            // section materialization), so unconditionally nulling here deselected
+            // the file the user was reading — its black "selected" background flipped
+            // to unselected on scroll. Only drop a stale/removed active section.
+            if (_activeSectionNav is not null
+                && (!_sectionMatchNavs.TryGetValue(_activeSectionNav.Block, out var cur)
+                    || !ReferenceEquals(cur, _activeSectionNav)
+                    || GetSectionMatchTotal(_activeSectionNav) <= 1))
+            {
+                _activeSectionNav = null;
+            }
         }
 
         HighlightActiveExpander();

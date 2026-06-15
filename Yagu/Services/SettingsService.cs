@@ -57,10 +57,13 @@ public sealed class AppSettings
     public bool GitignoreTakesPrecedence { get; set; } = true;
     public int ContextLines { get; set; } = 3;
     public int PreviewContextLines { get; set; } = 10;
-    public string IncludeGlobs { get; set; } = string.Empty;
-    public string ExcludeGlobs { get; set; } = DefaultExcludeGlobs;
-    public int IncludeFilterModeIndex { get; set; }
-    public int ExcludeFilterModeIndex { get; set; }
+    // Advanced-Options path filters are per-session only: edits made in Advanced
+    // Options must never persist to settings.json. They reset to defaults on next
+    // launch, matching the size/date filters below.
+    [JsonIgnore] public string IncludeGlobs { get; set; } = string.Empty;
+    [JsonIgnore] public string ExcludeGlobs { get; set; } = DefaultExcludeGlobs;
+    [JsonIgnore] public int IncludeFilterModeIndex { get; set; }
+    [JsonIgnore] public int ExcludeFilterModeIndex { get; set; }
     [JsonIgnore] public long MinFileSizeBytes { get; set; }
     [JsonIgnore] public long MaxFileSizeBytes { get; set; }
     [JsonIgnore] public DateTimeOffset? CreatedAfterDate { get; set; }

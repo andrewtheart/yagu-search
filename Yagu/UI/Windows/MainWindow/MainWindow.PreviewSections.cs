@@ -88,6 +88,14 @@ public sealed partial class MainWindow
     private readonly Dictionary<RichTextBlock, int> _sectionTotalMatchCounts = new();
     private bool _previewViewChangedHooked;
     private bool _viewportMaterializePending;
+    // Blocks whose section is being expanded by the scroll-driven
+    // MaterializeVisibleLazySections sweep. Such sections must render their
+    // content but must NOT become the active/selected section — otherwise
+    // scrolling a long file far enough to pull a sibling section into the
+    // pre-materialization buffer would steal the "selected" background from the
+    // file the user is actually reading. The Expander.Expanding handler consumes
+    // (removes) the tag synchronously before its first await.
+    private readonly HashSet<RichTextBlock> _autoMaterializingSections = new();
     private static readonly Windows.UI.Color s_defaultSelectedPreviewContentBackground = Windows.UI.Color.FromArgb(0xFF, 0x00, 0x00, 0x00);
     private static readonly Windows.UI.Color s_defaultUnselectedPreviewContentBackground = Windows.UI.Color.FromArgb(0x00, 0x00, 0x00, 0x00);
 
@@ -337,7 +345,7 @@ public sealed partial class MainWindow
         SearchStatusPanel.MaxWidth = drawerWidth;
         ApplyTopSearchDrawerCompactState(drawerWidth < CompactTopSearchDrawerThreshold);
 
-        double topOffset = SearchControlsBorder.ActualHeight + SearchStatusPanel.ActualHeight + 10;
+        double topOffset = SearchControlsBorder.ActualHeight + SearchStatusPanel.ActualHeight + PreviewTopExpandedDrawerGap;
         ResultsPanelBorder.Margin = new Thickness(0, Math.Max(0, topOffset), 0, 0);
     }
 
@@ -1368,7 +1376,16 @@ public sealed partial class MainWindow
                 {
                     try
                     {
-                        if (!captured.IsExpanded) captured.IsExpanded = true;
+                        if (!captured.IsExpanded)
+                        {
+                            // Tag this block so the Expander.Expanding handler builds
+                            // its content but skips ActivateSectionForBlock — a section
+                            // pulled in by scrolling must not steal the selected
+                            // background from the file the user is reading.
+                            if (captured.Tag is RichTextBlock lazyBlock)
+                                _autoMaterializingSections.Add(lazyBlock);
+                            captured.IsExpanded = true;
+                        }
                     }
                     catch (Exception ex)
                     {

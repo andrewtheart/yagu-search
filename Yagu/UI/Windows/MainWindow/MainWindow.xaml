@@ -1582,8 +1582,18 @@
                                     <FontIcon Grid.Column="0" Glyph="&#xE7C3;" FontSize="14" Opacity="0.8"
                                               VerticalAlignment="Center" />
                                     <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
-                                        <TextBlock x:Name="PreviewEditorPathText" FontSize="12"
-                                                   TextTrimming="CharacterEllipsis" />
+                                        <Grid ColumnSpacing="3">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock x:Name="PreviewEditorPathText" Grid.Column="0" FontSize="12"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock x:Name="PreviewEditorDirtyAsterisk" Grid.Column="1" Text="*"
+                                                       Visibility="Collapsed" FontSize="16" FontWeight="Bold"
+                                                       Foreground="#FFE6A100" VerticalAlignment="Center"
+                                                       ToolTipService.ToolTip="Unsaved changes" />
+                                        </Grid>
                                         <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Left">
                                             <TextBlock x:Name="PreviewEditorChunkStatusText" Visibility="Collapsed"
                                                        FontSize="11" Opacity="0.65"

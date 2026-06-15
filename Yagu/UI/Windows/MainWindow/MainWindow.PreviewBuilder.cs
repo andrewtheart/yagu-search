@@ -1744,6 +1744,14 @@ public sealed partial class MainWindow
             {
                 if (s is Expander exp && exp.Tag is RichTextBlock b)
                 {
+                    // Consume the auto-materialization tag synchronously, before the
+                    // first await: a section expanded by the scroll-driven
+                    // MaterializeVisibleLazySections sweep must render its content but
+                    // must NOT become the active/selected section, otherwise scrolling
+                    // past a sibling steals the selected background from the file the
+                    // user is reading. Manual expansion (header click), match
+                    // navigation, and scroll-to-section are untagged and still activate.
+                    bool autoMaterialized = _autoMaterializingSections.Remove(b);
                     UpdateExpandAllButtonVisibility();
                     if (await MaterializeLazySectionAsync(b) && MatchNavPanel.Visibility == Visibility.Visible)
                         MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
@@ -1757,7 +1765,8 @@ public sealed partial class MainWindow
                         ApplyPreviewHorizontalScrollForWrapSection(scroller, wrap);
                     else if (exp.Content is ScrollViewer scroller2)
                         ApplyPreviewHorizontalScrollForWrapSection(scroller2, wrap);
-                    ActivateSectionForBlock(b);
+                    if (!autoMaterialized)
+                        ActivateSectionForBlock(b);
                     UpdateStickyHorizontalScrollBar();
                 }
             }

@@ -18,6 +18,13 @@ public sealed partial class MainWindow
     private const double CompactTopSearchDrawerThreshold = 440;
     private const double CompactTopSearchActionButtonWidth = 38;
 
+    // Vertical gap between the floating search drawer (search card + status panel)
+    // and the results panel beneath it in PreviewTopExpanded mode. Kept equal to the
+    // normal stacked layout's gap (4px search-card bottom margin + 2px split-pane top
+    // margin) so the gap stays a fixed size and does not visibly grow when the preview
+    // panel is revealed for the first time and the panels reorganize.
+    private const double PreviewTopExpandedDrawerGap = 6;
+
     // Minimum usable height for the Advanced Options drawer content before a
     // scrollbar is preferred over shrinking further.
     private const double MinAdvancedOptionsDrawerHeight = 160;

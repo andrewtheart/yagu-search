@@ -896,10 +896,10 @@ public sealed class SettingsEffectTests : IDisposable
         var json = System.Text.Json.JsonSerializer.Serialize(settings, AppSettingsJsonContext.Default.AppSettings);
         Assert.DoesNotContain("\"CaseSensitive\"", json);
         Assert.DoesNotContain("\"UseRegex\"", json);
-        Assert.Contains("\"IncludeGlobs\"", json);
-        Assert.Contains("\"ExcludeGlobs\"", json);
-        Assert.Contains("\"IncludeFilterModeIndex\"", json);
-        Assert.Contains("\"ExcludeFilterModeIndex\"", json);
+        Assert.DoesNotContain("\"IncludeGlobs\"", json);
+        Assert.DoesNotContain("\"ExcludeGlobs\"", json);
+        Assert.DoesNotContain("\"IncludeFilterModeIndex\"", json);
+        Assert.DoesNotContain("\"ExcludeFilterModeIndex\"", json);
         Assert.DoesNotContain("\"SkipBinary\"", json);
         Assert.Contains("\"SkipExtensions\"", json);
         Assert.Contains("\"ArchiveExtensions\"", json);

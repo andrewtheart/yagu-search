@@ -80,6 +80,8 @@ public sealed partial class MainWindow
         {
             PreviewEditor.KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden;
 
+            AddPreviewEditorSaveAccelerator();
+
             var flyout = PreviewEditor.ContextFlyout;
             if (flyout is not null)
             {
@@ -148,6 +150,23 @@ public sealed partial class MainWindow
             if (deltaPercent == 0) SetPreviewEditorZoom(100);
             else AdjustPreviewEditorZoom(deltaPercent);
             args.Handled = true;
+        };
+        PreviewEditor.KeyboardAccelerators.Add(accelerator);
+    }
+
+    private void AddPreviewEditorSaveAccelerator()
+    {
+        var accelerator = new KeyboardAccelerator
+        {
+            Key = VirtualKey.S,
+            Modifiers = VirtualKeyModifiers.Control,
+        };
+        accelerator.Invoked += async (_, args) =>
+        {
+            args.Handled = true;
+            if (PreviewEditor.Visibility != Visibility.Visible) return;
+            if (!_previewEditorDirty || _previewEditorPath is null) return;
+            await SavePreviewEditAsync();
         };
         PreviewEditor.KeyboardAccelerators.Add(accelerator);
     }
@@ -1269,6 +1288,7 @@ public sealed partial class MainWindow
                 DefaultButton = YaguDialogDefaultButton.Primary,
                 Width = 500,
                 Height = 270,
+                ShowTitleBar = false,
             });
         if (choice == YaguDialogResult.Primary)
         {
@@ -1591,6 +1611,11 @@ public sealed partial class MainWindow
 
     private void UpdateEditorDirtyIndicator()
     {
+        PreviewEditorDirtyAsterisk.Visibility =
+            PreviewEditor.Visibility == Visibility.Visible && _previewEditorDirty && _previewEditorPath is not null
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+
         if (_previewEditorPath is null) return;
         string baseName = _previewEditorPath;
         // Strip any existing dirty indicator prefix.
