@@ -86,6 +86,13 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
+    /// Tracks which disks have already shown the HDD parallelism warning this session.
+    /// Keyed by drive root (e.g. "C:\"). Reset only when the app restarts so the dialog
+    /// shows at most once per disk per Yagu session.
+    /// </summary>
+    private readonly HashSet<string> _hddWarningShownDrives = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Checks if the search directory is on a rotational HDD and, if LimitParallelismOnHdd is enabled,
     /// forces parallelism to 1 and warns the user. Returns false if the user cancels.
     /// </summary>
@@ -97,6 +104,11 @@ public sealed partial class MainWindow
 
         // Force parallelism to 1 (sequential)
         ViewModel.ParallelismIndex = 1;
+
+        // Only warn once per disk per session; subsequent searches on the same disk
+        // still limit parallelism but skip the dialog until the app is restarted.
+        var driveKey = GetHddWarningDriveKey(ViewModel.Directory);
+        if (!_hddWarningShownDrives.Add(driveKey)) return true;
 
         var contentPanel = new StackPanel { Spacing = 8, MinWidth = 360 };
         contentPanel.Children.Add(new TextBlock
@@ -115,15 +127,21 @@ public sealed partial class MainWindow
         secondBlock.Inlines.Add(new Run { Text = "You can increase parallelism or disable this warning in " });
         var settingsLink = new Hyperlink();
         settingsLink.Inlines.Add(new Run { Text = "Settings \u2192 Performance" });
+        var openSettingsRequested = false;
+        YaguDialog? hddDialog = null;
         settingsLink.Click += (_, _) =>
         {
-            OpenSettingsTab(SettingsPerformanceTabIndex);
+            // The dialog is modal (the owner window is disabled while it is shown), so opening
+            // the Settings window now would leave it behind the disabled owner. Close the dialog
+            // first, then open Settings -> Performance after it has fully dismissed.
+            openSettingsRequested = true;
+            hddDialog?.AcceptClose();
         };
         secondBlock.Inlines.Add(settingsLink);
         secondBlock.Inlines.Add(new Run { Text = "." });
         contentPanel.Children.Add(secondBlock);
 
-        return await YaguDialog.ShowAsync(
+        var result = await YaguDialog.ShowAsync(
             _hwnd,
             new YaguDialogOptions
             {
@@ -132,10 +150,35 @@ public sealed partial class MainWindow
                 PrimaryButtonText = "Continue search",
                 CloseButtonText = "Cancel",
                 DefaultButton = YaguDialogDefaultButton.Primary,
+                ShowTitleBar = false,
                 Width = 560,
                 Height = 330,
                 MaxContentHeight = 220,
-            }) == YaguDialogResult.Primary;
+            },
+            dlg => hddDialog = dlg);
+
+        if (openSettingsRequested)
+        {
+            OpenSettingsTab(SettingsPerformanceTabIndex);
+            return false;
+        }
+
+        return result == YaguDialogResult.Primary;
+    }
+
+    /// <summary>
+    /// Returns a stable per-disk key for the HDD warning dedup set. Uses the path root
+    /// (drive letter or UNC share) so repeated searches under the same disk share one key.
+    /// </summary>
+    private static string GetHddWarningDriveKey(string directory)
+    {
+        try
+        {
+            var root = Path.GetPathRoot(directory);
+            if (!string.IsNullOrEmpty(root)) return root.TrimEnd('\\', '/').ToUpperInvariant();
+        }
+        catch { /* fall through to the raw directory below */ }
+        return directory.ToUpperInvariant();
     }
 
     private void OnCloseWindowClick(object sender, RoutedEventArgs e)

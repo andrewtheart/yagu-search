@@ -2524,7 +2524,6 @@ public sealed partial class MainWindow
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DependencyObject, object> s_previewShowMoreActions = new();
     private const int PreviewShowMoreTooltipHideDelayMs = 700;
     private const double PreviewShowMoreTooltipCursorGapDip = 12;
-    private const double PreviewShowMoreTooltipLeftShiftRatio = 0.10;
     private PreviewShowMoreAction? _previewShowMoreTooltipAction;
     private PreviewShowMoreEdge? _previewShowMoreTooltipEdge;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _previewShowMoreTooltipHideTimer;
@@ -2566,6 +2565,7 @@ public sealed partial class MainWindow
         s_gutterSepBrush.Color = previewGutterColor;
         s_matchGutterBrush.Color = ColorStringHelper.Parse(vm.PreviewGutterMatchColor, Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE));
         PreviewEditor.LineNumberColor = ColorStringHelper.Parse(vm.PreviewEditorGutterColor, Windows.UI.Color.FromArgb(0xFF, 0x3A, 0x8F, 0xD6));
+        PreviewEditor.TextColor = ResolveEffectiveEditorTextColor();
         var matchTextColor = ColorStringHelper.Parse(vm.PreviewMatchTextColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00));
         _matchTextBrush = new SolidColorBrush(matchTextColor);
         _overlayColor = ColorStringHelper.Parse(vm.PreviewOverlayColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x45, 0x00));
@@ -2579,6 +2579,33 @@ public sealed partial class MainWindow
         ActiveMatchBand.BorderBrush = new SolidColorBrush(_overlayColor);
         ActiveMatchWordMarker.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x1A, _overlayColor.R, _overlayColor.G, _overlayColor.B));
         ActiveMatchWordMarker.BorderBrush = new SolidColorBrush(_overlayColor);
+    }
+
+    // Resolves the color applied to the built-in editor's body text. An empty PreviewEditorTextColor is the
+    // "Auto" sentinel that follows the app/system theme (the editor renders on a theme-colored card), so a
+    // single fixed default would be unreadable in one theme. Auto resolves to the theme-appropriate default.
+    private Windows.UI.Color ResolveEffectiveEditorTextColor()
+    {
+        string configured = ViewModel.PreviewEditorTextColor;
+        if (!string.IsNullOrWhiteSpace(configured))
+            return ColorStringHelper.Parse(configured, GetThemeDefaultEditorTextColor());
+
+        return GetThemeDefaultEditorTextColor();
+    }
+
+    private Windows.UI.Color GetThemeDefaultEditorTextColor()
+    {
+        var effectiveTheme = AppThemeService.ResolveEffectiveTheme(RootGrid, ViewModel.ThemeModeIndex);
+        return effectiveTheme == ElementTheme.Light
+            ? Windows.UI.Color.FromArgb(0xFF, 0x32, 0x32, 0x32) // near-black for light theme cards
+            : Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF); // white for dark theme cards
+    }
+
+    // Re-applies only the editor body-text color (used on theme changes so the Auto sentinel tracks the
+    // active light/dark theme without rebuilding every preview brush).
+    private void ApplyPreviewEditorTextColor()
+    {
+        PreviewEditor.TextColor = ResolveEffectiveEditorTextColor();
     }
 
     private string ResolvePreviewTextFontFamily()
@@ -3649,11 +3676,43 @@ public sealed partial class MainWindow
         double bubbleHeight = Math.Max(32, PreviewShowMoreTooltipBubble.ActualHeight);
         double maxLeft = Math.Max(4, PreviewShowMoreTooltipOverlay.ActualWidth - bubbleWidth - 4);
         double maxTop = Math.Max(4, PreviewShowMoreTooltipOverlay.ActualHeight - bubbleHeight - 4);
-        double left = Math.Clamp(pointer.X + PreviewShowMoreTooltipCursorGapDip - (bubbleWidth * PreviewShowMoreTooltipLeftShiftRatio), 4, maxLeft);
+
+        // Center the "Show more" button (the first action button) directly under the cursor X so it
+        // appears centered beneath the pointer; "Show all" follows it in the horizontal stack as usual.
+        double showMoreCenterOffset = GetPreviewShowMoreButtonCenterOffset(bubbleWidth);
+        double left = Math.Clamp(pointer.X - showMoreCenterOffset, 4, maxLeft);
+        // Drop the bubble below the cursor so the button sits underneath the pointer without the
+        // pointer landing on it, keeping the button in its normal (not-pressed) visual state.
         double top = Math.Clamp(pointer.Y + PreviewShowMoreTooltipCursorGapDip, 4, maxTop);
 
         Canvas.SetLeft(PreviewShowMoreTooltipBubble, left);
         Canvas.SetTop(PreviewShowMoreTooltipBubble, top);
+    }
+
+    /// <summary>
+    /// Returns the horizontal distance from the tooltip bubble's left edge to the center of the
+    /// "Show more" button (the first action button) so the bubble can be positioned to center that
+    /// button under the cursor. Falls back to centering the whole bubble when the button is not laid out.
+    /// </summary>
+    private double GetPreviewShowMoreButtonCenterOffset(double bubbleWidth)
+    {
+        if (PreviewShowMoreTooltipContent.Children.Count > 0
+            && PreviewShowMoreTooltipContent.Children[0] is FrameworkElement showMoreButton
+            && showMoreButton.ActualWidth > 0)
+        {
+            try
+            {
+                var origin = showMoreButton
+                    .TransformToVisual(PreviewShowMoreTooltipBubble)
+                    .TransformPoint(new Windows.Foundation.Point(0, 0));
+                return origin.X + (showMoreButton.ActualWidth / 2);
+            }
+            catch
+            {
+                return PreviewShowMoreTooltipBubble.Padding.Left + (showMoreButton.ActualWidth / 2);
+            }
+        }
+        return bubbleWidth / 2;
     }
 
     private Button CreatePreviewShowMoreActionButton(

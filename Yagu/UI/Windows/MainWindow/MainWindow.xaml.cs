@@ -190,6 +190,7 @@ public sealed partial class MainWindow : Window, IDisposable
         RootGrid.ActualThemeChanged += (_, _) =>
         {
             ApplyTitleBarButtonTheme();
+            ApplyPreviewEditorTextColor();
             QueueFontContrastCheck();
         };
         TextControlBoxNS.TextControlBoxDiagnostics.VerboseLogger = (source, message) => LogService.Instance.Verbose(source, message);
@@ -289,6 +290,7 @@ public sealed partial class MainWindow : Window, IDisposable
             if (e.PropertyName == nameof(ViewModel.PreviewGutterContextColor) ||
                 e.PropertyName == nameof(ViewModel.PreviewGutterMatchColor) ||
                 e.PropertyName == nameof(ViewModel.PreviewEditorGutterColor) ||
+                e.PropertyName == nameof(ViewModel.PreviewEditorTextColor) ||
                 e.PropertyName == nameof(ViewModel.PreviewMatchTextColor) ||
                 e.PropertyName == nameof(ViewModel.PreviewOverlayColor) ||
                 e.PropertyName == nameof(ViewModel.PreviewMatchLineColor) ||

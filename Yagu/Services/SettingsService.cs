@@ -27,6 +27,9 @@ public sealed class AppSettings
     public const string DefaultPreviewGutterContextColor = DefaultPreviewGutterColor;
     public const string DefaultPreviewGutterMatchColor = DefaultPreviewGutterColor;
     public const string DefaultPreviewEditorGutterColor = "#FF3A8FD6"; // Darker blue (passes light+dark)
+    // Empty string means "follow the app/system theme" (white on dark, near-black on light). A non-empty
+    // ARGB hex string is an explicit user override applied to the built-in editor's body text.
+    public const string DefaultPreviewEditorTextColor = "";
     public const string DefaultPreviewMatchTextColor = "#FFFFD700"; // Gold
     public const string DefaultPreviewOverlayColor = "#FFFF4500"; // OrangeRed
     public const string DefaultPreviewMatchLineColor = "#FFFFFFFF"; // White
@@ -90,6 +93,7 @@ public sealed class AppSettings
     public string PreviewGutterContextColor { get; set; } = DefaultPreviewGutterContextColor;
     public string PreviewGutterMatchColor { get; set; } = DefaultPreviewGutterMatchColor;
     public string PreviewEditorGutterColor { get; set; } = DefaultPreviewEditorGutterColor;
+    public string PreviewEditorTextColor { get; set; } = DefaultPreviewEditorTextColor;
     public string PreviewMatchTextColor { get; set; } = DefaultPreviewMatchTextColor;
     public string PreviewOverlayColor { get; set; } = DefaultPreviewOverlayColor;
     public string PreviewMatchLineColor { get; set; } = DefaultPreviewMatchLineColor;
@@ -490,6 +494,20 @@ public sealed class SettingsService
 
         if (string.IsNullOrWhiteSpace(settings.PreviewEditorGutterColor))
             settings.PreviewEditorGutterColor = AppSettings.DefaultPreviewEditorGutterColor;
+
+        settings.PreviewEditorTextColor = NormalizeEditorTextColor(settings.PreviewEditorTextColor);
+    }
+
+    // Editor body-text color uses an empty string as an "Auto" sentinel meaning "follow the app/system
+    // theme". A non-empty value is normalized to canonical ARGB hex; null/whitespace/invalid collapse to Auto.
+    private static string NormalizeEditorTextColor(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return AppSettings.DefaultPreviewEditorTextColor;
+
+        return TryParseArgbHex(value, out var color)
+            ? FormatArgbHex(color)
+            : AppSettings.DefaultPreviewEditorTextColor;
     }
 
     private static bool IsLegacyExpandedBinaryPrefilter(string binaryExtensions) =>

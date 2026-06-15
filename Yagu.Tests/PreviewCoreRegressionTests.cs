@@ -1050,6 +1050,34 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void EditorTextColor_IsConfigurableWithThemeAutoDefault()
+    {
+        string settingsSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "Services", "SettingsService.cs"));
+        string viewModelSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
+        string textControlBoxSource = File.ReadAllText(Path.Combine(RepoRoot, "vendor", "TextControlBox-WinUI", "TextControlBox", "TextControlBox.cs"));
+
+        // Empty string is the "Auto" sentinel (follow the app/system theme) and must be normalized in the
+        // shared migration path so both Load() and LoadAsync() preserve it.
+        Assert.Contains("DefaultPreviewEditorTextColor = \"\"", settingsSource);
+        Assert.Contains("settings.PreviewEditorTextColor = NormalizeEditorTextColor(settings.PreviewEditorTextColor);", settingsSource);
+
+        Assert.Contains("PreviewEditorTextColor", viewModelSource);
+        Assert.Contains("_settings.PreviewEditorTextColor = string.IsNullOrWhiteSpace(PreviewEditorTextColor)", viewModelSource);
+
+        // Editor body-text color must be exposed on the vendored editor and applied alongside the gutter color.
+        Assert.Contains("public Windows.UI.Color TextColor", textControlBoxSource);
+
+        string applyColors = ExtractMethodWindow(MainWindowSource, "ApplyPreviewColors", window: 1800);
+        AssertContainsInOrder(applyColors,
+            "PreviewEditor.LineNumberColor = ColorStringHelper.Parse(vm.PreviewEditorGutterColor",
+            "PreviewEditor.TextColor = ResolveEffectiveEditorTextColor();");
+
+        // Settings UI surfaces both the Auto override toggle and the color row.
+        Assert.Contains("Override editor text color", SettingsWindowSource);
+        Assert.Contains("Editor text:", SettingsWindowSource);
+    }
+
+    [Fact]
     public void DeveloperOptions_HidesMemoryPressureWarningLabelByDefault()
     {
         string settingsSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "Services", "SettingsService.cs"));
@@ -1968,9 +1996,8 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("Background=\"#B8181818\"", MainWindowXaml);
         Assert.Contains("x:Name=\"PreviewShowMoreTooltipContent\"", MainWindowXaml);
         Assert.Contains("PreviewShowMoreTooltipCursorGapDip = 12", previewBuilder);
-        Assert.Contains("PreviewShowMoreTooltipLeftShiftRatio = 0.10", previewBuilder);
 
-        string tooltip = ExtractMethodWindow(previewBuilder, "ShowPreviewShowMoreTooltip", window: 3600);
+        string tooltip = ExtractMethodWindow(previewBuilder, "ShowPreviewShowMoreTooltip", window: 5200);
         Assert.Contains("PreviewShowMoreTooltipContent.Children.Clear()", tooltip);
         Assert.Contains("Segoe MDL2 Assets", tooltip);
         Assert.Contains("\\uE72B", tooltip);
@@ -1985,7 +2012,8 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("\\uE72A", tooltip);
         Assert.Contains("Canvas.SetLeft", tooltip);
         Assert.Contains("Canvas.SetTop", tooltip);
-        Assert.Contains("pointer.X + PreviewShowMoreTooltipCursorGapDip - (bubbleWidth * PreviewShowMoreTooltipLeftShiftRatio)", tooltip);
+        Assert.Contains("GetPreviewShowMoreButtonCenterOffset(bubbleWidth)", tooltip);
+        Assert.Contains("pointer.X - showMoreCenterOffset", tooltip);
         Assert.Contains("pointer.Y + PreviewShowMoreTooltipCursorGapDip", tooltip);
         Assert.Contains("CancelPreviewSelectionAutoScrollForShowMore(\"show-more-tooltip\")", tooltip);
         Assert.Contains("EnsurePreviewShowMoreTooltipHandlers()", tooltip);

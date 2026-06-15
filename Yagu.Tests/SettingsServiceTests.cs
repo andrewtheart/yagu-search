@@ -301,6 +301,80 @@ public class SettingsServiceNewFieldTests
     }
 
     [Fact]
+    public void Defaults_PreviewEditorTextColor_IsAutoEmpty()
+    {
+        var settings = new AppSettings();
+
+        Assert.Equal(string.Empty, AppSettings.DefaultPreviewEditorTextColor);
+        Assert.Equal(string.Empty, settings.PreviewEditorTextColor);
+    }
+
+    [Fact]
+    public void RoundTrip_PreviewEditorTextColor_Override()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-editor-text-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var svc = new SettingsService(tmp);
+            var settings = new AppSettings { PreviewEditorTextColor = "#FF112233" };
+            svc.Save(settings);
+
+            var loaded = svc.Load();
+
+            Assert.Equal("#FF112233", loaded.PreviewEditorTextColor);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
+    public void Load_EmptyPreviewEditorTextColor_StaysAuto()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-editor-text-empty-" + Guid.NewGuid() + ".json");
+        try
+        {
+            File.WriteAllText(tmp, """{"PreviewEditorTextColor":""}""");
+            var svc = new SettingsService(tmp);
+
+            var loaded = svc.Load();
+
+            Assert.Equal(string.Empty, loaded.PreviewEditorTextColor);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
+    public void Load_InvalidPreviewEditorTextColor_FallsBackToAuto()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-editor-text-invalid-" + Guid.NewGuid() + ".json");
+        try
+        {
+            File.WriteAllText(tmp, """{"PreviewEditorTextColor":"not-a-color"}""");
+            var svc = new SettingsService(tmp);
+
+            var loaded = svc.Load();
+
+            Assert.Equal(string.Empty, loaded.PreviewEditorTextColor);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
+    public void Load_PreviewEditorTextColor_NormalizesShorthandHex()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-editor-text-normalize-" + Guid.NewGuid() + ".json");
+        try
+        {
+            File.WriteAllText(tmp, """{"PreviewEditorTextColor":"123456"}""");
+            var svc = new SettingsService(tmp);
+
+            var loaded = svc.Load();
+
+            Assert.Equal("#FF123456", loaded.PreviewEditorTextColor);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
     public void Load_ResultListMatchHighlightColor_NormalizesWithoutUiDependency()
     {
         var tmp = Path.Combine(Path.GetTempPath(), "qg-result-highlight-" + Guid.NewGuid() + ".json");

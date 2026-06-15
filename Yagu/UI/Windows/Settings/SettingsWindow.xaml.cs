@@ -1338,6 +1338,55 @@ public sealed partial class SettingsWindow : Window
             _fontContrastStatusRefreshers.Add,
             showContrastStatus ? GetPreviewContentContrastStatus : null);
 
+    // Built-in editor body-text color. Unlike other preview colors this supports an "Auto" mode (empty
+    // PreviewEditorTextColor) because the editor renders on a theme-colored card, so a single fixed color would
+    // be unreadable in one theme. The checkbox is the sole writer of the Auto/override decision and the color row
+    // only writes to the view model while the override is enabled, so Cancel/restore reconciles in any order.
+    private void AddEditorTextColorSetting(StackPanel parent)
+    {
+        var overrideCheckBox = new CheckBox
+        {
+            Content = "Override editor text color (otherwise follows the light/dark theme)",
+            IsChecked = !string.IsNullOrWhiteSpace(_viewModel.PreviewEditorTextColor),
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        parent.Children.Add(overrideCheckBox);
+
+        var colorPanel = new StackPanel();
+        string initialHex = string.IsNullOrWhiteSpace(_viewModel.PreviewEditorTextColor)
+            ? "#FFFFFFFF"
+            : _viewModel.PreviewEditorTextColor;
+
+        LazyColorSettingHandle handle = AddColorSetting(
+            colorPanel,
+            "Editor text:",
+            "Color of body text in the built-in editor. Turn off the override to follow the light/dark theme automatically.",
+            initialHex,
+            Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF),
+            value =>
+            {
+                if (overrideCheckBox.IsChecked == true)
+                    _viewModel.PreviewEditorTextColor = value;
+            },
+            afterChange: null,
+            contrastThemeProvider: ResolveFontContrastTheme,
+            registerContrastStatusRefresher: _fontContrastStatusRefreshers.Add);
+        parent.Children.Add(colorPanel);
+
+        colorPanel.Visibility = overrideCheckBox.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+
+        overrideCheckBox.Checked += (_, _) =>
+        {
+            colorPanel.Visibility = Visibility.Visible;
+            _viewModel.PreviewEditorTextColor = ColorStringHelper.ToHex(handle.GetColor());
+        };
+        overrideCheckBox.Unchecked += (_, _) =>
+        {
+            colorPanel.Visibility = Visibility.Collapsed;
+            _viewModel.PreviewEditorTextColor = string.Empty;
+        };
+    }
+
     private readonly record struct ContrastStatus(double Ratio, string Label);
 
     private static ContrastStatus GetThemeSampleContrastStatus(Windows.UI.Color color, FontContrastTheme theme)
@@ -1805,8 +1854,8 @@ public sealed partial class SettingsWindow : Window
 
     private void AddResultTempDriveSetting(StackPanel parent)
     {
+        // GetLaunchDriveRoot() is cheap (no disk readiness/free-space probing), so it is safe to run inline.
         string? launchDrive = ResultStoreTempLocationService.GetLaunchDriveRoot();
-        var options = ResultStoreTempLocationService.GetWritableDriveOptions(launchDrive);
 
         parent.Children.Add(NextSearchLabel("Search result temp-file drive:"));
         parent.Children.Add(new TextBlock
@@ -1817,66 +1866,113 @@ public sealed partial class SettingsWindow : Window
             TextWrapping = TextWrapping.Wrap,
         });
 
-        if (options.Count == 0)
-        {
-            parent.Children.Add(new TextBlock
-            {
-                Text = "No writable drive with at least 50 GB free is currently available. Yagu will use the Windows temp folder until an eligible drive is selected.",
-                FontSize = 11,
-                Opacity = 0.7,
-                TextWrapping = TextWrapping.Wrap,
-            });
-            return;
-        }
-
         var picker = new ComboBox
         {
             MinWidth = 340,
             MaxWidth = 520,
             HorizontalAlignment = HorizontalAlignment.Left,
+            IsEnabled = false,
         };
-
-        ResultStoreTempDriveOption? selectedOption = ResultStoreTempLocationService.ChoosePreferredOption(
-            options,
-            _viewModel.SearchResultTempDirectory,
-            launchDrive);
-
-        for (int i = 0; i < options.Count; i++)
-        {
-            picker.Items.Add(new ComboBoxItem
-            {
-                Content = options[i].DisplayName,
-                Tag = options[i],
-            });
-
-            if (Equals(options[i], selectedOption))
-                picker.SelectedIndex = i;
-        }
-
-        void ApplySelectedDrive()
-        {
-            if (picker.SelectedItem is ComboBoxItem item && item.Tag is ResultStoreTempDriveOption option)
-            {
-                _viewModel.SearchResultTempDirectory = option.TempDirectory;
-                _viewModel.HasChosenSearchResultTempDirectory = true;
-            }
-        }
-
-        picker.SelectionChanged += (_, _) => ApplySelectedDrive();
-
-        if (picker.SelectedIndex < 0 && picker.Items.Count > 0)
-            picker.SelectedIndex = 0;
-
-        ApplySelectedDrive();
-
+        picker.Items.Add(new ComboBoxItem { Content = "Detecting eligible drives\u2026" });
+        picker.SelectedIndex = 0;
         parent.Children.Add(picker);
-        parent.Children.Add(new TextBlock
+
+        var status = new TextBlock
         {
             Text = "Temp files will be written under the selected drive's Temp\\Yagu folder starting with the next search.",
             FontSize = 11,
             Opacity = 0.6,
             TextWrapping = TextWrapping.Wrap,
-        });
+        };
+        parent.Children.Add(status);
+
+        // Enumerating writable drives probes drive readiness, free space, and write access (creating a probe
+        // file per eligible drive). That synchronous disk I/O blocked the Settings build and made the window
+        // open extremely slowly, so it now runs off the UI thread and populates the picker when complete.
+        QueueResultTempDriveLoad(picker, status, launchDrive);
+    }
+
+    private void QueueResultTempDriveLoad(ComboBox picker, TextBlock status, string? launchDrive)
+    {
+        _ = Task.Run(() => ResultStoreTempLocationService.GetWritableDriveOptions(launchDrive))
+            .ContinueWith(task =>
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    IReadOnlyList<ResultStoreTempDriveOption> options = task.IsCompletedSuccessfully
+                        ? task.Result
+                        : Array.Empty<ResultStoreTempDriveOption>();
+                    PopulateResultTempDriveOptions(picker, status, options, launchDrive);
+                });
+            });
+    }
+
+    private void PopulateResultTempDriveOptions(
+        ComboBox picker,
+        TextBlock status,
+        IReadOnlyList<ResultStoreTempDriveOption> options,
+        string? launchDrive)
+    {
+        bool wasDirtyTrackingEnabled = _settingDirtyTrackingEnabled;
+        _settingDirtyTrackingEnabled = false;
+
+        try
+        {
+            picker.Items.Clear();
+
+            if (options.Count == 0)
+            {
+                picker.IsEnabled = false;
+                picker.Items.Add(new ComboBoxItem { Content = "No eligible drive (50 GB free, writable) found" });
+                picker.SelectedIndex = 0;
+                status.Text = "No writable drive with at least 50 GB free is currently available. Yagu will use the Windows temp folder until an eligible drive is selected.";
+                if (TryGetSettingValue(picker, out var emptyValue))
+                    _cleanSettingValues[picker] = emptyValue;
+                return;
+            }
+
+            ResultStoreTempDriveOption? selectedOption = ResultStoreTempLocationService.ChoosePreferredOption(
+                options,
+                _viewModel.SearchResultTempDirectory,
+                launchDrive);
+
+            for (int i = 0; i < options.Count; i++)
+            {
+                picker.Items.Add(new ComboBoxItem
+                {
+                    Content = options[i].DisplayName,
+                    Tag = options[i],
+                });
+
+                if (Equals(options[i], selectedOption))
+                    picker.SelectedIndex = i;
+            }
+
+            if (picker.SelectedIndex < 0 && picker.Items.Count > 0)
+                picker.SelectedIndex = 0;
+
+            picker.IsEnabled = true;
+            picker.SelectionChanged += (_, _) => ApplyResultTempDriveSelection(picker);
+            ApplyResultTempDriveSelection(picker);
+
+            status.Text = "Temp files will be written under the selected drive's Temp\\Yagu folder starting with the next search.";
+
+            if (TryGetSettingValue(picker, out var pickerValue))
+                _cleanSettingValues[picker] = pickerValue;
+        }
+        finally
+        {
+            _settingDirtyTrackingEnabled = wasDirtyTrackingEnabled;
+        }
+    }
+
+    private void ApplyResultTempDriveSelection(ComboBox picker)
+    {
+        if (picker.SelectedItem is ComboBoxItem item && item.Tag is ResultStoreTempDriveOption option)
+        {
+            _viewModel.SearchResultTempDirectory = option.TempDirectory;
+            _viewModel.HasChosenSearchResultTempDirectory = true;
+        }
     }
 
     private void AddTerminalEmulationSetting(StackPanel parent)
@@ -2677,6 +2773,8 @@ public sealed partial class SettingsWindow : Window
                 Windows.UI.Color.FromArgb(0xFF, 0x9C, 0xDC, 0xFE),
                 value => _viewModel.PreviewEditorGutterColor = value,
                 showContrastStatus: true);
+
+            AddEditorTextColorSetting(editorAppearanceGroup);
         }
 
         // ── Editor ──

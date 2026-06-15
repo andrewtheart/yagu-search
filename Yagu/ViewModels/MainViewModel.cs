@@ -138,6 +138,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         PreviewEditorGutterColor = ColorStringHelper.Normalize(
             _settings.PreviewEditorGutterColor,
             Windows.UI.Color.FromArgb(0xFF, 0x3A, 0x8F, 0xD6));
+        // Empty string is the "Auto" sentinel (follow the app/system theme); only normalize explicit overrides.
+        PreviewEditorTextColor = string.IsNullOrWhiteSpace(_settings.PreviewEditorTextColor)
+            ? string.Empty
+            : ColorStringHelper.Normalize(
+                _settings.PreviewEditorTextColor,
+                Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF));
         PreviewMatchTextColor = ColorStringHelper.Normalize(
             _settings.PreviewMatchTextColor,
             Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00));
@@ -479,6 +485,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial string PreviewGutterContextColor { get; set; } = AppSettings.DefaultPreviewGutterContextColor;
     [ObservableProperty] public partial string PreviewGutterMatchColor { get; set; } = AppSettings.DefaultPreviewGutterMatchColor;
     [ObservableProperty] public partial string PreviewEditorGutterColor { get; set; } = AppSettings.DefaultPreviewEditorGutterColor;
+    // Empty string = "Auto" (follow the app/system theme); a non-empty ARGB hex is an explicit override.
+    [ObservableProperty] public partial string PreviewEditorTextColor { get; set; } = AppSettings.DefaultPreviewEditorTextColor;
     [ObservableProperty] public partial string PreviewMatchTextColor { get; set; } = AppSettings.DefaultPreviewMatchTextColor;
     [ObservableProperty] public partial string PreviewOverlayColor { get; set; } = AppSettings.DefaultPreviewOverlayColor;
     [ObservableProperty] public partial string PreviewMatchLineColor { get; set; } = AppSettings.DefaultPreviewMatchLineColor;
@@ -2489,6 +2497,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.PreviewEditorGutterColor = ColorStringHelper.Normalize(
             PreviewEditorGutterColor,
             Windows.UI.Color.FromArgb(0xFF, 0x3A, 0x8F, 0xD6));
+        // Preserve the empty "Auto" sentinel; only normalize an explicit override to canonical ARGB hex.
+        _settings.PreviewEditorTextColor = string.IsNullOrWhiteSpace(PreviewEditorTextColor)
+            ? string.Empty
+            : ColorStringHelper.Normalize(
+                PreviewEditorTextColor,
+                Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF));
         _settings.PreviewMatchTextColor = ColorStringHelper.Normalize(
             PreviewMatchTextColor,
             Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xD7, 0x00));

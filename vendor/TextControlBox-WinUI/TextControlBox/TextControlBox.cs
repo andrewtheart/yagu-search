@@ -809,6 +809,15 @@ public partial class TextControlBox : UserControl
     }
 
     /// <summary>
+    /// Gets or sets the color of the editor body text.
+    /// </summary>
+    public Windows.UI.Color TextColor
+    {
+        get => coreTextBox.TextColor;
+        set => coreTextBox.TextColor = value;
+    }
+
+    /// <summary>
     /// Gets or sets a value indicating whether line numbers should be displayed in the textbox.
     /// </summary>
     public bool ShowLineNumbers
