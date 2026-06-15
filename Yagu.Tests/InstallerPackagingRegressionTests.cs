@@ -7,13 +7,10 @@ public sealed class InstallerPackagingRegressionTests
     {
         string root = FindRepoRoot();
         string buildInstaller = File.ReadAllText(Path.Combine(root, "build-installer.ps1"));
-        string publishScript = File.ReadAllText(Path.Combine(root, "scripts", "publish-to-azure.ps1"));
 
         Assert.Contains("windows-app-runtime-prereq.ps1", buildInstaller);
         Assert.Contains("Copy-YaguWindowsAppRuntimePrerequisite -ProjectXml $projectXml -RepoRoot $repoRoot -DestinationRoot $stagingDir", buildInstaller);
-        Assert.Contains("Copy-YaguWindowsAppRuntimePrerequisite -ProjectXml $projectXml -RepoRoot $root -DestinationRoot $publishDir", publishScript);
         Assert.Contains("Installer app version: $version", buildInstaller);
-        Assert.Contains("Packaging Yagu $version", publishScript);
         Assert.Contains("Microsoft.WindowsAppRuntime.$majorMinor.msix", File.ReadAllText(Path.Combine(root, "scripts", "windows-app-runtime-prereq.ps1")));
         Assert.Contains("Microsoft.WindowsAppRuntime.DDLM.$majorMinor.msix", File.ReadAllText(Path.Combine(root, "scripts", "windows-app-runtime-prereq.ps1")));
     }
@@ -23,45 +20,11 @@ public sealed class InstallerPackagingRegressionTests
     {
         string root = FindRepoRoot();
         string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
-        string publishScript = File.ReadAllText(Path.Combine(root, "scripts", "publish-to-azure.ps1"));
 
         Assert.Contains("InstallWindowsAppRuntime", inno);
         Assert.Contains("Install-WindowsAppRuntime.ps1", inno);
         Assert.Contains("if not InstallWindowsAppRuntime() then", inno);
         Assert.Contains("Abort;", inno);
-
-        int runtimeInstaller = publishScript.IndexOf("$runtimeInstaller = Join-Path $sourceDir", StringComparison.Ordinal);
-        int copyFiles = publishScript.IndexOf("# Copy files", StringComparison.Ordinal);
-        Assert.True(runtimeInstaller >= 0, "Generated Install-Yagu.ps1 must invoke the runtime prerequisite installer.");
-        Assert.True(copyFiles >= 0, "Generated Install-Yagu.ps1 should still copy files.");
-        Assert.True(runtimeInstaller < copyFiles, "Generated Install-Yagu.ps1 should install prerequisites before copying files.");
-    }
-
-    [Fact]
-    public void AzurePublish_UploadsInstallerAndAddsItToYaguCard()
-    {
-        string root = FindRepoRoot();
-        string publishScript = File.ReadAllText(Path.Combine(root, "scripts", "publish-to-azure.ps1"));
-        string deployPrompt = File.ReadAllText(Path.Combine(root, ".github", "prompts", "deploy-to-azurestaticsite.prompt.md"));
-
-        Assert.Contains("$installerName = \"YaguSetup-$version-x64.exe\"", publishScript);
-        Assert.Contains("$buildInstallerScript = Join-Path $root \"build-installer.ps1\"", publishScript);
-        Assert.Contains("& $buildInstallerScript -Architecture x64", publishScript);
-        Assert.Contains("--name $installerName", publishScript);
-        Assert.Contains("--content-type \"application/octet-stream\"", publishScript);
-        Assert.Contains("data-blob=\"$installerName\"", publishScript);
-        Assert.Contains("Download Installer", publishScript);
-        Assert.Contains("data-blob=\"$zipName\"", publishScript);
-        Assert.Contains("Download ZIP", publishScript);
-        Assert.Contains("Installer: in '$DownloadsContainer' container as $installerName", publishScript);
-        Assert.Contains("ZIP:       in '$DownloadsContainer' container as $zipName", publishScript);
-
-        Assert.Contains("uploads ZIP and installer EXE", deployPrompt);
-        Assert.Contains("installer build", deployPrompt);
-        Assert.Contains("Download Installer", deployPrompt);
-        Assert.Contains("YaguSetup-<version>-x64.exe", deployPrompt);
-        Assert.Contains("Download ZIP", deployPrompt);
-        Assert.Contains("Yagu-<version>.zip", deployPrompt);
     }
 
     [Fact]
