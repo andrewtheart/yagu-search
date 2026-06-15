@@ -302,7 +302,9 @@ public sealed partial class MainWindow
         for (int i = currentContinuationRows; i < targetContinuationRows; i++)
         {
             gutterParagraph.Inlines.Add(new LineBreak());
-            gutterParagraph.Inlines.Add(new Run { Text = "       │ ", Foreground = s_gutterSepBrush });
+            // Blank gutter spacer for the wrapped row; the separator line itself is the
+            // gutter column border (see AddPreviewSection), so no pipe glyph is needed.
+            gutterParagraph.Inlines.Add(new Run { Text = "       ", Foreground = s_gutterSepBrush });
         }
     }
 
@@ -312,7 +314,7 @@ public sealed partial class MainWindow
         if (_sectionGutterBlocks.TryGetValue(section, out var gb))
         {
             var spacer = new Paragraph { Margin = margin };
-            spacer.Inlines.Add(new Run { Text = "       │ ", Foreground = s_gutterSepBrush });
+            spacer.Inlines.Add(new Run { Text = "       ", Foreground = s_gutterSepBrush });
             gb.Blocks.Add(spacer);
         }
     }
@@ -330,7 +332,6 @@ public sealed partial class MainWindow
             var gutterGapRun = new Run { Text = "  gap " };
             gutterGapRun.Foreground = new SolidColorBrush(Microsoft.UI.Colors.DimGray);
             gutterGap.Inlines.Add(gutterGapRun);
-            gutterGap.Inlines.Add(new Run { Text = "│ ", Foreground = s_gutterSepBrush });
             gb.Blocks.Add(gutterGap);
 
             var contentSpacer = new Paragraph();
@@ -745,7 +746,7 @@ public sealed partial class MainWindow
                 if (_sectionGutterBlocks.TryGetValue(section, out var gb))
                 {
                     var gutterSep = new Paragraph { Margin = new Thickness(0, 8, 0, 4) };
-                    gutterSep.Inlines.Add(new Run { Text = "       │ ", Foreground = s_gutterSepBrush });
+                    gutterSep.Inlines.Add(new Run { Text = "       ", Foreground = s_gutterSepBrush });
                     gb.Blocks.Add(gutterSep);
                 }
             }
@@ -1660,6 +1661,7 @@ public sealed partial class MainWindow
 
         var content = new Border
         {
+            Padding = new Thickness(8, 0, 0, 0),
             Child = block,
         };
         block.AddHandler(UIElement.PointerPressedEvent,
@@ -1711,7 +1713,12 @@ public sealed partial class MainWindow
 
         var gutterBorder = new Border
         {
-            Padding = new Thickness(8, 0, 0, 0),
+            // Right border draws the continuous gutter separator line. It reuses
+            // s_gutterSepBrush (the "Preview gutter text" color) so the line stays
+            // user-configurable and updates live alongside the gutter numbers.
+            Padding = new Thickness(8, 0, 8, 0),
+            BorderThickness = new Thickness(0, 0, 1, 0),
+            BorderBrush = s_gutterSepBrush,
             Child = gutterBlock,
         };
         Grid.SetColumn(gutterBorder, 0);
@@ -3415,6 +3422,31 @@ public sealed partial class MainWindow
         }
     }
 
+    // Formats the gutter line-number token so the digits sit centered within the gutter
+    // column as a whole. The column's visual field is the one-cell match/context indicator
+    // ("│"/" "/"↳") PLUS this fixed-width run, so the centering biases one cell left to
+    // absorb that leading indicator cell — otherwise the number lands half a cell right of
+    // the box center (centered only in the space to the right of the indicator). The run
+    // width stays fixed so the gutter column edge — and the drawn separator line — stays
+    // vertically straight regardless of how many digits a line number has.
+    private static string FormatGutterNumber(int lineNum, bool continuation)
+    {
+        const int runWidth = 6;        // emitted run width; keeps the column edge straight
+        const int indicatorCells = 1;  // leading indicator cell sits to the left of this run
+        string token = lineNum.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (continuation)
+            token += "+";
+        if (token.Length >= runWidth)
+            return token;
+        int totalPad = (runWidth + indicatorCells) - token.Length;
+        int leftCells = totalPad / 2;                                  // total left padding incl. indicator cell
+        int leftSpaces = System.Math.Max(0, leftCells - indicatorCells); // spaces before the number
+        int rightSpaces = runWidth - token.Length - leftSpaces;       // remainder fills the fixed run width
+        if (rightSpaces < 0)
+            rightSpaces = 0;
+        return new string(' ', leftSpaces) + token + new string(' ', rightSpaces);
+    }
+
     private Paragraph MakePreviewParagraph(string line, int lineNum, bool isMatchLine, SearchResult r, Regex? rx, bool truncate = true, bool continuationGutter = false, RichTextBlock? gutterBlock = null, PreviewTruncatedLineState? truncationState = null, HashSet<int>? matchOrdinalsToColor = null)
     {
         line ??= string.Empty;
@@ -3432,23 +3464,25 @@ public sealed partial class MainWindow
         var indicator = new Run { Text = continuationGutter ? "↳" : (isMatchLine ? "│" : " ") };
         indicator.Foreground = continuationGutter ? s_contextGutterBrush : (isMatchLine ? s_matchAccentBrush : s_contextTextBrush);
 
-        var gutterRun = new Run { Text = continuationGutter ? $"{lineNum,5}+" : $"{lineNum,5} " };
+        var gutterRun = new Run { Text = FormatGutterNumber(lineNum, continuationGutter) };
         gutterRun.Foreground = continuationGutter ? s_contextGutterBrush : (isMatchLine ? s_matchGutterBrush : s_contextGutterBrush);
-        var gutterSep = new Run { Text = "│ " };
-        gutterSep.Foreground = s_gutterSepBrush;
 
         if (gutterBlock is not null)
         {
-            // Emit gutter to the separate gutter block.
+            // Emit gutter to the separate gutter block. The continuous separator line is
+            // drawn as the gutter column's right border (see AddPreviewSection), so no pipe
+            // glyph is emitted here — a pipe plus the border would render as a doubled line.
             var gutterPara = new Paragraph();
             gutterPara.Inlines.Add(indicator);
             gutterPara.Inlines.Add(gutterRun);
-            gutterPara.Inlines.Add(gutterSep);
             gutterBlock.Blocks.Add(gutterPara);
         }
         else
         {
-            // Inline gutter (legacy path for PreviewBlock single-file view).
+            // Inline gutter (legacy path for PreviewBlock single-file view). This block has
+            // no forced line height, so the box-drawing pipe tiles into a continuous
+            // separator on its own — keep the glyph here.
+            var gutterSep = new Run { Text = "│ ", Foreground = s_gutterSepBrush };
             para.Inlines.Add(indicator);
             para.Inlines.Add(gutterRun);
             para.Inlines.Add(gutterSep);

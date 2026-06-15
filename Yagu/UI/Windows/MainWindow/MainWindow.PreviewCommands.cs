@@ -2155,7 +2155,7 @@ public sealed partial class MainWindow
 
         if (!hasInlineGutter) return -1;
 
-        // Inline gutter layout: [indicator][gutterRun ("{lineNum,5} " or "      ")][gutterSep]
+        // Inline gutter layout: [indicator][gutterRun (box-centered line number, e.g. " 43   ")][gutterSep]
         int idx = 0;
         foreach (var inline in para.Inlines)
         {

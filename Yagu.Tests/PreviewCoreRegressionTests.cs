@@ -2132,7 +2132,7 @@ public sealed class PreviewCoreRegressionTests
 
         string helper = ExtractMethodWindow(MainWindowSource, "SetGutterWrappedContinuationRows", window: 2200);
         Assert.Contains("new LineBreak()", helper);
-        Assert.Contains("Text = \"       │ \"", helper);
+        Assert.Contains("Text = \"       \"", helper);
         Assert.Contains("Foreground = s_gutterSepBrush", helper);
         // Idempotency must be derived from the rows actually present (LineBreak count),
         // not a side table keyed on object identity, otherwise a moved/re-synced gutter
