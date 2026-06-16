@@ -56,7 +56,7 @@ $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() |
     Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
                    $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
 
-function Await-WinRT([object]$WinRtTask, [Type]$ResultType) {
+function Wait-WinRTResult([object]$WinRtTask, [Type]$ResultType) {
     $asTask = $script:asTaskGeneric.MakeGenericMethod($ResultType)
     $netTask = $asTask.Invoke($null, @($WinRtTask))
     $netTask.Wait(-1) | Out-Null
@@ -68,7 +68,7 @@ $asTaskAction = ([System.WindowsRuntimeSystemExtensions].GetMethods() |
     Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
                    $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncAction' })[0]
 
-function Await-Action([object]$WinRtTask) {
+function Wait-WinRTAction([object]$WinRtTask) {
     $netTask = $script:asTaskAction.Invoke($null, @($WinRtTask))
     $netTask.Wait(-1) | Out-Null
 }
@@ -81,8 +81,23 @@ if (-not $ocrEngine) {
 }
 Write-Host "Windows OCR engine ready (language: $($ocrEngine.RecognizerLanguage.DisplayName))"
 
-# Get all screenshots sorted by time index
-$screenshots = Get-ChildItem $ScreenshotDir -Filter "taskmgr-*.png" -ErrorAction Stop | Sort-Object {
+# Get screenshots from the latest capture batch sorted by time index.
+$allScreenshots = Get-ChildItem $ScreenshotDir -Filter "taskmgr-*.png" -ErrorAction Stop
+
+if ($allScreenshots.Count -gt 0) {
+    $groups = $allScreenshots | Group-Object {
+        if ($_.BaseName -match '^taskmgr-(\d{8}-\d{6})-t\d+s$') { $Matches[1] } else { 'ungrouped' }
+    }
+    $latestGroup = $groups | Where-Object { $_.Name -ne 'ungrouped' } | Sort-Object Name | Select-Object -Last 1
+    if ($latestGroup) {
+        if ($groups.Count -gt 1) {
+            Write-Host "Multiple screenshot batches found; processing latest batch: $($latestGroup.Name) ($($latestGroup.Count) screenshots)"
+        }
+        $allScreenshots = $latestGroup.Group
+    }
+}
+
+$screenshots = $allScreenshots | Sort-Object {
     if ($_.BaseName -match 't(\d+)s$') { [int]$Matches[1] } else { 0 }
 }
 
@@ -96,6 +111,128 @@ Write-Host "Processing $($screenshots.Count) screenshots with Windows OCR..."
 $results = @()
 $results += "Time_s`tDisk_MBps`tMemory_MB`tCPU_Pct`tRaw_Line"
 
+function Convert-OcrNumber {
+    param(
+        [string]$Text,
+        [switch]$TaskManagerDiskValue
+    )
+    if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
+    $value = $Text -replace '[^0-9\.,]', ''
+
+    # Task Manager's Disk column displays one decimal place for MB/s values.
+    # Windows OCR often drops the decimal point in that narrow highlighted cell:
+    #   222.2 -> 2222, 403.0 -> 4030, 1,551.1 -> 15511.
+    if ($TaskManagerDiskValue -and $value -match '^\d{2,}$' -and $value -notmatch '[\.,]') {
+        $value = $value.Insert($value.Length - 1, '.')
+    }
+
+    if ($value -match ',\d{3}\.') {
+        $value = $value -replace ',', ''
+    } elseif ($value -match ',' -and $value -notmatch '\.') {
+        $value = $value -replace ',', '.'
+    }
+    return $value
+}
+
+function Get-NearestNumberLeft {
+    param(
+        [object[]]$Words,
+        [double]$X,
+        [double]$MinX = 0
+    )
+    $Words |
+        Where-Object { $_.X -lt $X -and $_.X -ge $MinX -and $_.Text -match '^\d[\d\.,]*$' } |
+        Sort-Object @{ Expression = { [math]::Abs($_.X - $X) } } |
+        Select-Object -First 1
+}
+
+function Extract-TaskManagerRowSpatial {
+    param([object]$OcrResult)
+
+    $words = @()
+    foreach ($ocrLine in $OcrResult.Lines) {
+        foreach ($word in $ocrLine.Words) {
+            $rect = $word.BoundingRect
+            $words += [pscustomobject]@{
+                Text = [string]$word.Text
+                X = [double]$rect.X
+                Y = [double]$rect.Y
+                W = [double]$rect.Width
+                H = [double]$rect.Height
+                Cx = [double]($rect.X + ($rect.Width / 2.0))
+                Cy = [double]($rect.Y + ($rect.Height / 2.0))
+            }
+        }
+    }
+    if ($words.Count -eq 0) { return $null }
+
+    $diskHeader = $words | Where-Object { $_.Text -match '^(?i)Disk$' } | Sort-Object Y,X | Select-Object -First 1
+    $memoryHeader = $words | Where-Object { $_.Text -match '^(?i)Memory$' } | Sort-Object Y,X | Select-Object -First 1
+    $cpuHeader = $words | Where-Object { $_.Text -match '^(?i)CPU$' } | Sort-Object Y,X | Select-Object -First 1
+    $commandHeader = $words | Where-Object { $_.Text -match '^(?i)Command$' } | Sort-Object Y,X | Select-Object -First 1
+
+    if (-not $diskHeader -or -not $memoryHeader) { return $null }
+
+    $headerY = [math]::Max($diskHeader.Y, $memoryHeader.Y)
+    $cpuX = if ($cpuHeader) { $cpuHeader.Cx } else { $memoryHeader.Cx - 80 }
+    $memoryX = $memoryHeader.Cx
+    $diskX = $diskHeader.Cx
+    $commandX = if ($commandHeader) { $commandHeader.X } else { $diskX + 110 }
+
+    # OCR commonly reads the process name as "Vagu" and MB/s as "M8/s" in dark-mode screenshots.
+    $yaguCandidate = $words |
+        Where-Object {
+            $_.Text -match '^(?i)[vy]agu$' -and
+            $_.Y -gt $headerY -and
+            $_.X -lt ($cpuX - 60)
+        } |
+        Sort-Object Y,X |
+        Select-Object -First 1
+
+    if (-not $yaguCandidate) { return $null }
+
+    $rowY = $yaguCandidate.Cy
+    $rowWords = $words |
+        Where-Object { [math]::Abs($_.Cy - $rowY) -le 18 } |
+        Sort-Object X
+
+    $diskUnit = $rowWords |
+        Where-Object {
+            $_.Text -match '^(?i)M[B8]/s$|^(?i)MB/s$' -and
+            $_.X -gt ($memoryX + 20) -and
+            $_.X -lt $commandX
+        } |
+        Sort-Object X |
+        Select-Object -First 1
+
+    $diskWord = $null
+    if ($diskUnit) {
+        $diskWord = Get-NearestNumberLeft -Words $rowWords -X $diskUnit.X -MinX ($memoryX + 20)
+    } else {
+        $diskWord = $rowWords |
+            Where-Object { $_.Text -match '^\d[\d\.,]*$' -and $_.X -gt ($memoryX + 20) -and $_.X -lt $commandX } |
+            Sort-Object @{ Expression = { [math]::Abs($_.Cx - $diskX) } } |
+            Select-Object -First 1
+    }
+
+    $memoryWord = $rowWords |
+        Where-Object { $_.Text -match '^\d[\d\.,]*$' -and $_.X -gt ($cpuX + 20) -and $_.X -lt ($diskX - 20) } |
+        Sort-Object @{ Expression = { [math]::Abs($_.Cx - $memoryX) } } |
+        Select-Object -First 1
+
+    $cpuWord = $rowWords |
+        Where-Object { $_.Text -match '^\d[\d\.,]*%$' -and $_.X -gt ($cpuX - 60) -and $_.X -lt ($memoryX - 20) } |
+        Sort-Object @{ Expression = { [math]::Abs($_.Cx - $cpuX) } } |
+        Select-Object -First 1
+
+    [pscustomobject]@{
+        DiskMBps = Convert-OcrNumber $diskWord.Text -TaskManagerDiskValue
+        MemoryMB = Convert-OcrNumber $memoryWord.Text
+        CpuPct = Convert-OcrNumber $cpuWord.Text
+        RawLine = ($rowWords | ForEach-Object { $_.Text }) -join ' '
+    }
+}
+
 foreach ($img in $screenshots) {
     # Extract time index from filename
     $timeSec = 0
@@ -105,13 +242,13 @@ foreach ($img in $screenshots) {
 
     try {
         # Open the image via WinRT StorageFile → BitmapDecoder → SoftwareBitmap
-        $file = Await-WinRT ([Windows.Storage.StorageFile]::GetFileFromPathAsync($img.FullName)) ([Windows.Storage.StorageFile])
-        $stream = Await-WinRT ($file.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
-        $decoder = Await-WinRT ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
-        $bitmap = Await-WinRT ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+        $file = Wait-WinRTResult ([Windows.Storage.StorageFile]::GetFileFromPathAsync($img.FullName)) ([Windows.Storage.StorageFile])
+        $stream = Wait-WinRTResult ($file.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
+        $decoder = Wait-WinRTResult ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+        $bitmap = Wait-WinRTResult ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
 
         # Run OCR on full image
-        $ocrResult = Await-WinRT ($ocrEngine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+        $ocrResult = Wait-WinRTResult ($ocrEngine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
 
         $bitmap.Dispose()
         $stream.Dispose()
@@ -126,7 +263,8 @@ foreach ($img in $screenshots) {
         continue
     }
 
-    # Parse: find lines containing "Yagu" and extract numeric values
+    # Parse: find the Task Manager row spatially first. Windows OCR often splits
+    # dark-mode table rows by column and may read "Yagu" as "Vagu" and "MB/s" as "M8/s".
     # Windows OCR returns lines separated by newlines. The Task Manager row for Yagu
     # will contain something like: "Yagu 20.6% 645.3 MB 757.6 MB/s ..."
     $diskMBps = ""
@@ -134,47 +272,57 @@ foreach ($img in $screenshots) {
     $cpuPct = ""
     $rawLine = ""
 
-    $lines = $fullText -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
-
-    # Strategy 1: Find line(s) with "Yagu" text
-    $yaguLines = $lines | Where-Object { $_ -match '\bYagu\b' }
-
-    if ($yaguLines) {
-        # Combine Yagu lines (OCR might split across lines)
-        $dataLine = ($yaguLines -join ' ')
-    } else {
-        # Strategy 2: Windows OCR may split by spatial regions. Look for the line
-        # with MB/s that also has a percentage (the process data row)
-        $dataLine = $lines | Where-Object { $_ -match 'MB/s' -and $_ -match '\d+[\.,]?\d*\s*%' } | Select-Object -First 1
-        if (-not $dataLine) {
-            # Strategy 3: Just find any line with MB/s
-            $dataLine = $lines | Where-Object { $_ -match 'MB/s' } | Select-Object -First 1
-        }
+    $spatial = Extract-TaskManagerRowSpatial -OcrResult $ocrResult
+    if ($spatial -and $spatial.DiskMBps) {
+        $diskMBps = $spatial.DiskMBps
+        $memMB = $spatial.MemoryMB
+        $cpuPct = $spatial.CpuPct
+        $rawLine = $spatial.RawLine -replace '\s+', ' '
     }
 
-    if ($dataLine) {
-        # Extract Disk MB/s value
-        if ($dataLine -match '(\d+[\.,]\d+)\s*MB/s') {
-            $diskMBps = $Matches[1] -replace ',', '.'
-        } elseif ($dataLine -match '(\d+)\s*MB/s') {
-            $diskMBps = $Matches[1]
+    $lines = $fullText -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
+
+    if (-not $diskMBps) {
+        # Strategy 1: Find line(s) with "Yagu" text
+        $yaguLines = $lines | Where-Object { $_ -match '\b[Vy]agu\b' }
+
+        if ($yaguLines) {
+            # Combine Yagu lines (OCR might split across lines)
+            $dataLine = ($yaguLines -join ' ')
+        } else {
+            # Strategy 2: Windows OCR may split by spatial regions. Look for the line
+            # with MB/s that also has a percentage (the process data row)
+            $dataLine = $lines | Where-Object { $_ -match 'M[B8]/s|MB/s' -and $_ -match '\d+[\.,]?\d*\s*%' } | Select-Object -First 1
+            if (-not $dataLine) {
+                # Strategy 3: Just find any line with MB/s
+                $dataLine = $lines | Where-Object { $_ -match 'M[B8]/s|MB/s' } | Select-Object -First 1
+            }
         }
 
-        # Extract Memory (number followed by MB but not MB/s)
-        if ($dataLine -match '(\d{2,}[\.,]\d+)\s*MB(?!\s*/s)') {
-            $memMB = $Matches[1] -replace ',', '.'
-        }
+        if ($dataLine) {
+            # Extract Disk MB/s value
+            if ($dataLine -match '(\d+[\.,]\d+)\s*M[B8]/s') {
+                $diskMBps = $Matches[1] -replace ',', '.'
+            } elseif ($dataLine -match '(\d+)\s*M[B8]/s') {
+                $diskMBps = Convert-OcrNumber $Matches[1] -TaskManagerDiskValue
+            }
 
-        # Extract CPU % (first percentage value, typically like "20.6%")
-        if ($dataLine -match '(\d+[\.,]\d+)\s*%') {
-            $cpuPct = $Matches[1] -replace ',', '.'
-        } elseif ($dataLine -match '(\d+)\s*%') {
-            $cpuPct = $Matches[1]
-        }
+            # Extract Memory (number followed by MB but not MB/s)
+            if ($dataLine -match '(\d{2,}[\.,]\d+)\s*MB(?!\s*/s)') {
+                $memMB = $Matches[1] -replace ',', '.'
+            }
 
-        $rawLine = $dataLine -replace '\s+', ' '
-    } else {
-        $rawLine = "[Yagu row not found in OCR text]"
+            # Extract CPU % (first percentage value, typically like "20.6%")
+            if ($dataLine -match '(\d+[\.,]\d+)\s*%') {
+                $cpuPct = $Matches[1] -replace ',', '.'
+            } elseif ($dataLine -match '(\d+)\s*%') {
+                $cpuPct = $Matches[1]
+            }
+
+            $rawLine = $dataLine -replace '\s+', ' '
+        } else {
+            $rawLine = "[Yagu row not found in OCR text]"
+        }
     }
 
     $results += "$timeSec`t$diskMBps`t$memMB`t$cpuPct`t$rawLine"
@@ -199,18 +347,21 @@ if ($dataLines.Count -gt 0) {
         $min = ($diskValues | Measure-Object -Minimum).Minimum
         $above600 = ($diskValues | Where-Object { $_ -ge 600 }).Count
         $above1000 = ($diskValues | Where-Object { $_ -ge 1000 }).Count
+        $above1500 = ($diskValues | Where-Object { $_ -ge 1500 }).Count
         $pct1000 = [math]::Round($above1000/$diskValues.Count*100)
+        $pct1500 = [math]::Round($above1500/$diskValues.Count*100)
         Write-Host "`n=== Disk Throughput Summary ==="
         Write-Host "  Samples with data: $($diskValues.Count) / $($screenshots.Count)"
         Write-Host "  Average: $([math]::Round($avg, 1)) MB/s"
         Write-Host "  Max:     $([math]::Round($max, 1)) MB/s"
         Write-Host "  Min:     $([math]::Round($min, 1)) MB/s"
         Write-Host "  >= 600 MB/s:  $above600 / $($diskValues.Count) ($([math]::Round($above600/$diskValues.Count*100))%)"
-        Write-Host "  >= 1000 MB/s: $above1000 / $($diskValues.Count) ($pct1000%)  [TARGET: >= 70%]"
-        if ($pct1000 -ge 70) {
-            Write-Host "  PASS: >= 1000 MB/s threshold met ($pct1000% >= 70%)" -ForegroundColor Green
+        Write-Host "  >= 1000 MB/s: $above1000 / $($diskValues.Count) ($pct1000%)"
+        Write-Host "  >= 1500 MB/s: $above1500 / $($diskValues.Count) ($pct1500%)  [TARGET: >= 70%]"
+        if ($pct1500 -ge 70) {
+            Write-Host "  PASS: >= 1500 MB/s threshold met ($pct1500% >= 70%)" -ForegroundColor Green
         } else {
-            Write-Host "  FAIL: >= 1000 MB/s threshold NOT met ($pct1000% < 70%)" -ForegroundColor Yellow
+            Write-Host "  FAIL: >= 1500 MB/s threshold NOT met ($pct1500% < 70%)" -ForegroundColor Yellow
         }
     }
 } else {

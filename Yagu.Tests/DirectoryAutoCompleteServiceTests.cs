@@ -459,4 +459,13 @@ public class DirectoryAutoCompleteServiceTests : IDisposable
         var result = DirectoryAutoCompleteService.EnumerateDirectories(@"C:\System Volume Information\", "");
         Assert.Empty(result);
     }
+
+    [Fact]
+    public void DefaultConstructor_DoesNotThrow()
+    {
+        // Exercises the parameterless ctor which calls FileLister.FindEsExe()
+        var service = new DirectoryAutoCompleteService();
+        // IsEverythingAvailable depends on whether es.exe is installed
+        Assert.IsType<bool>(service.IsEverythingAvailable);
+    }
 }

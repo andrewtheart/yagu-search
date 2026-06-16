@@ -368,6 +368,26 @@ public sealed class BatchObservableCollectionTests
         Assert.True(changingRaised);
         Assert.Equal(1, countAtChanging); // Still had old count when Changing fired
     }
+
+    [Fact]
+    public void SetItem_RaisesCollectionChanging()
+    {
+        var c = new BatchObservableCollection<string> { "a", "b", "c" };
+        bool changingRaised = false;
+        c.CollectionChanging += (_, _) => changingRaised = true;
+        c[1] = "replaced";
+        Assert.True(changingRaised);
+        Assert.Equal("replaced", c[1]);
+    }
+
+    [Fact]
+    public void SetItem_UpdatesItemAtIndex()
+    {
+        var c = new BatchObservableCollection<int> { 10, 20, 30 };
+        c[0] = 99;
+        Assert.Equal(99, c[0]);
+        Assert.Equal(3, c.Count);
+    }
 }
 
 public sealed class FileGroupShowMoreBranchTests

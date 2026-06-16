@@ -32,7 +32,7 @@
 
 ## Test Run Rules
 
-- **Always ask before running tests:** When the user asks to run tests, ask whether they want the **iterative** version (`--filter "Category!=Slow"`, ~22 seconds, skips benchmarks and UI tests) or the **full** version (all 2028 tests, ~14 minutes including performance benchmarks).
+- **Always ask before running tests:** When the user asks to run tests, ask whether they want the **iterative** version (`--filter "Category!=Slow"`, ~22 seconds, skips benchmarks and UI tests) or the **full** version (all 2028 tests, ~14 minutes including performance benchmarks). If you decude to run tests on your own, pick the iterative version.
 - **Do NOT kill test runs prematurely.** The `Yagu.Tests` suite includes performance, ETW, and large-corpus benchmarks that can legitimately take **5–15+ minutes** to finish. A long-running `dotnet test` is almost always still working, not hung.
 - When a `dotnet test` invocation appears stalled, **poll terminal output or tail the log file** (e.g. `TestResults\dotnet-test-stream.log`) instead of killing the terminal. Only kill if there is concrete evidence of a hang (no new output for several minutes, no CPU activity from the `dotnet`/`testhost` processes, and no progress in the log).
 - Prefer streaming output to a file with `Tee-Object` so progress is visible while the run continues, rather than buffering through `Select-Object -Last N` (which only emits after the pipeline completes).

@@ -559,6 +559,26 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial int ConsoleLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] public partial int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
     [ObservableProperty] public partial int ParallelismIndex { get; set; } = 4; // 0 = safe cap, 1 = 1 thread, 2 = half cores, 3 = 2x cores, 4 = all cores
+
+    /// <summary>
+    /// Session-only parallelism override applied when the search target is detected on a rotational
+    /// HDD. When non-null it takes precedence over <see cref="ParallelismIndex"/> for the actual
+    /// search, but is never written back to <see cref="ParallelismIndex"/> nor persisted to settings.
+    /// It is cleared when the user explicitly changes the parallelism setting, and lost on restart.
+    /// </summary>
+    private int? _sessionParallelismOverrideIndex;
+
+    /// <summary>
+    /// Applies a session-only parallelism override (e.g. limiting to 1 thread on an HDD). This does
+    /// NOT modify the persisted <see cref="ParallelismIndex"/> setting; it only affects searches in
+    /// the current session until the app restarts or the user changes parallelism in Settings.
+    /// </summary>
+    public void SetSessionParallelismOverride(int index) => _sessionParallelismOverrideIndex = index;
+
+    // When the user (or settings load) explicitly changes the persisted parallelism index, drop any
+    // session-only HDD override so the user's choice takes effect.
+    partial void OnParallelismIndexChanged(int value) => _sessionParallelismOverrideIndex = null;
+
     [ObservableProperty] public partial int LineTruncationLength { get; set; } = 500;
     [ObservableProperty] public partial int MaxRecentItems { get; set; } = 20;
     [ObservableProperty] public partial bool GlobalHotkeyEnabled { get; set; }
@@ -1438,7 +1458,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 SkipExtensions = effectiveSkipExtensions,
                 SearchInsideArchives = SearchInsideArchives,
                 ArchiveExtensions = ParseDottedExtensionSet(ArchiveExtensions),
-                MaxDegreeOfParallelism = ResolveParallelism(ParallelismIndex),
+                MaxDegreeOfParallelism = ResolveParallelism(_sessionParallelismOverrideIndex ?? ParallelismIndex),
                 MaxProcessMemoryBytes = MemoryLimitMB > 0 ? (long)MemoryLimitMB * 1024 * 1024 : 0,
                 MemoryPressurePercent = MemoryPressurePercent,
                 SdkChannelBufferSize = SdkChannelBufferSize,

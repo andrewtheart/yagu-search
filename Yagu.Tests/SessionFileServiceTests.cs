@@ -615,4 +615,19 @@ public class SessionFileServiceTests
         await Assert.ThrowsAsync<InvalidDataException>(() =>
             SessionFileService.ReadAsync(ms, _ => { }, _ => Task.CompletedTask));
     }
+
+    [Fact]
+    public void SessionHeader_SavedUtc_ReturnsExpectedValue()
+    {
+        var now = DateTime.UtcNow;
+        var header = new SessionFileService.SessionHeader(
+            SchemaVersion: "1.0",
+            SavedUtc: now,
+            Query: "test",
+            SearchRoot: @"C:\",
+            Stats: new SessionFileService.SessionStats(DateTime.UtcNow, TimeSpan.FromSeconds(1), 100, 50000, 5),
+            ResultCount: 5);
+
+        Assert.Equal(now, header.SavedUtc);
+    }
 }

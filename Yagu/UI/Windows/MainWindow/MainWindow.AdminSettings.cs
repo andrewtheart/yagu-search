@@ -102,8 +102,10 @@ public sealed partial class MainWindow
         if (string.IsNullOrWhiteSpace(ViewModel.Directory)) return true;
         if (!Helpers.DiskTypeDetector.IsHardDisk(ViewModel.Directory)) return true;
 
-        // Force parallelism to 1 (sequential)
-        ViewModel.ParallelismIndex = 1;
+        // Force parallelism to 1 (sequential) for this session only. This is a temporary override
+        // that affects searches in the current session but is NOT written back to the persisted
+        // ParallelismIndex setting, so the user's saved preference is preserved across restarts.
+        ViewModel.SetSessionParallelismOverride(1);
 
         // Only warn once per disk per session; subsequent searches on the same disk
         // still limit parallelism but skip the dialog until the app is restarted.

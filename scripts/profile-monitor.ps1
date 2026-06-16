@@ -32,23 +32,43 @@ if (-not $YaguPid) {
 Write-Host "Yagu PID: $YaguPid"
 
 # ── 1. Set up Task Manager with Yagu filter (MAIN THREAD) ─────────────
-# Always kill and relaunch Task Manager fresh — stale instances have broken UIA COM proxies
-$tmProc = Get-Process -Name Taskmgr -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($tmProc) {
-    Stop-Process -Id $tmProc.Id -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
+# Always kill and relaunch Task Manager fresh — stale instances have broken UIA COM proxies.
+# Task Manager is single-instance (mutex). After a force-kill the mutex can linger briefly,
+# causing a freshly launched taskmgr.exe to see the "existing" instance and exit immediately.
+# Kill ALL instances, wait for full reap, then retry launch/detect until a windowed process appears.
+Get-Process -Name Taskmgr -ErrorAction SilentlyContinue | ForEach-Object {
+    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
 }
-Start-Process taskmgr.exe
-Start-Sleep -Seconds 5
-$tmProc = Get-Process -Name Taskmgr -ErrorAction SilentlyContinue | Select-Object -First 1
-
-# Wait for Task Manager's WinUI to fully render (UI Automation tree needs time)
-$tmWait = 0
-while (-not $tmProc.MainWindowHandle -or $tmProc.MainWindowHandle -eq [IntPtr]::Zero) {
+# Wait until no taskmgr remains (mutex released on full process reap)
+$reapWait = 0
+while ((Get-Process -Name Taskmgr -ErrorAction SilentlyContinue) -and $reapWait -lt 20) {
     Start-Sleep -Milliseconds 500
-    $tmProc = Get-Process -Id $tmProc.Id -ErrorAction SilentlyContinue
-    $tmWait++
-    if ($tmWait -gt 20) { break }
+    $reapWait++
+}
+Start-Sleep -Seconds 2
+
+$tmProc = $null
+for ($tmLaunch = 1; $tmLaunch -le 5 -and -not $tmProc; $tmLaunch++) {
+    Start-Process taskmgr.exe
+    # Wait up to 10s for the process to appear with a rendered main window
+    $tmWait = 0
+    while ($tmWait -lt 20) {
+        Start-Sleep -Milliseconds 500
+        $candidate = Get-Process -Name Taskmgr -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($candidate -and $candidate.MainWindowHandle -and $candidate.MainWindowHandle -ne [IntPtr]::Zero) {
+            $tmProc = $candidate
+            break
+        }
+        $tmWait++
+    }
+    if (-not $tmProc) {
+        Write-Host "Task Manager launch attempt $tmLaunch did not produce a windowed process; retrying..."
+        Start-Sleep -Seconds 2
+    }
+}
+if (-not $tmProc) {
+    Write-Error "Failed to launch Task Manager with a visible window after 5 attempts."
+    exit 1
 }
 Start-Sleep -Seconds 3
 Write-Host "Task Manager PID: $($tmProc.Id)"
@@ -65,13 +85,82 @@ public class TmAutomate {
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab);
     [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+    [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint uCode, uint uMapType);
+    [DllImport("user32.dll")] static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
     [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
     [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+    [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)] struct INPUT { public int type; public InputUnion u; }
+    [StructLayout(LayoutKind.Explicit)] struct InputUnion { [FieldOffset(0)] public MOUSEINPUT mi; [FieldOffset(0)] public KEYBDINPUT ki; }
+    [StructLayout(LayoutKind.Sequential)] struct MOUSEINPUT { public int dx, dy; public uint mouseData, dwFlags, time; public IntPtr dwExtraInfo; }
+    [StructLayout(LayoutKind.Sequential)] struct KEYBDINPUT { public ushort wVk, wScan; public uint dwFlags, time; public IntPtr dwExtraInfo; }
+    const uint KEYEVENTF_KEYUP = 0x0002;
+    const uint KEYEVENTF_SCANCODE = 0x0008;
+
+    static uint SendKey(ushort vk, bool up) {
+        ushort scan = (ushort)MapVirtualKey(vk, 0);
+        INPUT[] input = new INPUT[1];
+        input[0].type = 1;
+        input[0].u.ki.wVk = vk;
+        input[0].u.ki.wScan = scan;
+        input[0].u.ki.dwFlags = KEYEVENTF_SCANCODE | (up ? KEYEVENTF_KEYUP : 0);
+        return SendInput(1, input, Marshal.SizeOf(typeof(INPUT)));
+    }
+
+    public static void ReleaseModifiers() {
+        ushort[] keys = new ushort[] { 0x10, 0x11, 0x12, 0x5B, 0x5C };
+        foreach (ushort key in keys) {
+            SendKey(key, true);
+            Thread.Sleep(20);
+        }
+    }
+
+    public static void TapKey(ushort vk) {
+        SendKey(vk, false);
+        Thread.Sleep(45);
+        SendKey(vk, true);
+        Thread.Sleep(90);
+    }
+
+    public static void CtrlTap(ushort vk) {
+        SendKey(0x11, false);
+        Thread.Sleep(80);
+        TapKey(vk);
+        Thread.Sleep(60);
+        SendKey(0x11, true);
+        Thread.Sleep(250);
+    }
+
+    public static void TypeText(string text) {
+        foreach (char ch in text) {
+            char upper = Char.ToUpperInvariant(ch);
+            if (upper >= 'A' && upper <= 'Z') {
+                TapKey((ushort)upper);
+            } else if (upper >= '0' && upper <= '9') {
+                TapKey((ushort)upper);
+            }
+        }
+    }
+
+    public static RECT GetRect(IntPtr hWnd) {
+        RECT rect;
+        GetWindowRect(hWnd, out rect);
+        return rect;
+    }
 
     public static bool ForceForeground(IntPtr hWnd) {
-        ShowWindow(hWnd, 9);
+        if (IsIconic(hWnd)) {
+            ShowWindow(hWnd, 9);
+        } else {
+            ShowWindow(hWnd, 5);
+        }
         Thread.Sleep(100);
         SwitchToThisWindow(hWnd, true);
         Thread.Sleep(200);
@@ -105,66 +194,106 @@ Write-Host "Task Manager foreground: $fgOk"
 # Maximize Task Manager so the Disk MB/s column is wide enough for reliable OCR
 # (SW_MAXIMIZE = 3). Without this, Task Manager often opens narrow and OCR can
 # misread the disk/CPU/memory columns or capture VS Code text underneath.
-[void][TmAutomate]::ShowWindow($tmProc.MainWindowHandle, 3)
-Start-Sleep -Milliseconds 300
-Write-Host "Task Manager maximized."
+function Get-TmRectSummary {
+    param([IntPtr]$Handle)
+    $rect = [TmAutomate]::GetRect($Handle)
+    $width = $rect.Right - $rect.Left
+    $height = $rect.Bottom - $rect.Top
+    "L=$($rect.Left) T=$($rect.Top) R=$($rect.Right) B=$($rect.Bottom) W=$width H=$height"
+}
 
-# Use UI Automation to click search box and set filter text (with retries for WinUI load delay)
-$searchBox = $null
-$maxRetries = 5
-for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
-    try {
-        $ae = [System.Windows.Automation.AutomationElement]::FromHandle($tmProc.MainWindowHandle)
-        $nameCond = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::NameProperty, "Search box")
-        $searchBox = $ae.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $nameCond)
-        if ($searchBox) {
-            Write-Host "Found search box on attempt $attempt"
-            break
+function Maximize-TaskManagerWindow {
+    param([IntPtr]$Handle)
+
+    $screen = [System.Windows.Forms.Screen]::FromHandle($Handle)
+    $work = $screen.WorkingArea
+
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        [void][TmAutomate]::ForceForeground($Handle)
+        [void][TmAutomate]::ShowWindow($Handle, 3)
+        Start-Sleep -Milliseconds 600
+
+        $rect = [TmAutomate]::GetRect($Handle)
+        $width = $rect.Right - $rect.Left
+        $height = $rect.Bottom - $rect.Top
+        $nearWorkArea = ([math]::Abs($width - $work.Width) -le 80) -and ([math]::Abs($height - $work.Height) -le 80)
+        if ($nearWorkArea) {
+            Write-Host "Task Manager maximized via ShowWindow: $(Get-TmRectSummary -Handle $Handle)"
+            return
         }
-        Write-Host "Search box not found on attempt $attempt, retrying..."
-    } catch {
-        Write-Host "UI Automation attempt $attempt failed: $($_.Exception.Message)"
+
+        Write-Host "Maximize attempt $attempt left Task Manager restored-size: $(Get-TmRectSummary -Handle $Handle); work area W=$($work.Width) H=$($work.Height)"
     }
-    Start-Sleep -Seconds 2
+
+    [void][TmAutomate]::MoveWindow($Handle, $work.Left, $work.Top, $work.Width, $work.Height, $true)
+    Start-Sleep -Milliseconds 600
+    Write-Host "Task Manager resized to work area fallback: $(Get-TmRectSummary -Handle $Handle)"
 }
 
-if ($searchBox) {
-    try {
-        $invokePattern = $searchBox.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-        $invokePattern.Invoke()
-    } catch {
-        Write-Host "InvokePattern failed, clicking via SetFocus..."
+Maximize-TaskManagerWindow -Handle $tmProc.MainWindowHandle
+
+# ── Set the Task Manager "Yagu" filter, robustly ─────────────────────
+# On current Windows builds Task Manager's WinUI islands may expose only
+# DesktopWindowXamlSource/InputSite stubs to UIA, with no Edit/ValuePattern.
+# Ctrl+F still focuses the search box. Text injection into elevated Task Manager
+# requires this script to run elevated too; otherwise Windows UIPI blocks it.
+$filterText = "Yagu"
+
+function Set-TmFilterViaKeyboard {
+    param(
+        [IntPtr]$Handle,
+        [string]$Text
+    )
+
+    [void][TmAutomate]::ForceForeground($Handle)
+    Start-Sleep -Milliseconds 300
+    [TmAutomate]::ReleaseModifiers()
+
+    # Ctrl+F focuses the Task Manager search box without moving the mouse.
+    [TmAutomate]::CtrlTap(0x46) # F
+    Start-Sleep -Milliseconds 700
+
+    # Replace any existing filter text.
+    [TmAutomate]::ReleaseModifiers()
+    [TmAutomate]::CtrlTap(0x41) # A
+    [TmAutomate]::TapKey(0x08)  # Backspace
+    Start-Sleep -Milliseconds 150
+
+    [TmAutomate]::TypeText($Text)
+    Start-Sleep -Milliseconds 700
+    [TmAutomate]::ReleaseModifiers()
+}
+
+# Fast path for older Task Manager builds that still expose the search box to UIA.
+$filterApplied = $false
+try {
+    $root = [System.Windows.Automation.AutomationElement]::FromHandle($tmProc.MainWindowHandle)
+    $nameCond = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::NameProperty, 'Search box')
+    $searchBox = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $nameCond)
+    if ($searchBox) {
         try { $searchBox.SetFocus() } catch { }
-    }
-    Start-Sleep -Milliseconds 800
-
-    try {
-        $vp = $searchBox.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-        $vp.SetValue("Yagu")
-        Write-Host "Search filter set to 'Yagu' via ValuePattern"
-    } catch {
-        Write-Host "ValuePattern failed, trying SendKeys fallback..."
-        [System.Windows.Forms.SendKeys]::SendWait("^a")
         Start-Sleep -Milliseconds 200
-        [System.Windows.Forms.SendKeys]::SendWait("Yagu")
-        Write-Host "Search filter set via SendKeys fallback"
+        $vp = $searchBox.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+        $vp.SetValue('')
+        Start-Sleep -Milliseconds 100
+        $vp.SetValue($filterText)
+        Start-Sleep -Milliseconds 500
+        Write-Host "Search filter set to '$filterText' via UIA ValuePattern."
+        $filterApplied = $true
     }
-    Start-Sleep -Milliseconds 500
-} else {
-    # WinUI 3 controls sometimes don't expose to UIA. Fall back to keyboard:
-    # Ctrl+F focuses the filter box in modern Task Manager.
-    Write-Host "UIA search box not found; using Ctrl+F keyboard fallback..."
-    [void][TmAutomate]::ForceForeground($tmProc.MainWindowHandle)
-    Start-Sleep -Milliseconds 500
-    [System.Windows.Forms.SendKeys]::SendWait("^f")
-    Start-Sleep -Milliseconds 800
-    [System.Windows.Forms.SendKeys]::SendWait("^a")
-    Start-Sleep -Milliseconds 200
-    [System.Windows.Forms.SendKeys]::SendWait("Yagu")
-    Start-Sleep -Milliseconds 800
-    Write-Host "Search filter set via Ctrl+F + SendKeys"
+} catch {
+    Write-Host "UIA search filter path unavailable: $($_.Exception.Message)"
 }
+
+if (-not $filterApplied) {
+    Write-Host "UIA search Edit unavailable; using Ctrl+F keyboard filter path."
+    Set-TmFilterViaKeyboard -Handle $tmProc.MainWindowHandle -Text $filterText
+    $filterApplied = $true
+    Write-Host "Search filter typed via Ctrl+F keyboard path."
+}
+
+Start-Sleep -Milliseconds 500
 
 # ── 2. Attach VSDiagnostics sessions ──────────────────────────────────
 $VSDiag = "C:\Program Files\Microsoft Visual Studio\18\Enterprise\Team Tools\DiagnosticsHub\Collector\VSDiagnostics.exe"
@@ -176,7 +305,12 @@ if (!(Test-Path $cleanupDir)) { New-Item -ItemType Directory -Path $cleanupDir -
 1..10 | ForEach-Object {
     $outFile = "$cleanupDir\cleanup-session-$_.diagsession"
     Remove-Item $outFile -Force -ErrorAction SilentlyContinue
-    & $VSDiag stop $_ /output:"$outFile" 2>&1 | Out-Null
+    $stopArgs = @('stop', $_, "/output:$outFile")
+    try {
+        & $VSDiag @stopArgs *> $null
+    } catch {
+        # Some stale/nonexistent sessions report "unsupported state"; cleanup is best-effort.
+    }
 }
 # Also remove stale GUID session directories (VSDiag uses pattern XX97E42F-...)
 Get-ChildItem $env:TEMP -Directory -ErrorAction SilentlyContinue | Where-Object {

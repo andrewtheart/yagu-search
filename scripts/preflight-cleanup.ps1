@@ -25,8 +25,8 @@ function Remove-WithRetry {
     return -not (Test-Path -LiteralPath $Path)
 }
 
-# ── 1. Stop all VSDiagnostics sessions (1-6) ──────────────────────────
-# CRITICAL: VSDiagnostics `stop` requires /output:<path> — without it, the session
+# -- 1. Stop all VSDiagnostics sessions (1-6) --------------------------
+# CRITICAL: VSDiagnostics `stop` requires /output:<path> - without it, the session
 # stays running and subsequent `start` calls fail with "The file exists (0x80070050)".
 # Strategy: Just attempt stop on all session IDs. Non-existent sessions fail harmlessly.
 Write-Host "Stopping VSDiag sessions 1-6..."
@@ -49,7 +49,7 @@ if ($stoppedCount -eq 0) {
     Write-Host "  Stopped $stoppedCount session(s)."
 }
 
-# ── 2. Remove diagnostic temp directories ─────────────────────────────
+# -- 2. Remove diagnostic temp directories -----------------------------
 # VSDiag creates GUID-named dirs like "0197E42F-003D-4F91-A845-6404CF289E84" and ".scratch"
 # The pattern for session IDs 1-10 is: {XX}97E42F-003D-4F91-A845-6404CF289E84
 #
@@ -58,11 +58,11 @@ if ($stoppedCount -eq 0) {
 # fails to delete that lock file (the directory then partially survives, the dir
 # LWT updates but the lock file lingers). On the next `vsdiag start N`, VSDiag
 # tries to (re)create the lock file and fails with "The file exists (HRESULT
-# 0x80070050)" — which is exactly the FileIO session-3 attach failure we observed.
+# 0x80070050)" - which is exactly the FileIO session-3 attach failure we observed.
 #
 # Fix: stop VSStandardCollectorService150 BEFORE attempting deletion. The service
 # auto-restarts on the next `vsdiag start`, so this is safe. We do NOT restart the
-# service manually here (see step 7's comment about kernel ETW DACLs — that only
+# service manually here (see step 7's comment about kernel ETW DACLs - that only
 # matters after sessions are attached, not during pre-attach cleanup).
 $svc = Get-Service -Name VSStandardCollectorService150 -ErrorAction SilentlyContinue
 if ($svc -and $svc.Status -eq 'Running') {
@@ -113,7 +113,7 @@ if ($removedCount -eq 0) {
     Write-Host "  No temp directories to clean."
 }
 
-# ── 3. Aggressive disk cleanup — TestResults artifacts ─────────────────
+# -- 3. Aggressive disk cleanup - TestResults artifacts -----------------
 # Removes large extracted ETL folders, .diagsession archives, screenshots,
 # stale reports, and .analysis caches that bloat D:\ between iterations.
 $testResults = "C:\src\Yagu\TestResults"
@@ -169,7 +169,7 @@ if (Test-Path $testResults) {
 
 # ResultStore temp data (can grow to 25+ GB between runs).
 # Yagu writes `yagu-results-*.tmp` files via ResultStore. Possible locations:
-#   - C:\Temp\Yagu          (current default — see ChooseResultStoreTempDir)
+#   - C:\Temp\Yagu          (current default - see ChooseResultStoreTempDir)
 #   - $env:TEMP\Yagu        (profiling override via YAGU_RESULTSTORE_TEMP)
 #   - D:\Temp\Yagu          (legacy default)
 #   - $env:TEMP             (Path.GetTempPath() fallback if no tempDirectory passed)
@@ -214,7 +214,7 @@ if ($freedMB -gt 0) {
 }
 Write-Host "  D:\ free: $([math]::Round((Get-PSDrive D).Free/1GB, 1)) GB"
 
-# ── 4. Clear old Yagu log ─────────────────────────────────────────────
+# -- 4. Clear old Yagu log ---------------------------------------------
 $yaguLog = "$env:APPDATA\Yagu\yagu.log"
 if (Test-Path $yaguLog) {
     Remove-Item $yaguLog -Force -ErrorAction SilentlyContinue
@@ -223,7 +223,7 @@ if (Test-Path $yaguLog) {
     Write-Host "No Yagu log to clear."
 }
 
-# ── 5. Ensure Everything is running ───────────────────────────────────
+# -- 5. Ensure Everything is running -----------------------------------
 $everythingRunning = Get-Process -Name Everything -ErrorAction SilentlyContinue
 if (-not $everythingRunning) {
     Start-Process "C:\Program Files\Everything\Everything.exe" -ArgumentList "-startup"
@@ -233,7 +233,7 @@ if (-not $everythingRunning) {
     Write-Host "Everything is already running."
 }
 
-# ── 6. Kill any existing Yagu process (by PID) ────────────────────────
+# -- 6. Kill any existing Yagu process (by PID) ------------------------
 $yaguProc = Get-Process -Name Yagu -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($yaguProc) {
     Stop-Process -Id $yaguProc.Id -Force
@@ -243,7 +243,7 @@ if ($yaguProc) {
     Write-Host "No existing Yagu process."
 }
 
-# ── 7. Quick verification — just check sessions 1-3 (the ones profile-monitor uses) ──
+# -- 7. Quick verification - just check sessions 1-3 (the ones profile-monitor uses) --
 #
 # History: previously, if any session reported "Running" we restarted
 # VSStandardCollectorService150. That breaks the FileIO session (session 3) on the
@@ -254,18 +254,18 @@ if ($yaguProc) {
 # even when running elevated, because the new token isn't on the kernel session's
 # ACL. We now drop straight to `logman -ets` to terminate any stuck kernel/user
 # ETW sessions directly, without restarting the controller service.
-$anyActive = $false
-1..3 | ForEach-Object {
-    $result = & $VSDiag status $_ 2>&1 | Out-String
+$activeSessions = @()
+foreach ($sessionId in 1..3) {
+    $result = & $VSDiag status $sessionId 2>&1 | Out-String
     if ($result -match 'Running|Paused') {
-        Write-Warning "Session $_ is STILL active after cleanup!"
-        $anyActive = $true
+        Write-Warning "Session $sessionId is STILL active after cleanup!"
+        $activeSessions += $sessionId
     }
 }
-if (-not $anyActive) {
+if ($activeSessions.Count -eq 0) {
     Write-Host "`nPre-flight cleanup complete. All VSDiag sessions clear."
 } else {
-    Write-Warning "Some sessions still active — terminating ETW sessions via logman -ets..."
+    Write-Warning "Some sessions still active - terminating ETW sessions via logman -ets..."
     # logman speaks directly to the ETW kernel API (StopTrace) and bypasses the
     # collector service entirely. It can stop both user-mode and kernel-mode
     # loggers as long as the caller is elevated (which the loop requires).
