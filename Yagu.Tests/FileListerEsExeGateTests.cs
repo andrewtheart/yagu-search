@@ -3,11 +3,11 @@ using Yagu.Services;
 namespace Yagu.Tests;
 
 [Collection("FileListerBackend")]
-public sealed class ExcludedMethodTests_FileListerEsExe : IDisposable
+public sealed class FileListerEsExeGateTests : IDisposable
 {
     private readonly FileListerBackend _originalBackend;
 
-    public ExcludedMethodTests_FileListerEsExe()
+    public FileListerEsExeGateTests()
     {
         _originalBackend = FileLister.Backend;
     }
@@ -22,31 +22,33 @@ public sealed class ExcludedMethodTests_FileListerEsExe : IDisposable
     {
         // Force es.exe backend and use a mock process
         FileLister.Backend = FileListerBackend.EsExe;
+        var dir = Path.GetTempPath().TrimEnd('\\');
 
         var lister = new FileLister((path, psi) => new FakeProcess(
-            lines: new[] { @"C:\test\file1.txt", @"C:\test\file2.cs", "" },
+            lines: new[] { dir + @"\file1.txt", dir + @"\file2.cs", "" },
             exitCode: 0));
 
         var files = new List<string>();
-        await foreach (var p in lister.ListFilesAsync(@"C:\test", Array.Empty<string>(), 0, CancellationToken.None))
+        await foreach (var p in lister.ListFilesAsync(dir, Array.Empty<string>(), 0, CancellationToken.None))
             files.Add(p);
 
         Assert.Equal(2, files.Count);
-        Assert.Contains(@"C:\test\file1.txt", files);
-        Assert.Contains(@"C:\test\file2.cs", files);
+        Assert.Contains(dir + @"\file1.txt", files);
+        Assert.Contains(dir + @"\file2.cs", files);
     }
 
     [Fact]
     public async Task RunEverythingAsync_ExitCode8_SetsFallbackReason()
     {
         FileLister.Backend = FileListerBackend.EsExe;
+        var dir = Path.GetTempPath().TrimEnd('\\');
 
         var lister = new FileLister((path, psi) => new FakeProcess(
             lines: Array.Empty<string>(),
             exitCode: 8));
 
         var files = new List<string>();
-        await foreach (var p in lister.ListFilesAsync(@"C:\test", Array.Empty<string>(), 0, CancellationToken.None))
+        await foreach (var p in lister.ListFilesAsync(dir, Array.Empty<string>(), 0, CancellationToken.None))
             files.Add(p);
 
         Assert.Empty(files);
@@ -57,6 +59,7 @@ public sealed class ExcludedMethodTests_FileListerEsExe : IDisposable
     public async Task TryGetEverythingResultCount_SetsKnownTotalFiles()
     {
         FileLister.Backend = FileListerBackend.EsExe;
+        var dir = Path.GetTempPath().TrimEnd('\\');
 
         // The count process returns "42", then the main process returns lines
         int callCount = 0;
@@ -66,12 +69,12 @@ public sealed class ExcludedMethodTests_FileListerEsExe : IDisposable
             if (psi.ArgumentList.Contains("-get-result-count"))
                 return new FakeProcess(lines: new[] { "42" }, exitCode: 0);
             return new FakeProcess(
-                lines: new[] { @"C:\a.txt", @"C:\b.txt" },
+                lines: new[] { dir + @"\a.txt", dir + @"\b.txt" },
                 exitCode: 0);
         });
 
         var files = new List<string>();
-        await foreach (var p in lister.ListFilesAsync(@"C:\test", Array.Empty<string>(), 0, CancellationToken.None))
+        await foreach (var p in lister.ListFilesAsync(dir, Array.Empty<string>(), 0, CancellationToken.None))
             files.Add(p);
 
         Assert.Equal(42, lister.KnownTotalFiles);
@@ -81,11 +84,12 @@ public sealed class ExcludedMethodTests_FileListerEsExe : IDisposable
     public async Task RunEverythingAsync_ProcessStartFails_SetsFallbackReason()
     {
         FileLister.Backend = FileListerBackend.EsExe;
+        var dir = Path.GetTempPath().TrimEnd('\\');
 
         var lister = new FileLister((path, psi) => new ThrowingProcess());
 
         var files = new List<string>();
-        await foreach (var p in lister.ListFilesAsync(@"C:\test", Array.Empty<string>(), 0, CancellationToken.None))
+        await foreach (var p in lister.ListFilesAsync(dir, Array.Empty<string>(), 0, CancellationToken.None))
             files.Add(p);
 
         Assert.Empty(files);

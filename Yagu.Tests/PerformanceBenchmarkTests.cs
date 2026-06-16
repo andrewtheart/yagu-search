@@ -21,6 +21,7 @@ namespace Yagu.Tests;
 /// </summary>
 [Collection("PerformanceBenchmarks")]
 [ExcludeFromCodeCoverage]
+[Trait("Category", "Slow")]
 public sealed class PerformanceBenchmarkTests : IDisposable
 {
     private const long Megabyte = 1024L * 1024L;

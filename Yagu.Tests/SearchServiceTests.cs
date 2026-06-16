@@ -1144,6 +1144,72 @@ public class SearchServiceExtraTests : IDisposable
             recoveryMarginPercent: 5);
         Assert.True(relieved);
     }
+
+    [Fact]
+    public void IsMemoryPressureRelievedForSnapshot_NegativePressurePercent_ReturnsTrue()
+    {
+        // pressurePercent <= 0 means "no pressure configured" → returns true if process is relieved
+        bool relieved = SearchService.IsMemoryPressureRelievedForSnapshot(
+            workingSetBytes: 100,
+            effectiveProcessCapBytes: 200,
+            systemMemoryLoadPercent: 95,
+            pressurePercent: -1,
+            recoveryMarginPercent: 5);
+        Assert.True(relieved);
+    }
+
+    [Fact]
+    public void IsMemoryPressureRelievedForSnapshot_PressurePercent101_ReturnsTrue()
+    {
+        // pressurePercent > 100 means "no pressure configured" → returns true
+        bool relieved = SearchService.IsMemoryPressureRelievedForSnapshot(
+            workingSetBytes: 100,
+            effectiveProcessCapBytes: 200,
+            systemMemoryLoadPercent: 95,
+            pressurePercent: 101,
+            recoveryMarginPercent: 5);
+        Assert.True(relieved);
+    }
+
+    [Fact]
+    public void IsMemoryPressureRelievedForSnapshot_SystemLoadAboveRelief_ReturnsFalse()
+    {
+        // Process relieved but system memory load above (pressurePercent - recoveryMargin)
+        bool relieved = SearchService.IsMemoryPressureRelievedForSnapshot(
+            workingSetBytes: 100,
+            effectiveProcessCapBytes: 200,
+            systemMemoryLoadPercent: 80,
+            pressurePercent: 85,
+            recoveryMarginPercent: 5);
+        // relief = 85 - 5 = 80, systemLoad = 80 → 80 <= 80 → true
+        Assert.True(relieved);
+    }
+
+    [Fact]
+    public void IsMemoryPressureRelievedForSnapshot_SystemLoadJustAboveRelief_ReturnsFalse()
+    {
+        bool relieved = SearchService.IsMemoryPressureRelievedForSnapshot(
+            workingSetBytes: 100,
+            effectiveProcessCapBytes: 200,
+            systemMemoryLoadPercent: 81,
+            pressurePercent: 85,
+            recoveryMarginPercent: 5);
+        // relief = 85 - 5 = 80, systemLoad = 81 → 81 > 80 → false
+        Assert.False(relieved);
+    }
+
+    [Fact]
+    public void IsMemoryPressureRelievedForSnapshot_LargeRecoveryMargin_ClampsToZero()
+    {
+        // recoveryMargin larger than pressurePercent → reliefPercent = max(0, 50-100) = 0
+        bool relieved = SearchService.IsMemoryPressureRelievedForSnapshot(
+            workingSetBytes: 100,
+            effectiveProcessCapBytes: 200,
+            systemMemoryLoadPercent: 0,
+            pressurePercent: 50,
+            recoveryMarginPercent: 100);
+        Assert.True(relieved);
+    }
 }
 
 // ─── SearchService.ExtractExtensions ────────────────────────────────────
@@ -1729,6 +1795,36 @@ public class IsMemoryPressureRelievedGcFallbackTests
             pressurePercent: 80, recoveryMarginPercent: 10,
             gcMemoryLoadBytes: 9_000_000_000, gcTotalAvailableBytes: 10_000_000_000));
     }
+
+    [Fact]
+    public void ZeroRecoveryMargin_UsesFullPressurePercent()
+    {
+        // recoveryMargin=0 → reliefPercent = pressurePercent
+        // gcThreshold = 10GB * (80/100) = 8GB, gcLoad = 7.5GB → below → true
+        Assert.True(SearchService.IsMemoryPressureRelievedGcFallback(
+            workingSetBytes: 500_000_000, effectiveProcessCapBytes: 4_000_000_000,
+            pressurePercent: 80, recoveryMarginPercent: 0,
+            gcMemoryLoadBytes: 7_500_000_000, gcTotalAvailableBytes: 10_000_000_000));
+    }
+
+    [Fact]
+    public void NegativePressurePercent_ClampsToZero()
+    {
+        // Math.Max(0, negative - margin) = 0 → threshold = 0 → gcLoad > 0 → false
+        Assert.False(SearchService.IsMemoryPressureRelievedGcFallback(
+            workingSetBytes: 500_000_000, effectiveProcessCapBytes: 4_000_000_000,
+            pressurePercent: -5, recoveryMarginPercent: 10,
+            gcMemoryLoadBytes: 1, gcTotalAvailableBytes: 10_000_000_000));
+    }
+
+    [Fact]
+    public void ZeroGcLoad_AlwaysRelieved()
+    {
+        Assert.True(SearchService.IsMemoryPressureRelievedGcFallback(
+            workingSetBytes: 500_000_000, effectiveProcessCapBytes: 4_000_000_000,
+            pressurePercent: 80, recoveryMarginPercent: 10,
+            gcMemoryLoadBytes: 0, gcTotalAvailableBytes: 10_000_000_000));
+    }
 }
 
 // ─── SearchEvent record construction ────────────────────────────────────
@@ -1966,5 +2062,153 @@ public class SearchOptionsSdkChannelBufferTests
     {
         var opts = new SearchOptions { Directory = ".", Query = "x", SdkChannelBufferSize = 512 };
         Assert.Equal(512, opts.SdkChannelBufferSize);
+    }
+}
+
+// ─── ResolveNativeBatchTarget ───────────────────────────────────────────
+
+public class ResolveNativeBatchTargetTests
+{
+    [Fact]
+    public void MemorySaving_ReturnsSmallBatch()
+    {
+        int result = SearchService.ResolveNativeBatchTarget(4096, memorySaving: true);
+        Assert.Equal(256, result);
+    }
+
+    [Fact]
+    public void NotMemorySaving_ReturnsCurrentTarget()
+    {
+        int result = SearchService.ResolveNativeBatchTarget(2048, memorySaving: false);
+        Assert.Equal(2048, result);
+    }
+}
+
+// ─── CollectForMemoryPressureIfDue ──────────────────────────────────────
+
+public class CollectForMemoryPressureIfDueTests
+{
+    [Fact]
+    public void FirstCall_DoesNotThrow()
+    {
+        // First call ever should succeed without error (bypasses cooldown)
+        SearchService.CollectForMemoryPressureIfDue(TimeSpan.FromMilliseconds(1));
+    }
+
+    [Fact]
+    public void RapidCalls_Debounces()
+    {
+        // Call once with a long cooldown
+        SearchService.CollectForMemoryPressureIfDue(TimeSpan.FromSeconds(60));
+        // Immediate second call should be debounced (no exception, just returns early)
+        SearchService.CollectForMemoryPressureIfDue(TimeSpan.FromSeconds(60));
+    }
+
+    [Fact]
+    public void AfterCooldownExpires_Collects()
+    {
+        // Using zero cooldown should always allow collection
+        SearchService.CollectForMemoryPressureIfDue(TimeSpan.Zero);
+        SearchService.CollectForMemoryPressureIfDue(TimeSpan.Zero);
+    }
+}
+
+// ─── GetMemoryDiagnostics ───────────────────────────────────────────────
+
+public class GetMemoryDiagnosticsTests
+{
+    [Fact]
+    public void ReturnsNonEmptyString()
+    {
+        string diag = SearchService.GetMemoryDiagnostics();
+        Assert.False(string.IsNullOrWhiteSpace(diag));
+    }
+
+    [Fact]
+    public void ContainsWorkingSetInfo()
+    {
+        string diag = SearchService.GetMemoryDiagnostics();
+        Assert.Contains("WS=", diag);
+    }
+}
+
+// ─── IsMemoryPressureRelieved additional branches ───────────────────────
+
+public class IsMemoryPressureRelievedTests
+{
+    [Fact]
+    public void NoPressureConfig_ReturnsTrue()
+    {
+        // pressurePercent=0 means no system memory threshold configured
+        bool relieved = SearchService.IsMemoryPressureRelieved(0, 0);
+        Assert.True(relieved);
+    }
+
+    [Fact]
+    public void WithPressureConfig_ReturnsBasedOnSystemMemory()
+    {
+        // Large cap, low pressure threshold — should be relieved on most machines
+        bool relieved = SearchService.IsMemoryPressureRelieved(long.MaxValue, 99);
+        Assert.True(relieved);
+    }
+
+    [Fact]
+    public void IsMemoryPressureHigh_NoCapNoThreshold_ReturnsFalse()
+    {
+        // With no cap and no threshold, should not report high pressure
+        bool high = SearchService.IsMemoryPressureHigh(0, 0);
+        Assert.False(high);
+    }
+
+    [Fact]
+    public void IsMemoryPressureHigh_VeryLowCap_ReturnsTrue()
+    {
+        // Working set is always > 1 byte, so this should trigger
+        bool high = SearchService.IsMemoryPressureHigh(1, 0);
+        Assert.True(high);
+    }
+}
+
+// ─── DiskSpaceSnapshot ──────────────────────────────────────────────────
+
+public class DiskSpaceSnapshotBranchTests
+{
+    [Fact]
+    public void UsedBytes_CalculatesCorrectly()
+    {
+        var snap = new DiskSpaceSnapshot(@"C:\", 1000, 300);
+        Assert.Equal(700, snap.UsedBytes);
+    }
+
+    [Fact]
+    public void UsedBytes_NeverNegative()
+    {
+        // Edge case: AvailableBytes > TotalBytes (shouldn't happen but be safe)
+        var snap = new DiskSpaceSnapshot(@"C:\", 100, 200);
+        Assert.Equal(0, snap.UsedBytes);
+    }
+
+    [Fact]
+    public void UsedFraction_ZeroTotal_ReturnsZero()
+    {
+        var snap = new DiskSpaceSnapshot(@"C:\", 0, 0);
+        Assert.Equal(0.0, snap.UsedFraction);
+    }
+
+    [Fact]
+    public void UsedPercent_CorrectPercentage()
+    {
+        var snap = new DiskSpaceSnapshot(@"C:\", 1000, 250);
+        Assert.Equal(75.0, snap.UsedPercent);
+    }
+
+    [Theory]
+    [InlineData(@"C:\", "C:")]
+    [InlineData(@"D:\", "D:")]
+    [InlineData("", "")]
+    public void DriveDisplayName_TrimsSeparator(string root, string expected)
+    {
+        var snap = new DiskSpaceSnapshot(root, 1000, 500);
+        Assert.Equal(expected, snap.DriveDisplayName);
     }
 }

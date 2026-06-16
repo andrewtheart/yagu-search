@@ -466,6 +466,74 @@ public class FileGroupTests
         Assert.True(group.HasMore);
         Assert.Equal(extraCount, group.RemainingCount);
     }
+
+    [Fact]
+    public void HiddenMatchCount_PeriodicNotification_FiresAt256()
+    {
+        int oldMax = FileGroup.MaxMatchesPerGroup;
+        try
+        {
+            FileGroup.MaxMatchesPerGroup = 2;
+            var group = new FileGroup(@"D:\file.txt");
+            // Fill up to the cap
+            group.Add(MakeResult(@"D:\file.txt", 1));
+            group.Add(MakeResult(@"D:\file.txt", 2));
+
+            var propertyNames = new List<string>();
+            ((System.ComponentModel.INotifyPropertyChanged)group).PropertyChanged += (_, e) => propertyNames.Add(e.PropertyName!);
+
+            // Add 256 more to trigger the (HiddenMatchCount & 0xFF) == 0 notification
+            for (int i = 0; i < 256; i++)
+                group.Add(MakeResult(@"D:\file.txt", i + 3));
+
+            Assert.Equal(256, group.HiddenMatchCount);
+            // Should have raised HiddenMatchCount and MatchCount notifications
+            Assert.Contains(nameof(FileGroup.HiddenMatchCount), propertyNames);
+            Assert.Contains(nameof(FileGroup.MatchCount), propertyNames);
+        }
+        finally
+        {
+            FileGroup.MaxMatchesPerGroup = oldMax;
+        }
+    }
+
+    [Fact]
+    public void InsertItem_PreEvicted_Collapsed_TracksEvictedCount()
+    {
+        var group = new FileGroup(@"D:\file.txt");
+        // Group starts collapsed (_isExpanded = false by default)
+        // Add pre-evicted items
+        group.Add(SearchResult.CreatePreEvicted(@"D:\file.txt", 1, 0, 5, diskOffset: 100));
+        group.Add(SearchResult.CreatePreEvicted(@"D:\file.txt", 2, 0, 5, diskOffset: 200));
+        group.Add(SearchResult.CreatePreEvicted(@"D:\file.txt", 3, 0, 5, diskOffset: 300));
+
+        // Items collection should be empty (evicted stubs don't go into Items)
+        Assert.Equal(0, group.Count);
+        // TotalStoredCount should reflect evicted stubs
+        Assert.True(group.HasMore);
+    }
+
+    [Fact]
+    public void InsertItem_Normal_Collapsed_GoesIntoItems()
+    {
+        var group = new FileGroup(@"D:\file.txt");
+        // Group starts collapsed — normal (non-evicted) items still go into Items
+        group.Add(MakeResult(@"D:\file.txt", 1));
+        group.Add(MakeResult(@"D:\file.txt", 2));
+
+        Assert.Equal(2, group.Count);
+    }
+
+    [Fact]
+    public void InsertItem_Expanded_UsesBaseInsertItem()
+    {
+        var group = new FileGroup(@"D:\file.txt");
+        group.IsExpanded = true;
+        group.Add(MakeResult(@"D:\file.txt", 1));
+        group.Add(MakeResult(@"D:\file.txt", 2));
+
+        Assert.Equal(2, group.Count);
+    }
 }
 
 // ─── FileGroup: FormatSize branches (MB, GB) ────────────────────────────

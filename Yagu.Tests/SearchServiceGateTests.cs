@@ -2,7 +2,7 @@ using Yagu.Services;
 
 namespace Yagu.Tests;
 
-public sealed class ExcludedMethodTests_SearchService
+public sealed class SearchServiceGateTests
 {
     [Fact]
     public void CollectForMemoryPressureIfDue_DoesNotThrow()

@@ -3,7 +3,7 @@ using Yagu.Native;
 
 namespace Yagu.Tests;
 
-public sealed class ExcludedMethodTests_NativeSearcherBufferReader
+public sealed class NativeSearcherBufferReaderTests
 {
     [Fact]
     public void TryReadU32_ValidData_ReadsCorrectly()

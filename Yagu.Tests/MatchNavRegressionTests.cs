@@ -22,6 +22,7 @@ namespace Yagu.Tests;
 /// <c>YAGU_RUN_UI_REGRESSION=1</c>. Without that, the test exits early with
 /// a "skipped" message so CI runs that lack a desktop session don't fail.
 /// </summary>
+[Trait("Category", "Slow")]
 public sealed class MatchNavRegressionTests
 {
     private const int MinRedPixelsPerMatch = 100;

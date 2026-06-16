@@ -7,11 +7,11 @@ namespace Yagu.Tests;
 /// Tests for FileLister admin path logic, elevation check, SetKnownTotalFiles,
 /// FindEsExe, WaitForEverythingSdkReady, RealProcess.
 /// </summary>
-public sealed class ExcludedMethodTests_FileLister : IDisposable
+public sealed class FileListerTests : IDisposable
 {
     private readonly Func<bool>? _originalElevationOverride;
 
-    public ExcludedMethodTests_FileLister()
+    public FileListerTests()
     {
         _originalElevationOverride = FileLister.ElevationOverride;
     }

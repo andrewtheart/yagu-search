@@ -5,11 +5,11 @@ using Yagu.Services;
 
 namespace Yagu.Tests;
 
-public sealed class ExcludedMethodTests_ContentSearcher : IDisposable
+public sealed class ContentSearcherGateTests : IDisposable
 {
     private readonly string _root;
 
-    public ExcludedMethodTests_ContentSearcher()
+    public ContentSearcherGateTests()
     {
         _root = Path.Combine(Path.GetTempPath(), "yagu-cs-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_root);

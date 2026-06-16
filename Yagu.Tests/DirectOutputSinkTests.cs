@@ -142,6 +142,140 @@ public sealed class DirectOutputSinkTests
         Assert.Equal(0, sink.GetFileLength(99));
     }
 
+    [Fact]
+    public unsafe void OnMatchForFile_MultipleFiles_InsertsBlankLineBetween()
+    {
+        using var output = new MemoryStream();
+        var paths = new List<string> { @"C:\a.txt", @"C:\b.txt" };
+        int cancel = 0;
+        int filesScanned = 0;
+        using var sink = new DirectOutputSink(output, color: false, paths, maxResults: 0, currentTotalMatches: 0, (IntPtr)(&cancel), &filesScanned);
+
+        byte[] line1 = Encoding.UTF8.GetBytes("match in a");
+        byte[] line2 = Encoding.UTF8.GetBytes("match in b");
+        fixed (byte* p1 = line1)
+        fixed (byte* p2 = line2)
+        {
+            var m1 = new NativeSearcher.QgMatchView { LineNumber = 1, MatchStart = 0, SourceMatchStart = 0, MatchLen = 5, LinePtr = p1, LineLen = (nuint)line1.Length };
+            var m2 = new NativeSearcher.QgMatchView { LineNumber = 1, MatchStart = 0, SourceMatchStart = 0, MatchLen = 5, LinePtr = p2, LineLen = (nuint)line2.Length };
+
+            sink.OnMatchForFile(0, &m1);
+            sink.OnMatchForFile(1, &m2);
+        }
+
+        string text = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("C:\\a.txt", text);
+        Assert.Contains("C:\\b.txt", text);
+        Assert.Equal(2, sink.FilesWithMatches);
+        // Blank line between files
+        Assert.Contains("\n\n", text);
+    }
+
+    [Fact]
+    public unsafe void OnMatchForFile_CancelFlagSet_StopsImmediately()
+    {
+        using var output = new MemoryStream();
+        var paths = new List<string> { @"C:\a.txt" };
+        int cancel = 0;
+        int filesScanned = 0;
+        using var sink = new DirectOutputSink(output, color: false, paths, maxResults: 0, currentTotalMatches: 0, (IntPtr)(&cancel), &filesScanned);
+
+        byte[] line = Encoding.UTF8.GetBytes("first match");
+        fixed (byte* p = line)
+        {
+            var m = new NativeSearcher.QgMatchView { LineNumber = 1, MatchStart = 0, SourceMatchStart = 0, MatchLen = 5, LinePtr = p, LineLen = (nuint)line.Length };
+            sink.OnMatchForFile(0, &m);
+        }
+
+        long lenAfterFirst = output.Length;
+
+        // Truncate to trigger _stopped
+        byte[] line2 = Encoding.UTF8.GetBytes("second");
+        fixed (byte* p = line2)
+        {
+            // Manually set Truncated by reaching maxResults via constructor with maxResults=1, currentTotal=0
+        }
+
+        // Create a new sink with maxResults=1 to verify stop behavior
+        using var output2 = new MemoryStream();
+        using var sink2 = new DirectOutputSink(output2, color: false, paths, maxResults: 1, currentTotalMatches: 0, (IntPtr)(&cancel), &filesScanned);
+
+        byte[] lineA = Encoding.UTF8.GetBytes("AAA");
+        byte[] lineB = Encoding.UTF8.GetBytes("BBB");
+        fixed (byte* pA = lineA)
+        fixed (byte* pB = lineB)
+        {
+            var ma = new NativeSearcher.QgMatchView { LineNumber = 1, MatchStart = 0, SourceMatchStart = 0, MatchLen = 3, LinePtr = pA, LineLen = (nuint)lineA.Length };
+            var mb = new NativeSearcher.QgMatchView { LineNumber = 2, MatchStart = 0, SourceMatchStart = 0, MatchLen = 3, LinePtr = pB, LineLen = (nuint)lineB.Length };
+
+            int r1 = sink2.OnMatchForFile(0, &ma);
+            Assert.Equal(1, r1); // Returns 1 because maxResults reached
+            Assert.True(sink2.Truncated);
+
+            long lenBefore = output2.Length;
+            int r2 = sink2.OnMatchForFile(0, &mb);
+            Assert.Equal(1, r2);
+            Assert.Equal(lenBefore, output2.Length); // No output written after stop
+        }
+    }
+
+    [Fact]
+    public unsafe void OnMatchForFile_ContextBeforeWithSeparator_WritesDoubleDash()
+    {
+        using var output = new MemoryStream();
+        var paths = new List<string> { @"C:\a.txt" };
+        int cancel = 0;
+        int filesScanned = 0;
+        using var sink = new DirectOutputSink(output, color: false, paths, maxResults: 0, currentTotalMatches: 0, (IntPtr)(&cancel), &filesScanned);
+
+        byte[] line1 = Encoding.UTF8.GetBytes("first");
+        byte[] line2 = Encoding.UTF8.GetBytes("second");
+        byte[] ctx = PackContext("before second");
+        fixed (byte* p1 = line1)
+        fixed (byte* p2 = line2)
+        fixed (byte* pCtx = ctx)
+        {
+            // First match at line 5
+            var m1 = new NativeSearcher.QgMatchView { LineNumber = 5, MatchStart = 0, SourceMatchStart = 0, MatchLen = 5, LinePtr = p1, LineLen = (nuint)line1.Length };
+            sink.OnMatchForFile(0, &m1);
+
+            // Second match at line 20 with context-before starting at line 19
+            var m2 = new NativeSearcher.QgMatchView
+            {
+                LineNumber = 20, MatchStart = 0, SourceMatchStart = 0, MatchLen = 6,
+                LinePtr = p2, LineLen = (nuint)line2.Length,
+                CtxBeforePtr = pCtx, CtxBeforeBytes = (nuint)ctx.Length, CtxBeforeCount = 1,
+            };
+            sink.OnMatchForFile(0, &m2);
+        }
+
+        string text = Encoding.UTF8.GetString(output.ToArray());
+        // Should contain separator between non-contiguous matches
+        Assert.Contains("--\n", text);
+    }
+
+    [Fact]
+    public unsafe void OnMatchForFile_PlainNoColorMatchInvalid_WritesWholeLine()
+    {
+        using var output = new MemoryStream();
+        var paths = new List<string> { @"C:\a.txt" };
+        int cancel = 0;
+        int filesScanned = 0;
+        // Use color mode to test the matchStart >= lineLen fallback
+        using var sink = new DirectOutputSink(output, color: true, paths, maxResults: 0, currentTotalMatches: 0, (IntPtr)(&cancel), &filesScanned);
+
+        byte[] line = Encoding.UTF8.GetBytes("hello world");
+        fixed (byte* p = line)
+        {
+            // matchStart beyond line length → writes whole line without highlight
+            var m = new NativeSearcher.QgMatchView { LineNumber = 1, MatchStart = 999, SourceMatchStart = 999, MatchLen = 0, LinePtr = p, LineLen = (nuint)line.Length };
+            sink.OnMatchForFile(0, &m);
+        }
+
+        string text = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("hello world", text);
+    }
+
     private static byte[] PackContext(params string[] lines)
     {
         using var stream = new MemoryStream();
@@ -153,5 +287,186 @@ public sealed class DirectOutputSinkTests
         }
 
         return stream.ToArray();
+    }
+
+    [Fact]
+    public unsafe void OnMatchForFile_ColorMode_HighlightsMatchWithPrefixAndSuffix()
+    {
+        using var output = new MemoryStream();
+        var paths = new List<string> { @"C:\test.cs" };
+        int cancel = 0;
+        int filesScanned = 0;
+        using var sink = new DirectOutputSink(output, color: true, paths, maxResults: 0, currentTotalMatches: 0, (IntPtr)(&cancel), &filesScanned);
+
+        // "hello MATCH world" — match starts at 6, length 5
+        byte[] line = Encoding.UTF8.GetBytes("hello MATCH world");
+        fixed (byte* p = line)
+        {
+            var m = new NativeSearcher.QgMatchView
+            {
+                LineNumber = 7,
+                MatchStart = 6,
+                SourceMatchStart = 6,
+                MatchLen = 5,
+                LinePtr = p,
+                LineLen = (nuint)line.Length,
+            };
+            sink.OnMatchForFile(0, &m);
+        }
+
+        string text = Encoding.UTF8.GetString(output.ToArray());
+        // Should have: green line number, then prefix "hello ", then red "MATCH", then suffix " world"
+        Assert.Contains("\u001b[1;31mMATCH\u001b[0m", text); // red match
+        Assert.Contains("hello ", text); // prefix before match
+        Assert.Contains(" world", text); // suffix after match
+    }
+
+    [Fact]
+    public unsafe void OnMatchForFile_ColorMode_MatchAtStart_NoPrefixWritten()
+    {
+        using var output = new MemoryStream();
+        var paths = new List<string> { @"C:\test.cs" };
+        int cancel = 0;
+        int filesScanned = 0;
+        using var sink = new DirectOutputSink(output, color: true, paths, maxResults: 0, currentTotalMatches: 0, (IntPtr)(&cancel), &filesScanned);
+
+        // "MATCH suffix" — match starts at 0
+        byte[] line = Encoding.UTF8.GetBytes("MATCH suffix");
+        fixed (byte* p = line)
+        {
+            var m = new NativeSearcher.QgMatchView
+            {
+                LineNumber = 1,
+                MatchStart = 0,
+                SourceMatchStart = 0,
+                MatchLen = 5,
+                LinePtr = p,
+                LineLen = (nuint)line.Length,
+            };
+            sink.OnMatchForFile(0, &m);
+        }
+
+        string text = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("\u001b[1;31mMATCH\u001b[0m suffix", text);
+    }
+
+    [Fact]
+    public unsafe void OnMatchForFile_ColorMode_MatchAtEnd_NoSuffixWritten()
+    {
+        using var output = new MemoryStream();
+        var paths = new List<string> { @"C:\test.cs" };
+        int cancel = 0;
+        int filesScanned = 0;
+        using var sink = new DirectOutputSink(output, color: true, paths, maxResults: 0, currentTotalMatches: 0, (IntPtr)(&cancel), &filesScanned);
+
+        // "prefix MATCH" — match at end of line
+        byte[] line = Encoding.UTF8.GetBytes("prefix MATCH");
+        fixed (byte* p = line)
+        {
+            var m = new NativeSearcher.QgMatchView
+            {
+                LineNumber = 1,
+                MatchStart = 7,
+                SourceMatchStart = 7,
+                MatchLen = 5,
+                LinePtr = p,
+                LineLen = (nuint)line.Length,
+            };
+            sink.OnMatchForFile(0, &m);
+        }
+
+        string text = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("prefix \u001b[1;31mMATCH\u001b[0m", text);
+        // No trailing content after reset
+        Assert.EndsWith("\n", text);
+    }
+
+    [Fact]
+    public unsafe void OnMatchForFile_ColorMode_ContextBeforeSeparator()
+    {
+        using var output = new MemoryStream();
+        var paths = new List<string> { @"C:\test.cs" };
+        int cancel = 0;
+        int filesScanned = 0;
+        using var sink = new DirectOutputSink(output, color: true, paths, maxResults: 0, currentTotalMatches: 0, (IntPtr)(&cancel), &filesScanned);
+
+        byte[] line1 = Encoding.UTF8.GetBytes("first match");
+        byte[] line2 = Encoding.UTF8.GetBytes("second match");
+        byte[] ctx = PackContext("ctx line");
+        fixed (byte* p1 = line1)
+        fixed (byte* p2 = line2)
+        fixed (byte* pCtx = ctx)
+        {
+            // First match at line 5
+            var m1 = new NativeSearcher.QgMatchView { LineNumber = 5, MatchStart = 0, SourceMatchStart = 0, MatchLen = 5, LinePtr = p1, LineLen = (nuint)line1.Length };
+            sink.OnMatchForFile(0, &m1);
+
+            // Second match at line 50 with context at line 49 — gap from line 5 triggers separator
+            var m2 = new NativeSearcher.QgMatchView
+            {
+                LineNumber = 50, MatchStart = 0, SourceMatchStart = 0, MatchLen = 6,
+                LinePtr = p2, LineLen = (nuint)line2.Length,
+                CtxBeforePtr = pCtx, CtxBeforeBytes = (nuint)ctx.Length, CtxBeforeCount = 1,
+            };
+            sink.OnMatchForFile(0, &m2);
+        }
+
+        string text = Encoding.UTF8.GetString(output.ToArray());
+        // Should contain colorized separator
+        Assert.Contains("\u001b[1;34m--\u001b[0m\n", text);
+    }
+
+    [Fact]
+    public unsafe void OnMatchForFile_LargeFilePath_WritesViaRentedBuffer()
+    {
+        using var output = new MemoryStream();
+        // Create a path longer than 340 chars (UTF-8 maxBytes > 1024)
+        string longPath = @"C:\" + new string('X', 350) + @"\file.txt";
+        var paths = new List<string> { longPath };
+        int cancel = 0;
+        int filesScanned = 0;
+        using var sink = new DirectOutputSink(output, color: false, paths, maxResults: 0, currentTotalMatches: 0, (IntPtr)(&cancel), &filesScanned);
+
+        byte[] line = Encoding.UTF8.GetBytes("match here");
+        fixed (byte* p = line)
+        {
+            var m = new NativeSearcher.QgMatchView { LineNumber = 1, MatchStart = 0, SourceMatchStart = 0, MatchLen = 5, LinePtr = p, LineLen = (nuint)line.Length };
+            sink.OnMatchForFile(0, &m);
+        }
+
+        string text = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains(longPath, text);
+        Assert.Contains("match here", text);
+    }
+
+    [Fact]
+    public unsafe void OnMatchForFile_NonColorMode_MatchHighlighting_WritesPlainOutput()
+    {
+        using var output = new MemoryStream();
+        var paths = new List<string> { @"C:\test.cs" };
+        int cancel = 0;
+        int filesScanned = 0;
+        using var sink = new DirectOutputSink(output, color: false, paths, maxResults: 0, currentTotalMatches: 0, (IntPtr)(&cancel), &filesScanned);
+
+        // Valid match position in non-color mode — should just write "linenum:fullline"
+        byte[] line = Encoding.UTF8.GetBytes("hello MATCH world");
+        fixed (byte* p = line)
+        {
+            var m = new NativeSearcher.QgMatchView
+            {
+                LineNumber = 3,
+                MatchStart = 6,
+                SourceMatchStart = 6,
+                MatchLen = 5,
+                LinePtr = p,
+                LineLen = (nuint)line.Length,
+            };
+            sink.OnMatchForFile(0, &m);
+        }
+
+        string text = Encoding.UTF8.GetString(output.ToArray());
+        // Non-color: no ANSI codes, just "3:hello MATCH world"
+        Assert.Contains("3:hello MATCH world", text);
+        Assert.DoesNotContain("\u001b[", text);
     }
 }

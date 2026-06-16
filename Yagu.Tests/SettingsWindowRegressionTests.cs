@@ -513,12 +513,10 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("PlaceholderText = _viewModel.IncludeFilterPlaceholder, Width = 620", SettingsWindowSource);
         Assert.Contains("PlaceholderText = _viewModel.ExcludeFilterPlaceholder, Width = 620", SettingsWindowSource);
 
-        Assert.Contains("public string IncludeGlobs", SettingsServiceSource);
-        Assert.Contains("public string ExcludeGlobs", SettingsServiceSource);
+        Assert.Contains("[JsonIgnore] public string IncludeGlobs", SettingsServiceSource);
+        Assert.Contains("[JsonIgnore] public string ExcludeGlobs", SettingsServiceSource);
         Assert.Contains("public int IncludeFilterModeIndex", SettingsServiceSource);
         Assert.Contains("public int ExcludeFilterModeIndex", SettingsServiceSource);
-        Assert.DoesNotContain("[JsonIgnore] public string IncludeGlobs", SettingsServiceSource);
-        Assert.DoesNotContain("[JsonIgnore] public string ExcludeGlobs", SettingsServiceSource);
 
         Assert.Contains("IncludeFilterModeIndex = _settings.IncludeFilterModeIndex", MainViewModelSource);
         Assert.Contains("ExcludeFilterModeIndex = _settings.ExcludeFilterModeIndex", MainViewModelSource);

@@ -573,4 +573,129 @@ public sealed class DynamicGitignoreMatcherTests : IDisposable
         var matcher = new DynamicGitignoreMatcher(_root);
         Assert.True(matcher.ShouldSkipDirectory(Path.Combine(_root, "src", "generated")));
     }
+
+    // ─── ShouldSkipFile: null directory case ────────────────────────
+
+    [Fact]
+    public void ShouldSkipFile_RootPathOnly_ReturnsFalse()
+    {
+        // Path.GetDirectoryName on a root-level file like "C:\" returns null
+        var matcher = new DynamicGitignoreMatcher(_root);
+        // A file at the drive root — GetDirectoryName returns null → false
+        Assert.False(matcher.ShouldSkipFile(@"C:\"));
+    }
+
+    // ─── ShouldSkipPath: intermediate directory excluded ────────────
+
+    [Fact]
+    public void ShouldSkipPath_IntermediateGitDir_ReturnsTrue()
+    {
+        // An intermediate .git directory should cause the path to be skipped
+        CreateDir(Path.Combine(".git", "objects"));
+        CreateFile(Path.Combine(".git", "objects", "pack", "file.pack"));
+
+        var matcher = new DynamicGitignoreMatcher(_root);
+        Assert.True(matcher.ShouldSkipPath(
+            Path.Combine(_root, ".git", "objects", "pack", "file.pack")));
+    }
+
+    [Fact]
+    public void ShouldSkipPath_FileInExcludedSubdir_ReturnsTrue()
+    {
+        WriteGitignore("", "node_modules\n");
+        CreateDir(Path.Combine("node_modules", "lodash"));
+        CreateFile(Path.Combine("node_modules", "lodash", "index.js"));
+
+        var matcher = new DynamicGitignoreMatcher(_root);
+        Assert.True(matcher.ShouldSkipPath(
+            Path.Combine(_root, "node_modules", "lodash", "index.js")));
+    }
+
+    [Fact]
+    public void ShouldSkipPath_FileMatchesExtensionRule_ReturnsTrue()
+    {
+        WriteGitignore("", "*.log\n");
+        CreateFile("debug.log");
+
+        var matcher = new DynamicGitignoreMatcher(_root);
+        Assert.True(matcher.ShouldSkipPath(Path.Combine(_root, "debug.log")));
+    }
+
+    [Fact]
+    public void ShouldSkipPath_FileNotExcluded_ReturnsFalse()
+    {
+        WriteGitignore("", "*.log\n");
+        CreateFile("app.cs");
+
+        var matcher = new DynamicGitignoreMatcher(_root);
+        Assert.False(matcher.ShouldSkipPath(Path.Combine(_root, "app.cs")));
+    }
+
+    // ─── GetOrLoadRules: unreadable .gitignore ──────────────────────
+
+    [Fact]
+    public void GetOrLoadRules_LockedGitignore_DoesNotThrow()
+    {
+        var dir = Path.Combine(_root, "locked");
+        Directory.CreateDirectory(dir);
+        var gitignorePath = Path.Combine(dir, ".gitignore");
+        File.WriteAllText(gitignorePath, "*.tmp\n");
+
+        // Hold the file exclusively so it can't be read
+        using var fs = new FileStream(gitignorePath, FileMode.Open, FileAccess.Read, FileShare.None);
+
+        var matcher = new DynamicGitignoreMatcher(_root);
+        // Should not throw — falls through the catch
+        Assert.False(matcher.ShouldSkipFile(Path.Combine(dir, "test.tmp")));
+    }
+
+    // ─── MatchesAnyAncestorFolderRule: full path matching ───────────
+
+    [Fact]
+    public void MatchesAnyAncestorFolderRule_FullPathPatternExclusion()
+    {
+        // A path-relative pattern resolves to an ExcludedFullPaths entry
+        CreateDir(Path.Combine("build", "output"));
+        WriteGitignore("", "build/output\n");
+
+        var matcher = new DynamicGitignoreMatcher(_root);
+        Assert.True(matcher.ShouldSkipDirectory(Path.Combine(_root, "build", "output")));
+    }
+
+    [Fact]
+    public void MatchesAnyAncestorFolderRule_ChildOfExcludedFullPath()
+    {
+        // A subdirectory of an excluded full path should also be excluded
+        CreateDir(Path.Combine("build", "output", "logs"));
+        WriteGitignore("", "build/output\n");
+
+        var matcher = new DynamicGitignoreMatcher(_root);
+        Assert.True(matcher.ShouldSkipDirectory(Path.Combine(_root, "build", "output", "logs")));
+    }
+
+    // ─── MatchesAnyAncestorFileRule: nested gitignore ───────────────
+
+    [Fact]
+    public void MatchesAnyAncestorFileRule_NestedGitignoreExcludesFile()
+    {
+        CreateDir("subdir");
+        WriteGitignore("subdir", "*.gen\n");
+        CreateFile(Path.Combine("subdir", "output.gen"));
+
+        var matcher = new DynamicGitignoreMatcher(_root);
+        Assert.True(matcher.ShouldSkipFile(Path.Combine(_root, "subdir", "output.gen")));
+    }
+
+    [Fact]
+    public void MatchesAnyAncestorFileRule_ParentGitignore_ExcludesInChild()
+    {
+        // Root .gitignore excludes *.tmp; file is in a subdirectory
+        WriteGitignore("", "*.tmp\n");
+        CreateDir("deep");
+        CreateFile(Path.Combine("deep", "cache.tmp"));
+
+        var matcher = new DynamicGitignoreMatcher(_root);
+        Assert.True(matcher.ShouldSkipFile(Path.Combine(_root, "deep", "cache.tmp")));
+    }
 }
+

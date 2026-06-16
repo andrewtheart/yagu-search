@@ -650,3 +650,81 @@ public class LogServiceCatchBlockTests
         }
     }
 }
+
+// ─── LogService: IsInfoEnabled / IsVerboseEnabled ───────────────────────
+
+public class LogServiceLevelPropertyTests : IDisposable
+{
+    private readonly LogService _log;
+    public LogServiceLevelPropertyTests()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "yagu-loglevel-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        _log = new LogService(Path.Combine(dir, "test.log"));
+    }
+    public void Dispose() => _log.Dispose();
+
+    [Fact]
+    public void IsInfoEnabled_WhenFileLevelIsInfo_ReturnsTrue()
+    {
+        _log.FileLevel = LogLevel.Info;
+        _log.ConsoleLevel = LogLevel.None;
+        Assert.True(_log.IsInfoEnabled);
+    }
+
+    [Fact]
+    public void IsInfoEnabled_WhenConsoleLevelIsInfo_ReturnsTrue()
+    {
+        _log.FileLevel = LogLevel.None;
+        _log.ConsoleLevel = LogLevel.Info;
+        Assert.True(_log.IsInfoEnabled);
+    }
+
+    [Fact]
+    public void IsInfoEnabled_WhenBothNone_ReturnsFalse()
+    {
+        _log.FileLevel = LogLevel.None;
+        _log.ConsoleLevel = LogLevel.None;
+        Assert.False(_log.IsInfoEnabled);
+    }
+
+    [Fact]
+    public void IsInfoEnabled_WhenBothWarningOnly_ReturnsFalse()
+    {
+        _log.FileLevel = LogLevel.Warning;
+        _log.ConsoleLevel = LogLevel.Warning;
+        Assert.False(_log.IsInfoEnabled);
+    }
+
+    [Fact]
+    public void IsVerboseEnabled_WhenFileLevelIsVerbose_ReturnsTrue()
+    {
+        _log.FileLevel = LogLevel.Verbose;
+        _log.ConsoleLevel = LogLevel.None;
+        Assert.True(_log.IsVerboseEnabled);
+    }
+
+    [Fact]
+    public void IsVerboseEnabled_WhenConsoleLevelIsVerbose_ReturnsTrue()
+    {
+        _log.FileLevel = LogLevel.None;
+        _log.ConsoleLevel = LogLevel.Verbose;
+        Assert.True(_log.IsVerboseEnabled);
+    }
+
+    [Fact]
+    public void IsVerboseEnabled_WhenBothNone_ReturnsFalse()
+    {
+        _log.FileLevel = LogLevel.None;
+        _log.ConsoleLevel = LogLevel.None;
+        Assert.False(_log.IsVerboseEnabled);
+    }
+
+    [Fact]
+    public void IsVerboseEnabled_WhenBothInfo_ReturnsFalse()
+    {
+        _log.FileLevel = LogLevel.Info;
+        _log.ConsoleLevel = LogLevel.Info;
+        Assert.False(_log.IsVerboseEnabled);
+    }
+}

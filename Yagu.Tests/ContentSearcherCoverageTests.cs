@@ -398,3 +398,244 @@ public sealed class ContentSearcherExtendedCoverageTests
         finally { File.Delete(tmpFile); }
     }
 }
+
+// ─── StreamingSink unit tests ───────────────────────────────────────────────
+public sealed class StreamingSinkTests
+{
+    [Fact]
+    public unsafe void OnMatch_WritesToChannel()
+    {
+        var channel = Channel.CreateUnbounded<SearchResult>();
+        var metadata = new FileMetadata(100, DateTime.Now, DateTime.Now);
+        var sink = new ContentSearcher.StreamingSink(
+            @"C:\test\file.cs", channel.Writer, contextLines: 0, metadata, CancellationToken.None);
+
+        byte[] lineBytes = System.Text.Encoding.UTF8.GetBytes("hello world");
+        fixed (byte* linePtr = lineBytes)
+        {
+            var view = new Native.NativeSearcher.QgMatchView
+            {
+                LineNumber = 42,
+                MatchStart = 6,
+                SourceMatchStart = 6,
+                MatchLen = 5,
+                LinePtr = linePtr,
+                LineLen = (nuint)lineBytes.Length,
+                CtxBeforePtr = null,
+                CtxBeforeBytes = 0,
+                CtxBeforeCount = 0,
+                CtxAfterPtr = null,
+                CtxAfterBytes = 0,
+                CtxAfterCount = 0,
+            };
+
+            int ret = sink.OnMatch(&view);
+            Assert.Equal(0, ret); // success
+            Assert.Equal(1, sink.Emitted);
+        }
+
+        Assert.True(channel.Reader.TryRead(out var result));
+        Assert.Equal("hello world", result.MatchLine);
+        Assert.Equal(42, result.LineNumber);
+        Assert.Equal(6, result.MatchStartColumn);
+        Assert.Equal(5, result.MatchLength);
+    }
+
+    [Fact]
+    public unsafe void OnMatch_Cancelled_ReturnsOne()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var channel = Channel.CreateUnbounded<SearchResult>();
+        var metadata = new FileMetadata(100, DateTime.Now, DateTime.Now);
+        var sink = new ContentSearcher.StreamingSink(
+            @"C:\test\file.cs", channel.Writer, contextLines: 0, metadata, cts.Token);
+
+        byte[] lineBytes = System.Text.Encoding.UTF8.GetBytes("test");
+        fixed (byte* linePtr = lineBytes)
+        {
+            var view = new Native.NativeSearcher.QgMatchView
+            {
+                LineNumber = 1,
+                MatchStart = 0,
+                SourceMatchStart = 0,
+                MatchLen = 4,
+                LinePtr = linePtr,
+                LineLen = (nuint)lineBytes.Length,
+                CtxBeforePtr = null,
+                CtxBeforeBytes = 0,
+                CtxBeforeCount = 0,
+                CtxAfterPtr = null,
+                CtxAfterBytes = 0,
+                CtxAfterCount = 0,
+            };
+
+            int ret = sink.OnMatch(&view);
+            Assert.Equal(1, ret); // cancelled
+            Assert.Equal(0, sink.Emitted);
+        }
+    }
+
+    [Fact]
+    public unsafe void OnMatch_ChannelCompleted_ReturnsOne()
+    {
+        var channel = Channel.CreateBounded<SearchResult>(1);
+        var metadata = new FileMetadata(100, DateTime.Now, DateTime.Now);
+        var sink = new ContentSearcher.StreamingSink(
+            @"C:\test\file.cs", channel.Writer, contextLines: 0, metadata, CancellationToken.None);
+
+        // Complete the channel writer so TryWrite returns false and WaitToWriteAsync returns false
+        channel.Writer.Complete();
+
+        byte[] lineBytes = System.Text.Encoding.UTF8.GetBytes("match");
+        fixed (byte* linePtr = lineBytes)
+        {
+            var view = new Native.NativeSearcher.QgMatchView
+            {
+                LineNumber = 1,
+                MatchStart = 0,
+                SourceMatchStart = 0,
+                MatchLen = 5,
+                LinePtr = linePtr,
+                LineLen = (nuint)lineBytes.Length,
+                CtxBeforePtr = null,
+                CtxBeforeBytes = 0,
+                CtxBeforeCount = 0,
+                CtxAfterPtr = null,
+                CtxAfterBytes = 0,
+                CtxAfterCount = 0,
+            };
+
+            int ret = sink.OnMatch(&view);
+            Assert.Equal(1, ret); // channel closed
+            Assert.Equal(0, sink.Emitted);
+        }
+    }
+
+    [Fact]
+    public unsafe void OnMatch_BoundedChannelFull_BackpressureWritesEventually()
+    {
+        var channel = Channel.CreateBounded<SearchResult>(new BoundedChannelOptions(1)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+        });
+
+        var metadata = new FileMetadata(100, DateTime.Now, DateTime.Now);
+        var sink = new ContentSearcher.StreamingSink(
+            @"C:\test\file.cs", channel.Writer, contextLines: 0, metadata, CancellationToken.None);
+
+        byte[] lineBytes = System.Text.Encoding.UTF8.GetBytes("line");
+        fixed (byte* linePtr = lineBytes)
+        {
+            var view = new Native.NativeSearcher.QgMatchView
+            {
+                LineNumber = 1,
+                MatchStart = 0,
+                SourceMatchStart = 0,
+                MatchLen = 4,
+                LinePtr = linePtr,
+                LineLen = (nuint)lineBytes.Length,
+                CtxBeforePtr = null,
+                CtxBeforeBytes = 0,
+                CtxBeforeCount = 0,
+                CtxAfterPtr = null,
+                CtxAfterBytes = 0,
+                CtxAfterCount = 0,
+            };
+
+            // First write should succeed immediately (channel capacity=1)
+            int ret1 = sink.OnMatch(&view);
+            Assert.Equal(0, ret1);
+
+            // Drain the channel so the second write can proceed
+            Assert.True(channel.Reader.TryRead(out _));
+
+            // Second write should succeed now that space is available
+            view.LineNumber = 2;
+            int ret2 = sink.OnMatch(&view);
+            Assert.Equal(0, ret2);
+            Assert.Equal(2, sink.Emitted);
+        }
+    }
+
+    [Fact]
+    public unsafe void OnMatch_WithContextLines_DecodesContext()
+    {
+        var channel = Channel.CreateUnbounded<SearchResult>();
+        var metadata = new FileMetadata(100, DateTime.Now, DateTime.Now);
+        var sink = new ContentSearcher.StreamingSink(
+            @"C:\test\file.cs", channel.Writer, contextLines: 2, metadata, CancellationToken.None);
+
+        byte[] lineBytes = System.Text.Encoding.UTF8.GetBytes("match here");
+        // Build context: length-prefixed format (4-byte LE length + UTF-8 bytes per line)
+        byte[] beforeLine = System.Text.Encoding.UTF8.GetBytes("before");
+        byte[] ctxBefore = new byte[4 + beforeLine.Length];
+        BitConverter.GetBytes((uint)beforeLine.Length).CopyTo(ctxBefore, 0);
+        Array.Copy(beforeLine, 0, ctxBefore, 4, beforeLine.Length);
+
+        byte[] afterLine = System.Text.Encoding.UTF8.GetBytes("after");
+        byte[] ctxAfter = new byte[4 + afterLine.Length];
+        BitConverter.GetBytes((uint)afterLine.Length).CopyTo(ctxAfter, 0);
+        Array.Copy(afterLine, 0, ctxAfter, 4, afterLine.Length);
+
+        fixed (byte* linePtr = lineBytes)
+        fixed (byte* beforePtr = ctxBefore)
+        fixed (byte* afterPtr = ctxAfter)
+        {
+            var view = new Native.NativeSearcher.QgMatchView
+            {
+                LineNumber = 5,
+                MatchStart = 0,
+                SourceMatchStart = 0,
+                MatchLen = 5,
+                LinePtr = linePtr,
+                LineLen = (nuint)lineBytes.Length,
+                CtxBeforePtr = beforePtr,
+                CtxBeforeBytes = (nuint)ctxBefore.Length,
+                CtxBeforeCount = 1,
+                CtxAfterPtr = afterPtr,
+                CtxAfterBytes = (nuint)ctxAfter.Length,
+                CtxAfterCount = 1,
+            };
+
+            int ret = sink.OnMatch(&view);
+            Assert.Equal(0, ret);
+        }
+
+        Assert.True(channel.Reader.TryRead(out var result));
+        Assert.Equal("match here", result.MatchLine);
+        Assert.Single(result.ContextBefore);
+        Assert.Equal("before", result.ContextBefore[0]);
+        Assert.Single(result.ContextAfter);
+        Assert.Equal("after", result.ContextAfter[0]);
+    }
+
+    [Fact]
+    public unsafe void OnMatch_CachesFileMetadataOnlyOnce()
+    {
+        var channel = Channel.CreateUnbounded<SearchResult>();
+        var metadata = new FileMetadata(12345, DateTime.Now, DateTime.Now);
+        var sink = new ContentSearcher.StreamingSink(
+            @"C:\test\cached.cs", channel.Writer, contextLines: 0, metadata, CancellationToken.None);
+
+        byte[] lineBytes = System.Text.Encoding.UTF8.GetBytes("x");
+        fixed (byte* linePtr = lineBytes)
+        {
+            var view = new Native.NativeSearcher.QgMatchView
+            {
+                LineNumber = 1, MatchStart = 0, SourceMatchStart = 0, MatchLen = 1,
+                LinePtr = linePtr, LineLen = 1,
+                CtxBeforePtr = null, CtxBeforeBytes = 0, CtxBeforeCount = 0,
+                CtxAfterPtr = null, CtxAfterBytes = 0, CtxAfterCount = 0,
+            };
+
+            sink.OnMatch(&view);
+            sink.OnMatch(&view);
+            Assert.Equal(2, sink.Emitted);
+        }
+
+        // Verify metadata was cached
+        Assert.True(FileMetadataCache.TryGet(@"C:\test\cached.cs", out var cachedMeta));
+        Assert.Equal(12345, cachedMeta.Length);
+    }
+}

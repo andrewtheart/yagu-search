@@ -2144,8 +2144,21 @@ public class FileListerGapTests : IDisposable
 // ─── ProbeEverythingSdkReadiness gap-fill ────────────────────────────────
 
 [Collection("FileListerBackend")]
-public class ProbeReadinessGapTests
+public class ProbeReadinessGapTests : IDisposable
 {
+    private readonly bool _origAvail;
+
+    public ProbeReadinessGapTests()
+    {
+        _origAvail = FileLister.SdkAvailable;
+        FileLister.SdkAvailable = true; // ensure clean state for each test
+    }
+
+    public void Dispose()
+    {
+        FileLister.SdkAvailable = _origAvail;
+    }
+
     [Fact]
     public void Probe_ResultsWithPaths_ReturnsReady()
     {
@@ -2195,18 +2208,10 @@ public class ProbeReadinessGapTests
     [Fact]
     public void Probe_NotAvailable_ReturnsNotReady()
     {
-        var origAvail = FileLister.SdkAvailable;
-        try
-        {
-            FileLister.SdkAvailable = false;
-            var sdk = new MockEverythingSdkOps();
-            var result = FileLister.ProbeEverythingSdkReadiness(sdk);
-            Assert.False(result.IsReady);
-        }
-        finally
-        {
-            FileLister.SdkAvailable = origAvail;
-        }
+        FileLister.SdkAvailable = false;
+        var sdk = new MockEverythingSdkOps();
+        var result = FileLister.ProbeEverythingSdkReadiness(sdk);
+        Assert.False(result.IsReady);
     }
 
     [Fact]
@@ -2221,18 +2226,10 @@ public class ProbeReadinessGapTests
     [Fact]
     public void Probe_DllNotFound_SetsUnavailable()
     {
-        var origAvail = FileLister.SdkAvailable;
-        try
-        {
-            var sdk = new MockEverythingSdkOps { ThrowDllNotFound = true };
-            var result = FileLister.ProbeEverythingSdkReadiness(sdk);
-            Assert.False(result.IsReady);
-            Assert.Contains("not found", result.Error, StringComparison.OrdinalIgnoreCase);
-        }
-        finally
-        {
-            FileLister.SdkAvailable = origAvail;
-        }
+        var sdk = new MockEverythingSdkOps { ThrowDllNotFound = true };
+        var result = FileLister.ProbeEverythingSdkReadiness(sdk);
+        Assert.False(result.IsReady);
+        Assert.Contains("not found", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

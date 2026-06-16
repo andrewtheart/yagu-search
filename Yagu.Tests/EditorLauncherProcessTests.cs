@@ -4,7 +4,7 @@ using Yagu.Services;
 namespace Yagu.Tests;
 
 [Collection("EditorLauncher")]
-public sealed class ExcludedMethodTests_EditorLauncher : IDisposable
+public sealed class EditorLauncherProcessTests : IDisposable
 {
     public void Dispose()
     {

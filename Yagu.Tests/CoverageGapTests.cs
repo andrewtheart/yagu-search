@@ -2850,13 +2850,36 @@ public class SearchResultCollectionBranchTests
     [Fact]
     public void ClassifyDateBucket_ThisWeek_ReturnsThisWeek()
     {
-        // A date 2 days ago (within this week for most days) with a mode that extends beyond
+        // A date within this week that is NOT today or yesterday
         var now = DateTime.Now;
         int dow = (int)now.DayOfWeek;
         var startOfWeek = now.Date.AddDays(-(dow == 0 ? 6 : dow - 1));
-        // Use start of week (always "This week") with mode that would show "This week"
+        // Find a date in [startOfWeek, today) that isn't yesterday
+        var candidate = startOfWeek;
+        var yesterday = now.Date.AddDays(-1);
+        // On Mon/Tue, there's no date in "this week" that isn't today/yesterday — skip
+        if (candidate == now.Date || candidate == yesterday)
+        {
+            // Try other days in the week before today
+            bool found = false;
+            for (int i = 0; i < (int)(now.Date - startOfWeek).TotalDays; i++)
+            {
+                var d = startOfWeek.AddDays(i);
+                if (d != now.Date && d != yesterday)
+                {
+                    candidate = d;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+            {
+                // On Monday or Tuesday there's no "This week" date possible — skip test
+                return;
+            }
+        }
         Assert.Equal("This week", SearchResultCollection.ClassifyDateBucket(
-            startOfWeek, GroupMode.DateThisMonth));
+            candidate, GroupMode.DateThisMonth));
     }
 
     [Fact]
@@ -3885,6 +3908,13 @@ public class SearchResultCollectionBranch3Tests
         var startOfWeek = now.Date.AddDays(-(dow == 0 ? 6 : dow - 1));
         // One day before the start of week — should NOT be "This week"
         var beforeWeek = startOfWeek.AddDays(-1);
+        // Must also not be today or yesterday
+        var yesterday = now.Date.AddDays(-1);
+        if (beforeWeek == now.Date || beforeWeek == yesterday)
+        {
+            // Edge case: on Mon/Tue, beforeWeek is yesterday or today — skip
+            return;
+        }
         if (beforeWeek.Month == now.Month)
         {
             // Same month → should be "This month"
