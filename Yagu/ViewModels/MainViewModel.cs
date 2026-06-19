@@ -1152,6 +1152,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     partial void OnTotalFilesChanged(int value) => OnPropertyChanged(nameof(ProgressTooltip));
     [ObservableProperty] public partial int MatchesFound { get; set; }
     [ObservableProperty] public partial int FilesSkipped { get; set; }
+    [ObservableProperty] public partial bool HasPerformedSearch { get; set; }
     [ObservableProperty] public partial int AccessDeniedCount { get; set; }
     [ObservableProperty] public partial bool Truncated { get; set; }
     [ObservableProperty] public partial bool Degraded { get; set; }
@@ -1187,6 +1188,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             : Microsoft.UI.Xaml.Visibility.Collapsed;
     public Microsoft.UI.Xaml.Visibility StatsForNerdsVisibility =>
         ShowStatsForNerds
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+    public Microsoft.UI.Xaml.Visibility SkippedCountVisibility =>
+        HasPerformedSearch
             ? Microsoft.UI.Xaml.Visibility.Visible
             : Microsoft.UI.Xaml.Visibility.Collapsed;
 
@@ -1286,6 +1292,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     partial void OnShowMemoryPressureWarningLabelChanged(bool value) => OnPropertyChanged(nameof(MemoryPressureWarningVisibility));
     partial void OnShowStatsForNerdsChanged(bool value) => OnPropertyChanged(nameof(StatsForNerdsVisibility));
     partial void OnShowAutoScrollResultsCheckboxChanged(bool value) => OnPropertyChanged(nameof(AutoScrollResultsCheckboxVisibility));
+    partial void OnHasPerformedSearchChanged(bool value) => OnPropertyChanged(nameof(SkippedCountVisibility));
     partial void OnFilesSkippedChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); }
     partial void OnAccessDeniedCountChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); }
     partial void OnSortModeIndexChanged(int value)
@@ -1795,6 +1802,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         TotalFiles = 0;
         MatchesFound = 0;
         FilesSkipped = 0;
+        HasPerformedSearch = true;
         AccessDeniedCount = 0;
         FilesPerSecondText = string.Empty;
         UpdateSkipBreakdown(null);
@@ -2292,6 +2300,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         FilesScanned = 0;
         TotalFiles = 0;
         FilesSkipped = 0;
+        HasPerformedSearch = false;
         AccessDeniedCount = 0;
         ErrorText = null;
         FallbackReason = null;
@@ -3053,6 +3062,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             TotalFiles = 0;
             MatchesFound = 0;
             FilesSkipped = 0;
+            HasPerformedSearch = false;
             AccessDeniedCount = 0;
             Truncated = false;
             Degraded = false;

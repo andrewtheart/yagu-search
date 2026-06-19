@@ -15,8 +15,11 @@ public sealed partial class MainWindow
     private double _col2StartWidth;
     private bool _topSearchDrawerCompact;
     private bool _advancedOptionsDrawerExpandedWidth;
+    private bool _advancedOptionsDrawerMaxHeightRetryQueued;
+    private int _advancedOptionsDrawerMaxHeightRetryCount;
     private const double CompactTopSearchDrawerThreshold = 440;
     private const double CompactTopSearchActionButtonWidth = 38;
+    private const int MaxAdvancedOptionsDrawerMaxHeightRetries = 8;
 
     // Vertical gap between the floating search drawer (search card + status panel)
     // and the results panel beneath it in PreviewTopExpanded mode. Kept equal to the
@@ -42,10 +45,15 @@ public sealed partial class MainWindow
             if (!AdvancedOptionsExpander.IsExpanded)
                 SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: false);
         });
+
+        if (AdvancedOptionsScrollViewer.Content is FrameworkElement drawerContent)
+            drawerContent.SizeChanged += (_, _) => UpdateAdvancedOptionsDrawerMaxHeight();
     }
 
     private void OnAdvancedOptionsExpanding(Expander sender, ExpanderExpandingEventArgs args)
     {
+        _advancedOptionsDrawerMaxHeightRetryQueued = false;
+        _advancedOptionsDrawerMaxHeightRetryCount = 0;
         SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: true);
         UpdateAdvancedOptionsDrawerMaxHeight();
         if (_launcherMode)
@@ -67,9 +75,9 @@ public sealed partial class MainWindow
     private void SetAdvancedOptionsDrawerExpandedWidthState(bool isExpanded)
     {
         _advancedOptionsDrawerExpandedWidth = isExpanded;
-        bool shouldFillSearchCardWidth = isExpanded || _terminalPaneExpanded;
-        Grid.SetColumnSpan(AdvancedOptionsExpander, shouldFillSearchCardWidth ? 2 : 1);
-        AdvancedOptionsExpander.HorizontalAlignment = shouldFillSearchCardWidth || ViewModel.AdvancedOptionsCollapsedWidthModeIndex == 0
+        bool shouldFillQueryColumnWidth = isExpanded || ViewModel.AdvancedOptionsCollapsedWidthModeIndex == 0;
+        Grid.SetColumnSpan(AdvancedOptionsExpander, 1);
+        AdvancedOptionsExpander.HorizontalAlignment = shouldFillQueryColumnWidth
             ? HorizontalAlignment.Stretch
             : HorizontalAlignment.Left;
         AdvancedOptionsExpander.Width = double.NaN;
@@ -89,6 +97,8 @@ public sealed partial class MainWindow
 
         if (!AdvancedOptionsExpander.IsExpanded)
         {
+            _advancedOptionsDrawerMaxHeightRetryQueued = false;
+            _advancedOptionsDrawerMaxHeightRetryCount = 0;
             AdvancedOptionsScrollViewer.MaxHeight = double.PositiveInfinity;
             return;
         }
@@ -102,51 +112,92 @@ public sealed partial class MainWindow
         }
         catch
         {
+            QueueAdvancedOptionsDrawerMaxHeightRetry();
             return;
         }
 
         if (double.IsNaN(topY) || topY < 0)
+        {
+            QueueAdvancedOptionsDrawerMaxHeightRetry();
             return;
+        }
 
         double ceiling = ResolveAdvancedOptionsDrawerCeiling();
         if (ceiling <= 0)
+        {
+            QueueAdvancedOptionsDrawerMaxHeightRetry();
             return;
+        }
 
         double maxHeight = ceiling - topY;
         AdvancedOptionsScrollViewer.MaxHeight =
             maxHeight > MinAdvancedOptionsDrawerHeight ? maxHeight : MinAdvancedOptionsDrawerHeight;
+        _advancedOptionsDrawerMaxHeightRetryQueued = false;
+        _advancedOptionsDrawerMaxHeightRetryCount = 0;
+    }
+
+    private void QueueAdvancedOptionsDrawerMaxHeightRetry()
+    {
+        if (!AdvancedOptionsExpander.IsExpanded || _advancedOptionsDrawerMaxHeightRetryQueued)
+            return;
+
+        if (_advancedOptionsDrawerMaxHeightRetryCount >= MaxAdvancedOptionsDrawerMaxHeightRetries)
+            return;
+
+        _advancedOptionsDrawerMaxHeightRetryQueued = true;
+        _advancedOptionsDrawerMaxHeightRetryCount++;
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            _advancedOptionsDrawerMaxHeightRetryQueued = false;
+            if (!AdvancedOptionsExpander.IsExpanded)
+            {
+                _advancedOptionsDrawerMaxHeightRetryCount = 0;
+                return;
+            }
+
+            UpdateAdvancedOptionsDrawerMaxHeight();
+        });
     }
 
     /// <summary>
     /// Resolves the bottom limit (in DIPs, relative to the window client top) the
-    /// drawer content may reach. Full-window mode uses the visible client height;
-    /// launcher mode uses the monitor work area since the window auto-sizes.
+    /// drawer content may reach. Prefer the realized client height so the drawer
+    /// scrolls inside the visible window instead of sizing itself to the monitor.
     /// </summary>
     private double ResolveAdvancedOptionsDrawerCeiling()
     {
+        double reserve = _launcherMode ? LauncherDrawerBottomReserve : FullModeDrawerBottomReserve;
+        double rootHeight = RootGrid.ActualHeight;
+        if (rootHeight > 0)
+            return rootHeight - reserve;
+
         if (!_launcherMode)
-        {
-            double height = RootGrid.ActualHeight;
-            return height > 0 ? height - FullModeDrawerBottomReserve : 0;
-        }
+            return 0;
 
         try
         {
             if (AppWindow is null)
-                return RootGrid.ActualHeight;
+                return 0;
+
+            double scale = Content?.XamlRoot?.RasterizationScale ?? 1.0;
+            if (scale <= 0)
+                return 0;
+
+            double clientHeightDip = AppWindow.ClientSize.Height / scale;
+            if (clientHeightDip > 0)
+                return clientHeightDip - reserve;
 
             var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(
                 AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
-            double scale = Content?.XamlRoot?.RasterizationScale ?? 1.0;
-            if (displayArea is null || scale <= 0)
-                return RootGrid.ActualHeight;
+            if (displayArea is null)
+                return 0;
 
             double workAreaHeightDip = displayArea.WorkArea.Height / scale;
-            return workAreaHeightDip - LauncherDrawerBottomReserve;
+            return workAreaHeightDip - reserve;
         }
         catch
         {
-            return RootGrid.ActualHeight;
+            return 0;
         }
     }
 

@@ -2882,12 +2882,12 @@ public sealed partial class SettingsWindow : Window
                 HorizontalAlignment = HorizontalAlignment.Left,
                 MinWidth = 300,
             };
-            advancedOptionsDrawerWidth.Items.Add("Full width when collapsed and expanded (default)");
-            advancedOptionsDrawerWidth.Items.Add("Compact when collapsed, full width when expanded");
+            advancedOptionsDrawerWidth.Items.Add("Fill search box width when collapsed and expanded (default)");
+            advancedOptionsDrawerWidth.Items.Add("Compact when collapsed, fill search box width when expanded");
             advancedOptionsDrawerWidth.SelectionChanged += (_, _) =>
                 _viewModel.AdvancedOptionsCollapsedWidthModeIndex = advancedOptionsDrawerWidth.SelectedIndex == 1 ? 1 : 0;
             layoutGroup.Children.Add(advancedOptionsDrawerWidth);
-            layoutGroup.Children.Add(new TextBlock { Text = "Controls the top Advanced Options drawer while it is collapsed. It always expands to the full window width.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            layoutGroup.Children.Add(new TextBlock { Text = "Controls the top Advanced Options drawer while it is collapsed. It always expands to the search box width.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
         }
 
         // ── Interaction ──

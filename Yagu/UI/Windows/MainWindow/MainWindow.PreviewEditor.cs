@@ -1214,9 +1214,8 @@ public sealed partial class MainWindow
             }
 
             File.Move(tempPath, _previewEditorPath, overwrite: true);
-            _previewEditorLoadedByteLength = encodedLoadedBytes;
-            _previewEditorTotalByteLength = new FileInfo(_previewEditorPath).Length;
-            UpdatePreviewEditorChunkUi();
+            long totalByteLength = new FileInfo(_previewEditorPath).Length;
+            await ApplyPreviewEditorChunkSaveStateAsync(encodedLoadedBytes, totalByteLength).ConfigureAwait(false);
         }
         finally
         {
@@ -1227,6 +1226,32 @@ public sealed partial class MainWindow
             }
             catch { }
         }
+    }
+
+    private async Task ApplyPreviewEditorChunkSaveStateAsync(long loadedByteLength, long totalByteLength)
+    {
+        var completion = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool queued = DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal, () =>
+        {
+            try
+            {
+                _previewEditorLoadedByteLength = loadedByteLength;
+                _previewEditorTotalByteLength = totalByteLength;
+                UpdatePreviewEditorChunkUi();
+                completion.TrySetResult(null);
+            }
+            catch (Exception ex)
+            {
+                completion.TrySetException(ex);
+            }
+        });
+
+        if (!queued)
+        {
+            completion.TrySetException(new InvalidOperationException("Could not enqueue preview editor chunk UI update."));
+        }
+
+        await completion.Task.ConfigureAwait(false);
     }
 
     private async Task VerifyPreviewEditorSavedTextAsync(string expectedText)

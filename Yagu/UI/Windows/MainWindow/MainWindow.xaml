@@ -311,120 +311,111 @@
         </Border>
 
         <!-- Search controls card -->
-        <Border x:Name="SearchControlsBorder" Grid.Row="2" Margin="16,10,16,4" Padding="16,12"
+        <Border x:Name="SearchControlsBorder" Grid.Row="2" Margin="16,10,16,4" Padding="16,18"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1" CornerRadius="8">
-            <Grid RowSpacing="10" ColumnSpacing="8">
+            <Grid RowSpacing="12" ColumnSpacing="8">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <!-- Directory bar -->
-                <Grid Grid.Row="0" Grid.ColumnSpan="2" ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <FontIcon Glyph="&#xE8B7;" FontSize="16" VerticalAlignment="Center" Opacity="0.7" />
-                    <AutoSuggestBox
-                        x:Name="DirectoryBox" Grid.Column="1"
-                        PlaceholderText="Directory to search (e.g. D:\projects\myapp)"
-                        Text="{x:Bind ViewModel.Directory, Mode=TwoWay}"
-                        ItemsSource="{x:Bind ViewModel.DirectorySuggestions, Mode=OneWay}"
-                        TextChanged="OnDirectoryTextChanged"
-                        SuggestionChosen="OnDirectorySuggestionChosen"
-                        QuerySubmitted="OnDirectoryQuerySubmitted" />
-                    <Button x:Name="BrowseDirectoryButton" Grid.Column="2" Click="OnBrowseDirectory" ToolTipService.ToolTip="Browse for folder" Padding="8,6" MinWidth="0">
-                        <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center">
-                            <FontIcon Glyph="&#xED25;" FontSize="14" />
-                            <TextBlock x:Name="BrowseDirectoryLabel" Text="Browse" />
-                        </StackPanel>
-                    </Button>
-                </Grid>
+                <FontIcon Grid.Row="0" Grid.Column="0"
+                          Glyph="&#xE8B7;" FontSize="16"
+                          VerticalAlignment="Center" Opacity="0.7" />
+                <AutoSuggestBox
+                    x:Name="DirectoryBox" Grid.Row="0" Grid.Column="1"
+                    PlaceholderText="Directory to search (e.g. D:\projects\myapp)"
+                    Text="{x:Bind ViewModel.Directory, Mode=TwoWay}"
+                    ItemsSource="{x:Bind ViewModel.DirectorySuggestions, Mode=OneWay}"
+                    TextChanged="OnDirectoryTextChanged"
+                    SuggestionChosen="OnDirectorySuggestionChosen"
+                    QuerySubmitted="OnDirectoryQuerySubmitted" />
+                <Button x:Name="BrowseDirectoryButton" Grid.Row="0" Grid.Column="2" Click="OnBrowseDirectory" ToolTipService.ToolTip="Browse for folder" Padding="8,6" MinWidth="0">
+                    <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center">
+                        <FontIcon Glyph="&#xED25;" FontSize="14" />
+                        <TextBlock x:Name="BrowseDirectoryLabel" Text="Browse" />
+                    </StackPanel>
+                </Button>
 
                 <!-- Search bar -->
-                <Grid Grid.Row="1" Grid.ColumnSpan="2" ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <FontIcon Glyph="&#xE721;" FontSize="16" VerticalAlignment="Center" Opacity="0.7" />
-                    <Grid Grid.Column="1">
-                        <AutoSuggestBox
-                            x:Name="QueryBox"
-                            PlaceholderText="Search query (Enter to run)"
-                            Text="{x:Bind ViewModel.Query, Mode=TwoWay}"
-                            ItemsSource="{x:Bind ViewModel.SearchHistory, Mode=OneWay}"
-                            QuerySubmitted="OnQuerySubmitted"
-                            TextChanged="OnQueryTextChanged"
-                            LostFocus="OnQueryLostFocus"
-                            KeyDown="OnQueryKeyDown" />
-                        <!-- Inline toggle buttons for search options -->
-                        <StackPanel x:Name="InlineSearchToggles"
-                                    Orientation="Horizontal" Spacing="2"
-                                    HorizontalAlignment="Right" VerticalAlignment="Center"
-                                    Margin="0,0,36,0">
-                            <ToggleButton x:Name="CaseSensitiveToggle"
-                                          IsChecked="{x:Bind ViewModel.CaseSensitive, Mode=TwoWay}"
-                                          ToolTipService.ToolTip="Match Case (Alt+C)"
-                                          Padding="4,2" MinWidth="0" MinHeight="0"
-                                          Width="28" Height="24" FontSize="12"
-                                          VerticalAlignment="Center">
-                                <TextBlock Text="Aa" FontSize="12" FontWeight="SemiBold" />
-                            </ToggleButton>
-                            <ToggleButton x:Name="RegexToggle"
-                                          IsChecked="{x:Bind ViewModel.UseRegex, Mode=TwoWay}"
-                                          ToolTipService.ToolTip="Use Regular Expression (Alt+R)"
-                                          Padding="4,2" MinWidth="0" MinHeight="0"
-                                          Width="28" Height="24" FontSize="12"
-                                          VerticalAlignment="Center">
-                                <TextBlock Text=".*" FontSize="12" FontFamily="Consolas" />
-                            </ToggleButton>
-                            <ToggleButton x:Name="ExactMatchToggle"
-                                          IsChecked="{x:Bind ViewModel.ExactMatch, Mode=TwoWay}"
-                                          ToolTipService.ToolTip="Exact Match — on: treat the whole query as one term. Off: split on spaces and match any term. (Alt+E)"
-                                          Padding="4,2" MinWidth="0" MinHeight="0"
-                                          Width="28" Height="24" FontSize="12"
-                                          VerticalAlignment="Center">
-                                <TextBlock Text="&quot;&quot;" FontSize="12" FontFamily="Consolas" />
-                            </ToggleButton>
-                        </StackPanel>
-                        <Button x:Name="QueryClearButton"
-                                Width="32" Height="32" MinWidth="0" Padding="0"
+                <FontIcon Grid.Row="1" Grid.Column="0"
+                          Glyph="&#xE721;" FontSize="16"
+                          VerticalAlignment="Center" Opacity="0.7" />
+                <Grid Grid.Row="1" Grid.Column="1">
+                    <AutoSuggestBox
+                        x:Name="QueryBox"
+                        PlaceholderText="Search query (Enter to run)"
+                        Text="{x:Bind ViewModel.Query, Mode=TwoWay}"
+                        ItemsSource="{x:Bind ViewModel.SearchHistory, Mode=OneWay}"
+                        QuerySubmitted="OnQuerySubmitted"
+                        TextChanged="OnQueryTextChanged"
+                        LostFocus="OnQueryLostFocus"
+                        KeyDown="OnQueryKeyDown" />
+                    <!-- Inline toggle buttons for search options -->
+                    <StackPanel x:Name="InlineSearchToggles"
+                                Orientation="Horizontal" Spacing="2"
                                 HorizontalAlignment="Right" VerticalAlignment="Center"
-                                Margin="0,0,4,0"
-                                Background="Transparent" BorderThickness="0"
-                                Visibility="{x:Bind ViewModel.HasQueryText, Mode=OneWay}"
-                                Click="OnQueryClearClick"
-                                ToolTipService.ToolTip="Clear query">
-                            <FontIcon Glyph="&#xE894;" FontSize="12" />
-                        </Button>
-                    </Grid>
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
-                        <Button x:Name="SearchCancelButton" Click="OnSearchCancelClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,6" MinWidth="0"
-                                ToolTipService.ToolTip="Search (F5)">
-                            <Button.KeyboardAccelerators>
-                                <KeyboardAccelerator Key="F5" />
-                            </Button.KeyboardAccelerators>
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <FontIcon x:Name="SearchCancelIcon" Glyph="&#xE721;" FontSize="14" />
-                                <TextBlock x:Name="SearchCancelLabel" Text="Search" />
-                            </StackPanel>
-                        </Button>
+                                Margin="0,0,36,0">
+                        <ToggleButton x:Name="CaseSensitiveToggle"
+                                      IsChecked="{x:Bind ViewModel.CaseSensitive, Mode=TwoWay}"
+                                      ToolTipService.ToolTip="Match Case (Alt+C)"
+                                      Padding="4,2" MinWidth="0" MinHeight="0"
+                                      Width="28" Height="24" FontSize="12"
+                                      VerticalAlignment="Center">
+                            <TextBlock Text="Aa" FontSize="12" FontWeight="SemiBold" />
+                        </ToggleButton>
+                        <ToggleButton x:Name="RegexToggle"
+                                      IsChecked="{x:Bind ViewModel.UseRegex, Mode=TwoWay}"
+                                      ToolTipService.ToolTip="Use Regular Expression (Alt+R)"
+                                      Padding="4,2" MinWidth="0" MinHeight="0"
+                                      Width="28" Height="24" FontSize="12"
+                                      VerticalAlignment="Center">
+                            <TextBlock Text=".*" FontSize="12" FontFamily="Consolas" />
+                        </ToggleButton>
+                        <ToggleButton x:Name="ExactMatchToggle"
+                                      IsChecked="{x:Bind ViewModel.ExactMatch, Mode=TwoWay}"
+                                      ToolTipService.ToolTip="Exact Match — on: treat the whole query as one term. Off: split on spaces and match any term. (Alt+E)"
+                                      Padding="4,2" MinWidth="0" MinHeight="0"
+                                      Width="28" Height="24" FontSize="12"
+                                      VerticalAlignment="Center">
+                            <TextBlock Text="&quot;&quot;" FontSize="12" FontFamily="Consolas" />
+                        </ToggleButton>
                     </StackPanel>
+                    <Button x:Name="QueryClearButton"
+                            Width="32" Height="32" MinWidth="0" Padding="0"
+                            HorizontalAlignment="Right" VerticalAlignment="Center"
+                            Margin="0,0,4,0"
+                            Background="Transparent" BorderThickness="0"
+                            Visibility="{x:Bind ViewModel.HasQueryText, Mode=OneWay}"
+                            Click="OnQueryClearClick"
+                            ToolTipService.ToolTip="Clear query">
+                        <FontIcon Glyph="&#xE894;" FontSize="12" />
+                    </Button>
                 </Grid>
+                <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal" Spacing="6">
+                    <Button x:Name="SearchCancelButton" Click="OnSearchCancelClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,6" MinWidth="0"
+                            ToolTipService.ToolTip="Search (F5)">
+                        <Button.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="F5" />
+                        </Button.KeyboardAccelerators>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon x:Name="SearchCancelIcon" Glyph="&#xE721;" FontSize="14" />
+                            <TextBlock x:Name="SearchCancelLabel" Text="Search" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
 
                 <!-- Advanced options (collapsed by default) -->
                 <Expander x:Name="AdvancedOptionsExpander"
-                          Grid.Row="2" Grid.Column="0"
+                          Grid.Row="2" Grid.Column="1"
                           IsExpanded="False" HorizontalAlignment="Stretch"
                           HorizontalContentAlignment="Stretch" Padding="0"
                           MinHeight="0" FontSize="12"
@@ -771,7 +762,7 @@
                     </ScrollViewer>
                 </Expander>
                 <StackPanel x:Name="SearchCardBottomActions"
-                            Grid.Row="2" Grid.Column="1"
+                            Grid.Row="2" Grid.Column="2"
                             Orientation="Horizontal" Spacing="6"
                             HorizontalAlignment="Right"
                             VerticalAlignment="Bottom">
@@ -1720,6 +1711,7 @@
             </Grid>
             <TextBlock Grid.Column="4" FontSize="12" Opacity="0.6" x:Name="SkipCountBlock"
                        FontFamily="Consolas" Width="140" TextAlignment="Right"
+                       Visibility="{x:Bind ViewModel.SkippedCountVisibility, Mode=OneWay}"
                        Tapped="OnSkipCountTapped" PointerEntered="OnSkipCountPointerEntered"
                        PointerExited="OnSkipCountPointerExited">
                 <Run Text="Skipped: " />

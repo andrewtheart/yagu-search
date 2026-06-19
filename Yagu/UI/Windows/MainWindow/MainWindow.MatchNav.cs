@@ -895,15 +895,16 @@ public sealed partial class MainWindow
         int navIndex = _currentMatchIndex;
         Run targetRun = activeRun;
         int requestId = ++_activeMatchOverlayUpdateRequestId;
-                int manualScrollVersion = _previewManualScrollVersion;
+        int manualScrollVersion = _previewManualScrollVersion;
 
         bool IsRequestCurrent()
             => _activeMatchOverlayUpdateRequestId == requestId
                && _currentMatchIndex == navIndex
-                             && _previewManualScrollVersion == manualScrollVersion
+               && _previewManualScrollVersion == manualScrollVersion
                && _activeMatchHighlight is { para: var currentPara, run: var currentRun }
                && ReferenceEquals(currentPara, targetPara)
-               && ReferenceEquals(currentRun, targetRun);
+               && ReferenceEquals(currentRun, targetRun)
+               && IsActiveMatchGeometryTargetAttached(block, targetPara, targetRun);
 
         void EnqueueUpdate(int retriesRemaining, int delayMs)
         {
@@ -934,17 +935,33 @@ public sealed partial class MainWindow
                     }
                     else if (IsRequestCurrent())
                     {
-                        // All retries exhausted — force-scroll the run into
-                        // view and do one last overlay attempt.
-                        targetRun.ElementStart?.GetCharacterRect(
-                            Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
-                        ScrollPreviewToLine(block, targetPara, forceCenter: true);
+                        // All retries exhausted. Do not force one more native text
+                        // geometry read here: stale WinUI TextPointers can fail-fast
+                        // in Microsoft.UI.Xaml before managed exception handling runs.
+                        HideActiveMatchOverlay();
                     }
                 }
             });
         }
 
         EnqueueUpdate(retriesRemaining: 12, delayMs: 16);
+    }
+
+    private bool IsActiveMatchGeometryTargetAttached(RichTextBlock block, Paragraph targetPara, Run targetRun)
+    {
+        if (PreviewScrollViewer.Visibility != Visibility.Visible)
+            return false;
+
+        if (!block.Blocks.Contains(targetPara))
+            return false;
+
+        foreach (var inline in targetPara.Inlines)
+        {
+            if (ReferenceEquals(inline, targetRun))
+                return true;
+        }
+
+        return false;
     }
 
     private bool TryGetActiveMatchTargetVerticalOffset(
@@ -1031,6 +1048,9 @@ public sealed partial class MainWindow
             // (GetCharacterRect/TransformToVisual) against torn-down preview visuals
             // can fault inside native XAML, so bail while the surface is hidden.
             if (PreviewScrollViewer.Visibility != Visibility.Visible)
+                return false;
+
+            if (!IsActiveMatchGeometryTargetAttached(block, targetPara, targetRun))
                 return false;
 
             if (_activeMatchHighlight is not { para: var activePara, run: var activeRun, column: var activeColumn, matchInPara: var matchInPara }

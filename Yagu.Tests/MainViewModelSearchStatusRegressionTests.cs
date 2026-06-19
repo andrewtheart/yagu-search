@@ -49,6 +49,40 @@ public sealed class MainViewModelSearchStatusRegressionTests
     }
 
     [Fact]
+    public void SkippedCount_RemainsHiddenUntilSearchStarts()
+    {
+        string mainWindowXaml = File.ReadAllText(
+            Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
+        Assert.Contains("Visibility=\"{x:Bind ViewModel.SkippedCountVisibility, Mode=OneWay}\"", mainWindowXaml);
+
+        Assert.Contains("[ObservableProperty] public partial bool HasPerformedSearch { get; set; }", MainViewModelSource);
+        AssertContainsInOrder(MainViewModelSource,
+            "SkippedCountVisibility =>",
+            "HasPerformedSearch",
+            "Microsoft.UI.Xaml.Visibility.Visible",
+            "Microsoft.UI.Xaml.Visibility.Collapsed");
+        Assert.Contains("partial void OnHasPerformedSearchChanged(bool value) => OnPropertyChanged(nameof(SkippedCountVisibility));", MainViewModelSource);
+
+        string resetForSearch = ExtractWindow(MainViewModelSource, "private void ResetStateForNewSearch()", "private bool IsCurrentSearch");
+        AssertContainsInOrder(resetForSearch,
+            "FilesSkipped = 0;",
+            "HasPerformedSearch = true;",
+            "AccessDeniedCount = 0;");
+
+        string clearResults = ExtractWindow(MainViewModelSource, "public async Task ClearResultsAsync()", "public void HydrateResult");
+        AssertContainsInOrder(clearResults,
+            "FilesSkipped = 0;",
+            "HasPerformedSearch = false;",
+            "AccessDeniedCount = 0;");
+
+        string loadSession = ExtractWindow(MainViewModelSource, "public async Task<SessionFileService.SessionHeader> LoadSessionAsync", "bool firstBatch = true;");
+        AssertContainsInOrder(loadSession,
+            "FilesSkipped = 0;",
+            "HasPerformedSearch = false;",
+            "AccessDeniedCount = 0;");
+    }
+
+    [Fact]
     public void SearchStatusHeartbeat_EnqueuesHighPriorityRefreshWhileSearchIsActive()
     {
         Assert.Contains("private CancellationTokenSource? _searchStatusHeartbeatCts;", MainViewModelSource);
