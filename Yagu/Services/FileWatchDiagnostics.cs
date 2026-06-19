@@ -11,18 +11,15 @@ namespace Yagu.Services;
 public static class FileWatchDiagnostics
 {
     /// <summary>
-    /// Substrings to watch for. Default includes a known offender flagged from a
-    /// recent diagnostics session where the UI froze for 30–60s after this file
-    /// appeared in results. Add via <see cref="Add"/>; clear via <see cref="Clear"/>.
+    /// Substrings to watch for. Empty by default — this is an opt-in diagnostic:
+    /// register a suspect path substring at runtime via <see cref="Add"/> to
+    /// bracket its scan/emit lifecycle, and <see cref="Clear"/> to reset.
     /// </summary>
     private static readonly object s_lock = new();
-    private static readonly HashSet<string> s_patterns = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "lvl_jotun_gpm_rockskipcontest.sbp",
-    };
+    private static readonly HashSet<string> s_patterns = new(StringComparer.OrdinalIgnoreCase);
 
     // Lock-free read snapshot — updated on Add/Clear. Readers never contend.
-    private static volatile string[] s_snapshot = ["lvl_jotun_gpm_rockskipcontest.sbp"];
+    private static volatile string[] s_snapshot = [];
 
     public static void Add(string substring)
     {

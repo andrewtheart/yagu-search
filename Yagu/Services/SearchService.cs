@@ -14,7 +14,9 @@ public sealed class SearchService
     private const int MemoryPressureRecoveryMarginPercent = 5;
     private const double ProcessMemoryRecoveryRatio = 0.90;
     private const int EventChannelCapacity = 64;
+    private const int PendingFileChannelCapacity = 32_768;
     private const int UnlimitedContentResultChannelCapacity = 2_048;
+    private const int SourceBackedResultChannelCapacity = 65_536;
     private const int MaxContentResultChannelCapacity = 4_096;
     private const long AutoProcessMemoryCapFloor = 512L * 1024 * 1024;
     private const long AutoProcessMemoryCapCeiling = 768L * 1024 * 1024;
@@ -161,6 +163,7 @@ public sealed class SearchService
             concreteLister.ExcludeAdminProtectedPaths = options.ExcludeAdminProtectedPaths;
             concreteLister.AdminProtectedPathSegmentsOverride = options.AdminProtectedPathSegments;
             concreteLister.MaxSearchDepth = options.MaxSearchDepth;
+            concreteLister.SearchOnlineOnlyFiles = options.SearchOnlineOnlyFiles;
 
             // Dynamic gitignore: create a matcher that loads .gitignore files
             // lazily as directories are encountered during the scan.
@@ -197,7 +200,7 @@ public sealed class SearchService
             FullMode = BoundedChannelFullMode.Wait,
         });
         // Bounded so discovery applies back-pressure when workers are saturated.
-        var pending = Channel.CreateBounded<string>(new BoundedChannelOptions(1024)
+        var pending = Channel.CreateBounded<string>(new BoundedChannelOptions(PendingFileChannelCapacity)
         {
             SingleReader = false,
             SingleWriter = true,
@@ -216,7 +219,16 @@ public sealed class SearchService
             SingleWriter = false,
             FullMode = BoundedChannelFullMode.Wait,
         });
-        LogService.Instance.Info("SearchService", $"Pipeline channels created: events={EventChannelCapacity}, pending=1024, contentResults={contentCap}");
+        int sourceBackedCap = options.DegradedResultStore != null
+            ? SourceBackedResultChannelCapacity
+            : contentCap;
+        var sourceBackedResults = Channel.CreateBounded<SourceBackedMatch>(new BoundedChannelOptions(sourceBackedCap)
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.Wait,
+        });
+        LogService.Instance.Info("SearchService", $"Pipeline channels created: events={EventChannelCapacity}, pending={PendingFileChannelCapacity}, contentResults={contentCap}, sourceBackedResults={sourceBackedCap}");
 
         int filesScanned = 0;
         int filesSkipped = 0;
@@ -240,6 +252,10 @@ public sealed class SearchService
         int skipNotFound = 0, skipEncoding = 0, skipOther = 0, skipByExtension = 0, skipDirectories = 0;
         int skipGlobExcluded = 0;
         int skipSizeFiltered = 0;
+        int skipCloudOnly = 0;
+        // Fresh provider-liveness decisions per search (a provider may have been
+        // installed/uninstalled/signed-out since the last run).
+        CloudFileHelper.ResetProviderCache();
         StreamingScanSink? activeStreamingSink = null; // promoted to outer scope so CheckMemoryPressure can toggle degraded mode
         IntPtr activeFilesScannedPtr = IntPtr.Zero; // unmanaged counter updated atomically during streaming scan
         IntPtr activeTotalMatchesPtr = IntPtr.Zero; // unmanaged counter updated atomically during streaming scan
@@ -249,6 +265,7 @@ public sealed class SearchService
         int CurrentAccessDeniedSkips() => Volatile.Read(ref skipAccessDenied) + _fileLister.AccessDeniedDirectories;
         int CurrentEarlySkips() => _fileLister.EarlySkippedFiles;
         int CurrentEarlyTooLargeSkips() => _fileLister.EarlySkippedTooLargeFiles;
+        int CurrentCloudOnlySkips() => Volatile.Read(ref skipCloudOnly) + _fileLister.CloudOnlySkippedFiles;
         int CurrentFilesSkipped() => Volatile.Read(ref filesSkipped) + CurrentDirectorySkips() + CurrentEarlySkips();
         // Total files processed (content-scanned + early-filtered + discovery-filtered)
         // so the progress bar increments for every file that has been "dealt with".
@@ -288,7 +305,8 @@ public sealed class SearchService
                 nonAccessDeniedDirSkips,
                 CurrentEarlySkips() + Volatile.Read(ref skipSizeFiltered),
                 Volatile.Read(ref skipGlobExcluded),
-                _fileLister.GitignoreSkipped);
+                _fileLister.GitignoreSkipped,
+                CurrentCloudOnlySkips());
             int currentTotalMatches;
             int currentFilesWithMatches;
             unsafe
@@ -310,6 +328,49 @@ public sealed class SearchService
                 sw.Elapsed,
                 accessDenied,
                 breakdown);
+        }
+
+        SearchSummary CreateSummarySnapshot(TimeSpan elapsed)
+        {
+            bool wasTruncated = Volatile.Read(ref truncated) != 0;
+            bool wasDegraded = Volatile.Read(ref everDegraded) != 0;
+
+            int totalFiles = CurrentTotalFiles();
+            int directorySkips = CurrentDirectorySkips();
+            int earlySkips = CurrentEarlySkips();
+            int discoverySizeSkips = Volatile.Read(ref skipSizeFiltered);
+            int earlyTooLargeSkips = CurrentEarlyTooLargeSkips();
+            int accessDeniedSkips = CurrentAccessDeniedSkips();
+            int totalSkipped = Volatile.Read(ref filesSkipped) + directorySkips + earlySkips;
+            int nonAccessDeniedDirectorySkips = Math.Max(0, directorySkips - _fileLister.AccessDeniedDirectories);
+            var skipReasons = new SkipBreakdown(
+                skipBinary,
+                accessDeniedSkips,
+                skipIOError,
+                skipTooLarge + earlyTooLargeSkips,
+                skipNotFound,
+                skipEncoding,
+                skipOther,
+                skipByExtension,
+                nonAccessDeniedDirectorySkips,
+                earlySkips + discoverySizeSkips,
+                skipGlobExcluded,
+                _fileLister.GitignoreSkipped,
+                CurrentCloudOnlySkips());
+
+            return new SearchSummary(
+                TotalFiles: totalFiles,
+                FilesScanned: CurrentFilesProcessed(),
+                FilesSkipped: totalSkipped,
+                FilesWithMatches: filesWithMatches,
+                TotalMatches: totalMatches,
+                BytesScanned: bytesScanned,
+                Elapsed: elapsed,
+                Cancelled: cancellationToken.IsCancellationRequested,
+                Truncated: wasTruncated,
+                Degraded: wasDegraded,
+                FallbackReason: fallbackReason,
+                SkipReasons: skipReasons);
         }
 
         // Captures the search locals directly so workers and the progress timer can
@@ -678,14 +739,15 @@ public sealed class SearchService
                                             directSink = new DirectOutputSink(
                                                 options.DirectOutputStream, options.DirectOutputColor,
                                                 pathsByIndex, options.MaxResults, Volatile.Read(ref totalMatches),
-                                                cancelPtr, (int*)filesScannedAlloc);
+                                                cancelPtr, (int*)filesScannedAlloc,
+                                                contextEnabled: options.ContextLines > 0);
                                             sinkInstance = directSink;
                                         }
                                         else
                                         {
                                             streamingSink = new StreamingScanSink(
                                                 pathsByIndex,
-                                                contentResults.Writer, options.MaxResults, Volatile.Read(ref totalMatches),
+                                                contentResults.Writer, sourceBackedResults.Writer, options.MaxResults, Volatile.Read(ref totalMatches),
                                                 cancelPtr, (int*)filesScannedAlloc,
                                                 (int*)totalMatchesAlloc, (int*)filesWithMatchesAlloc,
                                                 options.DegradedResultStore);
@@ -698,13 +760,36 @@ public sealed class SearchService
                                         }
                                     }
 
-                                    // Create streaming scanner — Rust spawns persistent worker threads
+                                    // Create streaming scanner — Rust spawns persistent worker threads.
+                                    // The streaming workers each perform *blocking* file opens/reads, so on a
+                                    // cold full-drive sweep they spend most of their time parked on disk and
+                                    // per-file filter-driver latency rather than burning CPU. Oversubscribing
+                                    // the worker count relative to the CPU-scan width keeps the NVMe queue
+                                    // depth high (more outstanding reads overlap that latency) and puts the
+                                    // otherwise-idle CPU headroom to productive use. This raises concurrency
+                                    // only — it imposes no cap on results, files, or memory. The native side
+                                    // already clamps to MAX_WORKERS (64).
+                                    //
+                                    // The multiplier is configurable (IoOversubscriptionIndex). 2x is the
+                                    // measured sweet spot on a *cold* full-C:\ sweep (24-core box): 24->48
+                                    // workers raised bytes-read +62% and >=600 MB/s samples 11%->20% while
+                                    // keeping working set well under the 2 GB ceiling. But on a warm cache
+                                    // (re-search of cached data) those reads return instantly, so the extra
+                                    // threads become pure CPU/heat. Auto therefore uses 1x on SSD/NVMe and 2x
+                                    // only on rotational HDDs; the user can force 1x/2x/3x in Settings.
+                                    bool targetIsHardDisk = options.IoOversubscriptionIndex == 0
+                                        && !string.IsNullOrEmpty(options.Directory)
+                                        && DiskTypeDetector.IsHardDisk(options.Directory);
+                                    int oversubscription = SearchOptions.ResolveIoOversubscriptionMultiplier(
+                                        options.IoOversubscriptionIndex, targetIsHardDisk);
+                                    int streamingWorkers = Math.Min(64, Math.Max(1, parallelism) * oversubscription);
+                                    LogService.Instance.Info("SearchService", $"Streaming scanner IO workers = {streamingWorkers} (cpu parallelism {parallelism}, oversubscription {oversubscription}x, mode {options.IoOversubscriptionIndex})");
                                     IntPtr scanner;
                                     GCHandle sinkHandle;
                                     unsafe
                                     {
                                         scanner = Native.NativeSearcher.CreateStreamingScanner(
-                                            activeSession, parallelism, (int*)cancelPtr, sinkInstance, out sinkHandle);
+                                            activeSession, streamingWorkers, (int*)cancelPtr, sinkInstance, out sinkHandle);
                                     }
 
                                     if (scanner == IntPtr.Zero)
@@ -959,6 +1044,7 @@ public sealed class SearchService
                                     case ContentSearcher.SkipNotFound: Interlocked.Increment(ref skipNotFound); break;
                                     case ContentSearcher.SkipEncoding: Interlocked.Increment(ref skipEncoding); break;
                                     case ContentSearcher.SkipByExtension: Interlocked.Increment(ref skipByExtension); break;
+                                    case ContentSearcher.SkipCloudOnly: Interlocked.Increment(ref skipCloudOnly); break;
                                     default: Interlocked.Increment(ref skipOther); break;
                                 }
                             }
@@ -1001,12 +1087,14 @@ public sealed class SearchService
                         $"batches={Volatile.Read(ref nativeBatchesProcessed)}, pressureCycles={Volatile.Read(ref pressureCycles)}, " +
                         $"elapsed={sw.Elapsed.TotalSeconds:F2}s, {finishMemDiag}");
                     contentResults.Writer.TryComplete();
+                    sourceBackedResults.Writer.TryComplete();
                 }
             }, CancellationToken.None);
         }
         else
         {
             contentResults.Writer.TryComplete();
+            sourceBackedResults.Writer.TryComplete();
         }
 
         // ── Forwarder: content results → unified event stream ──
@@ -1117,7 +1205,99 @@ public sealed class SearchService
             catch (Exception ex) { LogService.Instance.Warning("Forwarder", "Failed", ex); }
         }, CancellationToken.None);
 
-        var pipelineComplete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sourceBackedForwarder = Task.Run(async () =>
+        {
+            try
+            {
+                const int SourceBackedBatchSize = 16_384;
+                List<SourceBackedMatch>? sourceBackedBatch = null;
+                long fwdLogLastTicks = Stopwatch.GetTimestamp();
+                const long FwdLogIntervalSec = 10;
+                long fwdBatchesFlushed = 0;
+                var fwdWriteSw = new Stopwatch();
+
+                async ValueTask FlushSourceBackedBatchAsync()
+                {
+                    if (sourceBackedBatch is null || sourceBackedBatch.Count == 0) return;
+                    var batch = sourceBackedBatch;
+                    sourceBackedBatch = null;
+                    fwdWriteSw.Restart();
+                    await events.Writer.WriteAsync(new SearchEvent.SourceBackedMatchBatch(batch), cancellationToken).ConfigureAwait(false);
+                    fwdWriteSw.Stop();
+                    long stallMs = fwdWriteSw.ElapsedMilliseconds;
+                    Interlocked.Add(ref forwarderItemsForwarded, batch.Count);
+                    Interlocked.Add(ref forwarderWriteStallMs, stallMs);
+                    fwdBatchesFlushed++;
+
+                    if (stallMs > 500)
+                    {
+                        LogService.Instance.Warning("SourceBackedForwarder",
+                            $"Backpressure: WriteAsync to events channel took {stallMs}ms " +
+                            $"(batch={batch.Count} items, totalForwarded={Volatile.Read(ref forwarderItemsForwarded):N0})");
+                    }
+
+                    long now = Stopwatch.GetTimestamp();
+                    if ((now - fwdLogLastTicks) >= Stopwatch.Frequency * FwdLogIntervalSec)
+                    {
+                        fwdLogLastTicks = now;
+                        LogService.Instance.Info("SourceBackedForwarder",
+                            $"Throughput: forwarded={Volatile.Read(ref forwarderItemsForwarded):N0}, " +
+                            $"batchesFlushed={fwdBatchesFlushed}, cumulativeStallMs={Volatile.Read(ref forwarderWriteStallMs)}, " +
+                            $"elapsed={sw.Elapsed.TotalSeconds:F1}s");
+                    }
+                }
+
+                const int PartialFlushDelayMs = 250;
+                CancellationTokenSource? delayCts = null;
+                try
+                {
+                    while (await sourceBackedResults.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        while (sourceBackedResults.Reader.TryRead(out var r))
+                        {
+                            (sourceBackedBatch ??= new List<SourceBackedMatch>(SourceBackedBatchSize)).Add(r);
+                            if (sourceBackedBatch.Count >= SourceBackedBatchSize)
+                                await FlushSourceBackedBatchAsync().ConfigureAwait(false);
+                        }
+
+                        if (sourceBackedBatch is { Count: > 0 })
+                        {
+                            if (delayCts is null || !delayCts.TryReset())
+                            {
+                                delayCts?.Dispose();
+                                delayCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                            }
+                            delayCts.CancelAfter(PartialFlushDelayMs);
+                            try
+                            {
+                                if (await sourceBackedResults.Reader.WaitToReadAsync(delayCts.Token).ConfigureAwait(false))
+                                {
+                                    delayCts.CancelAfter(Timeout.Infinite);
+                                    continue;
+                                }
+                            }
+                            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                            {
+                            }
+                            await FlushSourceBackedBatchAsync().ConfigureAwait(false);
+                        }
+                    }
+                }
+                finally
+                {
+                    delayCts?.Dispose();
+                }
+
+                await FlushSourceBackedBatchAsync().ConfigureAwait(false);
+                LogService.Instance.Info("SourceBackedForwarder",
+                    $"Completed: batchesFlushed={fwdBatchesFlushed}, " +
+                    $"cumulativeStallMs={Volatile.Read(ref forwarderWriteStallMs)}, elapsed={sw.Elapsed.TotalSeconds:F1}s");
+            }
+            catch (OperationCanceledException) { LogService.Instance.Warning("SourceBackedForwarder", "Cancelled"); }
+            catch (Exception ex) { LogService.Instance.Warning("SourceBackedForwarder", "Failed", ex); }
+        }, CancellationToken.None);
+
+        var scanComplete = new TaskCompletionSource<SearchSummary>(TaskCreationOptions.RunContinuationsAsynchronously);
         var progressEmitter = Task.Run(async () =>
         {
             try
@@ -1125,10 +1305,10 @@ public sealed class SearchService
                 using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(100));
                 long lastMemoryPressurePollTicks = 0;
                 long memoryPressurePollIntervalTicks = (long)(PeriodicMemoryPressureCheckInterval.TotalSeconds * Stopwatch.Frequency);
-                while (!pipelineComplete.Task.IsCompleted &&
+                while (!scanComplete.Task.IsCompleted &&
                        await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
                 {
-                    if (pipelineComplete.Task.IsCompleted || Volatile.Read(ref truncated) != 0) break;
+                    if (scanComplete.Task.IsCompleted || Volatile.Read(ref truncated) != 0) break;
                     long now = Stopwatch.GetTimestamp();
                     if (lastMemoryPressurePollTicks == 0 ||
                         now - lastMemoryPressurePollTicks >= memoryPressurePollIntervalTicks)
@@ -1146,11 +1326,24 @@ public sealed class SearchService
         // Close the events channel once everything upstream is done.
         _ = Task.Run(async () =>
         {
-            try { await Task.WhenAll(discovery, workers, forwarder).ConfigureAwait(false); }
-            catch (Exception ex) { LogService.Instance.Verbose("SearchService", "Pipeline task exception", ex); }
+            try
+            {
+                await Task.WhenAll(discovery, workers).ConfigureAwait(false);
+                var summary = CreateSummarySnapshot(sw.Elapsed);
+                scanComplete.TrySetResult(summary);
+                LogService.Instance.Info("SearchService",
+                    $"Scan complete: scanned={summary.FilesScanned:N0}, matches={summary.TotalMatches:N0}, " +
+                    $"elapsed={summary.Elapsed.TotalSeconds:F2}s; result batches are finalizing");
+                await Task.WhenAll(forwarder, sourceBackedForwarder).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                scanComplete.TrySetResult(CreateSummarySnapshot(sw.Elapsed));
+                LogService.Instance.Verbose("SearchService", "Pipeline task exception", ex);
+            }
             finally
             {
-                pipelineComplete.TrySetResult();
+                scanComplete.TrySetResult(CreateSummarySnapshot(sw.Elapsed));
                 try { await progressEmitter.ConfigureAwait(false); }
                 catch (Exception ex) { LogService.Instance.Verbose("SearchService", "Progress emitter completion failed", ex); }
                 events.Writer.TryComplete();
@@ -1159,38 +1352,50 @@ public sealed class SearchService
 
         // 3. Stream events to caller. Progress snapshots are emitted by a timer so
         // quiet no-match stretches still update the UI.
-        await foreach (var evt in events.Reader.ReadAllAsync(cancellationToken))
+        bool scanCompletedYielded = false;
+        while (true)
         {
-            yield return evt;
+            if (!scanCompletedYielded && scanComplete.Task.IsCompletedSuccessfully)
+            {
+                scanCompletedYielded = true;
+                yield return new SearchEvent.ScanCompleted(scanComplete.Task.Result);
+                continue;
+            }
+
+            if (events.Reader.TryRead(out var evt))
+            {
+                yield return evt;
+                continue;
+            }
+
+            if (scanCompletedYielded)
+            {
+                if (!await events.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+                    break;
+                continue;
+            }
+
+            using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            Task<bool> waitForEventTask = events.Reader.WaitToReadAsync(waitCts.Token).AsTask();
+            Task completedTask = await Task.WhenAny(waitForEventTask, scanComplete.Task).ConfigureAwait(false);
+            if (ReferenceEquals(completedTask, scanComplete.Task))
+            {
+                waitCts.Cancel();
+                try { await waitForEventTask.ConfigureAwait(false); }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { }
+                continue;
+            }
+
+            if (!await waitForEventTask.ConfigureAwait(false))
+                break;
         }
 
-        bool wasTruncated = Volatile.Read(ref truncated) != 0;
-        bool wasDegraded = Volatile.Read(ref everDegraded) != 0;
-
-        int totalFiles = CurrentTotalFiles();
-        int directorySkips = CurrentDirectorySkips();
-        int earlySkips = CurrentEarlySkips();
-        int discoverySizeSkips = Volatile.Read(ref skipSizeFiltered);
-        int earlyTooLargeSkips = CurrentEarlyTooLargeSkips();
-        int accessDeniedSkips = CurrentAccessDeniedSkips();
-        int totalSkipped = Volatile.Read(ref filesSkipped) + directorySkips + earlySkips;
-        int nonAccessDeniedDirectorySkips = Math.Max(0, directorySkips - _fileLister.AccessDeniedDirectories);
-        var skipReasons = new SkipBreakdown(skipBinary, accessDeniedSkips, skipIOError, skipTooLarge + earlyTooLargeSkips, skipNotFound, skipEncoding, skipOther, skipByExtension, nonAccessDeniedDirectorySkips, earlySkips + discoverySizeSkips, skipGlobExcluded, _fileLister.GitignoreSkipped);
-        LogService.Instance.Info("SearchService", $"Search complete: {totalMatches} matches in {filesWithMatches} files, {filesScanned} scanned, {totalSkipped} skipped ({skipReasons}), earlyFiltered={earlySkips + discoverySizeSkips}, degraded={wasDegraded}, truncated={wasTruncated}, " +
+        var completedSummary = scanComplete.Task.IsCompletedSuccessfully
+            ? scanComplete.Task.Result
+            : CreateSummarySnapshot(sw.Elapsed);
+        LogService.Instance.Info("SearchService", $"Search complete: {completedSummary.TotalMatches} matches in {completedSummary.FilesWithMatches} files, {completedSummary.FilesScanned} scanned, {completedSummary.FilesSkipped} skipped ({completedSummary.SkipReasons}), earlyFiltered={completedSummary.SkipReasons?.EarlyFiltered ?? 0}, degraded={completedSummary.Degraded}, truncated={completedSummary.Truncated}, " +
             $"batches={Volatile.Read(ref nativeBatchesProcessed)}, pressureCycles={pressureCycles}, forwarderItems={Volatile.Read(ref forwarderItemsForwarded):N0}, forwarderStallMs={Volatile.Read(ref forwarderWriteStallMs)}, {sw.Elapsed.TotalSeconds:F2}s");
-        yield return new SearchEvent.Completed(new SearchSummary(
-            TotalFiles: totalFiles,
-            FilesScanned: CurrentFilesProcessed(),
-            FilesSkipped: totalSkipped,
-            FilesWithMatches: filesWithMatches,
-            TotalMatches: totalMatches,
-            BytesScanned: bytesScanned,
-            Elapsed: sw.Elapsed,
-            Cancelled: cancellationToken.IsCancellationRequested,
-            Truncated: wasTruncated,
-            Degraded: wasDegraded,
-            FallbackReason: fallbackReason,
-            SkipReasons: skipReasons));
+        yield return new SearchEvent.Completed(completedSummary);
     }
 
     private static bool ShouldSkipByFileMetadata(
@@ -1722,7 +1927,7 @@ public sealed class SearchService
             var view = *m;
             int lineBytes = view.LineLen > (nuint)int.MaxValue ? int.MaxValue : (int)view.LineLen;
             int matchStartBytes = view.MatchStart > int.MaxValue ? lineBytes : (int)view.MatchStart;
-            int sourceMatchStartBytes = view.SourceMatchStart > int.MaxValue ? matchStartBytes : (int)view.SourceMatchStart;
+            int? sourceMatchStartBytes = view.SourceMatchStart > int.MaxValue ? (int?)null : (int)view.SourceMatchStart;
             int matchLenBytes = view.MatchLen > int.MaxValue ? 0 : (int)view.MatchLen;
             var matchLine = ContentSearcher.NativeMatchDecoder.DecodeMatchLine(
                 view.LinePtr, lineBytes, matchStartBytes, matchLenBytes, sourceMatchStartBytes);
@@ -1813,6 +2018,7 @@ public sealed class SearchService
     {
         private readonly List<string> _paths; // shared reference; grows as paths pushed
         private readonly ChannelWriter<SearchResult> _writer;
+        private readonly ChannelWriter<SourceBackedMatch> _sourceBackedWriter;
         private readonly int _maxResults;
         private readonly unsafe int* _cancelPtr;
         private readonly unsafe int* _filesScannedPtr;
@@ -1839,6 +2045,7 @@ public sealed class SearchService
         public unsafe StreamingScanSink(
             List<string> paths,
             ChannelWriter<SearchResult> writer,
+            ChannelWriter<SourceBackedMatch> sourceBackedWriter,
             int maxResults,
             int currentTotalMatches,
             IntPtr cancelPtr,
@@ -1850,6 +2057,7 @@ public sealed class SearchService
         {
             _paths = paths;
             _writer = writer;
+            _sourceBackedWriter = sourceBackedWriter;
             _maxResults = maxResults;
             _runningTotal = currentTotalMatches;
             _cancelPtr = (int*)cancelPtr;
@@ -1902,16 +2110,24 @@ public sealed class SearchService
             var view = *m;
             int lineBytes = view.LineLen > (nuint)int.MaxValue ? int.MaxValue : (int)view.LineLen;
             int matchStartBytes = view.MatchStart > int.MaxValue ? lineBytes : (int)view.MatchStart;
-            int sourceMatchStartBytes = view.SourceMatchStart > int.MaxValue ? matchStartBytes : (int)view.SourceMatchStart;
+            int? sourceMatchStartBytes = view.SourceMatchStart > int.MaxValue ? (int?)null : (int)view.SourceMatchStart;
             int matchLenBytes = view.MatchLen > int.MaxValue ? 0 : (int)view.MatchLen;
             int lineNum = view.LineNumber > int.MaxValue ? int.MaxValue : (int)view.LineNumber;
-            // The core reports source_match_start as a full-line UTF-16 column (the
-            // space the preview disambiguates sibling matches against), already
-            // accounting for any windowing of long lines. It cannot be reconstructed
-            // on the managed side from the emitted (windowed) slice, so use it verbatim.
-            int charSourceMatchStart = Math.Max(0, sourceMatchStartBytes);
 
             // ── Degraded fast-path: write raw UTF-8 directly to disk, skip String alloc ──
+            // PERF-CRITICAL HOT PATH. This callback runs once per match on a
+            // full-disk degraded scan (millions of matches/sec across 24 native
+            // workers); it is the throughput-defining region. Keep per-match work
+            // bounded and avoid scanning the whole line: never run a full-line
+            // GetCharCount / UTF-16 column over a giant non-ASCII prefix here (it
+            // regressed full-`C:\` "test" ~4x — see SOURCE_MATCH_START note in
+            // repo memory `yagu-profiling.md`). Derive columns from the already-
+            // computed display window or a cheap ASCII fast path instead.
+            //
+            // Pre-evicts each match to the ResultStore so memory stays bounded (the
+            // payload lives on disk; only a lightweight pre-evicted SearchResult is
+            // kept). This is what keeps degraded full-disk scans fast and lets the
+            // memory-pressure path actually free memory instead of livelocking.
             if (Volatile.Read(ref _degraded) != 0 && _resultStore != null)
             {
                 // Truncate match line bytes the same way DecodeMatchLine would (window around match)
@@ -1921,7 +2137,6 @@ public sealed class SearchService
                 if (lineBytes <= maxDisplayBytes)
                 {
                     matchLineUtf8 = new ReadOnlySpan<byte>(view.LinePtr, lineBytes);
-                    // Convert byte offsets to char offsets so highlighting is correct after hydration.
                     int safeStart = Math.Min(matchStartBytes, lineBytes);
                     int safeLen = Math.Min(matchLenBytes, lineBytes - safeStart);
                     if (System.Text.Ascii.IsValid(matchLineUtf8[..Math.Min(safeStart + safeLen, lineBytes)]))
@@ -1937,7 +2152,6 @@ public sealed class SearchService
                 }
                 else
                 {
-                    // Take a window around the match, same logic as DecodeMatchLine truncation
                     int windowBytes = Math.Max(matchLenBytes, maxDisplayBytes);
                     int contextBytes = Math.Max(0, (windowBytes - matchLenBytes) / 2);
                     int windowStart = Math.Max(0, matchStartBytes - contextBytes);
@@ -1946,13 +2160,11 @@ public sealed class SearchService
                     if (windowEnd < minEnd) windowEnd = minEnd;
                     if (windowEnd - windowStart < windowBytes)
                         windowStart = Math.Max(0, windowEnd - windowBytes);
-                    // Align to UTF-8 boundaries
                     while (windowStart < lineBytes && (view.LinePtr[windowStart] & 0xC0) == 0x80)
                         windowStart++;
                     while (windowEnd > windowStart && windowEnd < lineBytes && (view.LinePtr[windowEnd] & 0xC0) == 0x80)
                         windowEnd--;
                     matchLineUtf8 = new ReadOnlySpan<byte>(view.LinePtr + windowStart, windowEnd - windowStart);
-                    // Convert byte offsets within the window to char offsets.
                     int matchBytesFromWindow = Math.Max(0, matchStartBytes - windowStart);
                     int safeLenW = Math.Min(matchLenBytes, matchLineUtf8.Length - matchBytesFromWindow);
                     if (System.Text.Ascii.IsValid(matchLineUtf8[..Math.Min(matchBytesFromWindow + safeLenW, matchLineUtf8.Length)]))
@@ -1972,7 +2184,30 @@ public sealed class SearchService
                     view.CtxBeforePtr, (int)view.CtxBeforeBytes, (int)view.CtxBeforeCount,
                     view.CtxAfterPtr, (int)view.CtxAfterBytes, (int)view.CtxAfterCount);
 
-                var result = SearchResult.CreatePreEvicted(filePath, lineNum, charMatchStart, charMatchLen, offset, charSourceMatchStart);
+                // Full-line source column. When native provides it (metadata-only
+                // mode), use it directly; otherwise derive it here cheaply. For a
+                // non-windowed line the display column already is the full-line
+                // column; for a windowed line take the ASCII fast path and fall
+                // back to the byte offset rather than scanning a giant non-ASCII
+                // prefix on the hot degraded path.
+                int sourceMatchStart;
+                if (sourceMatchStartBytes.HasValue)
+                {
+                    sourceMatchStart = Math.Max(0, sourceMatchStartBytes.Value);
+                }
+                else if (lineBytes <= maxDisplayBytes)
+                {
+                    sourceMatchStart = charMatchStart;
+                }
+                else
+                {
+                    int safeStartForCol = Math.Min(matchStartBytes, lineBytes);
+                    sourceMatchStart = System.Text.Ascii.IsValid(new ReadOnlySpan<byte>(view.LinePtr, safeStartForCol))
+                        ? safeStartForCol
+                        : matchStartBytes;
+                }
+
+                var result = SearchResult.CreatePreEvicted(filePath, lineNum, charMatchStart, charMatchLen, offset, sourceMatchStart);
                 if (!TryWriteWithBackpressure(result))
                 {
                     _stopped = true;
@@ -2043,8 +2278,26 @@ public sealed class SearchService
             {
                 if (_cancelPtr != null && Volatile.Read(ref *_cancelPtr) != 0)
                     return false;
+
                 spinWait.SpinOnce(sleep1Threshold: 2);
                 if (_writer.TryWrite(result))
+                    return true;
+            }
+        }
+
+        private unsafe bool TryWriteSourceBackedWithBackpressure(SourceBackedMatch result)
+        {
+            if (_sourceBackedWriter.TryWrite(result))
+                return true;
+
+            var spinWait = new SpinWait();
+            while (true)
+            {
+                if (_cancelPtr != null && Volatile.Read(ref *_cancelPtr) != 0)
+                    return false;
+
+                spinWait.SpinOnce(sleep1Threshold: 2);
+                if (_sourceBackedWriter.TryWrite(result))
                     return true;
             }
         }
@@ -2087,8 +2340,10 @@ public abstract record SearchEvent
     /// when the producer is generating very high match rates (e.g. filename matches against
     /// millions of paths).</summary>
     public sealed record MatchBatch(IReadOnlyList<SearchResult> Results) : SearchEvent;
+    public sealed record SourceBackedMatchBatch(IReadOnlyList<SourceBackedMatch> Results) : SearchEvent;
     public sealed record Progress(SearchProgress Snapshot) : SearchEvent;
     public sealed record SearchError(string Message) : SearchEvent;
+    public sealed record ScanCompleted(SearchSummary Summary) : SearchEvent;
     public sealed record Completed(SearchSummary Summary) : SearchEvent;
     /// <summary>Emitted when memory pressure triggers degradation. The consumer should evict heavy data to disk
     /// and then call <see cref="AcknowledgeEviction"/> with the count of results actually evicted. Workers keep

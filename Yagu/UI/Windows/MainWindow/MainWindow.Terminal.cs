@@ -67,7 +67,11 @@ public sealed partial class MainWindow
 
     private void UpdateTerminalChevronVisibility()
     {
-        PreSearchTerminalChevron.Visibility = !_terminalPaneExpanded && !_advancedOptionsDrawerExpandedWidth
+        var showSearchCardBottomActions = !_terminalPaneExpanded && !_advancedOptionsDrawerExpandedWidth;
+        PreSearchTerminalChevron.Visibility = showSearchCardBottomActions
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        SearchCardBottomActions.Visibility = showSearchCardBottomActions
             ? Visibility.Visible
             : Visibility.Collapsed;
         TerminalChevron.Visibility = _terminalPaneExpanded ? Visibility.Visible : Visibility.Collapsed;

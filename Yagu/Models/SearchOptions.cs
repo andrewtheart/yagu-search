@@ -69,6 +69,16 @@ public sealed class SearchOptions
 
     public bool SkipBinary { get; init; } = true;
 
+    /// <summary>
+    /// When true, the scanner may open cloud-only placeholder files (OneDrive
+    /// Files On-Demand / Google Drive online-only files), hydrating them on
+    /// demand — but only when a live sync provider is present to service the
+    /// download. When false (the default), cloud-only files are skipped entirely
+    /// so the scan can never block on a hydration that may never complete.
+    /// See <see cref="Services.CloudFileHelper"/>.
+    /// </summary>
+    public bool SearchOnlineOnlyFiles { get; init; }
+
     /// <summary>Maximum directory depth to recurse into. 0 = unlimited.</summary>
     public int MaxSearchDepth { get; init; }
 
@@ -96,6 +106,32 @@ public sealed class SearchOptions
             3 => cores * 2,
             4 => cores,
             _ => 0,
+        };
+    }
+
+    /// <summary>
+    /// Streaming-scanner I/O worker oversubscription mode. The native file-scan
+    /// worker thread count is <see cref="MaxDegreeOfParallelism"/> multiplied by a
+    /// factor selected here: 0 = Auto (SSD/NVMe → 1×, rotational HDD → 2×),
+    /// 1 = 1×, 2 = 2×, 3 = 3×. Oversubscription overlaps per-file open/read latency
+    /// on cold sweeps but burns extra CPU when data is already cached, so SSDs
+    /// default to 1×.
+    /// </summary>
+    public int IoOversubscriptionIndex { get; init; }
+
+    /// <summary>
+    /// Resolves the streaming-scanner worker multiplier from the configured
+    /// <paramref name="index"/> and whether the search target is a rotational hard
+    /// disk. Pure function for testability.
+    /// </summary>
+    public static int ResolveIoOversubscriptionMultiplier(int index, bool isHardDisk)
+    {
+        return index switch
+        {
+            1 => 1,
+            2 => 2,
+            3 => 3,
+            _ => isHardDisk ? 2 : 1, // Auto
         };
     }
 
@@ -144,9 +180,9 @@ public sealed class SearchOptions
     public bool DirectOutputColor { get; set; }
 
     /// <summary>
-    /// When set, the streaming scanner in degraded mode writes raw UTF-8 bytes directly
-    /// to this store, bypassing String materialization entirely. The SearchResult sent
-    /// through the pipeline will be pre-evicted (empty MatchLine, valid DiskOffset).
+    /// When set, the native streaming scanner can use degraded metadata-only results:
+    /// the hot path sends source-backed stubs instead of materializing match-line strings.
+    /// Non-native fallback paths may still use the store for pre-evicted payloads.
     /// Set by the ViewModel to its active ResultStore before starting the search.
     /// </summary>
     public ResultStore? DegradedResultStore { get; set; }

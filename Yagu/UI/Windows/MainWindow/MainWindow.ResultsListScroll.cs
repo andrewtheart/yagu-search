@@ -160,7 +160,7 @@ public sealed partial class MainWindow
     {
         CaptureResultsListScrollPosition();
         ResultsListSmartScrollIntent intent = ResolveResultsListSmartScrollIntent();
-        if (LogService.Instance.IsVerboseEnabled && intent != ResultsListSmartScrollIntent.None)
+        if (!ViewModel.IsSearching && LogService.Instance.IsVerboseEnabled && intent != ResultsListSmartScrollIntent.None)
         {
             LogService.Instance.Verbose("ResultsList",
                 $"ResultRowsChanging: intent={intent}, atTop={_resultsListWasAtTop}, atBottom={_resultsListWasAtBottom}, rows={ViewModel.ResultRows.Count}, groups={ViewModel.ResultGroups.Count}, autoScroll={_autoScrollEnabled}");
@@ -269,34 +269,60 @@ public sealed partial class MainWindow
         double overlayBottom = GetResultsFileOverlayReservedHeight();
         FileGroup? bestGroup = null;
         double bestTop = double.NegativeInfinity;
+        bool visibleHeaderBlocksOverlay = false;
 
-        foreach (var expander in FindVisualDescendants<Expander>(ResultsList))
+        Visit(ResultsList);
+        return visibleHeaderBlocksOverlay ? null : bestGroup;
+
+        void Visit(DependencyObject parent)
+        {
+            if (visibleHeaderBlocksOverlay)
+                return;
+
+            int count = VisualTreeHelper.GetChildrenCount(parent);
+            for (int i = 0; i < count; i++)
+            {
+                var child = VisualTreeHelper.GetChild(parent, i);
+                if (child is Expander expander)
+                    VisitExpander(expander);
+
+                if (visibleHeaderBlocksOverlay)
+                    return;
+
+                Visit(child);
+            }
+        }
+
+        void VisitExpander(Expander expander)
         {
             if (expander.DataContext is not FileGroup group || expander.ActualHeight <= 0)
-                continue;
+                return;
 
             if (!TryGetElementBoundsInResultsList(expander, out double top, out double bottom))
-                continue;
+                return;
 
             if (bottom <= 0 || top >= viewportBottom)
-                continue;
+                return;
 
             // If the entire expander (header + content) fits within the viewport,
             // the header is already visible — no overlay needed.
             if (top >= -ResultsListScrollEdgeEpsilon && bottom <= viewportBottom + ResultsListScrollEdgeEpsilon)
-                continue;
+                return;
 
             if (!TryGetFileGroupHeaderBoundsInResultsList(expander, fallbackTop: top, out double headerTop, out double headerBottom))
-                continue;
+                return;
 
             if (headerBottom > ResultsListScrollEdgeEpsilon && headerTop < overlayBottom)
-                return null;
+            {
+                visibleHeaderBlocksOverlay = true;
+                return;
+            }
 
             if (headerBottom > ResultsListScrollEdgeEpsilon)
-                continue;
+                return;
 
             if (bottom <= overlayBottom + ResultsListScrollEdgeEpsilon)
-                continue;
+                return;
 
             if (top > bestTop)
             {
@@ -304,8 +330,6 @@ public sealed partial class MainWindow
                 bestGroup = group;
             }
         }
-
-        return bestGroup;
     }
 
     private double GetResultsFileOverlayReservedHeight()
@@ -446,7 +470,7 @@ public sealed partial class MainWindow
         EnsureResultsListScrollViewerHooked();
         ResultsList.ScrollIntoView(ViewModel.ResultRows[0], ScrollIntoViewAlignment.Leading);
         _resultsListScrollViewer?.ChangeView(null, 0, null, disableAnimation: true);
-        if (LogService.Instance.IsVerboseEnabled)
+        if (!ViewModel.IsSearching && LogService.Instance.IsVerboseEnabled)
             LogService.Instance.Verbose("ResultsList", $"ScrollResultsListToTop: rows={ViewModel.ResultRows.Count}, groups={ViewModel.ResultGroups.Count}");
         CaptureResultsListScrollPosition();
     }
@@ -485,20 +509,6 @@ public sealed partial class MainWindow
         }
 
         return null;
-    }
-
-    private static IEnumerable<T> FindVisualDescendants<T>(DependencyObject parent) where T : DependencyObject
-    {
-        int count = VisualTreeHelper.GetChildrenCount(parent);
-        for (int i = 0; i < count; i++)
-        {
-            var child = VisualTreeHelper.GetChild(parent, i);
-            if (child is T match)
-                yield return match;
-
-            foreach (var nested in FindVisualDescendants<T>(child))
-                yield return nested;
-        }
     }
 
 }

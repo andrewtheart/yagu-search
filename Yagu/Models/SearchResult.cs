@@ -10,6 +10,17 @@ namespace Yagu.Models;
 public sealed record ContextLine(int LineNum, string Text);
 
 /// <summary>
+/// Compact metadata for a match whose payload can be re-read from the source file.
+/// Used by degraded streaming searches to avoid constructing a SearchResult per hit.
+/// </summary>
+public readonly record struct SourceBackedMatch(
+    string FilePath,
+    int LineNumber,
+    int MatchStartColumn,
+    int MatchLength,
+    int SourceMatchStartColumn);
+
+/// <summary>
 /// A single match found in a file.
 /// </summary>
 public sealed record SearchResult(
@@ -23,6 +34,8 @@ public sealed record SearchResult(
 {
     // Override primary constructor properties with mutable versions to support disk eviction.
     public string MatchLine { get; internal set; } = MatchLine;
+    public int MatchStartColumn { get; internal set; } = MatchStartColumn;
+    public int MatchLength { get; internal set; } = MatchLength;
     public IReadOnlyList<string> ContextBefore { get; internal set; } = ContextBefore;
     public IReadOnlyList<string> ContextAfter { get; internal set; } = ContextAfter;
     internal int SourceMatchStartColumn { get; set; } = MatchStartColumn;
@@ -46,13 +59,17 @@ public sealed record SearchResult(
 
     private const long InMemoryOffset = -1;
     private const long EvictingOffset = -2;
+    internal const long SourceBackedOffset = -3;
     private long _diskOffset = InMemoryOffset;
 
     /// <summary>Byte offset in the <see cref="ResultStore"/> temp file, or -1 if in memory.</summary>
     public long DiskOffset => Volatile.Read(ref _diskOffset);
 
     /// <summary>True when heavy data has been evicted to disk.</summary>
-    public bool IsEvicted => DiskOffset >= 0;
+    public bool IsEvicted => DiskOffset >= 0 || IsSourceBacked;
+
+    /// <summary>True when payload should be re-read from the original source file on demand.</summary>
+    internal bool IsSourceBacked => DiskOffset == SourceBackedOffset;
 
     /// <summary>True when this result has been queued for eviction but has not been written yet.</summary>
     internal bool IsEvicting => DiskOffset == EvictingOffset;
@@ -77,6 +94,21 @@ public sealed record SearchResult(
             ContextAfter: Array.Empty<string>());
         result.SourceMatchStartColumn = sourceMatchStartColumn ?? matchStartColumn;
         Volatile.Write(ref result._diskOffset, diskOffset);
+        return result;
+    }
+
+    internal static SearchResult CreateSourceBacked(string filePath, int lineNumber, int matchStartColumn, int matchLength, int sourceMatchStartColumn)
+    {
+        var result = new SearchResult(
+            FilePath: filePath,
+            LineNumber: lineNumber,
+            MatchLine: string.Empty,
+            MatchStartColumn: matchStartColumn,
+            MatchLength: matchLength,
+            ContextBefore: Array.Empty<string>(),
+            ContextAfter: Array.Empty<string>());
+        result.SourceMatchStartColumn = sourceMatchStartColumn;
+        Volatile.Write(ref result._diskOffset, SourceBackedOffset);
         return result;
     }
 
@@ -166,9 +198,21 @@ public sealed record SearchResult(
 
     /// <summary>Restore full payload from pre-read data (batch hydration path).</summary>
     internal void HydrateFrom(string matchLine, IReadOnlyList<string> contextBefore, IReadOnlyList<string> contextAfter)
+        => HydrateFrom(matchLine, contextBefore, contextAfter, MatchStartColumn, MatchLength, SourceMatchStartColumn);
+
+    internal void HydrateFrom(
+        string matchLine,
+        IReadOnlyList<string> contextBefore,
+        IReadOnlyList<string> contextAfter,
+        int matchStartColumn,
+        int matchLength,
+        int sourceMatchStartColumn)
     {
-        if (DiskOffset < 0) return;
+        if (!IsEvicted) return;
         MatchLine = matchLine;
+        MatchStartColumn = matchStartColumn;
+        MatchLength = matchLength;
+        SourceMatchStartColumn = sourceMatchStartColumn;
         ContextBefore = contextBefore;
         ContextAfter = contextAfter;
         _shortPreview = null;

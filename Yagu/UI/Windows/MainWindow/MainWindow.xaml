@@ -371,7 +371,7 @@
                         <StackPanel x:Name="InlineSearchToggles"
                                     Orientation="Horizontal" Spacing="2"
                                     HorizontalAlignment="Right" VerticalAlignment="Center"
-                                Margin="0,0,36,0">
+                                    Margin="0,0,36,0">
                             <ToggleButton x:Name="CaseSensitiveToggle"
                                           IsChecked="{x:Bind ViewModel.CaseSensitive, Mode=TwoWay}"
                                           ToolTipService.ToolTip="Match Case (Alt+C)"
@@ -409,14 +409,6 @@
                         </Button>
                     </Grid>
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
-                        <Button x:Name="SearchCardLoadSessionButton"
-                                Click="OnLoadSession"
-                                Width="32" Height="32"
-                                Padding="0" MinWidth="0" MinHeight="0"
-                                IsEnabled="{x:Bind ViewModel.IsSessionIdle, Mode=OneWay}"
-                                ToolTipService.ToolTip="Load a previously saved .yagu-session file">
-                            <FontIcon Glyph="&#xE8E5;" FontSize="14" />
-                        </Button>
                         <Button x:Name="SearchCancelButton" Click="OnSearchCancelClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,6" MinWidth="0"
                                 ToolTipService.ToolTip="Search (F5)">
                             <Button.KeyboardAccelerators>
@@ -778,23 +770,33 @@
                     </Border>
                     </ScrollViewer>
                 </Expander>
-            <Button x:Name="PreSearchTerminalChevron"
-                    Grid.Row="2"
-                    Grid.Column="1"
-                    Click="OnToggleTerminalPane"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Bottom"
-                    Width="36" Height="32" MinWidth="0" MinHeight="0"
-                    Padding="0"
-                    Background="Transparent"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1"
-                    CornerRadius="6"
-                    ToolTipService.ToolTip="Toggle embedded terminal">
-                <FontIcon x:Name="PreSearchTerminalChevronIcon"
-                          FontFamily="{StaticResource SymbolThemeFontFamily}"
-                          Glyph="&#xE70D;" FontSize="12" />
-            </Button>
+                <StackPanel x:Name="SearchCardBottomActions"
+                            Grid.Row="2" Grid.Column="1"
+                            Orientation="Horizontal" Spacing="6"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Bottom">
+                    <Button x:Name="SearchCardLoadSessionButton"
+                            Click="OnLoadSession"
+                            Width="32" Height="32"
+                            Padding="0" MinWidth="0" MinHeight="0"
+                            IsEnabled="{x:Bind ViewModel.IsSessionIdle, Mode=OneWay}"
+                            ToolTipService.ToolTip="Load a previously saved .yagu-session file">
+                        <FontIcon Glyph="&#xE8E5;" FontSize="14" />
+                    </Button>
+                    <Button x:Name="PreSearchTerminalChevron"
+                            Click="OnToggleTerminalPane"
+                            Width="36" Height="32" MinWidth="0" MinHeight="0"
+                            Padding="0"
+                            Background="Transparent"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            ToolTipService.ToolTip="Toggle embedded terminal">
+                        <FontIcon x:Name="PreSearchTerminalChevronIcon"
+                                  FontFamily="{StaticResource SymbolThemeFontFamily}"
+                                  Glyph="&#xE70D;" FontSize="12" />
+                    </Button>
+                </StackPanel>
             </Grid>
         </Border>
 

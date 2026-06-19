@@ -233,14 +233,19 @@ if (-not $everythingRunning) {
     Write-Host "Everything is already running."
 }
 
-# -- 6. Kill any existing Yagu process (by PID) ------------------------
-$yaguProc = Get-Process -Name Yagu -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($yaguProc) {
-    Stop-Process -Id $yaguProc.Id -Force
-    Write-Host "Killed existing Yagu (PID: $($yaguProc.Id))."
+# -- 6. Kill any existing Yagu processes from this workspace (by PID) --
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$yaguBinRoot = Join-Path $repoRoot 'Yagu\bin'
+$yaguProcs = @(Get-CimInstance Win32_Process -Filter "Name = 'Yagu.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($yaguBinRoot, [System.StringComparison]::OrdinalIgnoreCase) })
+if ($yaguProcs.Count -gt 0) {
+    foreach ($yaguProc in $yaguProcs) {
+        Stop-Process -Id $yaguProc.ProcessId -Force -ErrorAction SilentlyContinue
+        Write-Host "Killed existing workspace Yagu (PID: $($yaguProc.ProcessId), Path: $($yaguProc.ExecutablePath))."
+    }
     Start-Sleep -Seconds 2
 } else {
-    Write-Host "No existing Yagu process."
+    Write-Host "No existing workspace Yagu processes."
 }
 
 # -- 7. Quick verification - just check sessions 1-3 (the ones profile-monitor uses) --

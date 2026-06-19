@@ -3208,8 +3208,6 @@ public sealed class ContentSearcherBranchTests : IDisposable
         finally
         {
             FileWatchDiagnostics.Clear();
-            // Re-add the original default pattern
-            FileWatchDiagnostics.Add("lvl_jotun_gpm_rockskipcontest.sbp");
         }
     }
 }
@@ -4066,7 +4064,6 @@ public sealed class ContentSearcherBranch3Tests : IDisposable
         finally
         {
             FileWatchDiagnostics.Clear();
-            FileWatchDiagnostics.Add("lvl_jotun_gpm_rockskipcontest.sbp");
         }
     }
 }

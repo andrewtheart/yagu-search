@@ -452,6 +452,48 @@ public class SearchServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task SearchAsync_EmitsScanCompletedBeforeFinalCompleted()
+    {
+        Write("a.txt", "needle");
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "needle",
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        var eventNames = new List<string>();
+        SearchSummary? scanSummary = null;
+        SearchSummary? completedSummary = null;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            switch (evt)
+            {
+                case SearchEvent.ScanCompleted sc:
+                    eventNames.Add(nameof(SearchEvent.ScanCompleted));
+                    scanSummary = sc.Summary;
+                    break;
+                case SearchEvent.Completed c:
+                    eventNames.Add(nameof(SearchEvent.Completed));
+                    completedSummary = c.Summary;
+                    break;
+            }
+        }
+
+        int scanCompletedIndex = eventNames.IndexOf(nameof(SearchEvent.ScanCompleted));
+        int completedIndex = eventNames.IndexOf(nameof(SearchEvent.Completed));
+        Assert.True(scanCompletedIndex >= 0);
+        Assert.True(completedIndex > scanCompletedIndex);
+        Assert.NotNull(scanSummary);
+        Assert.NotNull(completedSummary);
+        Assert.Equal(1, scanSummary!.TotalMatches);
+        Assert.Equal(scanSummary.Elapsed, completedSummary!.Elapsed);
+    }
+
+    [Fact]
     public async Task SearchSummary_CountsGlobFilteredFilesAsCompleted()
     {
         Write("keep.txt", "needle");
@@ -809,6 +851,7 @@ public class SearchServiceTests : IDisposable
         public int EarlySkippedTooLargeFiles => 0;
         public int EarlyExcludedByExtensionFiles => 0;
         public int GitignoreSkipped => 0;
+        public int CloudOnlySkippedFiles => 0;
 
         public async IAsyncEnumerable<string> ListFilesAsync(
             string directory,
@@ -838,6 +881,7 @@ public class SearchServiceTests : IDisposable
         public int EarlySkippedTooLargeFiles => 0;
         public int EarlyExcludedByExtensionFiles => 0;
         public int GitignoreSkipped => 0;
+        public int CloudOnlySkippedFiles => 0;
 
         public async IAsyncEnumerable<string> ListFilesAsync(
             string directory,
@@ -1401,6 +1445,18 @@ public class SearchEventCoverageTests
             new("f.txt", 2, "line2", 0, 5, Array.Empty<string>(), Array.Empty<string>()),
         };
         var e = new SearchEvent.MatchBatch(results);
+        Assert.Equal(2, e.Results.Count);
+    }
+
+    [Fact]
+    public void SourceBackedMatchBatch_Properties()
+    {
+        var results = new List<SourceBackedMatch>
+        {
+            new("f.txt", 1, 0, 5, 0),
+            new("f.txt", 2, 1, 4, 1),
+        };
+        var e = new SearchEvent.SourceBackedMatchBatch(results);
         Assert.Equal(2, e.Results.Count);
     }
 
@@ -2033,6 +2089,7 @@ public class SearchServiceEarlySkipTests : IDisposable
         public int EarlySkippedTooLargeFiles { get; } = earlySkippedFiles;
         public int EarlyExcludedByExtensionFiles => 0;
         public int GitignoreSkipped => 0;
+        public int CloudOnlySkippedFiles => 0;
 
         public async IAsyncEnumerable<string> ListFilesAsync(
             string directory,

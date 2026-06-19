@@ -464,11 +464,11 @@ public class LogServiceEdgeCaseTests
 public class FileWatchDiagnosticsCoverageTests
 {
     /// <summary>
-    /// Save and restore static state to avoid polluting other tests.
+    /// Clear shared static state before and after each test so the opt-in watch
+    /// set never leaks between tests.
     /// </summary>
     private static void RunWithCleanState(Action action)
     {
-        // Clear, run test, then restore default pattern
         FileWatchDiagnostics.Clear();
         try
         {
@@ -477,20 +477,27 @@ public class FileWatchDiagnosticsCoverageTests
         finally
         {
             FileWatchDiagnostics.Clear();
-            FileWatchDiagnostics.Add("lvl_jotun_gpm_rockskipcontest.sbp");
         }
     }
 
     [Fact]
-    public void DefaultPattern_IsWatched()
+    public void RegisteredPattern_IsWatched()
     {
-        Assert.True(FileWatchDiagnostics.IsWatched(@"C:\data\lvl_jotun_gpm_rockskipcontest.sbp"));
+        RunWithCleanState(() =>
+        {
+            FileWatchDiagnostics.Add("suspect-file.dat");
+            Assert.True(FileWatchDiagnostics.IsWatched(@"C:\data\suspect-file.dat"));
+        });
     }
 
     [Fact]
-    public void DefaultPattern_CaseInsensitive()
+    public void RegisteredPattern_MatchIsCaseInsensitive()
     {
-        Assert.True(FileWatchDiagnostics.IsWatched(@"C:\DATA\LVL_JOTUN_GPM_ROCKSKIPCONTEST.SBP"));
+        RunWithCleanState(() =>
+        {
+            FileWatchDiagnostics.Add("suspect-file.dat");
+            Assert.True(FileWatchDiagnostics.IsWatched(@"C:\DATA\SUSPECT-FILE.DAT"));
+        });
     }
 
     [Fact]

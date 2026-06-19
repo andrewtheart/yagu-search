@@ -359,6 +359,7 @@ mod tests {
             max_results: 0,
             skip_binary: false,
             ascii_case_only: false,
+            metadata_only: false,
         }
     }
 

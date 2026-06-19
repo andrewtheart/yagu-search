@@ -71,6 +71,18 @@ public sealed class SearchServiceGateTests
     }
 
     [Fact]
+    public void SourceBackedResults_UseCoarseBatchesAndDedicatedBuffer()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "SearchService.cs"));
+
+        Assert.Contains("private const int SourceBackedResultChannelCapacity = 65_536;", source);
+        Assert.Contains("int sourceBackedCap = options.DegradedResultStore != null", source);
+        Assert.Contains("new BoundedChannelOptions(sourceBackedCap)", source);
+        Assert.Contains("sourceBackedResults={sourceBackedCap}", source);
+        Assert.Contains("const int SourceBackedBatchSize = 16_384;", source);
+    }
+
+    [Fact]
     public void IsMemoryPressureHigh_ReturnsBoolean()
     {
         // Exercise with no cap — should not throw

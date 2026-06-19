@@ -13,7 +13,7 @@ public sealed class DirectOutputSinkTests
         var paths = new List<string> { @"C:\src\example.txt" };
         int cancel = 0;
         int filesScanned = 0;
-        using var sink = new DirectOutputSink(output, color: false, paths, maxResults: 2, currentTotalMatches: 0, (IntPtr)(&cancel), &filesScanned);
+        using var sink = new DirectOutputSink(output, color: false, paths, maxResults: 2, currentTotalMatches: 0, (IntPtr)(&cancel), &filesScanned, contextEnabled: true);
 
         byte[] firstLine = Encoding.UTF8.GetBytes("prefix NEEDLE suffix");
         byte[] before = PackContext("before one", "before two");
@@ -252,6 +252,73 @@ public sealed class DirectOutputSinkTests
         string text = Encoding.UTF8.GetString(output.ToArray());
         // Should contain separator between non-contiguous matches
         Assert.Contains("--\n", text);
+    }
+
+    [Fact]
+    public unsafe void OnMatchForFile_NoContext_NonContiguousMatches_OmitsSeparator()
+    {
+        // ripgrep prints "--" separators only when context (-A/-B/-C) is enabled.
+        // At context 0 (contextEnabled: false), non-contiguous matches must NOT be
+        // separated by "--".
+        using var output = new MemoryStream();
+        var paths = new List<string> { @"C:\a.txt" };
+        int cancel = 0;
+        int filesScanned = 0;
+        using var sink = new DirectOutputSink(output, color: false, paths, maxResults: 0, currentTotalMatches: 0, (IntPtr)(&cancel), &filesScanned, contextEnabled: false);
+
+        byte[] line1 = Encoding.UTF8.GetBytes("first");
+        byte[] line2 = Encoding.UTF8.GetBytes("second");
+        fixed (byte* p1 = line1)
+        fixed (byte* p2 = line2)
+        {
+            var m1 = new NativeSearcher.QgMatchView { LineNumber = 5, MatchStart = 0, SourceMatchStart = 0, MatchLen = 5, LinePtr = p1, LineLen = (nuint)line1.Length };
+            sink.OnMatchForFile(0, &m1);
+            var m2 = new NativeSearcher.QgMatchView { LineNumber = 20, MatchStart = 0, SourceMatchStart = 0, MatchLen = 6, LinePtr = p2, LineLen = (nuint)line2.Length };
+            sink.OnMatchForFile(0, &m2);
+        }
+
+        string text = Encoding.UTF8.GetString(output.ToArray());
+        Assert.DoesNotContain("--", text);
+        Assert.Contains("5:first", text);
+        Assert.Contains("20:second", text);
+    }
+
+    [Fact]
+    public unsafe void OnMatchForFile_MultipleMatchesOnSameLine_EmitsLineOnce()
+    {
+        // ripgrep is line-oriented: a source line containing several matches is
+        // printed exactly once. The scanner delivers same-line matches consecutively,
+        // so the sink must fold them into a single emitted line and count it once.
+        using var output = new MemoryStream();
+        var paths = new List<string> { @"C:\a.txt" };
+        int cancel = 0;
+        int filesScanned = 0;
+        using var sink = new DirectOutputSink(output, color: false, paths, maxResults: 0, currentTotalMatches: 0, (IntPtr)(&cancel), &filesScanned);
+
+        // "foo foo foo" — three matches of "foo" on the same line (offsets 0, 4, 8).
+        byte[] line = Encoding.UTF8.GetBytes("foo foo foo");
+        byte[] next = Encoding.UTF8.GetBytes("foo bar");
+        fixed (byte* p = line)
+        fixed (byte* pn = next)
+        {
+            var a = new NativeSearcher.QgMatchView { LineNumber = 1, MatchStart = 0, SourceMatchStart = 0, MatchLen = 3, LinePtr = p, LineLen = (nuint)line.Length };
+            var b = new NativeSearcher.QgMatchView { LineNumber = 1, MatchStart = 4, SourceMatchStart = 4, MatchLen = 3, LinePtr = p, LineLen = (nuint)line.Length };
+            var c = new NativeSearcher.QgMatchView { LineNumber = 1, MatchStart = 8, SourceMatchStart = 8, MatchLen = 3, LinePtr = p, LineLen = (nuint)line.Length };
+            var d = new NativeSearcher.QgMatchView { LineNumber = 2, MatchStart = 0, SourceMatchStart = 0, MatchLen = 3, LinePtr = pn, LineLen = (nuint)next.Length };
+
+            Assert.Equal(0, sink.OnMatchForFile(0, &a));
+            Assert.Equal(0, sink.OnMatchForFile(0, &b));
+            Assert.Equal(0, sink.OnMatchForFile(0, &c));
+            Assert.Equal(0, sink.OnMatchForFile(0, &d));
+        }
+
+        string text = Encoding.UTF8.GetString(output.ToArray());
+        // Line 1 emitted exactly once despite three matches on it.
+        int occurrences = text.Split("1:foo foo foo").Length - 1;
+        Assert.Equal(1, occurrences);
+        Assert.Contains("2:foo bar", text);
+        // Matching-line count (like ripgrep), not raw match count: 2 lines, not 4.
+        Assert.Equal(2, sink.TotalMatches);
     }
 
     [Fact]

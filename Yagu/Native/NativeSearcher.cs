@@ -22,7 +22,7 @@ internal static partial class NativeSearcher
         public byte CaseSensitive;
         public byte UseRegex;
         public byte SkipBinary;
-        public byte _Pad0;
+        public byte OmitLineBytes;
         public uint ContextBefore;
         public uint ContextAfter;
         public ulong MaxResults;
@@ -205,6 +205,25 @@ internal static partial class NativeSearcher
         return 0;
     }
 
+    private static uint NativeContextLineCount(SearchOptions options)
+        => (uint)Math.Max(0, options.ContextLines);
+
+    private static QgOptions CreateOptions(SearchOptions options)
+    {
+        uint contextLineCount = NativeContextLineCount(options);
+        return new QgOptions
+        {
+            CaseSensitive = (byte)(options.CaseSensitive ? 1 : 0),
+            UseRegex = (byte)(options.UseRegex ? 1 : 0),
+            SkipBinary = (byte)(options.SkipBinary ? 1 : 0),
+            OmitLineBytes = 0,
+            ContextBefore = contextLineCount,
+            ContextAfter = contextLineCount,
+            MaxResults = EffectivePerFileCap(options),
+            MaxFileSize = options.MaxFileSizeBytes > 0 ? (ulong)options.MaxFileSizeBytes : 0UL,
+        };
+    }
+
     /// <summary>
     /// Search a single file. Returns null when the native engine isn't loaded
     /// or the file should be skipped by the binary/size policy.
@@ -217,16 +236,7 @@ internal static partial class NativeSearcher
     {
         if (!IsAvailable) return NativeSearchOutcome.Unavailable;
 
-        var ffiOptions = new QgOptions
-        {
-            CaseSensitive = (byte)(options.CaseSensitive ? 1 : 0),
-            UseRegex = (byte)(options.UseRegex ? 1 : 0),
-            SkipBinary = (byte)(options.SkipBinary ? 1 : 0),
-            ContextBefore = (uint)Math.Max(0, options.ContextLines),
-            ContextAfter = (uint)Math.Max(0, options.ContextLines),
-            MaxResults = EffectivePerFileCap(options),
-            MaxFileSize = options.MaxFileSizeBytes > 0 ? (ulong)options.MaxFileSizeBytes : 0UL,
-        };
+        var ffiOptions = CreateOptions(options);
 
         QgResult result = default;
         int status;
@@ -280,16 +290,7 @@ internal static partial class NativeSearcher
     {
         if (!IsAvailable) return StatusOpenFailed;
 
-        var ffiOptions = new QgOptions
-        {
-            CaseSensitive = (byte)(options.CaseSensitive ? 1 : 0),
-            UseRegex = (byte)(options.UseRegex ? 1 : 0),
-            SkipBinary = (byte)(options.SkipBinary ? 1 : 0),
-            ContextBefore = (uint)Math.Max(0, options.ContextLines),
-            ContextAfter = (uint)Math.Max(0, options.ContextLines),
-            MaxResults = EffectivePerFileCap(options),
-            MaxFileSize = options.MaxFileSizeBytes > 0 ? (ulong)options.MaxFileSizeBytes : 0UL,
-        };
+        var ffiOptions = CreateOptions(options);
 
         var patternBytes = System.Text.Encoding.UTF8.GetBytes(pattern);
         var handle = GCHandle.Alloc(sink, GCHandleType.Normal);
@@ -370,16 +371,7 @@ internal static partial class NativeSearcher
     {
         if (!IsAvailable) return null;
 
-        var ffiOptions = new QgOptions
-        {
-            CaseSensitive = (byte)(options.CaseSensitive ? 1 : 0),
-            UseRegex = (byte)(options.UseRegex ? 1 : 0),
-            SkipBinary = (byte)(options.SkipBinary ? 1 : 0),
-            ContextBefore = (uint)Math.Max(0, options.ContextLines),
-            ContextAfter = (uint)Math.Max(0, options.ContextLines),
-            MaxResults = EffectivePerFileCap(options),
-            MaxFileSize = options.MaxFileSizeBytes > 0 ? (ulong)options.MaxFileSizeBytes : 0UL,
-        };
+        var ffiOptions = CreateOptions(options);
 
         var patternBytes = System.Text.Encoding.UTF8.GetBytes(pattern);
         byte* errMsg = null;

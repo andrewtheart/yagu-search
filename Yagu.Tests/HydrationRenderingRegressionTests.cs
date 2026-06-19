@@ -12,7 +12,10 @@ namespace Yagu.Tests;
 ///    ItemsControl/ListView only honor the first NewItem in a multi-item
 ///    Add notification, which caused only one of many newly added match rows
 ///    to be rendered when a drawer was expanded.
-/// 2. <see cref="SearchResult.HydrateFrom(string, IReadOnlyList{string}, IReadOnlyList{string})"/>
+/// 2. <see cref="BatchObservableCollection{T}.AppendRange"/> must preserve
+///    per-item Add notifications while raising only one pre-change event for
+///    scroll-capture code.
+/// 3. <see cref="SearchResult.HydrateFrom(string, IReadOnlyList{string}, IReadOnlyList{string})"/>
 ///    must restore payload AND raise PropertyChanged for the context-line
 ///    collections. Because PropertyChanged drives XAML bindings, hydration
 ///    must run on the UI thread; the disk-read phase is split out separately
@@ -112,10 +115,13 @@ public class HydrationRenderingRegressionTests
     {
         var collection = new BatchObservableCollection<int> { 1, 2 };
         var notifications = new List<NotifyCollectionChangedEventArgs>();
+        int changingCount = 0;
+        collection.CollectionChanging += (_, _) => changingCount++;
         collection.CollectionChanged += (_, e) => notifications.Add(e);
 
         collection.AppendRange(new[] { 3, 4, 5 });
 
+        Assert.Equal(1, changingCount);
         Assert.Equal(3, notifications.Count);
         Assert.All(notifications, e => Assert.Equal(NotifyCollectionChangedAction.Add, e.Action));
         Assert.Equal(new[] { 3, 4, 5 }, notifications.Select(e => Assert.Single(e.NewItems!.Cast<int>())).ToArray());

@@ -110,6 +110,7 @@ public sealed class AppSettings
     public int ConsoleLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     public int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
     public int ParallelismIndex { get; set; } = 4; // 0 = safe cap, 1 = 1, 2 = half cores, 3 = 2x cores, 4 = all cores
+    public int IoOversubscriptionIndex { get; set; } // 0 = Auto (SSD 1x, HDD 2x), 1 = 1x, 2 = 2x, 3 = 3x
     public int LineTruncationLength { get; set; } = 500;
     public int MaxRecentItems { get; set; } = 20;
     /// <summary>Hard process memory cap in MB. 0 = automatic sub-GB paging target.</summary>
@@ -138,6 +139,11 @@ public sealed class AppSettings
     public int MaxMatchesPerFile { get; set; }
     /// <summary>Whether to skip binary files during content search. Default true.</summary>
     [JsonIgnore] public bool SkipBinary { get; set; } = true;
+    /// <summary>When true, the scanner opens cloud-only (online-only) placeholder files
+    /// — OneDrive Files On-Demand / Google Drive — hydrating them on demand when a live
+    /// provider is present. When false (default), such files are skipped so the scan can
+    /// never block on a hydration that may never complete. Default false.</summary>
+    public bool SearchOnlineOnlyFiles { get; set; }
     /// <summary>When true, detect ZIP archives by file header and search text files inside them. Default true.</summary>
     [JsonIgnore] public bool SearchInsideArchives { get; set; }
     /// <summary>Semicolon-separated file extensions that are known ZIP-like containers (bypassed from skip-extensions when archive search is on). e.g. "zip;jar;docx;xlsx".</summary>

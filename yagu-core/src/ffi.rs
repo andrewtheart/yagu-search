@@ -44,9 +44,9 @@ fn open_for_scan(path: &str) -> std::io::Result<File> {
     }
 }
 
-/// Files at or below this size are read fully into a `Vec<u8>` instead of being
-/// memory-mapped. mmap setup (TLB, page-fault dance) costs more than a single
-/// `read_to_end` for small files; on the C:\ benchmark 75% of files are <64 KB.
+/// Files at or below this size are read fully into a per-worker scratch buffer
+/// instead of being memory-mapped. mmap setup and the page-fault path amortize
+/// poorly across the long tail of small/medium files in full-drive scans.
 const MMAP_THRESHOLD_BYTES: u64 = 64 * 1024;
 
 /// Number of bytes read from the head of a candidate file to test for binary
@@ -60,7 +60,7 @@ pub struct QgOptions {
     pub case_sensitive: c_uchar,
     pub use_regex: c_uchar,
     pub skip_binary: c_uchar,
-    pub _pad0: c_uchar,
+    pub omit_line_bytes: c_uchar,
     pub context_before: c_uint,
     pub context_after: c_uint,
     pub max_results: c_ulonglong,
@@ -192,9 +192,9 @@ impl FileBytes {
 ///    the C:\ benchmark 75% of candidate files were binary; this short-circuit
 ///    saves both physical I/O for the file tail and TLB/page-fault overhead.
 /// 2. **mmap for large files only.** Files larger than `MMAP_THRESHOLD_BYTES`
-///    (64 KB) are memory-mapped; smaller files are read into a `Vec<u8>` in
-///    one syscall. mmap's per-call setup amortizes poorly across the long
-///    tail of small text files.
+///    are memory-mapped; smaller files are read into a `Vec<u8>` in one syscall.
+///    mmap's per-call setup amortizes poorly across the long tail of small and
+///    medium text files.
 /// 3. **Empty files** return an empty `Owned` buffer (caller treats this as
 ///    zero matches, no allocation cost).
 fn open_file_for_scan(
@@ -272,8 +272,9 @@ impl<'a> FileBytesRef<'a> {
 
 /// Same contract as [`open_file_for_scan`], but the small-file path reads into
 /// a caller-supplied scratch buffer so per-thread `Vec<u8>` allocations are
-/// reused across files. On the C:\ benchmark 75% of files are <= 64 KB, so
-/// this turns the most common case into a zero-alloc syscall plus a memcpy.
+/// reused across files. This turns small and medium files into a zero-alloc
+/// syscall plus a memcpy while reserving mmap for files large enough to amortize
+/// the mapping/page-fault setup cost.
 fn open_file_for_scan_into<'a>(
     path: &str,
     max_file_size: u64,
@@ -446,6 +447,7 @@ pub unsafe extern "C" fn qg_search_file(
             opts_in.use_regex != 0,
             opts_in.case_sensitive != 0,
         ),
+        metadata_only: opts_in.omit_line_bytes != 0,
     };
 
     // Open + size check + (probe/read/mmap).
@@ -705,6 +707,7 @@ pub unsafe extern "C" fn qg_search_file_stream(
             opts_in.use_regex != 0,
             opts_in.case_sensitive != 0,
         ),
+        metadata_only: opts_in.omit_line_bytes != 0,
     };
 
     let file_bytes = match open_file_for_scan(&path, opts_in.max_file_size, scan_opts.skip_binary) {
@@ -745,30 +748,39 @@ pub unsafe extern "C" fn qg_search_file_stream(
             }
         }
 
-        pack_lines_borrowed(view.context_before, &mut before_buf);
-        pack_lines_borrowed(view.context_after, &mut after_buf);
+        if opts_in.omit_line_bytes != 0 {
+            before_buf.clear();
+            after_buf.clear();
+        } else {
+            pack_lines_borrowed(view.context_before, &mut before_buf);
+            pack_lines_borrowed(view.context_after, &mut after_buf);
+        }
 
         let qg_view = QgMatchView {
             line_number: view.line_number,
             match_start: view.match_start,
             source_match_start: view.source_match_start,
             match_len: view.match_len,
-            line_ptr: view.line.as_ptr(),
-            line_len: view.line.len(),
+            line_ptr: if opts_in.omit_line_bytes != 0 {
+                std::ptr::null()
+            } else {
+                view.line.as_ptr()
+            },
+            line_len: if opts_in.omit_line_bytes != 0 { 0 } else { view.line.len() },
             ctx_before_ptr: if before_buf.is_empty() {
                 std::ptr::null()
             } else {
                 before_buf.as_ptr()
             },
             ctx_before_bytes: before_buf.len(),
-            ctx_before_count: view.context_before.len() as c_uint,
+            ctx_before_count: if opts_in.omit_line_bytes != 0 { 0 } else { view.context_before.len() as c_uint },
             ctx_after_ptr: if after_buf.is_empty() {
                 std::ptr::null()
             } else {
                 after_buf.as_ptr()
             },
             ctx_after_bytes: after_buf.len(),
-            ctx_after_count: view.context_after.len() as c_uint,
+            ctx_after_count: if opts_in.omit_line_bytes != 0 { 0 } else { view.context_after.len() as c_uint },
         };
 
         let cb_result = on_match(on_match_ctx, &qg_view as *const QgMatchView);
@@ -808,6 +820,7 @@ pub struct QgSession {
     matcher: Box<dyn crate::scan::LineMatcher>,
     scan_opts: ScanOptions,
     max_file_size: u64,
+    omit_line_bytes: bool,
 }
 
 // SAFETY: LineMatcher is Send+Sync, ScanOptions is plain data.
@@ -863,6 +876,7 @@ pub unsafe extern "C" fn qg_create_session(
             opts_in.use_regex != 0,
             opts_in.case_sensitive != 0,
         ),
+        metadata_only: opts_in.omit_line_bytes != 0,
     };
 
     let matcher = match crate::scan::build_matcher(pattern, &scan_opts) {
@@ -877,6 +891,7 @@ pub unsafe extern "C" fn qg_create_session(
         matcher,
         scan_opts,
         max_file_size: opts_in.max_file_size,
+        omit_line_bytes: opts_in.omit_line_bytes != 0,
     }))
 }
 
@@ -983,30 +998,39 @@ pub unsafe extern "C" fn qg_session_search_file_stream(
                 }
             }
 
-            pack_lines_borrowed(view.context_before, &mut before_buf);
-            pack_lines_borrowed(view.context_after, &mut after_buf);
+            if sess.omit_line_bytes {
+                before_buf.clear();
+                after_buf.clear();
+            } else {
+                pack_lines_borrowed(view.context_before, &mut before_buf);
+                pack_lines_borrowed(view.context_after, &mut after_buf);
+            }
 
             let qg_view = QgMatchView {
                 line_number: view.line_number,
                 match_start: view.match_start,
                 source_match_start: view.source_match_start,
                 match_len: view.match_len,
-                line_ptr: view.line.as_ptr(),
-                line_len: view.line.len(),
+                line_ptr: if sess.omit_line_bytes {
+                    std::ptr::null()
+                } else {
+                    view.line.as_ptr()
+                },
+                line_len: if sess.omit_line_bytes { 0 } else { view.line.len() },
                 ctx_before_ptr: if before_buf.is_empty() {
                     std::ptr::null()
                 } else {
                     before_buf.as_ptr()
                 },
                 ctx_before_bytes: before_buf.len(),
-                ctx_before_count: view.context_before.len() as c_uint,
+                ctx_before_count: if sess.omit_line_bytes { 0 } else { view.context_before.len() as c_uint },
                 ctx_after_ptr: if after_buf.is_empty() {
                     std::ptr::null()
                 } else {
                     after_buf.as_ptr()
                 },
                 ctx_after_bytes: after_buf.len(),
-                ctx_after_count: view.context_after.len() as c_uint,
+                ctx_after_count: if sess.omit_line_bytes { 0 } else { view.context_after.len() as c_uint },
             };
 
             let cb_result = on_match(on_match_ctx, &qg_view as *const QgMatchView);
@@ -1353,16 +1377,30 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                                 return false;
                             }
 
-                            let (before_offset, before_len) =
-                                pack_lines_into_arena(view.context_before, &mut context_arena);
-                            let (after_offset, after_len) =
-                                pack_lines_into_arena(view.context_after, &mut context_arena);
+                            let (before_offset, before_len, before_count) = if sess.omit_line_bytes {
+                                (0, 0, 0)
+                            } else {
+                                let (offset, len) =
+                                    pack_lines_into_arena(view.context_before, &mut context_arena);
+                                (offset, len, view.context_before.len() as c_uint)
+                            };
+                            let (after_offset, after_len, after_count) = if sess.omit_line_bytes {
+                                (0, 0, 0)
+                            } else {
+                                let (offset, len) =
+                                    pack_lines_into_arena(view.context_after, &mut context_arena);
+                                (offset, len, view.context_after.len() as c_uint)
+                            };
 
-                            // Copy line bytes into arena (they may reference
-                            // a reusable scratch buffer that gets overwritten).
-                            let line_offset = context_arena.len();
-                            context_arena.extend_from_slice(view.line);
-                            let line_len = view.line.len();
+                            let (line_offset, line_len) = if sess.omit_line_bytes {
+                                (0, 0)
+                            } else {
+                                // Copy line bytes into arena (they may reference
+                                // a reusable scratch buffer that gets overwritten).
+                                let offset = context_arena.len();
+                                context_arena.extend_from_slice(view.line);
+                                (offset, view.line.len())
+                            };
 
                             match_buf.push(BufferedMatchEntry {
                                 line_number: view.line_number,
@@ -1373,10 +1411,10 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                                 line_len,
                                 ctx_before_offset: before_offset,
                                 ctx_before_len: before_len,
-                                ctx_before_count: view.context_before.len() as c_uint,
+                                ctx_before_count: before_count,
                                 ctx_after_offset: after_offset,
                                 ctx_after_len: after_len,
-                                ctx_after_count: view.context_after.len() as c_uint,
+                                ctx_after_count: after_count,
                             });
                             true
                         },
@@ -1398,7 +1436,11 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                             match_start: entry.match_start,
                             source_match_start: entry.source_match_start,
                             match_len: entry.match_len,
-                            line_ptr: context_arena[entry.line_offset..].as_ptr(),
+                            line_ptr: if entry.line_len == 0 {
+                                std::ptr::null()
+                            } else {
+                                context_arena[entry.line_offset..].as_ptr()
+                            },
                             line_len: entry.line_len,
                             ctx_before_ptr: if entry.ctx_before_len == 0 {
                                 std::ptr::null()
@@ -1666,14 +1708,28 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
                             return false;
                         }
 
-                        let (before_offset, before_len) =
-                            pack_lines_into_arena(view.context_before, &mut context_arena);
-                        let (after_offset, after_len) =
-                            pack_lines_into_arena(view.context_after, &mut context_arena);
+                        let (before_offset, before_len, before_count) = if sess.omit_line_bytes {
+                            (0, 0, 0)
+                        } else {
+                            let (offset, len) =
+                                pack_lines_into_arena(view.context_before, &mut context_arena);
+                            (offset, len, view.context_before.len() as c_uint)
+                        };
+                        let (after_offset, after_len, after_count) = if sess.omit_line_bytes {
+                            (0, 0, 0)
+                        } else {
+                            let (offset, len) =
+                                pack_lines_into_arena(view.context_after, &mut context_arena);
+                            (offset, len, view.context_after.len() as c_uint)
+                        };
 
-                        let line_offset = context_arena.len();
-                        context_arena.extend_from_slice(view.line);
-                        let line_len = view.line.len();
+                        let (line_offset, line_len) = if sess.omit_line_bytes {
+                            (0, 0)
+                        } else {
+                            let offset = context_arena.len();
+                            context_arena.extend_from_slice(view.line);
+                            (offset, view.line.len())
+                        };
 
                         match_buf.push(BufferedMatchEntry {
                             line_number: view.line_number,
@@ -1684,10 +1740,10 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
                             line_len,
                             ctx_before_offset: before_offset,
                             ctx_before_len: before_len,
-                            ctx_before_count: view.context_before.len() as c_uint,
+                            ctx_before_count: before_count,
                             ctx_after_offset: after_offset,
                             ctx_after_len: after_len,
-                            ctx_after_count: view.context_after.len() as c_uint,
+                            ctx_after_count: after_count,
                         });
                         true
                     },
@@ -1709,7 +1765,11 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
                         match_start: entry.match_start,
                         source_match_start: entry.source_match_start,
                         match_len: entry.match_len,
-                        line_ptr: context_arena[entry.line_offset..].as_ptr(),
+                        line_ptr: if entry.line_len == 0 {
+                            std::ptr::null()
+                        } else {
+                            context_arena[entry.line_offset..].as_ptr()
+                        },
                         line_len: entry.line_len,
                         ctx_before_ptr: if entry.ctx_before_len == 0 {
                             std::ptr::null()
@@ -1879,7 +1939,7 @@ mod tests {
             case_sensitive: 0,
             use_regex: 0,
             skip_binary: 1,
-            _pad0: 0,
+            omit_line_bytes: 0,
             context_before: 0,
             context_after: 0,
             max_results: 0,
@@ -3797,11 +3857,11 @@ mod tests {
 
     #[test]
     fn search_file_mmap_failure() {
-        // File must exceed MMAP_THRESHOLD_BYTES (64 KB) so open_file_for_scan
+        // File must exceed MMAP_THRESHOLD_BYTES so open_file_for_scan
         // takes the mmap path; smaller files go through read_to_end and bypass
         // try_mmap entirely.
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
-        let big = vec![b'a'; 70 * 1024];
+        let big = vec![b'a'; (MMAP_THRESHOLD_BYTES as usize) + 16];
         tmp.write_all(&big).unwrap();
         tmp.write_all(b"\nhello\n").unwrap();
         tmp.flush().unwrap();
@@ -3871,7 +3931,7 @@ mod tests {
     fn stream_mmap_failure() {
         // See `search_file_mmap_failure` — file must exceed MMAP_THRESHOLD_BYTES.
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
-        let big = vec![b'a'; 70 * 1024];
+        let big = vec![b'a'; (MMAP_THRESHOLD_BYTES as usize) + 16];
         tmp.write_all(&big).unwrap();
         tmp.write_all(b"\nhello\n").unwrap();
         tmp.flush().unwrap();
@@ -3949,7 +4009,7 @@ mod tests {
     fn session_stream_mmap_failure() {
         // See `search_file_mmap_failure` — file must exceed MMAP_THRESHOLD_BYTES.
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
-        let big = vec![b'a'; 70 * 1024];
+        let big = vec![b'a'; (MMAP_THRESHOLD_BYTES as usize) + 16];
         tmp.write_all(&big).unwrap();
         tmp.write_all(b"\nhello\n").unwrap();
         tmp.flush().unwrap();

@@ -32,29 +32,24 @@ if (-not $YaguPid) {
 Write-Host "Yagu PID: $YaguPid"
 
 # ── 1. Set up Task Manager with Yagu filter (MAIN THREAD) ─────────────
-# Always kill and relaunch Task Manager fresh — stale instances have broken UIA COM proxies.
-# Task Manager is single-instance (mutex). After a force-kill the mutex can linger briefly,
-# causing a freshly launched taskmgr.exe to see the "existing" instance and exit immediately.
-# Kill ALL instances, wait for full reap, then retry launch/detect until a windowed process appears.
-Get-Process -Name Taskmgr -ErrorAction SilentlyContinue | ForEach-Object {
-    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-}
-# Wait until no taskmgr remains (mutex released on full process reap)
-$reapWait = 0
-while ((Get-Process -Name Taskmgr -ErrorAction SilentlyContinue) -and $reapWait -lt 20) {
-    Start-Sleep -Milliseconds 500
-    $reapWait++
-}
-Start-Sleep -Seconds 2
+# Reuse an existing visible Task Manager when one is already open. If not, launch one
+# and track the specific PID returned by Start-Process instead of force-killing all instances.
+$tmProc = Get-Process -Name Taskmgr -ErrorAction SilentlyContinue |
+    Where-Object { $_.MainWindowHandle -and $_.MainWindowHandle -ne [IntPtr]::Zero } |
+    Select-Object -First 1
 
-$tmProc = $null
 for ($tmLaunch = 1; $tmLaunch -le 5 -and -not $tmProc; $tmLaunch++) {
-    Start-Process taskmgr.exe
-    # Wait up to 10s for the process to appear with a rendered main window
+    $startedTaskManager = Start-Process taskmgr.exe -PassThru
+    # Wait up to 10s for the launched or single-instance process to render a main window.
     $tmWait = 0
     while ($tmWait -lt 20) {
         Start-Sleep -Milliseconds 500
-        $candidate = Get-Process -Name Taskmgr -ErrorAction SilentlyContinue | Select-Object -First 1
+        $candidate = Get-Process -Id $startedTaskManager.Id -ErrorAction SilentlyContinue
+        if (-not $candidate) {
+            $candidate = Get-Process -Name Taskmgr -ErrorAction SilentlyContinue |
+                Where-Object { $_.MainWindowHandle -and $_.MainWindowHandle -ne [IntPtr]::Zero } |
+                Select-Object -First 1
+        }
         if ($candidate -and $candidate.MainWindowHandle -and $candidate.MainWindowHandle -ne [IntPtr]::Zero) {
             $tmProc = $candidate
             break
@@ -77,9 +72,10 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+if (-not ([System.Management.Automation.PSTypeName]'TmAutomate3').Type) {
 Add-Type @"
 using System; using System.Runtime.InteropServices; using System.Threading;
-public class TmAutomate {
+public class TmAutomate3 {
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
@@ -145,6 +141,8 @@ public class TmAutomate {
                 TapKey((ushort)upper);
             } else if (upper >= '0' && upper <= '9') {
                 TapKey((ushort)upper);
+            } else if (ch == '.') {
+                TapKey(0xBE);
             }
         }
     }
@@ -186,9 +184,10 @@ public class TmAutomate {
     }
 }
 "@
+}
 
 # Bring Task Manager to foreground
-$fgOk = [TmAutomate]::ForceForeground($tmProc.MainWindowHandle)
+$fgOk = [TmAutomate3]::ForceForeground($tmProc.MainWindowHandle)
 Write-Host "Task Manager foreground: $fgOk"
 
 # Maximize Task Manager so the Disk MB/s column is wide enough for reliable OCR
@@ -196,7 +195,7 @@ Write-Host "Task Manager foreground: $fgOk"
 # misread the disk/CPU/memory columns or capture VS Code text underneath.
 function Get-TmRectSummary {
     param([IntPtr]$Handle)
-    $rect = [TmAutomate]::GetRect($Handle)
+    $rect = [TmAutomate3]::GetRect($Handle)
     $width = $rect.Right - $rect.Left
     $height = $rect.Bottom - $rect.Top
     "L=$($rect.Left) T=$($rect.Top) R=$($rect.Right) B=$($rect.Bottom) W=$width H=$height"
@@ -209,11 +208,11 @@ function Maximize-TaskManagerWindow {
     $work = $screen.WorkingArea
 
     for ($attempt = 1; $attempt -le 3; $attempt++) {
-        [void][TmAutomate]::ForceForeground($Handle)
-        [void][TmAutomate]::ShowWindow($Handle, 3)
+        [void][TmAutomate3]::ForceForeground($Handle)
+        [void][TmAutomate3]::ShowWindow($Handle, 3)
         Start-Sleep -Milliseconds 600
 
-        $rect = [TmAutomate]::GetRect($Handle)
+        $rect = [TmAutomate3]::GetRect($Handle)
         $width = $rect.Right - $rect.Left
         $height = $rect.Bottom - $rect.Top
         $nearWorkArea = ([math]::Abs($width - $work.Width) -le 80) -and ([math]::Abs($height - $work.Height) -le 80)
@@ -225,7 +224,7 @@ function Maximize-TaskManagerWindow {
         Write-Host "Maximize attempt $attempt left Task Manager restored-size: $(Get-TmRectSummary -Handle $Handle); work area W=$($work.Width) H=$($work.Height)"
     }
 
-    [void][TmAutomate]::MoveWindow($Handle, $work.Left, $work.Top, $work.Width, $work.Height, $true)
+    [void][TmAutomate3]::MoveWindow($Handle, $work.Left, $work.Top, $work.Width, $work.Height, $true)
     Start-Sleep -Milliseconds 600
     Write-Host "Task Manager resized to work area fallback: $(Get-TmRectSummary -Handle $Handle)"
 }
@@ -237,7 +236,7 @@ Maximize-TaskManagerWindow -Handle $tmProc.MainWindowHandle
 # DesktopWindowXamlSource/InputSite stubs to UIA, with no Edit/ValuePattern.
 # Ctrl+F still focuses the search box. Text injection into elevated Task Manager
 # requires this script to run elevated too; otherwise Windows UIPI blocks it.
-$filterText = "Yagu"
+$filterText = "Yagu.exe"
 
 function Set-TmFilterViaKeyboard {
     param(
@@ -245,23 +244,23 @@ function Set-TmFilterViaKeyboard {
         [string]$Text
     )
 
-    [void][TmAutomate]::ForceForeground($Handle)
+    [void][TmAutomate3]::ForceForeground($Handle)
     Start-Sleep -Milliseconds 300
-    [TmAutomate]::ReleaseModifiers()
+    [TmAutomate3]::ReleaseModifiers()
 
     # Ctrl+F focuses the Task Manager search box without moving the mouse.
-    [TmAutomate]::CtrlTap(0x46) # F
+    [TmAutomate3]::CtrlTap(0x46) # F
     Start-Sleep -Milliseconds 700
 
     # Replace any existing filter text.
-    [TmAutomate]::ReleaseModifiers()
-    [TmAutomate]::CtrlTap(0x41) # A
-    [TmAutomate]::TapKey(0x08)  # Backspace
+    [TmAutomate3]::ReleaseModifiers()
+    [TmAutomate3]::CtrlTap(0x41) # A
+    [TmAutomate3]::TapKey(0x08)  # Backspace
     Start-Sleep -Milliseconds 150
 
-    [TmAutomate]::TypeText($Text)
+    [TmAutomate3]::TypeText($Text)
     Start-Sleep -Milliseconds 700
-    [TmAutomate]::ReleaseModifiers()
+    [TmAutomate3]::ReleaseModifiers()
 }
 
 # Fast path for older Task Manager builds that still expose the search box to UIA.
@@ -327,9 +326,35 @@ Write-Host "All 3 profiling sessions attached."
 # ── 3. Launch parallel monitoring jobs ────────────────────────────────
 
 # Job 1: Task Manager screenshots every 1s for 2 minutes (no limit)
-$screenshotJob = Start-Job -ScriptBlock {
+$screenshotJob = Start-Job -ArgumentList $tmProc.Id -ScriptBlock {
+    param($taskManagerPid)
+
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
+    Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class ScreenshotTaskManagerForeground {
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+}
+"@
+
+    function Show-TaskManagerBeforeCapture {
+        $taskManager = Get-Process -Id $taskManagerPid -ErrorAction SilentlyContinue
+        if (-not $taskManager) { return }
+        if (-not $taskManager.MainWindowHandle -or $taskManager.MainWindowHandle -eq [IntPtr]::Zero) { return }
+
+        if ([ScreenshotTaskManagerForeground]::IsIconic($taskManager.MainWindowHandle)) {
+            [void][ScreenshotTaskManagerForeground]::ShowWindow($taskManager.MainWindowHandle, 9)
+        } else {
+            [void][ScreenshotTaskManagerForeground]::ShowWindow($taskManager.MainWindowHandle, 5)
+        }
+        [void][ScreenshotTaskManagerForeground]::SetForegroundWindow($taskManager.MainWindowHandle)
+        Start-Sleep -Milliseconds 120
+    }
 
     $screenshotDir = "C:\src\Yagu\TestResults\TaskManagerScreenshots"
     if (!(Test-Path $screenshotDir)) { New-Item -ItemType Directory -Path $screenshotDir -Force | Out-Null }
@@ -337,6 +362,7 @@ $screenshotJob = Start-Job -ScriptBlock {
     $durationSec = 120
     for ($i = 1; $i -le $durationSec; $i++) {
         Start-Sleep -Seconds 1
+        Show-TaskManagerBeforeCapture
         $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
         $bitmap = New-Object System.Drawing.Bitmap($screen.Width, $screen.Height)
         $graphics = [System.Drawing.Graphics]::FromImage($bitmap)

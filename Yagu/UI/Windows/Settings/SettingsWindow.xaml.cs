@@ -2250,6 +2250,11 @@ public sealed partial class SettingsWindow : Window
             pathTypeGroup.Children.Add(searchBinary);
             pathTypeGroup.Children.Add(new TextBlock { Text = "When enabled, files detected as binary (null bytes, magic bytes) are included in content search. Off by default for faster searching.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
+            var searchCloud = new ToggleSwitch { OnContent = NextSearchLabel("Search online-only cloud files"), OffContent = NextSearchLabel("Search online-only cloud files"), IsOn = _viewModel.SearchOnlineOnlyFiles };
+            searchCloud.Toggled += (_, _) => _viewModel.SearchOnlineOnlyFiles = searchCloud.IsOn;
+            pathTypeGroup.Children.Add(searchCloud);
+            pathTypeGroup.Children.Add(new TextBlock { Text = "When enabled, OneDrive/Google Drive ‘online-only’ placeholder files are downloaded on demand and searched — but only when the sync provider is running to serve them. Off by default: cloud-only files are skipped so the scan can never hang waiting on a download that may never complete. Searching them can be slow and use network/disk.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
             var skipAdmin = new CheckBox { Content = NextSearchLabel("Skip admin-protected paths when not elevated"), IsChecked = _viewModel.ExcludeAdminProtectedPaths };
             skipAdmin.Checked += (_, _) => _viewModel.ExcludeAdminProtectedPaths = true;
             skipAdmin.Unchecked += (_, _) => _viewModel.ExcludeAdminProtectedPaths = false;
@@ -2370,6 +2375,17 @@ public sealed partial class SettingsWindow : Window
             parallelism.SelectedIndex = _viewModel.ParallelismIndex;
             parallelism.SelectionChanged += (_, _) => _viewModel.ParallelismIndex = parallelism.SelectedIndex;
             searchEngineGroup.Children.Add(parallelism);
+
+            searchEngineGroup.Children.Add(NextSearchLabel("I/O worker oversubscription (scan threads = parallelism × factor):"));
+            var oversub = new ComboBox();
+            oversub.Items.Add("Auto (SSD/NVMe: 1×, HDD: 2×) — recommended");
+            oversub.Items.Add("1× (lowest CPU, coolest)");
+            oversub.Items.Add("2× (max throughput on cold full-drive sweeps)");
+            oversub.Items.Add("3× (aggressive, highest CPU)");
+            oversub.SelectedIndex = _viewModel.IoOversubscriptionIndex;
+            oversub.SelectionChanged += (_, _) => _viewModel.IoOversubscriptionIndex = oversub.SelectedIndex;
+            searchEngineGroup.Children.Add(oversub);
+            searchEngineGroup.Children.Add(new TextBlock { Text = "How many concurrent file-scan worker threads the native scanner spawns, as a multiple of the parallelism setting above. Oversubscription overlaps per-file disk latency during cold sweeps but wastes CPU (and generates heat) when files are already cached. Auto uses 1× on SSD/NVMe and 2× on rotational HDDs.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             var hddToggle = new ToggleSwitch
             {

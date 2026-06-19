@@ -89,6 +89,18 @@ var fileBytesWritten = 0L;
 var topFilesByReads = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
 var topFilesByBytes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
 
+// File I/O — enhanced per-file tracking
+// Per-file record: (openCount, readCount, totalBytesRead, firstOpenTimeMs, firstReadTimeMs)
+var perFileStats = new Dictionary<string, FileStats>(StringComparer.OrdinalIgnoreCase);
+// File I/O timeline (10s buckets): (opens, reads, bytesRead)
+var fileIoTimeline = new Dictionary<int, (long opens, long reads, long bytesRead)>();
+// Opens by file extension
+var opensByExtension = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+// File open timestamps for open-to-first-read gap calculation
+var fileOpenTimestamps = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+// Open-to-first-read latencies (ms)
+var openToFirstReadMs = new List<double>();
+
 // Disk I/O
 var diskReads = 0L;
 var diskBytesRead = 0L;
@@ -96,6 +108,8 @@ var diskWrites = 0L;
 var diskBytesWritten = 0L;
 var diskReadLatencyMs = new List<double>();
 var diskWriteLatencyMs = new List<double>();
+// Disk I/O timeline (10s buckets)
+var diskIoTimeline = new Dictionary<int, (long reads, long bytesRead, long writes, long bytesWritten)>();
 
 // Process info
 var processInfo = new Dictionary<int, (string Name, double StartMs, double EndMs)>();
@@ -432,6 +446,41 @@ using (var source = new ETWTraceEventSource(etlPath))
     {
         if (!MatchProcess(e)) return;
         Interlocked.Increment(ref fileOpens);
+        var fn = e.FileName ?? "?";
+
+        // Timeline bucket
+        int bucket = (int)(e.TimeStampRelativeMSec / 10_000);
+        lock (fileIoTimeline)
+        {
+            fileIoTimeline.TryGetValue(bucket, out var cur);
+            fileIoTimeline[bucket] = (cur.opens + 1, cur.reads, cur.bytesRead);
+        }
+
+        // Extension tracking
+        var ext = Path.GetExtension(fn);
+        if (string.IsNullOrEmpty(ext)) ext = "(no ext)";
+        lock (opensByExtension)
+        {
+            opensByExtension.TryGetValue(ext, out long cnt);
+            opensByExtension[ext] = cnt + 1;
+        }
+
+        // Per-file stats (first open time)
+        lock (perFileStats)
+        {
+            if (!perFileStats.TryGetValue(fn, out var stats))
+            {
+                stats = new FileStats { FirstOpenTimeMs = e.TimeStampRelativeMSec };
+                perFileStats[fn] = stats;
+            }
+            stats.OpenCount++;
+        }
+
+        // Track open timestamp for open-to-first-read gap
+        lock (fileOpenTimestamps)
+        {
+            fileOpenTimestamps[fn] = e.TimeStampRelativeMSec;
+        }
     };
 
     kernelParser.FileIORead += e =>
@@ -440,6 +489,15 @@ using (var source = new ETWTraceEventSource(etlPath))
         Interlocked.Increment(ref fileReads);
         Interlocked.Add(ref fileBytesRead, e.IoSize);
         var fn = e.FileName ?? "?";
+
+        // Timeline bucket
+        int bucket = (int)(e.TimeStampRelativeMSec / 10_000);
+        lock (fileIoTimeline)
+        {
+            fileIoTimeline.TryGetValue(bucket, out var cur);
+            fileIoTimeline[bucket] = (cur.opens, cur.reads + 1, cur.bytesRead + e.IoSize);
+        }
+
         lock (topFilesByReads)
         {
             topFilesByReads.TryGetValue(fn, out long cnt);
@@ -449,6 +507,31 @@ using (var source = new ETWTraceEventSource(etlPath))
         {
             topFilesByBytes.TryGetValue(fn, out long b);
             topFilesByBytes[fn] = b + e.IoSize;
+        }
+
+        // Per-file stats
+        lock (perFileStats)
+        {
+            if (!perFileStats.TryGetValue(fn, out var stats))
+            {
+                stats = new FileStats { FirstOpenTimeMs = e.TimeStampRelativeMSec };
+                perFileStats[fn] = stats;
+            }
+            stats.ReadCount++;
+            stats.TotalBytesRead += e.IoSize;
+            if (stats.FirstReadTimeMs == 0)
+                stats.FirstReadTimeMs = e.TimeStampRelativeMSec;
+        }
+
+        // Open-to-first-read gap
+        lock (fileOpenTimestamps)
+        {
+            if (fileOpenTimestamps.Remove(fn, out double openTime))
+            {
+                double gap = e.TimeStampRelativeMSec - openTime;
+                if (gap >= 0 && gap < 60_000) // sanity: < 60s
+                    lock (openToFirstReadMs) openToFirstReadMs.Add(gap);
+            }
         }
     };
 
@@ -466,6 +549,14 @@ using (var source = new ETWTraceEventSource(etlPath))
         Interlocked.Add(ref diskBytesRead, e.TransferSize);
         if (e.ElapsedTimeMSec > 0)
             lock (diskReadLatencyMs) diskReadLatencyMs.Add(e.ElapsedTimeMSec);
+
+        // Timeline bucket
+        int bucket = (int)(e.TimeStampRelativeMSec / 10_000);
+        lock (diskIoTimeline)
+        {
+            diskIoTimeline.TryGetValue(bucket, out var cur);
+            diskIoTimeline[bucket] = (cur.reads + 1, cur.bytesRead + e.TransferSize, cur.writes, cur.bytesWritten);
+        }
     };
 
     kernelParser.DiskIOWrite += e =>
@@ -474,6 +565,14 @@ using (var source = new ETWTraceEventSource(etlPath))
         Interlocked.Add(ref diskBytesWritten, e.TransferSize);
         if (e.ElapsedTimeMSec > 0)
             lock (diskWriteLatencyMs) diskWriteLatencyMs.Add(e.ElapsedTimeMSec);
+
+        // Timeline bucket
+        int bucket = (int)(e.TimeStampRelativeMSec / 10_000);
+        lock (diskIoTimeline)
+        {
+            diskIoTimeline.TryGetValue(bucket, out var cur);
+            diskIoTimeline[bucket] = (cur.reads, cur.bytesRead, cur.writes + 1, cur.bytesWritten + e.TransferSize);
+        }
     };
 
     // ── Process ──────────────────────────────────────────────────────────
@@ -981,6 +1080,45 @@ if (cpuTimelineByModule.Count > 0)
         }
         sb.AppendLine("└──────────────────────────────────────────────────────────────────");
         sb.AppendLine();
+
+        // ── CPU Utilization % (estimated from sample rate) ───────────────
+        // ETW CPU sampling typically fires at 1kHz per logical core. 
+        // samples_in_bucket / (cores * 10s * 1000 samples/sec/core) ≈ utilization
+        int coreCount = Environment.ProcessorCount;
+        long expectedSamplesPerBucket = (long)coreCount * 10 * 1000; // 10s bucket, 1kHz
+        sb.AppendLine("┌─ CPU UTILIZATION % TIMELINE (10s buckets, process only) ──────────");
+        sb.AppendLine($"│ (Estimated from {coreCount} cores × 1kHz sample rate = {expectedSamplesPerBucket:N0} max samples/bucket)");
+        sb.AppendLine("│  Time (s) | Samples | Est. CPU% | ████ (bar)");
+        sb.AppendLine("│ ----------|---------|-----------|----------");
+
+        // Total samples per bucket across all modules in the process
+        var totalSamplesPerBucket = new Dictionary<int, long>();
+        foreach (var mod in cpuTimelineByModule.Values)
+        {
+            foreach (var (bk, cnt) in mod)
+            {
+                totalSamplesPerBucket.TryGetValue(bk, out long existing);
+                totalSamplesPerBucket[bk] = existing + cnt;
+            }
+        }
+
+        foreach (var bucket in totalSamplesPerBucket.OrderBy(kv => kv.Key))
+        {
+            double tSec = bucket.Key * 10;
+            long samples = bucket.Value;
+            // Note: inclusive stacks mean a sample appears in multiple modules.
+            // Use cpuSamplesForProcess to calibrate: total inclusive / bucket count ≈ actual ratio
+            // But simpler: just divide by expected max. Cap at 100%.
+            double utilPct = Math.Min(100.0, samples * 100.0 / expectedSamplesPerBucket);
+            int barLen = (int)(utilPct / 2.5); // 40 chars = 100%
+            string bar = new string('█', barLen);
+            sb.AppendLine($"│ {tSec,8:F0}  | {samples,7:N0} | {utilPct,7:F1}%  | {bar}");
+        }
+        sb.AppendLine("│");
+        sb.AppendLine("│ Note: Inclusive stacks inflate per-bucket totals (a single sample appears");
+        sb.AppendLine("│ in every module on its stack). Treat as relative activity, not absolute %.");
+        sb.AppendLine("└──────────────────────────────────────────────────────────────────");
+        sb.AppendLine();
     }
 }
 
@@ -1172,10 +1310,125 @@ if (traceDurationSec > 0)
     sb.AppendLine($"│ Reads/sec:    {fileReads / traceDurationSec:F0}");
     sb.AppendLine($"│ Read MB/sec:  {fileBytesRead / (1024.0 * 1024) / traceDurationSec:F1}");
 }
+if (fileOpens > 0 && fileReads > 0)
+{
+    double avgBytesPerOpen = (double)fileBytesRead / fileOpens;
+    double readsPerOpen = (double)fileReads / fileOpens;
+    sb.AppendLine($"│ Avg bytes/open: {avgBytesPerOpen / 1024:F1} KB");
+    sb.AppendLine($"│ Reads/open:     {readsPerOpen:F2}");
+}
+sb.AppendLine("│");
+
+// ── File I/O Timeline ────────────────────────────────────────────────
+if (fileIoTimeline.Count > 0)
+{
+    sb.AppendLine("│ ┌─ FILE I/O TIMELINE (10s buckets) ─────────────────────────────");
+    sb.AppendLine("│ │  Time (s) |   Opens | Opens/s |  Reads |  Read MB | MB/s");
+    sb.AppendLine("│ │ ----------|---------|---------|--------|----------|-----");
+    foreach (var bucket in fileIoTimeline.OrderBy(kv => kv.Key))
+    {
+        double tSec = bucket.Key * 10;
+        var (opens, reads, bytesRead) = bucket.Value;
+        double mbRead = bytesRead / (1024.0 * 1024);
+        sb.AppendLine($"│ │ {tSec,8:F0}  | {opens,7:N0} | {opens / 10.0,7:F0} | {reads,6:N0} | {mbRead,8:F1} | {mbRead / 10.0:F1}");
+    }
+    sb.AppendLine("│ └────────────────────────────────────────────────────────────");
+    sb.AppendLine("│");
+}
+
+// ── File Size Distribution (by bytes read per file) ──────────────────
+if (perFileStats.Count > 0)
+{
+    sb.AppendLine("│ ┌─ FILE SIZE DISTRIBUTION (by total bytes read per file) ───────");
+    var fileSizeRanges = new (string Label, long Min, long Max)[]
+    {
+        ("       0 B (open-only)", 0, 1),
+        ("    1 B - 4 KB", 1, 4 * 1024),
+        ("  4 KB - 8 KB", 4 * 1024, 8 * 1024),
+        (" 8 KB - 64 KB", 8 * 1024, 64 * 1024),
+        ("64 KB - 1 MB", 64 * 1024, 1024 * 1024),
+        (" 1 MB - 10 MB", 1024 * 1024, 10L * 1024 * 1024),
+        ("     > 10 MB", 10L * 1024 * 1024, long.MaxValue),
+    };
+    sb.AppendLine("│ │     Size range | Files |   % | Total bytes |  % bytes");
+    sb.AppendLine("│ │ ---------------|-------|-----|-------------|--------");
+    long totalFilesTracked = perFileStats.Count;
+    long totalBytesTracked = perFileStats.Values.Sum(f => f.TotalBytesRead);
+    foreach (var (label, min, max) in fileSizeRanges)
+    {
+        var inRange = perFileStats.Values
+            .Where(f => f.TotalBytesRead >= min && f.TotalBytesRead < max)
+            .ToList();
+        if (inRange.Count > 0)
+        {
+            double pctFiles = inRange.Count * 100.0 / totalFilesTracked;
+            long rangeBytes = inRange.Sum(f => f.TotalBytesRead);
+            double pctBytes = totalBytesTracked > 0 ? rangeBytes * 100.0 / totalBytesTracked : 0;
+            sb.AppendLine($"│ │ {label,14} | {inRange.Count,5:N0} | {pctFiles,3:F0}% | {rangeBytes / (1024.0 * 1024),8:F1} MB | {pctBytes,5:F1}%");
+        }
+    }
+    sb.AppendLine("│ └────────────────────────────────────────────────────────────");
+    sb.AppendLine("│");
+}
+
+// ── Wasted Opens (binary probe rejects: open + ≤1 read of ≤8KB) ─────
+if (perFileStats.Count > 0)
+{
+    var wastedOpens = perFileStats.Values
+        .Where(f => f.ReadCount == 0 || (f.ReadCount == 1 && f.TotalBytesRead <= 8192))
+        .ToList();
+    long totalOpensTracked = perFileStats.Values.Sum(f => f.OpenCount);
+    long wastedOpenCount = wastedOpens.Sum(f => f.OpenCount);
+    if (wastedOpenCount > 0)
+    {
+        double wastedPct = wastedOpenCount * 100.0 / totalOpensTracked;
+        long noReadFiles = perFileStats.Values.Count(f => f.ReadCount == 0);
+        long probeOnlyFiles = perFileStats.Values.Count(f => f.ReadCount == 1 && f.TotalBytesRead <= 8192);
+        sb.AppendLine("│ ┌─ WASTED OPENS (open cost paid, no useful scan) ───────────────");
+        sb.AppendLine($"│ │ Total wasted opens: {wastedOpenCount:N0} of {totalOpensTracked:N0} ({wastedPct:F1}%)");
+        sb.AppendLine($"│ │   Files with 0 reads (open-only):    {noReadFiles:N0}");
+        sb.AppendLine($"│ │   Files with 1 read ≤8KB (probe):    {probeOnlyFiles:N0}");
+        sb.AppendLine($"│ │ Each wasted open pays full filter-stack traversal cost.");
+        sb.AppendLine("│ └────────────────────────────────────────────────────────────");
+        sb.AppendLine("│");
+    }
+}
+
+// ── Open-to-First-Read Latency ───────────────────────────────────────
+if (openToFirstReadMs.Count > 10)
+{
+    openToFirstReadMs.Sort();
+    sb.AppendLine("│ ┌─ OPEN-TO-FIRST-READ GAP ─────────────────────────────────────");
+    sb.AppendLine($"│ │ Measured gaps: {openToFirstReadMs.Count:N0}");
+    sb.AppendLine($"│ │   Mean:   {openToFirstReadMs.Average():F3} ms");
+    sb.AppendLine($"│ │   Median: {Percentile(openToFirstReadMs, 50):F3} ms");
+    sb.AppendLine($"│ │   P95:    {Percentile(openToFirstReadMs, 95):F3} ms");
+    sb.AppendLine($"│ │   P99:    {Percentile(openToFirstReadMs, 99):F3} ms");
+    sb.AppendLine($"│ │   Max:    {openToFirstReadMs.Max():F3} ms");
+    sb.AppendLine($"│ │ (Time between FileIO/Create and first FileIO/Read on same file.)");
+    sb.AppendLine($"│ │ (Large gaps indicate managed-side overhead between open and scan start.)");
+    sb.AppendLine("│ └────────────────────────────────────────────────────────────");
+    sb.AppendLine("│");
+}
+
+// ── Opens by Extension ───────────────────────────────────────────────
+if (opensByExtension.Count > 0)
+{
+    sb.AppendLine("│ ┌─ OPENS BY FILE EXTENSION (top 25) ────────────────────────────");
+    sb.AppendLine("│ │   Opens |   % | Extension");
+    sb.AppendLine("│ │ --------|-----|----------");
+    var topExts = opensByExtension.OrderByDescending(kv => kv.Value).Take(25);
+    foreach (var (ext, count) in topExts)
+    {
+        double pct = fileOpens > 0 ? count * 100.0 / fileOpens : 0;
+        sb.AppendLine($"│ │ {count,7:N0} | {pct,3:F0}% | {ext}");
+    }
+    sb.AppendLine("│ └────────────────────────────────────────────────────────────");
+    sb.AppendLine("│");
+}
 
 if (topFilesByReads.Count > 0)
 {
-    sb.AppendLine("│");
     sb.AppendLine("│ Top files by read count:");
     var topReads = topFilesByReads.OrderByDescending(kv => kv.Value).Take(20);
     foreach (var (file, count) in topReads)
@@ -1201,6 +1454,11 @@ if (traceDurationSec > 0)
     sb.AppendLine($"│ Reads/sec:     {diskReads / traceDurationSec:F0}");
     sb.AppendLine($"│ Read MB/sec:   {diskBytesRead / (1024.0 * 1024) / traceDurationSec:F1}");
 }
+if (diskReads > 0)
+{
+    double avgDiskReadSize = (double)diskBytesRead / diskReads;
+    sb.AppendLine($"│ Avg read size: {avgDiskReadSize / 1024:F1} KB");
+}
 if (diskReadLatencyMs.Count > 0)
 {
     diskReadLatencyMs.Sort();
@@ -1210,6 +1468,34 @@ if (diskReadLatencyMs.Count > 0)
     sb.AppendLine($"│   P95:    {Percentile(diskReadLatencyMs, 95):F3} ms");
     sb.AppendLine($"│   P99:    {Percentile(diskReadLatencyMs, 99):F3} ms");
     sb.AppendLine($"│   Max:    {diskReadLatencyMs.Max():F3} ms");
+    sb.AppendLine("│");
+    // Latency histogram
+    sb.AppendLine("│ Read latency histogram:");
+    var latencyBuckets = new (string Label, double Min, double Max)[]
+    {
+        ("    < 0.01 ms", 0, 0.01),
+        ("0.01-0.05 ms", 0.01, 0.05),
+        ("0.05-0.1  ms", 0.05, 0.1),
+        (" 0.1-0.5  ms", 0.1, 0.5),
+        (" 0.5-1.0  ms", 0.5, 1.0),
+        (" 1.0-5.0  ms", 1.0, 5.0),
+        (" 5.0-20   ms", 5.0, 20.0),
+        ("     > 20 ms", 20.0, double.MaxValue),
+    };
+    sb.AppendLine("│     Latency    |   Count |   % | Cumulative");
+    sb.AppendLine("│ ---------------|---------|-----|----------");
+    long cumulative = 0;
+    foreach (var (label, min, max) in latencyBuckets)
+    {
+        var inRange = diskReadLatencyMs.Count(l => l >= min && l < max);
+        if (inRange > 0)
+        {
+            cumulative += inRange;
+            double pct = inRange * 100.0 / diskReadLatencyMs.Count;
+            double cumPct = cumulative * 100.0 / diskReadLatencyMs.Count;
+            sb.AppendLine($"│ {label,14} | {inRange,7:N0} | {pct,3:F0}% | {cumPct,5:F1}%");
+        }
+    }
 }
 if (diskWriteLatencyMs.Count > 0)
 {
@@ -1219,6 +1505,25 @@ if (diskWriteLatencyMs.Count > 0)
     sb.AppendLine($"│   P95:    {Percentile(diskWriteLatencyMs, 95):F3} ms");
     sb.AppendLine($"│   Max:    {diskWriteLatencyMs.Max():F3} ms");
 }
+sb.AppendLine("│");
+
+// ── Disk I/O Timeline ────────────────────────────────────────────────
+if (diskIoTimeline.Count > 0)
+{
+    sb.AppendLine("│ ┌─ DISK I/O TIMELINE (10s buckets) ─────────────────────────────");
+    sb.AppendLine("│ │  Time (s) |  Reads | Read MB |  MB/s | Writes | Write MB");
+    sb.AppendLine("│ │ ----------|--------|---------|-------|--------|--------");
+    foreach (var bucket in diskIoTimeline.OrderBy(kv => kv.Key))
+    {
+        double tSec = bucket.Key * 10;
+        var (reads, bytesRead, writes, bytesWritten) = bucket.Value;
+        double readMB = bytesRead / (1024.0 * 1024);
+        double writeMB = bytesWritten / (1024.0 * 1024);
+        sb.AppendLine($"│ │ {tSec,8:F0}  | {reads,6:N0} | {readMB,7:F1} | {readMB / 10.0,5:F1} | {writes,6:N0} | {writeMB,7:F1}");
+    }
+    sb.AppendLine("│ └────────────────────────────────────────────────────────────");
+}
+
 sb.AppendLine("└──────────────────────────────────────────────────────────────────");
 sb.AppendLine();
 
@@ -1575,6 +1880,91 @@ if (cpuTimelineByModule.Count > 0)
     Console.WriteLine($"CPU timeline CSV: {cpuTlCsv}");
 }
 
+// ── Write File I/O timeline CSV ──────────────────────────────────────────
+if (fileIoTimeline.Count > 0)
+{
+    string fioTlCsv = Path.Combine(outDir, "fileio-timeline.csv");
+    using var csv = new StreamWriter(fioTlCsv, false, Encoding.UTF8);
+    csv.WriteLine("TimeSec,Opens,OpensPerSec,Reads,BytesRead,ReadMBPerSec");
+    foreach (var bucket in fileIoTimeline.OrderBy(kv => kv.Key))
+    {
+        var (opens, reads, bytesRead) = bucket.Value;
+        csv.WriteLine(string.Format(CultureInfo.InvariantCulture,
+            "{0:F0},{1},{2:F1},{3},{4},{5:F1}",
+            bucket.Key * 10.0, opens, opens / 10.0, reads, bytesRead,
+            bytesRead / (1024.0 * 1024) / 10.0));
+    }
+    Console.WriteLine($"File I/O timeline CSV: {fioTlCsv}");
+}
+
+// ── Write Disk I/O timeline CSV ──────────────────────────────────────────
+if (diskIoTimeline.Count > 0)
+{
+    string dioTlCsv = Path.Combine(outDir, "diskio-timeline.csv");
+    using var csv = new StreamWriter(dioTlCsv, false, Encoding.UTF8);
+    csv.WriteLine("TimeSec,Reads,BytesRead,ReadMBPerSec,Writes,BytesWritten");
+    foreach (var bucket in diskIoTimeline.OrderBy(kv => kv.Key))
+    {
+        var (reads, bytesRead, writes, bytesWritten) = bucket.Value;
+        csv.WriteLine(string.Format(CultureInfo.InvariantCulture,
+            "{0:F0},{1},{2},{3:F1},{4},{5}",
+            bucket.Key * 10.0, reads, bytesRead,
+            bytesRead / (1024.0 * 1024) / 10.0, writes, bytesWritten));
+    }
+    Console.WriteLine($"Disk I/O timeline CSV: {dioTlCsv}");
+}
+
+// ── Write per-file stats CSV (top 500 by bytes read) ─────────────────────
+if (perFileStats.Count > 0)
+{
+    string pfCsv = Path.Combine(outDir, "fileio-per-file-stats.csv");
+    using var csv = new StreamWriter(pfCsv, false, Encoding.UTF8);
+    csv.WriteLine("Opens,Reads,BytesRead,AvgBytesPerRead,FirstOpenMs,FirstReadMs,OpenToReadGapMs,File");
+    var topPerFile = perFileStats
+        .OrderByDescending(kv => kv.Value.TotalBytesRead)
+        .Take(500);
+    foreach (var (file, stats) in topPerFile)
+    {
+        double avgBpr = stats.ReadCount > 0 ? (double)stats.TotalBytesRead / stats.ReadCount : 0;
+        double gap = stats.FirstReadTimeMs > 0 && stats.FirstOpenTimeMs > 0
+            ? stats.FirstReadTimeMs - stats.FirstOpenTimeMs : -1;
+        csv.WriteLine(string.Format(CultureInfo.InvariantCulture,
+            "{0},{1},{2},{3:F0},{4:F2},{5:F2},{6:F3},{7}",
+            stats.OpenCount, stats.ReadCount, stats.TotalBytesRead, avgBpr,
+            stats.FirstOpenTimeMs, stats.FirstReadTimeMs, gap,
+            file.Replace(",", ";")));
+    }
+    Console.WriteLine($"Per-file stats CSV: {pfCsv}");
+}
+
+// ── Write disk read latency histogram CSV ────────────────────────────────
+if (diskReadLatencyMs.Count > 0)
+{
+    string latCsv = Path.Combine(outDir, "disk-read-latency-histogram.csv");
+    using var csv = new StreamWriter(latCsv, false, Encoding.UTF8);
+    csv.WriteLine("BucketMinMs,BucketMaxMs,Count,Percent,CumulativePercent");
+    var histBuckets = new (double Min, double Max)[]
+    {
+        (0, 0.01), (0.01, 0.05), (0.05, 0.1), (0.1, 0.5),
+        (0.5, 1.0), (1.0, 5.0), (5.0, 20.0), (20.0, 100.0), (100.0, double.MaxValue)
+    };
+    long cumCount = 0;
+    foreach (var (min, max) in histBuckets)
+    {
+        int count = diskReadLatencyMs.Count(l => l >= min && l < max);
+        if (count > 0)
+        {
+            cumCount += count;
+            double pct = count * 100.0 / diskReadLatencyMs.Count;
+            double cumPct = cumCount * 100.0 / diskReadLatencyMs.Count;
+            csv.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                "{0},{1},{2},{3:F2},{4:F2}",
+                min, max == double.MaxValue ? 9999 : max, count, pct, cumPct));
+        }
+    }
+    Console.WriteLine($"Disk latency CSV: {latCsv}");
+}
+
 // ── Write summary JSON ───────────────────────────────────────────────────
 {
     var jittedOnly = jitEvents.Where(j => !j.IsR2R).ToList();
@@ -1630,6 +2020,38 @@ if (cpuTimelineByModule.Count > 0)
             bytesReadMB = Math.Round(fileBytesRead / (1024.0 * 1024), 1),
             writes = fileWrites,
             bytesWrittenMB = Math.Round(fileBytesWritten / (1024.0 * 1024), 1),
+            opensPerSec = traceDurationSec > 0 ? Math.Round(fileOpens / traceDurationSec, 1) : 0,
+            readMBPerSec = traceDurationSec > 0
+                ? Math.Round(fileBytesRead / (1024.0 * 1024) / traceDurationSec, 1) : 0,
+            avgBytesPerOpen = fileOpens > 0 ? Math.Round((double)fileBytesRead / fileOpens, 0) : 0,
+            filesTracked = perFileStats.Count,
+            wastedOpens = perFileStats.Values.Count(f => f.ReadCount == 0 || (f.ReadCount == 1 && f.TotalBytesRead <= 8192)),
+            wastedOpenPercent = perFileStats.Count > 0
+                ? Math.Round(perFileStats.Values.Count(f => f.ReadCount == 0 || (f.ReadCount == 1 && f.TotalBytesRead <= 8192)) * 100.0 / perFileStats.Values.Sum(f => f.OpenCount), 1) : 0,
+            openToFirstReadMs = openToFirstReadMs.Count > 0
+                ? new { mean = Math.Round(openToFirstReadMs.Average(), 3),
+                        p50 = Math.Round(Percentile(openToFirstReadMs, 50), 3),
+                        p95 = Math.Round(Percentile(openToFirstReadMs, 95), 3),
+                        p99 = Math.Round(Percentile(openToFirstReadMs, 99), 3) }
+                : null,
+        },
+        diskIO = new
+        {
+            reads = diskReads,
+            bytesReadMB = Math.Round(diskBytesRead / (1024.0 * 1024), 1),
+            writes = diskWrites,
+            bytesWrittenMB = Math.Round(diskBytesWritten / (1024.0 * 1024), 1),
+            readMBPerSec = traceDurationSec > 0
+                ? Math.Round(diskBytesRead / (1024.0 * 1024) / traceDurationSec, 1) : 0,
+            avgReadSizeKB = diskReads > 0
+                ? Math.Round((double)diskBytesRead / diskReads / 1024, 1) : 0,
+            readLatencyMs = diskReadLatencyMs.Count > 0
+                ? new { mean = Math.Round(diskReadLatencyMs.Average(), 3),
+                        p50 = Math.Round(Percentile(diskReadLatencyMs, 50), 3),
+                        p95 = Math.Round(Percentile(diskReadLatencyMs, 95), 3),
+                        p99 = Math.Round(Percentile(diskReadLatencyMs, 99), 3),
+                        max = Math.Round(diskReadLatencyMs.Max(), 3) }
+                : null,
         },
         contextSwitches = contextSwitchCount,
         assembliesLoaded = assemblyLoads.Count,
@@ -1764,4 +2186,13 @@ struct ImageLoadRecord
     public ulong ImageBase;
     public int ImageSize;
     public DateTime BuildTime;
+}
+
+sealed class FileStats
+{
+    public long OpenCount;
+    public long ReadCount;
+    public long TotalBytesRead;
+    public double FirstOpenTimeMs;
+    public double FirstReadTimeMs;
 }

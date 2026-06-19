@@ -160,6 +160,59 @@ public class FileGroupTests
     }
 
     [Fact]
+    public void SourceBackedMatchAddedToCollapsedGroup_IsCompactedAndMaterializedOnExpand()
+    {
+        var group = new FileGroup(@"D:\file.txt");
+        group.Add(MakeResult(@"D:\file.txt", 1));
+        group.SelectAll();
+
+        group.AddSourceBackedMatch(lineNumber: 2, matchStartColumn: 3, matchLength: 5, sourceMatchStartColumn: 3);
+
+        Assert.Equal(1, group.Count);
+        Assert.True(group.HasMore);
+        Assert.Equal(2, group.RemainingCount);
+        Assert.Equal(2, group.SelectedCount);
+
+        var snapshot = group.GetPreviewSnapshot(2);
+        Assert.Equal(2, snapshot.Count);
+        Assert.True(snapshot[1].IsEvicted);
+        Assert.True(snapshot[1].IsSelected);
+        Assert.Equal(2, snapshot[1].LineNumber);
+
+        group.IsExpanded = true;
+
+        Assert.Equal(2, group.Count);
+        Assert.True(group[1].IsEvicted);
+        Assert.True(group[1].IsSelected);
+        Assert.Equal(3, group[1].MatchStartColumn);
+        Assert.Equal(5, group[1].MatchLength);
+    }
+
+    [Fact]
+    public void SourceBackedMatchesAddedToCollapsedGroup_AreCompactedInBulk()
+    {
+        var group = new FileGroup(@"D:\file.txt");
+        var matches = new List<SourceBackedMatch>
+        {
+            new(@"D:\file.txt", 1, 2, 4, 2),
+            new(@"D:\file.txt", 2, 3, 5, 3),
+            new(@"D:\file.txt", 3, 4, 6, 4),
+        };
+
+        group.AddSourceBackedMatches(matches, 0, matches.Count);
+
+        Assert.Equal(0, group.Count);
+        Assert.Equal(3, group.MatchCount);
+        Assert.True(group.HasMore);
+
+        group.IsExpanded = true;
+
+        Assert.Equal(3, group.Count);
+        Assert.All(group, result => Assert.True(result.IsEvicted));
+        Assert.Equal([1, 2, 3], group.Select(result => result.LineNumber).ToArray());
+    }
+
+    [Fact]
     public void PreviewSnapshot_DecodesBoundedPreEvictedRowsWithoutMaterializingGroup()
     {
         var group = new FileGroup(@"D:\file.txt");

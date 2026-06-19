@@ -15,6 +15,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TextControlBox", "vendor\Te
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "SharpSevenZip", "SharpSevenZip", "{5BEA7D07-666D-76A1-60CB-03D43B49609C}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "peinspect", "..\..\yaguTemp\peinspect\peinspect.csproj", "{2DC85ADD-7A1A-4D15-8CD3-B371789A3E05}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -73,6 +75,18 @@ Global
 		{6AD39B7E-1E34-4A5F-9093-EB4F9A243626}.Release|Any CPU.Build.0 = Release|Any CPU
 		{6AD39B7E-1E34-4A5F-9093-EB4F9A243626}.Release|x86.ActiveCfg = Release|Any CPU
 		{6AD39B7E-1E34-4A5F-9093-EB4F9A243626}.Release|x86.Build.0 = Release|Any CPU
+		{2DC85ADD-7A1A-4D15-8CD3-B371789A3E05}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{2DC85ADD-7A1A-4D15-8CD3-B371789A3E05}.Debug|x64.Build.0 = Debug|Any CPU
+		{2DC85ADD-7A1A-4D15-8CD3-B371789A3E05}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2DC85ADD-7A1A-4D15-8CD3-B371789A3E05}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2DC85ADD-7A1A-4D15-8CD3-B371789A3E05}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{2DC85ADD-7A1A-4D15-8CD3-B371789A3E05}.Debug|x86.Build.0 = Debug|Any CPU
+		{2DC85ADD-7A1A-4D15-8CD3-B371789A3E05}.Release|x64.ActiveCfg = Release|Any CPU
+		{2DC85ADD-7A1A-4D15-8CD3-B371789A3E05}.Release|x64.Build.0 = Release|Any CPU
+		{2DC85ADD-7A1A-4D15-8CD3-B371789A3E05}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2DC85ADD-7A1A-4D15-8CD3-B371789A3E05}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2DC85ADD-7A1A-4D15-8CD3-B371789A3E05}.Release|x86.ActiveCfg = Release|Any CPU
+		{2DC85ADD-7A1A-4D15-8CD3-B371789A3E05}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

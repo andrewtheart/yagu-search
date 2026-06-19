@@ -231,6 +231,35 @@ public sealed class SearchResultCollectionExtendedCoverageTests
     }
 
     [Fact]
+    public void AddSourceBackedRange_GroupsAndCompactsMatches()
+    {
+        var collection = new SearchResultCollection();
+        var matches = new List<SourceBackedMatch>
+        {
+            new(@"C:\src\a.cs", 1, 2, 4, 2),
+            new(@"C:\src\a.cs", 2, 3, 5, 3),
+            new(@"C:\src\b.cs", 3, 1, 6, 1),
+        };
+
+        bool wasFirst = collection.AddSourceBackedRange(matches);
+
+        Assert.True(wasFirst);
+        Assert.Equal(2, collection.AllGroups.Count);
+        Assert.Equal(2, collection.VisibleGroups.Count);
+
+        var firstGroup = collection.FindGroup(@"C:\src\a.cs")!;
+        Assert.Equal(0, firstGroup.Count);
+        Assert.Equal(2, firstGroup.MatchCount);
+        Assert.True(firstGroup.HasMore);
+
+        firstGroup.IsExpanded = true;
+
+        Assert.Equal(2, firstGroup.Count);
+        Assert.All(firstGroup, result => Assert.True(result.IsEvicted));
+        Assert.Equal([1, 2], firstGroup.Select(result => result.LineNumber).ToArray());
+    }
+
+    [Fact]
     public void GroupMode_Folder_GroupsByDirectory()
     {
         var collection = new SearchResultCollection();

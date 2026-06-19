@@ -12,6 +12,7 @@ namespace Yagu.Models;
 public class BatchObservableCollection<T> : ObservableCollection<T>
 {
     private bool _suppressNotification;
+    private bool _suppressChangingNotification;
 
     /// <summary>
     /// Raised before the collection mutates, giving UI code a chance to capture
@@ -55,13 +56,59 @@ public class BatchObservableCollection<T> : ObservableCollection<T>
     }
 
     /// <summary>
+    /// Add multiple items and raise a single multi-item Add notification. Use only for
+    /// collections consumed by managed observers that support multi-item Add events.
+    /// </summary>
+    public void AddRangeWithAddNotification(IReadOnlyList<T> items)
+    {
+        if (items.Count == 0) return;
+
+        if (items.Count == 1)
+        {
+            Add(items[0]);
+            return;
+        }
+
+        int startIndex = Count;
+        OnCollectionChanging();
+        _suppressNotification = true;
+        try
+        {
+            for (int i = 0; i < items.Count; i++)
+                Items.Add(items[i]);
+        }
+        finally
+        {
+            _suppressNotification = false;
+        }
+
+        OnPropertyChanged(new PropertyChangedEventArgs("Count"));
+        OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+        OnCollectionChanged(new NotifyCollectionChangedEventArgs(
+            NotifyCollectionChangedAction.Add,
+            items is System.Collections.IList itemList ? itemList : items.ToList(),
+            startIndex));
+    }
+
+    /// <summary>
     /// Append items with normal per-item Add notifications. Use this when an existing
     /// bound list must not briefly clear/rebuild in response to a Reset notification.
     /// </summary>
     public void AppendRange(IReadOnlyList<T> items)
     {
-        for (int i = 0; i < items.Count; i++)
-            Add(items[i]);
+        if (items.Count == 0) return;
+
+        OnCollectionChanging();
+        _suppressChangingNotification = true;
+        try
+        {
+            for (int i = 0; i < items.Count; i++)
+                Add(items[i]);
+        }
+        finally
+        {
+            _suppressChangingNotification = false;
+        }
     }
 
     /// <summary>
@@ -100,28 +147,28 @@ public class BatchObservableCollection<T> : ObservableCollection<T>
 
     protected override void InsertItem(int index, T item)
     {
-        if (!_suppressNotification)
+        if (!_suppressNotification && !_suppressChangingNotification)
             OnCollectionChanging();
         base.InsertItem(index, item);
     }
 
     protected override void SetItem(int index, T item)
     {
-        if (!_suppressNotification)
+        if (!_suppressNotification && !_suppressChangingNotification)
             OnCollectionChanging();
         base.SetItem(index, item);
     }
 
     protected override void RemoveItem(int index)
     {
-        if (!_suppressNotification)
+        if (!_suppressNotification && !_suppressChangingNotification)
             OnCollectionChanging();
         base.RemoveItem(index);
     }
 
     protected override void ClearItems()
     {
-        if (!_suppressNotification)
+        if (!_suppressNotification && !_suppressChangingNotification)
             OnCollectionChanging();
         base.ClearItems();
     }

@@ -91,6 +91,9 @@ public interface IFileLister
 
     /// <summary>Files or directories skipped because they matched .gitignore rules.</summary>
     int GitignoreSkipped { get; }
+
+    /// <summary>Cloud-only placeholder files skipped to avoid blocking on hydration.</summary>
+    int CloudOnlySkippedFiles { get; }
 }
 
 /// <summary>Selects which file-listing backend to use.</summary>
@@ -141,6 +144,7 @@ public sealed class FileLister : IFileLister
     private int _earlySkippedFiles;
     private int _earlySkippedTooLargeFiles;
     private int _earlyExcludedByExtensionFiles;
+    private int _cloudOnlySkippedFiles;
     public string? FallbackReason { get; private set; }
     public int SkippedDirectories => Volatile.Read(ref _skippedDirectories);
     public int AccessDeniedDirectories => Volatile.Read(ref _accessDeniedDirectories);
@@ -148,6 +152,7 @@ public sealed class FileLister : IFileLister
     public int EarlySkippedFiles => Volatile.Read(ref _earlySkippedFiles);
     public int EarlySkippedTooLargeFiles => Volatile.Read(ref _earlySkippedTooLargeFiles);
     public int EarlyExcludedByExtensionFiles => Volatile.Read(ref _earlyExcludedByExtensionFiles);
+    public int CloudOnlySkippedFiles => Volatile.Read(ref _cloudOnlySkippedFiles);
     public int GitignoreSkipped => GitignoreMatcher?.Skipped ?? 0;
 
     /// <summary>Files smaller than this are skipped during listing. 0 disables.</summary>
@@ -180,6 +185,12 @@ public sealed class FileLister : IFileLister
 
     /// <summary>Literal file-name terms to apply during listing when the search mode first gates by file name.</summary>
     public IReadOnlyList<string> EarlyFileNameLiteralTerms { get; set; } = [];
+
+    /// <summary>When false (the default), cloud-only placeholder files (OneDrive
+    /// Files On-Demand / Google Drive online-only) are skipped during listing so
+    /// the scan never blocks on a hydration that may never complete. When true,
+    /// placeholders are listed and the scanner gates them by provider liveness.</summary>
+    public bool SearchOnlineOnlyFiles { get; set; }
 
     /// <summary>
     /// When true and the current process is NOT elevated, skip directories that
@@ -351,6 +362,7 @@ public sealed class FileLister : IFileLister
         Volatile.Write(ref _knownTotalFiles, 0);
         Volatile.Write(ref _earlySkippedFiles, 0);
         Volatile.Write(ref _earlySkippedTooLargeFiles, 0);
+        Volatile.Write(ref _cloudOnlySkippedFiles, 0);
         Volatile.Write(ref _earlyExcludedByExtensionFiles, 0);
         if (string.IsNullOrWhiteSpace(directory)) yield break;
 
@@ -790,6 +802,11 @@ public sealed class FileLister : IFileLister
         {
             if (error is not null) break;
             if (matcher is not null && matcher.ShouldSkipPath(path)) continue;
+            if (CloudFileHelper.ShouldSkipDiscoveredPath(path, SearchOnlineOnlyFiles))
+            {
+                Interlocked.Increment(ref _cloudOnlySkippedFiles);
+                continue;
+            }
             anyYielded = true;
             yield return path;
         }
@@ -1131,6 +1148,11 @@ public sealed class FileLister : IFileLister
             cancellationToken.ThrowIfCancellationRequested();
             if (line.Length == 0) continue;
             if (matcher is not null && matcher.ShouldSkipPath(line)) continue;
+            if (CloudFileHelper.ShouldSkipDiscoveredPath(line, SearchOnlineOnlyFiles))
+            {
+                Interlocked.Increment(ref _cloudOnlySkippedFiles);
+                continue;
+            }
             yield return line;
             yielded++;
         }
@@ -1428,6 +1450,15 @@ public sealed class FileLister : IFileLister
                     }
                     else
                     {
+                        // Cloud-only placeholder guard: skip dehydrated OneDrive/Google
+                        // Drive online-only files (the attribute is already in hand from
+                        // enumeration — no extra syscall, no hydration) unless the user
+                        // opted in and a live provider can hydrate them.
+                        if (CloudFileHelper.ShouldSkipPlaceholder(entry, attrs.Value, SearchOnlineOnlyFiles))
+                        {
+                            Interlocked.Increment(ref _cloudOnlySkippedFiles);
+                            continue;
+                        }
                         // Dynamic gitignore: check file against ancestor extension rules.
                         if (GitignoreMatcher is not null && GitignoreMatcher.ShouldSkipFile(entry))
                         {

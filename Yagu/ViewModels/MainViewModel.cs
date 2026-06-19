@@ -29,7 +29,10 @@ public readonly record struct HydrationPayload(
     SearchResult Result,
     string MatchLine,
     IReadOnlyList<string> ContextBefore,
-    IReadOnlyList<string> ContextAfter);
+    IReadOnlyList<string> ContextAfter,
+    int MatchStartColumn,
+    int MatchLength,
+    int SourceMatchStartColumn);
 
 public sealed partial class MainViewModel : ObservableObject, IDisposable
 {
@@ -37,6 +40,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private readonly SettingsService _settingsService;
     private readonly EditorLauncher _editor;
     private readonly DispatcherQueue _dispatcher;
+    private CancellationTokenSource? _searchStatusHeartbeatCts;
 
     private CancellationTokenSource? _cts;
     private readonly SemaphoreSlim _searchLifecycleGate = new(1, 1);
@@ -74,6 +78,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private const double SearchSortRefreshIntervalBaseSec = 2.0;
     private const double SearchSortRefreshIntervalMaxSec = 30.0;
     private const long SearchSortRefreshSlowBudgetMs = 500;
+    private const int SearchSortRefreshDegradedDeferGroupThreshold = 20_000;
 
     public MainViewModel() : this(new SearchService(), new SettingsService(), new EditorLauncher(),
                                    DispatcherQueue.GetForCurrentThread())
@@ -188,6 +193,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         ConsoleLogLevelIndex = _settings.ConsoleLogLevelIndex;
         FileListerBackendIndex = _settings.FileListerBackendIndex;
         ParallelismIndex = _settings.ParallelismIndex;
+        IoOversubscriptionIndex = _settings.IoOversubscriptionIndex;
         LineTruncationLength = _settings.LineTruncationLength;
         MaxRecentItems = _settings.MaxRecentItems;
         GlobalHotkeyEnabled = _settings.GlobalHotkeyEnabled;
@@ -207,6 +213,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         MaxMatchesPerFile = _settings.MaxMatchesPerFile;
         ApplyMaxMatchesPerFile(MaxMatchesPerFile);
         SkipBinary = _settings.SkipBinary;
+        SearchOnlineOnlyFiles = _settings.SearchOnlineOnlyFiles;
         SearchInsideArchives = _settings.SearchInsideArchives;
         SettingsSkipExtensions = _settings.SkipExtensions;
         SettingsBinaryExtensions = _settings.BinaryExtensions;
@@ -284,6 +291,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         try { _cts?.Cancel(); } catch { }
         try { _dirAutoCompleteCts?.Cancel(); } catch { }
         try { _metadataCts.Cancel(); } catch { }
+        StopSearchStatusHeartbeat();
         _cts?.Dispose();
         _dirAutoCompleteCts?.Dispose();
         _metadataCts.Dispose();
@@ -560,6 +568,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed
     [ObservableProperty] public partial int ParallelismIndex { get; set; } = 4; // 0 = safe cap, 1 = 1 thread, 2 = half cores, 3 = 2x cores, 4 = all cores
 
+    /// <summary>Streaming-scanner I/O worker oversubscription: 0 = Auto (SSD 1×, HDD 2×), 1 = 1×, 2 = 2×, 3 = 3×.</summary>
+    [ObservableProperty] public partial int IoOversubscriptionIndex { get; set; }
+
     /// <summary>
     /// Session-only parallelism override applied when the search target is detected on a rotational
     /// HDD. When non-null it takes precedence over <see cref="ParallelismIndex"/> for the actual
@@ -618,6 +629,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [ObservableProperty] public partial bool SkipBinary { get; set; } = true;
+
+    /// <summary>When true, search cloud-only (online-only) placeholder files by hydrating
+    /// them on demand when a live provider is present; when false (default) they are
+    /// skipped so the scan never blocks on hydration.</summary>
+    [ObservableProperty] public partial bool SearchOnlineOnlyFiles { get; set; }
 
     /// <summary>UI-facing inverse of <see cref="SkipBinary"/> for the "Search binary" toggle.</summary>
     public bool SearchBinary
@@ -1184,6 +1200,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnVisibleResultGroupsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        if (e.Action == NotifyCollectionChangedAction.Add && e.NewItems is not null && (GroupMode == GroupMode.None || IsSearching))
+        {
+            ResultRows.AppendRange(e.NewItems.Cast<object>().ToList());
+            return;
+        }
+
         if (GroupMode != GroupMode.None)
         {
             RebuildResultRows();
@@ -1237,6 +1259,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             lines.AppendLine();
             if (b.GlobExcluded > 0)   lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  🚫  Glob exclusions       {b.GlobExcluded,8:N0}");
             if (b.GitignoreExcluded > 0) lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  🙈  .gitignore excluded   {b.GitignoreExcluded,8:N0}");
+            if (b.CloudOnly > 0)      lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  ☁️  Cloud-only skipped    {b.CloudOnly,8:N0}");
             if (b.Binary > 0)         lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  🔒  Binary files          {b.Binary,8:N0}");
             if (b.ByExtension > 0)    lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  📄  Scanner extension skips {b.ByExtension,8:N0}");
             if (b.TooLarge > 0)       lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  📏  Too large             {b.TooLarge,8:N0}");
@@ -1453,12 +1476,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 ModifiedBeforeDate = ModifiedBeforeDate,
                 MaxResults = MaxResults,
                 SkipBinary = SkipBinary,
+                SearchOnlineOnlyFiles = SearchOnlineOnlyFiles,
                 ObeyGitignore = ObeyGitignore,
                 GitignoreTakesPrecedence = GitignoreTakesPrecedence,
                 SkipExtensions = effectiveSkipExtensions,
                 SearchInsideArchives = SearchInsideArchives,
                 ArchiveExtensions = ParseDottedExtensionSet(ArchiveExtensions),
                 MaxDegreeOfParallelism = ResolveParallelism(_sessionParallelismOverrideIndex ?? ParallelismIndex),
+                IoOversubscriptionIndex = IoOversubscriptionIndex,
                 MaxProcessMemoryBytes = MemoryLimitMB > 0 ? (long)MemoryLimitMB * 1024 * 1024 : 0,
                 MemoryPressurePercent = MemoryPressurePercent,
                 SdkChannelBufferSize = SdkChannelBufferSize,
@@ -1563,6 +1588,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                                 $"(groups={_resultCollection.AllGroups.Count:N0})");
                         }
                         break;
+                    case SearchEvent.SourceBackedMatchBatch sb:
+                        uiMatchesReceived += sb.Results.Count;
+                        uiEventSw.Restart();
+                        await AddSourceBackedMatchesAsync(sb.Results, token).ConfigureAwait(true);
+                        uiEventSw.Stop();
+                        RefreshStatusFromReceivedMatches();
+                        if (uiEventSw.ElapsedMilliseconds > 200)
+                        {
+                            LogService.Instance.Warning("UIConsumer",
+                                $"Slow AddSourceBackedMatches: {sb.Results.Count} results took {uiEventSw.ElapsedMilliseconds}ms " +
+                                $"(groups={_resultCollection.AllGroups.Count:N0})");
+                        }
+                        break;
                     case SearchEvent.Progress p:
                         FilesScanned = p.Snapshot.FilesScanned;
                         TotalFiles = p.Snapshot.TotalFiles;
@@ -1612,6 +1650,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                         DegradedNoticeText = string.Empty;
                         UpdateFilesPerSecond();
                         LogService.Instance.Warning("ViewModel", $"Memory pressure relieved — leaving memory-saving mode ({relieved.Diagnostics})");
+                        break;
+                    case SearchEvent.ScanCompleted sc:
+                        var scanElapsed = StopSearchTimer();
+                        FilesScanned = sc.Summary.FilesScanned;
+                        TotalFiles = sc.Summary.TotalFiles;
+                        MatchesFound = Math.Max(sc.Summary.TotalMatches, ClampMatchCount(uiMatchesReceived));
+                        FilesSkipped = sc.Summary.FilesSkipped;
+                        AccessDeniedCount = sc.Summary.SkipReasons?.AccessDenied ?? 0;
+                        _bytesScanned = sc.Summary.BytesScanned;
+                        UpdateSkipBreakdown(sc.Summary.SkipReasons);
+                        Truncated = sc.Summary.Truncated;
+                        Degraded = sc.Summary.Degraded;
+                        StatusText = $"Finalizing results... {MatchesFound:N0} matches in {_resultCollection.AllGroups.Count:N0} files ({FormatElapsed(scanElapsed)})";
                         break;
                     case SearchEvent.Completed c:
                         LogService.Instance.Warning("UIConsumer",
@@ -1764,6 +1815,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         ThroughputSamples.Clear();
         _searchStartedUtc = DateTime.UtcNow;
         _searchTimer = System.Diagnostics.Stopwatch.StartNew();
+        StartSearchStatusHeartbeat();
         StatusText = "Searching…";
 
         OnPropertyChanged(nameof(HasResults));
@@ -1855,12 +1907,57 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         var timer = _searchTimer;
         if (timer is null)
-            return TimeSpan.Zero;
+            return _lastSearchElapsed;
 
         timer.Stop();
         _searchTimer = null;
+        StopSearchStatusHeartbeat();
         _lastSearchElapsed = timer.Elapsed;
         return timer.Elapsed;
+    }
+
+    private void StartSearchStatusHeartbeat()
+    {
+        StopSearchStatusHeartbeat();
+        var cts = new CancellationTokenSource();
+        _searchStatusHeartbeatCts = cts;
+        _ = RunSearchStatusHeartbeatAsync(cts);
+    }
+
+    private void StopSearchStatusHeartbeat()
+    {
+        var cts = Interlocked.Exchange(ref _searchStatusHeartbeatCts, null);
+        try { cts?.Cancel(); } catch { }
+    }
+
+    private async Task RunSearchStatusHeartbeatAsync(CancellationTokenSource cts)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(250));
+            while (await timer.WaitForNextTickAsync(cts.Token).ConfigureAwait(false))
+            {
+                if (!_dispatcher.TryEnqueue(DispatcherQueuePriority.High, UpdateSearchStatusHeartbeat))
+                    break;
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            Interlocked.CompareExchange(ref _searchStatusHeartbeatCts, null, cts);
+            cts.Dispose();
+        }
+    }
+
+    private void UpdateSearchStatusHeartbeat()
+    {
+        if (_disposed || _searchTimer is null || !IsSearching)
+        {
+            StopSearchStatusHeartbeat();
+            return;
+        }
+
+        UpdateFilesPerSecond();
     }
 
     private string BuildCancelledStatus(TimeSpan elapsed)
@@ -1958,6 +2055,22 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             NotifyResultAvailabilityChanged();
     }
 
+    private Task AddSourceBackedMatchesAsync(IReadOnlyList<SourceBackedMatch> results, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        bool resultAvailabilityChanged = _resultCollection.AddSourceBackedRange(
+            results,
+            InitializeResultGroup);
+
+        QueueSearchSortRefreshIfDue();
+
+        if (resultAvailabilityChanged)
+            NotifyResultAvailabilityChanged();
+
+        return Task.CompletedTask;
+    }
+
     private static bool ContainsInMemoryPayload(IReadOnlyList<SearchResult> results)
     {
         for (int i = 0; i < results.Count; i++)
@@ -2042,14 +2155,25 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void QueueSearchSortRefreshIfDue()
     {
         int groupCount = _resultCollection.AllGroups.Count;
-        // Note: intentionally allow refresh while Degraded (memory-pressure paging mode).
-        // Adaptive backoff below handles cost on slow passes; skipping outright would
-        // freeze the visible sort/group ordering for the remainder of large searches.
         if (!IsSearching || _searchSortRefreshQueued || groupCount < 2)
             return;
 
         long now = System.Diagnostics.Stopwatch.GetTimestamp();
         long intervalTicks = (long)(System.Diagnostics.Stopwatch.Frequency * _searchSortRefreshIntervalSec);
+
+        if (Degraded && groupCount >= SearchSortRefreshDegradedDeferGroupThreshold)
+        {
+            _searchSortRefreshIntervalSec = SearchSortRefreshIntervalMaxSec;
+            if (_lastSearchSortRefreshTicks == 0 || now - _lastSearchSortRefreshTicks >= intervalTicks)
+            {
+                _lastSearchSortRefreshTicks = now;
+                LogService.Instance.Verbose("ViewModel",
+                    $"Deferring periodic in-search sort refresh for degraded large result set: {groupCount:N0} group(s); final refresh will run on completion");
+            }
+
+            return;
+        }
+
         if (_lastSearchSortRefreshTicks != 0 && now - _lastSearchSortRefreshTicks < intervalTicks)
             return;
 
@@ -2198,7 +2322,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>Hydrate an evicted result from disk so its full data is available.</summary>
     public void HydrateResult(SearchResult result)
     {
-        if (result.IsEvicted && _resultStore is not null)
+        if (!result.IsEvicted) return;
+
+        if (result.IsSourceBacked)
+        {
+            if (ReadSourceBackedHydrationPayload(result) is { } payload)
+                ApplyHydrationPayloads([payload]);
+            return;
+        }
+
+        if (_resultStore is not null)
         {
             try
             {
@@ -2225,7 +2358,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public IReadOnlyList<HydrationPayload> ReadHydrationPayloads(IReadOnlyList<SearchResult> results)
     {
-        if (_resultStore is null || results.Count == 0) return Array.Empty<HydrationPayload>();
+        if (results.Count == 0) return Array.Empty<HydrationPayload>();
+
+        List<HydrationPayload>? payloads = null;
+
+        for (int i = 0; i < results.Count; i++)
+        {
+            if (results[i].IsSourceBacked && ReadSourceBackedHydrationPayload(results[i]) is { } payload)
+                (payloads ??= new List<HydrationPayload>()).Add(payload);
+        }
+
+        if (_resultStore is null)
+            return payloads ?? (IReadOnlyList<HydrationPayload>)Array.Empty<HydrationPayload>();
 
         // Collect offsets for evicted items
         long[] offsets = new long[results.Count];
@@ -2233,33 +2377,160 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         int[] evictedIndices = new int[results.Count];
         for (int i = 0; i < results.Count; i++)
         {
-            if (results[i].IsEvicted)
+            if (results[i].DiskOffset >= 0)
             {
                 offsets[evictedCount] = results[i].DiskOffset;
                 evictedIndices[evictedCount] = i;
                 evictedCount++;
             }
         }
-        if (evictedCount == 0) return Array.Empty<HydrationPayload>();
+        if (evictedCount == 0)
+            return payloads ?? (IReadOnlyList<HydrationPayload>)Array.Empty<HydrationPayload>();
 
         try
         {
             var readResults = _resultStore.ReadBatch(offsets.AsSpan(0, evictedCount));
-            var payloads = new List<HydrationPayload>(evictedCount);
+            payloads ??= new List<HydrationPayload>(evictedCount);
             for (int i = 0; i < evictedCount; i++)
             {
                 var data = readResults[i];
                 if (data is null) continue;
                 var (ml, cb, ca) = data.Value;
-                payloads.Add(new HydrationPayload(results[evictedIndices[i]], ml, cb, ca));
+                var result = results[evictedIndices[i]];
+                payloads.Add(new HydrationPayload(
+                    result,
+                    ml,
+                    cb,
+                    ca,
+                    result.MatchStartColumn,
+                    result.MatchLength,
+                    result.SourceMatchStartColumn));
             }
             return payloads;
         }
         catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException)
         {
             LogService.Instance.Warning("ViewModel", $"Batch hydration failed: {ex.Message}");
-            return Array.Empty<HydrationPayload>();
+            return payloads ?? (IReadOnlyList<HydrationPayload>)Array.Empty<HydrationPayload>();
         }
+    }
+
+    private HydrationPayload? ReadSourceBackedHydrationPayload(SearchResult result)
+    {
+        if (result.LineNumber <= 0 || string.IsNullOrWhiteSpace(result.FilePath)) return null;
+
+        try
+        {
+            int contextLineCount = Math.Max(0, ContextLines);
+            var before = new Queue<string>(contextLineCount);
+            var after = new List<string>(contextLineCount);
+            string? matchLine = null;
+            int currentLineNumber = 0;
+
+            foreach (var line in File.ReadLines(result.FilePath))
+            {
+                currentLineNumber++;
+                if (currentLineNumber < result.LineNumber)
+                {
+                    if (contextLineCount > 0)
+                    {
+                        if (before.Count == contextLineCount)
+                            before.Dequeue();
+                        before.Enqueue(LineTruncator.Truncate(line));
+                    }
+                    continue;
+                }
+
+                if (currentLineNumber == result.LineNumber)
+                {
+                    matchLine = line;
+                    continue;
+                }
+
+                if (after.Count < contextLineCount)
+                {
+                    after.Add(LineTruncator.Truncate(line));
+                    if (after.Count < contextLineCount)
+                        continue;
+                }
+                break;
+            }
+
+            if (matchLine is null) return null;
+
+            int sourceMatchStart = EstimateUtf16ColumnFromUtf8ByteOffset(matchLine, result.SourceMatchStartColumn);
+            int matchLength = EstimateUtf16LengthFromUtf8ByteLength(matchLine, sourceMatchStart, result.MatchLength);
+            matchLength = Math.Min(matchLength, Math.Max(0, matchLine.Length - sourceMatchStart));
+            var displayLine = LineTruncator.TruncateAroundMatch(matchLine, sourceMatchStart, matchLength);
+
+            return new HydrationPayload(
+                result,
+                displayLine.Text,
+                before.ToArray(),
+                after,
+                displayLine.MatchStart,
+                matchLength,
+                sourceMatchStart);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            LogService.Instance.Warning("ViewModel", $"Source-backed hydration failed for '{result.FilePath}': {ex.Message}");
+            return null;
+        }
+    }
+
+    private static int EstimateUtf16LengthFromUtf8ByteLength(string line, int sourceColumn, int utf8ByteLength)
+    {
+        if (utf8ByteLength <= 0 || sourceColumn >= line.Length) return 0;
+        int consumedBytes = 0;
+        int chars = 0;
+
+        while (sourceColumn + chars < line.Length && consumedBytes < utf8ByteLength)
+        {
+            int charCount = 1;
+            if (char.IsHighSurrogate(line[sourceColumn + chars])
+                && sourceColumn + chars + 1 < line.Length
+                && char.IsLowSurrogate(line[sourceColumn + chars + 1]))
+            {
+                charCount = 2;
+            }
+
+            int byteCount = System.Text.Encoding.UTF8.GetByteCount(line.AsSpan(sourceColumn + chars, charCount));
+            if (consumedBytes + byteCount > utf8ByteLength && chars > 0)
+                break;
+
+            consumedBytes += byteCount;
+            chars += charCount;
+        }
+
+        return chars;
+    }
+
+    private static int EstimateUtf16ColumnFromUtf8ByteOffset(string line, int utf8ByteOffset)
+    {
+        if (utf8ByteOffset <= 0) return 0;
+
+        int consumedBytes = 0;
+        int column = 0;
+        while (column < line.Length && consumedBytes < utf8ByteOffset)
+        {
+            int charCount = 1;
+            if (char.IsHighSurrogate(line[column])
+                && column + 1 < line.Length
+                && char.IsLowSurrogate(line[column + 1]))
+            {
+                charCount = 2;
+            }
+
+            int byteCount = System.Text.Encoding.UTF8.GetByteCount(line.AsSpan(column, charCount));
+            if (consumedBytes + byteCount > utf8ByteOffset)
+                break;
+
+            consumedBytes += byteCount;
+            column += charCount;
+        }
+
+        return column;
     }
 
     /// <summary>Apply hydrated payloads to SearchResult objects. Must run on the UI thread.</summary>
@@ -2267,7 +2538,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         foreach (var payload in payloads)
         {
-            payload.Result.HydrateFrom(payload.MatchLine, payload.ContextBefore, payload.ContextAfter);
+            payload.Result.HydrateFrom(
+                payload.MatchLine,
+                payload.ContextBefore,
+                payload.ContextAfter,
+                payload.MatchStartColumn,
+                payload.MatchLength,
+                payload.SourceMatchStartColumn);
         }
     }
 
@@ -2567,6 +2844,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.ConsoleLogLevelIndex = ConsoleLogLevelIndex;
         _settings.FileListerBackendIndex = FileListerBackendIndex;
         _settings.ParallelismIndex = ParallelismIndex;
+        _settings.IoOversubscriptionIndex = IoOversubscriptionIndex;
         _settings.LineTruncationLength = LineTruncationLength;
         _settings.MaxRecentItems = MaxRecentItems;
         _settings.GlobalHotkeyEnabled = GlobalHotkeyEnabled;
@@ -2585,6 +2863,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.SdkChannelBufferSize = SdkChannelBufferSize;
         _settings.MaxMatchesPerFile = MaxMatchesPerFile;
         _settings.SkipBinary = SkipBinary;
+        _settings.SearchOnlineOnlyFiles = SearchOnlineOnlyFiles;
         _settings.SearchInsideArchives = SearchInsideArchives;
         _settings.ArchiveExtensions = SettingsArchiveExtensions;
         _settings.SkipExtensions = SettingsSkipExtensions;

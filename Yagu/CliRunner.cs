@@ -525,9 +525,11 @@ internal static class CliRunner
             MaxMatchesPerFile     = maxMatchesPerFile,
             MaxSearchDepth        = maxSearchDepth,
             SkipBinary            = skipBinary,
+            SearchOnlineOnlyFiles = s.SearchOnlineOnlyFiles,
             ObeyGitignore         = obeyGitignore,
             GitignoreTakesPrecedence = gitignorePrecedence,
             MaxDegreeOfParallelism = parallelism,
+            IoOversubscriptionIndex = s.IoOversubscriptionIndex,
             MaxProcessMemoryBytes = memoryBytes,
             MemoryPressurePercent = memoryPressure,
             SkipExtensions        = skipExtensions,
@@ -583,7 +585,14 @@ internal static class CliRunner
         // writes ripgrep-formatted UTF-8 directly from Rust's byte buffers.
         if (!needsCollection)
         {
-            options.DirectOutputStream = Console.OpenStandardOutput();
+            // Console.OpenStandardOutput() is UNBUFFERED: every per-match write
+            // (line number, ':', line bytes, newline) became its own WriteFile
+            // syscall, so a match-heavy search paid ~4 syscalls per match (e.g.
+            // ~56K syscalls / ~3s for 14K matches). Wrap it in a 128 KiB
+            // BufferedStream so those tiny writes coalesce into block writes,
+            // matching ripgrep's buffered stdout. The DirectOutputSink flushes
+            // this stream after the scan (and per-file while interactive).
+            options.DirectOutputStream = new BufferedStream(Console.OpenStandardOutput(), 1 << 17);
             options.DirectOutputColor = useColor;
         }
 

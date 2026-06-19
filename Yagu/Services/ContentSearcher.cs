@@ -75,6 +75,7 @@ public sealed class ContentSearcher
     public const int SkipEncoding    = -6;
     public const int SkipOther       = -7;
     public const int SkipByExtension = -8;
+    public const int SkipCloudOnly   = -10;
 
     private static int LogBinaryAndReturn(string filePath)
     {
@@ -142,6 +143,18 @@ public sealed class ContentSearcher
             try { fi = new FileInfo(filePath); }
             catch (Exception ex) { LogService.Instance.Verbose("ContentSearcher", $"Cannot stat file: {filePath}", ex); return new FileSearchOutcome(SkipOther, 0); }
             if (!fi.Exists) return new FileSearchOutcome(SkipNotFound, 0);
+
+            // Cloud-only placeholder guard. Opening a dehydrated OneDrive/Google
+            // Drive online-only file triggers a provider hydration that blocks
+            // forever when no provider is connected. Manual discovery filters these
+            // earlier; this covers Everything-backend / uncached paths. Reading the
+            // attribute never hydrates.
+            if (CloudFileHelper.IsCloudOnlyPlaceholder(fi.Attributes)
+                && CloudFileHelper.ShouldSkipPlaceholder(filePath, fi.Attributes, options.SearchOnlineOnlyFiles))
+            {
+                LogService.Instance.Verbose("ContentSearcher", $"Cloud-only placeholder skipped: {filePath}");
+                return new FileSearchOutcome(SkipCloudOnly, 0);
+            }
 
             fileLength = fi.Length;
             metadata = new FileMetadata(fileLength, fi.LastWriteTime, fi.CreationTime);
@@ -694,7 +707,7 @@ public sealed class ContentSearcher
             var view = *m;
             int lineBytes = view.LineLen > (nuint)int.MaxValue ? int.MaxValue : (int)view.LineLen;
             int matchStartBytes = view.MatchStart > int.MaxValue ? lineBytes : (int)view.MatchStart;
-            int sourceMatchStartBytes = view.SourceMatchStart > int.MaxValue ? matchStartBytes : (int)view.SourceMatchStart;
+            int? sourceMatchStartBytes = view.SourceMatchStart > int.MaxValue ? (int?)null : (int)view.SourceMatchStart;
             int matchLenBytes = view.MatchLen > int.MaxValue ? 0 : (int)view.MatchLen;
             var matchLine = DecodeMatchLine(view.LinePtr, lineBytes, matchStartBytes, matchLenBytes, sourceMatchStartBytes);
 
@@ -773,6 +786,16 @@ public sealed class ContentSearcher
             }
         }
 
+        // Decode one native match view into a managed line + display/source columns.
+        //
+        // This is the DELIBERATE home for full-line column work. `sourceMatchStartBytes`
+        // is null when the native scanner left the column unresolved (the common
+        // case — see `source_match_start` in yagu-core/src/scan.rs). Computing the
+        // UTF-16 column here is correct and cheap because it runs LAZILY, only when
+        // a match is materialized into a managed result, not once per match in the
+        // native scan hot loop. Do NOT push this work back into the native loop:
+        // doing so regressed full-`C:\` "test" ~4x (SOURCE_MATCH_START note in repo
+        // memory `yagu-profiling.md`).
         internal static unsafe DecodedMatchLine DecodeMatchLine(byte* ptr, int len, int matchStartBytes, int matchLenBytes, int? sourceMatchStartBytes = null)
         {
             if (ptr == null || len <= 0) return new DecodedMatchLine(string.Empty, 0, 0, 0);

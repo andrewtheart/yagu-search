@@ -330,6 +330,22 @@ public sealed class BatchObservableCollectionTests
     }
 
     [Fact]
+    public void AddRangeWithAddNotification_MultipleItems_SingleAddNotification()
+    {
+        var c = new BatchObservableCollection<string>();
+        NotifyCollectionChangedEventArgs? args = null;
+        c.CollectionChanged += (_, e) => args = e;
+
+        c.AddRangeWithAddNotification(["a", "b", "c"]);
+
+        Assert.Equal(3, c.Count);
+        Assert.NotNull(args);
+        Assert.Equal(NotifyCollectionChangedAction.Add, args!.Action);
+        Assert.Equal(0, args.NewStartingIndex);
+        Assert.Equal(3, args.NewItems!.Count);
+    }
+
+    [Fact]
     public void ReplaceAll_ReplacesContent()
     {
         var c = new BatchObservableCollection<int>();

@@ -871,6 +871,7 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(changing,
             "CaptureResultsListScrollPosition();",
             "ResultsListSmartScrollIntent intent = ResolveResultsListSmartScrollIntent();",
+            "!ViewModel.IsSearching",
             "ResultRowsChanging: intent={intent}",
             "QueueResultsListSmartScrollRestore(intent);");
 

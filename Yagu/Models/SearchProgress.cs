@@ -15,10 +15,11 @@ public sealed record SkipBreakdown(
     int Directories = 0,
     int EarlyFiltered = 0,
     int GlobExcluded = 0,
-    int GitignoreExcluded = 0)
+    int GitignoreExcluded = 0,
+    int CloudOnly = 0)
 {
     public override string ToString() =>
-        $"binary={Binary}, accessDenied={AccessDenied}, ioError={IOError}, tooLarge={TooLarge}, notFound={NotFound}, encoding={Encoding}, other={Other}, byExtension={ByExtension}, directories={Directories}, earlyFiltered={EarlyFiltered}, globExcluded={GlobExcluded}, gitignoreExcluded={GitignoreExcluded}";
+        $"binary={Binary}, accessDenied={AccessDenied}, ioError={IOError}, tooLarge={TooLarge}, notFound={NotFound}, encoding={Encoding}, other={Other}, byExtension={ByExtension}, directories={Directories}, earlyFiltered={EarlyFiltered}, globExcluded={GlobExcluded}, gitignoreExcluded={GitignoreExcluded}, cloudOnly={CloudOnly}";
 }
 
 /// <summary>

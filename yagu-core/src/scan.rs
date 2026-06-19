@@ -56,10 +56,51 @@ pub struct ScanOptions {
     /// Unicode-aware case folding via the regex engine, matching the regex
     /// matcher's case-insensitive behavior.
     pub ascii_case_only: bool,
+    /// When true, callers only need line number and byte-range metadata. The
+    /// scanner skips display-line windowing and reports source_match_start as a
+    /// UTF-8 byte offset; consumers can convert only the visible hydrated rows.
+    pub metadata_only: bool,
 }
 
 const MAX_EMITTED_LINE_BYTES: usize = 4096;
 const TRUNCATION_MARKER: &[u8] = b"\xE2\x80\xA6";
+
+/// Resolve the `source_match_start` column for a match at `byte_start`.
+///
+/// PERF-CRITICAL — this runs once per match inside the scan hot loop (called
+/// for *every* match across the whole corpus, billions of times on a full-disk
+/// scan). It MUST stay O(1). Do NOT call `utf16_col` (or anything that scans
+/// the line/prefix) here on the common path: a full-`C:\` `test` scan went ~4x
+/// slower and stopped completing when this naively ran `utf16_col` per match,
+/// because long non-ASCII lines (binary blobs, minified files) turned it into a
+/// per-match O(prefix) UTF-8 decode (O(line^2) on dense lines). See the
+/// SOURCE_MATCH_START regression note in repo memory `yagu-profiling.md`.
+///
+/// Design: in the common path the line bytes cross the FFI boundary intact, so
+/// this returns the `u32::MAX` sentinel ("not provided") and the managed
+/// decoder computes the column LAZILY, only when a result is materialized. The
+/// full-line UTF-16 column is computed here (via [`utf16_col`]) only in
+/// `metadata_only` mode, where the line bytes are omitted and the managed side
+/// has nothing left to reconstruct the column from.
+#[inline]
+fn source_match_start(
+    line: &[u8],
+    byte_start: usize,
+    options: &ScanOptions,
+) -> u32 {
+    if options.metadata_only {
+        // The line bytes are omitted across the FFI boundary, so the managed
+        // side cannot reconstruct the column from the (absent) slice — compute
+        // the full-line UTF-16 column here while the whole line is in hand.
+        utf16_col(line, byte_start)
+    } else {
+        // The line bytes cross the boundary intact, so the managed decoder
+        // computes the column lazily (and only when a result is materialized).
+        // Returning the sentinel keeps the native scan hot loop free of
+        // per-match column work. `u32::MAX` == "not provided".
+        u32::MAX
+    }
+}
 
 /// UTF-16 code-unit offset of the prefix `line[..byte_start]`.
 ///
@@ -243,6 +284,13 @@ pub fn scan_bytes_with_matcher_ex(
         }
 
         // Find every match in this line.
+        //
+        // PERF-CRITICAL HOT LOOP. Body runs once per match across the entire
+        // corpus (billions of times on a full-disk scan). Keep per-match work
+        // O(1) and allocation-free: no per-match line/prefix scans, no
+        // `utf16_col`, no fresh `Vec`/`String` on the common path. New columns
+        // or metadata must be derived lazily on the managed side (see
+        // `source_match_start`), not computed here.
         let mut search_from = 0usize;
         while search_from <= line.len() {
             match matcher.find(&line[search_from..]) {
@@ -259,7 +307,7 @@ pub fn scan_bytes_with_matcher_ex(
                     let rec = MatchRecord {
                         line_number,
                         match_start: display_start,
-                        source_match_start: utf16_col(line, start),
+                        source_match_start: source_match_start(line, start, options),
                         match_len: len as u32,
                         line: match_line,
                         context_before: before.iter().cloned().collect(),
@@ -406,6 +454,13 @@ where
         }
 
         // Find every match in this line.
+        //
+        // PERF-CRITICAL HOT LOOP (streaming path). Body runs once per match for
+        // the whole corpus; on a full-disk scan this feeds the degraded
+        // streaming sink millions of matches/sec. Keep per-match work O(1): no
+        // per-match line/prefix scans, no `utf16_col`. Columns/metadata that
+        // need the full line are resolved lazily on the managed side (see
+        // `source_match_start` returning the `u32::MAX` sentinel).
         let mut search_from = 0usize;
         while search_from <= line.len() {
             match matcher.find(&line[search_from..]) {
@@ -423,7 +478,9 @@ where
                         // borrowed from `bytes`, the small `Vec<&[u8]>` for
                         // before-context is stack-friendly when its capacity
                         // is small — typical context_before is 0..5).
-                        let (display_line, display_start) = if line.len() <= MAX_EMITTED_LINE_BYTES
+                        let (display_line, display_start) = if options.metadata_only {
+                            (&[][..], start.min(u32::MAX as usize) as u32)
+                        } else if line.len() <= MAX_EMITTED_LINE_BYTES
                         {
                             (line, start as u32)
                         } else {
@@ -440,7 +497,7 @@ where
                         let view = MatchView {
                             line_number,
                             match_start: display_start,
-                            source_match_start: utf16_col(line, start),
+                            source_match_start: source_match_start(line, start, options),
                             match_len: len as u32,
                             line: display_line,
                             context_before: &before_view,
@@ -462,7 +519,7 @@ where
                         pending.push_back(PendingMatchOwned {
                             line_number,
                             match_start: display_start,
-                            source_match_start: utf16_col(line, start),
+                            source_match_start: source_match_start(line, start, options),
                             match_len: len as u32,
                             line: match_line,
                             context_before,
@@ -776,6 +833,18 @@ enum LiteralImpl {
     AsciiCaseInsensitive {
         needle_lower: Vec<u8>,
         len: usize,
+        /// Offset within the needle of the byte chosen for the candidate
+        /// prefilter. Chosen to be the *rarest* byte (by memchr's background
+        /// frequency model) rather than always the first byte, so a common
+        /// leading byte like 't' in "test" no longer fires a verify at nearly
+        /// every position in t-dense text. Mirrors ripgrep/memmem's rare-byte
+        /// strategy for the ASCII case-insensitive path.
+        rare_offset: usize,
+        /// Lowercase form of the prefilter byte.
+        rare_lo: u8,
+        /// Uppercase form of the prefilter byte (equals `rare_lo` when the
+        /// byte is not ASCII-alphabetic).
+        rare_hi: u8,
     },
     UnicodeCaseInsensitive {
         regex: Regex,
@@ -793,10 +862,19 @@ impl LiteralMatcher {
     }
 
     fn new_ascii_case_insensitive(needle: &[u8]) -> Self {
+        let needle_lower = needle.to_ascii_lowercase();
+        // Pick the rarest byte in the needle as the prefilter anchor. memchr's
+        // `Pair` uses the same background byte-frequency model that powers its
+        // SIMD substring search, so on English text it avoids anchoring on a
+        // common byte. Needles shorter than 2 bytes fall back to offset 0.
+        let (rare_offset, rare_lo, rare_hi) = ascii_ci_anchor(&needle_lower);
         Self {
             impl_: LiteralImpl::AsciiCaseInsensitive {
-                needle_lower: needle.to_ascii_lowercase(),
                 len: needle.len(),
+                needle_lower,
+                rare_offset,
+                rare_lo,
+                rare_hi,
             },
         }
     }
@@ -823,9 +901,14 @@ impl LineMatcher for LiteralMatcher {
             LiteralImpl::CaseSensitive { finder, len } => {
                 finder.find(hay).map(|i| (i, *len))
             }
-            LiteralImpl::AsciiCaseInsensitive { needle_lower, len } => {
-                find_ascii_case_insensitive(hay, needle_lower).map(|i| (i, *len))
-            }
+            LiteralImpl::AsciiCaseInsensitive {
+                needle_lower,
+                len,
+                rare_offset,
+                rare_lo,
+                rare_hi,
+            } => find_ascii_ci_anchored(hay, needle_lower, *rare_offset, *rare_lo, *rare_hi)
+                .map(|i| (i, *len)),
             LiteralImpl::UnicodeCaseInsensitive { regex } => {
                 regex.find(hay).map(|m| (m.start(), m.end() - m.start()))
             }
@@ -834,37 +917,73 @@ impl LineMatcher for LiteralMatcher {
 }
 
 #[inline]
-fn find_ascii_case_insensitive(hay: &[u8], needle_lower: &[u8]) -> Option<usize> {
-    if needle_lower.is_empty() {
+fn find_ascii_ci_anchored(
+    hay: &[u8],
+    needle_lower: &[u8],
+    rare_offset: usize,
+    rare_lo: u8,
+    rare_hi: u8,
+) -> Option<usize> {
+    let n = needle_lower.len();
+    if n == 0 {
         return Some(0);
     }
-    if needle_lower.len() > hay.len() {
+    if n > hay.len() {
         return None;
     }
 
-    let first = needle_lower[0];
-    let mut offset = 0usize;
-    while offset + needle_lower.len() <= hay.len() {
-        let candidate_rel = if first.is_ascii_alphabetic() {
-            memchr2(first, first.to_ascii_uppercase(), &hay[offset..])?
+    // Every valid match starting at `s` has its anchor byte at `s + rare_offset`.
+    // Scan only the anchor positions: candidate starts run from 0..=max_start,
+    // so anchor positions run from rare_offset..=max_start+rare_offset.
+    let max_start = hay.len() - n; // inclusive
+    let search_end = max_start + rare_offset; // inclusive, always < hay.len()
+    let mut p = rare_offset;
+    while p <= search_end {
+        let window = &hay[p..=search_end];
+        let rel = if rare_lo != rare_hi {
+            memchr2(rare_lo, rare_hi, window)?
         } else {
-            memchr(first, &hay[offset..])?
+            memchr(rare_lo, window)?
         };
-        let candidate = offset + candidate_rel;
-        if candidate + needle_lower.len() > hay.len() {
-            return None;
-        }
-        if hay[candidate..candidate + needle_lower.len()]
+        let anchor = p + rel;
+        let candidate = anchor - rare_offset;
+        if hay[candidate..candidate + n]
             .iter()
             .zip(needle_lower.iter())
             .all(|(&actual, &expected_lower)| ascii_byte_eq_lower(actual, expected_lower))
         {
             return Some(candidate);
         }
-        offset = candidate + 1;
+        p = anchor + 1;
     }
 
     None
+}
+
+/// Compute the rare-byte prefilter anchor (offset + both case forms) for an
+/// already-lowercased needle, mirroring the selection done once at matcher
+/// construction. Used by the convenience wrapper below and indirectly by tests.
+#[inline]
+fn ascii_ci_anchor(needle_lower: &[u8]) -> (usize, u8, u8) {
+    let rare_offset = memchr::arch::all::packedpair::Pair::new(needle_lower)
+        .map(|p| usize::from(p.index1()))
+        .filter(|&o| o < needle_lower.len())
+        .unwrap_or(0);
+    let rare_lo = needle_lower.get(rare_offset).copied().unwrap_or(0);
+    let rare_hi = if rare_lo.is_ascii_alphabetic() {
+        rare_lo.to_ascii_uppercase()
+    } else {
+        rare_lo
+    };
+    (rare_offset, rare_lo, rare_hi)
+}
+
+/// Convenience entry point that selects the anchor on the fly. The hot path
+/// uses [`find_ascii_ci_anchored`] with a precomputed anchor instead.
+#[inline]
+fn find_ascii_case_insensitive(hay: &[u8], needle_lower: &[u8]) -> Option<usize> {
+    let (rare_offset, rare_lo, rare_hi) = ascii_ci_anchor(needle_lower);
+    find_ascii_ci_anchored(hay, needle_lower, rare_offset, rare_lo, rare_hi)
 }
 
 #[inline]
@@ -900,7 +1019,39 @@ mod tests {
             max_results: 0,
             skip_binary: true,
             ascii_case_only: false,
+            metadata_only: false,
         }
+    }
+
+    /// REGRESSION GUARD (perf): in the common bytes-present path the scan hot
+    /// loop must NOT compute the full-line column per match. `source_match_start`
+    /// has to return the `u32::MAX` "not provided" sentinel so the managed side
+    /// resolves the column lazily on emission. Computing `utf16_col` here per
+    /// match regressed full-`C:\` "test" ~4x (see `source_match_start` docs and
+    /// repo memory `yagu-profiling.md`). If this test fails, per-match column
+    /// work was reintroduced into the hot loop — that is the regression.
+    #[test]
+    fn source_match_start_defers_to_managed_side_in_common_path() {
+        // A non-ASCII line: the old (slow) behavior would decode the prefix here.
+        let line = "café test".as_bytes();
+        let match_start = line.len() - 4; // byte offset of "test"
+
+        // Common path (bytes cross FFI intact): must return the sentinel.
+        assert_eq!(
+            source_match_start(line, match_start, &opts()),
+            u32::MAX,
+            "scan hot loop must defer column computation to the managed side"
+        );
+
+        // metadata_only path (bytes omitted across FFI): native owns the column.
+        let meta = ScanOptions {
+            metadata_only: true,
+            ..opts()
+        };
+        assert_eq!(
+            source_match_start(line, match_start, &meta),
+            utf16_col(line, match_start)
+        );
     }
 
     #[test]

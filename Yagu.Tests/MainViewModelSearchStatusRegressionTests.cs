@@ -48,6 +48,67 @@ public sealed class MainViewModelSearchStatusRegressionTests
         Assert.Contains("dt >= 0.15 && FilesScanned > 0", updateMethod);
     }
 
+    [Fact]
+    public void SearchStatusHeartbeat_EnqueuesHighPriorityRefreshWhileSearchIsActive()
+    {
+        Assert.Contains("private CancellationTokenSource? _searchStatusHeartbeatCts;", MainViewModelSource);
+        Assert.Contains("StartSearchStatusHeartbeat();", MainViewModelSource);
+
+        string runHeartbeatMethod = ExtractWindow(MainViewModelSource, "private async Task RunSearchStatusHeartbeatAsync", "private void UpdateSearchStatusHeartbeat()");
+        Assert.Contains("new PeriodicTimer(TimeSpan.FromMilliseconds(250))", runHeartbeatMethod);
+        Assert.Contains("_dispatcher.TryEnqueue(DispatcherQueuePriority.High, UpdateSearchStatusHeartbeat)", runHeartbeatMethod);
+
+        string stopTimerMethod = ExtractWindow(MainViewModelSource, "private TimeSpan StopSearchTimer()", "private string BuildCancelledStatus");
+        Assert.Contains("StopSearchStatusHeartbeat();", stopTimerMethod);
+
+        string heartbeatMethod = ExtractWindow(MainViewModelSource, "private void UpdateSearchStatusHeartbeat()", "private string BuildCancelledStatus");
+        Assert.Contains("_searchTimer is null", heartbeatMethod);
+        Assert.Contains("!IsSearching", heartbeatMethod);
+        Assert.Contains("UpdateFilesPerSecond();", heartbeatMethod);
+    }
+
+    [Fact]
+    public void SearchLoop_StopsElapsedTimerWhenScanCompletesBeforeFinalResultDrain()
+    {
+        string scanCompletedCase = ExtractWindow(MainViewModelSource, "case SearchEvent.ScanCompleted sc:", "case SearchEvent.Completed c:");
+        Assert.Contains("var scanElapsed = StopSearchTimer();", scanCompletedCase);
+        Assert.Contains("Finalizing results...", scanCompletedCase);
+        Assert.DoesNotContain("IsSearching = false", scanCompletedCase);
+
+        string stopTimerMethod = ExtractWindow(MainViewModelSource, "private TimeSpan StopSearchTimer()", "private string BuildCancelledStatus");
+        Assert.Contains("if (timer is null)", stopTimerMethod);
+        Assert.Contains("return _lastSearchElapsed;", stopTimerMethod);
+    }
+
+    [Fact]
+    public void SearchSortRefresh_DefersLargeDegradedRefreshesDuringActiveSearch()
+    {
+        Assert.Contains("SearchSortRefreshDegradedDeferGroupThreshold = 20_000", MainViewModelSource);
+
+        string refreshMethod = ExtractWindow(MainViewModelSource, "private void QueueSearchSortRefreshIfDue()", "private void NotifyResultAvailabilityChanged()");
+        Assert.Contains("if (Degraded && groupCount >= SearchSortRefreshDegradedDeferGroupThreshold)", refreshMethod);
+        Assert.Contains("_searchSortRefreshIntervalSec = SearchSortRefreshIntervalMaxSec;", refreshMethod);
+        Assert.Contains("Deferring periodic in-search sort refresh for degraded large result set", refreshMethod);
+        AssertContainsInOrder(refreshMethod,
+            "if (Degraded && groupCount >= SearchSortRefreshDegradedDeferGroupThreshold)",
+            "return;",
+            "ApplySortAndFilter();");
+
+        string completedCase = ExtractWindow(MainViewModelSource, "case SearchEvent.Completed c:", "break;");
+        Assert.Contains("ApplySortAndFilter();", completedCase);
+    }
+
+    private static void AssertContainsInOrder(string text, params string[] expected)
+    {
+        int searchFrom = 0;
+        foreach (string item in expected)
+        {
+            int index = text.IndexOf(item, searchFrom, StringComparison.Ordinal);
+            Assert.True(index >= 0, $"Expected to find '{item}' after offset {searchFrom}.");
+            searchFrom = index + item.Length;
+        }
+    }
+
     private static string ExtractWindow(string source, string startMarker, string endMarker, int occurrence = 1)
     {
         int start = IndexOfOccurrence(source, startMarker, occurrence);

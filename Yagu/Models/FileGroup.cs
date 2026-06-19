@@ -201,6 +201,119 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             NotifySelectedCountChanged();
     }
 
+    internal void AddSourceBackedMatch(int lineNumber, int matchStartColumn, int matchLength, int sourceMatchStartColumn)
+    {
+        if (_isExpanded)
+        {
+            Add(SearchResult.CreateSourceBacked(FilePath, lineNumber, matchStartColumn, matchLength, sourceMatchStartColumn));
+            return;
+        }
+
+        bool hadContentMatches = HasContentMatches;
+
+        if (lineNumber == 0)
+            _fileNameMatchCount++;
+
+        if (Count >= MaxMatchesPerGroup)
+        {
+            HiddenMatchCount++;
+            if (HiddenMatchCount == 1)
+                OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(HasHiddenMatches)));
+            if ((HiddenMatchCount & 0xFF) == 0)
+            {
+                OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(HiddenMatchCount)));
+                OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(MatchCount)));
+            }
+            NotifyContentMatchStateIfChanged(hadContentMatches);
+            return;
+        }
+
+        AddEvictedStub(new EvictedStub(
+            lineNumber,
+            matchStartColumn,
+            matchLength,
+            sourceMatchStartColumn,
+            SearchResult.SourceBackedOffset));
+        _evictedOnlyCount++;
+
+        int totalStub = Items.Count + _evictedOnlyCount;
+        bool notifyStub = totalStub == PageSize + 1
+                      || (totalStub % HiddenNotificationInterval) == 0;
+        if (notifyStub)
+        {
+            OnPropertyChanged(s_countChanged);
+            OnPropertyChanged(s_indexerChanged);
+            NotifyMoreStateChanged();
+            OnPropertyChanged(s_matchCountChanged);
+        }
+        NotifyContentMatchStateIfChanged(hadContentMatches);
+    }
+
+    internal void AddSourceBackedMatches(IReadOnlyList<SourceBackedMatch> results, int start, int count)
+    {
+        if (count <= 0)
+            return;
+
+        if (_isExpanded)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                var result = results[start + i];
+                Add(SearchResult.CreateSourceBacked(
+                    FilePath,
+                    result.LineNumber,
+                    result.MatchStartColumn,
+                    result.MatchLength,
+                    result.SourceMatchStartColumn));
+            }
+            return;
+        }
+
+        bool hadContentMatches = HasContentMatches;
+        int hiddenBefore = HiddenMatchCount;
+        int addedStubs = 0;
+
+        for (int i = 0; i < count; i++)
+        {
+            var result = results[start + i];
+            if (result.LineNumber == 0)
+                _fileNameMatchCount++;
+
+            if (TotalStoredCount >= MaxMatchesPerGroup)
+            {
+                HiddenMatchCount++;
+                continue;
+            }
+
+            AddEvictedStub(new EvictedStub(
+                result.LineNumber,
+                result.MatchStartColumn,
+                result.MatchLength,
+                result.SourceMatchStartColumn,
+                SearchResult.SourceBackedOffset));
+            _evictedOnlyCount++;
+            addedStubs++;
+        }
+
+        if (HiddenMatchCount != hiddenBefore)
+        {
+            if (hiddenBefore == 0)
+                OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(HasHiddenMatches)));
+            OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(HiddenMatchCount)));
+            OnPropertyChanged(s_matchCountChanged);
+        }
+
+        if (addedStubs > 0)
+        {
+            OnPropertyChanged(s_countChanged);
+            OnPropertyChanged(s_indexerChanged);
+            NotifyMoreStateChanged();
+            OnPropertyChanged(s_matchCountChanged);
+        }
+
+        NotifyContentMatchStateIfChanged(hadContentMatches);
+    }
+
     private void NotifyContentMatchStateIfChanged(bool hadContentMatches)
     {
         if (hadContentMatches == HasContentMatches)
@@ -341,7 +454,9 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             while (remaining > 0 && offset < page.Length)
             {
                 var s = ReadEvictedStub(page, ref offset);
-                var result = SearchResult.CreatePreEvicted(FilePath, s.LineNumber, s.MatchStartColumn, s.MatchLength, s.DiskOffset, s.SourceMatchStartColumn);
+                var result = s.DiskOffset == SearchResult.SourceBackedOffset
+                    ? SearchResult.CreateSourceBacked(FilePath, s.LineNumber, s.MatchStartColumn, s.MatchLength, s.SourceMatchStartColumn)
+                    : SearchResult.CreatePreEvicted(FilePath, s.LineNumber, s.MatchStartColumn, s.MatchLength, s.DiskOffset, s.SourceMatchStartColumn);
                 ApplySelectionIntent(result);
                 Items.Add(result);
                 remaining--;
@@ -762,13 +877,20 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
                 if (skipFileNameMatches && stub.LineNumber == 0)
                     continue;
 
-                var result = SearchResult.CreatePreEvicted(
-                    FilePath,
-                    stub.LineNumber,
-                    stub.MatchStartColumn,
-                    stub.MatchLength,
-                    stub.DiskOffset,
-                    stub.SourceMatchStartColumn);
+                var result = stub.DiskOffset == SearchResult.SourceBackedOffset
+                    ? SearchResult.CreateSourceBacked(
+                        FilePath,
+                        stub.LineNumber,
+                        stub.MatchStartColumn,
+                        stub.MatchLength,
+                        stub.SourceMatchStartColumn)
+                    : SearchResult.CreatePreEvicted(
+                        FilePath,
+                        stub.LineNumber,
+                        stub.MatchStartColumn,
+                        stub.MatchLength,
+                        stub.DiskOffset,
+                        stub.SourceMatchStartColumn);
                 ApplySelectionIntent(result);
                 results.Add(result);
             }

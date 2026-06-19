@@ -173,7 +173,43 @@ public sealed class SearchResultCollection
 
         // Flush new groups to VisibleGroups in one batch notification.
         if (newVisibleGroups is not null)
-            VisibleGroups.AddRange(newVisibleGroups);
+            VisibleGroups.AddRangeWithAddNotification(newVisibleGroups);
+
+        return wasEmpty && _allGroups.Count > 0;
+    }
+
+    public bool AddSourceBackedRange(
+        IReadOnlyList<SourceBackedMatch> results,
+        Action<FileGroup>? initializeNewGroup = null)
+    {
+        if (results.Count == 0) return false;
+
+        bool wasEmpty = _allGroups.Count == 0;
+        List<FileGroup>? newVisibleGroups = null;
+
+        for (int i = 0; i < results.Count;)
+        {
+            var result = results[i];
+            if (!_index.TryGetValue(result.FilePath, out var group))
+            {
+                group = new FileGroup(result.FilePath);
+                initializeNewGroup?.Invoke(group);
+                _index[result.FilePath] = group;
+                _allGroups.Add(group);
+                if (MatchesFilter(group))
+                    (newVisibleGroups ??= []).Add(group);
+            }
+
+            int runStart = i;
+            i++;
+            while (i < results.Count && string.Equals(results[i].FilePath, result.FilePath, StringComparison.OrdinalIgnoreCase))
+                i++;
+
+            group.AddSourceBackedMatches(results, runStart, i - runStart);
+        }
+
+        if (newVisibleGroups is not null)
+            VisibleGroups.AddRangeWithAddNotification(newVisibleGroups);
 
         return wasEmpty && _allGroups.Count > 0;
     }

@@ -13,6 +13,7 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
 {
     private readonly Stream _output;
     private readonly bool _color;
+    private readonly bool _contextEnabled;
     private readonly List<string> _paths;
     private readonly int _maxResults;
     private readonly unsafe int* _cancelPtr;
@@ -27,6 +28,7 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
     // State for ripgrep-format output
     private string? _currentFile;
     private int _lastLineWritten;
+    private int _lastMatchLine;
     private bool _wroteMatchInFile;
     private int _runningTotal;
     private bool _stopped;
@@ -66,10 +68,12 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
         int currentTotalMatches,
         IntPtr cancelPtr,
         int* filesScannedPtr,
+        bool contextEnabled = false,
         int initialCapacity = 4096)
     {
         _output = output;
         _color = color;
+        _contextEnabled = contextEnabled;
         _paths = paths;
         _maxResults = maxResults;
         _runningTotal = currentTotalMatches;
@@ -134,9 +138,18 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
 
             _currentFile = filePath;
             _lastLineWritten = 0;
+            _lastMatchLine = 0;
             _wroteMatchInFile = false;
             FilesWithMatches++;
         }
+
+        // ripgrep is line-oriented: a single source line containing several matches
+        // is printed once. The scanner delivers same-line matches consecutively in
+        // ascending order, so fold any repeat of the just-written match line into the
+        // single emitted line (and count it once, like ripgrep's matching-line count).
+        // (Line numbers are 1-based, so 0 is a safe "no line yet" sentinel.)
+        if (lineNum == _lastMatchLine)
+            return 0;
 
         // ---- Context before ----
         if (view.CtxBeforeCount > 0 && view.CtxBeforePtr != null && view.CtxBeforeBytes > 0)
@@ -144,7 +157,7 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
             WriteContextLines(view.CtxBeforePtr, (int)view.CtxBeforeBytes, view.CtxBeforeCount,
                 lineNum - (int)view.CtxBeforeCount, isAfter: false);
         }
-        else if (_wroteMatchInFile && lineNum > _lastLineWritten + 1)
+        else if (_contextEnabled && _wroteMatchInFile && lineNum > _lastLineWritten + 1)
         {
             _output.Write(_color ? SeparatorColor : Separator);
         }
@@ -153,6 +166,7 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
         WriteMatchLine(lineNum, view.LinePtr, (int)view.LineLen,
             (int)view.MatchStart, (int)view.MatchLen);
         _lastLineWritten = lineNum;
+        _lastMatchLine = lineNum;
         _wroteMatchInFile = true;
 
         // ---- Context after ----
@@ -202,6 +216,14 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
                 default: SkipOther++; break;
             }
         }
+
+        // Interactive terminals get live, per-file streaming (the output stream is
+        // block-buffered for throughput, so flush at file boundaries to keep a
+        // human-watched search responsive). Piped/redirected output (color off)
+        // stays fully buffered and flushes once at the end for max throughput,
+        // matching ripgrep's buffered-when-not-a-tty behavior.
+        if (_color && _wroteMatchInFile)
+            _output.Flush();
     }
 
     // ---- Direct UTF-8 writing methods (zero allocation hot path) ----
