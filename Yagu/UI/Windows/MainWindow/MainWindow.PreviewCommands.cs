@@ -2432,10 +2432,10 @@ public sealed partial class MainWindow
                     if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
                         break;
 
-                    bool isMatchLine = !isFileNameOnlyPreview && matchLineNums.Contains(lineNum);
+                    bool isMatchLine = isFileNameOnlyPreview || matchLineNums.Contains(lineNum);
                     _sectionMatchNavs.TryGetValue(section, out var sn);
                     var firstPara = AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, isFileNameOnlyPreview ? null : rx, truncate: !isFileNameOnlyPreview && truncatePreviewLines,
-                        isMatchLine ? _matchParagraphs : null, sn, out int addedParagraphs,
+                        isMatchLine && !isFileNameOnlyPreview ? _matchParagraphs : null, sn, out int addedParagraphs,
                         maxParagraphs: MaxPreviewBlocksPerSection - (section.Blocks.Count - startingBlocks));
                     parasInFile += addedParagraphs;
 

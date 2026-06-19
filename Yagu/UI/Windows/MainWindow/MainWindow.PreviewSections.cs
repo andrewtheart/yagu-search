@@ -672,6 +672,7 @@ public sealed partial class MainWindow
     /// </summary>
     private void EnsureSectionsSurface()
     {
+        ClearPreviewBlockContentBackground();
         if (PreviewSectionsPanel.Visibility == Visibility.Visible)
         {
             LogService.Instance.Verbose("Preview", "EnsureSectionsSurface: already visible, preserving existing sections");

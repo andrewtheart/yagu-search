@@ -1441,7 +1441,7 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void FileNameOnlyPreview_RendersFullFileWithoutMatchHighlightsOrNavigation()
+    public void FileNameOnlyPreview_RendersFullFileWithSelectedMatchTextButNoNavigation()
     {
         string previewable = ExtractMethodWindow(MainWindowSource, "GetPreviewableResults", window: 900);
         AssertContainsInOrder(previewable,
@@ -1465,15 +1465,15 @@ public sealed class PreviewCoreRegressionTests
             "Regex? rx = isFileNameOnlyPreview",
             "? null",
             "var lines = GetPreviewLines(r, allLines, ViewModel.PreviewContextLines, fullFile);",
-            "bool isMatchLine = !isFileNameOnlyPreview && lineNum == r.LineNumber;");
+            "bool isMatchLine = isFileNameOnlyPreview || lineNum == r.LineNumber;");
 
         string concatenated = ExtractMethodWindow(MainWindowSource, "BuildConcatenatedSection", window: 5200);
         AssertContainsInOrder(concatenated,
             "bool isFileNameOnlyPreview = r.LineNumber <= 0;",
             "fullFile: isFileNameOnlyPreview",
-            "bool isMatchLine = !isFileNameOnlyPreview && lineNum == r.LineNumber;",
+            "bool isMatchLine = isFileNameOnlyPreview || lineNum == r.LineNumber;",
             "isFileNameOnlyPreview ? null : rx",
-            "isMatchLine ? _matchParagraphs : null");
+            "isMatchLine && !isFileNameOnlyPreview ? _matchParagraphs : null");
 
         string highlight = ExtractMethodWindow(MainWindowSource, "BuildHighlightSectionAsync", window: 1000);
         AssertContainsInOrder(highlight,
@@ -1508,7 +1508,34 @@ public sealed class PreviewCoreRegressionTests
             "continue;");
 
         string blockSurface = ExtractMethodWindow(MainWindowSource, "ShowPreviewBlockSurface", window: 900);
+        Assert.Contains("ApplyPreviewBlockContentBackground();", blockSurface);
         Assert.Contains("HideMatchNavPanel();", blockSurface);
+
+        string ensureSectionsSurface = ExtractMethodWindow(MainWindowSource, "EnsureSectionsSurface", window: 1200);
+        AssertContainsInOrder(ensureSectionsSurface,
+            "ClearPreviewBlockContentBackground();",
+            "if (PreviewSectionsPanel.Visibility == Visibility.Visible)");
+
+        string blockBackground = ExtractMethodWindow(MainWindowSource, "ApplyPreviewBlockContentBackground", window: 900);
+        AssertContainsInOrder(blockBackground,
+            "CreatePreviewSectionContentBackgroundBrush(isActive: true)",
+            "PreviewScrollViewer.Background = brush;",
+            "grid.Background = brush;",
+            "PreviewMessagePanel.Background = brush;");
+    }
+
+    [Fact]
+    public void ReportExportDialog_HidesDialogTitleAndNativeTitleBar()
+    {
+        string source = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "ReportExportDialog.cs"));
+
+        AssertContainsInOrder(source,
+            "Title = \"Export Report\",",
+            "Content = root,",
+            "PrimaryButtonText = \"Export\",",
+            "CloseButtonText = \"Cancel\",",
+            "ShowTitle = false,",
+            "ShowTitleBar = false,");
     }
 
     [Fact]

@@ -131,6 +131,8 @@ internal static class ReportExportDialog
                 Width = 520,
                 Height = 560,
                 MaxContentHeight = 440,
+                ShowTitle = false,
+                ShowTitleBar = false,
             });
         if (result != YaguDialogResult.Primary)
             return null;

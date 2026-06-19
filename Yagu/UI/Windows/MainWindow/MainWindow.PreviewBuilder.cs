@@ -757,10 +757,10 @@ public sealed partial class MainWindow
                 if (section.Blocks.Count - startingBlocks >= maxBlocks)
                     break;
 
-                bool isMatchLine = !isFileNameOnlyPreview && lineNum == r.LineNumber;
+                bool isMatchLine = isFileNameOnlyPreview || lineNum == r.LineNumber;
                 _sectionMatchNavs.TryGetValue(section, out var sn);
                 AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, isFileNameOnlyPreview ? null : rx, truncate: !isFileNameOnlyPreview && truncatePreviewLines,
-                    isMatchLine ? _matchParagraphs : null, sn, out int addedParagraphs,
+                    isMatchLine && !isFileNameOnlyPreview ? _matchParagraphs : null, sn, out int addedParagraphs,
                     maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks));
                 parasBuilt += addedParagraphs;
             }
@@ -1479,7 +1479,7 @@ public sealed partial class MainWindow
         LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync rebuild: wrapMode={ViewModel.PreviewWrapModeIndex}, segmentCap={GetEffectiveSegmentSize()}, truncate={truncatePreviewLines}, lines={lines.Count}, maxLineLen={maxLineLen}");
         foreach (var (line, lineNum) in lines)
         {
-            bool isMatchLine = !isFileNameOnlyPreview && lineNum == r.LineNumber;
+            bool isMatchLine = isFileNameOnlyPreview || lineNum == r.LineNumber;
             AddPreviewLineParagraphs(PreviewBlock, line, lineNum, isMatchLine, r, rx, truncate: truncatePreviewLines, null, null, out int addedParagraphs);
             lineCount += addedParagraphs;
         }
@@ -1503,6 +1503,7 @@ public sealed partial class MainWindow
         PreviewBlock.TextWrapping = ViewModel.PreviewWordWrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
         ConfigurePreviewSelectionMode(PreviewBlock);
         PreviewBlock.Visibility = Visibility.Visible;
+        ApplyPreviewBlockContentBackground();
         HidePreviewLoading();
         SetPerFileToolbarVisibility(Visibility.Visible);
         HideMatchNavPanel();
@@ -1518,6 +1519,7 @@ public sealed partial class MainWindow
         PreviewScrollViewer.Padding = new Thickness(0, 0, 0, 0);
         PreviewBlock.Blocks.Clear();
         PreviewBlock.Visibility = Visibility.Collapsed;
+        ClearPreviewBlockContentBackground();
         PreviewSectionsPanel.Children.Clear();
         PreviewSectionsPanel.Visibility = Visibility.Visible;
         HidePreviewLoading();
@@ -1529,10 +1531,28 @@ public sealed partial class MainWindow
         UpdatePreviewEmptyState();
     }
 
+    private void ApplyPreviewBlockContentBackground()
+    {
+        var brush = CreatePreviewSectionContentBackgroundBrush(isActive: true);
+        PreviewScrollViewer.Background = brush;
+        if (PreviewScrollViewer.Content is Grid grid)
+            grid.Background = brush;
+        PreviewMessagePanel.Background = brush;
+    }
+
+    private void ClearPreviewBlockContentBackground()
+    {
+        PreviewScrollViewer.Background = null;
+        if (PreviewScrollViewer.Content is Grid grid)
+            grid.Background = null;
+        PreviewMessagePanel.Background = null;
+    }
+
     private void ShowPreviewLoading(string message = "Loading preview…")
     {
         PreviewScrollViewer.Padding = new Thickness(16, 12, 16, 12);
         PreviewMessagePanel.Visibility = Visibility.Collapsed;
+        ClearPreviewBlockContentBackground();
         PreviewSectionsPanel.Visibility = Visibility.Collapsed;
         PreviewEmptyState.Visibility = Visibility.Collapsed;
         PreviewLoadingText.Text = message;
