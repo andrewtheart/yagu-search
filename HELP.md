@@ -388,7 +388,6 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 | Launcher focus-loss behavior | Minimize to tray, Stay open, or Always on top when the compact launcher loses focus. |
 | Close to tray | Closing the window minimizes to tray instead of exiting (on by default). |
 | Maximize window on startup | Starts the main window maximized instead of at the default size. |
-| Advanced Options drawer width | Uses the search box width when collapsed and expanded, or compact width when collapsed and search box width when expanded. |
 
 ### Interaction Tab
 

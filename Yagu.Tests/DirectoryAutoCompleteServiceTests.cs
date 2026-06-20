@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Yagu.Native;
 using Yagu.Services;
 
 namespace Yagu.Tests;
@@ -70,6 +71,20 @@ public class DirectoryAutoCompleteServiceTests : IDisposable
         Assert.Contains(result, r => r.EndsWith("Alpha"));
         Assert.Contains(result, r => r.EndsWith("Beta"));
         Assert.Contains(result, r => r.EndsWith("Gamma"));
+    }
+
+    [Fact]
+    public async Task GetChildDirectorySuggestionsAsync_SelectedDirectoryWithoutTrailingSlash_ListsChildren()
+    {
+        Directory.CreateDirectory(Path.Combine(_tempDir, "ChildA"));
+        Directory.CreateDirectory(Path.Combine(_tempDir, "ChildB"));
+
+        var svc = new DirectoryAutoCompleteService(esExePath: null);
+        var result = await svc.GetChildDirectorySuggestionsAsync(_tempDir, CancellationToken.None);
+
+        Assert.Equal(2, result.Count);
+        Assert.Contains(result, r => r.EndsWith("ChildA"));
+        Assert.Contains(result, r => r.EndsWith("ChildB"));
     }
 
     [Fact]
@@ -252,6 +267,88 @@ public class DirectoryAutoCompleteServiceTests : IDisposable
         // Should use Everything results, not fallback
         Assert.Single(result);
         Assert.Contains("EverythingResult", result[0]);
+    }
+
+    [Fact]
+    public async Task GetChildDirectorySuggestionsAsync_EverythingSdkReturnsResults_SkipsEsExeAndFallback()
+    {
+        bool originalSdkAvailable = FileLister.SdkAvailable;
+        FileLister.SdkAvailable = true;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(_tempDir, "ShouldNotAppear"));
+            var sdk = new MockEverythingSdkOps
+            {
+                Results = [(Path.Combine(_tempDir, "SdkChild"), 0)],
+            };
+
+            var scriptPath = Path.Combine(_tempDir, "mock-es-should-not-run.cmd");
+            File.WriteAllText(scriptPath, $"@echo off\r\necho {_tempDir}\\EsChild\r\n");
+
+            var svc = new DirectoryAutoCompleteService(scriptPath, (exe, args) =>
+            {
+                var p = new Process();
+                p.StartInfo = new ProcessStartInfo
+                {
+                    FileName = exe,
+                    Arguments = args,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true,
+                };
+                return p;
+            }, sdk);
+
+            var result = await svc.GetChildDirectorySuggestionsAsync(_tempDir, CancellationToken.None);
+
+            Assert.Single(result);
+            Assert.Contains("SdkChild", result[0]);
+            Assert.Contains("folder:", sdk.CapturedQuery);
+            Assert.Contains($"parent:\"{_tempDir}\"", sdk.CapturedQuery);
+            Assert.Equal(EverythingSdk.EVERYTHING_REQUEST_FULL_PATH_AND_FILE_NAME, sdk.CapturedRequestFlags);
+            Assert.Equal<uint>(30, sdk.CapturedMax.GetValueOrDefault());
+        }
+        finally
+        {
+            FileLister.SdkAvailable = originalSdkAvailable;
+        }
+    }
+
+    [Fact]
+    public async Task GetChildDirectorySuggestionsAsync_EmptySdkResults_FallsBackToEsExe()
+    {
+        bool originalSdkAvailable = FileLister.SdkAvailable;
+        FileLister.SdkAvailable = true;
+        try
+        {
+            var sdk = new MockEverythingSdkOps { Results = [] };
+            var scriptPath = Path.Combine(_tempDir, "mock-es-after-sdk-empty.cmd");
+            File.WriteAllText(scriptPath, $"@echo off\r\necho {_tempDir}\\EsChild\r\n");
+
+            var svc = new DirectoryAutoCompleteService(scriptPath, (exe, args) =>
+            {
+                var p = new Process();
+                p.StartInfo = new ProcessStartInfo
+                {
+                    FileName = exe,
+                    Arguments = args,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true,
+                };
+                return p;
+            }, sdk);
+
+            var result = await svc.GetChildDirectorySuggestionsAsync(_tempDir, CancellationToken.None);
+
+            Assert.Single(result);
+            Assert.Contains("EsChild", result[0]);
+            Assert.Contains("folder:", sdk.CapturedQuery);
+        }
+        finally
+        {
+            FileLister.SdkAvailable = originalSdkAvailable;
+        }
     }
 
     [Fact]

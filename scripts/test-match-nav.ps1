@@ -43,6 +43,23 @@ public class YaguInput {
     }
     public static void Activate(IntPtr hWnd) { ShowWindow(hWnd, 5); BringWindowToTop(hWnd); SetForegroundWindow(hWnd); }
     public static void Maximize(IntPtr hWnd) { ShowWindow(hWnd, 3); }
+    public static long LastProgressTicks = DateTime.UtcNow.Ticks;
+    public static void Progress() { LastProgressTicks = DateTime.UtcNow.Ticks; }
+    public static void StartStallWatchdog(int stallSeconds, string message, string logPath) {
+        var t = new System.Threading.Thread(() => {
+            while (true) {
+                System.Threading.Thread.Sleep(2000);
+                long idle = (DateTime.UtcNow.Ticks - LastProgressTicks) / TimeSpan.TicksPerSecond;
+                if (idle >= stallSeconds) {
+                    try { System.IO.File.AppendAllText(logPath, message + Environment.NewLine); } catch {}
+                    try { Console.Out.WriteLine(message); Console.Out.Flush(); } catch {}
+                    Environment.Exit(7);
+                }
+            }
+        });
+        t.IsBackground = true;
+        t.Start();
+    }
 }
 "@ -ErrorAction SilentlyContinue
 
@@ -52,6 +69,19 @@ $ErrorActionPreference = 'Stop'
 if (-not (Test-Path $ScreenshotDir)) {
     New-Item -ItemType Directory -Path $ScreenshotDir -Force | Out-Null
 }
+
+# Global stall watchdog: UIA calls can BLOCK (not throw) when the provider is wedged,
+# which per-call try/catch cannot interrupt. This background .NET thread runs independently
+# of the (possibly blocked) main runspace and force-exits with a clear message if no progress
+# (successful UIA call or screenshot) happens for $StallSeconds, instead of hanging until the
+# 15-minute harness timeout. Healthy phases tick [YaguInput]::Progress() continuously, so a
+# trip means UIA is genuinely stuck. (Longest legit wait is the ~120s preview poll, which also
+# ticks progress, so 90s is safe.)
+$StallSeconds = 90
+[YaguInput]::Progress()
+[YaguInput]::StartStallWatchdog($StallSeconds,
+    "FATAL: test-match-nav.ps1 made no UI progress for ${StallSeconds}s; UI Automation is blocked/unresponsive. Aborting early (exit 7) instead of hanging until the harness timeout. The result tree is likely too large/slow for UIA here, or the desktop session is degraded.",
+    (Join-Path $ScreenshotDir "watchdog.log"))
 
 function Activate-YaguWindow {
     if ($script:yaguWindow) {
@@ -78,7 +108,42 @@ function Take-Screenshot([string]$Name, [switch]$Fast) {
     $path = Join-Path $ScreenshotDir "$Name.png"
     $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     $bmp.Dispose()
+    [YaguInput]::Progress()
     if (-not $Fast) { Write-Host "  Screenshot saved: $path" }
+}
+
+# --- UI Automation health watchdog ------------------------------------------
+# UIA queries (FindFirst/FindAll) can transiently throw a timeout (COMException
+# 0x80131505) when the result tree is large or the app is busy. A single timeout
+# should not crash the run, but if UIA is *persistently* unresponsive we fail fast
+# and loud rather than grind until the 15-minute harness timeout.
+$script:UiaTimeoutStreak = 0
+$script:UiaTimeoutLimit  = 8   # consecutive timeouts before declaring UIA dead
+
+function Test-IsUiaTimeout {
+    param($ErrorRecord)
+    $ex = $ErrorRecord.Exception
+    while ($ex) {
+        if ($ex -is [System.TimeoutException]) { return $true }
+        if ($ex.Message -match '0x80131505|timed out|timeout') { return $true }
+        $ex = $ex.InnerException
+    }
+    return $false
+}
+
+function Reset-UiaTimeoutStreak { $script:UiaTimeoutStreak = 0; [YaguInput]::Progress() }
+
+function Register-UiaTimeout {
+    param([string]$Where)
+    $script:UiaTimeoutStreak++
+    if ($script:UiaTimeoutStreak -ge $script:UiaTimeoutLimit) {
+        Write-Host ""
+        Write-Host "FATAL: UI Automation is unresponsive - $($script:UiaTimeoutStreak) consecutive timeouts (last at $Where)."
+        Write-Host "       Aborting early instead of hanging until the harness timeout."
+        Write-Host "       The result tree is likely too large/slow for UIA in this environment"
+        Write-Host "       (this test searches an entire drive). Reduce the corpus or run unelevated."
+        exit 3
+    }
 }
 
 function Find-Element {
@@ -102,7 +167,17 @@ function Find-Element {
         $condition = if ($conditions.Count -eq 1) { $conditions[0] } 
                      else { [System.Windows.Automation.AndCondition]::new($conditions) }
         
-        $el = $Parent.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+        # FindFirst can transiently throw a UIA timeout (COMException 0x80131505) when the
+        # tree is large or the app is busy. Treat that like "not found yet" and keep retrying
+        # until the deadline; the watchdog bails fast if UIA is persistently unresponsive.
+        try {
+            $el = $Parent.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+            Reset-UiaTimeoutStreak
+        } catch {
+            if (-not (Test-IsUiaTimeout $_)) { throw }
+            Register-UiaTimeout "Find-Element"
+            $el = $null
+        }
         if ($el) { return $el }
         Start-Sleep -Milliseconds 500
     }
@@ -114,7 +189,8 @@ function Find-AllElements {
         [System.Windows.Automation.AutomationElement]$Parent,
         [string]$Name = $null,
         [string]$AutomationId = $null,
-        [System.Windows.Automation.ControlType]$ControlType = $null
+        [System.Windows.Automation.ControlType]$ControlType = $null,
+        [int]$TimeoutSeconds = 5
     )
     
     $conditions = @()
@@ -125,7 +201,25 @@ function Find-AllElements {
     $condition = if ($conditions.Count -eq 1) { $conditions[0] } 
                  else { [System.Windows.Automation.AndCondition]::new($conditions) }
     
-    return $Parent.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    # FindAll over Descendants can transiently throw a UIA timeout (COMException 0x80131505)
+    # when the tree is large or the app is busy (e.g. right after a context menu opens). Retry
+    # for a few seconds before giving up; the watchdog bails fast if UIA is persistently dead.
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ($true) {
+        try {
+            $result = $Parent.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+            Reset-UiaTimeoutStreak
+            return $result
+        } catch {
+            if (-not (Test-IsUiaTimeout $_)) { throw }
+            Register-UiaTimeout "Find-AllElements"
+            if ((Get-Date) -ge $deadline) {
+                Write-Host "  [warn] FindAll timed out repeatedly; returning empty set: $($_.Exception.Message)"
+                return $null
+            }
+            Start-Sleep -Milliseconds 500
+        }
+    }
 }
 
 function Find-YaguWindow {
@@ -228,6 +322,12 @@ Write-Host ""
 
 # 1. Launch Yagu with directory and query
 Write-Host "[1] Launching Yagu..."
+# Point the app at an inert editor so any accidental double-tap on a result during
+# UI automation does NOT launch the user's real editor (e.g. `code`). Launching `code`
+# under an elevated VS Code pops a modal "Another instance of Code is already running as
+# administrator" dialog that steals focus and hangs this script until it times out.
+# The exe name does not exist, so EditorLauncher.Open fails silently (no window, no dialog).
+$env:YAGU_EDITOR_COMMAND = 'yagu-ui-test-noop-editor --goto "{file}:{line}"'
 $yaguExe = "C:\src\Yagu\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe"
 $proc = Start-Process -FilePath $yaguExe `
     -ArgumentList "--dir `"$Directory`" --query `"$Query`" --window-mode traditional" `
@@ -650,6 +750,7 @@ function Find-AddingElement {
         $all = $Window.FindAll(
             [System.Windows.Automation.TreeScope]::Descendants,
             [System.Windows.Automation.Condition]::TrueCondition)
+        [YaguInput]::Progress()
         foreach ($el in $all) {
             try {
                 $name = $el.Current.Name

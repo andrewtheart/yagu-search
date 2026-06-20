@@ -9,12 +9,20 @@ use std::collections::VecDeque;
 /// Owned, decoded match record handed back to the FFI layer.
 #[derive(Debug)]
 pub struct MatchRecord {
+    /// 1-based line number in the scanned file.
     pub line_number: u64,
+    /// Match start inside `line`, after any long-line windowing/truncation.
     pub match_start: u32,
+    /// Full source-line UTF-16 column, or `u32::MAX` when the C# side can
+    /// compute it lazily from the complete emitted line bytes.
     pub source_match_start: u32,
+    /// Match length in source bytes.
     pub match_len: u32,
+    /// Emitted line bytes. Very long lines are windowed around the match.
     pub line: Vec<u8>,
+    /// Context lines before the match, oldest first.
     pub context_before: Vec<Vec<u8>>,
+    /// Context lines after the match, in file order.
     pub context_after: Vec<Vec<u8>>,
 }
 
@@ -65,40 +73,93 @@ pub struct ScanOptions {
 const MAX_EMITTED_LINE_BYTES: usize = 4096;
 const TRUNCATION_MARKER: &[u8] = b"\xE2\x80\xA6";
 
-/// Resolve the `source_match_start` column for a match at `byte_start`.
+/// Should the native scanner compute the full-line UTF-16 column EAGERLY for
+/// matches on `line`, instead of deferring to the managed side?
 ///
-/// PERF-CRITICAL — this runs once per match inside the scan hot loop (called
-/// for *every* match across the whole corpus, billions of times on a full-disk
-/// scan). It MUST stay O(1). Do NOT call `utf16_col` (or anything that scans
-/// the line/prefix) here on the common path: a full-`C:\` `test` scan went ~4x
-/// slower and stopped completing when this naively ran `utf16_col` per match,
-/// because long non-ASCII lines (binary blobs, minified files) turned it into a
-/// per-match O(prefix) UTF-8 decode (O(line^2) on dense lines). See the
-/// SOURCE_MATCH_START regression note in repo memory `yagu-profiling.md`.
+/// Eager computation is required only when the managed decoder will NOT receive
+/// the full line bytes and therefore cannot reconstruct the full-line column:
+///   * `metadata_only`: the line bytes are omitted across the FFI boundary.
+///   * `line.len() > MAX_EMITTED_LINE_BYTES`: the line is windowed/truncated
+///     before crossing, so only a partial slice reaches the managed side.
 ///
-/// Design: in the common path the line bytes cross the FFI boundary intact, so
-/// this returns the `u32::MAX` sentinel ("not provided") and the managed
-/// decoder computes the column LAZILY, only when a result is materialized. The
-/// full-line UTF-16 column is computed here (via [`utf16_col`]) only in
-/// `metadata_only` mode, where the line bytes are omitted and the managed side
-/// has nothing left to reconstruct the column from.
+/// In every other (common) case this returns `false`: the line bytes cross the
+/// boundary intact and the managed decoder resolves the column LAZILY, only
+/// when a result is materialized — keeping the native hot loop free of
+/// per-match column work (the `u32::MAX` "not provided" sentinel is emitted).
 #[inline]
-fn source_match_start(
-    line: &[u8],
-    byte_start: usize,
-    options: &ScanOptions,
-) -> u32 {
-    if options.metadata_only {
-        // The line bytes are omitted across the FFI boundary, so the managed
-        // side cannot reconstruct the column from the (absent) slice — compute
-        // the full-line UTF-16 column here while the whole line is in hand.
-        utf16_col(line, byte_start)
-    } else {
-        // The line bytes cross the boundary intact, so the managed decoder
-        // computes the column lazily (and only when a result is materialized).
-        // Returning the sentinel keeps the native scan hot loop free of
-        // per-match column work. `u32::MAX` == "not provided".
-        u32::MAX
+fn needs_eager_source_col(line: &[u8], options: &ScanOptions) -> bool {
+    options.metadata_only || line.len() > MAX_EMITTED_LINE_BYTES
+}
+
+/// Incremental UTF-16 column accumulator for the matches on a SINGLE line.
+///
+/// !!! PERF WARNING — DO NOT REGRESS THIS AREA !!!
+/// DO NOT "simplify" the eager column path back to a per-match
+/// `utf16_col(line, byte_start)` call. `utf16_col` is O(prefix): it rescans
+/// `line[..byte_start]` from the start every time. Matches on one line arrive
+/// in strictly increasing byte-start order, so calling it per match rescans the
+/// growing prefix and becomes O(line^2) on dense lines. That is EXACTLY what
+/// regressed a full-`C:\` "test" scan ~4x (5.18x on the isolated benchmark) and
+/// stopped it from completing — see repo memory `yagu-profiling.md`
+/// ("SOURCE_MATCH_START PERF REGRESSION") and
+/// `Yagu.Tests/ContentSearchPerformanceRegressionTests.cs`.
+///
+/// This cursor instead decodes each prefix SEGMENT `line[prev..cur]` exactly
+/// once and folds it into a running total, so resolving the column for every
+/// match on a line costs O(line length) TOTAL, regardless of how many matches
+/// the line holds. Use ONE cursor per line (reset at the top of each line) and
+/// feed it the match starts in order.
+///
+/// Correctness: a match start is a UTF-16 char boundary — its first byte is a
+/// non-continuation byte (`(b & 0xC0) != 0x80`), true for every valid
+/// literal/regex match — and the cached `byte` offset is only ever advanced to
+/// such boundaries, so decoding the disjoint segments independently yields the
+/// same unit count as decoding the whole prefix in one shot. The rare
+/// non-boundary or non-monotonic input falls back to a one-shot `utf16_col`
+/// and leaves the running total untouched.
+#[derive(Debug)]
+pub(crate) struct Utf16ColCursor {
+    /// Char-boundary byte offset already folded into `units`.
+    byte: usize,
+    /// UTF-16 code units of `line[..byte]`.
+    units: u32,
+}
+
+impl Utf16ColCursor {
+    #[inline]
+    pub(crate) fn new() -> Self {
+        Self { byte: 0, units: 0 }
+    }
+
+    /// UTF-16 column of `byte_start`, advancing the cursor. `byte_start` is
+    /// expected to be >= the previous call's value for the same line (matches
+    /// are emitted in increasing order); out-of-order or mid-sequence input is
+    /// handled defensively without corrupting the running total.
+    #[inline]
+    pub(crate) fn col_at(&mut self, line: &[u8], byte_start: usize) -> u32 {
+        let target = byte_start.min(line.len());
+        if target == self.byte {
+            return self.units;
+        }
+        // Non-monotonic (defensive — should not happen): recompute once from
+        // scratch and leave the cached boundary in place.
+        if target < self.byte {
+            return utf16_col(line, target);
+        }
+        // Segmented decoding only equals whole-prefix decoding when `target`
+        // sits on a char boundary. Match starts always do; the rare exception
+        // (e.g. a raw byte-literal match starting on a continuation byte) takes
+        // the one-shot path and leaves the cursor unadvanced.
+        let on_boundary = target == line.len() || (line[target] & 0xC0) != 0x80;
+        if !on_boundary {
+            return utf16_col(line, target);
+        }
+        // Decode ONLY the new segment; every byte of the line is decoded at
+        // most once across all of the line's matches (O(line), never O(line^2)).
+        let segment = &line[self.byte..target];
+        self.units = self.units.saturating_add(utf16_col(segment, segment.len()));
+        self.byte = target;
+        self.units
     }
 }
 
@@ -287,10 +348,14 @@ pub fn scan_bytes_with_matcher_ex(
         //
         // PERF-CRITICAL HOT LOOP. Body runs once per match across the entire
         // corpus (billions of times on a full-disk scan). Keep per-match work
-        // O(1) and allocation-free: no per-match line/prefix scans, no
-        // `utf16_col`, no fresh `Vec`/`String` on the common path. New columns
-        // or metadata must be derived lazily on the managed side (see
-        // `source_match_start`), not computed here.
+        // O(1) and allocation-free: no per-match from-scratch prefix scans, no
+        // fresh `Vec`/`String` on the common path. The full-line column is the
+        // ONLY thing that can need the prefix; on the common path it is deferred
+        // to the managed side (sentinel), and on the eager path it is resolved
+        // through the per-line `col_cursor` in O(line) — NEVER a per-match
+        // `utf16_col` (that is the O(line^2) regression; see `Utf16ColCursor`).
+        let eager_source_col = needs_eager_source_col(line, options);
+        let mut col_cursor = Utf16ColCursor::new();
         let mut search_from = 0usize;
         while search_from <= line.len() {
             match matcher.find(&line[search_from..]) {
@@ -307,7 +372,11 @@ pub fn scan_bytes_with_matcher_ex(
                     let rec = MatchRecord {
                         line_number,
                         match_start: display_start,
-                        source_match_start: source_match_start(line, start, options),
+                        source_match_start: if eager_source_col {
+                            col_cursor.col_at(line, start)
+                        } else {
+                            u32::MAX
+                        },
                         match_len: len as u32,
                         line: match_line,
                         context_before: before.iter().cloned().collect(),
@@ -458,9 +527,13 @@ where
         // PERF-CRITICAL HOT LOOP (streaming path). Body runs once per match for
         // the whole corpus; on a full-disk scan this feeds the degraded
         // streaming sink millions of matches/sec. Keep per-match work O(1): no
-        // per-match line/prefix scans, no `utf16_col`. Columns/metadata that
-        // need the full line are resolved lazily on the managed side (see
-        // `source_match_start` returning the `u32::MAX` sentinel).
+        // per-match from-scratch prefix scans. The full-line column is deferred
+        // to the managed side (sentinel) on the common path, and on the eager
+        // path is resolved through the per-line `col_cursor` in O(line) — NEVER
+        // a per-match `utf16_col` (the O(line^2) regression; see
+        // `Utf16ColCursor`).
+        let eager_source_col = needs_eager_source_col(line, options);
+        let mut col_cursor = Utf16ColCursor::new();
         let mut search_from = 0usize;
         while search_from <= line.len() {
             match matcher.find(&line[search_from..]) {
@@ -497,7 +570,11 @@ where
                         let view = MatchView {
                             line_number,
                             match_start: display_start,
-                            source_match_start: source_match_start(line, start, options),
+                            source_match_start: if eager_source_col {
+                                col_cursor.col_at(line, start)
+                            } else {
+                                u32::MAX
+                            },
                             match_len: len as u32,
                             line: display_line,
                             context_before: &before_view,
@@ -519,7 +596,11 @@ where
                         pending.push_back(PendingMatchOwned {
                             line_number,
                             match_start: display_start,
-                            source_match_start: source_match_start(line, start, options),
+                            source_match_start: if eager_source_col {
+                                col_cursor.col_at(line, start)
+                            } else {
+                                u32::MAX
+                            },
                             match_len: len as u32,
                             line: match_line,
                             context_before,
@@ -696,6 +777,8 @@ fn snap_to_char_boundary_end(line: &[u8], mut index: usize) -> usize {
 }
 
 pub(crate) fn looks_binary(bytes: &[u8]) -> bool {
+    // Keep this deliberately cheap: it runs before scanning many files, so a
+    // small head probe catches obvious binaries without reading the whole file.
     let probe = &bytes[..bytes.len().min(8 * 1024)];
     if probe.is_empty() {
         return false;
@@ -1024,34 +1107,70 @@ mod tests {
     }
 
     /// REGRESSION GUARD (perf): in the common bytes-present path the scan hot
-    /// loop must NOT compute the full-line column per match. `source_match_start`
-    /// has to return the `u32::MAX` "not provided" sentinel so the managed side
-    /// resolves the column lazily on emission. Computing `utf16_col` here per
-    /// match regressed full-`C:\` "test" ~4x (see `source_match_start` docs and
-    /// repo memory `yagu-profiling.md`). If this test fails, per-match column
-    /// work was reintroduced into the hot loop — that is the regression.
+    /// loop must NOT compute the full-line column per match. The eager-decision
+    /// helper has to report `false` so the loop emits the `u32::MAX` "not
+    /// provided" sentinel and the managed side resolves the column lazily on
+    /// emission. Computing `utf16_col` here per match regressed full-`C:\`
+    /// "test" ~4x (see `Utf16ColCursor` docs and repo memory
+    /// `yagu-profiling.md`). If this test fails, per-match column work was
+    /// reintroduced into the hot loop — that is the regression.
     #[test]
     fn source_match_start_defers_to_managed_side_in_common_path() {
         // A non-ASCII line: the old (slow) behavior would decode the prefix here.
         let line = "café test".as_bytes();
         let match_start = line.len() - 4; // byte offset of "test"
 
-        // Common path (bytes cross FFI intact): must return the sentinel.
-        assert_eq!(
-            source_match_start(line, match_start, &opts()),
-            u32::MAX,
+        // Common path (bytes cross FFI intact): must defer (emit the sentinel).
+        assert!(
+            !needs_eager_source_col(line, &opts()),
             "scan hot loop must defer column computation to the managed side"
         );
 
-        // metadata_only path (bytes omitted across FFI): native owns the column.
+        // metadata_only path (bytes omitted across FFI): native owns the column,
+        // and the per-line cursor must reproduce the one-shot utf16_col value.
         let meta = ScanOptions {
             metadata_only: true,
             ..opts()
         };
+        assert!(needs_eager_source_col(line, &meta));
         assert_eq!(
-            source_match_start(line, match_start, &meta),
+            Utf16ColCursor::new().col_at(line, match_start),
             utf16_col(line, match_start)
         );
+    }
+
+    /// REGRESSION GUARD (perf + correctness): the eager column path for long,
+    /// windowed lines (> MAX_EMITTED_LINE_BYTES) must resolve every match's
+    /// full-line UTF-16 column via the incremental `Utf16ColCursor`, which is
+    /// O(line) and must equal the one-shot `utf16_col` at every match start.
+    /// The filler is invalid UTF-8 (0x80) — the exact binary-blob shape that
+    /// turned a per-match `utf16_col` into the O(line^2) regression. This is the
+    /// long-line case the short-line guard above does not exercise.
+    #[test]
+    fn utf16_col_cursor_matches_one_shot_on_long_invalid_utf8_line() {
+        let filler = 1024usize;
+        let needle = b"test";
+        let match_count = 8usize;
+        let mut line: Vec<u8> = Vec::new();
+        let mut starts: Vec<usize> = Vec::new();
+        for _ in 0..match_count {
+            line.extend(std::iter::repeat(0x80u8).take(filler));
+            starts.push(line.len()); // each "test" begins on a char boundary
+            line.extend_from_slice(needle);
+        }
+        assert!(line.len() > MAX_EMITTED_LINE_BYTES);
+        assert!(needs_eager_source_col(&line, &opts()));
+
+        // One cursor per line, fed match starts in order, must match the
+        // from-scratch decode at every position.
+        let mut cursor = Utf16ColCursor::new();
+        for &s in &starts {
+            assert_eq!(
+                cursor.col_at(&line, s),
+                utf16_col(&line, s),
+                "incremental cursor diverged from one-shot utf16_col at byte {s}"
+            );
+        }
     }
 
     #[test]

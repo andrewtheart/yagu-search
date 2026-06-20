@@ -132,6 +132,37 @@ public sealed class MainViewModelSearchStatusRegressionTests
         Assert.Contains("ApplySortAndFilter();", completedCase);
     }
 
+    [Fact]
+    public void SearchSortRefresh_SkipsRebuildWhileAFileGroupIsExpanded()
+    {
+        // A periodic in-search sort refresh goes through ApplySortAndFilter ->
+        // VisibleGroups.ReplaceAll -> a Reset that rebuilds every ListView container,
+        // which makes an open drawer flicker (collapse + re-expand). The refresh must
+        // be skipped while any visible file group is expanded.
+        string refreshMethod = ExtractWindow(MainViewModelSource, "private void QueueSearchSortRefreshIfDue()", "private bool AnyResultGroupExpanded()");
+
+        // Gate before queuing: the due refresh bails out when a drawer is expanded.
+        AssertContainsInOrder(refreshMethod,
+            "now - _lastSearchSortRefreshTicks < intervalTicks",
+            "if (AnyResultGroupExpanded())",
+            "_lastSearchSortRefreshTicks = now;",
+            "return;",
+            "_searchSortRefreshQueued = true;");
+
+        // Race guard inside the queued callback (user expands during the delay).
+        AssertContainsInOrder(refreshMethod,
+            "_searchSortRefreshQueued = false;",
+            "if (AnyResultGroupExpanded())",
+            "return;",
+            "ApplySortAndFilter();");
+
+        // The helper scans visible groups for any expanded drawer.
+        string helper = ExtractWindow(MainViewModelSource, "private bool AnyResultGroupExpanded()", "private void NotifyResultAvailabilityChanged()");
+        Assert.Contains("_resultCollection.VisibleGroups", helper);
+        Assert.Contains("groups[i].IsExpanded", helper);
+        Assert.Contains("return true;", helper);
+    }
+
     private static void AssertContainsInOrder(string text, params string[] expected)
     {
         int searchFrom = 0;

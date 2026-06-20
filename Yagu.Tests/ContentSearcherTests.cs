@@ -647,6 +647,16 @@ public class SearchResultCoverageTests
     }
 
     [Fact]
+    public void LineLocationDisplay_LabelsLineAndOneBasedSourceColumn()
+    {
+        var r = MakeResult("short line", lineNumber: 611, matchStartColumn: 3, matchLength: 5);
+        r.SourceMatchStartColumn = 1234;
+
+        Assert.Equal("L611 C1235", r.LineLocationDisplay);
+        Assert.Equal("Line 611, column 1235", r.LineLocationTooltip);
+    }
+
+    [Fact]
     public void ShortPreview_LongLine_TruncatesAt120()
     {
         var longLine = new string('A', 200);

@@ -422,6 +422,14 @@ public sealed partial class MainWindow
         GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
     }
 
+    private void OnResultsOptionsFlyoutOpened(object? sender, object e)
+    {
+        // The NumberBox is the first focusable element, so the flyout would otherwise auto-focus
+        // it (selecting the context value). Move focus to the first menu button instead — using
+        // Programmatic focus so no focus rectangle is drawn — so the textbox isn't focused on open.
+        ClearResultsButton.Focus(FocusState.Programmatic);
+    }
+
     private async void OnClearResults(object sender, RoutedEventArgs e)
     {
         ResultsOptionsFlyout.Hide();
@@ -447,26 +455,63 @@ public sealed partial class MainWindow
 
     private async void OnSaveSession(object sender, RoutedEventArgs e)
     {
-        var picker = new Windows.Storage.Pickers.FileSavePicker();
-        picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
-        picker.FileTypeChoices.Add("Yagu Session", new List<string> { Services.SessionFileService.FileExtension });
-        picker.SuggestedFileName = BuildSessionFileSuggestedName(ViewModel.Query);
-
-        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
-
-        var file = await picker.PickSaveFileAsync();
-        if (file is null) return;
+        string? path = await PickSessionFileToSaveAsync();
+        if (path is null) return;
 
         try
         {
-            int count = await ViewModel.SaveSessionAsync(file.Path);
-            ViewModel.StatusText = $"Saved session ({count:N0} matches) to {file.Path}";
+            int count = await ViewModel.SaveSessionAsync(path);
+            ViewModel.StatusText = $"Saved session ({count:N0} matches) to {path}";
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warning("MainWindow", $"Save session failed: {file.Path}", ex);
+            LogService.Instance.Warning("MainWindow", $"Save session failed: {path}", ex);
             ViewModel.ErrorText = $"Save session failed: {ex.Message}";
+        }
+    }
+
+    private async Task<string?> PickSessionFileToSaveAsync()
+    {
+        string suggestedName = BuildSessionFileSuggestedName(ViewModel.Query);
+        var hwnd = GetMainWindowHandle();
+
+        // The WinAppSDK FileSavePicker routes through a broker that throws E_FAIL when the
+        // process is elevated, so when running as admin go straight to the Win32 Save dialog
+        // (which works elevated). When not elevated, use the modern picker but fall back to the
+        // Win32 dialog if it fails for any reason rather than crashing the whole app.
+        if (!Services.FileLister.CheckIsElevated())
+        {
+            try
+            {
+                var picker = new Windows.Storage.Pickers.FileSavePicker();
+                picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
+                picker.FileTypeChoices.Add("Yagu Session", new List<string> { Services.SessionFileService.FileExtension });
+                picker.SuggestedFileName = suggestedName;
+                WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+                var file = await picker.PickSaveFileAsync();
+                return file?.Path;
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Warning("MainWindow", "FileSavePicker failed; falling back to Win32 Save dialog.", ex);
+            }
+        }
+
+        try
+        {
+            return Helpers.Win32FileDialog.Save(hwnd, "Save Yagu Session", suggestedName,
+                Services.SessionFileService.FileExtension,
+                new[]
+                {
+                    ("Yagu Session", "*" + Services.SessionFileService.FileExtension),
+                    ("All files", "*.*"),
+                });
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("MainWindow", "Win32 Save dialog failed.", ex);
+            ViewModel.ErrorText = $"Could not open the Save dialog: {ex.Message}";
+            return null;
         }
     }
 
@@ -518,16 +563,44 @@ public sealed partial class MainWindow
 
     private async Task<string?> PickSessionFileWithWindowsDialogAsync(string previousStatusText)
     {
-        var picker = new Windows.Storage.Pickers.FileOpenPicker();
-        picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
-        picker.FileTypeFilter.Add(Services.SessionFileService.FileExtension);
-        picker.FileTypeFilter.Add("*");
-
         var hwnd = GetMainWindowHandle();
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
 
-        var file = await picker.PickSingleFileAsync();
-        return file?.Path ?? RestoreStatusAfterCanceledSessionLoad(previousStatusText);
+        // FileOpenPicker has the same elevated-broker E_FAIL exposure as FileSavePicker.
+        // Use the Win32 Open dialog when elevated (or as a fallback) so loading never crashes.
+        if (!Services.FileLister.CheckIsElevated())
+        {
+            try
+            {
+                var picker = new Windows.Storage.Pickers.FileOpenPicker();
+                picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
+                picker.FileTypeFilter.Add(Services.SessionFileService.FileExtension);
+                picker.FileTypeFilter.Add("*");
+                WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+                var file = await picker.PickSingleFileAsync();
+                return file?.Path ?? RestoreStatusAfterCanceledSessionLoad(previousStatusText);
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Warning("MainWindow", "FileOpenPicker failed; falling back to Win32 Open dialog.", ex);
+            }
+        }
+
+        try
+        {
+            string? path = Helpers.Win32FileDialog.Open(hwnd, "Open Yagu Session",
+                new[]
+                {
+                    ("Yagu Session", "*" + Services.SessionFileService.FileExtension),
+                    ("All files", "*.*"),
+                });
+            return path ?? RestoreStatusAfterCanceledSessionLoad(previousStatusText);
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("MainWindow", "Win32 Open dialog failed.", ex);
+            ViewModel.ErrorText = $"Could not open the Open dialog: {ex.Message}";
+            return RestoreStatusAfterCanceledSessionLoad(previousStatusText);
+        }
     }
 
     private string? RestoreStatusAfterCanceledSessionLoad(string previousStatusText)
@@ -640,10 +713,26 @@ public sealed partial class MainWindow
 
     private void RefreshSortDirectionButtons()
     {
+        ApplySortNoneState();
         UpdateSortDirectionButtons(SortMatchesAscButton, SortMatchesDescButton, 1);
         UpdateSortDirectionButtons(SortDateModifiedAscButton, SortDateModifiedDescButton, 2);
         UpdateSortDirectionButtons(SortFileSizeAscButton, SortFileSizeDescButton, 3);
         UpdateSortDirectionButtons(SortFileNameAscButton, SortFileNameDescButton, 4);
+    }
+
+    private void ApplySortNoneState()
+    {
+        bool selected = ViewModel.SortCriteria.Count == 0;
+        var foreground = new SolidColorBrush(selected
+            ? Microsoft.UI.Colors.White
+            : Microsoft.UI.ColorHelper.FromArgb(0x88, 0xFF, 0xFF, 0xFF));
+        var background = new SolidColorBrush(selected
+            ? Microsoft.UI.ColorHelper.FromArgb(0x24, 0xFF, 0xFF, 0xFF)
+            : Microsoft.UI.ColorHelper.FromArgb(0x00, 0xFF, 0xFF, 0xFF));
+
+        SortNoneButton.Foreground = foreground;
+        SortNoneButton.Background = background;
+        SortNoneButton.Opacity = selected ? 1.0 : 0.72;
     }
 
     private void UpdateSortDirectionButtons(Button ascButton, Button descButton, int sortModeIndex)
@@ -2582,12 +2671,13 @@ public sealed partial class MainWindow
                 var matchByLine = BuildMatchByLineForRanges(results, merged);
 
                 bool firstRange = true;
+                int previousRangeEndLine = 0;
                 foreach (var (start, end) in merged)
                 {
                     if (section.Blocks.Count - startingBlocks >= MaxPreviewBlocksPerSection)
                         break;
 
-                    if (!firstRange)
+                    if (!firstRange && ShouldAddGapBetweenRenderedLines(previousRangeEndLine, start + 1))
                     {
                         AddGapIndicator(section);
                     }
@@ -2613,6 +2703,7 @@ public sealed partial class MainWindow
                             scrollPara = firstPara;
                         }
                     }
+                    previousRangeEndLine = end + 1;
                 }
             }
             else

@@ -513,7 +513,20 @@ public sealed partial class MainWindow
             {
                 [result.FilePath] = [result]
             };
-            await PrependPreviewSectionsForFilesAsync(newFiles, result.FilePath);
+            await PrependPreviewSectionsForFilesAsync(newFiles, result.FilePath, result);
+            RefreshPreviewSectionHeaderForSelectedMatches(result.FilePath);
+            return;
+        }
+
+        await RevealCheckedMatchInPreviewSectionAsync(result);
+        RefreshPreviewSectionHeaderForSelectedMatches(result.FilePath);
+    }
+
+    private async Task RevealCheckedMatchInPreviewSectionAsync(SearchResult result)
+    {
+        if (!TryFindPreviewSection(result.FilePath, out var expander, out var section))
+        {
+            TryScrollToPreviewSection(result.FilePath);
             return;
         }
 
@@ -681,8 +694,10 @@ public sealed partial class MainWindow
                             maxParagraphs: MaxPreviewBlocksPerExpandChunk);
                     }
 
-                    // Add gap indicator between new and old content.
-                    AddGapIndicator(section);
+                    // Add gap indicator between new and old content only when
+                    // there is at least one omitted source line between them.
+                    if (ShouldAddGapBetweenRenderedLines(lines.Max(l => l.lineNum), firstRenderedLine))
+                        AddGapIndicator(section);
 
                     // Re-add existing blocks.
                     foreach (var block in existingBlocks)
@@ -695,8 +710,10 @@ public sealed partial class MainWindow
                 }
                 else
                 {
-                    // Append after existing content with gap indicator.
-                    AddGapIndicator(section);
+                    // Append after existing content with a gap indicator only
+                    // when there is at least one omitted source line between them.
+                    if (lines.Count > 0 && ShouldAddGapBetweenRenderedLines(lastRenderedLine, lines.Min(l => l.lineNum)))
+                        AddGapIndicator(section);
                 }
             }
             else

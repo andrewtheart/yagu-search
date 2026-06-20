@@ -17,6 +17,16 @@
               SizeChanged="OnRootGridSizeChanged"
               PreviewKeyDown="OnRootGridPreviewKeyDown">
                 <Grid.Resources>
+        <Style x:Key="SearchCardBottomIconButtonStyle" TargetType="Button">
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+        </Style>
+
         <DataTemplate x:Key="ResultGroupHeaderTemplate" x:DataType="models:ResultGroupHeaderRow">
             <Button Click="OnResultGroupHeaderClicked"
                     HorizontalAlignment="Stretch"
@@ -61,7 +71,8 @@
         </DataTemplate>
 
         <DataTemplate x:Key="FileGroupResultTemplate" x:DataType="models:FileGroup">
-            <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}" Expanding="OnFileGroupExpanding" Collapsed="OnFileGroupCollapsed">
+            <Expander AutomationProperties.AutomationId="FileGroupResultExpander"
+                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" IsExpanded="{x:Bind IsExpanded, Mode=TwoWay}" Expanding="OnFileGroupExpanding" Collapsed="OnFileGroupCollapsed">
                 <Expander.Header>
                     <Grid PointerPressed="OnFileGroupHeaderPointerPressed" PointerReleased="OnFileGroupHeaderPointerReleased" DoubleTapped="OnFileGroupHeaderDoubleTapped" Loaded="OnFileGroupHeaderLoaded" Tag="{x:Bind FilePath}" Background="Transparent">
                         <Grid.ContextFlyout>
@@ -176,16 +187,19 @@
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
                                         <ToggleButton Grid.Column="0" IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
+                                                      AutomationProperties.AutomationId="MatchLineLocationButton"
+                                                      AutomationProperties.Name="{x:Bind LineLocationDisplay, Mode=OneWay}"
                                                       Click="OnMatchLineCheckBoxClicked"
                                                       Loaded="OnMatchLineNumberLoaded"
+                                                      ToolTipService.ToolTip="{x:Bind LineLocationTooltip, Mode=OneWay}"
                                                       MinWidth="34" MinHeight="22" Padding="5,1" Margin="4,0,2,0"
                                                       CornerRadius="4"
                                                       VerticalAlignment="Center"
                                                       HorizontalContentAlignment="Center">
-                                            <TextBlock Text="{x:Bind LineNumber}"
-                                                       FontFamily="Consolas"
-                                                       FontSize="12"
-                                                       FontWeight="SemiBold" />
+                                           <TextBlock Text="{x:Bind LineLocationDisplay, Mode=OneWay}"
+                                                      FontFamily="Consolas"
+                                                      FontSize="12"
+                                                      FontWeight="SemiBold" />
                                         </ToggleButton>
                                         <RichTextBlock Grid.Column="1" TextTrimming="CharacterEllipsis" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="False" Loaded="OnMatchLineLoaded" VerticalAlignment="Center" />
                                     </Grid>
@@ -765,23 +779,19 @@
                             Grid.Row="2" Grid.Column="2"
                             Orientation="Horizontal" Spacing="6"
                             HorizontalAlignment="Right"
-                            VerticalAlignment="Bottom">
+                            VerticalAlignment="Top">
                     <Button x:Name="SearchCardLoadSessionButton"
                             Click="OnLoadSession"
+                            Style="{StaticResource SearchCardBottomIconButtonStyle}"
                             Width="32" Height="32"
-                            Padding="0" MinWidth="0" MinHeight="0"
                             IsEnabled="{x:Bind ViewModel.IsSessionIdle, Mode=OneWay}"
                             ToolTipService.ToolTip="Load a previously saved .yagu-session file">
                         <FontIcon Glyph="&#xE8E5;" FontSize="14" />
                     </Button>
                     <Button x:Name="PreSearchTerminalChevron"
                             Click="OnToggleTerminalPane"
+                            Style="{StaticResource SearchCardBottomIconButtonStyle}"
                             Width="36" Height="32" MinWidth="0" MinHeight="0"
-                            Padding="0"
-                            Background="Transparent"
-                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                            BorderThickness="1"
-                            CornerRadius="6"
                             ToolTipService.ToolTip="Toggle embedded terminal">
                         <FontIcon x:Name="PreSearchTerminalChevronIcon"
                                   FontFamily="{StaticResource SymbolThemeFontFamily}"
@@ -859,10 +869,12 @@
                             <DropDownButton.Flyout>
                                 <Flyout x:Name="SortFlyout" Placement="BottomEdgeAlignedLeft" Opening="OnSortFlyoutOpening">
                                     <StackPanel MinWidth="154" Padding="8,6" Spacing="2">
-                                        <Button Content="None" Click="OnSortNone"
-                                                MinHeight="32" Padding="8,0"
+                                        <Button x:Name="SortNoneButton" Content="None" Click="OnSortNone"
+                                            MinHeight="32" Padding="8,0"
                                                 HorizontalAlignment="Stretch"
-                                                HorizontalContentAlignment="Left" />
+                                            HorizontalContentAlignment="Left"
+                                            Background="Transparent"
+                                            BorderThickness="0" />
                                         <Grid MinHeight="32" ColumnSpacing="10" Padding="8,0">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*" />
@@ -1030,8 +1042,8 @@
                                 VerticalAlignment="Center" ToolTipService.ToolTip="Results options">
                             <FontIcon Glyph="&#xE700;" FontSize="12" />
                             <Button.Flyout>
-                                <Flyout x:Name="ResultsOptionsFlyout" Placement="BottomEdgeAlignedRight">
-                                    <StackPanel Width="220" Spacing="6" Padding="2">
+                                <Flyout x:Name="ResultsOptionsFlyout" Placement="BottomEdgeAlignedRight" Opened="OnResultsOptionsFlyoutOpened">
+                                    <StackPanel MinWidth="170" Spacing="6" Padding="2">
                                         <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                             <TextBlock Text="Context:" VerticalAlignment="Center" FontSize="12" Opacity="0.8" />
                                             <NumberBox Value="{x:Bind ViewModel.ContextLines, Mode=TwoWay}" Minimum="0" Maximum="20"
@@ -1041,7 +1053,7 @@
 
                                         <Border Height="1" Margin="0,2" Background="{ThemeResource CardStrokeColorDefaultBrush}" />
 
-                                        <Button Click="OnClearResults" Background="Transparent" BorderThickness="0"
+                                        <Button x:Name="ClearResultsButton" Click="OnClearResults" Background="Transparent" BorderThickness="0"
                                                 Padding="8,6" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
                                                 ToolTipService.ToolTip="Clear all results (Ctrl+Shift+Delete)">
                                             <StackPanel Orientation="Horizontal" Spacing="10">
@@ -1079,13 +1091,14 @@
                         <Button x:Name="ExpandResultsButton" Grid.Column="2"
                                 Click="OnExpandResultsPanel"
                                 Background="Transparent" BorderThickness="0"
-                                Padding="6,4" VerticalAlignment="Center"
+                                Width="28" Height="28" MinWidth="0" MinHeight="0"
+                                Padding="0" Margin="0,0,8,0" VerticalAlignment="Center"
                                 ToolTipService.ToolTip="Expand file list / collapse preview">
                             <FontIcon x:Name="ExpandResultsIcon" Glyph="&#xE740;" FontSize="12" />
                         </Button>
                     </Grid>
 
-                    <Grid Grid.Row="1" Margin="8,6" ColumnSpacing="6">
+                    <Grid Grid.Row="1" Margin="22,6,34,6" ColumnSpacing="6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
@@ -1101,7 +1114,8 @@
                                       Unchecked="OnSelectAllFilesUnchecked" />
                         </Grid>
                         <Grid Grid.Column="1">
-                            <TextBox PlaceholderText="Filter files…"
+                            <TextBox AutomationProperties.AutomationId="ResultFileFilterBox"
+                                     PlaceholderText="Filter files…"
                                      Text="{x:Bind ViewModel.FileNameFilter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                      Padding="30,4,8,4" FontSize="12" />
                             <FontIcon Glyph="&#xE71C;" FontSize="12" Opacity="0.65"
@@ -1859,6 +1873,28 @@
                      ShouldConstrainToRootBounds="True"
                      MaxWidth="360"
                      Canvas.ZIndex="300" />
+
+        <!-- Floating Advanced Options drawer (traditional mode only). The drawer subtree
+             (AdvancedOptionsScrollViewer) is reparented into AdvancedOptionsOverlayHost at
+             runtime so expanding it overlays the results pane instead of reflowing the layout
+             or growing the window. The transparent scrim dismisses the drawer on an outside
+             click; the host handles Esc. Both are collapsed until the drawer is opened. -->
+        <Border x:Name="AdvancedOptionsOverlayScrim"
+                Grid.Row="2" Grid.RowSpan="5"
+                Background="Transparent"
+                Visibility="Collapsed"
+                Canvas.ZIndex="50"
+                PointerPressed="OnAdvancedOptionsOverlayScrimPressed" />
+        <Border x:Name="AdvancedOptionsOverlayHost"
+                Grid.Row="0" Grid.RowSpan="7"
+                HorizontalAlignment="Left" VerticalAlignment="Top"
+                Visibility="Collapsed"
+                Canvas.ZIndex="51"
+                KeyDown="OnAdvancedOptionsOverlayKeyDown">
+            <Border.KeyboardAccelerators>
+                <KeyboardAccelerator Key="Escape" Invoked="OnAdvancedOptionsOverlayEscapeInvoked" />
+            </Border.KeyboardAccelerators>
+        </Border>
 
     </Grid>
 </Window>

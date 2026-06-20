@@ -264,7 +264,7 @@ public sealed class FileLister : IFileLister
 
     /// <summary>Returns true if listing should skip well-known admin-protected paths.</summary>
 
-    internal bool ShouldExcludeAdminPaths => ExcludeAdminProtectedPaths && !s_isElevated.Value;
+    internal bool ShouldExcludeAdminPaths => ExcludeAdminProtectedPaths && !(ElevationOverride?.Invoke() ?? s_isElevated.Value);
 
     /// <summary>
     /// Returns true if <paramref name="path"/> matches one of the effective admin-protected segments.

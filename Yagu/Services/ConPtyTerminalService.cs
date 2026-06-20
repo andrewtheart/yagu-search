@@ -399,6 +399,13 @@ internal sealed class ConPtyTerminalService : IDisposable
         {
             if (_process is { HasExited: false })
             {
+                // Forcibly terminate any command currently running under the shell
+                // (e.g. a long-running build, ping -t, or a hung process) so that a
+                // terminal reset or app shutdown does not leave it running. The
+                // graceful "exit" below is swallowed by a foreground child, so the
+                // shell would otherwise keep the command alive until the timeout.
+                TryKillDescendantProcesses(_process.Id);
+
                 _input?.Write("exit\r");
                 _input?.Flush();
                 if (!_process.WaitForExit(500))

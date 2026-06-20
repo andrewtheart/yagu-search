@@ -24,6 +24,7 @@ public sealed partial class MainWindow
         // Only show the dialog when the toggle is being turned on (not during initial load).
         if (!_isLoaded) return;
         if (sender is ToggleSwitch ts && !ts.IsOn) return;
+        if (!HasUserDefinedIncludeFilterText()) return;
 
         var result = await YaguDialog.ShowAsync(
             _hwnd,
@@ -43,10 +44,13 @@ public sealed partial class MainWindow
         ViewModel.GitignoreTakesPrecedence = result != YaguDialogResult.Secondary;
     }
 
-    private async Task PickFolderAsync(Windows.Storage.Pickers.FolderPicker picker)
+    private bool HasUserDefinedIncludeFilterText()
     {
-        var folder = await picker.PickSingleFolderAsync();
-        if (folder is not null) ViewModel.Directory = folder.Path;
+        if (IncludeFilterBox is null)
+            return !string.IsNullOrWhiteSpace(ViewModel.IncludeGlobs);
+
+        string text = IncludeFilterBox.Text?.Trim() ?? string.Empty;
+        return text.Length > 0 && !IsFilterExampleText(IncludeFilterBox);
     }
 
     private SettingsWindow? _settingsWindow;

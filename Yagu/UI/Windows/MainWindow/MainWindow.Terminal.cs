@@ -67,13 +67,11 @@ public sealed partial class MainWindow
 
     private void UpdateTerminalChevronVisibility()
     {
-        var showSearchCardBottomActions = !_terminalPaneExpanded && !_advancedOptionsDrawerExpandedWidth;
-        PreSearchTerminalChevron.Visibility = showSearchCardBottomActions
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-        SearchCardBottomActions.Visibility = showSearchCardBottomActions
-            ? Visibility.Visible
-            : Visibility.Collapsed;
+        // The search-card actions (Load Session + chevron) are permanent: always visible. The
+        // chevron flips its glyph to expand/collapse the terminal. Only the floating chevron
+        // inside the terminal pane is shown/hidden with the pane.
+        SearchCardBottomActions.Visibility = Visibility.Visible;
+        PreSearchTerminalChevron.Visibility = Visibility.Visible;
         TerminalChevron.Visibility = _terminalPaneExpanded ? Visibility.Visible : Visibility.Collapsed;
     }
 

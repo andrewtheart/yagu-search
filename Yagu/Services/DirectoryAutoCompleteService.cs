@@ -1,25 +1,31 @@
 using System.Diagnostics;
+using Yagu.Native;
 
 namespace Yagu.Services;
 
 /// <summary>
-/// Provides directory path auto-complete suggestions using Everything's es.exe when available,
+/// Provides directory path auto-complete suggestions using Everything SDK/es.exe when available,
 /// falling back to .NET directory enumeration.
 /// </summary>
 internal sealed class DirectoryAutoCompleteService
 {
     private readonly string? _esExePath;
     private readonly Func<string, string, Process>? _processFactory;
+    private readonly IEverythingSdkOps? _sdkOps;
 
-    public DirectoryAutoCompleteService() : this(FileLister.FindEsExe(), null) { }
+    public DirectoryAutoCompleteService() : this(FileLister.FindEsExe(), null, RealEverythingSdkOps.Instance) { }
 
-    internal DirectoryAutoCompleteService(string? esExePath, Func<string, string, Process>? processFactory = null)
+    internal DirectoryAutoCompleteService(
+        string? esExePath,
+        Func<string, string, Process>? processFactory = null,
+        IEverythingSdkOps? sdkOps = null)
     {
         _esExePath = esExePath;
         _processFactory = processFactory;
+        _sdkOps = sdkOps;
     }
 
-    public bool IsEverythingAvailable => _esExePath != null;
+    public bool IsEverythingAvailable => _sdkOps != null || _esExePath != null;
 
     /// <summary>
     /// Returns subdirectory suggestions for the given partial path.
@@ -53,6 +59,33 @@ internal sealed class DirectoryAutoCompleteService
         if (!parentDir.EndsWith('\\') && !parentDir.EndsWith('/'))
             parentDir += '\\';
 
+        return await GetSuggestionsForParentAsync(parentDir, prefix, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Returns immediate child directories for an already selected directory.
+    /// </summary>
+    public Task<List<string>> GetChildDirectorySuggestionsAsync(string directory, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(directory))
+            return Task.FromResult(new List<string>());
+
+        string parentDir = directory;
+        if (!parentDir.EndsWith('\\') && !parentDir.EndsWith('/'))
+            parentDir += '\\';
+
+        return GetSuggestionsForParentAsync(parentDir, string.Empty, ct);
+    }
+
+    private async Task<List<string>> GetSuggestionsForParentAsync(string parentDir, string prefix, CancellationToken ct)
+    {
+        if (_sdkOps != null && FileLister.SdkAvailable)
+        {
+            var sdkResults = await QueryEverythingSdkAsync(parentDir, prefix, ct).ConfigureAwait(false);
+            if (sdkResults.Count > 0)
+                return sdkResults;
+        }
+
         if (_esExePath != null)
         {
             var results = await QueryEverythingAsync(parentDir, prefix, ct).ConfigureAwait(false);
@@ -60,16 +93,71 @@ internal sealed class DirectoryAutoCompleteService
                 return results;
         }
 
-        // Fallback: .NET enumeration
         return await Task.Run(() => EnumerateDirectories(parentDir, prefix), ct).ConfigureAwait(false);
+    }
+
+    internal Task<List<string>> QueryEverythingSdkAsync(string parentDir, string prefix, CancellationToken ct)
+    {
+        if (_sdkOps == null || !FileLister.SdkAvailable)
+            return Task.FromResult(new List<string>());
+
+        return Task.Run(() => QueryEverythingSdkCore(parentDir, prefix, ct), ct);
+    }
+
+    private List<string> QueryEverythingSdkCore(string parentDir, string prefix, CancellationToken ct)
+    {
+        var results = new List<string>();
+
+        try
+        {
+            lock (_sdkOps!.SyncLock)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!_sdkOps.IsDBLoaded())
+                    return results;
+
+                _sdkOps.Reset();
+                _sdkOps.SetSearch(BuildEverythingDirectoryQuery(parentDir, prefix));
+                _sdkOps.SetMatchCase(false);
+                _sdkOps.SetMatchPath(false);
+                _sdkOps.SetOffset(0);
+                _sdkOps.SetMax(30);
+                _sdkOps.SetRequestFlags(EverythingSdk.EVERYTHING_REQUEST_FULL_PATH_AND_FILE_NAME);
+
+                if (!_sdkOps.Query(bWait: true))
+                    return results;
+
+                uint count = _sdkOps.GetNumResults();
+                var buffer = new char[1024];
+                for (uint index = 0; index < count && results.Count < 30; index++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    string path = ReadSdkFullPath(_sdkOps, index, ref buffer);
+                    if (!string.IsNullOrWhiteSpace(path))
+                        results.Add(path);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (DllNotFoundException)
+        {
+            FileLister.SdkAvailable = false;
+        }
+        catch
+        {
+            // Everything SDK is unavailable or failed; caller will fall back to es.exe/.NET.
+        }
+
+        return results;
     }
 
     internal async Task<List<string>> QueryEverythingAsync(string parentDir, string prefix, CancellationToken ct)
     {
         // es.exe query: search for folders directly under parentDir
-        var query = string.IsNullOrEmpty(prefix)
-            ? $"parent:\"{parentDir.TrimEnd('\\')}\" folder:"
-            : $"parent:\"{parentDir.TrimEnd('\\')}\" folder: \"{prefix}\"";
+        var query = BuildEverythingDirectoryQuery(parentDir, prefix);
 
         var arguments = $"-max-results 30 {query}";
         var results = new List<string>();
@@ -103,6 +191,30 @@ internal sealed class DirectoryAutoCompleteService
         }
 
         return results;
+    }
+
+    private static string BuildEverythingDirectoryQuery(string parentDir, string prefix)
+        => string.IsNullOrEmpty(prefix)
+            ? $"parent:\"{parentDir.TrimEnd('\\', '/')}\" folder:"
+            : $"parent:\"{parentDir.TrimEnd('\\', '/')}\" folder: \"{prefix}\"";
+
+    private static string ReadSdkFullPath(IEverythingSdkOps sdk, uint index, ref char[] buffer)
+    {
+        Array.Clear(buffer);
+        uint length = sdk.GetResultFullPathName(index, buffer, (uint)buffer.Length);
+        if (length == 0) return string.Empty;
+
+        if (length >= buffer.Length)
+        {
+            buffer = new char[(int)length + 1];
+            Array.Clear(buffer);
+            length = sdk.GetResultFullPathName(index, buffer, (uint)buffer.Length);
+            if (length == 0) return string.Empty;
+        }
+
+        int charCount = (int)Math.Min(length, (uint)buffer.Length);
+        if (charCount > 0 && buffer[charCount - 1] == '\0') charCount--;
+        return new string(buffer, 0, charCount);
     }
 
     private static Process CreateDefaultProcess(string esExePath, string arguments)

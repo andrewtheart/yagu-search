@@ -138,6 +138,9 @@ where
     session.scan(bytes, options, || false, emit)
 }
 
+/// Adapter between ripgrep's event-based searcher and Yagu's match-record
+/// shape. It keeps before-context in a ring, delays records that still need
+/// after-context, and emits only when a match is complete.
 struct QgSink<'m, C, E>
 where
     C: FnMut() -> bool,
@@ -249,6 +252,11 @@ where
             return Ok(false);
         }
 
+        // Per-line UTF-16 column cursor: this sink resolves source columns
+        // eagerly for every match, so it MUST advance one cursor per line in
+        // O(line) — NOT call `utf16_col` per match (the O(line^2) regression;
+        // see `crate::scan::Utf16ColCursor`).
+        let mut col_cursor = crate::scan::Utf16ColCursor::new();
         let mut search_from = 0usize;
         while search_from <= trimmed_len {
             let region = &line_view[search_from..];
@@ -270,7 +278,7 @@ where
             let rec = MatchRecord {
                 line_number,
                 match_start: display_start,
-                source_match_start: crate::scan::utf16_col(line_view, abs_start),
+                source_match_start: col_cursor.col_at(line_view, abs_start),
                 match_len: match_len as u32,
                 line: line_truncated,
                 context_before: self.before.iter().cloned().collect(),

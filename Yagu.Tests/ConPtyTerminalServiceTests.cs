@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using Yagu.Services;
 
@@ -372,5 +373,60 @@ public sealed class ConPtyTerminalServiceLocalEchoTests
         // CancelCurrentCommand after exit should hit the HasExited branch
         var ex = Record.Exception(() => terminal.CancelCurrentCommand());
         Assert.Null(ex);
+    }
+
+    [Fact]
+    public void Dispose_KillsCommandRunningInShell()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        using var gotOutput = new ManualResetEventSlim(false);
+        var terminal = new ConPtyTerminalService();
+        terminal.OutputReceived += _ => gotOutput.Set();
+        terminal.Start(cols: 120, rows: 24);
+        Assert.True(gotOutput.Wait(TimeSpan.FromSeconds(5)));
+
+        // Start a long-running command under the shell. ping spawns a PING.EXE
+        // child process that would keep running if the reset/dispose only told the
+        // shell to "exit".
+        var preexisting = Process.GetProcessesByName("PING").Select(p => p.Id).ToHashSet();
+        terminal.WriteInput("ping -n 30 127.0.0.1\r", echoInput: false);
+
+        int childPid = -1;
+        for (int i = 0; i < 50 && childPid < 0; i++)
+        {
+            childPid = Process.GetProcessesByName("PING")
+                .Select(p => p.Id)
+                .FirstOrDefault(id => !preexisting.Contains(id), -1);
+            if (childPid < 0)
+                Thread.Sleep(100);
+        }
+
+        Assert.True(childPid > 0, "Expected a running PING child process under the shell.");
+
+        // Disposing the terminal (what a "Reset terminal session" does) must kill
+        // the running command, not just exit the shell.
+        terminal.Dispose();
+
+        bool childExited = false;
+        for (int i = 0; i < 50 && !childExited; i++)
+        {
+            try
+            {
+                using Process child = Process.GetProcessById(childPid);
+                if (child.HasExited)
+                    childExited = true;
+            }
+            catch (ArgumentException)
+            {
+                childExited = true; // process no longer exists
+            }
+
+            if (!childExited)
+                Thread.Sleep(100);
+        }
+
+        Assert.True(childExited, "The running command should be killed when the terminal session is reset/disposed.");
     }
 }

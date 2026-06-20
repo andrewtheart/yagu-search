@@ -86,7 +86,18 @@ public sealed class SearchService
                 yield break;
             }
 
-            if (literalTerms.Count > 1)
+            if (options.ExactMatch)
+            {
+                // Whole-word match: wrap the literal query in word boundaries and
+                // run it through the regex path so the native and managed scanners
+                // agree. "async" matches the word "async" but not "asynchronously".
+                string wordPattern = SearchQueryParser.BuildLiteralRegexPattern(options.Query, exactMatch: true)!;
+                RegexOptions regexOpts = RegexOptions.Compiled | RegexOptions.CultureInvariant;
+                if (!options.CaseSensitive) regexOpts |= RegexOptions.IgnoreCase;
+                regex = new Regex(wordPattern, regexOpts);
+                patternOptions = CopyOptions(options, query: wordPattern, useRegex: true);
+            }
+            else if (literalTerms.Count > 1)
             {
                 string alternation = SearchQueryParser.BuildLiteralAlternation(literalTerms);
                 RegexOptions regexOpts = RegexOptions.Compiled | RegexOptions.CultureInvariant;

@@ -601,6 +601,25 @@ public sealed partial class MainWindow
         return false;
     }
 
+    private void RefreshPreviewSectionHeaderForSelectedMatches(string filePath)
+    {
+        if (!TryFindPreviewSection(filePath, out var expander, out var section))
+            return;
+
+        var selectedForFile = ViewModel.GetAllSelectedResults()
+            .Where(result => string.Equals(result.FilePath, filePath, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (selectedForFile.Count == 0)
+            return;
+
+        string detail = $"{selectedForFile.Count:N0} selected match(es)";
+        expander.Header = BuildPreviewSectionHeader(filePath, detail, section, selectedForFile);
+        _expanderHeaderArgs[expander] = (filePath, detail, section, selectedForFile);
+
+        if (ReferenceEquals(_stickyHeaderExpander, expander))
+            StickyFileHeader.Child = BuildPreviewSectionHeader(filePath, detail, section, selectedForFile);
+    }
+
     private HashSet<string> GetExistingPreviewFilePaths()
     {
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1408,7 +1427,9 @@ public sealed partial class MainWindow
     /// Shows a loading spinner when adding more than 50 files.
     /// </summary>
     private async Task PrependPreviewSectionsForFilesAsync(
-        Dictionary<string, List<SearchResult>> newFiles, string? scrollToFile)
+        Dictionary<string, List<SearchResult>> newFiles,
+        string? scrollToFile,
+        SearchResult? scrollTarget = null)
     {
         LogService.Instance.Info("Preview", $"PrependPreviewSectionsForFilesAsync: newFiles={newFiles.Count}, scrollToFile='{scrollToFile}'");
         if (newFiles.Count == 0) return;
@@ -1434,7 +1455,9 @@ public sealed partial class MainWindow
 
         if (filesToPrepend.Count == 0)
         {
-            if (scrollToFile is not null && PreviewSectionExists(scrollToFile))
+            if (scrollTarget is not null)
+                await RevealCheckedMatchInPreviewSectionAsync(scrollTarget);
+            else if (scrollToFile is not null && PreviewSectionExists(scrollToFile))
                 TryScrollToPreviewSection(scrollToFile);
             return;
         }
@@ -1591,8 +1614,15 @@ public sealed partial class MainWindow
         UpdateSectionMatchNavPanels();
         UpdateExpandAllButtonVisibility();
 
-        // Scroll to the target file.
-        if (scrollToFile is not null)
+        // Scroll to the target file or, for a checked match, to the exact line.
+        if (scrollTarget is not null)
+        {
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, async () =>
+            {
+                await RevealCheckedMatchInPreviewSectionAsync(scrollTarget);
+            });
+        }
+        else if (scrollToFile is not null)
         {
             DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
             {

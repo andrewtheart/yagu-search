@@ -63,6 +63,16 @@ public sealed partial class MainWindow
     /// </summary>
     private const int PreviewLineLayoutSegmentCharsNoWrap = 4096;
 
+    /// <summary>
+    /// Upper bound on how many characters a single "Show all" click reveals. A truly
+    /// unbounded reveal of an extremely long physical line (e.g. a minified JSON blob of
+    /// hundreds of KB on one line) builds one RichTextBlock paragraph with tens of thousands
+    /// of wrapped rows and match runs, which hangs the WinUI UI thread. Lines longer than this
+    /// reveal a bounded window centered on the current view instead, keeping the prefix/suffix
+    /// "Show more" ellipses so the user can keep expanding or open the file in an editor.
+    /// </summary>
+    private const int PreviewShowAllMaxRevealLength = 20_000;
+
     private enum PreviewShowMoreEdge
     {
         Prefix,
@@ -140,6 +150,9 @@ public sealed partial class MainWindow
 
     private int GetPreviewShowMoreMaxWindowLength()
         => Math.Max(50, GetEffectiveSegmentSize() - (2 * LineTruncator.Ellipsis.Length));
+
+    private int GetPreviewShowAllMaxRevealLength()
+        => Math.Max(GetEffectiveSegmentSize(), PreviewShowAllMaxRevealLength);
 
     private int GetPreviewTruncatedLength()
     {
@@ -346,6 +359,13 @@ public sealed partial class MainWindow
             gap.Inlines.Add(gapRun);
             section.Blocks.Add(gap);
         }
+    }
+
+    private static bool ShouldAddGapBetweenRenderedLines(int previousLineNumber, int nextLineNumber)
+    {
+        return previousLineNumber > 0
+            && nextLineNumber > 0
+            && nextLineNumber - previousLineNumber > 1;
     }
 
     private int GetGutterBlockCount(RichTextBlock section)
@@ -804,6 +824,13 @@ public sealed partial class MainWindow
         }
 
         results = results.Where(result => result.LineNumber > 0).ToList();
+        if (allLines is not null && !HasReadablePreviewLine(results, allLines))
+        {
+            LogService.Instance.Verbose("Preview",
+                $"BuildHighlightSection: current file contents do not contain requested line(s) for '{results[0].FilePath}', using stored match context");
+            allLines = null;
+        }
+
         ResetPreviewShowMoreDiagnostics();
         var buildSw = System.Diagnostics.Stopwatch.StartNew();
         bool truncatePreviewLines = ViewModel.IsSearching
@@ -909,12 +936,13 @@ public sealed partial class MainWindow
             }
             var matchByLine = BuildMatchByLineForRanges(results, merged);
             bool firstRange = true;
+            int previousRangeEndLine = 0;
             foreach (var (start, end) in merged)
             {
                 if (section.Blocks.Count - startingBlocks >= maxBlocks)
                     break;
 
-                if (!firstRange)
+                if (!firstRange && ShouldAddGapBetweenRenderedLines(previousRangeEndLine, start + 1))
                 {
                     AddGapIndicator(section);
                 }
@@ -940,6 +968,7 @@ public sealed partial class MainWindow
                         await DispatchIdleAsync();
                     }
                 }
+                previousRangeEndLine = end + 1;
             }
             } // end else (multi-line range rendering)
         }
@@ -1394,16 +1423,22 @@ public sealed partial class MainWindow
         }
     }
 
+    private static bool HasReadablePreviewLine(IEnumerable<SearchResult> results, string[] allLines)
+        => allLines.Length > 0 && results.Any(result => result.LineNumber >= 1 && result.LineNumber <= allLines.Length);
+
     private static List<(string line, int lineNum)> GetPreviewLines(SearchResult r, string[]? allLines, int previewLines, bool fullFile)
     {
         var lines = new List<(string, int)>();
         int matchLineNum = r.LineNumber;
 
-        if (allLines != null)
+        if (fullFile && allLines is { Length: > 0 })
+        {
+            for (int i = 0; i < allLines.Length; i++)
+                lines.Add((allLines[i], i + 1));
+        }
+        else if (allLines is { Length: > 0 } && matchLineNum >= 1 && matchLineNum <= allLines.Length)
         {
             int matchIdx = matchLineNum - 1;
-            if (matchIdx < 0) matchIdx = 0;
-            if (matchIdx >= allLines.Length) matchIdx = allLines.Length - 1;
 
             int startLine, endLine;
             if (fullFile)
@@ -2550,7 +2585,9 @@ public sealed partial class MainWindow
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Run, object> s_previewSearchMatchRuns = new();
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DependencyObject, object> s_previewShowMoreActions = new();
     private const int PreviewShowMoreTooltipHideDelayMs = 700;
-    private const double PreviewShowMoreTooltipCursorGapDip = 12;
+    // How far below the top edge of the "Show more" button the cursor should land so the button is
+    // directly layered underneath the pointer (the pointer overlaps the button rather than sitting above it).
+    private const double PreviewShowMoreTooltipCursorOverlapDip = 6;
     private PreviewShowMoreAction? _previewShowMoreTooltipAction;
     private PreviewShowMoreEdge? _previewShowMoreTooltipEdge;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _previewShowMoreTooltipHideTimer;
@@ -3371,7 +3408,7 @@ public sealed partial class MainWindow
         {
             var (start, end) = ranges[rangeIndex++];
 
-            if (hasExistingRenderedLines && start > lastRenderedLine)
+            if (hasExistingRenderedLines && ShouldAddGapBetweenRenderedLines(lastRenderedLine, start + 1))
             {
                 if (paragraphsAdded >= maxAdditionalBlocks)
                     break;
@@ -3707,15 +3744,21 @@ public sealed partial class MainWindow
         {
             PreviewShowMoreTooltipContent.Children.Clear();
             var foreground = new SolidColorBrush(Microsoft.UI.Colors.White);
+            // "Show all" is only offered when it can actually reveal the entire line. For
+            // extremely long lines subject to the bounded reveal cap (GetPreviewShowAllMaxRevealLength),
+            // clicking "Show all" would only show a window, not everything, so the option is omitted.
+            bool canShowEntireLine = action.State.SourceLine.Length <= GetPreviewShowAllMaxRevealLength();
             if (edge == PreviewShowMoreEdge.Prefix)
             {
                 PreviewShowMoreTooltipContent.Children.Add(CreatePreviewShowMoreActionButton("\uE72B", "Show more", arrowFirst: true, action, PreviewShowMoreExpandMode.More, foreground));
-                PreviewShowMoreTooltipContent.Children.Add(CreatePreviewShowMoreActionButton("\uE72B", "Show all", arrowFirst: true, action, PreviewShowMoreExpandMode.All, foreground));
+                if (canShowEntireLine)
+                    PreviewShowMoreTooltipContent.Children.Add(CreatePreviewShowMoreActionButton("\uE72B", "Show all", arrowFirst: true, action, PreviewShowMoreExpandMode.All, foreground));
             }
             else
             {
                 PreviewShowMoreTooltipContent.Children.Add(CreatePreviewShowMoreActionButton("\uE72A", "Show more", arrowFirst: false, action, PreviewShowMoreExpandMode.More, foreground));
-                PreviewShowMoreTooltipContent.Children.Add(CreatePreviewShowMoreActionButton("\uE72A", "Show all", arrowFirst: false, action, PreviewShowMoreExpandMode.All, foreground));
+                if (canShowEntireLine)
+                    PreviewShowMoreTooltipContent.Children.Add(CreatePreviewShowMoreActionButton("\uE72A", "Show all", arrowFirst: false, action, PreviewShowMoreExpandMode.All, foreground));
             }
 
             _previewShowMoreTooltipAction = action;
@@ -3735,9 +3778,9 @@ public sealed partial class MainWindow
         // appears centered beneath the pointer; "Show all" follows it in the horizontal stack as usual.
         double showMoreCenterOffset = GetPreviewShowMoreButtonCenterOffset(bubbleWidth);
         double left = Math.Clamp(pointer.X - showMoreCenterOffset, 4, maxLeft);
-        // Drop the bubble below the cursor so the button sits underneath the pointer without the
-        // pointer landing on it, keeping the button in its normal (not-pressed) visual state.
-        double top = Math.Clamp(pointer.Y + PreviewShowMoreTooltipCursorGapDip, 4, maxTop);
+        // Lift the bubble so the cursor lands just inside the top of the "Show more" button: the button
+        // is layered directly underneath the pointer (extending downward) with "Show all" to its right.
+        double top = Math.Clamp(pointer.Y - (PreviewShowMoreTooltipBubble.Padding.Top + PreviewShowMoreTooltipCursorOverlapDip), 4, maxTop);
 
         Canvas.SetLeft(PreviewShowMoreTooltipBubble, left);
         Canvas.SetTop(PreviewShowMoreTooltipBubble, top);
@@ -4042,8 +4085,18 @@ public sealed partial class MainWindow
 
         if (mode == PreviewShowMoreExpandMode.All)
         {
-            newStart = 0;
-            newEnd = lineLength;
+            int maxReveal = GetPreviewShowAllMaxRevealLength();
+            if (lineLength <= maxReveal)
+            {
+                newStart = 0;
+                newEnd = lineLength;
+            }
+            else
+            {
+                int center = state.SourceStart + (currentLength / 2);
+                newStart = Math.Clamp(center - (maxReveal / 2), 0, lineLength - maxReveal);
+                newEnd = newStart + maxReveal;
+            }
         }
         else if (action.Edge == PreviewShowMoreEdge.Prefix && state.SourceStart > 0)
         {
@@ -4207,7 +4260,10 @@ public sealed partial class MainWindow
         while (paragraph.Inlines.Count > state.ContentInlineStart)
             paragraph.Inlines.RemoveAt(state.ContentInlineStart);
 
-        if (state.SourceStart <= 0 && state.SourceEnd >= state.SourceLine.Length && state.SourceLine.Length > GetEffectiveSegmentSize())
+        // Any window longer than one layout segment must be split into segment-sized runs
+        // separated by LineBreaks (single very long runs hang Wrap layout and throw E_FAIL in
+        // NoWrap). This covers both a full-line "Show all" and the bounded "Show all" window.
+        if ((state.SourceEnd - state.SourceStart) > GetEffectiveSegmentSize())
         {
             AddPreviewFullLineSegmentRuns(paragraph, state);
             return;
@@ -4222,21 +4278,32 @@ public sealed partial class MainWindow
     {
         var fullWindow = CreatePreviewLineWindow(state.SourceLine, 0, state.SourceLine.Length);
         int segmentLength = Math.Max(50, GetEffectiveSegmentSize() - (2 * LineTruncator.Ellipsis.Length));
+        int windowStart = Math.Clamp(state.SourceStart, 0, state.SourceLine.Length);
+        int windowEnd = Math.Clamp(state.SourceEnd, windowStart, state.SourceLine.Length);
+
+        // When the revealed window is bounded (a "Show all" on an extremely long line), keep the
+        // clickable prefix/suffix ellipses so the user can continue expanding the remaining text.
+        if (windowStart > 0)
+            paragraph.Inlines.Add(CreatePreviewShowMoreInline(paragraph, state, PreviewShowMoreEdge.Prefix));
+
         bool firstSegment = true;
-        for (int index = 0; index < state.SourceLine.Length; index += segmentLength)
+        for (int index = windowStart; index < windowEnd; index += segmentLength)
         {
             if (!firstSegment)
                 paragraph.Inlines.Add(new LineBreak());
 
-            int length = Math.Min(segmentLength, state.SourceLine.Length - index);
+            int length = Math.Min(segmentLength, windowEnd - index);
             string segmentText = state.SourceLine.Substring(index, length);
             var matchOrdinalsToColor = BuildTargetColorOrdinals(state, fullWindow, segmentText, segmentDisplayStart: index);
             AddPreviewTextSpanRuns(paragraph, segmentText, state.IsMatchLine, state.Regex, matchOrdinalsToColor);
             firstSegment = false;
         }
 
-        if (state.SourceLine.Length == 0)
-            AddPreviewTextSpanRuns(paragraph, string.Empty, state.IsMatchLine, state.Regex, BuildTargetColorOrdinals(state, fullWindow, string.Empty, segmentDisplayStart: 0));
+        if (windowEnd <= windowStart)
+            AddPreviewTextSpanRuns(paragraph, string.Empty, state.IsMatchLine, state.Regex, BuildTargetColorOrdinals(state, fullWindow, string.Empty, segmentDisplayStart: windowStart));
+
+        if (windowEnd < state.SourceLine.Length)
+            paragraph.Inlines.Add(CreatePreviewShowMoreInline(paragraph, state, PreviewShowMoreEdge.Suffix));
     }
 
     /// <summary>

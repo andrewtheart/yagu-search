@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Globalization;
 using Yagu.Helpers;
 using Yagu.Services;
 
@@ -51,6 +52,14 @@ public sealed record SearchResult(
 
     /// <summary>Match start adjusted for <see cref="ShortPreview" />.</summary>
     public int ShortPreviewMatchStart => EnsureShortPreview().MatchStart;
+
+    public string LineLocationDisplay => LineNumber > 0
+        ? string.Create(CultureInfo.InvariantCulture, $"L{LineNumber} C{GetOneBasedSourceColumn()}")
+        : LineNumber.ToString(CultureInfo.InvariantCulture);
+
+    public string LineLocationTooltip => LineNumber > 0
+        ? string.Create(CultureInfo.InvariantCulture, $"Line {LineNumber}, column {GetOneBasedSourceColumn()}")
+        : "File name match";
 
     private ShortPreviewInfo EnsureShortPreview()
         => _shortPreview ??= CreateShortPreview(MatchLine, MatchStartColumn, MatchLength);
@@ -233,6 +242,8 @@ public sealed record SearchResult(
         var dispatcher = HydrationDispatcher;
         if (dispatcher is null)
         {
+            handler(this, LocationArgs);
+            handler(this, LocationTooltipArgs);
             handler(this, BeforeArgs);
             handler(this, AfterArgs);
             return;
@@ -242,11 +253,18 @@ public sealed record SearchResult(
         {
             var h = PropertyChanged;
             if (h is null) return;
+            h(this, LocationArgs);
+            h(this, LocationTooltipArgs);
             h(this, BeforeArgs);
             h(this, AfterArgs);
         });
     }
 
+    private int GetOneBasedSourceColumn()
+        => Math.Max(0, SourceMatchStartColumn >= 0 ? SourceMatchStartColumn : MatchStartColumn) + 1;
+
+    private static readonly PropertyChangedEventArgs LocationArgs = new(nameof(LineLocationDisplay));
+    private static readonly PropertyChangedEventArgs LocationTooltipArgs = new(nameof(LineLocationTooltip));
     private static readonly PropertyChangedEventArgs BeforeArgs = new(nameof(NumberedBefore));
     private static readonly PropertyChangedEventArgs AfterArgs = new(nameof(NumberedAfter));
 

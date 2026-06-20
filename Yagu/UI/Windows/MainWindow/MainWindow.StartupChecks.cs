@@ -24,6 +24,10 @@ public sealed partial class MainWindow
         {
             presenter.Maximize();
         }
+        else if (!_launcherMode)
+        {
+            InitializeTraditionalAdvancedOptionsOverlay();
+        }
 
         if (_autoSearchOnLoad)
         {

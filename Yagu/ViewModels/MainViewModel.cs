@@ -280,8 +280,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             : (int)PreviewWrapMode.NoWrap;
     }
 
-    private static int NormalizeAdvancedOptionsCollapsedWidthModeIndex(int modeIndex) =>
-        modeIndex == 1 ? 1 : 0;
+    private static int NormalizeAdvancedOptionsCollapsedWidthModeIndex(int modeIndex) => 0;
 
     public void Dispose()
     {
@@ -1986,7 +1985,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public void OpenInEditor(SearchResult? result)
     {
         if (result is null) return;
-        _editor.Command = EditorCommand;
+        // Test seam: a UI-automation harness (e.g. scripts\test-match-nav.ps1) can set
+        // YAGU_EDITOR_COMMAND so that double-tapping a result while driving the real app
+        // never launches the user's configured editor. Launching `code` under an elevated
+        // VS Code pops a modal "Another instance of Code is already running as administrator"
+        // dialog that steals focus and hangs the automation. When the variable is unset (the
+        // normal case) the user's configured EditorCommand is used unchanged.
+        var editorOverride = Environment.GetEnvironmentVariable("YAGU_EDITOR_COMMAND");
+        _editor.Command = string.IsNullOrWhiteSpace(editorOverride) ? EditorCommand : editorOverride;
         _editor.Open(result.FilePath, result.LineNumber);
     }
 
@@ -2185,6 +2191,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (_lastSearchSortRefreshTicks != 0 && now - _lastSearchSortRefreshTicks < intervalTicks)
             return;
 
+        // Don't reorder/rebuild the results list while the user has a file group
+        // expanded. The periodic refresh goes through ApplySortAndFilter ->
+        // VisibleGroups.ReplaceAll -> a Reset that tears down and re-creates every
+        // ListView container, which makes the open drawer visibly collapse and
+        // re-expand (flicker) and loses the user's scroll position. The final
+        // ApplySortAndFilter on search completion still sorts everything.
+        if (AnyResultGroupExpanded())
+        {
+            // Defer the next check by one interval so we don't rescan every batch.
+            _lastSearchSortRefreshTicks = now;
+            return;
+        }
+
         _searchSortRefreshQueued = true;
         _lastSearchSortRefreshTicks = now;
 
@@ -2193,6 +2212,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             _searchSortRefreshQueued = false;
             int currentGroupCount = _resultCollection.AllGroups.Count;
             if (!IsSearching || currentGroupCount < 2)
+                return;
+
+            // The user may have expanded a drawer between queueing and execution;
+            // skip the rebuild so the open drawer doesn't flicker.
+            if (AnyResultGroupExpanded())
                 return;
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -2222,6 +2246,23 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             _searchSortRefreshQueued = false;
         }
+    }
+
+    /// <summary>
+    /// True if any visible file group is currently expanded. Used to suppress the
+    /// periodic in-search sort refresh, whose ReplaceAll/Reset would otherwise tear
+    /// down and re-create the open drawer's container (visible flicker).
+    /// </summary>
+    private bool AnyResultGroupExpanded()
+    {
+        var groups = _resultCollection.VisibleGroups;
+        for (int i = 0; i < groups.Count; i++)
+        {
+            if (groups[i].IsExpanded)
+                return true;
+        }
+
+        return false;
     }
 
     private void NotifyResultAvailabilityChanged()
@@ -3319,25 +3360,50 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             // If no subdirectory suggestions, show recent directories as fallback.
             if (suggestions.Count == 0 && string.IsNullOrWhiteSpace(text))
             {
-                _dispatcher.TryEnqueue(() =>
-                {
-                    DirectorySuggestions.Clear();
-                    foreach (var d in _settings.RecentDirectories)
-                        DirectorySuggestions.Add(d);
-                });
+                await ApplyDirectorySuggestionsAsync(_settings.RecentDirectories).ConfigureAwait(false);
                 return;
             }
 
-            _dispatcher.TryEnqueue(() =>
-            {
-                DirectorySuggestions.Clear();
-                foreach (var s in suggestions)
-                    DirectorySuggestions.Add(s);
-            });
+            await ApplyDirectorySuggestionsAsync(suggestions).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             // Expected when user keeps typing.
         }
+    }
+
+    internal async Task<int> UpdateDirectorySuggestionsForSelectedDirectoryAsync(string directory)
+    {
+        _dirAutoCompleteCts?.Cancel();
+        _dirAutoCompleteCts = new CancellationTokenSource();
+        var ct = _dirAutoCompleteCts.Token;
+
+        try
+        {
+            var suggestions = await _dirAutoComplete.GetChildDirectorySuggestionsAsync(directory, ct).ConfigureAwait(false);
+            await ApplyDirectorySuggestionsAsync(suggestions).ConfigureAwait(false);
+            return suggestions.Count;
+        }
+        catch (OperationCanceledException)
+        {
+            return 0;
+        }
+    }
+
+    private Task ApplyDirectorySuggestionsAsync(IEnumerable<string> suggestions)
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_dispatcher.TryEnqueue(() =>
+        {
+            DirectorySuggestions.Clear();
+            foreach (var suggestion in suggestions)
+                DirectorySuggestions.Add(suggestion);
+            completion.SetResult();
+        }))
+        {
+            completion.SetResult();
+        }
+
+        return completion.Task;
     }
 }

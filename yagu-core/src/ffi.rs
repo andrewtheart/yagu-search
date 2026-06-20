@@ -1,5 +1,10 @@
 //! C ABI exposed to .NET via P/Invoke.
 //!
+//! This file is the unsafe edge of the Rust core. Raw pointers from C# are
+//! converted to Rust slices as soon as possible, result buffers have explicit
+//! owner/free functions, and callback pointers are only valid during the call
+//! that receives them.
+//!
 //! Lifecycle:
 //!   1. C# calls `qg_search_file` with a UTF-16 path, UTF-8 pattern, options,
 //!      and a `cancel_flag` pointer (an atomic 32-bit int it owns).
@@ -57,13 +62,21 @@ const BINARY_PROBE_BYTES: usize = 8 * 1024;
 
 #[repr(C)]
 pub struct QgOptions {
+    /// Non-zero means exact casing; zero means case-insensitive.
     pub case_sensitive: c_uchar,
+    /// Non-zero treats the pattern as a regex; zero treats it as a literal.
     pub use_regex: c_uchar,
+    /// Non-zero skips files that look binary instead of scanning their bytes.
     pub skip_binary: c_uchar,
+    /// Non-zero returns only match metadata, not line/context bytes.
     pub omit_line_bytes: c_uchar,
+    /// Number of lines to include before each match.
     pub context_before: c_uint,
+    /// Number of lines to include after each match.
     pub context_after: c_uint,
+    /// Maximum matches for a file/session call; zero means unlimited.
     pub max_results: c_ulonglong,
+    /// Maximum file size to scan; zero means unlimited.
     pub max_file_size: c_ulonglong,
 }
 
@@ -592,9 +605,14 @@ pub extern "C" fn qg_abi_version() -> c_uint {
 #[repr(C)]
 pub struct QgMatchView {
     pub line_number: c_ulonglong,
+    /// Match start inside `line_ptr`, not necessarily the full source line when
+    /// Rust had to window a very long line.
     pub match_start: c_uint,
+    /// Full source-line UTF-16 column, or `u32::MAX` when C# should compute it
+    /// from the complete line bytes it received.
     pub source_match_start: c_uint,
     pub match_len: c_uint,
+    /// Borrowed line bytes. Valid only until the current callback returns.
     pub line_ptr: *const u8,
     pub line_len: usize,
     /// Packed buffer: for each context-before line, u32 little-endian length
@@ -817,6 +835,8 @@ pub unsafe extern "C" fn qg_free_buffer(ptr: *mut u8, len: usize) {
 
 /// Opaque session holding a pre-compiled matcher and scan options.
 pub struct QgSession {
+    /// Compiled once per search so file workers do not rebuild regex/literal
+    /// matchers for every file.
     matcher: Box<dyn crate::scan::LineMatcher>,
     scan_opts: ScanOptions,
     max_file_size: u64,
@@ -1258,7 +1278,9 @@ unsafe fn qg_session_scan_paths_parallel_impl(
     };
     let workers = workers.clamp(1, MAX_WORKERS).min(path_count);
 
-    // Shared state.
+    // Shared state. `cb_mutex` protects all managed callbacks: the Rust workers
+    // scan files in parallel, but C# receives events one-at-a-time so delegate
+    // targets do not need to be thread-safe.
     let next_index = AtomicUsize::new(0);
     let cb_mutex = Mutex::new(());
     let early_stop = std::sync::atomic::AtomicBool::new(false);
@@ -1425,7 +1447,10 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                         Err(e) => scan_error_to_status(&e),
                     };
 
-                    // Phase 2: Acquire mutex ONCE, deliver all buffered matches + file_done.
+                    // Phase 2: acquire the callback mutex ONCE, deliver all
+                    // buffered matches, then always send file_done. The
+                    // QgMatchView pointers below point into `context_arena` and
+                    // are valid only until each callback returns.
                     let _g = cb_mutex.lock().unwrap();
                     for entry in &match_buf {
                         if early_stop.load(Ordering::Relaxed) {
@@ -1578,11 +1603,14 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
         finished: std::sync::atomic::AtomicBool::new(false),
     });
 
-    // Shared callback mutex — same serialization contract as the batch API.
+    // Shared callback mutex — same serialization contract as the batch API:
+    // workers scan concurrently, callbacks are delivered serially to C#.
     let cb_mutex = std::sync::Arc::new(Mutex::new(()));
     let early_stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    // SAFETY wrappers for Send
+    // SAFETY wrappers for Send. C# promises these pointers stay valid until
+    // `qg_scanner_finish`/destroy joins all workers; the wrappers only let Rust
+    // move the raw pointers into those worker threads.
     struct CtxPtr(*mut c_void);
     unsafe impl Send for CtxPtr {}
     unsafe impl Sync for CtxPtr {}
@@ -1632,7 +1660,8 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
                     }
                 }
 
-                // Pull next work item from queue
+                // Pull the next path from the queue. The condvar avoids
+                // spinning while C# is still discovering more paths.
                 let item = {
                     let mut q = work.queue.lock().unwrap();
                     loop {
@@ -1754,7 +1783,9 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
                     Err(e) => scan_error_to_status(&e),
                 };
 
-                // Acquire mutex ONCE, deliver all buffered matches + file_done.
+                // Acquire the callback mutex ONCE, deliver all buffered
+                // matches, then always send file_done. All QgMatchView pointers
+                // point into `context_arena` and are callback-duration only.
                 let _g = cb_mutex.lock().unwrap();
                 for entry in &match_buf {
                     if early_stop.load(Ordering::Relaxed) {

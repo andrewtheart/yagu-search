@@ -84,6 +84,24 @@ public sealed class SettingsWindowRegressionTests
     }
 
     [Fact]
+    public void GitignorePrecedencePrompt_RequiresUserDefinedIncludeFilter()
+    {
+        string toggle = ExtractMethod(MainWindowSource, "OnObeyGitignoreToggled", window: 2600);
+        AssertContainsInOrder(toggle,
+            "if (!_isLoaded) return;",
+            "if (sender is ToggleSwitch ts && !ts.IsOn) return;",
+            "if (!HasUserDefinedIncludeFilterText()) return;",
+            "Title = \".gitignore precedence\"");
+
+        string helper = ExtractMethod(MainWindowSource, "HasUserDefinedIncludeFilterText", window: 900);
+        AssertContainsInOrder(helper,
+            "if (IncludeFilterBox is null)",
+            "return !string.IsNullOrWhiteSpace(ViewModel.IncludeGlobs);",
+            "string text = IncludeFilterBox.Text?.Trim() ?? string.Empty;",
+            "return text.Length > 0 && !IsFilterExampleText(IncludeFilterBox);");
+    }
+
+    [Fact]
     public void SettingsWindowXaml_HasScrollableContent()
     {
         Assert.Contains("<ScrollViewer", SettingsWindowXaml);
@@ -540,7 +558,7 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("[ObservableProperty] public partial int ParallelismIndex { get; set; } = 4; // 0 = safe cap", MainViewModelSource);
 
         int start = SettingsWindowSource.IndexOf("Content-search parallelism (concurrent file scan threads):", StringComparison.Ordinal);
-        int end = SettingsWindowSource.IndexOf("var hddToggle", start, StringComparison.Ordinal);
+        int end = SettingsWindowSource.IndexOf("I/O worker oversubscription", start, StringComparison.Ordinal);
         Assert.True(start >= 0 && end > start);
 
         string parallelismBlock = SettingsWindowSource[start..end];
@@ -663,7 +681,11 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("Default working directory:", SettingsWindowSource);
         Assert.Contains("_viewModel.TerminalDefaultWorkingDirectory", SettingsWindowSource);
         Assert.Contains("Width = 620", SettingsWindowSource);
-        Assert.Contains("PickTerminalWorkingDirectoryAsync", SettingsWindowSource);
+        Assert.Contains("PickTerminalWorkingDirectory", SettingsWindowSource);
+        Assert.DoesNotContain("PickTerminalWorkingDirectoryAsync", SettingsWindowSource);
+        Assert.DoesNotContain("FolderPicker", SettingsWindowSource);
+        Assert.DoesNotContain("PickSingleFolderAsync", SettingsWindowSource);
+        Assert.Contains("Win32FileDialog.SelectFolder(_settingsHwnd", SettingsWindowSource);
         Assert.Contains("App.LaunchWorkingDirectory", SettingsWindowSource);
 
         AssertContainsInOrder(SettingsWindowSource,

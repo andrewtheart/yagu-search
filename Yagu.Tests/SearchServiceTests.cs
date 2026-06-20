@@ -756,6 +756,33 @@ public class SearchServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ExactMatch_True_MatchesWholeWordNotSubstring()
+    {
+        Write("word.txt", "an async method");
+        Write("longer.txt", "runs asynchronously");
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "async",
+            ExactMatch = true,
+            MaxFileSizeBytes = 0,
+            MaxResults = 0,
+        };
+
+        var matchFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            if (evt is SearchEvent.Match m) matchFiles.Add(Path.GetFileName(m.Result.FilePath));
+            else if (evt is SearchEvent.MatchBatch mb) foreach (var r in mb.Results) matchFiles.Add(Path.GetFileName(r.FilePath));
+        }
+
+        Assert.Single(matchFiles);
+        Assert.Contains("word.txt", matchFiles);
+    }
+
+    [Fact]
     public async Task ExactMatch_False_SearchesEachTermSeparately()
     {
         Write("word.txt", "contains test only");
@@ -964,6 +991,7 @@ public class SearchServiceFlushBatchTests : IDisposable
             Directory = _root,
             Query = "target",
             SearchMode = SearchMode.FileNames,
+            ExactMatch = false,
             MaxFileSizeBytes = 0,
             MaxResults = 0,
         };

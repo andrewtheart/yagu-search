@@ -29,6 +29,32 @@ public sealed class SearchQueryParserTests
     }
 
     [Fact]
+    public void BuildLiteralRegexPattern_ExactMatch_MatchesWholeWordOnly()
+    {
+        string? pattern = SearchQueryParser.BuildLiteralRegexPattern("async", exactMatch: true);
+
+        Assert.NotNull(pattern);
+        var regex = new Regex(pattern!, RegexOptions.CultureInvariant);
+        Assert.Matches(regex, "an async method");
+        Assert.DoesNotMatch(regex, "runs asynchronously");
+        Assert.DoesNotMatch(regex, "a preasync flag");
+        Assert.DoesNotMatch(regex, "call _async() now");
+    }
+
+    [Fact]
+    public void BuildLiteralRegexPattern_ExactMatch_PunctuationQuery_MatchesSubstring()
+    {
+        // A query with no word characters on its edges cannot be "whole word";
+        // it should still match as a literal substring.
+        string? pattern = SearchQueryParser.BuildLiteralRegexPattern("+=", exactMatch: true);
+
+        Assert.NotNull(pattern);
+        var regex = new Regex(pattern!, RegexOptions.CultureInvariant);
+        Assert.Matches(regex, "x += 1");
+        Assert.Matches(regex, "count+=2");
+    }
+
+    [Fact]
     public void BuildLiteralRegexPattern_EscapesRegexCharacters()
     {
         string? pattern = SearchQueryParser.BuildLiteralRegexPattern("a+b c.d", exactMatch: false);

@@ -62,11 +62,17 @@ public sealed class SettingsEffectTests : IDisposable
     /// Build a SearchOptions with test-friendly defaults.
     /// Override any property via named optional parameters.
     /// </summary>
+    /// <remarks>
+    /// These tests exercise file/size/date/glob filters, not match semantics,
+    /// and assert on substring hits (e.g. "needle" inside "needlexxxx"), so the
+    /// default here is substring (non-whole-word) matching.
+    /// </remarks>
     private SearchOptions Opts(
         string? directory = null,
         string query = "needle",
         bool caseSensitive = false,
         bool useRegex = false,
+        bool exactMatch = false,
         int contextLines = 0,
         int maxResults = 0,
         int maxMatchesPerFile = 0,
@@ -91,6 +97,7 @@ public sealed class SettingsEffectTests : IDisposable
             Query = query,
             CaseSensitive = caseSensitive,
             UseRegex = useRegex,
+            ExactMatch = exactMatch,
             ContextLines = contextLines,
             MaxResults = maxResults,
             MaxMatchesPerFile = maxMatchesPerFile,

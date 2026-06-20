@@ -312,13 +312,27 @@ public sealed partial class MainWindow
         return (state & Windows.UI.Core.CoreVirtualKeyStates.Down) == Windows.UI.Core.CoreVirtualKeyStates.Down;
     }
 
-    private void OnBrowseDirectory(object sender, RoutedEventArgs e)
+    private async void OnBrowseDirectory(object sender, RoutedEventArgs e)
     {
-        var picker = new Windows.Storage.Pickers.FolderPicker();
-        picker.FileTypeFilter.Add("*");
-        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
-        _ = PickFolderAsync(picker);
+        try
+        {
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            string? folderPath = Helpers.Win32FileDialog.SelectFolder(hwnd, "Select Search Directory");
+            if (!string.IsNullOrWhiteSpace(folderPath))
+            {
+                ViewModel.Directory = folderPath;
+                DirectoryBox.Text = folderPath;
+                int suggestionCount = await ViewModel.UpdateDirectorySuggestionsForSelectedDirectoryAsync(folderPath);
+                DirectoryBox.ItemsSource = ViewModel.DirectorySuggestions;
+                DirectoryBox.Focus(FocusState.Programmatic);
+                DirectoryBox.IsSuggestionListOpen = suggestionCount > 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("MainWindow", "Folder browse dialog failed.", ex);
+            ViewModel.StatusText = "Could not open the folder browse dialog.";
+        }
     }
 
     [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML event handlers are bound as instance methods.")]

@@ -1995,7 +1995,7 @@ public sealed partial class SettingsWindow : Window
             Content = "Browse...",
             Padding = new Thickness(10, 4, 10, 4),
         };
-        browse.Click += async (_, _) => await PickTerminalWorkingDirectoryAsync(workingDirectory);
+        browse.Click += (_, _) => PickTerminalWorkingDirectory(workingDirectory);
         buttonRow.Children.Add(browse);
 
         var useDefault = new Button
@@ -2021,18 +2021,21 @@ public sealed partial class SettingsWindow : Window
         });
     }
 
-    private async System.Threading.Tasks.Task PickTerminalWorkingDirectoryAsync(TextBox target)
+    private void PickTerminalWorkingDirectory(TextBox target)
     {
-        var picker = new Windows.Storage.Pickers.FolderPicker();
-        picker.FileTypeFilter.Add("*");
-        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
-        var folder = await picker.PickSingleFolderAsync();
-        if (folder is null)
-            return;
+        try
+        {
+            string? folderPath = Win32FileDialog.SelectFolder(_settingsHwnd, "Select Terminal Working Directory");
+            if (string.IsNullOrWhiteSpace(folderPath))
+                return;
 
-        target.Text = folder.Path;
-        _viewModel.TerminalDefaultWorkingDirectory = folder.Path;
+            target.Text = folderPath;
+            _viewModel.TerminalDefaultWorkingDirectory = folderPath;
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("Settings", "Terminal working directory browse dialog failed.", ex);
+        }
     }
 
     private void BuildSettingsContent()
@@ -2874,20 +2877,6 @@ public sealed partial class SettingsWindow : Window
             maximizeOnStartup.Unchecked += (_, _) => _viewModel.MaximizeOnStartup = false;
             layoutGroup.Children.Add(maximizeOnStartup);
             layoutGroup.Children.Add(new TextBlock { Text = "When enabled, the main window starts maximized instead of its default size.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
-
-            layoutGroup.Children.Add(new TextBlock { Text = "Advanced Options drawer width:" });
-            var advancedOptionsDrawerWidth = new ComboBox
-            {
-                SelectedIndex = _viewModel.AdvancedOptionsCollapsedWidthModeIndex == 1 ? 1 : 0,
-                HorizontalAlignment = HorizontalAlignment.Left,
-                MinWidth = 300,
-            };
-            advancedOptionsDrawerWidth.Items.Add("Fill search box width when collapsed and expanded (default)");
-            advancedOptionsDrawerWidth.Items.Add("Compact when collapsed, fill search box width when expanded");
-            advancedOptionsDrawerWidth.SelectionChanged += (_, _) =>
-                _viewModel.AdvancedOptionsCollapsedWidthModeIndex = advancedOptionsDrawerWidth.SelectedIndex == 1 ? 1 : 0;
-            layoutGroup.Children.Add(advancedOptionsDrawerWidth);
-            layoutGroup.Children.Add(new TextBlock { Text = "Controls the top Advanced Options drawer while it is collapsed. It always expands to the search box width.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
         }
 
         // ── Interaction ──

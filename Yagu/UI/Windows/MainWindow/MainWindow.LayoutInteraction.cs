@@ -17,6 +17,7 @@ public sealed partial class MainWindow
     private bool _advancedOptionsDrawerExpandedWidth;
     private bool _advancedOptionsDrawerMaxHeightRetryQueued;
     private int _advancedOptionsDrawerMaxHeightRetryCount;
+    private bool _advancedOptionsOverlayActive;
     private const double CompactTopSearchDrawerThreshold = 440;
     private const double CompactTopSearchActionButtonWidth = 38;
     private const int MaxAdvancedOptionsDrawerMaxHeightRetries = 8;
@@ -55,6 +56,24 @@ public sealed partial class MainWindow
         _advancedOptionsDrawerMaxHeightRetryQueued = false;
         _advancedOptionsDrawerMaxHeightRetryCount = 0;
         SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: true);
+
+        if (_advancedOptionsOverlayActive)
+        {
+            // Traditional mode: float the drawer over the results pane. The header
+            // chevron/layout needs a frame to settle before we can anchor the overlay
+            // under it, so reposition again on the next low-priority tick.
+            ShowAdvancedOptionsOverlay();
+            DispatcherQueue.TryEnqueue(
+                Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                () =>
+                {
+                    if (!AdvancedOptionsExpander.IsExpanded) return;
+                    PositionAdvancedOptionsOverlay();
+                    UpdateAdvancedOptionsDrawerMaxHeight();
+                });
+            return;
+        }
+
         UpdateAdvancedOptionsDrawerMaxHeight();
         if (_launcherMode)
             ListenForExpanderResize();
@@ -65,6 +84,13 @@ public sealed partial class MainWindow
     private void OnAdvancedOptionsCollapsed(Expander sender, ExpanderCollapsedEventArgs args)
     {
         SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: false);
+
+        if (_advancedOptionsOverlayActive)
+        {
+            HideAdvancedOptionsOverlay();
+            return;
+        }
+
         UpdateAdvancedOptionsDrawerMaxHeight();
         if (_launcherMode)
             ListenForExpanderResize();
@@ -72,14 +98,126 @@ public sealed partial class MainWindow
             ListenForExpanderLayoutSync();
     }
 
+    /// <summary>
+    /// Moves the Advanced Options drawer out of the inline Expander and into the floating
+    /// overlay host so that expanding it (in traditional, non-launcher mode) renders above the
+    /// results pane instead of reflowing the layout or growing the window. The Expander keeps
+    /// its header + chevron as the open/close toggle. Idempotent; no-op in launcher mode.
+    /// </summary>
+    private void MoveAdvancedOptionsDrawerToOverlay()
+    {
+        if (_advancedOptionsOverlayActive || _launcherMode) return;
+        if (AdvancedOptionsScrollViewer is null || AdvancedOptionsOverlayHost is null) return;
+
+        // Detach the drawer from the Expander (replacing its inline content with a zero-height
+        // placeholder so the toggle still works) and host it in the floating overlay.
+        AdvancedOptionsExpander.Content = new Border { Height = 0 };
+        AdvancedOptionsOverlayHost.Child = AdvancedOptionsScrollViewer;
+        _advancedOptionsOverlayActive = true;
+
+        // Keep the floating drawer anchored to the header as the window/content resizes.
+        RootGrid.SizeChanged += (_, _) =>
+        {
+            if (_advancedOptionsOverlayActive && AdvancedOptionsExpander.IsExpanded)
+            {
+                PositionAdvancedOptionsOverlay();
+                UpdateAdvancedOptionsDrawerMaxHeight();
+            }
+        };
+
+        if (AdvancedOptionsExpander.IsExpanded)
+            ShowAdvancedOptionsOverlay();
+    }
+
+    /// <summary>
+    /// Traditional (non-launcher) startup: move the Advanced Options drawer into the floating
+    /// overlay (so expanding it covers the results pane instead of reflowing), then keep a roomy
+    /// default window. Runs immediately and again at Low priority once layout has settled.
+    /// </summary>
+    private void InitializeTraditionalAdvancedOptionsOverlay()
+    {
+        MoveAdvancedOptionsDrawerToOverlay();
+        FitTraditionalWindowHeightToContent();
+        DispatcherQueue.TryEnqueue(
+            Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+            FitTraditionalWindowHeightToContent);
+    }
+
+    private void ShowAdvancedOptionsOverlay()
+    {
+        if (!_advancedOptionsOverlayActive || AdvancedOptionsOverlayHost is null) return;
+        AdvancedOptionsOverlayScrim.Visibility = Visibility.Visible;
+        AdvancedOptionsOverlayHost.Visibility = Visibility.Visible;
+        PositionAdvancedOptionsOverlay();
+        UpdateAdvancedOptionsDrawerMaxHeight();
+    }
+
+    private void HideAdvancedOptionsOverlay()
+    {
+        if (AdvancedOptionsOverlayHost is null) return;
+        AdvancedOptionsOverlayScrim.Visibility = Visibility.Collapsed;
+        AdvancedOptionsOverlayHost.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Anchors the floating drawer directly beneath the Advanced Options header, matched to the
+    /// header's width, using the header's position in RootGrid coordinates.
+    /// </summary>
+    private void PositionAdvancedOptionsOverlay()
+    {
+        if (!_advancedOptionsOverlayActive || AdvancedOptionsOverlayHost is null) return;
+        try
+        {
+            var transform = AdvancedOptionsExpander.TransformToVisual(RootGrid);
+            var origin = transform.TransformPoint(
+                new Windows.Foundation.Point(0, AdvancedOptionsExpander.ActualHeight));
+            double width = AdvancedOptionsExpander.ActualWidth;
+            if (width <= 0 || double.IsNaN(origin.X) || double.IsNaN(origin.Y))
+                return;
+
+            AdvancedOptionsOverlayHost.Margin = new Thickness(origin.X, origin.Y, 0, 0);
+            AdvancedOptionsOverlayHost.Width = width;
+        }
+        catch
+        {
+            // Transform can throw if the visual isn't in the live tree yet; ignore and rely on
+            // the deferred reposition tick.
+        }
+    }
+
+    private void OnAdvancedOptionsOverlayScrimPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (AdvancedOptionsExpander.IsExpanded)
+            AdvancedOptionsExpander.IsExpanded = false;
+        e.Handled = true;
+    }
+
+    private void OnAdvancedOptionsOverlayKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key == VirtualKey.Escape && AdvancedOptionsExpander.IsExpanded)
+        {
+            AdvancedOptionsExpander.IsExpanded = false;
+            e.Handled = true;
+        }
+    }
+
+    // Escape closes the floating drawer regardless of where focus currently sits (the header
+    // keeps focus when the drawer is opened by clicking it, so the KeyDown handler above would
+    // never see the key). The accelerator is only live while the overlay host is visible.
+    private void OnAdvancedOptionsOverlayEscapeInvoked(
+        Microsoft.UI.Xaml.Input.KeyboardAccelerator sender,
+        Microsoft.UI.Xaml.Input.KeyboardAcceleratorInvokedEventArgs args)
+    {
+        if (AdvancedOptionsExpander.IsExpanded)
+            AdvancedOptionsExpander.IsExpanded = false;
+        args.Handled = true;
+    }
+
     private void SetAdvancedOptionsDrawerExpandedWidthState(bool isExpanded)
     {
         _advancedOptionsDrawerExpandedWidth = isExpanded;
-        bool shouldFillQueryColumnWidth = isExpanded || ViewModel.AdvancedOptionsCollapsedWidthModeIndex == 0;
         Grid.SetColumnSpan(AdvancedOptionsExpander, 1);
-        AdvancedOptionsExpander.HorizontalAlignment = shouldFillQueryColumnWidth
-            ? HorizontalAlignment.Stretch
-            : HorizontalAlignment.Left;
+        AdvancedOptionsExpander.HorizontalAlignment = HorizontalAlignment.Stretch;
         AdvancedOptionsExpander.Width = double.NaN;
         AdvancedOptionsExpander.InvalidateMeasure();
         UpdateTerminalChevronVisibility();
