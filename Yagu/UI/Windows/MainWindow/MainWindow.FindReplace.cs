@@ -856,7 +856,13 @@ public sealed partial class MainWindow
                             list.Add((path, original, replaced, encoding, replaceCount));
                     }
                 }
-                catch { /* skip unreadable files */ }
+                catch (Exception ex)
+                {
+                    // Skip files we can't read/process, but record which one so a "replace all"
+                    // that silently misses a file is diagnosable by the user.
+                    LogService.Instance.Warning("FindReplace",
+                        $"Skipped file during replace-all (unreadable or unprocessable): {path}", ex);
+                }
             }
             return list;
         });

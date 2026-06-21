@@ -33,6 +33,12 @@ internal sealed class ResultStoreTempLocationWindow : Window
         Content = BuildContent(launchDrive, options, currentTempDirectory);
         Closed += OnClosed;
 
+        // Hide the OS title bar reliably. Setting this Window property directly
+        // (outside the presenter try/catch below) guarantees the caption strip is
+        // not drawn even if the OverlappedPresenter configuration fails to apply,
+        // matching the title-bar-less pattern used by MainWindow/SettingsWindow.
+        ExtendsContentIntoTitleBar = true;
+
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         WindowForegroundHelper.ConfigureOwnedWindow(hwnd, _ownerHwnd);
         var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);

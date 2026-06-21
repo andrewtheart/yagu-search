@@ -205,7 +205,17 @@ public sealed class ResultStore : IDisposable
                         for (int i = 0; i < batch.Count; i++)
                         {
                             try { batch[i].CompleteReservedEvictionWith(writeOne); }
-                            catch { /* skip and continue draining */ }
+                            catch (Exception ex)
+                            {
+                                // Skip this result and continue draining the rest of the batch, but
+                                // record it: a swallowed per-item failure silently drops a search
+                                // result from the disk-backed store. Verbose (not Warning) because a
+                                // failing disk can fault every item in a large batch and we don't
+                                // want to flood the log; the outer batch catch logs Warning.
+                                if (LogService.Instance.IsVerboseEnabled)
+                                    LogService.Instance.Verbose("ResultStore",
+                                        $"Skipped evicting result for '{batch[i].FilePath}' during drain", ex);
+                            }
                         }
                     });
                 }

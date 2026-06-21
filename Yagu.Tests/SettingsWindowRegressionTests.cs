@@ -45,6 +45,8 @@ public sealed class SettingsWindowRegressionTests
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "Help", "HelpWindow.xaml.cs"));
     private static readonly string ResultStoreTempLocationWindowSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "ResultStoreTempLocationWindow.cs"));
+    private static readonly string MainWindowResultsListScrollSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.ResultsListScroll.cs"));
     private static readonly string AdminProtectedPathsDialogSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "AdminProtectedPathsDialog.cs"));
     private static readonly string YaguDialogSource = File.ReadAllText(
@@ -212,6 +214,62 @@ public sealed class SettingsWindowRegressionTests
     {
         Assert.Contains("ExtendsContentIntoTitleBar = true;", SettingsWindowSource);
         Assert.Contains("SetTitleBar(AppTitleBar);", SettingsWindowSource);
+    }
+
+    [Fact]
+    public void ResultStoreTempLocationWindow_SuppressesOsTitleBar()
+    {
+        // The dialog must render without an OS title bar. Setting the Window
+        // property directly (in addition to the presenter call) guarantees the
+        // caption strip is hidden even if the OverlappedPresenter configuration
+        // throws and is swallowed by its try/catch.
+        Assert.Contains("ExtendsContentIntoTitleBar = true;", ResultStoreTempLocationWindowSource);
+        Assert.Contains("presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);", ResultStoreTempLocationWindowSource);
+
+        int extendsIndex = ResultStoreTempLocationWindowSource.IndexOf(
+            "ExtendsContentIntoTitleBar = true;", StringComparison.Ordinal);
+        int tryIndex = ResultStoreTempLocationWindowSource.IndexOf(
+            "if (appWindow.Presenter is OverlappedPresenter presenter)", StringComparison.Ordinal);
+        Assert.True(extendsIndex >= 0 && tryIndex >= 0, "Expected both title-bar suppression hooks.");
+        Assert.True(
+            extendsIndex < tryIndex,
+            "ExtendsContentIntoTitleBar must be set before the presenter try/catch so the title bar is hidden even if presenter configuration fails.");
+    }
+
+    [Fact]
+    public void FileListLabels_UseThemeAdaptiveDefaultColors()
+    {
+        // The persisted defaults (white at descending opacity) are invisible on a
+        // Light surface. When the user is still on the built-in default, the apply
+        // code must substitute readable black-based colors for the Light theme,
+        // while custom colors and Dark theme stay exactly as before.
+        string src = MainWindowResultsListScrollSource;
+
+        // Pure resolver: only override when configured value equals the built-in default.
+        Assert.Contains("private static Windows.UI.Color ResolveThemedLabelColor(", src);
+        Assert.Contains(
+            "string.Equals(configuredColor.Trim(), defaultColor, System.StringComparison.OrdinalIgnoreCase)",
+            src);
+        Assert.Contains("return isLight ? lightDefault : darkDefault;", src);
+
+        // Black-based Light-theme substitutes (primary/secondary/tertiary opacities).
+        Assert.Contains("DrawerPrimaryLightColor = Windows.UI.Color.FromArgb(0xE4, 0x00, 0x00, 0x00)", src);
+        Assert.Contains("DrawerSecondaryLightColor = Windows.UI.Color.FromArgb(0x9E, 0x00, 0x00, 0x00)", src);
+        Assert.Contains("DrawerTertiaryLightColor = Windows.UI.Color.FromArgb(0x72, 0x00, 0x00, 0x00)", src);
+
+        // Drawer labels and the file-list overlay both resolve via the helper using
+        // the realized element's ActualTheme.
+        Assert.Contains("bool isLight = grid.ActualTheme == ElementTheme.Light;", src);
+        Assert.Contains("bool isLight = ResultsFileOverlay.ActualTheme == ElementTheme.Light;", src);
+        Assert.Contains("ViewModel.DrawerFileNameFontColor, AppSettings.DefaultDrawerFileNameFontColor", src);
+        Assert.Contains("ViewModel.DrawerDirectoryFontColor, AppSettings.DefaultDrawerDirectoryFontColor", src);
+        Assert.Contains("ViewModel.DrawerMetadataFontColor, AppSettings.DefaultDrawerMetadataFontColor", src);
+        Assert.Contains("ViewModel.FileListOverlayFontColor, AppSettings.DefaultFileListOverlayFontColor", src);
+
+        // Realized rows refresh on a live theme switch.
+        Assert.Contains("internal void RefreshDrawerLabelThemes()", src);
+        Assert.Contains("RefreshDrawerLabelThemes();", MainWindowWindowSource);
+        Assert.Contains("headerGrid.Unloaded += OnFileGroupHeaderUnloaded;", MainWindowIntroTipsSource);
     }
 
     [Fact]

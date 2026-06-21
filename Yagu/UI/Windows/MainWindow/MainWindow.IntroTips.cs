@@ -26,6 +26,17 @@ public sealed partial class MainWindow
         {
             QueueDelayedFileDrawerIntroTip(target);
             ApplyDrawerLabelSettings(target);
+            if (target is Grid headerGrid && _realizedFileGroupHeaders.Add(headerGrid))
+                headerGrid.Unloaded += OnFileGroupHeaderUnloaded;
+        }
+    }
+
+    private void OnFileGroupHeaderUnloaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is Grid headerGrid)
+        {
+            _realizedFileGroupHeaders.Remove(headerGrid);
+            headerGrid.Unloaded -= OnFileGroupHeaderUnloaded;
         }
     }
 

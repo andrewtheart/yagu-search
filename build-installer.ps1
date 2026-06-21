@@ -98,7 +98,9 @@ foreach ($arch in $architectures) {
   Write-Host "=== Building installer for $arch ($rid) ==="
 
   # Step 1: Publish (self-contained Native AOT) for this architecture.
-  $publishDir = Join-Path $projectDir "bin\Release\$targetFramework\$rid\publish"
+  # Passing -p:Platform=$arch makes MSBuild emit output under a platform-specific
+  # folder (bin\<arch>\Release\...) rather than the default bin\Release\... path.
+  $publishDir = Join-Path $projectDir "bin\$arch\Release\$targetFramework\$rid\publish"
   if (-not $SkipBuild) {
     Write-Host "Publishing Yagu (Release, $rid, self-contained Native AOT)..."
     & dotnet publish $projectPath -c Release -r $rid -p:Platform=$arch --self-contained -p:BuildInstallerOnPublish=false --nologo

@@ -513,11 +513,45 @@ public sealed partial class MainWindow
         return null;
     }
 
+    // Theme-adaptive default colors for file-list labels. The persisted defaults
+    // (white at descending opacity) are tuned for a dark surface; on a Light
+    // surface white text is invisible, so when the user is still on the built-in
+    // default we substitute equivalent black-based opacities. Custom colors are
+    // always honored verbatim.
+    private static readonly Windows.UI.Color DrawerPrimaryLightColor = Windows.UI.Color.FromArgb(0xE4, 0x00, 0x00, 0x00);
+    private static readonly Windows.UI.Color DrawerSecondaryLightColor = Windows.UI.Color.FromArgb(0x9E, 0x00, 0x00, 0x00);
+    private static readonly Windows.UI.Color DrawerTertiaryLightColor = Windows.UI.Color.FromArgb(0x72, 0x00, 0x00, 0x00);
+
+    private readonly System.Collections.Generic.HashSet<Grid> _realizedFileGroupHeaders = new();
+
+    private static Windows.UI.Color ResolveThemedLabelColor(
+        string? configuredColor, string defaultColor,
+        Windows.UI.Color darkDefault, Windows.UI.Color lightDefault, bool isLight)
+    {
+        bool isDefault = string.IsNullOrWhiteSpace(configuredColor)
+            || string.Equals(configuredColor.Trim(), defaultColor, System.StringComparison.OrdinalIgnoreCase);
+        if (isDefault)
+            return isLight ? lightDefault : darkDefault;
+        return ColorStringHelper.Parse(configuredColor, isLight ? lightDefault : darkDefault);
+    }
+
+    /// <summary>Re-applies drawer/overlay label colors to realized rows after a
+    /// live theme switch so theme-default colors track the new surface.</summary>
+    internal void RefreshDrawerLabelThemes()
+    {
+        ApplyFileListOverlayFontSettings();
+        foreach (var headerGrid in _realizedFileGroupHeaders)
+            ApplyDrawerLabelSettings(headerGrid);
+    }
+
     private void ApplyFileListOverlayFontSettings()
     {
         ResultsFileOverlayFileName.FontSize = ViewModel.FileListOverlayFontSize;
         ResultsFileOverlayFileName.FontFamily = new Microsoft.UI.Xaml.Media.FontFamily(ViewModel.FileListOverlayFontFamily);
-        var color = ColorStringHelper.Parse(ViewModel.FileListOverlayFontColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF));
+        bool isLight = ResultsFileOverlay.ActualTheme == ElementTheme.Light;
+        var color = ResolveThemedLabelColor(
+            ViewModel.FileListOverlayFontColor, AppSettings.DefaultFileListOverlayFontColor,
+            Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF), DrawerPrimaryLightColor, isLight);
         ResultsFileOverlayFileName.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(color);
         ResultsFileOverlay.Height = ViewModel.FileListOverlayHeight;
     }
@@ -526,9 +560,16 @@ public sealed partial class MainWindow
     {
         if (headerGrid is not Grid grid) return;
 
-        var fileNameBrush = new SolidColorBrush(ColorStringHelper.Parse(ViewModel.DrawerFileNameFontColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)));
-        var dirBrush = new SolidColorBrush(ColorStringHelper.Parse(ViewModel.DrawerDirectoryFontColor, Windows.UI.Color.FromArgb(0x8C, 0xFF, 0xFF, 0xFF)));
-        var metaBrush = new SolidColorBrush(ColorStringHelper.Parse(ViewModel.DrawerMetadataFontColor, Windows.UI.Color.FromArgb(0x73, 0xFF, 0xFF, 0xFF)));
+        bool isLight = grid.ActualTheme == ElementTheme.Light;
+        var fileNameBrush = new SolidColorBrush(ResolveThemedLabelColor(
+            ViewModel.DrawerFileNameFontColor, AppSettings.DefaultDrawerFileNameFontColor,
+            Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF), DrawerPrimaryLightColor, isLight));
+        var dirBrush = new SolidColorBrush(ResolveThemedLabelColor(
+            ViewModel.DrawerDirectoryFontColor, AppSettings.DefaultDrawerDirectoryFontColor,
+            Windows.UI.Color.FromArgb(0x8C, 0xFF, 0xFF, 0xFF), DrawerSecondaryLightColor, isLight));
+        var metaBrush = new SolidColorBrush(ResolveThemedLabelColor(
+            ViewModel.DrawerMetadataFontColor, AppSettings.DefaultDrawerMetadataFontColor,
+            Windows.UI.Color.FromArgb(0x73, 0xFF, 0xFF, 0xFF), DrawerTertiaryLightColor, isLight));
         var fileNameFont = new FontFamily(ViewModel.DrawerFileNameFontFamily);
         var dirFont = new FontFamily(ViewModel.DrawerDirectoryFontFamily);
         var metaFont = new FontFamily(ViewModel.DrawerMetadataFontFamily);

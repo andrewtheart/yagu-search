@@ -191,6 +191,7 @@ public sealed partial class MainWindow : Window, IDisposable
         {
             ApplyTitleBarButtonTheme();
             ApplyPreviewEditorTextColor();
+            RefreshDrawerLabelThemes();
             QueueFontContrastCheck();
         };
         TextControlBoxNS.TextControlBoxDiagnostics.VerboseLogger = (source, message) => LogService.Instance.Verbose(source, message);
