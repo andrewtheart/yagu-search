@@ -937,6 +937,7 @@ public sealed partial class MainWindow
                 _stickyHeaderExpander = topMostInView;
             }
             StickyFileHeader.Visibility = Visibility.Visible;
+            StickyFileHeader.Height = ViewModel.PreviewStickyHeaderHeight;
         }
         catch (Exception ex)
         {

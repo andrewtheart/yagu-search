@@ -42,6 +42,33 @@ public sealed class AppSettings
     public const string DefaultResultListMatchTextFontFamily = "Consolas";
     public const int DefaultResultListMatchTextFontSize = 12;
     public const string DefaultResultListMatchHighlightColor = "#FFB8860B"; // DarkGoldenrod (passes light+dark)
+
+    // ── File list overlay (sticky header in results list) ──
+    public const int DefaultFileListOverlayHeight = 36;
+    public const int DefaultFileListOverlayFontSize = 12;
+    public const string DefaultFileListOverlayFontColor = "#FFFFFFFF";
+    public const string DefaultFileListOverlayFontFamily = "Segoe UI";
+
+    // ── Preview sticky file header overlay ──
+    public const int DefaultPreviewStickyHeaderHeight = 36;
+    public const int DefaultPreviewStickyHeaderFileNameFontSize = 14;
+    public const string DefaultPreviewStickyHeaderFileNameFontColor = "#FFFFFFFF";
+    public const string DefaultPreviewStickyHeaderFileNameFontFamily = "Segoe UI";
+    public const int DefaultPreviewStickyHeaderDetailFontSize = 12;
+    public const string DefaultPreviewStickyHeaderDetailFontColor = "#B3FFFFFF"; // White @ 70% opacity
+    public const string DefaultPreviewStickyHeaderDetailFontFamily = "Segoe UI";
+
+    // ── File list drawer labels ──
+    public const int DefaultDrawerFileNameFontSize = 13;
+    public const string DefaultDrawerFileNameFontColor = "#FFFFFFFF";
+    public const string DefaultDrawerFileNameFontFamily = "Segoe UI";
+    public const int DefaultDrawerDirectoryFontSize = 13;
+    public const string DefaultDrawerDirectoryFontColor = "#8CFFFFFF"; // White @ 55% opacity
+    public const string DefaultDrawerDirectoryFontFamily = "Segoe UI";
+    public const int DefaultDrawerMetadataFontSize = 11;
+    public const string DefaultDrawerMetadataFontColor = "#73FFFFFF"; // White @ 45% opacity
+    public const string DefaultDrawerMetadataFontFamily = "Segoe UI";
+
     public const int DefaultLowDiskSpaceWarningPercent = 98;
     public const int MinimumLowDiskSpaceWarningPercent = 1;
     public const int MaximumLowDiskSpaceWarningPercent = 99;
@@ -106,6 +133,33 @@ public sealed class AppSettings
     public string ResultListMatchTextFontFamily { get; set; } = DefaultResultListMatchTextFontFamily;
     public int ResultListMatchTextFontSize { get; set; } = DefaultResultListMatchTextFontSize;
     public string ResultListMatchHighlightColor { get; set; } = DefaultResultListMatchHighlightColor;
+
+    // ── File list overlay settings ──
+    public int FileListOverlayHeight { get; set; } = DefaultFileListOverlayHeight;
+    public int FileListOverlayFontSize { get; set; } = DefaultFileListOverlayFontSize;
+    public string FileListOverlayFontColor { get; set; } = DefaultFileListOverlayFontColor;
+    public string FileListOverlayFontFamily { get; set; } = DefaultFileListOverlayFontFamily;
+
+    // ── Preview sticky file header overlay settings ──
+    public int PreviewStickyHeaderHeight { get; set; } = DefaultPreviewStickyHeaderHeight;
+    public int PreviewStickyHeaderFileNameFontSize { get; set; } = DefaultPreviewStickyHeaderFileNameFontSize;
+    public string PreviewStickyHeaderFileNameFontColor { get; set; } = DefaultPreviewStickyHeaderFileNameFontColor;
+    public string PreviewStickyHeaderFileNameFontFamily { get; set; } = DefaultPreviewStickyHeaderFileNameFontFamily;
+    public int PreviewStickyHeaderDetailFontSize { get; set; } = DefaultPreviewStickyHeaderDetailFontSize;
+    public string PreviewStickyHeaderDetailFontColor { get; set; } = DefaultPreviewStickyHeaderDetailFontColor;
+    public string PreviewStickyHeaderDetailFontFamily { get; set; } = DefaultPreviewStickyHeaderDetailFontFamily;
+
+    // ── File list drawer label settings ──
+    public int DrawerFileNameFontSize { get; set; } = DefaultDrawerFileNameFontSize;
+    public string DrawerFileNameFontColor { get; set; } = DefaultDrawerFileNameFontColor;
+    public string DrawerFileNameFontFamily { get; set; } = DefaultDrawerFileNameFontFamily;
+    public int DrawerDirectoryFontSize { get; set; } = DefaultDrawerDirectoryFontSize;
+    public string DrawerDirectoryFontColor { get; set; } = DefaultDrawerDirectoryFontColor;
+    public string DrawerDirectoryFontFamily { get; set; } = DefaultDrawerDirectoryFontFamily;
+    public int DrawerMetadataFontSize { get; set; } = DefaultDrawerMetadataFontSize;
+    public string DrawerMetadataFontColor { get; set; } = DefaultDrawerMetadataFontColor;
+    public string DrawerMetadataFontFamily { get; set; } = DefaultDrawerMetadataFontFamily;
+
     public int LogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose (file logging)
     public int ConsoleLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     public int FileListerBackendIndex { get; set; } // 0 = Auto, 1 = SDK, 2 = es.exe, 3 = Managed

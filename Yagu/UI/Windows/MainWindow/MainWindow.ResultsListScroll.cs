@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Yagu.Helpers;
 using Yagu.Models;
 using Yagu.Services;
 
@@ -15,7 +16,7 @@ namespace Yagu;
 public sealed partial class MainWindow
 {
     private const double ResultsListScrollEdgeEpsilon = 0.5;
-    private const double ResultsFileOverlayFallbackHeight = 36;
+    private double ResultsFileOverlayFallbackHeight => ViewModel.FileListOverlayHeight;
     private const int ResultsListSmartScrollRestorePasses = 3;
 
     private enum ResultsListSmartScrollIntent
@@ -219,6 +220,7 @@ public sealed partial class MainWindow
             ResultsFileOverlayFileName.Text = group.FileName;
             ToolTipService.SetToolTip(ResultsFileOverlayFileName, group.FilePath);
             ResultsFileOverlayExplorerButton.Tag = group.FilePath;
+            ApplyFileListOverlayFontSettings();
         }
 
         ResultsFileOverlay.Visibility = Visibility.Visible;
@@ -509,6 +511,83 @@ public sealed partial class MainWindow
         }
 
         return null;
+    }
+
+    private void ApplyFileListOverlayFontSettings()
+    {
+        ResultsFileOverlayFileName.FontSize = ViewModel.FileListOverlayFontSize;
+        ResultsFileOverlayFileName.FontFamily = new Microsoft.UI.Xaml.Media.FontFamily(ViewModel.FileListOverlayFontFamily);
+        var color = ColorStringHelper.Parse(ViewModel.FileListOverlayFontColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF));
+        ResultsFileOverlayFileName.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(color);
+        ResultsFileOverlay.Height = ViewModel.FileListOverlayHeight;
+    }
+
+    private void ApplyDrawerLabelSettings(FrameworkElement headerGrid)
+    {
+        if (headerGrid is not Grid grid) return;
+
+        var fileNameBrush = new SolidColorBrush(ColorStringHelper.Parse(ViewModel.DrawerFileNameFontColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)));
+        var dirBrush = new SolidColorBrush(ColorStringHelper.Parse(ViewModel.DrawerDirectoryFontColor, Windows.UI.Color.FromArgb(0x8C, 0xFF, 0xFF, 0xFF)));
+        var metaBrush = new SolidColorBrush(ColorStringHelper.Parse(ViewModel.DrawerMetadataFontColor, Windows.UI.Color.FromArgb(0x73, 0xFF, 0xFF, 0xFF)));
+        var fileNameFont = new FontFamily(ViewModel.DrawerFileNameFontFamily);
+        var dirFont = new FontFamily(ViewModel.DrawerDirectoryFontFamily);
+        var metaFont = new FontFamily(ViewModel.DrawerMetadataFontFamily);
+
+        // Column 2 is the StackPanel containing file name, compact dir, and metadata
+        foreach (var child in grid.Children)
+        {
+            if (child is StackPanel stack && Grid.GetColumn((FrameworkElement)child) == 2)
+            {
+                foreach (var item in stack.Children)
+                {
+                    if (item is TextBlock tb)
+                    {
+                        if (tb.FontWeight.Weight >= 600) // SemiBold = FileName
+                        {
+                            tb.FontSize = ViewModel.DrawerFileNameFontSize;
+                            tb.FontFamily = fileNameFont;
+                            tb.Foreground = fileNameBrush;
+                        }
+                        else if (tb.Tag is "CompactDir") // Directory
+                        {
+                            tb.FontSize = ViewModel.DrawerDirectoryFontSize;
+                            tb.FontFamily = dirFont;
+                            tb.Foreground = dirBrush;
+                            tb.Opacity = 1.0; // color already encodes opacity
+                        }
+                        else // Metadata (Modified/Size)
+                        {
+                            tb.FontSize = ViewModel.DrawerMetadataFontSize;
+                            tb.FontFamily = metaFont;
+                            tb.Foreground = metaBrush;
+                            tb.Opacity = 1.0;
+                        }
+                    }
+                    else if (item is StackPanel metaPanel) // inner StackPanel with metadata TextBlock
+                    {
+                        foreach (var metaChild in metaPanel.Children)
+                        {
+                            if (metaChild is TextBlock metaTb)
+                            {
+                                metaTb.FontSize = ViewModel.DrawerMetadataFontSize;
+                                metaTb.FontFamily = metaFont;
+                                metaTb.Foreground = metaBrush;
+                                metaTb.Opacity = 1.0;
+                            }
+                        }
+                    }
+                }
+            }
+            // Column 3 = wide directory label
+            else if (child is TextBlock dirTb && Grid.GetColumn((FrameworkElement)child) == 3
+                     && dirTb.Tag is "WideDir")
+            {
+                dirTb.FontSize = ViewModel.DrawerDirectoryFontSize;
+                dirTb.FontFamily = dirFont;
+                dirTb.Foreground = dirBrush;
+                dirTb.Opacity = 1.0;
+            }
+        }
     }
 
 }

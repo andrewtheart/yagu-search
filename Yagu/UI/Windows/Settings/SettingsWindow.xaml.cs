@@ -2465,6 +2465,7 @@ public sealed partial class SettingsWindow : Window
             var fileMatchListGroup = AddSettingsGroupBox(g, "File Match List");
             var previewViewerGroup = AddSettingsGroupBox(g, "Preview Viewer");
             var editorAppearanceGroup = AddSettingsGroupBox(g, "Built-In Editor Appearance");
+            var overlayGroup = AddSettingsGroupBox(g, "Overlay & Drawer Fonts");
 
             appAppearanceGroup.Children.Add(new TextBlock { Text = "Theme:" });
             var themeMode = new ComboBox { SelectedIndex = AppThemeService.NormalizeThemeModeIndex(_viewModel.ThemeModeIndex), MinWidth = 220 };
@@ -2794,6 +2795,96 @@ public sealed partial class SettingsWindow : Window
                 showContrastStatus: true);
 
             AddEditorTextColorSetting(editorAppearanceGroup);
+
+            // ── Overlay & Drawer Fonts ──
+            overlayGroup.Children.Add(new TextBlock { Text = "File list sticky overlay", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14 });
+            overlayGroup.Children.Add(new TextBlock { Text = "Height (px):" });
+            var fileListOverlayHeight = new NumberBox { Value = _viewModel.FileListOverlayHeight, Minimum = 20, Maximum = 100, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact };
+            fileListOverlayHeight.ValueChanged += (_, args) => { if (!double.IsNaN(args.NewValue)) _viewModel.FileListOverlayHeight = (int)Math.Clamp(args.NewValue, 20, 100); };
+            overlayGroup.Children.Add(fileListOverlayHeight);
+
+            overlayGroup.Children.Add(new TextBlock { Text = "Font size:" });
+            var fileListOverlayFontSize = new NumberBox { Value = _viewModel.FileListOverlayFontSize, Minimum = 6, Maximum = 72, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact };
+            fileListOverlayFontSize.ValueChanged += (_, args) => { if (!double.IsNaN(args.NewValue)) _viewModel.FileListOverlayFontSize = (int)Math.Clamp(args.NewValue, 6, 72); };
+            overlayGroup.Children.Add(fileListOverlayFontSize);
+
+            overlayGroup.Children.Add(new TextBlock { Text = "Font family:" });
+            var fileListOverlayFontFamily = CreateFontFamilyPicker(_viewModel.FileListOverlayFontFamily, AppSettings.DefaultFileListOverlayFontFamily, value => _viewModel.FileListOverlayFontFamily = value);
+            overlayGroup.Children.Add(fileListOverlayFontFamily);
+
+            overlayGroup.Children.Add(new TextBlock { Text = "Font color:" });
+            AddPreviewContentColorSetting(overlayGroup, "File name:", "Color of the file name text in the results-list sticky overlay.",
+                _viewModel.FileListOverlayFontColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF), value => _viewModel.FileListOverlayFontColor = value);
+
+            overlayGroup.Children.Add(new TextBlock { Text = "Preview sticky file header", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 16, 0, 0) });
+            overlayGroup.Children.Add(new TextBlock { Text = "Height (px):" });
+            var previewStickyHeight = new NumberBox { Value = _viewModel.PreviewStickyHeaderHeight, Minimum = 20, Maximum = 100, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact };
+            previewStickyHeight.ValueChanged += (_, args) => { if (!double.IsNaN(args.NewValue)) _viewModel.PreviewStickyHeaderHeight = (int)Math.Clamp(args.NewValue, 20, 100); };
+            overlayGroup.Children.Add(previewStickyHeight);
+
+            overlayGroup.Children.Add(new TextBlock { Text = "File name font size:" });
+            var stickyFileNameSize = new NumberBox { Value = _viewModel.PreviewStickyHeaderFileNameFontSize, Minimum = 6, Maximum = 72, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact };
+            stickyFileNameSize.ValueChanged += (_, args) => { if (!double.IsNaN(args.NewValue)) _viewModel.PreviewStickyHeaderFileNameFontSize = (int)Math.Clamp(args.NewValue, 6, 72); };
+            overlayGroup.Children.Add(stickyFileNameSize);
+
+            overlayGroup.Children.Add(new TextBlock { Text = "File name font family:" });
+            var stickyFileNameFamily = CreateFontFamilyPicker(_viewModel.PreviewStickyHeaderFileNameFontFamily, AppSettings.DefaultPreviewStickyHeaderFileNameFontFamily, value => _viewModel.PreviewStickyHeaderFileNameFontFamily = value);
+            overlayGroup.Children.Add(stickyFileNameFamily);
+
+            AddPreviewContentColorSetting(overlayGroup, "File name color:", "Color of the file name in the preview sticky header.",
+                _viewModel.PreviewStickyHeaderFileNameFontColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF), value => _viewModel.PreviewStickyHeaderFileNameFontColor = value);
+
+            overlayGroup.Children.Add(new TextBlock { Text = "Detail font size:" });
+            var stickyDetailSize = new NumberBox { Value = _viewModel.PreviewStickyHeaderDetailFontSize, Minimum = 6, Maximum = 72, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact };
+            stickyDetailSize.ValueChanged += (_, args) => { if (!double.IsNaN(args.NewValue)) _viewModel.PreviewStickyHeaderDetailFontSize = (int)Math.Clamp(args.NewValue, 6, 72); };
+            overlayGroup.Children.Add(stickyDetailSize);
+
+            overlayGroup.Children.Add(new TextBlock { Text = "Detail font family:" });
+            var stickyDetailFamily = CreateFontFamilyPicker(_viewModel.PreviewStickyHeaderDetailFontFamily, AppSettings.DefaultPreviewStickyHeaderDetailFontFamily, value => _viewModel.PreviewStickyHeaderDetailFontFamily = value);
+            overlayGroup.Children.Add(stickyDetailFamily);
+
+            AddPreviewContentColorSetting(overlayGroup, "Detail color:", "Color of the detail text (match count) in the preview sticky header.",
+                _viewModel.PreviewStickyHeaderDetailFontColor, Windows.UI.Color.FromArgb(0xB3, 0xFF, 0xFF, 0xFF), value => _viewModel.PreviewStickyHeaderDetailFontColor = value);
+
+            overlayGroup.Children.Add(new TextBlock { Text = "File list drawer labels", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(0, 16, 0, 0) });
+
+            overlayGroup.Children.Add(new TextBlock { Text = "File name font size:" });
+            var drawerFileNameSize = new NumberBox { Value = _viewModel.DrawerFileNameFontSize, Minimum = 6, Maximum = 72, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact };
+            drawerFileNameSize.ValueChanged += (_, args) => { if (!double.IsNaN(args.NewValue)) _viewModel.DrawerFileNameFontSize = (int)Math.Clamp(args.NewValue, 6, 72); };
+            overlayGroup.Children.Add(drawerFileNameSize);
+
+            overlayGroup.Children.Add(new TextBlock { Text = "File name font family:" });
+            var drawerFileNameFamily = CreateFontFamilyPicker(_viewModel.DrawerFileNameFontFamily, AppSettings.DefaultDrawerFileNameFontFamily, value => _viewModel.DrawerFileNameFontFamily = value);
+            overlayGroup.Children.Add(drawerFileNameFamily);
+
+            AddPreviewContentColorSetting(overlayGroup, "File name color:", "Color of file names in the file list drawer headers.",
+                _viewModel.DrawerFileNameFontColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF), value => _viewModel.DrawerFileNameFontColor = value);
+
+            overlayGroup.Children.Add(new TextBlock { Text = "Directory font size:" });
+            var drawerDirSize = new NumberBox { Value = _viewModel.DrawerDirectoryFontSize, Minimum = 6, Maximum = 72, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact };
+            drawerDirSize.ValueChanged += (_, args) => { if (!double.IsNaN(args.NewValue)) _viewModel.DrawerDirectoryFontSize = (int)Math.Clamp(args.NewValue, 6, 72); };
+            overlayGroup.Children.Add(drawerDirSize);
+
+            overlayGroup.Children.Add(new TextBlock { Text = "Directory font family:" });
+            var drawerDirFamily = CreateFontFamilyPicker(_viewModel.DrawerDirectoryFontFamily, AppSettings.DefaultDrawerDirectoryFontFamily, value => _viewModel.DrawerDirectoryFontFamily = value);
+            overlayGroup.Children.Add(drawerDirFamily);
+
+            AddPreviewContentColorSetting(overlayGroup, "Directory color:", "Color of directory paths in the file list drawer headers.",
+                _viewModel.DrawerDirectoryFontColor, Windows.UI.Color.FromArgb(0x8C, 0xFF, 0xFF, 0xFF), value => _viewModel.DrawerDirectoryFontColor = value);
+
+            overlayGroup.Children.Add(new TextBlock { Text = "Metadata (date/size) font size:" });
+            var drawerMetaSize = new NumberBox { Value = _viewModel.DrawerMetadataFontSize, Minimum = 6, Maximum = 72, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact };
+            drawerMetaSize.ValueChanged += (_, args) => { if (!double.IsNaN(args.NewValue)) _viewModel.DrawerMetadataFontSize = (int)Math.Clamp(args.NewValue, 6, 72); };
+            overlayGroup.Children.Add(drawerMetaSize);
+
+            overlayGroup.Children.Add(new TextBlock { Text = "Metadata font family:" });
+            var drawerMetaFamily = CreateFontFamilyPicker(_viewModel.DrawerMetadataFontFamily, AppSettings.DefaultDrawerMetadataFontFamily, value => _viewModel.DrawerMetadataFontFamily = value);
+            overlayGroup.Children.Add(drawerMetaFamily);
+
+            AddPreviewContentColorSetting(overlayGroup, "Metadata color:", "Color of the modified date and file size text in drawer headers.",
+                _viewModel.DrawerMetadataFontColor, Windows.UI.Color.FromArgb(0x73, 0xFF, 0xFF, 0xFF), value => _viewModel.DrawerMetadataFontColor = value);
+
+            overlayGroup.Children.Add(new TextBlock { Text = "Changes to overlay and drawer fonts apply to new results loaded after saving settings.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
         }
 
         // ── Editor ──

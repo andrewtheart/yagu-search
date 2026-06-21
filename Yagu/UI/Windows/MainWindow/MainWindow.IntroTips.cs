@@ -25,6 +25,7 @@ public sealed partial class MainWindow
         if (sender is FrameworkElement target)
         {
             QueueDelayedFileDrawerIntroTip(target);
+            ApplyDrawerLabelSettings(target);
         }
     }
 

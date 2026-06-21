@@ -189,6 +189,33 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         ResultListMatchHighlightColor = ColorStringHelper.Normalize(
             _settings.ResultListMatchHighlightColor,
             Windows.UI.Color.FromArgb(0xFF, 0xB8, 0x86, 0x0B));
+
+        // ── File list overlay ──
+        FileListOverlayHeight = Math.Clamp(_settings.FileListOverlayHeight <= 0 ? AppSettings.DefaultFileListOverlayHeight : _settings.FileListOverlayHeight, 20, 100);
+        FileListOverlayFontSize = Math.Clamp(_settings.FileListOverlayFontSize <= 0 ? AppSettings.DefaultFileListOverlayFontSize : _settings.FileListOverlayFontSize, 6, 72);
+        FileListOverlayFontColor = string.IsNullOrWhiteSpace(_settings.FileListOverlayFontColor) ? AppSettings.DefaultFileListOverlayFontColor : _settings.FileListOverlayFontColor;
+        FileListOverlayFontFamily = string.IsNullOrWhiteSpace(_settings.FileListOverlayFontFamily) ? AppSettings.DefaultFileListOverlayFontFamily : _settings.FileListOverlayFontFamily;
+
+        // ── Preview sticky header ──
+        PreviewStickyHeaderHeight = Math.Clamp(_settings.PreviewStickyHeaderHeight <= 0 ? AppSettings.DefaultPreviewStickyHeaderHeight : _settings.PreviewStickyHeaderHeight, 20, 100);
+        PreviewStickyHeaderFileNameFontSize = Math.Clamp(_settings.PreviewStickyHeaderFileNameFontSize <= 0 ? AppSettings.DefaultPreviewStickyHeaderFileNameFontSize : _settings.PreviewStickyHeaderFileNameFontSize, 6, 72);
+        PreviewStickyHeaderFileNameFontColor = string.IsNullOrWhiteSpace(_settings.PreviewStickyHeaderFileNameFontColor) ? AppSettings.DefaultPreviewStickyHeaderFileNameFontColor : _settings.PreviewStickyHeaderFileNameFontColor;
+        PreviewStickyHeaderFileNameFontFamily = string.IsNullOrWhiteSpace(_settings.PreviewStickyHeaderFileNameFontFamily) ? AppSettings.DefaultPreviewStickyHeaderFileNameFontFamily : _settings.PreviewStickyHeaderFileNameFontFamily;
+        PreviewStickyHeaderDetailFontSize = Math.Clamp(_settings.PreviewStickyHeaderDetailFontSize <= 0 ? AppSettings.DefaultPreviewStickyHeaderDetailFontSize : _settings.PreviewStickyHeaderDetailFontSize, 6, 72);
+        PreviewStickyHeaderDetailFontColor = string.IsNullOrWhiteSpace(_settings.PreviewStickyHeaderDetailFontColor) ? AppSettings.DefaultPreviewStickyHeaderDetailFontColor : _settings.PreviewStickyHeaderDetailFontColor;
+        PreviewStickyHeaderDetailFontFamily = string.IsNullOrWhiteSpace(_settings.PreviewStickyHeaderDetailFontFamily) ? AppSettings.DefaultPreviewStickyHeaderDetailFontFamily : _settings.PreviewStickyHeaderDetailFontFamily;
+
+        // ── File list drawer labels ──
+        DrawerFileNameFontSize = Math.Clamp(_settings.DrawerFileNameFontSize <= 0 ? AppSettings.DefaultDrawerFileNameFontSize : _settings.DrawerFileNameFontSize, 6, 72);
+        DrawerFileNameFontColor = string.IsNullOrWhiteSpace(_settings.DrawerFileNameFontColor) ? AppSettings.DefaultDrawerFileNameFontColor : _settings.DrawerFileNameFontColor;
+        DrawerFileNameFontFamily = string.IsNullOrWhiteSpace(_settings.DrawerFileNameFontFamily) ? AppSettings.DefaultDrawerFileNameFontFamily : _settings.DrawerFileNameFontFamily;
+        DrawerDirectoryFontSize = Math.Clamp(_settings.DrawerDirectoryFontSize <= 0 ? AppSettings.DefaultDrawerDirectoryFontSize : _settings.DrawerDirectoryFontSize, 6, 72);
+        DrawerDirectoryFontColor = string.IsNullOrWhiteSpace(_settings.DrawerDirectoryFontColor) ? AppSettings.DefaultDrawerDirectoryFontColor : _settings.DrawerDirectoryFontColor;
+        DrawerDirectoryFontFamily = string.IsNullOrWhiteSpace(_settings.DrawerDirectoryFontFamily) ? AppSettings.DefaultDrawerDirectoryFontFamily : _settings.DrawerDirectoryFontFamily;
+        DrawerMetadataFontSize = Math.Clamp(_settings.DrawerMetadataFontSize <= 0 ? AppSettings.DefaultDrawerMetadataFontSize : _settings.DrawerMetadataFontSize, 6, 72);
+        DrawerMetadataFontColor = string.IsNullOrWhiteSpace(_settings.DrawerMetadataFontColor) ? AppSettings.DefaultDrawerMetadataFontColor : _settings.DrawerMetadataFontColor;
+        DrawerMetadataFontFamily = string.IsNullOrWhiteSpace(_settings.DrawerMetadataFontFamily) ? AppSettings.DefaultDrawerMetadataFontFamily : _settings.DrawerMetadataFontFamily;
+
         FileLogLevelIndex = _settings.LogLevelIndex;
         ConsoleLogLevelIndex = _settings.ConsoleLogLevelIndex;
         FileListerBackendIndex = _settings.FileListerBackendIndex;
@@ -513,6 +540,32 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial string ResultListMatchTextFontFamily { get; set; } = AppSettings.DefaultResultListMatchTextFontFamily;
     [ObservableProperty] public partial int ResultListMatchTextFontSize { get; set; } = AppSettings.DefaultResultListMatchTextFontSize;
     [ObservableProperty] public partial string ResultListMatchHighlightColor { get; set; } = AppSettings.DefaultResultListMatchHighlightColor;
+
+    // ── File list overlay settings ──
+    [ObservableProperty] public partial int FileListOverlayHeight { get; set; } = AppSettings.DefaultFileListOverlayHeight;
+    [ObservableProperty] public partial int FileListOverlayFontSize { get; set; } = AppSettings.DefaultFileListOverlayFontSize;
+    [ObservableProperty] public partial string FileListOverlayFontColor { get; set; } = AppSettings.DefaultFileListOverlayFontColor;
+    [ObservableProperty] public partial string FileListOverlayFontFamily { get; set; } = AppSettings.DefaultFileListOverlayFontFamily;
+
+    // ── Preview sticky file header overlay settings ──
+    [ObservableProperty] public partial int PreviewStickyHeaderHeight { get; set; } = AppSettings.DefaultPreviewStickyHeaderHeight;
+    [ObservableProperty] public partial int PreviewStickyHeaderFileNameFontSize { get; set; } = AppSettings.DefaultPreviewStickyHeaderFileNameFontSize;
+    [ObservableProperty] public partial string PreviewStickyHeaderFileNameFontColor { get; set; } = AppSettings.DefaultPreviewStickyHeaderFileNameFontColor;
+    [ObservableProperty] public partial string PreviewStickyHeaderFileNameFontFamily { get; set; } = AppSettings.DefaultPreviewStickyHeaderFileNameFontFamily;
+    [ObservableProperty] public partial int PreviewStickyHeaderDetailFontSize { get; set; } = AppSettings.DefaultPreviewStickyHeaderDetailFontSize;
+    [ObservableProperty] public partial string PreviewStickyHeaderDetailFontColor { get; set; } = AppSettings.DefaultPreviewStickyHeaderDetailFontColor;
+    [ObservableProperty] public partial string PreviewStickyHeaderDetailFontFamily { get; set; } = AppSettings.DefaultPreviewStickyHeaderDetailFontFamily;
+
+    // ── File list drawer label settings ──
+    [ObservableProperty] public partial int DrawerFileNameFontSize { get; set; } = AppSettings.DefaultDrawerFileNameFontSize;
+    [ObservableProperty] public partial string DrawerFileNameFontColor { get; set; } = AppSettings.DefaultDrawerFileNameFontColor;
+    [ObservableProperty] public partial string DrawerFileNameFontFamily { get; set; } = AppSettings.DefaultDrawerFileNameFontFamily;
+    [ObservableProperty] public partial int DrawerDirectoryFontSize { get; set; } = AppSettings.DefaultDrawerDirectoryFontSize;
+    [ObservableProperty] public partial string DrawerDirectoryFontColor { get; set; } = AppSettings.DefaultDrawerDirectoryFontColor;
+    [ObservableProperty] public partial string DrawerDirectoryFontFamily { get; set; } = AppSettings.DefaultDrawerDirectoryFontFamily;
+    [ObservableProperty] public partial int DrawerMetadataFontSize { get; set; } = AppSettings.DefaultDrawerMetadataFontSize;
+    [ObservableProperty] public partial string DrawerMetadataFontColor { get; set; } = AppSettings.DefaultDrawerMetadataFontColor;
+    [ObservableProperty] public partial string DrawerMetadataFontFamily { get; set; } = AppSettings.DefaultDrawerMetadataFontFamily;
 
     public IReadOnlyList<FontContrastCandidate> GetFontContrastCandidates()
     {
@@ -2897,6 +2950,33 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.ResultListMatchHighlightColor = ColorStringHelper.Normalize(
             ResultListMatchHighlightColor,
             Windows.UI.Color.FromArgb(0xFF, 0xB8, 0x86, 0x0B));
+
+        // ── File list overlay ──
+        _settings.FileListOverlayHeight = Math.Clamp(FileListOverlayHeight <= 0 ? AppSettings.DefaultFileListOverlayHeight : FileListOverlayHeight, 20, 100);
+        _settings.FileListOverlayFontSize = Math.Clamp(FileListOverlayFontSize <= 0 ? AppSettings.DefaultFileListOverlayFontSize : FileListOverlayFontSize, 6, 72);
+        _settings.FileListOverlayFontColor = string.IsNullOrWhiteSpace(FileListOverlayFontColor) ? AppSettings.DefaultFileListOverlayFontColor : FileListOverlayFontColor.Trim();
+        _settings.FileListOverlayFontFamily = string.IsNullOrWhiteSpace(FileListOverlayFontFamily) ? AppSettings.DefaultFileListOverlayFontFamily : FileListOverlayFontFamily.Trim();
+
+        // ── Preview sticky header ──
+        _settings.PreviewStickyHeaderHeight = Math.Clamp(PreviewStickyHeaderHeight <= 0 ? AppSettings.DefaultPreviewStickyHeaderHeight : PreviewStickyHeaderHeight, 20, 100);
+        _settings.PreviewStickyHeaderFileNameFontSize = Math.Clamp(PreviewStickyHeaderFileNameFontSize <= 0 ? AppSettings.DefaultPreviewStickyHeaderFileNameFontSize : PreviewStickyHeaderFileNameFontSize, 6, 72);
+        _settings.PreviewStickyHeaderFileNameFontColor = string.IsNullOrWhiteSpace(PreviewStickyHeaderFileNameFontColor) ? AppSettings.DefaultPreviewStickyHeaderFileNameFontColor : PreviewStickyHeaderFileNameFontColor.Trim();
+        _settings.PreviewStickyHeaderFileNameFontFamily = string.IsNullOrWhiteSpace(PreviewStickyHeaderFileNameFontFamily) ? AppSettings.DefaultPreviewStickyHeaderFileNameFontFamily : PreviewStickyHeaderFileNameFontFamily.Trim();
+        _settings.PreviewStickyHeaderDetailFontSize = Math.Clamp(PreviewStickyHeaderDetailFontSize <= 0 ? AppSettings.DefaultPreviewStickyHeaderDetailFontSize : PreviewStickyHeaderDetailFontSize, 6, 72);
+        _settings.PreviewStickyHeaderDetailFontColor = string.IsNullOrWhiteSpace(PreviewStickyHeaderDetailFontColor) ? AppSettings.DefaultPreviewStickyHeaderDetailFontColor : PreviewStickyHeaderDetailFontColor.Trim();
+        _settings.PreviewStickyHeaderDetailFontFamily = string.IsNullOrWhiteSpace(PreviewStickyHeaderDetailFontFamily) ? AppSettings.DefaultPreviewStickyHeaderDetailFontFamily : PreviewStickyHeaderDetailFontFamily.Trim();
+
+        // ── File list drawer labels ──
+        _settings.DrawerFileNameFontSize = Math.Clamp(DrawerFileNameFontSize <= 0 ? AppSettings.DefaultDrawerFileNameFontSize : DrawerFileNameFontSize, 6, 72);
+        _settings.DrawerFileNameFontColor = string.IsNullOrWhiteSpace(DrawerFileNameFontColor) ? AppSettings.DefaultDrawerFileNameFontColor : DrawerFileNameFontColor.Trim();
+        _settings.DrawerFileNameFontFamily = string.IsNullOrWhiteSpace(DrawerFileNameFontFamily) ? AppSettings.DefaultDrawerFileNameFontFamily : DrawerFileNameFontFamily.Trim();
+        _settings.DrawerDirectoryFontSize = Math.Clamp(DrawerDirectoryFontSize <= 0 ? AppSettings.DefaultDrawerDirectoryFontSize : DrawerDirectoryFontSize, 6, 72);
+        _settings.DrawerDirectoryFontColor = string.IsNullOrWhiteSpace(DrawerDirectoryFontColor) ? AppSettings.DefaultDrawerDirectoryFontColor : DrawerDirectoryFontColor.Trim();
+        _settings.DrawerDirectoryFontFamily = string.IsNullOrWhiteSpace(DrawerDirectoryFontFamily) ? AppSettings.DefaultDrawerDirectoryFontFamily : DrawerDirectoryFontFamily.Trim();
+        _settings.DrawerMetadataFontSize = Math.Clamp(DrawerMetadataFontSize <= 0 ? AppSettings.DefaultDrawerMetadataFontSize : DrawerMetadataFontSize, 6, 72);
+        _settings.DrawerMetadataFontColor = string.IsNullOrWhiteSpace(DrawerMetadataFontColor) ? AppSettings.DefaultDrawerMetadataFontColor : DrawerMetadataFontColor.Trim();
+        _settings.DrawerMetadataFontFamily = string.IsNullOrWhiteSpace(DrawerMetadataFontFamily) ? AppSettings.DefaultDrawerMetadataFontFamily : DrawerMetadataFontFamily.Trim();
+
         _settings.LogLevelIndex = FileLogLevelIndex;
         _settings.ConsoleLogLevelIndex = ConsoleLogLevelIndex;
         _settings.FileListerBackendIndex = FileListerBackendIndex;

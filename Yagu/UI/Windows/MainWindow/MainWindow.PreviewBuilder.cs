@@ -1902,13 +1902,13 @@ public sealed partial class MainWindow
         {
             Text = Path.GetFileName(filePath),
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            FontSize = ViewModel.PreviewStickyHeaderFileNameFontSize,
+            FontFamily = new Microsoft.UI.Xaml.Media.FontFamily(ViewModel.PreviewStickyHeaderFileNameFontFamily),
+            Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                ColorStringHelper.Parse(ViewModel.PreviewStickyHeaderFileNameFontColor, Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF))),
             TextTrimming = TextTrimming.CharacterEllipsis,
             MinWidth = 0,
             MaxWidth = 360,
-            // Hug the folder icon. Without an explicit Left alignment a Stretch
-            // TextBlock constrained by MaxWidth gets centered inside its star
-            // column, leaving a gap after the icon that grows as the window
-            // widens. Left keeps the name sticky to the left at any width.
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Center,
         };
@@ -1920,8 +1920,10 @@ public sealed partial class MainWindow
             var detailText = new TextBlock
             {
                 Text = detail,
-                Opacity = 0.65,
-                FontSize = 12,
+                FontSize = ViewModel.PreviewStickyHeaderDetailFontSize,
+                FontFamily = new Microsoft.UI.Xaml.Media.FontFamily(ViewModel.PreviewStickyHeaderDetailFontFamily),
+                Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                    ColorStringHelper.Parse(ViewModel.PreviewStickyHeaderDetailFontColor, Windows.UI.Color.FromArgb(0xB3, 0xFF, 0xFF, 0xFF))),
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 MaxWidth = 180,
                 VerticalAlignment = VerticalAlignment.Center,
