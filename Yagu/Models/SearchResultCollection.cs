@@ -530,6 +530,9 @@ public sealed class SearchResultCollection
             4 => ascending
                 ? groups.OrderBy(group => group.FileName, StringComparer.OrdinalIgnoreCase).ThenBy(group => group.FilePath, StringComparer.OrdinalIgnoreCase)
                 : groups.OrderByDescending(group => group.FileName, StringComparer.OrdinalIgnoreCase).ThenByDescending(group => group.FilePath, StringComparer.OrdinalIgnoreCase),
+            5 => ascending
+                ? groups.OrderBy(group => group.DirectoryName, StringComparer.OrdinalIgnoreCase).ThenBy(group => group.FileName, StringComparer.OrdinalIgnoreCase)
+                : groups.OrderByDescending(group => group.DirectoryName, StringComparer.OrdinalIgnoreCase).ThenByDescending(group => group.FileName, StringComparer.OrdinalIgnoreCase),
             _ => ascending ? groups.OrderBy(group => group.MatchCount) : groups.OrderByDescending(group => group.MatchCount),
         };
     }
@@ -544,6 +547,9 @@ public sealed class SearchResultCollection
             4 => ascending
                 ? groups.ThenBy(group => group.FileName, StringComparer.OrdinalIgnoreCase).ThenBy(group => group.FilePath, StringComparer.OrdinalIgnoreCase)
                 : groups.ThenByDescending(group => group.FileName, StringComparer.OrdinalIgnoreCase).ThenByDescending(group => group.FilePath, StringComparer.OrdinalIgnoreCase),
+            5 => ascending
+                ? groups.ThenBy(group => group.DirectoryName, StringComparer.OrdinalIgnoreCase).ThenBy(group => group.FileName, StringComparer.OrdinalIgnoreCase)
+                : groups.ThenByDescending(group => group.DirectoryName, StringComparer.OrdinalIgnoreCase).ThenByDescending(group => group.FileName, StringComparer.OrdinalIgnoreCase),
             _ => ascending ? groups.ThenBy(group => group.MatchCount) : groups.ThenByDescending(group => group.MatchCount),
         };
     }
@@ -560,6 +566,9 @@ public sealed class SearchResultCollection
             4 => ascending
                 ? groups.ThenBy(item => item.Group.FileName, StringComparer.OrdinalIgnoreCase).ThenBy(item => item.Group.FilePath, StringComparer.OrdinalIgnoreCase)
                 : groups.ThenByDescending(item => item.Group.FileName, StringComparer.OrdinalIgnoreCase).ThenByDescending(item => item.Group.FilePath, StringComparer.OrdinalIgnoreCase),
+            5 => ascending
+                ? groups.ThenBy(item => item.Group.DirectoryName, StringComparer.OrdinalIgnoreCase).ThenBy(item => item.Group.FileName, StringComparer.OrdinalIgnoreCase)
+                : groups.ThenByDescending(item => item.Group.DirectoryName, StringComparer.OrdinalIgnoreCase).ThenByDescending(item => item.Group.FileName, StringComparer.OrdinalIgnoreCase),
             _ => ascending ? groups.ThenBy(item => item.Group.MatchCount) : groups.ThenByDescending(item => item.Group.MatchCount),
         };
     }

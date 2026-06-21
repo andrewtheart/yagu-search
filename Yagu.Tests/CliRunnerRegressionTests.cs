@@ -55,16 +55,16 @@ public sealed class CliRunnerRegressionTests
         int explanationCount = System.Text.RegularExpressions.Regex.Matches(source, @"(?m)^\s+Does: ").Count;
         int commandCount = System.Text.RegularExpressions.Regex.Matches(source, @"(?m)^\s+Cmd:\s+Yagu\.exe --cli ").Count;
 
-        Assert.Equal(200, exampleCount);
-        Assert.Equal(200, explanationCount);
-        Assert.Equal(200, commandCount);
-        Assert.Contains("EXAMPLES (200):", source);
+        Assert.Equal(201, exampleCount);
+        Assert.Equal(201, explanationCount);
+        Assert.Equal(201, commandCount);
+        Assert.Contains("EXAMPLES (201):", source);
         Assert.Contains("001. Basic search in the current folder", source);
         Assert.Contains("Does: Finds TODO anywhere under the current directory.", source);
         Assert.Contains("Cmd:  Yagu.exe --cli --directory . \"TODO\"", source);
-        Assert.Contains("100. Search for API key patterns", source);
+        Assert.Contains("101. Search for API key patterns", source);
         Assert.Contains("Cmd:  Yagu.exe --cli --directory . -e \"api[_-]?key\"", source);
-        Assert.Contains("200. Search source and write a compact audit", source);
+        Assert.Contains("201. Search source and write a compact audit", source);
         Assert.Contains("Cmd:  Yagu.exe --cli --directory src \"TODO\" -g \"*.cs\" --export .\\reports\\todo-audit.json --export-no-markers", source);
     }
 

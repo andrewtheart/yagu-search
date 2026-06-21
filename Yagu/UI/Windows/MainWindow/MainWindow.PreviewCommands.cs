@@ -718,6 +718,7 @@ public sealed partial class MainWindow
         UpdateSortDirectionButtons(SortDateModifiedAscButton, SortDateModifiedDescButton, 2);
         UpdateSortDirectionButtons(SortFileSizeAscButton, SortFileSizeDescButton, 3);
         UpdateSortDirectionButtons(SortFileNameAscButton, SortFileNameDescButton, 4);
+        UpdateSortDirectionButtons(SortDirectoryAscButton, SortDirectoryDescButton, 5);
     }
 
     private void ApplySortNoneState()
@@ -772,6 +773,8 @@ public sealed partial class MainWindow
     private void OnSortFileSizeAsc(object sender, RoutedEventArgs e) => ToggleSortDirection(3, 1);
     private void OnSortFileNameDesc(object sender, RoutedEventArgs e) => ToggleSortDirection(4, 0);
     private void OnSortFileNameAsc(object sender, RoutedEventArgs e) => ToggleSortDirection(4, 1);
+    private void OnSortDirectoryDesc(object sender, RoutedEventArgs e) => ToggleSortDirection(5, 0);
+    private void OnSortDirectoryAsc(object sender, RoutedEventArgs e) => ToggleSortDirection(5, 1);
 
     // ── Date filter menu handlers ─────────────────────────────────
 
@@ -1184,6 +1187,11 @@ public sealed partial class MainWindow
                     CaptureResultsListScrollPosition();
                 }
             }
+            catch (OutOfMemoryException ex)
+            {
+                _resultsListShowMoreRestoreInProgress = false;
+                HandleResultsOutOfMemory("showing more matches", g, ex);
+            }
             catch (Exception ex)
             {
                 _resultsListShowMoreRestoreInProgress = false;
@@ -1224,6 +1232,11 @@ public sealed partial class MainWindow
 
         while (remainingToShow > 0 && group.HasMore)
         {
+            // OOM safety net: stop adding rows when memory is critically low
+            // rather than risk an out-of-memory failfast in the XAML layer.
+            if (!TryEnsureResultsMemoryHeadroom("showing more matches", group))
+                break;
+
             int chunkSize = Math.Min(VisibleResultShowMoreBatchSize, remainingToShow);
             int start = group.VisibleResults.Count;
             int end = Math.Min(group.Count, start + chunkSize);

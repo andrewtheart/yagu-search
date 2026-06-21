@@ -1,4 +1,4 @@
-# Yagu Help Guide
+<h1 align="center">Yagu Help Guide</h1>
 
 Yagu is a fast Windows search app for finding text, regex matches, or file names across large folder trees. The name stands for "Yet Another Grep Utility". It is built for repeated code, log, and source-tree investigation where you want command-line search speed with a graphical result browser.
 
@@ -67,46 +67,45 @@ Literal searches are faster than regex. Use regex when you need pattern matching
 
 ## Advanced Options
 
-Click the **Advanced Options** expander below the search bar to reveal additional controls. These are per-session and reset to defaults on next launch (defaults can be configured in Settings).
+Click the **Advanced Options** expander below the search bar to reveal a tabbed panel. The left tabs group controls into **Search**, **Filters**, **Size**, **Dates**, and **Advanced**. Advanced Options are per-session and reset to defaults on next launch (defaults can be configured in Settings). Changes apply immediately; **Apply** closes the panel, and **Reset** restores the controls to the current settings defaults.
 
-### Search Behavior
+### Search Tab
 
 | Control | Effect |
 | --- | --- |
 | Search mode | Chooses what the query matches (see Search Modes above). |
-| Obey .gitignore | Reads `.gitignore` files in the tree and excludes matching paths. Has a performance cost on very large trees. |
-| Gitignore takes precedence | When enabled, gitignore rules override include filters. |
-
-### Path Filters
-
-| Control | Effect |
-| --- | --- |
 | Include filter | Limits the search to files matching these patterns. Accepts comma- or semicolon-separated extensions, globs, or path segments. Switch the dropdown between **Glob** and **Regex** modes. |
 | Exclude filter | Removes files matching these patterns. Same syntax options as Include. |
 
-### File Type Filters
+### Filters Tab
 
 | Control | Effect |
 | --- | --- |
+| Obey .gitignore | Reads `.gitignore` files in the tree and excludes matching paths. Has a performance cost on very large trees. |
 | Skip Extensions | A dropdown list of file extensions to skip entirely. Files with these extensions are never opened or read. Use **All/None** links to quickly toggle the whole list. |
 | Search binary | When enabled, files detected as binary (null bytes, magic headers) are included in content search. Off by default. |
 | Search archives | Opens ZIP-format containers (ZIP, DOCX, XLSX, JAR, NUPKG, etc.) and searches text entries inside. Has a performance cost. |
 | Archive Extensions | Visible when Search archives is on. Controls which extensions are treated as ZIP containers. |
 
-### Property Filters (Size and Date)
+### Size Tab
 
 | Control | Effect |
 | --- | --- |
-| Min MB | Only include files at least this many megabytes. 0 = no lower limit. |
-| Max MB | Only include files at most this many megabytes. 0 = no upper limit. |
+| Min MB | Only include files at least this many megabytes. Blank = no lower limit. |
+| Max MB | Only include files at most this many megabytes. Blank = no upper limit. |
+
+### Dates Tab
+
+| Control | Effect |
+| --- | --- |
 | Created Date From/To | Only include files created within this date range. |
 | Modified Date From/To | Only include files modified within this date range. |
 
-### Max Depth
+### Advanced Tab
 
 | Control | Effect |
 | --- | --- |
-| Max depth | Maximum subdirectory levels to recurse below the search root. 0 = unlimited. A value of 2 searches the root and up to two levels of child folders. This value is per-search and is not saved to settings. |
+| Max depth | Maximum subdirectory levels to recurse below the search root. Blank or 0 = unlimited. A value of 2 searches the root and up to two levels of child folders. This value is per-search and is not saved to settings. |
 
 ### CLI Command
 
@@ -943,7 +942,7 @@ Sort CLI output by file attributes. Useful for reviewing results in a specific o
 
 | Flag | Description |
 | --- | --- |
-| `--sort <key>` | Sort results by: `matches`, `date`, `size`, `name`, `path`. Default: unsorted (arrival order). |
+| `--sort <key>` | Sort results by: `matches`, `date`, `size`, `name`, `directory`, `path`. Default: unsorted (arrival order). |
 | `--sort-desc` | Sort in descending order. |
 | `--sort-asc` | Sort in ascending order (default). |
 

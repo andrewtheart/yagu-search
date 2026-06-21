@@ -105,7 +105,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         ObeyGitignore = _settings.ObeyGitignore;
         GitignoreTakesPrecedence = _settings.GitignoreTakesPrecedence;
         IncludeGlobs = _settings.IncludeGlobs;
-        ExcludeGlobs = _settings.ExcludeGlobs;
+        ExcludeGlobs = IsDefaultExcludeGlobs(_settings.ExcludeGlobs) ? string.Empty : _settings.ExcludeGlobs;
         IncludeFilterModeIndex = _settings.IncludeFilterModeIndex;
         ExcludeFilterModeIndex = _settings.ExcludeFilterModeIndex;
         DefaultMinFileSizeBytes = _settings.DefaultMinFileSizeBytes;
@@ -315,7 +315,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial bool ObeyGitignore { get; set; }
     [ObservableProperty] public partial bool GitignoreTakesPrecedence { get; set; } = true;
     [ObservableProperty] public partial string IncludeGlobs { get; set; } = string.Empty;
-    [ObservableProperty] public partial string ExcludeGlobs { get; set; } = AppSettings.DefaultExcludeGlobs;
+    [ObservableProperty] public partial string ExcludeGlobs { get; set; } = string.Empty;
     [ObservableProperty] public partial int IncludeFilterModeIndex { get; set; }
     [ObservableProperty] public partial int ExcludeFilterModeIndex { get; set; }
     [ObservableProperty] public partial long MinFileSizeBytes { get; set; }
@@ -344,11 +344,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public FilterPatternMode IncludeFilterMode => IncludeFilterModeIndex == 1 ? FilterPatternMode.Regex : FilterPatternMode.GlobPath;
     public FilterPatternMode ExcludeFilterMode => ExcludeFilterModeIndex == 1 ? FilterPatternMode.Regex : FilterPatternMode.GlobPath;
     public string IncludeFilterPlaceholder => IncludeFilterMode == FilterPatternMode.Regex
-        ? @"e.g. \.(cs|xaml)$"
-        : "e.g. ts,js,py or *.cs";
+        ? @"e.g. \.(cs|xaml)$…"
+        : "e.g. ts,js,py or *.cs…";
     public string ExcludeFilterPlaceholder => ExcludeFilterMode == FilterPatternMode.Regex
-        ? @"e.g. (^|/)node_modules/|\.min\.js$"
-        : $"e.g. {AppSettings.DefaultExcludeGlobs}";
+        ? @"e.g. (^|/)node_modules/|\.min\.js$…"
+        : $"e.g. {AppSettings.DefaultExcludeGlobs}…";
+
+    // An empty exclude box means "use the default excludes" (Glob mode only). The box is left
+    // empty so it shows greyed placeholder example text, matching the include box.
+    private string EffectiveExcludeGlobsText =>
+        string.IsNullOrWhiteSpace(ExcludeGlobs) && ExcludeFilterMode == FilterPatternMode.GlobPath
+            ? AppSettings.DefaultExcludeGlobs
+            : ExcludeGlobs;
     public string GroupModeLabel => GroupMode switch
     {
         GroupMode.None => "None",
@@ -1471,7 +1478,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 ContextLines = ContextLines,
                 SearchMode = (SearchMode)SearchModeIndex,
                 IncludeGlobs = SplitFilterPatterns(IncludeGlobs, IncludeFilterMode),
-                ExcludeGlobs = SplitFilterPatterns(ExcludeGlobs, ExcludeFilterMode),
+                ExcludeGlobs = SplitFilterPatterns(EffectiveExcludeGlobsText, ExcludeFilterMode),
                 IncludeFilterMode = IncludeFilterMode,
                 ExcludeFilterMode = ExcludeFilterMode,
                 MinFileSizeBytes = effectiveMinFileSizeBytes,
@@ -2772,7 +2779,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         _resultCollection.FileNameFilter = FileNameFilter;
         _resultCollection.IncludeGlobs = IncludeGlobs;
-        _resultCollection.ExcludeGlobs = ExcludeGlobs;
+        _resultCollection.ExcludeGlobs = EffectiveExcludeGlobsText;
         _resultCollection.IncludeFilterMode = IncludeFilterMode;
         _resultCollection.ExcludeFilterMode = ExcludeFilterMode;
         _resultCollection.SortModeIndex = SortModeIndex;

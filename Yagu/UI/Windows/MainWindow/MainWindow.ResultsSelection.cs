@@ -119,28 +119,41 @@ public sealed partial class MainWindow
             $"EnsureVisible START: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
             $"Count={group.Count}, VisibleCount={group.VisibleResults.Count}, HasMore={group.HasMore}, IsExpanded={group.IsExpanded}");
 
-        if (group.VisibleResults.Count == 0 && group.Count > 0)
-        {
-            await ShowMoreVisibleResultsIncrementalAsync(group, FileGroup.PageSize).ConfigureAwait(true);
+        // OOM safety net: under critical memory pressure, materializing more rows
+        // into the XAML tree can trigger a non-recoverable failfast. Pause and
+        // surface a message instead of crashing.
+        if (!TryEnsureResultsMemoryHeadroom("expanding file group", group))
+            return;
 
-            // Dump sample items to diagnose render issue
-            int sampleCount = Math.Min(10, group.VisibleResults.Count);
-            for (int i = 0; i < sampleCount; i++)
+        try
+        {
+            if (group.VisibleResults.Count == 0 && group.Count > 0)
             {
-                var r = group.VisibleResults[i];
+                await ShowMoreVisibleResultsIncrementalAsync(group, FileGroup.PageSize).ConfigureAwait(true);
+
+                // Dump sample items to diagnose render issue
+                int sampleCount = Math.Min(10, group.VisibleResults.Count);
+                for (int i = 0; i < sampleCount; i++)
+                {
+                    var r = group.VisibleResults[i];
+                    LogService.Instance.Info("FileGroup",
+                        $"EnsureVisible SAMPLE[{i}]: line={r.LineNumber}, IsEvicted={r.IsEvicted}, " +
+                        $"MatchLine.Length={r.MatchLine.Length}, DiskOffset={r.DiskOffset}, " +
+                        $"MatchLine='{(r.MatchLine.Length > 60 ? r.MatchLine[..60] : r.MatchLine)}'");
+                }
+
                 LogService.Instance.Info("FileGroup",
-                    $"EnsureVisible SAMPLE[{i}]: line={r.LineNumber}, IsEvicted={r.IsEvicted}, " +
-                    $"MatchLine.Length={r.MatchLine.Length}, DiskOffset={r.DiskOffset}, " +
-                    $"MatchLine='{(r.MatchLine.Length > 60 ? r.MatchLine[..60] : r.MatchLine)}'");
+                    $"EnsureVisible AFTER ShowMore: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+                    $"Count={group.Count}, VisibleCount={group.VisibleResults.Count}, HasMore={group.HasMore}");
+                return;
             }
 
-            LogService.Instance.Info("FileGroup",
-                $"EnsureVisible AFTER ShowMore: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
-                $"Count={group.Count}, VisibleCount={group.VisibleResults.Count}, HasMore={group.HasMore}");
-            return;
+            await HydrateVisibleResultsAsync(group).ConfigureAwait(true);
         }
-
-        await HydrateVisibleResultsAsync(group).ConfigureAwait(true);
+        catch (OutOfMemoryException ex)
+        {
+            HandleResultsOutOfMemory("expanding file group", group, ex);
+        }
     }
 
     private async Task EnsureVisibleResultsForExpandedGroupSerializedAsync(FileGroup group, string caller)

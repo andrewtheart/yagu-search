@@ -36,12 +36,21 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("Click=\"OnSendGeneratedCliCommandToTerminalClick\"", xaml);
         Assert.Contains("ToolTipService.ToolTip=\"Send command to terminal\"", xaml);
         Assert.Contains("Click=\"OnCloseGeneratedCliCommandOverlayClick\"", xaml);
+        Assert.Contains("x:Name=\"AdvancedOptionsTabList\"", xaml);
+        Assert.Contains("SelectionChanged=\"OnAdvancedOptionsTabSelectionChanged\"", xaml);
+        Assert.Contains("x:Name=\"AdvancedOptionsSearchTabContent\"", xaml);
+        Assert.Contains("x:Name=\"AdvancedOptionsFiltersTabContent\"", xaml);
+        Assert.Contains("x:Name=\"AdvancedOptionsSizeTabContent\"", xaml);
+        Assert.Contains("x:Name=\"AdvancedOptionsDatesTabContent\"", xaml);
+        Assert.Contains("x:Name=\"AdvancedOptionsAdvancedTabContent\"", xaml);
+        Assert.Contains("Click=\"OnAdvancedOptionsResetClick\"", xaml);
+        Assert.Contains("Click=\"OnAdvancedOptionsApplyClick\"", xaml);
         int buttonIndex = xaml.IndexOf("x:Name=\"GenerateCliCommandButton\"", StringComparison.Ordinal);
-        int controlStackIndex = xaml.IndexOf("<StackPanel Spacing=\"10\">", buttonIndex, StringComparison.Ordinal);
-        int searchBehaviorIndex = xaml.IndexOf("<!-- Search behavior -->", StringComparison.Ordinal);
+        int tabListIndex = xaml.IndexOf("x:Name=\"AdvancedOptionsTabList\"", StringComparison.Ordinal);
+        int searchTabIndex = xaml.IndexOf("x:Name=\"AdvancedOptionsSearchTabContent\"", StringComparison.Ordinal);
 
-        Assert.True(buttonIndex < searchBehaviorIndex, "The Generate CLI command button should stay at the top-right of Advanced Options.");
-        Assert.True(buttonIndex < controlStackIndex && controlStackIndex < searchBehaviorIndex, "The Generate CLI command button should float outside the Advanced Options control stack.");
+        Assert.True(buttonIndex > tabListIndex, "The Generate CLI command button should be in the footer below Advanced Options tabs.");
+        Assert.True(tabListIndex < searchTabIndex, "The tab rail should render before the selected Advanced Options tab content.");
         Assert.True(
             xaml.IndexOf("x:Name=\"GeneratedCliCommandOverlay\"", StringComparison.Ordinal) > xaml.IndexOf("<!-- Bottom status bar -->", StringComparison.Ordinal),
             "The generated CLI command should render in a root-level overlay, not inside Advanced Options.");

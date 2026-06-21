@@ -74,9 +74,9 @@
   <Target Name="ConvertHelpMdToHtml"
           BeforeTargets="BeforeBuild"
           Condition="'$(DesignTimeBuild)' != 'true'"
-          Inputs="$(MSBuildThisFileDirectory)..\HELP.md"
+          Inputs="$(MSBuildThisFileDirectory)..\HELP.md;$(MSBuildThisFileDirectory)help-style.html"
           Outputs="$(MSBuildThisFileDirectory)HELP.html">
-    <Exec Command="pandoc &quot;$(MSBuildThisFileDirectory)..\HELP.md&quot; -s --metadata title=&quot;Yagu Help&quot; -o &quot;$(MSBuildThisFileDirectory)HELP.html&quot;"
+    <Exec Command="pandoc &quot;$(MSBuildThisFileDirectory)..\HELP.md&quot; -s --metadata pagetitle=&quot;Yagu Help&quot; --include-in-header=&quot;$(MSBuildThisFileDirectory)help-style.html&quot; -o &quot;$(MSBuildThisFileDirectory)HELP.html&quot;"
           IgnoreExitCode="true"
           ContinueOnError="WarnAndContinue" />
   </Target>

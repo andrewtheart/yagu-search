@@ -10,7 +10,7 @@ internal enum SessionFileDiscoveryBackend
     EsExe,
 }
 
-internal sealed record SessionFileCandidate(string Path, long? SizeBytes, DateTimeOffset? ModifiedUtc);
+internal sealed record SessionFileCandidate(string Path, long? SizeBytes, DateTimeOffset? ModifiedUtc, DateTimeOffset? CreatedUtc);
 
 internal sealed record SessionFileDiscoveryResult(
     bool FastSearchAvailable,
@@ -140,8 +140,9 @@ internal sealed class SessionFileDiscoveryService
                         DateTimeOffset? modifiedUtc = _sdkOps.GetResultDateModified(i, out long modifiedFileTime) && modifiedFileTime > 0
                             ? new DateTimeOffset(DateTime.FromFileTimeUtc(modifiedFileTime))
                             : null;
+                        DateTimeOffset? createdUtc = GetCreatedUtc(path);
 
-                        candidates.Add(new SessionFileCandidate(path, sizeBytes, modifiedUtc));
+                        candidates.Add(new SessionFileCandidate(path, sizeBytes, modifiedUtc, createdUtc));
                     }
 
                     offset += count;
@@ -223,6 +224,7 @@ internal sealed class SessionFileDiscoveryService
     {
         long? sizeBytes = null;
         DateTimeOffset? modifiedUtc = null;
+        DateTimeOffset? createdUtc = null;
         try
         {
             var info = new FileInfo(path);
@@ -230,13 +232,26 @@ internal sealed class SessionFileDiscoveryService
             {
                 sizeBytes = info.Length;
                 modifiedUtc = new DateTimeOffset(info.LastWriteTimeUtc);
+                createdUtc = new DateTimeOffset(info.CreationTimeUtc);
             }
         }
         catch
         {
         }
 
-        return new SessionFileCandidate(path, sizeBytes, modifiedUtc);
+        return new SessionFileCandidate(path, sizeBytes, modifiedUtc, createdUtc);
+    }
+
+    private static DateTimeOffset? GetCreatedUtc(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            if (info.Exists)
+                return new DateTimeOffset(info.CreationTimeUtc);
+        }
+        catch { }
+        return null;
     }
 
     private static SessionFileCandidate[] NormalizeCandidates(IEnumerable<SessionFileCandidate> candidates)

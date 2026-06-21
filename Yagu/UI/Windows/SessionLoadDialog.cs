@@ -1,6 +1,7 @@
 using System.Globalization;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Yagu.Services;
 
@@ -112,45 +113,86 @@ internal static class SessionLoadDialog
 
         FrameworkElement body = sessions.Count == 0
             ? BuildEmptyState()
-            : BuildSessionList(sessions, loadPath);
+            : BuildSessionTable(sessions, loadPath);
         Grid.SetRow(body, 1);
         root.Children.Add(body);
 
         return root;
     }
 
-    private static ListView BuildSessionList(IReadOnlyList<SessionFileCandidate> sessions, Action<string> loadPath)
+    private enum SortColumn { Name, Directory, Size, Created }
+
+    private static FrameworkElement BuildSessionTable(IReadOnlyList<SessionFileCandidate> sessions, Action<string> loadPath)
     {
+        var sortedSessions = sessions.OrderByDescending(s => s.CreatedUtc ?? DateTimeOffset.MinValue).ToList();
+        var currentSort = SortColumn.Created;
+        var currentAscending = false;
+
+        var container = new Grid();
+        container.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        container.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+        // Column header
+        var headerGrid = new Grid { Padding = new Thickness(10, 6, 10, 6) };
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(200) }); // Name
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // Directory
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) }); // Size
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(140) }); // Created
+
+        TextBlock nameHeader = CreateSortableHeader("Name", SortColumn.Name);
+        TextBlock dirHeader = CreateSortableHeader("Directory", SortColumn.Directory);
+        TextBlock sizeHeader = CreateSortableHeader("Size", SortColumn.Size);
+        TextBlock createdHeader = CreateSortableHeader("Created \u25BC", SortColumn.Created);
+
+        Grid.SetColumn(nameHeader, 0);
+        Grid.SetColumn(dirHeader, 1);
+        Grid.SetColumn(sizeHeader, 2);
+        Grid.SetColumn(createdHeader, 3);
+        headerGrid.Children.Add(nameHeader);
+        headerGrid.Children.Add(dirHeader);
+        headerGrid.Children.Add(sizeHeader);
+        headerGrid.Children.Add(createdHeader);
+
+        Grid.SetRow(headerGrid, 0);
+        container.Children.Add(headerGrid);
+
+        // List
         var list = new ListView
         {
             SelectionMode = ListViewSelectionMode.Single,
             IsItemClickEnabled = true,
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
-            MinHeight = 300,
-            MaxHeight = 440,
+            MinHeight = 240,
+            MaxHeight = 400,
         };
 
-        foreach (var session in sessions)
+        void RebuildList()
         {
-            var item = new ListViewItem
+            list.Items.Clear();
+            foreach (var session in sortedSessions)
             {
-                Tag = session,
-                Content = BuildSessionRow(session),
-                HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                Padding = new Thickness(10, 8, 10, 8),
-            };
-            item.Tapped += (_, _) => loadPath(session.Path);
-            item.DoubleTapped += (_, _) => loadPath(session.Path);
-            item.KeyDown += (_, args) =>
-            {
-                if (args.Key == Windows.System.VirtualKey.Enter)
+                var item = new ListViewItem
                 {
-                    args.Handled = true;
-                    loadPath(session.Path);
-                }
-            };
-            list.Items.Add(item);
+                    Tag = session,
+                    Content = BuildTableRow(session),
+                    HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                    Padding = new Thickness(10, 6, 10, 6),
+                };
+                item.Tapped += (_, _) => loadPath(session.Path);
+                item.DoubleTapped += (_, _) => loadPath(session.Path);
+                item.KeyDown += (_, args) =>
+                {
+                    if (args.Key == Windows.System.VirtualKey.Enter)
+                    {
+                        args.Handled = true;
+                        loadPath(session.Path);
+                    }
+                };
+                list.Items.Add(item);
+            }
         }
+
+        RebuildList();
 
         list.ItemClick += (_, args) =>
         {
@@ -161,7 +203,6 @@ internal static class SessionLoadDialog
         {
             if (args.Key != Windows.System.VirtualKey.Enter)
                 return;
-
             if (list.SelectedItem is ListViewItem { Tag: SessionFileCandidate session })
             {
                 args.Handled = true;
@@ -169,7 +210,124 @@ internal static class SessionLoadDialog
             }
         };
 
-        return list;
+        void SortBy(SortColumn column)
+        {
+            if (currentSort == column)
+                currentAscending = !currentAscending;
+            else
+            {
+                currentSort = column;
+                currentAscending = column is SortColumn.Name or SortColumn.Directory;
+            }
+
+            sortedSessions = currentSort switch
+            {
+                SortColumn.Name => currentAscending
+                    ? sortedSessions.OrderBy(s => System.IO.Path.GetFileName(s.Path), StringComparer.OrdinalIgnoreCase).ToList()
+                    : sortedSessions.OrderByDescending(s => System.IO.Path.GetFileName(s.Path), StringComparer.OrdinalIgnoreCase).ToList(),
+                SortColumn.Directory => currentAscending
+                    ? sortedSessions.OrderBy(s => System.IO.Path.GetDirectoryName(s.Path) ?? "", StringComparer.OrdinalIgnoreCase).ToList()
+                    : sortedSessions.OrderByDescending(s => System.IO.Path.GetDirectoryName(s.Path) ?? "", StringComparer.OrdinalIgnoreCase).ToList(),
+                SortColumn.Size => currentAscending
+                    ? sortedSessions.OrderBy(s => s.SizeBytes ?? 0).ToList()
+                    : sortedSessions.OrderByDescending(s => s.SizeBytes ?? 0).ToList(),
+                SortColumn.Created => currentAscending
+                    ? sortedSessions.OrderBy(s => s.CreatedUtc ?? DateTimeOffset.MinValue).ToList()
+                    : sortedSessions.OrderByDescending(s => s.CreatedUtc ?? DateTimeOffset.MinValue).ToList(),
+                _ => sortedSessions,
+            };
+
+            string arrow = currentAscending ? " \u25B2" : " \u25BC";
+            nameHeader.Text = "Name" + (currentSort == SortColumn.Name ? arrow : "");
+            dirHeader.Text = "Directory" + (currentSort == SortColumn.Directory ? arrow : "");
+            sizeHeader.Text = "Size" + (currentSort == SortColumn.Size ? arrow : "");
+            createdHeader.Text = "Created" + (currentSort == SortColumn.Created ? arrow : "");
+
+            RebuildList();
+        }
+
+        nameHeader.Tapped += (_, _) => SortBy(SortColumn.Name);
+        dirHeader.Tapped += (_, _) => SortBy(SortColumn.Directory);
+        sizeHeader.Tapped += (_, _) => SortBy(SortColumn.Size);
+        createdHeader.Tapped += (_, _) => SortBy(SortColumn.Created);
+
+        Grid.SetRow(list, 1);
+        container.Children.Add(list);
+
+        return container;
+    }
+
+    private static TextBlock CreateSortableHeader(string text, SortColumn _)
+    {
+        return new TextBlock
+        {
+            Text = text,
+            FontSize = 12,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Opacity = 0.8,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsTextSelectionEnabled = false,
+        };
+    }
+
+    private static Grid BuildTableRow(SessionFileCandidate session)
+    {
+        var row = new Grid { ColumnSpacing = 8 };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(200) }); // Name
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // Directory
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) }); // Size
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(140) }); // Created
+
+        string fileName = System.IO.Path.GetFileName(session.Path);
+        string directory = System.IO.Path.GetDirectoryName(session.Path) ?? "";
+
+        var nameBlock = new TextBlock
+        {
+            Text = fileName,
+            FontSize = 13,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTipService.SetToolTip(nameBlock, fileName);
+        Grid.SetColumn(nameBlock, 0);
+        row.Children.Add(nameBlock);
+
+        var dirBlock = new TextBlock
+        {
+            Text = directory,
+            FontSize = 12,
+            Opacity = 0.7,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTipService.SetToolTip(dirBlock, directory);
+        Grid.SetColumn(dirBlock, 1);
+        row.Children.Add(dirBlock);
+
+        var sizeBlock = new TextBlock
+        {
+            Text = session.SizeBytes.HasValue ? FormatByteSize(session.SizeBytes.Value) : "—",
+            FontSize = 12,
+            Opacity = 0.7,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(sizeBlock, 2);
+        row.Children.Add(sizeBlock);
+
+        var createdBlock = new TextBlock
+        {
+            Text = session.CreatedUtc.HasValue
+                ? session.CreatedUtc.Value.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)
+                : "—",
+            FontSize = 12,
+            Opacity = 0.7,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(createdBlock, 3);
+        row.Children.Add(createdBlock);
+
+        return row;
     }
 
     private static bool TryGetSessionCandidate(object? value, out SessionFileCandidate session)
@@ -224,82 +382,6 @@ internal static class SessionLoadDialog
         };
 
         return border;
-    }
-
-    private static Grid BuildSessionRow(SessionFileCandidate session)
-    {
-        var row = new Grid
-        {
-            ColumnSpacing = 12,
-            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0, 0, 0, 0)),
-        };
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-        var icon = new FontIcon
-        {
-            Glyph = "\uE8A5",
-            FontSize = 18,
-            Width = 24,
-            VerticalAlignment = VerticalAlignment.Center,
-            Opacity = 0.78,
-        };
-        Grid.SetColumn(icon, 0);
-        row.Children.Add(icon);
-
-        var textStack = new StackPanel
-        {
-            Spacing = 2,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        textStack.Children.Add(new TextBlock
-        {
-            Text = GetDisplayName(session.Path),
-            FontSize = 14,
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-        });
-        textStack.Children.Add(new TextBlock
-        {
-            Text = session.Path,
-            FontSize = 12,
-            Opacity = 0.66,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-        });
-        Grid.SetColumn(textStack, 1);
-        row.Children.Add(textStack);
-
-        var metadata = new TextBlock
-        {
-            Text = FormatMetadata(session),
-            FontSize = 12,
-            Opacity = 0.62,
-            VerticalAlignment = VerticalAlignment.Center,
-            TextAlignment = Microsoft.UI.Xaml.TextAlignment.Right,
-            MinWidth = 120,
-        };
-        Grid.SetColumn(metadata, 2);
-        row.Children.Add(metadata);
-
-        return row;
-    }
-
-    private static string GetDisplayName(string path)
-    {
-        string fileName = System.IO.Path.GetFileName(path);
-        return string.IsNullOrWhiteSpace(fileName) ? path : fileName;
-    }
-
-    private static string FormatMetadata(SessionFileCandidate session)
-    {
-        var parts = new List<string>(2);
-        if (session.ModifiedUtc is DateTimeOffset modified)
-            parts.Add(modified.ToLocalTime().ToString("g", CultureInfo.CurrentCulture));
-        if (session.SizeBytes is long sizeBytes)
-            parts.Add(FormatByteSize(sizeBytes));
-
-        return string.Join(Environment.NewLine, parts);
     }
 
     private static string FormatByteSize(long bytes)

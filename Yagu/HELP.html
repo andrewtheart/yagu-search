@@ -235,12 +235,31 @@
     code span.vs { color: #4070a0; } /* VerbatimString */
     code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
   </style>
+  <style>
+    /* Softer, smooth-edged UI font for the generated help document. */
+    body {
+      font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system,
+                   "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: optimizeLegibility;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      font-family: "Segoe UI Variable Display", "Segoe UI Semibold", "Segoe UI",
+                   system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    /* Centered top-level help title. */
+    h1[align="center"] {
+      text-align: center;
+    }
+  </style>
 </head>
 <body>
-<header id="title-block-header">
-<h1 class="title">Yagu Help</h1>
-</header>
-<h1 id="yagu-help-guide">Yagu Help Guide</h1>
+<h1 align="center">
+Yagu Help Guide
+</h1>
 <p>Yagu is a fast Windows search app for finding text, regex matches, or
 file names across large folder trees. The name stands for “Yet Another
 Grep Utility”. It is built for repeated code, log, and source-tree
@@ -420,9 +439,15 @@ classes.</p>
 <hr />
 <h2 id="advanced-options">Advanced Options</h2>
 <p>Click the <strong>Advanced Options</strong> expander below the search
-bar to reveal additional controls. These are per-session and reset to
-defaults on next launch (defaults can be configured in Settings).</p>
-<h3 id="search-behavior">Search Behavior</h3>
+bar to reveal a tabbed panel. The left tabs group controls into
+<strong>Search</strong>, <strong>Filters</strong>,
+<strong>Size</strong>, <strong>Dates</strong>, and
+<strong>Advanced</strong>. Advanced Options are per-session and reset to
+defaults on next launch (defaults can be configured in Settings).
+Changes apply immediately; <strong>Apply</strong> closes the panel, and
+<strong>Reset</strong> restores the controls to the current settings
+defaults.</p>
+<h3 id="search-tab">Search Tab</h3>
 <table>
 <colgroup>
 <col style="width: 50%" />
@@ -440,30 +465,6 @@ defaults on next launch (defaults can be configured in Settings).</p>
 <td>Chooses what the query matches (see Search Modes above).</td>
 </tr>
 <tr>
-<td>Obey .gitignore</td>
-<td>Reads <code>.gitignore</code> files in the tree and excludes
-matching paths. Has a performance cost on very large trees.</td>
-</tr>
-<tr>
-<td>Gitignore takes precedence</td>
-<td>When enabled, gitignore rules override include filters.</td>
-</tr>
-</tbody>
-</table>
-<h3 id="path-filters">Path Filters</h3>
-<table>
-<colgroup>
-<col style="width: 50%" />
-<col style="width: 50%" />
-</colgroup>
-<thead>
-<tr>
-<th>Control</th>
-<th>Effect</th>
-</tr>
-</thead>
-<tbody>
-<tr>
 <td>Include filter</td>
 <td>Limits the search to files matching these patterns. Accepts comma-
 or semicolon-separated extensions, globs, or path segments. Switch the
@@ -477,7 +478,7 @@ Include.</td>
 </tr>
 </tbody>
 </table>
-<h3 id="file-type-filters">File Type Filters</h3>
+<h3 id="filters-tab">Filters Tab</h3>
 <table>
 <colgroup>
 <col style="width: 50%" />
@@ -490,6 +491,11 @@ Include.</td>
 </tr>
 </thead>
 <tbody>
+<tr>
+<td>Obey .gitignore</td>
+<td>Reads <code>.gitignore</code> files in the tree and excludes
+matching paths. Has a performance cost on very large trees.</td>
+</tr>
 <tr>
 <td>Skip Extensions</td>
 <td>A dropdown list of file extensions to skip entirely. Files with
@@ -513,8 +519,7 @@ treated as ZIP containers.</td>
 </tr>
 </tbody>
 </table>
-<h3 id="property-filters-size-and-date">Property Filters (Size and
-Date)</h3>
+<h3 id="size-tab">Size Tab</h3>
 <table>
 <colgroup>
 <col style="width: 50%" />
@@ -529,14 +534,29 @@ Date)</h3>
 <tbody>
 <tr>
 <td>Min MB</td>
-<td>Only include files at least this many megabytes. 0 = no lower
+<td>Only include files at least this many megabytes. Blank = no lower
 limit.</td>
 </tr>
 <tr>
 <td>Max MB</td>
-<td>Only include files at most this many megabytes. 0 = no upper
+<td>Only include files at most this many megabytes. Blank = no upper
 limit.</td>
 </tr>
+</tbody>
+</table>
+<h3 id="dates-tab">Dates Tab</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Control</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
 <tr>
 <td>Created Date From/To</td>
 <td>Only include files created within this date range.</td>
@@ -547,7 +567,7 @@ limit.</td>
 </tr>
 </tbody>
 </table>
-<h3 id="max-depth">Max Depth</h3>
+<h3 id="advanced-tab">Advanced Tab</h3>
 <table>
 <colgroup>
 <col style="width: 50%" />
@@ -562,9 +582,10 @@ limit.</td>
 <tbody>
 <tr>
 <td>Max depth</td>
-<td>Maximum subdirectory levels to recurse below the search root. 0 =
-unlimited. A value of 2 searches the root and up to two levels of child
-folders. This value is per-search and is not saved to settings.</td>
+<td>Maximum subdirectory levels to recurse below the search root. Blank
+or 0 = unlimited. A value of 2 searches the root and up to two levels of
+child folders. This value is per-search and is not saved to
+settings.</td>
 </tr>
 </tbody>
 </table>
@@ -2714,8 +2735,8 @@ specific order or combining with <code>--export</code>.</p>
 <tr>
 <td><code>--sort &lt;key&gt;</code></td>
 <td>Sort results by: <code>matches</code>, <code>date</code>,
-<code>size</code>, <code>name</code>, <code>path</code>. Default:
-unsorted (arrival order).</td>
+<code>size</code>, <code>name</code>, <code>directory</code>,
+<code>path</code>. Default: unsorted (arrival order).</td>
 </tr>
 <tr>
 <td><code>--sort-desc</code></td>

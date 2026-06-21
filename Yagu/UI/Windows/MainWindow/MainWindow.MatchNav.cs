@@ -2990,6 +2990,7 @@ public sealed partial class MainWindow
         _activeSectionNav = sn;
         HighlightActiveExpander();
         UpdateSectionNavOverlay();
+        SyncGlobalIndexFromSection(sn);
         var (para, matchInPara) = sn.Matches[sn.CurrentIndex];
         BoxMatchRun(para, matchInPara);
         ScrollAfterMatchNavigation(sn.Block, para, justMaterialized: expandedOverflow, sameParagraph: !expandedOverflow && !wrappedToStart && ReferenceEquals(previousPara, para));
@@ -3004,9 +3005,32 @@ public sealed partial class MainWindow
         _activeSectionNav = sn;
         HighlightActiveExpander();
         UpdateSectionNavOverlay();
+        SyncGlobalIndexFromSection(sn);
         var (para, matchInPara) = sn.Matches[sn.CurrentIndex];
         BoxMatchRun(para, matchInPara);
         ScrollAfterMatchNavigation(sn.Block, para, justMaterialized: false, sameParagraph: !wrappedToEnd && ReferenceEquals(previousPara, para));
+    }
+
+    /// <summary>
+    /// After a section-level navigation, update the global _currentMatchIndex
+    /// so the top-bar "Occurrence X/N" stays in sync with the per-file counter.
+    /// </summary>
+    private void SyncGlobalIndexFromSection(SectionMatchNav sn)
+    {
+        if (sn.CurrentIndex < 0 || sn.CurrentIndex >= sn.Matches.Count) return;
+        var (para, matchInPara) = sn.Matches[sn.CurrentIndex];
+        for (int i = 0; i < _matchParagraphs.Count; i++)
+        {
+            var entry = _matchParagraphs[i];
+            if (ReferenceEquals(entry.block, sn.Block)
+                && ReferenceEquals(entry.para, para)
+                && entry.matchInPara == matchInPara)
+            {
+                _currentMatchIndex = i;
+                MatchNavLabel.Text = FormatMatchNavLabel(i);
+                return;
+            }
+        }
     }
 
     private void ScrollAfterMatchNavigation(RichTextBlock block, Paragraph para, bool justMaterialized, bool sameParagraph)

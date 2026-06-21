@@ -87,9 +87,7 @@ public sealed partial class MainWindow
     private void OnFilterBoxTextChanged(object sender, TextChangedEventArgs e)
     {
         if (sender is TextBox tb)
-            tb.FontStyle = string.IsNullOrEmpty(tb.Text) || IsFilterExampleText(tb)
-                ? Windows.UI.Text.FontStyle.Italic
-                : Windows.UI.Text.FontStyle.Normal;
+            tb.FontStyle = Windows.UI.Text.FontStyle.Normal;
     }
 
     private void OnFilterBoxGotFocus(object sender, RoutedEventArgs e)
@@ -122,8 +120,7 @@ public sealed partial class MainWindow
         if (ReferenceEquals(textBox, IncludeFilterBox))
             return string.Equals(text, ViewModel.IncludeFilterPlaceholder, StringComparison.OrdinalIgnoreCase);
 
-        return string.Equals(text, ViewModel.ExcludeFilterPlaceholder, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(text, AppSettings.DefaultExcludeGlobs, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(text, ViewModel.ExcludeFilterPlaceholder, StringComparison.OrdinalIgnoreCase);
     }
 
     private async void OnSearchCancelClick(object sender, RoutedEventArgs e)
