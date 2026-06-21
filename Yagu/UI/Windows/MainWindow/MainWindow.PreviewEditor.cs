@@ -555,6 +555,7 @@ public sealed partial class MainWindow
             _previewEditorPath = result.FilePath;
             _previewEditorEncoding = document.Encoding;
             ResetPreviewEditorChunkState(clearUi: false);
+            ApplyPreviewEditorSyntaxHighlighting(result.FilePath);
 
             // Archive entries are read-only (cannot save back into zip)
             bool isArchive = ZipArchiveSearcher.IsArchivePath(result.FilePath);
@@ -690,6 +691,8 @@ public sealed partial class MainWindow
         _previewEditorChunked = true;
         _previewEditorLoadedByteLength = chunk.NextByteOffset;
         _previewEditorTotalByteLength = chunk.TotalByteLength;
+
+        ApplyPreviewEditorSyntaxHighlighting(result.FilePath);
 
         PreviewEditor.IsReadOnly = false;
         _previewEditorForcedWrap = false;
@@ -1465,6 +1468,74 @@ public sealed partial class MainWindow
             LogService.Instance.Warning("PreviewEditor", $"ApplyPreviewEditorFontSettings failed: {ex.GetType().Name}: {ex.Message}");
         }
     }
+
+    /// <summary>
+    /// Selects a syntax-highlighting language for the built-in editor based on the
+    /// file name/extension. Disables highlighting when the user has turned the
+    /// feature off or when no matching language is found.
+    /// </summary>
+    private void ApplyPreviewEditorSyntaxHighlighting(string? filePath)
+    {
+        try
+        {
+            if (!ViewModel.EditorSyntaxHighlightingEnabled)
+            {
+                PreviewEditor.EnableSyntaxHighlighting = false;
+                PreviewEditor.SyntaxHighlighting = null;
+                return;
+            }
+
+            var language = EditorSyntaxHighlightingResolver.ResolveFromFileName(filePath);
+            if (language is null)
+            {
+                PreviewEditor.EnableSyntaxHighlighting = false;
+                PreviewEditor.SyntaxHighlighting = null;
+                return;
+            }
+
+            var languageId = MapToSyntaxHighlightId(language.Value);
+            PreviewEditor.EnableSyntaxHighlighting = true;
+            PreviewEditor.SelectSyntaxHighlightingById(languageId);
+
+            if (LogService.Instance.IsVerboseEnabled)
+            {
+                LogService.Instance.Verbose("PreviewEditor",
+                    $"ApplyPreviewEditorSyntaxHighlighting: file='{System.IO.Path.GetFileName(filePath)}', language={languageId}");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("PreviewEditor", $"ApplyPreviewEditorSyntaxHighlighting failed: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private static TextControlBoxNS.SyntaxHighlightID MapToSyntaxHighlightId(EditorSyntaxLanguage language) => language switch
+    {
+        EditorSyntaxLanguage.Batch => TextControlBoxNS.SyntaxHighlightID.Batch,
+        EditorSyntaxLanguage.Cpp => TextControlBoxNS.SyntaxHighlightID.Cpp,
+        EditorSyntaxLanguage.CSharp => TextControlBoxNS.SyntaxHighlightID.CSharp,
+        EditorSyntaxLanguage.Inifile => TextControlBoxNS.SyntaxHighlightID.Inifile,
+        EditorSyntaxLanguage.Toml => TextControlBoxNS.SyntaxHighlightID.TOML,
+        EditorSyntaxLanguage.CSS => TextControlBoxNS.SyntaxHighlightID.CSS,
+        EditorSyntaxLanguage.CSVImproved => TextControlBoxNS.SyntaxHighlightID.CSVImproved,
+        EditorSyntaxLanguage.GCode => TextControlBoxNS.SyntaxHighlightID.GCode,
+        EditorSyntaxLanguage.Gitignore => TextControlBoxNS.SyntaxHighlightID.Gitignore,
+        EditorSyntaxLanguage.HexFile => TextControlBoxNS.SyntaxHighlightID.HexFile,
+        EditorSyntaxLanguage.Html => TextControlBoxNS.SyntaxHighlightID.Html,
+        EditorSyntaxLanguage.Java => TextControlBoxNS.SyntaxHighlightID.Java,
+        EditorSyntaxLanguage.Javascript => TextControlBoxNS.SyntaxHighlightID.Javascript,
+        EditorSyntaxLanguage.Json => TextControlBoxNS.SyntaxHighlightID.Json,
+        EditorSyntaxLanguage.Latex => TextControlBoxNS.SyntaxHighlightID.Latex,
+        EditorSyntaxLanguage.Lua => TextControlBoxNS.SyntaxHighlightID.Lua,
+        EditorSyntaxLanguage.Markdown => TextControlBoxNS.SyntaxHighlightID.Markdown,
+        EditorSyntaxLanguage.PHP => TextControlBoxNS.SyntaxHighlightID.PHP,
+        EditorSyntaxLanguage.Python => TextControlBoxNS.SyntaxHighlightID.Python,
+        EditorSyntaxLanguage.QSharp => TextControlBoxNS.SyntaxHighlightID.QSharp,
+        EditorSyntaxLanguage.XML => TextControlBoxNS.SyntaxHighlightID.XML,
+        EditorSyntaxLanguage.SQL => TextControlBoxNS.SyntaxHighlightID.SQL,
+        EditorSyntaxLanguage.X86Assembly => TextControlBoxNS.SyntaxHighlightID.x86Assembly,
+        _ => TextControlBoxNS.SyntaxHighlightID.None,
+    };
 
     private void UpdatePreviewEditorChunkUi()
     {

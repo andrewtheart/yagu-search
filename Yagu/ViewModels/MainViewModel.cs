@@ -262,6 +262,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         LimitParallelismOnHdd = _settings.LimitParallelismOnHdd;
         BackupBeforeSave = _settings.BackupBeforeSave;
         ShowEditorSavedOverlay = _settings.ShowEditorSavedOverlay;
+        EditorSyntaxHighlightingEnabled = _settings.EditorSyntaxHighlightingEnabled;
         WindowFocusBehavior = _settings.WindowFocusBehavior;
         StartInLauncherMode = _settings.StartInLauncherMode;
         CloseToTray = _settings.CloseToTray;
@@ -858,6 +859,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial bool LimitParallelismOnHdd { get; set; } = true;
     [ObservableProperty] public partial bool BackupBeforeSave { get; set; } = true;
     [ObservableProperty] public partial bool ShowEditorSavedOverlay { get; set; } = true;
+    [ObservableProperty] public partial bool EditorSyntaxHighlightingEnabled { get; set; } = true;
     [ObservableProperty] public partial int WindowFocusBehavior { get; set; } = 1; // 0 = MinimizeToTray, 1 = StayOpen (default), 2 = AlwaysOnTop
     [ObservableProperty] public partial bool StartInLauncherMode { get; set; } = true;
     [ObservableProperty] public partial bool CloseToTray { get; set; } = true;
@@ -3017,6 +3019,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.LimitParallelismOnHdd = LimitParallelismOnHdd;
         _settings.BackupBeforeSave = BackupBeforeSave;
         _settings.ShowEditorSavedOverlay = ShowEditorSavedOverlay;
+        _settings.EditorSyntaxHighlightingEnabled = EditorSyntaxHighlightingEnabled;
         _settings.WindowFocusBehavior = WindowFocusBehavior;
         _settings.StartInLauncherMode = StartInLauncherMode;
         _settings.CloseToTray = CloseToTray;

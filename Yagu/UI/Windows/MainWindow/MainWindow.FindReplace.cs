@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Windows.System;
 using Yagu.Services;
 
@@ -17,6 +18,17 @@ public sealed partial class MainWindow
     private int _previewEditorActiveFindSelectionVersion;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _previewEditorActiveFindSelectionRetryTimer;
 
+    private bool _findBarDragging;
+    private Windows.Foundation.Point _findBarDragStart;
+    private double _findBarTranslateStartX;
+    private double _findBarTranslateStartY;
+
+    // Opacity applied to the find modal surface when focus is inside vs. elsewhere.
+    private const double FindBarActiveOpacity = 1.0;
+    private const double FindBarInactiveSurfaceOpacity = 0.45;
+    private const double FindBarInactiveCloseOpacity = 0.85;
+    private bool _findBarFocusHandlersHooked;
+
     private void OnOpenFindReplaceBar(object sender, RoutedEventArgs e)
     {
         OpenFindBar(showReplace: true);
@@ -24,7 +36,18 @@ public sealed partial class MainWindow
 
     private void OpenFindBar(bool showReplace)
     {
+        // Reset the floating modal to its default anchored position so it is
+        // always fully visible when (re)opened, even after window resizes.
+        if (FindBarTranslate is not null)
+        {
+            FindBarTranslate.X = 0;
+            FindBarTranslate.Y = 0;
+        }
+
         FindBar.Visibility = Visibility.Visible;
+        HookFindBarFocusHandlers();
+        // Opaque on open; it only dims once focus moves outside the modal.
+        SetFindBarActive(true);
         bool inEditor = PreviewEditor.Visibility == Visibility.Visible;
         LogFindVerbose($"OpenFindBar: showReplace={showReplace}, {FindSurfaceDescription()}, selectedTextLength={(inEditor ? PreviewEditor.SelectedText.Length : 0)}");
         if (showReplace)
@@ -78,6 +101,105 @@ public sealed partial class MainWindow
         _previewEditorActiveFindSelectionVersion++;
         _previewEditorActiveFindSelectionRetryTimer?.Stop();
         _previewEditorActiveFindSelectionRetryTimer = null;
+    }
+
+    private void OnFindBarDragPointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is not UIElement handle)
+            return;
+
+        _findBarDragStart = e.GetCurrentPoint(PreviewContentHost).Position;
+        _findBarTranslateStartX = FindBarTranslate.X;
+        _findBarTranslateStartY = FindBarTranslate.Y;
+        _findBarDragging = handle.CapturePointer(e.Pointer);
+        e.Handled = true;
+    }
+
+    private void OnFindBarDragPointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_findBarDragging)
+            return;
+
+        var current = e.GetCurrentPoint(PreviewContentHost).Position;
+        double newX = _findBarTranslateStartX + (current.X - _findBarDragStart.X);
+        double newY = _findBarTranslateStartY + (current.Y - _findBarDragStart.Y);
+
+        // Keep the modal within the preview content bounds. The bar is anchored
+        // top-right with a 12/56px margin, so X grows negative as it moves left.
+        const double marginRight = 12;
+        const double marginTop = 56;
+        double hostWidth = PreviewContentHost.ActualWidth;
+        double hostHeight = PreviewContentHost.ActualHeight;
+        double barWidth = FindBar.ActualWidth;
+        double barHeight = FindBar.ActualHeight;
+
+        double minX = -Math.Max(0, hostWidth - barWidth - marginRight);
+        double maxX = marginRight;
+        double minY = -marginTop;
+        double maxY = Math.Max(minY, hostHeight - barHeight - marginTop);
+
+        FindBarTranslate.X = Math.Clamp(newX, Math.Min(minX, maxX), Math.Max(minX, maxX));
+        FindBarTranslate.Y = Math.Clamp(newY, Math.Min(minY, maxY), Math.Max(minY, maxY));
+        e.Handled = true;
+    }
+
+    private void OnFindBarDragPointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_findBarDragging)
+            return;
+
+        _findBarDragging = false;
+        if (sender is UIElement handle)
+            handle.ReleasePointerCapture(e.Pointer);
+        e.Handled = true;
+    }
+
+    // Subscribes (once) to focus changes so the modal can dim when focus moves
+    // out of it and become fully opaque again when focus returns.
+    private void HookFindBarFocusHandlers()
+    {
+        if (_findBarFocusHandlersHooked || FindBar is null)
+            return;
+
+        FindBar.GotFocus += OnFindBarGotFocus;
+        FindBar.LostFocus += OnFindBarLostFocus;
+        _findBarFocusHandlersHooked = true;
+    }
+
+    private void OnFindBarGotFocus(object sender, RoutedEventArgs e)
+    {
+        SetFindBarActive(true);
+    }
+
+    private void OnFindBarLostFocus(object sender, RoutedEventArgs e)
+    {
+        // The focused element updates after this event; re-check on the next tick.
+        DispatcherQueue.TryEnqueue(() => SetFindBarActive(IsFocusWithinFindBar()));
+    }
+
+    private bool IsFocusWithinFindBar()
+    {
+        if (FindBar is null || FindBar.XamlRoot is null)
+            return false;
+
+        if (FocusManager.GetFocusedElement(FindBar.XamlRoot) is not DependencyObject focused)
+            return false;
+
+        for (DependencyObject? node = focused; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (ReferenceEquals(node, FindBar))
+                return true;
+        }
+
+        return false;
+    }
+
+    private void SetFindBarActive(bool active)
+    {
+        if (FindBarSurface is not null)
+            FindBarSurface.Opacity = active ? FindBarActiveOpacity : FindBarInactiveSurfaceOpacity;
+        if (FindCloseButton is not null)
+            FindCloseButton.Opacity = active ? FindBarActiveOpacity : FindBarInactiveCloseOpacity;
     }
 
     private void OnFindReplaceToggle(object sender, RoutedEventArgs e)

@@ -1501,55 +1501,95 @@
                             <RowDefinition Height="*" />
                         </Grid.RowDefinitions>
 
-                        <!-- Find / Replace bar -->
-                        <Border x:Name="FindBar" Visibility="Collapsed" Grid.Row="0"
-                                Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
-                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                BorderThickness="0,0,0,1" Padding="8,6">
-                            <Grid HorizontalAlignment="Right">
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="4">
-                                    <TextBox x:Name="FindTextBox" PlaceholderText="Find…" Width="220" FontSize="12"
-                                             KeyDown="OnFindTextBoxKeyDown" TextChanged="OnFindTextBoxTextChanged"
-                                             IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" />
-                                    <Button Click="OnFindPrevious" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0">
-                                        <FontIcon Glyph="&#xE70E;" FontSize="12" />
-                                    </Button>
-                                    <Button Click="OnFindNext" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0">
-                                        <FontIcon Glyph="&#xE70D;" FontSize="12" />
-                                    </Button>
-                                    <CheckBox x:Name="FindMatchCaseCheckBox" Content="Aa" FontSize="11" MinWidth="0" Padding="4,0"
-                                              Unchecked="OnFindOptionChanged" Checked="OnFindOptionChanged" />
-                                    <ToggleButton x:Name="FindReplaceToggle" Click="OnFindReplaceToggle" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0">
-                                        <FontIcon Glyph="&#xE8AC;" FontSize="12" />
-                                    </ToggleButton>
-                                    <TextBlock x:Name="FindStatusText" VerticalAlignment="Center" FontSize="11" Opacity="0.6" Margin="4,0,0,0" />
-                                    <Button Click="OnCloseFindBar" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0">
-                                        <FontIcon Glyph="&#xE711;" FontSize="12" />
-                                    </Button>
-                                </StackPanel>
-                                <StackPanel x:Name="ReplaceRow" Grid.Row="1" Orientation="Horizontal" Spacing="4" Margin="0,4,0,0" Visibility="Collapsed">
-                                    <TextBox x:Name="ReplaceTextBox" PlaceholderText="Replace…" Width="220" FontSize="12"
-                                             KeyDown="OnReplaceTextBoxKeyDown"
-                                             IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" />
-                                    <Button x:Name="ReplaceOneButton" Click="OnReplaceOne" FontSize="12" Padding="8,4">
-                                        <TextBlock Text="Replace" />
-                                    </Button>
-                                    <Button x:Name="ReplaceAllButton" Click="OnReplaceAll" FontSize="12" Padding="8,4">
-                                        <TextBlock Text="All" />
-                                    </Button>
-                                    <Border Width="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="4,2" />
-                                    <Button x:Name="ReplaceInFilesButton" Click="OnReplaceInAllFiles"
-                                            FontSize="12" Padding="8,4">
-                                        <StackPanel Orientation="Horizontal" Spacing="4">
-                                            <FontIcon Glyph="&#xE8AC;" FontSize="12" />
-                                            <TextBlock Text="All Files" />
-                                        </StackPanel>
-                                    </Button>
-                                </StackPanel>
+                        <!-- Find / Replace floating modal: overlays the preview/editor
+                             content (does not push it down) and can be dragged by its grip.
+                             Positioned below the preview toolbar so it does not cover the
+                             drawer buttons. Opaque on open; dims to translucent when focus
+                             leaves it (the close button stays more visible). -->
+                        <Border x:Name="FindBar" Visibility="Collapsed" Grid.Row="1"
+                                VerticalAlignment="Top" HorizontalAlignment="Right"
+                                Canvas.ZIndex="60"
+                                Margin="0,56,12,0"
+                                Translation="0,0,32"
+                                Background="Transparent"
+                                BorderThickness="0">
+                            <Border.RenderTransform>
+                                <TranslateTransform x:Name="FindBarTranslate" />
+                            </Border.RenderTransform>
+                            <Border.Shadow>
+                                <ThemeShadow />
+                            </Border.Shadow>
+                            <Grid>
+                                <!-- Opaque card-grey surface (matches the search card). This is the
+                                     element whose opacity is reduced when the modal is inactive. -->
+                                <Border x:Name="FindBarSurface"
+                                        Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                        BorderThickness="1" CornerRadius="8">
+                                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                            CornerRadius="8" Padding="6,6,40,6">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="4">
+                                                <!-- Drag grip -->
+                                                <Border x:Name="FindBarDragHandle"
+                                                        PointerPressed="OnFindBarDragPointerPressed"
+                                                        PointerMoved="OnFindBarDragPointerMoved"
+                                                        PointerReleased="OnFindBarDragPointerReleased"
+                                                        PointerCanceled="OnFindBarDragPointerReleased"
+                                                        Background="Transparent" Width="16"
+                                                        VerticalAlignment="Stretch"
+                                                        ToolTipService.ToolTip="Drag to move">
+                                                    <FontIcon Glyph="&#xE76F;" FontSize="12" Opacity="0.5" />
+                                                </Border>
+                                                <TextBox x:Name="FindTextBox" PlaceholderText="Find…" Width="220" FontSize="12"
+                                                         KeyDown="OnFindTextBoxKeyDown" TextChanged="OnFindTextBoxTextChanged"
+                                                         IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" />
+                                                <Button Click="OnFindPrevious" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0">
+                                                    <FontIcon Glyph="&#xE70E;" FontSize="12" />
+                                                </Button>
+                                                <Button Click="OnFindNext" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0">
+                                                    <FontIcon Glyph="&#xE70D;" FontSize="12" />
+                                                </Button>
+                                                <CheckBox x:Name="FindMatchCaseCheckBox" Content="Aa" FontSize="11" MinWidth="0" Padding="4,0"
+                                                          Unchecked="OnFindOptionChanged" Checked="OnFindOptionChanged" />
+                                                <ToggleButton x:Name="FindReplaceToggle" Click="OnFindReplaceToggle" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0">
+                                                    <FontIcon Glyph="&#xE8AC;" FontSize="12" />
+                                                </ToggleButton>
+                                                <TextBlock x:Name="FindStatusText" VerticalAlignment="Center" FontSize="11" Opacity="0.6" Margin="4,0,0,0" />
+                                            </StackPanel>
+                                            <StackPanel x:Name="ReplaceRow" Grid.Row="1" Orientation="Horizontal" Spacing="4" Margin="20,4,0,0" Visibility="Collapsed">
+                                                <TextBox x:Name="ReplaceTextBox" PlaceholderText="Replace…" Width="220" FontSize="12"
+                                                         KeyDown="OnReplaceTextBoxKeyDown"
+                                                         IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" />
+                                                <Button x:Name="ReplaceOneButton" Click="OnReplaceOne" FontSize="12" Padding="8,4">
+                                                    <TextBlock Text="Replace" />
+                                                </Button>
+                                                <Button x:Name="ReplaceAllButton" Click="OnReplaceAll" FontSize="12" Padding="8,4">
+                                                    <TextBlock Text="All" />
+                                                </Button>
+                                                <Border Width="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="4,2" />
+                                                <Button x:Name="ReplaceInFilesButton" Click="OnReplaceInAllFiles"
+                                                        FontSize="12" Padding="8,4">
+                                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                                        <FontIcon Glyph="&#xE8AC;" FontSize="12" />
+                                                        <TextBlock Text="All Files" />
+                                                    </StackPanel>
+                                                </Button>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </Border>
+                                <!-- Close button overlays the top-right corner. It is a sibling of
+                                     the surface so it can stay more opaque when the modal dims. -->
+                                <Button x:Name="FindCloseButton" Click="OnCloseFindBar"
+                                        VerticalAlignment="Top" HorizontalAlignment="Right"
+                                        Margin="0,7,7,0" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0">
+                                    <FontIcon Glyph="&#xE711;" FontSize="12" />
+                                </Button>
                             </Grid>
                         </Border>
 

@@ -250,6 +250,8 @@ public sealed class AppSettings
     public bool BackupBeforeSave { get; set; } = true;
     /// <summary>When true, show a brief confirmation overlay after the built-in editor successfully saves. Default true.</summary>
     public bool ShowEditorSavedOverlay { get; set; } = true;
+    /// <summary>When true (default), the built-in editor applies syntax coloring based on the file name/extension.</summary>
+    public bool EditorSyntaxHighlightingEnabled { get; set; } = true;
     /// <summary>When true (default), Yagu starts in the compact launcher window (single search bar,
     /// no results pane). When false, Yagu starts in the traditional full window with title bar and
     /// results pane visible.</summary>

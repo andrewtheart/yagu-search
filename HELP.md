@@ -258,6 +258,7 @@ Click the **Edit** (pencil) button in the preview toolbar to enter editor mode.
 | Feature | Description |
 | --- | --- |
 | Full editing | Edit the file content directly with syntax-aware text display. |
+| Syntax coloring | Colors code (keywords, strings, comments, etc.) based on the file's name or extension. Supported types include C#, C/C++, Java, JavaScript/TypeScript, Python, JSON, XML/XAML, HTML, CSS, SQL, Markdown, Lua, PHP, INI/TOML, batch, and more. Toggle in Settings → Editor. |
 | Save | Write changes back to disk. Creates a `.yagubak` backup first (configurable). |
 | Back | Return to preview mode (prompts if unsaved changes exist). |
 | Backup on save | Automatically creates `{filename}.yagubak`. Numbered backups if one already exists. |
@@ -270,10 +271,17 @@ Click the **Edit** (pencil) button in the preview toolbar to enter editor mode.
 
 ## Find and Replace
 
-Open with **Ctrl+F** (find only) or **Ctrl+H** (find and replace).
+Open with **Ctrl+F** (find only) or **Ctrl+H** (find and replace). The find/replace
+panel appears as a floating modal over the top-right of the preview/editor — it
+overlays the content instead of pushing it down, positioned below the toolbar so
+it does not cover the drawer buttons. Drag it anywhere within the panel using the
+**grip handle** on its left edge. The modal is fully opaque while you are using it
+and dims to translucent once focus moves elsewhere (its close button stays more
+visible so you can always dismiss it).
 
 | Control | Purpose |
 | --- | --- |
+| Grip handle | Drag to move the floating find/replace modal. |
 | Find textbox | Text to search within the preview or editor. |
 | Previous / Next | Navigate between matches (with wrap-around). |
 | Match case (Aa) | Toggle case-sensitive find. |
@@ -375,6 +383,7 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 | Editor command | External editor command. Supports `{file}` and `{line}` placeholders. Examples: `code -g {file}:{line}`, `notepad++ {file} -n{line}`. |
 | Backup before save | Create `.yagubak` file before overwriting (on by default). |
 | Show saved confirmation after saving | Show a brief confirmation overlay after the built-in editor successfully writes the file. |
+| Syntax coloring based on file type | Color code in the built-in editor based on the file's name or extension (on by default). Applies to files opened after the change. |
 | Preview editor max size (MB) | Maximum file size the built-in editor loads (default: 32 MB). |
 | Preview editor max text length | Character limit for the built-in editor (default: 20 million). |
 | Preview editor max line length | Single-line character limit (default: 1 million). |

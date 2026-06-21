@@ -2892,6 +2892,7 @@ public sealed partial class SettingsWindow : Window
             var g = AddTab("Editor");
             var externalEditorGroup = AddSettingsGroupBox(g, "External Editor");
             var saveSafetyGroup = AddSettingsGroupBox(g, "Built-In Editor Saves");
+            var editorAppearanceGroup = AddSettingsGroupBox(g, "Built-In Editor Appearance");
             var fileLimitGroup = AddSettingsGroupBox(g, "Built-In Editor Limits");
 
             externalEditorGroup.Children.Add(new TextBlock { Text = "Editor command ({file} = full file path, {line} = line number):" });
@@ -2911,6 +2912,12 @@ public sealed partial class SettingsWindow : Window
             savedOverlay.Unchecked += (_, _) => _viewModel.ShowEditorSavedOverlay = false;
             saveSafetyGroup.Children.Add(savedOverlay);
             saveSafetyGroup.Children.Add(new TextBlock { Text = "When enabled, the built-in editor briefly shows a Saved confirmation after the file has been written successfully.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            var syntaxHighlight = new CheckBox { Content = "Syntax coloring based on file type", IsChecked = _viewModel.EditorSyntaxHighlightingEnabled };
+            syntaxHighlight.Checked += (_, _) => _viewModel.EditorSyntaxHighlightingEnabled = true;
+            syntaxHighlight.Unchecked += (_, _) => _viewModel.EditorSyntaxHighlightingEnabled = false;
+            editorAppearanceGroup.Children.Add(syntaxHighlight);
+            editorAppearanceGroup.Children.Add(new TextBlock { Text = "When enabled, the built-in editor colors code (keywords, strings, comments, etc.) based on the file's name or extension. Applies to files opened after the change. Supported types include C#, C/C++, Java, JavaScript/TypeScript, Python, JSON, XML/XAML, HTML, CSS, SQL, Markdown, Lua, PHP, and more.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             fileLimitGroup.Children.Add(new TextBlock { Text = "Files exceeding any of these limits will not open in the built-in editor. Use the external editor or Show in Explorer for very large files.", FontSize = 11, Opacity = 0.7, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
 

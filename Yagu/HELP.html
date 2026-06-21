@@ -1016,6 +1016,13 @@ toolbar to enter editor mode.</p>
 <td>Edit the file content directly with syntax-aware text display.</td>
 </tr>
 <tr>
+<td>Syntax coloring</td>
+<td>Colors code (keywords, strings, comments, etc.) based on the file’s
+name or extension. Supported types include C#, C/C++, Java,
+JavaScript/TypeScript, Python, JSON, XML/XAML, HTML, CSS, SQL, Markdown,
+Lua, PHP, INI/TOML, batch, and more. Toggle in Settings → Editor.</td>
+</tr>
+<tr>
 <td>Save</td>
 <td>Write changes back to disk. Creates a <code>.yagubak</code> backup
 first (configurable).</td>
@@ -1053,7 +1060,14 @@ display.</td>
 <hr />
 <h2 id="find-and-replace">Find and Replace</h2>
 <p>Open with <strong>Ctrl+F</strong> (find only) or
-<strong>Ctrl+H</strong> (find and replace).</p>
+<strong>Ctrl+H</strong> (find and replace). The find/replace panel
+appears as a floating modal over the top-right of the preview/editor —
+it overlays the content instead of pushing it down, positioned below the
+toolbar so it does not cover the drawer buttons. Drag it anywhere within
+the panel using the <strong>grip handle</strong> on its left edge. The
+modal is fully opaque while you are using it and dims to translucent
+once focus moves elsewhere (its close button stays more visible so you
+can always dismiss it).</p>
 <table>
 <colgroup>
 <col style="width: 50%" />
@@ -1066,6 +1080,10 @@ display.</td>
 </tr>
 </thead>
 <tbody>
+<tr>
+<td>Grip handle</td>
+<td>Drag to move the floating find/replace modal.</td>
+</tr>
 <tr>
 <td>Find textbox</td>
 <td>Text to search within the preview or editor.</td>
@@ -1456,6 +1474,12 @@ default).</td>
 <td>Show saved confirmation after saving</td>
 <td>Show a brief confirmation overlay after the built-in editor
 successfully writes the file.</td>
+</tr>
+<tr>
+<td>Syntax coloring based on file type</td>
+<td>Color code in the built-in editor based on the file’s name or
+extension (on by default). Applies to files opened after the
+change.</td>
 </tr>
 <tr>
 <td>Preview editor max size (MB)</td>
