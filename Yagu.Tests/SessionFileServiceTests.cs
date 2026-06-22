@@ -276,7 +276,7 @@ public class SessionFileServiceTests
         await SessionFileService.WriteAsync(ms, "q", @"C:\x", stats, results);
 
         ms.Position = 0;
-        var progressValues = new List<double>();
+        var progressValues = new System.Collections.Concurrent.ConcurrentBag<double>();
         var readResults = new List<SearchResult>();
         await SessionFileService.ReadAsync(
             ms,
