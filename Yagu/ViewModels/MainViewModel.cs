@@ -104,6 +104,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         PreviewContextLines = _settings.PreviewContextLines;
         ObeyGitignore = _settings.ObeyGitignore;
         GitignoreTakesPrecedence = _settings.GitignoreTakesPrecedence;
+        GitignorePrecedencePreference = _settings.GitignorePrecedencePreference;
+        if (_settings.GitignorePrecedencePreference is bool savedPrecedence)
+            GitignoreTakesPrecedence = savedPrecedence;
         IncludeGlobs = _settings.IncludeGlobs;
         ExcludeGlobs = IsDefaultExcludeGlobs(_settings.ExcludeGlobs) ? string.Empty : _settings.ExcludeGlobs;
         IncludeFilterModeIndex = _settings.IncludeFilterModeIndex;
@@ -343,6 +346,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] public partial int PreviewContextLines { get; set; } = 20;
     [ObservableProperty] public partial bool ObeyGitignore { get; set; }
     [ObservableProperty] public partial bool GitignoreTakesPrecedence { get; set; } = true;
+    // null = unset (ask via dialog), true = .gitignore wins, false = Include filter wins.
+    [ObservableProperty] public partial bool? GitignorePrecedencePreference { get; set; }
     [ObservableProperty] public partial string IncludeGlobs { get; set; } = string.Empty;
     [ObservableProperty] public partial string ExcludeGlobs { get; set; } = string.Empty;
     [ObservableProperty] public partial int IncludeFilterModeIndex { get; set; }
@@ -623,6 +628,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         SuppressFontContrastWarnings = false;
         FontContrastReminderAfterUtc = null;
     }
+
+    // When the user picks a concrete precedence preference (dialog or Settings),
+    // keep the effective runtime value in sync so the next search honors it immediately.
+    partial void OnGitignorePrecedencePreferenceChanged(bool? value)
+    {
+        if (value is bool preference)
+            GitignoreTakesPrecedence = preference;
+    }
+
+    public void ResetGitignorePrecedencePreference() => GitignorePrecedencePreference = null;
 
     [ObservableProperty] public partial int FileLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
     [ObservableProperty] public partial int ConsoleLogLevelIndex { get; set; } = 1; // -1 = None, 0 = Critical, 1 = Warning, 2 = Info, 3 = Verbose
@@ -2876,6 +2891,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.PreviewContextLines = PreviewContextLines;
         _settings.ObeyGitignore = ObeyGitignore;
         _settings.GitignoreTakesPrecedence = GitignoreTakesPrecedence;
+        _settings.GitignorePrecedencePreference = GitignorePrecedencePreference;
         _settings.IncludeGlobs = IncludeGlobs;
         _settings.ExcludeGlobs = ExcludeGlobs;
         _settings.IncludeFilterModeIndex = IncludeFilterModeIndex;

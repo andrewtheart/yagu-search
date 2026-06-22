@@ -104,6 +104,44 @@ public sealed class SettingsWindowRegressionTests
     }
 
     [Fact]
+    public void GitignorePrecedencePrompt_HonorsSavedPreferenceAndDontAskAgain()
+    {
+        string toggle = ExtractMethod(MainWindowSource, "OnObeyGitignoreToggled", window: 2600);
+        AssertContainsInOrder(toggle,
+            "if (ViewModel.GitignorePrecedencePreference is bool saved)",
+            "ViewModel.GitignoreTakesPrecedence = saved;",
+            "var dontAskAgain = new CheckBox",
+            "Title = \".gitignore precedence\"",
+            "if (dontAskAgain.IsChecked == true)",
+            "ViewModel.GitignorePrecedencePreference = gitignoreWins;",
+            "await ViewModel.PersistSettingsAsync();");
+    }
+
+    [Fact]
+    public void SettingsService_PersistsGitignorePrecedencePreference()
+    {
+        Assert.Contains("public bool? GitignorePrecedencePreference { get; set; }", SettingsServiceSource);
+    }
+
+    [Fact]
+    public void MainViewModel_WiresGitignorePrecedencePreference()
+    {
+        Assert.Contains("public partial bool? GitignorePrecedencePreference { get; set; }", MainViewModelSource);
+        Assert.Contains("GitignorePrecedencePreference = _settings.GitignorePrecedencePreference;", MainViewModelSource);
+        Assert.Contains("_settings.GitignorePrecedencePreference = GitignorePrecedencePreference;", MainViewModelSource);
+        Assert.Contains("partial void OnGitignorePrecedencePreferenceChanged(bool? value)", MainViewModelSource);
+        Assert.Contains("public void ResetGitignorePrecedencePreference() => GitignorePrecedencePreference = null;", MainViewModelSource);
+    }
+
+    [Fact]
+    public void SettingsWindow_HasGitignorePrecedenceControls()
+    {
+        Assert.Contains("\"Gitignore Conflicts\"", SettingsWindowSource);
+        Assert.Contains("Reset .gitignore vs include filter warning", SettingsWindowSource);
+        Assert.Contains("_viewModel.ResetGitignorePrecedencePreference();", SettingsWindowSource);
+    }
+
+    [Fact]
     public void SettingsWindowXaml_HasScrollableContent()
     {
         Assert.Contains("<ScrollViewer", SettingsWindowXaml);

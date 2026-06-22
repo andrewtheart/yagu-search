@@ -85,6 +85,9 @@ public sealed class AppSettings
     [JsonIgnore] public bool ExactMatch { get; set; } = true;
     [JsonIgnore] public bool ObeyGitignore { get; set; }
     public bool GitignoreTakesPrecedence { get; set; } = true;
+    // User's saved preference for .gitignore vs Include-filter precedence on conflict.
+    // null = unset (ask via the precedence dialog), true = .gitignore wins, false = Include filter wins.
+    public bool? GitignorePrecedencePreference { get; set; }
     public int ContextLines { get; set; } = 3;
     public int PreviewContextLines { get; set; } = 10;
     // Advanced-Options path filters are per-session only: edits made in Advanced

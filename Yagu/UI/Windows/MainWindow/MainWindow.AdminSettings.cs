@@ -26,22 +26,47 @@ public sealed partial class MainWindow
         if (sender is ToggleSwitch ts && !ts.IsOn) return;
         if (!HasUserDefinedIncludeFilterText()) return;
 
+        // If the user previously saved a precedence preference (via "Don't ask again" or the
+        // Search Defaults setting), honor it silently instead of prompting again.
+        if (ViewModel.GitignorePrecedencePreference is bool saved)
+        {
+            ViewModel.GitignoreTakesPrecedence = saved;
+            return;
+        }
+
+        var contentPanel = new StackPanel { Spacing = 12, MinWidth = 360 };
+        contentPanel.Children.Add(new TextBlock
+        {
+            Text = "Should .gitignore exclusions take precedence over your Include filter?\n\n" +
+                   "Yes - files excluded by .gitignore will be skipped even if they match your Include filter.\n\n" +
+                   "No - your Include filter takes priority; matching files will be searched even if .gitignore would exclude them.",
+            TextWrapping = TextWrapping.Wrap,
+        });
+        var dontAskAgain = new CheckBox { Content = "Don't ask again" };
+        contentPanel.Children.Add(dontAskAgain);
+
         var result = await YaguDialog.ShowAsync(
             _hwnd,
             new YaguDialogOptions
             {
                 Title = ".gitignore precedence",
-                Content = "Should .gitignore exclusions take precedence over your Include filter?\n\n" +
-                          "Yes - files excluded by .gitignore will be skipped even if they match your Include filter.\n\n" +
-                          "No - your Include filter takes priority; matching files will be searched even if .gitignore would exclude them.",
+                Content = contentPanel,
                 PrimaryButtonText = "Yes, .gitignore wins",
                 SecondaryButtonText = "No, Include filter wins",
                 CloseButtonText = null,
                 DefaultButton = YaguDialogDefaultButton.Primary,
                 Width = 620,
-                Height = 330,
+                Height = 360,
             });
-        ViewModel.GitignoreTakesPrecedence = result != YaguDialogResult.Secondary;
+
+        bool gitignoreWins = result != YaguDialogResult.Secondary;
+        ViewModel.GitignoreTakesPrecedence = gitignoreWins;
+
+        if (dontAskAgain.IsChecked == true)
+        {
+            ViewModel.GitignorePrecedencePreference = gitignoreWins;
+            await ViewModel.PersistSettingsAsync();
+        }
     }
 
     private bool HasUserDefinedIncludeFilterText()

@@ -2115,6 +2115,37 @@ public sealed partial class SettingsWindow : Window
             };
             filterGroup.Children.Add(excGlobs);
             filterGroup.Children.Add(new TextBlock { Text = "Exclude patterns are applied before content scanning, so broad excludes are the cheapest way to skip generated folders or noisy file trees.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            var precedenceGroup = AddSettingsGroupBox(g, "Gitignore Conflicts");
+            precedenceGroup.Children.Add(NextSearchLabel("When .gitignore and your Include filter conflict:"));
+            var precedence = new ComboBox
+            {
+                Width = 260,
+                MinWidth = 0,
+                Padding = new Thickness(8, 0, 8, 0),
+            };
+            precedence.Items.Add("Ask me each time");
+            precedence.Items.Add(".gitignore wins");
+            precedence.Items.Add("Include filter wins");
+            precedence.SelectedIndex = _viewModel.GitignorePrecedencePreference switch
+            {
+                true => 1,
+                false => 2,
+                _ => 0,
+            };
+            precedence.SelectionChanged += (_, _) =>
+            {
+                _viewModel.GitignorePrecedencePreference = precedence.SelectedIndex switch
+                {
+                    1 => true,
+                    2 => false,
+                    _ => (bool?)null,
+                };
+                MarkSettingsDirty(requireValueChanges: false);
+            };
+            precedenceGroup.Children.Add(precedence);
+            precedenceGroup.Children.Add(new TextBlock { Text = "Controls which side wins when a file is both matched by your Include filter and excluded by .gitignore (only relevant when Obey .gitignore is on). Leave on \"Ask me each time\" to be prompted; the prompt's \"Don't ask again\" option also updates this setting.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
         }
 
         // ── Search Limits ──
@@ -3101,6 +3132,31 @@ public sealed partial class SettingsWindow : Window
             remindersGroup.Children.Add(new TextBlock
             {
                 Text = "Allows theme/font contrast warnings to appear again after Remind me later or Don't remind me again.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var resetGitignorePrecedenceWarning = new Button
+            {
+                Content = "Reset .gitignore vs include filter warning",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetGitignorePrecedenceWarning.Click += (_, _) =>
+            {
+                _viewModel.ResetGitignorePrecedencePreference();
+                MarkSettingsDirty(requireValueChanges: false);
+                resetGitignorePrecedenceWarning.Content = ".gitignore vs include filter warning reset";
+                resetGitignorePrecedenceWarning.IsEnabled = false;
+            };
+            RegisterDefaultResetButton(resetGitignorePrecedenceWarning,
+                () => _viewModel.GitignorePrecedencePreference is null);
+            remindersGroup.Children.Add(resetGitignorePrecedenceWarning);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Re-enables the prompt asking whether .gitignore or your Include filter wins after you chose Don't ask again or set a fixed preference in Search Defaults.",
                 FontSize = 11,
                 Opacity = 0.6,
                 TextWrapping = TextWrapping.Wrap,
