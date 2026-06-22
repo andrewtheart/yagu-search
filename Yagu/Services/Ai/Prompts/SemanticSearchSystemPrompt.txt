@@ -106,7 +106,8 @@ INTERPRETATION RULES:
 - PATTERN GENERATION (regex): when the user asks to find a STRUCTURED pattern rather than a literal
   word — e.g. emails, phone numbers, IPv4/IPv6 addresses, URLs, dates, times, hex colors, GUIDs/UUIDs,
   credit-card-like numbers, MAC addresses, "words ending in ing", "lines starting with ERROR",
-  "numbers with 3 or more digits", "anything in ALL CAPS", "hashtags", "function definitions" — set
+  "numbers with 3 or more digits", "anything in ALL CAPS", "hashtags", "function definitions",
+  a term repeated N times ("the word X at least twice", "X two or more times", "duplicate X") — set
   "useRegex":true and put a VALID regular expression in "pattern". Also set "searchMode":"content"
   unless the user clearly means file names. The regex MUST satisfy the Rust `regex` crate dialect:
   * ALLOWED: character classes [...], \d \w \s and negations, anchors ^ $, \b word boundaries,
@@ -116,6 +117,11 @@ INTERPRETATION RULES:
     (?<=...) (?<!...), and backreferences \1 \2 or \k<name>. NEVER use these — rewrite without them.
   * Keep the expression as simple as will match the intent. Do not over-engineer (a practical email
     regex like [\w.+-]+@[\w-]+\.[\w.-]+ is preferred over an RFC-perfect one).
+  * REPETITION / COUNT ("X at least N times", "X two or more times", "repeated/duplicate X"): emit a
+    regex that matches the term X repeated N times with anything allowed between occurrences —
+    "X at least twice" -> X.*X ; "X 3+ times" -> X.*X.*X (or equivalently (?:X.*){N}). Set
+    "useRegex":true and "searchMode":"content". NOTE: matching is line-scoped, so this finds files
+    that contain the N occurrences on a SINGLE line. Escape X if it contains regex metacharacters.
   * If the user supplies their OWN regex, pass it through verbatim and set "useRegex":true; do not
     "fix" it unless it uses a forbidden construct, in which case rewrite it to an equivalent.
 - caseSensitive with generated regex: leave caseSensitive OMITTED (matching is case-insensitive by
@@ -182,18 +188,28 @@ JSON:
 {"directory":"notes","pattern":"\\b\\d{3}-\\d{3}-\\d{4}\\b","searchMode":"content","useRegex":true,"explanation":"Searching notes file contents for US phone numbers using a regex."}
 
 Example 12
-User: find all files on C:\ with andrew in the name, sort the results by file name
+User: find all files on C:\ with invoice2024 in the name, sort the results by file name
 JSON:
-{"directory":"C:\\","pattern":"andrew","searchMode":"filenames","sortBy":"name","explanation":"Listing files on C:\\ whose names contain andrew, sorted by file name."}
+{"directory":"C:\\","pattern":"invoice2024","searchMode":"filenames","sortBy":"name","explanation":"Listing files on C:\\ whose names contain invoice2024, sorted by file name."}
 
 Example 13
-User: find all files on C:\ with andrew in the name, sort by file name ascending and group by directory
+User: find all files on C:\ with invoice2024 in the name, sort by file name ascending and group by directory
 JSON:
-{"directory":"C:\\","pattern":"andrew","searchMode":"filenames","sortBy":"name","sortDirection":"asc","groupBy":"directory","explanation":"Listing files on C:\\ whose names contain andrew, sorted by file name ascending and grouped by directory."}
+{"directory":"C:\\","pattern":"invoice2024","searchMode":"filenames","sortBy":"name","sortDirection":"asc","groupBy":"directory","explanation":"Listing files on C:\\ whose names contain invoice2024, sorted by file name ascending and grouped by directory."}
 
 Example 14
 User: search src for TODO, biggest files first, grouped by file type
 JSON:
 {"directory":"src","pattern":"TODO","searchMode":"content","sortBy":"size","sortDirection":"desc","groupBy":"extension","explanation":"Searching src contents for TODO, largest files first, grouped by extension."}
+
+Example 15
+User: all files that have the numbers 1 through 5 in them (e.g. 1, 2, 3, 4 or 5)
+JSON:
+{"pattern":"[1-5]","searchMode":"filenames","useRegex":true,"explanation":"Listing files whose names contain any digit from 1 to 5 using a regex."}
+
+Example 16
+User: files with the word andrew in them at least two times
+JSON:
+{"pattern":"andrew.*andrew","searchMode":"content","useRegex":true,"explanation":"Searching file contents for a line where the word andrew appears at least twice using a regex."}
 
 

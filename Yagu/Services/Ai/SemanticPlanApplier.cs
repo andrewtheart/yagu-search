@@ -86,6 +86,8 @@ public sealed class ResolvedSearchPlan
 /// </summary>
 public static class SemanticPlanApplier
 {
+    private const string LogSource = "Semantic.PlanApplier";
+
     /// <summary>
     /// Normalizes <paramref name="plan"/> using <paramref name="context"/> for relative-date and
     /// default-directory resolution. Never throws on bad model output — unparseable values are
@@ -175,7 +177,7 @@ public static class SemanticPlanApplier
             mode ??= Models.SearchMode.FileNames;
         }
 
-        return new ResolvedSearchPlan
+        var resolved = new ResolvedSearchPlan
         {
             Directory = directory,
             Pattern = pattern,
@@ -201,6 +203,45 @@ public static class SemanticPlanApplier
             Explanation = string.IsNullOrWhiteSpace(plan.Explanation) ? null : plan.Explanation!.Trim(),
             Warnings = warnings,
         };
+
+        var log = LogService.Instance;
+        if (warnings.Count > 0)
+            log.Verbose(LogSource,
+                $"Resolved plan with {warnings.Count} normalization warning(s): {string.Join(" | ", warnings)}");
+        if (log.IsVerboseEnabled)
+            log.Verbose(LogSource, $"Resolved plan: {DescribeResolved(resolved)}");
+
+        return resolved;
+    }
+
+    /// <summary>Compact, allocation-light summary of a resolved plan for Verbose diagnostics. Only
+    /// the fields the model actually set are emitted, so the log shows exactly what will override the
+    /// search inputs.</summary>
+    private static string DescribeResolved(ResolvedSearchPlan r)
+    {
+        var parts = new List<string>();
+        if (r.Directory is { } dir) parts.Add($"dir={dir}");
+        if (r.Pattern is { } pat) parts.Add($"pattern='{pat}'");
+        if (r.SearchMode is { } m) parts.Add($"mode={m}");
+        if (r.CaseSensitive is { } cs) parts.Add($"caseSensitive={cs}");
+        if (r.UseRegex is { } rx) parts.Add($"useRegex={rx}");
+        if (r.ExactMatch is { } em) parts.Add($"exactMatch={em}");
+        if (r.IncludeGlobs is { Count: > 0 } inc) parts.Add($"include=[{string.Join(",", inc)}]");
+        if (r.ExcludeGlobs is { Count: > 0 } exc) parts.Add($"exclude=[{string.Join(",", exc)}]");
+        if (r.MinFileSizeBytes is { } mn) parts.Add($"minSize={mn}");
+        if (r.MaxFileSizeBytes is { } mx) parts.Add($"maxSize={mx}");
+        if (r.CreatedAfterDate is { } ca) parts.Add($"createdAfter={ca:O}");
+        if (r.CreatedBeforeDate is { } cb) parts.Add($"createdBefore={cb:O}");
+        if (r.ModifiedAfterDate is { } ma) parts.Add($"modifiedAfter={ma:O}");
+        if (r.ModifiedBeforeDate is { } mb) parts.Add($"modifiedBefore={mb:O}");
+        if (r.MaxSearchDepth is { } md) parts.Add($"maxDepth={md}");
+        if (r.ObeyGitignore is { } gi) parts.Add($"obeyGitignore={gi}");
+        if (r.SearchInsideArchives is { } ar) parts.Add($"archives={ar}");
+        if (r.SortModeIndex is { } sm) parts.Add($"sortMode={sm}");
+        if (r.SortDirectionIndex is { } sd) parts.Add($"sortDir={sd}");
+        if (r.GroupMode is { } gm) parts.Add($"group={gm}");
+        if (r.GroupSortDirectionIndex is { } gd) parts.Add($"groupDir={gd}");
+        return parts.Count == 0 ? "(no overrides)" : string.Join(", ", parts);
     }
 
     /// <summary>Convenience overload that resolves then applies to a writable UI target.</summary>

@@ -11,6 +11,8 @@ namespace Yagu.Services.Ai;
 /// </summary>
 public sealed class FoundryModelSelector
 {
+    private const string LogSource = "Semantic.ModelSelector";
+
     /// <summary>
     /// Ordered preference of small/fast instruct model alias fragments. Earlier entries win.
     /// Matched case-insensitively as a substring of the catalog alias so minor naming/version
@@ -59,20 +61,29 @@ public sealed class FoundryModelSelector
         if (!string.IsNullOrWhiteSpace(overrideAlias))
         {
             string wanted = overrideAlias.Trim();
+            LogService.Instance.Verbose(LogSource, $"Resolving requested model override '{wanted}'.");
 
             // First let Foundry resolve the value as an ALIAS (e.g. "phi-4-mini"), which yields the
             // family model carrying every hardware-available variant. When it resolves as an alias we
             // still apply the accuracy-oriented variant preference below (so "phi-4-mini" upgrades to
             // the less-quantized GPU build when this machine can run it).
             var direct = await catalog.GetModelAsync(wanted, cancellationToken).ConfigureAwait(false);
-            if (direct is not null) return await PreferAccurateVariantAsync(catalog, direct, cancellationToken).ConfigureAwait(false);
+            if (direct is not null)
+            {
+                LogService.Instance.Verbose(LogSource, $"Override '{wanted}' resolved as a family alias.");
+                return await PreferAccurateVariantAsync(catalog, direct, cancellationToken).ConfigureAwait(false);
+            }
 
             // The alias lookup above only resolves family aliases, never specific variant Ids
             // (e.g. "Phi-4-mini-instruct-cuda-gpu:5"). When the caller named a concrete variant — to
             // force a specific build — resolve it by its unique model id and honor that exact choice
             // (no preference upgrade: an explicit variant id is a deliberate pin).
             var variant = await catalog.GetModelVariantAsync(wanted, cancellationToken).ConfigureAwait(false);
-            if (variant is not null) return variant;
+            if (variant is not null)
+            {
+                LogService.Instance.Verbose(LogSource, $"Override '{wanted}' resolved as a pinned variant id.");
+                return variant;
+            }
 
             // Last resort: the value may be a variant id without its version suffix (e.g. ":5"), or a
             // device-specific id that only appears inside an alias' variant list. Resolve the family
@@ -89,15 +100,23 @@ public sealed class FoundryModelSelector
                 {
                     // Re-resolve as a dedicated single-variant handle (see PreferAccurateVariantAsync):
                     // a wrapper from Variants routes load/inference back through the family alias.
+                    LogService.Instance.Verbose(LogSource,
+                        $"Override '{wanted}' matched variant '{match.Id}' under family alias '{familyAlias}'.");
                     var dedicated = await catalog.GetModelVariantAsync(match.Id, cancellationToken).ConfigureAwait(false);
                     return dedicated ?? match;
                 }
             }
+            LogService.Instance.Warning(LogSource,
+                $"Requested model override '{wanted}' was not found in the catalog; no model selected.");
             return null;
         }
 
         var models = await catalog.ListModelsAsync(cancellationToken).ConfigureAwait(false);
-        if (models is null || models.Count == 0) return null;
+        if (models is null || models.Count == 0)
+        {
+            LogService.Instance.Warning(LogSource, "Model catalog returned no models for this hardware.");
+            return null;
+        }
 
         var candidates = models
             .Where(m => m is not null)
@@ -107,9 +126,15 @@ public sealed class FoundryModelSelector
                 Task: m.Info?.Task,
                 Device: m.Info?.Runtime.DeviceType ?? DeviceType.CPU))
             .ToList();
+        LogService.Instance.Verbose(LogSource, $"Ranking {candidates.Count} hardware-compatible catalog model(s).");
 
         string? chosenAlias = SelectAlias(candidates);
-        if (chosenAlias is null) return null;
+        if (chosenAlias is null)
+        {
+            LogService.Instance.Warning(LogSource, "No eligible text-chat model found among catalog candidates.");
+            return null;
+        }
+        LogService.Instance.Info(LogSource, $"Auto-selected model alias '{chosenAlias}'.");
 
         // Re-fetch the chosen family by alias so the returned IModel carries the full set of
         // hardware-available variants, then upgrade to the most accurate one this machine can run.
@@ -158,6 +183,8 @@ public sealed class FoundryModelSelector
             return family; // already on the best variant
 
         // Re-resolve as a dedicated single-variant handle so load/inference actually target it.
+        LogService.Instance.Verbose(LogSource,
+            $"Preferring more-accurate variant '{best.Id}' (score {bestScore}) over family default '{family.Id}'.");
         var dedicated = await catalog.GetModelVariantAsync(best.Id, cancellationToken).ConfigureAwait(false);
         return dedicated ?? family;
     }

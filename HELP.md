@@ -75,7 +75,7 @@ Example query:
 
 Yagu sets the directory to `C:\`, adds an include filter for `*.png`, excludes `*.mov` and `abc`/`abc.*`, sets a "modified after" date one year ago, switches to **File names only** mode, and searches.
 
-You can also ask Yagu to **sort** or **group** the results in the same sentence — e.g. *"find all files on C:\ with andrew in the name, sort by file name and group by directory"* sets the Sort and Group controls accordingly. When you name a sort field without a direction (e.g. *"sort by file name"*), Yagu defaults to **descending**; say *"ascending"* / *"a to z"* for the other direction.
+You can also ask Yagu to **sort** or **group** the results in the same sentence — e.g. *"find all files on C:\ with invoice2024 in the name, sort by file name and group by directory"* sets the Sort and Group controls accordingly. When you name a sort field without a direction (e.g. *"sort by file name"*), Yagu defaults to **descending**; say *"ascending"* / *"a to z"* for the other direction.
 
 Notes:
 
@@ -916,7 +916,7 @@ Yagu.exe --cli --semantic-pattern "find png files on the C drive modified in the
 Yagu.exe --cli --semantic-pattern "large pdf reports created since January" --explain
 Yagu.exe --cli --semantic-pattern "config files under the repo" --semantic-model "qwen2.5-1.5b-instruct-generic-cpu"
 Yagu.exe --cli --semantic-pattern "log files changed this week" --accept-model-download
-Yagu.exe --cli --semantic-pattern "find all files on C:\ with andrew in the name, sort by file name and group by directory"
+Yagu.exe --cli --semantic-pattern "find all files on C:\ with invoice2024 in the name, sort by file name and group by directory"
 ```
 
 Semantic requests can also set **sorting** and **grouping** (e.g. *"sort by file name"*, *"group by directory"*). As with traditional `--sort`/`--group`, the results are collected and rendered after the scan completes rather than streamed. See [Sort (CLI)](#sort-cli) and [Group (CLI)](#group-cli) for the underlying flags.

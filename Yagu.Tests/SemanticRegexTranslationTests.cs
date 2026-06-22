@@ -1,7 +1,13 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
 using Yagu.Models;
+using Yagu.Services;
 using Yagu.Services.Ai;
 using Xunit;
 
@@ -20,10 +26,35 @@ namespace Yagu.Tests;
 ///   the Rust <c>regex</c> crate rejects (lookaround / backreferences), and (d) actually match
 ///   the sample inputs they are meant to match while rejecting clear non-matches.</item>
 /// </list>
+/// An end-to-end case (<see cref="DigitRangeFilenameQuery_TranslatesAndMatchesOnlyDigit1To5Files"/>)
+/// drives the documented example "all files that have the numbers 1 through 5 in them" through the
+/// full production pipeline — raw model JSON → <see cref="SemanticPlanJsonExtractor"/> →
+/// <see cref="SemanticPlanApplier"/> → <see cref="SearchOptions"/> → <see cref="SearchService"/> —
+/// against synthetic directories and files, asserting only files whose names contain a digit 1-5 match.
 /// </summary>
-public sealed class SemanticRegexTranslationTests
+public sealed class SemanticRegexTranslationTests : IDisposable
 {
     private static readonly DateTimeOffset Now = new(2025, 6, 15, 12, 0, 0, TimeSpan.Zero);
+
+    private readonly string _root;
+
+    public SemanticRegexTranslationTests()
+    {
+        _root = Path.Combine(Path.GetTempPath(), "yagu-semantic-regex-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_root);
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_root, recursive: true); } catch { /* best-effort temp cleanup */ }
+    }
+
+    private void WriteFile(string relativePath, string content)
+    {
+        string path = Path.Combine(_root, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content, new UTF8Encoding(false));
+    }
 
     private static SemanticTranslationContext Context(string? defaultDir = null) =>
         new() { Now = Now, DefaultDirectory = defaultDir };
@@ -119,7 +150,147 @@ public sealed class SemanticRegexTranslationTests
         Assert.True(resolved.UseRegex);
     }
 
-    // ---- Prompt contract -----------------------------------------------------
+    // ---- End-to-end: "numbers 1 through 5" filename search -------------------
+
+    /// <summary>
+    /// The documented example "all files that have the numbers 1 through 5 in them (e.g. 1, 2, 3, 4
+    /// or 5)" must translate into a filename regex <c>[1-5]</c> and, when actually executed, match
+    /// only files whose names contain one of those digits. This drives the full production pipeline
+    /// (raw model JSON → extractor → applier → overlay → <see cref="SearchOptions"/> →
+    /// <see cref="SearchService"/>) against synthetic directories and files. Non-matching files are
+    /// seeded with digits 1-5 in their CONTENTS to prove the search matched on names, not contents.
+    /// </summary>
+    [Fact]
+    public async Task DigitRangeFilenameQuery_TranslatesAndMatchesOnlyDigit1To5Files()
+    {
+        // What the model is taught to emit for this request (see SemanticSearchSystemPrompt Example 15).
+        const string modelJson =
+            "{\"pattern\":\"[1-5]\",\"searchMode\":\"filenames\",\"useRegex\":true," +
+            "\"explanation\":\"Listing files whose names contain any digit from 1 to 5 using a regex.\"}";
+
+        // 1) Production parse + normalization path.
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(modelJson, out var plan, out var parseError),
+            $"Plan should parse. Error: {parseError}");
+        var overlay = SemanticPlanApplier.ToOverlay(SemanticPlanApplier.Resolve(plan!, Context(_root)));
+
+        Assert.Equal("[1-5]", overlay.Query);
+        Assert.True(overlay.UseRegex);
+        Assert.Equal(SearchMode.FileNames, overlay.SearchMode);
+
+        // 2) Synthetic corpus. Names WITH a digit 1-5 should match; names WITHOUT must not — even
+        //    though several non-matching files contain 1-5 in their CONTENTS (filenames mode ignores it).
+        var expectedMatches = new[]
+        {
+            "report1.txt", "data-2.log", "notes3.md", "page4.csv", "summary5.txt",
+            "v15-draft.txt", Path.Combine("archive", "old-3.bak"),
+        };
+        var nonMatches = new[]
+        {
+            "report.txt", "data-6.log", "notes7.md", "page8.csv", "summary9.txt",
+            "zero0.txt", Path.Combine("archive", "old.bak"),
+        };
+        foreach (var rel in expectedMatches) WriteFile(rel, "no relevant digits in body");
+        foreach (var rel in nonMatches) WriteFile(rel, "body mentions 1 2 3 4 5 but the name does not");
+
+        // 3) Fold the overlay into concrete SearchOptions exactly as a caller would, then run a real search.
+        var opts = new SearchOptions
+        {
+            Directory = overlay.Directory ?? _root,
+            Query = overlay.Query!,
+            UseRegex = overlay.UseRegex ?? false,
+            SearchMode = overlay.SearchMode ?? SearchMode.Both,
+            CaseSensitive = overlay.CaseSensitive ?? false,
+            ExactMatch = overlay.ExactMatch ?? true,
+            MaxFileSizeBytes = 0,
+            MaxResults = 50_000,
+            MaxMatchesPerFile = 0,
+            SkipBinary = true,
+        };
+
+        var matchedNames = await RunSearchAsync(opts);
+
+        var expectedNames = expectedMatches.Select(Path.GetFileName).OrderBy(n => n).ToArray();
+        Assert.Equal(expectedNames, matchedNames.OrderBy(n => n).ToArray());
+
+        // Every matched name really does contain a 1-5; none of the seeded non-matches slipped through.
+        Assert.All(matchedNames, n => Assert.Matches("[1-5]", n));
+        foreach (var rel in nonMatches)
+            Assert.DoesNotContain(Path.GetFileName(rel), matchedNames);
+    }
+
+    /// <summary>
+    /// "files with the word andrew in them at least two times" must translate into a content regex
+    /// <c>andrew.*andrew</c> and, when executed, match only files that contain the word at least twice
+    /// on a single line. Drives the full production pipeline (raw model JSON → extractor → applier →
+    /// overlay → <see cref="SearchOptions"/> → <see cref="SearchService"/>) against synthetic files.
+    /// Because content matching is line-scoped, a file with the two occurrences split across separate
+    /// lines does NOT match — this test documents that engine behavior.
+    /// </summary>
+    [Fact]
+    public async Task RepeatedWordQuery_TranslatesAndMatchesFilesWithWordAtLeastTwice()
+    {
+        // What the model is taught to emit for this request (see SemanticSearchSystemPrompt Example 16).
+        const string modelJson =
+            "{\"pattern\":\"andrew.*andrew\",\"searchMode\":\"content\",\"useRegex\":true," +
+            "\"explanation\":\"Searching file contents for a line where the word andrew appears at least twice.\"}";
+
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(modelJson, out var plan, out var parseError),
+            $"Plan should parse. Error: {parseError}");
+        var overlay = SemanticPlanApplier.ToOverlay(SemanticPlanApplier.Resolve(plan!, Context(_root)));
+
+        Assert.Equal("andrew.*andrew", overlay.Query);
+        Assert.True(overlay.UseRegex);
+        Assert.Equal(SearchMode.Content, overlay.SearchMode);
+
+        // Matches: two+ occurrences on one line. Non-matches: a single occurrence, none at all, or
+        // two occurrences split across separate lines (content matching is line-scoped).
+        WriteFile("twice-same-line.txt", "here is andrew and again andrew on one line");
+        WriteFile("adjacent.txt", "andrewandrew stuck together");
+        WriteFile("thrice.txt", "andrew andrew andrew three times");
+        WriteFile(Path.Combine("sub", "nested-twice.md"), "the andrew met the other andrew");
+
+        WriteFile("once.txt", "only andrew appears here a single time");
+        WriteFile("none.txt", "no relevant word in this file at all");
+        WriteFile("split-lines.txt", "andrew on the first line\nandrew on the second line");
+
+        var opts = new SearchOptions
+        {
+            Directory = overlay.Directory ?? _root,
+            Query = overlay.Query!,
+            UseRegex = overlay.UseRegex ?? false,
+            SearchMode = overlay.SearchMode ?? SearchMode.Both,
+            CaseSensitive = overlay.CaseSensitive ?? false,
+            ExactMatch = overlay.ExactMatch ?? true,
+            MaxFileSizeBytes = 0,
+            MaxResults = 50_000,
+            MaxMatchesPerFile = 0,
+            SkipBinary = true,
+        };
+
+        var matchedNames = await RunSearchAsync(opts);
+
+        var expected = new[] { "twice-same-line.txt", "adjacent.txt", "thrice.txt", "nested-twice.md" }
+            .OrderBy(n => n).ToArray();
+        Assert.Equal(expected, matchedNames.OrderBy(n => n).ToArray());
+
+        Assert.DoesNotContain("once.txt", matchedNames);
+        Assert.DoesNotContain("none.txt", matchedNames);
+        Assert.DoesNotContain("split-lines.txt", matchedNames);
+    }
+
+    private async Task<List<string>> RunSearchAsync(SearchOptions opts, CancellationToken ct = default)
+    {
+        var service = new SearchService();
+        var names = new List<string>();
+        await foreach (var evt in service.SearchAsync(opts, ct))
+        {
+            if (evt is SearchEvent.MatchBatch batch)
+                names.AddRange(batch.Results.Select(r => Path.GetFileName(r.FilePath)));
+            else if (evt is SearchEvent.Match match)
+                names.Add(Path.GetFileName(match.Result.FilePath));
+        }
+        return names.Distinct().ToList();
+    }
 
     public static TheoryData<string, string[], string[]> CanonicalRegexCases() => new()
     {
@@ -139,6 +310,12 @@ public sealed class SemanticRegexTranslationTests
         { @"\b\d{3}-\d{3}-\d{4}\b",
           new[] { "555-123-4567", "call 800-555-0199 now" },
           new[] { "5551234567", "12-345-6789", "phone" } },
+        { @"[1-5]",
+          new[] { "report1.txt", "data-2.log", "notes3", "page4.csv", "summary5", "v15-draft" },
+          new[] { "report.txt", "data-6.log", "notes7", "page8", "summary9", "zero0" } },
+        { @"andrew.*andrew",
+          new[] { "andrew met andrew", "andrewandrew", "x andrew y andrew z" },
+          new[] { "andrew once", "no match here", "andre w" } },
     };
 
     [Theory]
@@ -184,6 +361,16 @@ public sealed class SemanticRegexTranslationTests
         Assert.Contains(@"[\\w.+-]+@[\\w-]+\\.[\\w.-]+", prompt);   // email
         Assert.Contains(@"^ERROR", prompt);                          // line-start
         Assert.Contains(@"\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b", prompt); // IPv4
+
+        // The "numbers 1 through 5" filename example is taught (no backslashes, so it appears verbatim).
+        Assert.Contains("numbers 1 through 5", prompt);
+        Assert.Contains(@"""pattern"":""[1-5]""", prompt);
+        Assert.Contains(@"""searchMode"":""filenames""", prompt);
+
+        // The "repeated word at least N times" example + guidance is taught (line-scoped repetition regex).
+        Assert.Contains("REPETITION / COUNT", prompt);
+        Assert.Contains("at least two times", prompt);
+        Assert.Contains(@"""pattern"":""andrew.*andrew""", prompt);
     }
 
     private static string ReadSystemPrompt()

@@ -1429,6 +1429,13 @@ public sealed class FileLister : IFileLister
             ? new HashSet<string>(includeExtensions.Select(e => "." + NormalizeExtension(e)).Where(s => s.Length > 1), StringComparer.OrdinalIgnoreCase)
             : null;
 
+        // Skip-extension exclusion (e.g. "log", "tmp"). The Everything/SDK backends apply this at
+        // query time via "!ext:"; the managed walker must apply it here so SkipExtensions is honored
+        // on every backend — these files are dropped entirely (no content read), matching the
+        // documented SearchOptions.SkipExtensions contract.
+        var earlySkipExts = EarlySkipExtensions;
+        bool hasEarlySkipExts = earlySkipExts.Count > 0;
+
         int yielded = 0;
         int dirCount = 0;
         while (stack.Count > 0)
@@ -1501,6 +1508,15 @@ public sealed class FileLister : IFileLister
                         {
                             var ext = Path.GetExtension(entry);
                             if (ext.Length == 0 || !extSet.Contains(ext)) continue;
+                        }
+                        if (hasEarlySkipExts)
+                        {
+                            var ext = Path.GetExtension(entry);
+                            if (ext.Length > 1 && earlySkipExts.Contains(ext.AsSpan(1).ToString()))
+                            {
+                                Interlocked.Increment(ref _earlyExcludedByExtensionFiles);
+                                continue;
+                            }
                         }
                         if (!FileNameMatchesLiteralTerms(entry, EarlyFileNameLiteralTerms))
                             continue;

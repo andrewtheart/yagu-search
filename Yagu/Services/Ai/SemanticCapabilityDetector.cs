@@ -63,13 +63,18 @@ public sealed class GpuNpuCapabilityDetector : ISemanticCapabilityDetector
     {
         try
         {
-            return HasHardwareDeviceInClass(DisplayClassKey)
+            bool accelerated = HasHardwareDeviceInClass(DisplayClassKey)
                 || HasHardwareDeviceInClass(ComputeAcceleratorClassKey);
+            LogService.Instance.Verbose("Semantic.Capability",
+                $"Accelerated hardware detected: {accelerated} (default query mode = {(accelerated ? "Semantic" : "Traditional")}).");
+            return accelerated;
         }
-        catch
+        catch (Exception ex)
         {
             // Be conservative: an unreadable registry / unexpected layout means we cannot confirm
             // an accelerator, so default to Traditional rather than risk a slow CPU-only model.
+            LogService.Instance.Verbose("Semantic.Capability",
+                "Hardware accelerator detection failed; assuming no accelerator (defaulting to Traditional).", ex);
             return false;
         }
     }

@@ -17,6 +17,8 @@ namespace Yagu.Services.Ai;
 /// </summary>
 internal static class SemanticPlanJsonExtractor
 {
+    private const string LogSource = "Semantic.JsonExtractor";
+
     /// <summary>
     /// Extracts the first usable JSON object from <paramref name="raw"/> (tolerating code fences or
     /// surrounding prose) and deserializes it into a <see cref="SemanticSearchPlan"/>.
@@ -30,6 +32,8 @@ internal static class SemanticPlanJsonExtractor
         if (json is null)
         {
             error = "The model did not return a JSON object.";
+            LogService.Instance.Verbose(LogSource,
+                $"No JSON object could be extracted from model output ({(raw?.Length ?? 0)} chars).");
             return false;
         }
 
@@ -43,6 +47,8 @@ internal static class SemanticPlanJsonExtractor
         catch (JsonException ex)
         {
             error = $"The model output was not valid JSON: {ex.Message}";
+            LogService.Instance.Verbose(LogSource,
+                $"Extracted candidate did not deserialize as a plan: {ex.Message}. Candidate JSON:\n{json}");
             return false;
         }
     }
@@ -64,7 +70,16 @@ internal static class SemanticPlanJsonExtractor
         string? balanced = FindBalancedObject(text, start);
         if (balanced is not null) return balanced;
 
-        return RepairTruncatedObject(text, start);
+        // No closing brace was found — the model was almost certainly truncated mid-object (e.g. it
+        // hit the token limit). Attempt a best-effort repair so a usable prefix can still be parsed.
+        LogService.Instance.Verbose(LogSource,
+            "Model output has no brace-balanced object (likely truncated); attempting repair.");
+        string? repaired = RepairTruncatedObject(text, start);
+        LogService.Instance.Verbose(LogSource,
+            repaired is null
+                ? "Truncated-object repair failed; no parseable object recovered."
+                : "Truncated-object repair succeeded.");
+        return repaired;
     }
 
     /// <summary>Scans from <paramref name="start"/> and returns the first brace-balanced object, or
