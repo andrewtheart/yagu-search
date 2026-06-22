@@ -152,7 +152,7 @@ public sealed class CliRunnerRegressionTests
     public void SemanticSystemPrompt_DocumentsSortAndGroupFields()
     {
         string prompt = File.ReadAllText(Path.Combine(
-            FindRepoRoot(), "Yagu", "Services", "Ai", "Prompts", "SemanticSearchSystemPrompt.txt"));
+            FindRepoRoot(), "Yagu", "Services", "Ai", "Prompts", "SemanticSearchSystemPrompt.prompt.md"));
 
         Assert.Contains("\"sortBy\"", prompt);
         Assert.Contains("\"sortDirection\"", prompt);

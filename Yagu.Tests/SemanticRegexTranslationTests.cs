@@ -375,7 +375,7 @@ public sealed class SemanticRegexTranslationTests : IDisposable
 
     private static string ReadSystemPrompt()
     {
-        string path = Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "Prompts", "SemanticSearchSystemPrompt.txt");
+        string path = Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "Prompts", "SemanticSearchSystemPrompt.prompt.md");
         Assert.True(File.Exists(path), $"System prompt not found at {path}");
         return File.ReadAllText(path);
     }

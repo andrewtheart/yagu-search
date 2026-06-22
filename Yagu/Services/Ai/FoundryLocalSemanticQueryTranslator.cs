@@ -15,7 +15,7 @@ namespace Yagu.Services.Ai;
 /// </summary>
 public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslator, IAsyncDisposable
 {
-    private const string PromptResourceName = "Yagu.Services.Ai.Prompts.SemanticSearchSystemPrompt.txt";
+    private const string PromptResourceName = "Yagu.Services.Ai.Prompts.SemanticSearchSystemPrompt.prompt.md";
     private const string LogSource = "Semantic.Translator";
 
     private readonly bool _enabled;
@@ -516,7 +516,9 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         if (stream is null)
             throw new InvalidOperationException($"Embedded prompt resource '{PromptResourceName}' was not found.");
         using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
+        // The prompt is a VS Code ".prompt.md" with editor-only YAML front matter; strip it so the
+        // model receives only the live prompt body.
+        return SemanticPromptText.StripFrontMatter(reader.ReadToEnd());
     }
 
     public async ValueTask DisposeAsync()
