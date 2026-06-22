@@ -116,19 +116,27 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                 ?? throw new InvalidOperationException("No compatible local model is available for this machine.");
 
             bool cached = await model.IsCachedAsync(cancellationToken).ConfigureAwait(false);
-            progress?.Report(new SemanticTranslationProgress
-            {
-                Stage = SemanticTranslationStage.DownloadingModel,
-                Detail = model.Alias,
-                Percent = cached ? 100 : 0,
-            });
-            await model.DownloadAsync(
-                pct => progress?.Report(new SemanticTranslationProgress
+            // Only surface the download UI when the model isn't already on disk. A cached model
+            // makes DownloadAsync a fast no-op, so flashing "Downloading model — 100%" on every
+            // launch wrongly implies a re-download that never actually happens.
+            if (!cached)
+                progress?.Report(new SemanticTranslationProgress
                 {
                     Stage = SemanticTranslationStage.DownloadingModel,
                     Detail = model.Alias,
-                    Percent = pct,
-                }),
+                    Percent = 0,
+                });
+            await model.DownloadAsync(
+                pct =>
+                {
+                    if (!cached)
+                        progress?.Report(new SemanticTranslationProgress
+                        {
+                            Stage = SemanticTranslationStage.DownloadingModel,
+                            Detail = model.Alias,
+                            Percent = pct,
+                        });
+                },
                 cancellationToken).ConfigureAwait(false);
 
             progress?.Report(new SemanticTranslationProgress
@@ -173,17 +181,21 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
 
         var manager = FoundryLocalManager.Instance;
 
-        progress?.Report(new SemanticTranslationProgress
-        {
-            Stage = SemanticTranslationStage.DownloadingExecutionProviders,
-        });
+        // Execution providers are cached on disk by Foundry Local after the first run. The
+        // register step still runs each process, but performs no download when already cached.
+        // Surface the "Downloading AI runtime" stage only while a real download is in flight
+        // (callback reports < 100%), so repeat launches don't appear to re-download every time.
         await manager.DownloadAndRegisterEpsAsync(
-            (epName, pct) => progress?.Report(new SemanticTranslationProgress
+            (epName, pct) =>
             {
-                Stage = SemanticTranslationStage.DownloadingExecutionProviders,
-                Detail = epName,
-                Percent = pct,
-            }),
+                if (pct < 100)
+                    progress?.Report(new SemanticTranslationProgress
+                    {
+                        Stage = SemanticTranslationStage.DownloadingExecutionProviders,
+                        Detail = epName,
+                        Percent = pct,
+                    });
+            },
             cancellationToken).ConfigureAwait(false);
 
         _catalog = await manager.GetCatalogAsync(cancellationToken).ConfigureAwait(false);
@@ -322,7 +334,14 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         var s = chat.Settings;
         s.Temperature = 0f;
         s.TopP = 1f;
-        s.MaxTokens = 1536;
+        // Keep input + output well under phi-3.5-mini's 4096-token LongRoPE boundary. This model's
+        // ONNX export produces garbage ("token salad") once the TOTAL sequence length passes 4096
+        // (the long-factor RoPE branch is broken in the export), so an over-long generation would
+        // first emit the valid JSON object and then degenerate into junk. The trimmed system prompt
+        // is ~2.8K tokens and the JSON object we need is <150 tokens, so a 512-token cap leaves a
+        // wide safety margin (~2.8K + 512 ≈ 3.3K < 4096) while still fitting the largest realistic
+        // plan, and it makes translation noticeably faster by stopping the model from rambling.
+        s.MaxTokens = 512;
         s.RandomSeed = 0;
 
         // Repetition penalties are load-bearing for phi-3.5-mini in the Foundry Local runtime: with

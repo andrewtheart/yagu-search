@@ -405,6 +405,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// <summary>True while a natural-language query is being translated by the local model.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SemanticStatusBarVisibility))]
+    [NotifyPropertyChangedFor(nameof(SearchModeSplitButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(SearchActionButtonVisibility))]
     public partial bool IsTranslatingSemanticQuery { get; set; }
 
     /// <summary>Status/progress line shown next to the mode toggle during translation.</summary>
@@ -426,16 +428,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         SemanticSearchAvailable ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
 
     /// <summary>The search button is a SplitButton (with a chevron mode picker) only while semantic
-    /// search is available AND idle. During a search it is replaced by the morphing Cancel button.</summary>
+    /// search is available AND fully idle. As soon as a search starts — including the semantic
+    /// translation phase — it is replaced by the morphing Cancel button so the user can't fire a
+    /// second concurrent run (which would corrupt the local model's in-flight inference).</summary>
     public Microsoft.UI.Xaml.Visibility SearchModeSplitButtonVisibility =>
-        SemanticSearchAvailable && !IsSearching
+        SemanticSearchAvailable && !IsSearching && !IsTranslatingSemanticQuery
             ? Microsoft.UI.Xaml.Visibility.Visible
             : Microsoft.UI.Xaml.Visibility.Collapsed;
 
     /// <summary>The plain Search/Cancel button is shown when semantic search is unavailable (no mode
-    /// chevron) or whenever a search is running (so it can morph into the red Cancel action).</summary>
+    /// chevron) or whenever a search is running — including the semantic translation phase — so it
+    /// can morph into the red Cancel action the moment the user clicks Search.</summary>
     public Microsoft.UI.Xaml.Visibility SearchActionButtonVisibility =>
-        !SemanticSearchAvailable || IsSearching
+        !SemanticSearchAvailable || IsSearching || IsTranslatingSemanticQuery
             ? Microsoft.UI.Xaml.Visibility.Visible
             : Microsoft.UI.Xaml.Visibility.Collapsed;
 
@@ -1638,6 +1643,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// </summary>
     public async Task SubmitSearchAsync()
     {
+        // Re-entrancy guard: a second submit (Enter in the query box, F5, a double-click on the
+        // Search button) while a semantic translation is already in flight would start a concurrent
+        // model inference on the same chat client and corrupt its output ("the model did not return
+        // a JSON object"). Ignore additional submits until the translation finishes or is cancelled.
+        if (IsTranslatingSemanticQuery) return;
+
         if (IsSemanticQueryMode && SemanticSearchAvailable)
         {
             var applied = await TranslateSemanticQueryAsync().ConfigureAwait(true);
@@ -1645,6 +1656,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         }
 
         await StartSearchAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>Cancels an in-flight semantic translation (the local-model inference that turns a
+    /// natural-language query into search settings). Wired to the morphing Cancel button so a user
+    /// can abort the AI step the same way they cancel a running file search.</summary>
+    public void CancelSemanticTranslation()
+    {
+        try { _semanticCts?.Cancel(); } catch { }
+        SemanticStatusText = string.Empty;
     }
 
     /// <summary>

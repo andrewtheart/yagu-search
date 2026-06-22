@@ -1612,8 +1612,11 @@ internal static class CliRunner
                                           The first time you use it, Yagu offers a choice of local
                                           models to download (recommended pick first). Decline and it
                                           falls back to a literal Traditional search of your text.
-                  --semantic-model <alias> Force a specific Foundry Local model (default: auto-pick
-                                          the best small model for this machine's hardware). Skips the
+                  --semantic-model <alias> Force a specific Foundry Local model, by family alias
+                                          (e.g. phi-4-mini) or exact variant id (e.g.
+                                          Phi-4-mini-instruct-cuda-gpu:5). Default: auto-pick the
+                                          best small model for this machine's hardware, preferring
+                                          the less-quantized GPU build for accuracy. Skips the
                                           first-run model-download prompt.
                   --accept-model-download Auto-download the recommended model without prompting (for
                                           scripts / non-interactive consoles). Without it, a redirected

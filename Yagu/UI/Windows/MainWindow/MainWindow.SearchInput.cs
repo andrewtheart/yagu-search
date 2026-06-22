@@ -125,6 +125,12 @@ public sealed partial class MainWindow
 
     private async void OnSearchCancelClick(object sender, RoutedEventArgs e)
     {
+        if (ViewModel.IsTranslatingSemanticQuery)
+        {
+            // The AI is mid-translation — clicking Cancel aborts the model inference, not a file scan.
+            ViewModel.CancelSemanticTranslation();
+            return;
+        }
         if (ViewModel.IsSearching)
         {
             await ViewModel.CancelAsync();
@@ -219,7 +225,12 @@ public sealed partial class MainWindow
     private async void OnQueryKeyDown(object sender, KeyRoutedEventArgs e)
     {
         // Enter is handled by OnQuerySubmitted — only handle Escape here.
-        if (e.Key == VirtualKey.Escape && ViewModel.IsSearching)
+        if (e.Key == VirtualKey.Escape && ViewModel.IsTranslatingSemanticQuery)
+        {
+            e.Handled = true;
+            ViewModel.CancelSemanticTranslation();
+        }
+        else if (e.Key == VirtualKey.Escape && ViewModel.IsSearching)
         {
             e.Handled = true;
             await ViewModel.CancelAsync();

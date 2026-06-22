@@ -350,25 +350,24 @@ public sealed partial class MainWindow : Window, IDisposable
         };
         ViewModel.PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName != nameof(ViewModel.IsSearching)) return;
-            if (ViewModel.IsSearching)
+            if (e.PropertyName != nameof(ViewModel.IsSearching) &&
+                e.PropertyName != nameof(ViewModel.IsTranslatingSemanticQuery)) return;
+
+            // "Busy" covers both the semantic translation phase and the actual file scan, so the
+            // Search button morphs into the red Cancel action the instant the user clicks Search —
+            // even in semantic mode, before a single file has been scanned.
+            bool busy = ViewModel.IsSearching || ViewModel.IsTranslatingSemanticQuery;
+            if (busy)
             {
                 if (_launcherMode) ExitLauncherMode();
                 SearchCancelIcon.Glyph = "\uE711";   // Cancel X
                 SearchCancelLabel.Text = "Cancel";
-                ToolTipService.SetToolTip(SearchCancelButton, "Cancel search (F5)");
+                ToolTipService.SetToolTip(SearchCancelButton, "Cancel (F5)");
                 if (TryGetApplicationStyle("DefaultButtonStyle") is { } defaultButtonStyle)
                     SearchCancelButton.Style = defaultButtonStyle;
                 SearchCancelButton.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 255, 220, 220));
                 SearchCancelButton.BorderBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 216, 80, 80));
                 SearchCancelButton.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 120, 24, 24));
-                _autoScrollEnabled = AutoScrollResultsCheckBox.Visibility == Visibility.Visible
-                    && AutoScrollResultsCheckBox.IsChecked == true;
-                _autoScrollTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-                _autoScrollTimer.Tick += OnAutoScrollTick;
-                _autoScrollTimer.Start();
-                ThroughputSparkline.Opacity = 0.8;
-                DiskGaugeBar.Opacity = 0.5;
             }
             else
             {
@@ -380,6 +379,23 @@ public sealed partial class MainWindow : Window, IDisposable
                 SearchCancelButton.ClearValue(Control.BackgroundProperty);
                 SearchCancelButton.ClearValue(Control.BorderBrushProperty);
                 SearchCancelButton.ClearValue(Control.ForegroundProperty);
+            }
+
+            // Auto-scroll and the disk/throughput gauges track the real file scan, not the AI
+            // translation step, so they stay gated on IsSearching specifically.
+            if (e.PropertyName != nameof(ViewModel.IsSearching)) return;
+            if (ViewModel.IsSearching)
+            {
+                _autoScrollEnabled = AutoScrollResultsCheckBox.Visibility == Visibility.Visible
+                    && AutoScrollResultsCheckBox.IsChecked == true;
+                _autoScrollTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+                _autoScrollTimer.Tick += OnAutoScrollTick;
+                _autoScrollTimer.Start();
+                ThroughputSparkline.Opacity = 0.8;
+                DiskGaugeBar.Opacity = 0.5;
+            }
+            else
+            {
                 _autoScrollTimer?.Stop();
                 ThroughputSparkline.Opacity = 0.45;
                 DiskGaugeBar.Opacity = 0.25;

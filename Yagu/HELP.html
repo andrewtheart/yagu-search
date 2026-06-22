@@ -470,8 +470,9 @@ name”</em>), Yagu defaults to <strong>descending</strong>; say
 sent off the device. The model is downloaded once via Microsoft
 <strong>Foundry Local</strong> and cached for reuse.</li>
 <li><strong>Hardware‑aware.</strong> Yagu auto‑picks the best small
-instruct model your machine can run, preferring NPU, then GPU, then CPU,
-so it works even without a dedicated GPU/NPU.</li>
+instruct model your machine can run. Within that model it prefers the
+less‑quantized GPU build for accuracy, falling back to NPU then CPU,
+so it still works even without a dedicated GPU/NPU.</li>
 <li><strong>Smart default mode.</strong> On machines with a supported
 GPU/NPU, the search bar starts in <strong>Semantic</strong> mode
 automatically; machines with no supported accelerator start in
@@ -2605,7 +2606,8 @@ integration:</p>
 <p>Describe the search in plain language and let a local on-device model
 fill in the flags. The query never leaves the machine; the model is
 downloaded once via Microsoft Foundry Local and auto-selected for your
-hardware (NPU &gt; GPU &gt; CPU).</p>
+hardware (prefers the less-quantized GPU build for accuracy, falling back
+to NPU then CPU).</p>
 <table>
 <colgroup>
 <col style="width: 50%" />
@@ -2627,9 +2629,11 @@ becomes optional (defaults to the current directory).</td>
 </tr>
 <tr>
 <td><code>--semantic-model &lt;alias&gt;</code></td>
-<td>Force a specific Foundry Local model. Default: auto-pick the best
-small model for this machine’s hardware. Skips the first-run
-model-download prompt.</td>
+<td>Force a specific Foundry Local model, by family alias (e.g.
+<code>phi-4-mini</code>) or by exact variant id (e.g.
+<code>Phi-4-mini-instruct-cuda-gpu:5</code>). Default: auto-pick the best
+small model for this machine’s hardware, preferring the less-quantized GPU
+build for accuracy. Skips the first-run model-download prompt.</td>
 </tr>
 <tr>
 <td><code>--accept-model-download</code></td>

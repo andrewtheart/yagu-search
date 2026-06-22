@@ -80,7 +80,7 @@ You can also ask Yagu to **sort** or **group** the results in the same sentence 
 Notes:
 
 - **Runs entirely on your machine.** Your query is never sent off the device. The model is downloaded once via Microsoft **Foundry Local** and cached for reuse.
-- **Hardware‑aware.** Yagu auto‑picks the best small instruct model your machine can run, preferring NPU, then GPU, then CPU, so it works even without a dedicated GPU/NPU.
+- **Hardware‑aware.** Yagu auto‑picks the best small instruct model your machine can run. Within that model it prefers the less‑quantized **GPU** build for accuracy, falling back to **NPU** then **CPU**, so it still works even without a dedicated GPU/NPU.
 - **Smart default mode.** On machines with a supported GPU/NPU, the search bar starts in **Semantic** mode automatically; machines with no supported accelerator start in **Traditional**. You can override the default for accelerated machines under **Settings → Search Defaults → Default to Traditional search mode** (that option is greyed out when no supported GPU/NPU is present). Either way you can switch modes any time from the Search‑button chevron.
 - **First run asks before downloading.** The first time you switch to Semantic, a borderless dialog lists the available models with their download sizes. The model best suited to your hardware is pre‑selected and marked **Recommended**; smaller or lower‑ranked models show a ⚠ warning that they *may be less accurate*. Choose **Use this model** to download (a progress bar shows the percentage), or **Not now** to cancel — declining switches you back to **Traditional**. Already‑cached models are tagged **Downloaded** and start instantly. After the first download the prompt is not shown again.
 - **Status while translating.** A progress line appears just below the search card (in the status area above the results) while the runtime/model loads and the query is being translated, so it never pushes the search box down.
@@ -888,12 +888,13 @@ Yagu.exe --cli --directory <path> PATTERN [OPTIONS]
 
 Describe the search in plain language and let a local on-device model fill in the
 flags. The query never leaves the machine; the model is downloaded once via Microsoft
-Foundry Local and auto-selected for your hardware (NPU > GPU > CPU).
+Foundry Local and auto-selected for your hardware (prefers the less-quantized GPU build
+for accuracy, falling back to NPU then CPU).
 
 | Flag | Description |
 | --- | --- |
 | `-SP`, `--semantic-pattern <text>` | Natural-language request translated into the search flags (directory, globs, dates, sizes, search mode) and then executed. Replaces the positional `PATTERN`; `--directory` becomes optional (defaults to the current directory). |
-| `--semantic-model <alias>` | Force a specific Foundry Local model. Default: auto-pick the best small model for this machine's hardware. Skips the first-run model-download prompt. |
+| `--semantic-model <alias>` | Force a specific Foundry Local model, by family alias (e.g. `phi-4-mini`) or by exact variant id (e.g. `Phi-4-mini-instruct-cuda-gpu:5`). Default: auto-pick the best small model for this machine's hardware, preferring the less-quantized GPU build for accuracy. Skips the first-run model-download prompt. |
 | `--accept-model-download` | Auto-download the recommended model without prompting — for scripts and non-interactive consoles. Without it, a redirected console falls back to Traditional search instead of downloading. |
 | `--explain` | With `--semantic-pattern`, print the interpreted search parameters and exit **without** searching (a dry-run). Also reports the selected model and the model's raw JSON output (to stderr) to help diagnose interpretation. |
 

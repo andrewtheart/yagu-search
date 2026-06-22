@@ -14,21 +14,27 @@ public sealed class FoundryModelSelector
     /// <summary>
     /// Ordered preference of small/fast instruct model alias fragments. Earlier entries win.
     /// Matched case-insensitively as a substring of the catalog alias so minor naming/version
-    /// differences (e.g. "phi-3.5-mini-instruct-generic-gpu") still resolve.
+    /// differences (e.g. "phi-4-mini-instruct-cuda-gpu") still resolve.
     ///
-    /// <c>phi-3.5-mini</c> leads because it is the most accurate small instruct model for this
-    /// structured JSON-extraction task (it reliably keeps dates, picks the right size direction,
-    /// and distinguishes created-vs-modified). <c>qwen2.5-1.5b</c> is the next-best lighter option,
-    /// and the tiny <c>qwen2.5-0.5b</c> sits at the very end as a last-resort fallback only — it is
-    /// NOT reliable enough on its own (it drops dates, mis-routes search terms, and emits invalid
-    /// JSON), so it is used solely when nothing larger can run on the machine.
+    /// <c>phi-4-mini</c> leads because its ONNX export stays coherent well past 4096 tokens (unlike
+    /// the phi-3.5-mini trtrtx export, whose LongRoPE long-factor branch degenerates into token-salad
+    /// once input+output exceeds 4096) AND, on a machine with a capable GPU, its less-quantized
+    /// CUDA/DirectML build is the most accurate small model for this structured JSON-extraction task.
+    /// <c>phi-3.5-mini</c> remains a strong runner-up for machines without a GPU. <c>qwen2.5-1.5b</c>
+    /// is the next-best lighter option, and the tiny <c>qwen2.5-0.5b</c> sits at the very end as a
+    /// last-resort fallback only — it is NOT reliable enough on its own (it drops dates, mis-routes
+    /// search terms, and emits invalid JSON), so it is used solely when nothing larger can run.
+    ///
+    /// Note: which DEVICE variant of the chosen family is used (GPU vs NPU vs CPU) is decided
+    /// separately by <see cref="PreferAccurateVariantAsync"/>, which prefers the less-quantized GPU build
+    /// when this machine can run it.
     /// </summary>
     public static readonly IReadOnlyList<string> PreferredAliasFragments =
     [
+        "phi-4-mini",
         "phi-3.5-mini",
         "qwen2.5-1.5b",
         "phi-3-mini",
-        "phi-4-mini",
         "qwen2.5-3b",
         "deepseek-r1-1.5b",
         "phi-4",
@@ -51,7 +57,44 @@ public sealed class FoundryModelSelector
         ArgumentNullException.ThrowIfNull(catalog);
 
         if (!string.IsNullOrWhiteSpace(overrideAlias))
-            return await catalog.GetModelAsync(overrideAlias.Trim(), cancellationToken).ConfigureAwait(false);
+        {
+            string wanted = overrideAlias.Trim();
+
+            // First let Foundry resolve the value as an ALIAS (e.g. "phi-4-mini"), which yields the
+            // family model carrying every hardware-available variant. When it resolves as an alias we
+            // still apply the accuracy-oriented variant preference below (so "phi-4-mini" upgrades to
+            // the less-quantized GPU build when this machine can run it).
+            var direct = await catalog.GetModelAsync(wanted, cancellationToken).ConfigureAwait(false);
+            if (direct is not null) return await PreferAccurateVariantAsync(catalog, direct, cancellationToken).ConfigureAwait(false);
+
+            // The alias lookup above only resolves family aliases, never specific variant Ids
+            // (e.g. "Phi-4-mini-instruct-cuda-gpu:5"). When the caller named a concrete variant — to
+            // force a specific build — resolve it by its unique model id and honor that exact choice
+            // (no preference upgrade: an explicit variant id is a deliberate pin).
+            var variant = await catalog.GetModelVariantAsync(wanted, cancellationToken).ConfigureAwait(false);
+            if (variant is not null) return variant;
+
+            // Last resort: the value may be a variant id without its version suffix (e.g. ":5"), or a
+            // device-specific id that only appears inside an alias' variant list. Resolve the family
+            // alias and match against its variants by id/alias (suffix-insensitive).
+            string baseWanted = StripVersionSuffix(wanted);
+            foreach (var familyAlias in CandidateAliasesFor(wanted))
+            {
+                var family = await catalog.GetModelAsync(familyAlias, cancellationToken).ConfigureAwait(false);
+                var match = family?.Variants?.FirstOrDefault(v => v is not null && (
+                    string.Equals(v.Id, wanted, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(StripVersionSuffix(v.Id), baseWanted, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(v.Alias, wanted, StringComparison.OrdinalIgnoreCase)));
+                if (match is not null)
+                {
+                    // Re-resolve as a dedicated single-variant handle (see PreferAccurateVariantAsync):
+                    // a wrapper from Variants routes load/inference back through the family alias.
+                    var dedicated = await catalog.GetModelVariantAsync(match.Id, cancellationToken).ConfigureAwait(false);
+                    return dedicated ?? match;
+                }
+            }
+            return null;
+        }
 
         var models = await catalog.ListModelsAsync(cancellationToken).ConfigureAwait(false);
         if (models is null || models.Count == 0) return null;
@@ -68,10 +111,83 @@ public sealed class FoundryModelSelector
         string? chosenAlias = SelectAlias(candidates);
         if (chosenAlias is null) return null;
 
+        // Re-fetch the chosen family by alias so the returned IModel carries the full set of
+        // hardware-available variants, then upgrade to the most accurate one this machine can run.
+        var chosenFamily = await catalog.GetModelAsync(chosenAlias, cancellationToken).ConfigureAwait(false);
+        if (chosenFamily is not null)
+            return await PreferAccurateVariantAsync(catalog, chosenFamily, cancellationToken).ConfigureAwait(false);
+
         return models.FirstOrDefault(m =>
             string.Equals(m.Alias, chosenAlias, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(m.Info?.Alias, chosenAlias, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(m.Id, chosenAlias, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Upgrades a resolved family model to its most ACCURATE locally-runnable variant. Foundry's
+    /// default per-alias pick favors the lowest-power device (NPU &gt; GPU &gt; CPU), but the
+    /// aggressively int4-quantized NPU build is measurably worse at this structured-JSON task than
+    /// the less-quantized GPU builds. <see cref="IModel.Variants"/> is already filtered to execution
+    /// providers this machine actually has, so a GPU variant is only ever chosen when it can run;
+    /// otherwise this naturally falls back to NPU and then CPU.
+    ///
+    /// The chosen variant is re-resolved through <see cref="ICatalog.GetModelVariantAsync"/> so the
+    /// returned IModel is a DEDICATED single-variant handle. Operating on a wrapper pulled straight
+    /// from <see cref="IModel.Variants"/> routes load/inference back through the family alias (whose
+    /// default device is the NPU), which would silently undo the upgrade. Returns
+    /// <paramref name="family"/> unchanged when no better, separately-resolvable variant exists.
+    /// </summary>
+    private static async Task<IModel> PreferAccurateVariantAsync(
+        ICatalog catalog, IModel family, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<IModel>? variants = null;
+        try { variants = family.Variants?.ToList(); } catch { /* SDK may not populate variants */ }
+
+        if (variants is null || variants.Count <= 1) return family;
+
+        IModel? best = null;
+        int bestScore = int.MinValue;
+        foreach (var v in variants)
+        {
+            if (v is null) continue;
+            int score = VariantAccuracyScore(v);
+            if (score > bestScore) { best = v; bestScore = score; }
+        }
+        if (best is null || string.IsNullOrWhiteSpace(best.Id) ||
+            string.Equals(best.Id, family.Id, StringComparison.OrdinalIgnoreCase))
+            return family; // already on the best variant
+
+        // Re-resolve as a dedicated single-variant handle so load/inference actually target it.
+        var dedicated = await catalog.GetModelVariantAsync(best.Id, cancellationToken).ConfigureAwait(false);
+        return dedicated ?? family;
+    }
+
+    /// <summary>
+    /// Accuracy-oriented score for a model variant. Device tier dominates (GPU &gt; NPU &gt; CPU per
+    /// the chosen policy); within GPU, less-quantized runtimes win (CUDA &gt; DirectML/generic &gt;
+    /// TensorRT-RTX &gt; OpenVINO-GPU).
+    /// </summary>
+    private static int VariantAccuracyScore(IModel variant)
+    {
+        string id = (variant.Id ?? variant.Alias ?? string.Empty).ToLowerInvariant();
+        DeviceType device = variant.Info?.Runtime.DeviceType ?? DeviceType.CPU;
+
+        int deviceTier = device switch
+        {
+            DeviceType.GPU => 300,
+            DeviceType.NPU => 200,
+            DeviceType.CPU => 100,
+            _ => 0,
+        };
+
+        int runtimeBonus =
+            id.Contains("cuda") ? 40 :
+            id.Contains("generic") ? 30 :   // DirectML generic GPU/CPU build (less quantized)
+            id.Contains("trtrtx") || id.Contains("tensorrt") ? 20 :
+            id.Contains("openvino") ? 10 :
+            0;
+
+        return deviceTier + runtimeBonus;
     }
 
     /// <summary>
@@ -109,6 +225,33 @@ public sealed class FoundryModelSelector
             .ThenBy(c => c.Alias, StringComparer.OrdinalIgnoreCase)
             .First();
         return smallest.Alias;
+    }
+
+    /// <summary>Removes a trailing catalog version suffix (e.g. ":5") from a model id/alias.</summary>
+    private static string StripVersionSuffix(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        int colon = value.LastIndexOf(':');
+        // Only strip when the tail is purely digits (a version), not a drive-letter or namespace colon.
+        if (colon > 0 && colon < value.Length - 1 && value[(colon + 1)..].All(char.IsDigit))
+            return value[..colon];
+        return value;
+    }
+
+    /// <summary>
+    /// Family aliases to probe when resolving a concrete variant id. Returns every preference-list
+    /// fragment contained in the id (longest first so "phi-4-mini" wins over "phi-4"), plus the id
+    /// with its version suffix stripped as a final candidate.
+    /// </summary>
+    private static IEnumerable<string> CandidateAliasesFor(string variantId)
+    {
+        string lowered = (variantId ?? string.Empty).ToLowerInvariant();
+        foreach (var frag in PreferredAliasFragments
+                     .Where(f => lowered.Contains(f, StringComparison.OrdinalIgnoreCase))
+                     .OrderByDescending(f => f.Length))
+            yield return frag;
+        string stripped = StripVersionSuffix(variantId);
+        if (!string.IsNullOrWhiteSpace(stripped)) yield return stripped;
     }
 
     private static bool IsTextChatCandidate(ModelCandidate c)
