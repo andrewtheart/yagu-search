@@ -201,6 +201,7 @@ public sealed partial class MainWindow : Window, IDisposable
             handledEventsToo: true);
         InitializeHelpKeyboardShortcut();
         SearchCancelButton.SizeChanged += (_, _) => AlignBrowseButtonToSearchButton();
+        SearchSplitButton.SizeChanged += (_, _) => AlignBrowseButtonToSearchButton();
         SyncLayoutToggles(ViewModel.PreviewModeIndex);
         InitializeAdvancedOptionsDrawerStateTracking();
         SetAdvancedOptionsDrawerExpandedWidthState(AdvancedOptionsExpander.IsExpanded);

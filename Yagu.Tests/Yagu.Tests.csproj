@@ -88,6 +88,12 @@
     <Compile Include="..\Yagu\Services\FontContrastWarningService.cs" Link="Source\Services\FontContrastWarningService.cs" />
     <Compile Include="..\Yagu\Native\NativeSearcher.cs" Link="Source\Native\NativeSearcher.cs" />
     <Compile Include="..\Yagu\Native\EverythingSdk.cs" Link="Source\Native\EverythingSdk.cs" />
+    <!-- Semantic search: pure model→SearchOptions mapping (no Foundry/WindowsAppSDK deps). -->
+    <Compile Include="..\Yagu\Models\SemanticSearchPlan.cs" Link="Source\Models\SemanticSearchPlan.cs" />
+    <Compile Include="..\Yagu\Services\Ai\ISemanticQueryTranslator.cs" Link="Source\Services\Ai\ISemanticQueryTranslator.cs" />
+    <Compile Include="..\Yagu\Services\Ai\SemanticPlanApplier.cs" Link="Source\Services\Ai\SemanticPlanApplier.cs" />
+    <Compile Include="..\Yagu\Services\Ai\SemanticPlanJsonExtractor.cs" Link="Source\Services\Ai\SemanticPlanJsonExtractor.cs" />
+    <Compile Include="..\Yagu\Services\Ai\SemanticCapabilityDetector.cs" Link="Source\Services\Ai\SemanticCapabilityDetector.cs" />
   </ItemGroup>
 
   <!-- Copy the Rust cdylib next to the test assembly so the native fast-path

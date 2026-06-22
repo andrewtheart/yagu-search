@@ -2146,6 +2146,26 @@ public sealed partial class SettingsWindow : Window
             precedenceGroup.Children.Add(precedence);
             precedenceGroup.Children.Add(new TextBlock { Text = "Controls which side wins when a file is both matched by your Include filter and excluded by .gitignore (only relevant when Obey .gitignore is on). Leave on \"Ask me each time\" to be prompted; the prompt's \"Don't ask again\" option also updates this setting.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
+            var semanticGroup = AddSettingsGroupBox(g, "Semantic Search");
+            bool overrideEnabled = _viewModel.SemanticDefaultOverrideEnabled;
+            var defaultTraditional = new CheckBox
+            {
+                Content = NextSearchLabel("Default to Traditional search mode"),
+                IsChecked = overrideEnabled && _viewModel.DefaultToTraditionalSearchMode,
+                IsEnabled = overrideEnabled,
+            };
+            defaultTraditional.Checked += (_, _) => { _viewModel.DefaultToTraditionalSearchMode = true; MarkSettingsDirty(requireValueChanges: false); };
+            defaultTraditional.Unchecked += (_, _) => { _viewModel.DefaultToTraditionalSearchMode = false; MarkSettingsDirty(requireValueChanges: false); };
+            semanticGroup.Children.Add(defaultTraditional);
+            semanticGroup.Children.Add(new TextBlock
+            {
+                Text = overrideEnabled
+                    ? "Your machine has a GPU/NPU that can run Semantic search, so the search bar defaults to Semantic. Check this to default to Traditional instead. You can always switch modes from the search-button chevron."
+                    : "Disabled: no supported GPU/NPU was detected, so Yagu always defaults to Traditional search. Semantic mode can still be selected manually from the search-button chevron when available.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
         }
 
         // ── Search Limits ──

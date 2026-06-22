@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Yagu.Models;
 using Yagu.Services;
+using Yagu.Services.Ai;
 
 namespace Yagu;
 
@@ -88,6 +89,15 @@ internal static class CliRunner
         if (!string.IsNullOrWhiteSpace(args.LoadSessionPath))
             return RunLoadSession(args.LoadSessionPath!, vtEnabled);
 
+        // --semantic-pattern: translate the natural-language request into search flags via the
+        // local model, folding the result into `args` before the usual validation runs.
+        if (!string.IsNullOrWhiteSpace(args.SemanticPattern))
+        {
+            var semanticSettings = LoadEffectiveSettings(args);
+            var (semCode, stop) = RunSemanticAsync(args, semanticSettings).GetAwaiter().GetResult();
+            if (stop) return semCode;
+        }
+
         if (string.IsNullOrWhiteSpace(args.Directory))
         {
             WriteError("error: --directory is required when using --cli.");
@@ -128,6 +138,316 @@ internal static class CliRunner
         var options = BuildSearchOptions(args, settings);
 
         return RunSearchAsync(options, args, vtEnabled).GetAwaiter().GetResult();
+    }
+
+    // -----------------------------------------------------------------------
+    // Semantic translation (--semantic-pattern)
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Runs the local model to translate <see cref="CliArgs.SemanticPattern"/> into concrete search
+    /// flags and folds them into <paramref name="args"/>. Returns <c>Stop=true</c> when the caller
+    /// should return <c>Code</c> immediately (a failure, or an <c>--explain</c> dry-run); otherwise
+    /// the normal search pipeline continues with the populated args.
+    /// </summary>
+    private static async Task<(int Code, bool Stop)> RunSemanticAsync(CliArgs args, AppSettings settings)
+    {
+        if (!settings.SemanticSearchEnabled)
+        {
+            WriteError("error: semantic search is disabled (SemanticSearchEnabled = false in settings).");
+            return (2, true);
+        }
+
+        bool explicitModel = !string.IsNullOrWhiteSpace(args.SemanticModel);
+        string? modelAlias = explicitModel
+            ? args.SemanticModel
+            : (string.IsNullOrWhiteSpace(settings.SemanticModelAlias) ? null : settings.SemanticModelAlias);
+
+        await using var translator = new FoundryLocalSemanticQueryTranslator(enabled: true, modelOverrideAlias: modelAlias);
+
+        var context = new SemanticTranslationContext
+        {
+            Now = DateTimeOffset.Now,
+            DefaultDirectory = !string.IsNullOrWhiteSpace(args.Directory) ? args.Directory : Environment.CurrentDirectory,
+        };
+
+        // Progress goes to stderr so stdout stays ripgrep-clean.
+        string? lastProgress = null;
+        var progress = new Progress<SemanticTranslationProgress>(p =>
+        {
+            string msg = p.Message;
+            if (!string.Equals(msg, lastProgress, StringComparison.Ordinal)) { WriteError(msg); lastProgress = msg; }
+        });
+
+        // First run: offer to pick/download a local model (mirrors the GUI download modal). Skipped when
+        // an explicit --semantic-model was given (consent implied) or a model was already downloaded.
+        if (!explicitModel && !settings.SemanticModelDownloaded)
+        {
+            var setup = await EnsureSemanticModelReadyAsync(translator, args, settings, progress, CancellationToken.None)
+                .ConfigureAwait(false);
+            switch (setup)
+            {
+                case SemanticModelSetup.Ready:
+                    break; // model downloaded + persisted — continue to translate
+                case SemanticModelSetup.Declined:
+                    return FallBackToTraditional(args);
+                default: // Failed
+                    return (2, true);
+            }
+        }
+
+        SemanticTranslationResult result;
+        try
+        {
+            result = await translator.TranslateAsync(args.SemanticPattern!.Trim(), context, progress, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            WriteError($"error: semantic translation failed: {ex.Message}");
+            return (2, true);
+        }
+
+        if (!result.Success || result.Plan is null)
+        {
+            if (args.Explain)
+            {
+                WriteError($"model: {translator.SelectedModelAlias ?? "(unknown)"}");
+                if (!string.IsNullOrWhiteSpace(result.RawModelOutput))
+                {
+                    WriteError("raw model output:");
+                    WriteError(result.RawModelOutput);
+                }
+            }
+            WriteError($"error: {result.Error ?? "could not interpret the request."}");
+            return (2, true);
+        }
+
+        var resolved = SemanticPlanApplier.Resolve(result.Plan, context);
+        args.ApplySemanticOverlay(SemanticPlanApplier.ToOverlay(resolved));
+
+        foreach (var w in resolved.Warnings)
+            WriteError($"warning: {w}");
+
+        if (args.Explain)
+        {
+            WriteError($"model: {translator.SelectedModelAlias ?? "(unknown)"}");
+            if (!string.IsNullOrWhiteSpace(result.RawModelOutput))
+            {
+                WriteError("raw model output:");
+                WriteError(result.RawModelOutput);
+            }
+            PrintSemanticExplanation(args, resolved);
+            return (0, true); // dry-run: stop before searching
+        }
+
+        if (!string.IsNullOrWhiteSpace(resolved.Explanation))
+            WriteError($"interpreted: {resolved.Explanation}");
+
+        return (0, false);
+    }
+
+    /// <summary>Result of the first-run model-selection step.</summary>
+    private enum SemanticModelSetup { Ready, Declined, Failed }
+
+    /// <summary>
+    /// When the user declines to download a model, drop to Traditional search: reuse the typed
+    /// semantic text as a literal search pattern and default the directory. With <c>--explain</c>
+    /// there is nothing to interpret, so we stop instead of running a real search.
+    /// </summary>
+    private static (int Code, bool Stop) FallBackToTraditional(CliArgs args)
+    {
+        if (args.Explain)
+        {
+            WriteError("No model selected — semantic translation skipped (nothing to explain).");
+            return (0, true);
+        }
+
+        args.FallBackSemanticToTraditional();
+        WriteError($"Using Traditional search for: {args.Pattern}");
+        return (0, false); // continue the normal pipeline as a literal search
+    }
+
+    /// <summary>
+    /// Mirrors the GUI download modal for the CLI: lists the hardware-appropriate models, lets the
+    /// user pick one or decline, downloads the choice, and persists it so later runs skip the prompt.
+    /// Returns <see cref="SemanticModelSetup.Declined"/> when the user opts out (caller falls back to
+    /// Traditional search) and <see cref="SemanticModelSetup.Failed"/> on an unrecoverable error.
+    /// </summary>
+    private static async Task<SemanticModelSetup> EnsureSemanticModelReadyAsync(
+        FoundryLocalSemanticQueryTranslator translator, CliArgs args, AppSettings settings,
+        IProgress<SemanticTranslationProgress> progress, CancellationToken ct)
+    {
+        // A redirected/non-interactive stdin means we cannot prompt. Only auto-download when the
+        // user explicitly opted in with --accept-model-download; otherwise fall back to Traditional.
+        bool interactive = !Console.IsInputRedirected;
+        if (!interactive && !args.AcceptModelDownload)
+        {
+            WriteError("Semantic search needs a local AI model (first-time setup), but this console");
+            WriteError("cannot prompt for confirmation. Re-run interactively, pass --semantic-model <alias>,");
+            WriteError("or add --accept-model-download to download the recommended model automatically.");
+            return SemanticModelSetup.Declined;
+        }
+
+        WriteError("Semantic search needs a local AI model (first-time setup). Checking available models…");
+
+        IReadOnlyList<SemanticModelOption> options;
+        try
+        {
+            options = await translator.ListModelOptionsAsync(progress, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            WriteError($"error: could not list local models: {ex.Message}");
+            return SemanticModelSetup.Failed;
+        }
+
+        if (options.Count == 0)
+        {
+            WriteError("error: no compatible local model is available for this machine.");
+            return SemanticModelSetup.Failed;
+        }
+
+        var recommended = options.FirstOrDefault(o => o.IsRecommended) ?? options[0];
+
+        bool chosenIsRecommended;
+        string chosenAlias;
+        if (!interactive)
+        {
+            // --accept-model-download on a non-interactive console: take the recommended pick.
+            chosenIsRecommended = true;
+            chosenAlias = recommended.Alias;
+            WriteError($"Auto-accepting the recommended model: {recommended.DisplayName} ({FormatModelSize(recommended.SizeBytes)}).");
+        }
+        else
+        {
+            var pick = PromptForModelChoice(options, recommended);
+            if (pick is null) return SemanticModelSetup.Declined;
+            chosenIsRecommended = pick.IsRecommended;
+            chosenAlias = pick.Alias;
+        }
+
+        try
+        {
+            // A null alias tells the translator to use the recommended/auto pick, matching the GUI so
+            // Yagu keeps tracking the best model for this machine.
+            await translator.PrepareModelAsync(chosenIsRecommended ? null : chosenAlias, progress, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            WriteError($"error: model download failed: {ex.Message}");
+            return SemanticModelSetup.Failed;
+        }
+
+        PersistSemanticModelChoice(chosenIsRecommended ? string.Empty : chosenAlias);
+        settings.SemanticModelDownloaded = true;
+        return SemanticModelSetup.Ready;
+    }
+
+    /// <summary>
+    /// Prints the model menu to stderr and reads a choice from stdin. Returns the chosen option,
+    /// the recommended option on an empty/"y" answer, or null when the user declines or gives up.
+    /// </summary>
+    private static SemanticModelOption? PromptForModelChoice(
+        IReadOnlyList<SemanticModelOption> options, SemanticModelOption recommended)
+    {
+        WriteError("");
+        WriteError("Choose a local AI model for semantic search:");
+        for (int idx = 0; idx < options.Count; idx++)
+        {
+            var o = options[idx];
+            var tags = new List<string>();
+            if (o.IsRecommended) tags.Add("recommended");
+            if (o.IsCached) tags.Add("already downloaded");
+            if (!string.IsNullOrWhiteSpace(o.DeviceLabel)) tags.Add(o.DeviceLabel!);
+            string suffix = tags.Count > 0 ? $"  [{string.Join(", ", tags)}]" : string.Empty;
+            string warn = o.IsBelowRecommended ? "  (!) may give less accurate results" : string.Empty;
+            WriteError($"  {idx + 1,2}) {o.DisplayName,-28} {FormatModelSize(o.SizeBytes),8}{suffix}{warn}");
+        }
+
+        WriteError("");
+        WriteError($"[Enter] download recommended ({recommended.DisplayName}, {FormatModelSize(recommended.SizeBytes)})   " +
+                   "[1-N] choose another   [n] no, use Traditional search");
+
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            Console.Error.Write("> ");
+            string? line = Console.ReadLine();
+            if (line is null) return null; // EOF / closed stdin
+            line = line.Trim();
+            if (line.Length == 0) return recommended;
+            if (line.Equals("n", StringComparison.OrdinalIgnoreCase) || line.Equals("no", StringComparison.OrdinalIgnoreCase))
+                return null;
+            if (line.Equals("y", StringComparison.OrdinalIgnoreCase) || line.Equals("yes", StringComparison.OrdinalIgnoreCase))
+                return recommended;
+            if (int.TryParse(line, out int n) && n >= 1 && n <= options.Count)
+                return options[n - 1];
+            WriteError("Please enter a number, press Enter for the recommended model, or 'n' to decline.");
+        }
+
+        WriteError("No valid selection — using Traditional search.");
+        return null;
+    }
+
+    /// <summary>Formats an approximate model size for the picker (GB/MB), or "size n/a" when unknown.</summary>
+    private static string FormatModelSize(long? bytes)
+    {
+        if (bytes is not { } b || b <= 0) return "size n/a";
+        double gb = b / 1024d / 1024d / 1024d;
+        if (gb >= 1.0) return $"{gb:0.0} GB";
+        double mb = b / 1024d / 1024d;
+        return $"{mb:0} MB";
+    }
+
+    /// <summary>
+    /// Persists the chosen model to the global settings store the GUI also uses, so later runs (CLI or
+    /// GUI) skip the first-run prompt. An empty alias means "track the recommended/auto pick".
+    /// </summary>
+    private static void PersistSemanticModelChoice(string aliasToPersist)
+    {
+        try
+        {
+            var service = new SettingsService();
+            var global = service.Load();
+            global.SemanticModelAlias = aliasToPersist ?? string.Empty;
+            global.SemanticModelDownloaded = true;
+            service.Save(global);
+        }
+        catch (Exception ex)
+        {
+            WriteError($"warning: could not save the model choice: {ex.Message}");
+        }
+    }
+
+    /// <summary>Prints the interpreted search parameters to stdout for an <c>--explain</c> dry-run.</summary>
+    private static void PrintSemanticExplanation(CliArgs args, ResolvedSearchPlan resolved)
+    {
+        var o = Console.Out;
+        o.WriteLine("Semantic query interpreted as:");
+        if (!string.IsNullOrWhiteSpace(resolved.Explanation)) o.WriteLine($"  summary        : {resolved.Explanation}");
+        o.WriteLine($"  directory      : {args.Directory}");
+        o.WriteLine($"  pattern        : {(string.IsNullOrEmpty(args.Pattern) ? "(none)" : args.Pattern)}");
+        if (resolved.SearchMode is { } sm)        o.WriteLine($"  search-mode    : {sm}");
+        if (resolved.UseRegex is { } rx)          o.WriteLine($"  regex          : {rx}");
+        if (resolved.CaseSensitive is { } cs)     o.WriteLine($"  case-sensitive : {cs}");
+        if (resolved.ExactMatch is { } em)        o.WriteLine($"  exact-match    : {em}");
+        if (resolved.IncludeGlobs is { } inc)     o.WriteLine($"  include        : {string.Join(", ", inc)}");
+        if (resolved.ExcludeGlobs is { } exc)     o.WriteLine($"  exclude        : {string.Join(", ", exc)}");
+        if (resolved.MinFileSizeBytes is { } mn)  o.WriteLine($"  min-size       : {mn:N0} bytes");
+        if (resolved.MaxFileSizeBytes is { } mx)  o.WriteLine($"  max-size       : {mx:N0} bytes");
+        if (resolved.CreatedAfterDate is { } ca)  o.WriteLine($"  created-after  : {ca:yyyy-MM-dd}");
+        if (resolved.CreatedBeforeDate is { } cb) o.WriteLine($"  created-before : {cb:yyyy-MM-dd}");
+        if (resolved.ModifiedAfterDate is { } ma) o.WriteLine($"  modified-after : {ma:yyyy-MM-dd}");
+        if (resolved.ModifiedBeforeDate is { } mb)o.WriteLine($"  modified-before: {mb:yyyy-MM-dd}");
+        if (resolved.MaxSearchDepth is { } depth) o.WriteLine($"  max-depth      : {(depth <= 0 ? "unlimited" : depth.ToString())}");
+        if (resolved.ObeyGitignore is { } gi)     o.WriteLine($"  obey-gitignore : {gi}");
+        if (resolved.SearchInsideArchives is { } arc) o.WriteLine($"  archives       : {arc}");
+        if (!string.IsNullOrWhiteSpace(args.SortBy))
+            o.WriteLine($"  sort           : {args.SortBy} ({(args.SortDescending ? "descending" : "ascending")})");
+        if (!string.IsNullOrWhiteSpace(args.GroupBy))
+            o.WriteLine($"  group          : {args.GroupBy}{(args.GroupDescending ? " (reversed)" : string.Empty)}");
+        o.WriteLine();
+        o.WriteLine("(--explain dry-run: no search executed. Re-run without --explain to search.)");
     }
 
     // -----------------------------------------------------------------------
@@ -526,6 +846,7 @@ internal static class CliRunner
             MaxSearchDepth        = maxSearchDepth,
             SkipBinary            = skipBinary,
             SearchOnlineOnlyFiles = s.SearchOnlineOnlyFiles,
+            SearchHiddenFiles     = args.SearchHiddenFiles ?? s.SearchHiddenFiles,
             ObeyGitignore         = obeyGitignore,
             GitignoreTakesPrecedence = gitignorePrecedence,
             MaxDegreeOfParallelism = parallelism,
@@ -566,8 +887,9 @@ internal static class CliRunner
         bool exporting = !string.IsNullOrWhiteSpace(args.ExportPath);
         bool replacing = args.ReplaceText is not null;
         bool sorting = !string.IsNullOrWhiteSpace(args.SortBy);
+        bool grouping = !string.IsNullOrWhiteSpace(args.GroupBy);
         bool savingSession = !string.IsNullOrWhiteSpace(args.SaveSessionPath);
-        bool needsCollection = exporting || replacing || sorting || savingSession;
+        bool needsCollection = exporting || replacing || sorting || grouping || savingSession;
 
         // When collecting results, disable direct output so results are available via events
         if (needsCollection)
@@ -647,6 +969,10 @@ internal static class CliRunner
                             // Replace in files (replace prints its own per-file summary).
                             if (replacing)
                                 await RunReplaceAsync(sortedResults, options, args, useColor);
+                            else if (grouping)
+                                // Grouping waits for the whole search, then renders grouped
+                                // (and, within each group, sorted) — never streamed live.
+                                WriteGroupedResults(collectedResults, args, useColor);
                             else
                                 // Stream matches to stdout for every collection mode
                                 // (sort / export / save-session), matching the parity of
@@ -925,8 +1251,14 @@ internal static class CliRunner
     {
         // Group by file, sort groups, then flatten back
         var groups = results.GroupBy(r => r.FilePath, StringComparer.OrdinalIgnoreCase).ToList();
+        return OrderFileGroups(groups, sortBy, descending).SelectMany(g => g).ToList();
+    }
 
-        IEnumerable<IGrouping<string, SearchResult>> sorted = sortBy switch
+    /// <summary>Orders per-file match groups by the given sort key. Shared by flat sort and grouped output.</summary>
+    private static IEnumerable<IGrouping<string, SearchResult>> OrderFileGroups(
+        IReadOnlyList<IGrouping<string, SearchResult>> groups, string sortBy, bool descending)
+    {
+        return sortBy switch
         {
             "matches" or "count" => descending
                 ? groups.OrderByDescending(g => g.Count())
@@ -946,10 +1278,8 @@ internal static class CliRunner
             "path" => descending
                 ? groups.OrderByDescending(g => g.Key, StringComparer.OrdinalIgnoreCase)
                 : groups.OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase),
-            _ => groups.AsEnumerable(),
+            _ => groups,
         };
-
-        return sorted.SelectMany(g => g).ToList();
     }
 
     private static DateTime GetFileModifiedSafe(string path)
@@ -970,6 +1300,152 @@ internal static class CliRunner
         foreach (var result in results)
             writer.Add(result);
         writer.Flush();
+    }
+
+    // -----------------------------------------------------------------------
+    // Grouped output (post-search): buckets files by the group key, orders the
+    // buckets, and within each bucket orders by the sort key (when given). Only
+    // used after the whole scan completes — grouped results are never streamed.
+    // -----------------------------------------------------------------------
+
+    private sealed class GroupBucket(string label)
+    {
+        public string Label { get; } = label;
+        public List<IGrouping<string, SearchResult>> Files { get; } = [];
+        public long MinSize { get; private set; } = long.MaxValue;
+        public DateTime MaxDate { get; private set; } = DateTime.MinValue;
+        public void ObserveSize(long size) { if (size < MinSize) MinSize = size; }
+        public void ObserveDate(DateTime date) { if (date > MaxDate) MaxDate = date; }
+    }
+
+    private static void WriteGroupedResults(IReadOnlyList<SearchResult> results, CliArgs args, bool useColor)
+    {
+        string groupBy = args.GroupBy!;
+        bool groupDescending = args.GroupDescending;
+        bool sorting = !string.IsNullOrWhiteSpace(args.SortBy);
+
+        bool needsSize = groupBy == "size";
+        bool needsDate = groupBy is "modified" or "created" or "date";
+        GroupMode dateMode = groupBy switch
+        {
+            "modified" => GroupMode.DateRangeModified,
+            "created" => GroupMode.DateRangeCreated,
+            _ => GroupMode.DateRangeModifiedCreated,
+        };
+
+        // One entry per file (first-seen order preserved), with that file's matches.
+        var fileGroups = results
+            .GroupBy(r => r.FilePath, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var buckets = new List<GroupBucket>();
+        var byLabel = new Dictionary<string, GroupBucket>(StringComparer.Ordinal);
+
+        foreach (var fg in fileGroups)
+        {
+            string label;
+            long size = 0;
+            DateTime date = default;
+
+            if (needsSize)
+            {
+                size = GetFileSizeSafe(fg.Key);
+                label = SearchResultCollection.ClassifyFileSizeBucket(size);
+            }
+            else if (needsDate)
+            {
+                date = GetGroupDate(fg.Key, groupBy);
+                label = SearchResultCollection.ClassifyDateRangeBucket(date, dateMode);
+            }
+            else if (groupBy == "extension")
+            {
+                string ext = Path.GetExtension(fg.Key);
+                label = string.IsNullOrEmpty(ext) ? "(no extension)" : ext.ToLowerInvariant();
+            }
+            else // directory
+            {
+                string dir = Path.GetDirectoryName(fg.Key) ?? string.Empty;
+                label = dir.Length == 0 ? "(root)" : dir;
+            }
+
+            if (!byLabel.TryGetValue(label, out var bucket))
+            {
+                bucket = new GroupBucket(label);
+                byLabel[label] = bucket;
+                buckets.Add(bucket);
+            }
+            bucket.Files.Add(fg);
+            if (needsSize) bucket.ObserveSize(size);
+            if (needsDate) bucket.ObserveDate(date);
+        }
+
+        var ordered = OrderBuckets(buckets, groupBy, groupDescending);
+
+        var o = Console.Out;
+        bool first = true;
+        foreach (var bucket in ordered)
+        {
+            int fileCount = bucket.Files.Count;
+            int matchCount = bucket.Files.Sum(f => f.Count());
+
+            if (!first) o.WriteLine();
+            first = false;
+            WriteGroupHeader(o, bucket.Label, fileCount, matchCount, useColor);
+
+            IEnumerable<IGrouping<string, SearchResult>> filesInBucket = sorting
+                ? OrderFileGroups(bucket.Files, args.SortBy!, args.SortDescending)
+                : bucket.Files;
+
+            var writer = new RipgrepWriter(o, useColor);
+            foreach (var fg in filesInBucket)
+                foreach (var r in fg)
+                    writer.Add(r);
+            writer.Flush();
+        }
+    }
+
+    private static List<GroupBucket> OrderBuckets(List<GroupBucket> buckets, string groupBy, bool groupDescending)
+    {
+        IEnumerable<GroupBucket> ordered = groupBy switch
+        {
+            // Natural order: smallest first; --group-desc => largest first.
+            "size" => groupDescending
+                ? buckets.OrderByDescending(b => b.MinSize)
+                : buckets.OrderBy(b => b.MinSize),
+            // Natural order: most recent first; --group-desc => oldest first.
+            "modified" or "created" or "date" => groupDescending
+                ? buckets.OrderBy(b => b.MaxDate)
+                : buckets.OrderByDescending(b => b.MaxDate),
+            // Natural order: A-Z; --group-desc => Z-A.
+            _ => groupDescending
+                ? buckets.OrderByDescending(b => b.Label, StringComparer.OrdinalIgnoreCase)
+                : buckets.OrderBy(b => b.Label, StringComparer.OrdinalIgnoreCase),
+        };
+        return ordered.ToList();
+    }
+
+    private static void WriteGroupHeader(TextWriter o, string label, int fileCount, int matchCount, bool color)
+    {
+        string files = fileCount == 1 ? "file" : "files";
+        string matches = matchCount == 1 ? "match" : "matches";
+        string text = $"== {label}  ({fileCount:N0} {files}, {matchCount:N0} {matches}) ==";
+        o.WriteLine(color ? $"\x1B[1;36m{text}\x1B[0m" : text);
+    }
+
+    private static DateTime GetGroupDate(string path, string groupBy)
+    {
+        try
+        {
+            return groupBy switch
+            {
+                "created" => File.GetCreationTime(path),
+                "modified" => File.GetLastWriteTime(path),
+                _ => Latest(File.GetLastWriteTime(path), File.GetCreationTime(path)),
+            };
+        }
+        catch { return default; }
+
+        static DateTime Latest(DateTime a, DateTime b) => a >= b ? a : b;
     }
 
     // -----------------------------------------------------------------------
@@ -1128,6 +1604,23 @@ internal static class CliRunner
                   --exact-match           Match whole words only (default).
                   --no-exact-match        Allow substring matches.
 
+            SEMANTIC SEARCH (local AI):
+              -SP,--semantic-pattern <text> Natural-language request that a local on-device model
+                                          translates into the search flags below (directory, globs,
+                                          dates, sizes, search mode) and then executes. Replaces the
+                                          positional PATTERN; --directory becomes optional.
+                                          The first time you use it, Yagu offers a choice of local
+                                          models to download (recommended pick first). Decline and it
+                                          falls back to a literal Traditional search of your text.
+                  --semantic-model <alias> Force a specific Foundry Local model (default: auto-pick
+                                          the best small model for this machine's hardware). Skips the
+                                          first-run model-download prompt.
+                  --accept-model-download Auto-download the recommended model without prompting (for
+                                          scripts / non-interactive consoles). Without it, a redirected
+                                          console falls back to Traditional search.
+                  --explain               With --semantic-pattern, print the interpreted search
+                                          parameters and exit WITHOUT searching (a dry-run).
+
             FILE FILTERING:
               -g, --glob <glob>           Include files matching GLOB (repeatable).
                   --exclude-glob <glob>   Exclude files/dirs matching GLOB (repeatable).
@@ -1165,6 +1658,10 @@ internal static class CliRunner
                   --no-search-archives    Do not search inside archives (default).
                   --archive-extensions <e> Semicolon-separated archive extensions.
 
+            CONTENT OPTIONS:
+                  --hidden                Include files/folders with the Hidden attribute (default).
+                  --no-hidden             Exclude hidden files/folders (system files always skipped).
+
             ADMIN / SECURITY:
                   --no-admin-warning      Suppress the non-administrator privilege warning.
                   --exclude-admin-paths   Skip admin-protected paths (default when non-admin).
@@ -1199,6 +1696,15 @@ internal static class CliRunner
                   --sort-desc             Sort in descending order.
                   --sort-asc              Sort in ascending order (default).
 
+            GROUP:
+                  --group <key>           Group results by: directory, extension, size, modified,
+                                          created, date, none. Grouping waits for the whole search
+                                          to finish, then prints the results under group headers
+                                          (it is never streamed live). Combine with --sort to order
+                                          files within each group.
+                  --group-desc            Reverse the natural group order (Z-A / oldest / largest first).
+                  --group-asc             Natural group order: A-Z / recent / smallest first (default).
+
             SESSIONS (.yagu-session):
                   --save-session <path>   After a search completes, save its results to
                                           <path> as a .yagu-session file (rehydrate later).
@@ -1213,7 +1719,7 @@ internal static class CliRunner
                             directory next, then falls back to global AppData settings. CLI flags
                             always override file-based settings.
 
-            EXAMPLES (201):
+            EXAMPLES (210):
               001. Basic search in the current folder
                   Does: Finds TODO anywhere under the current directory.
                   Cmd:  Yagu.exe --cli --directory . "TODO"
@@ -2018,6 +2524,42 @@ internal static class CliRunner
                   Does: Finds TODO in C# files, exports JSON, and omits match markers.
                   Cmd:  Yagu.exe --cli --directory src "TODO" -g "*.cs" --export .\reports\todo-audit.json --export-no-markers
 
+              202. Semantic search in plain English
+                  Does: Lets a local AI model translate the request into search flags, then runs it.
+                  Cmd:  Yagu.exe --cli --semantic-pattern "find png files on the C drive modified in the past year, ignore mov files"
+
+              203. Preview a semantic translation without searching
+                  Does: Prints the interpreted directory, globs, and date filters, then exits.
+                  Cmd:  Yagu.exe --cli --semantic-pattern "large pdf reports created since January" --explain
+
+              204. Semantic search with a specific local model
+                  Does: Forces a chosen Foundry Local model to interpret the request.
+                  Cmd:  Yagu.exe --cli --semantic-pattern "config files under the repo" --semantic-model "qwen2.5-1.5b-instruct-generic-cpu"
+
+              205. Semantic search in a script (auto-download the recommended model)
+                  Does: Skips the first-run model picker and downloads the recommended model, then runs.
+                  Cmd:  Yagu.exe --cli --semantic-pattern "log files changed this week" --accept-model-download
+
+              206. Exclude hidden files and folders
+                  Does: Searches TODO while skipping items with the Windows Hidden attribute.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --no-hidden
+
+              207. Force-include hidden files
+                  Does: Searches secrets including dotfiles/hidden folders (overrides a disabled default).
+                  Cmd:  Yagu.exe --cli --directory . "API_KEY" --hidden
+
+              208. Group results by directory
+                  Does: Waits for the search to finish, then prints matches under per-folder headers.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --group directory
+
+              209. Group by file type, biggest files first within each group
+                  Does: Groups matches by extension and sorts files inside each group by size descending.
+                  Cmd:  Yagu.exe --cli --directory src "TODO" --group extension --sort size --sort-desc
+
+              210. Group by modified date, oldest groups first
+                  Does: Groups matches into modified-date ranges and reverses the natural recent-first order.
+                  Cmd:  Yagu.exe --cli --directory logs "ERROR" --group modified --group-desc
+
             EXIT CODES:
               0   One or more matches found.
               1   No matches found.
@@ -2261,6 +2803,7 @@ internal sealed class CliArgs
     public int?             ConsoleLogLevelIndex { get; private set; }
     public int?             FileListerBackendIndex { get; private set; }
     public bool?            SearchInsideArchives { get; private set; }
+    public bool?            SearchHiddenFiles { get; private set; }
     public string?          ArchiveExtensions { get; private set; }
     public bool?            ExcludeAdminProtectedPaths { get; private set; }
     public string?          AdminProtectedPathSegments { get; private set; }
@@ -2278,6 +2821,12 @@ internal sealed class CliArgs
     public bool             SuppressAdminWarning { get; private set; }
     public bool             ShowHelp     { get; private set; }
 
+    // Semantic search (--semantic-pattern): natural-language request translated by the local model.
+    public string?          SemanticPattern { get; private set; }
+    public string?          SemanticModel { get; private set; }
+    public bool             AcceptModelDownload { get; private set; }
+    public bool             Explain { get; private set; }
+
     // Export options
     public string?          ExportPath { get; private set; }
     public string?          ExportFormat { get; private set; } // html, json, csv
@@ -2294,8 +2843,12 @@ internal sealed class CliArgs
     public bool             ReplaceDryRun { get; private set; }
 
     // Sort options
-    public string?          SortBy { get; private set; } // matches, date, size, name
+    public string?          SortBy { get; private set; } // matches, date, size, name, directory, path
     public bool             SortDescending { get; private set; }
+
+    // Group options (post-search, applied after the scan completes)
+    public string?          GroupBy { get; private set; } // directory, extension, size, modified, created, date
+    public bool             GroupDescending { get; private set; }
 
     // Session (.yagu-session) file options
     public string?          LoadSessionPath { get; private set; }
@@ -2323,6 +2876,8 @@ internal sealed class CliArgs
             if (Eq(tok, "--no-admin-warning"))             { a.SuppressAdminWarning = true; i++; continue; }
             if (Eq(tok, "--search-archives"))                { a.SearchInsideArchives = true; i++; continue; }
             if (Eq(tok, "--no-search-archives"))             { a.SearchInsideArchives = false; i++; continue; }
+            if (Eq(tok, "--hidden", "--search-hidden"))      { a.SearchHiddenFiles = true; i++; continue; }
+            if (Eq(tok, "--no-hidden", "--no-search-hidden")) { a.SearchHiddenFiles = false; i++; continue; }
             if (Eq(tok, "--exclude-admin-paths"))            { a.ExcludeAdminProtectedPaths = true; i++; continue; }
             if (Eq(tok, "--no-exclude-admin-paths"))         { a.ExcludeAdminProtectedPaths = false; i++; continue; }
             if (Eq(tok, "--obey-gitignore", "--gitignore"))  { a.ObeyGitignore = true; i++; continue; }
@@ -2331,6 +2886,8 @@ internal sealed class CliArgs
             if (Eq(tok, "--no-gitignore-precedence"))        { a.GitignoreTakesPrecedence = false; i++; continue; }
             if (Eq(tok, "--exact-match"))                    { a.ExactMatch = true; i++; continue; }
             if (Eq(tok, "--no-exact-match", "--substring"))  { a.ExactMatch = false; i++; continue; }
+            if (Eq(tok, "--explain"))                        { a.Explain = true; i++; continue; }
+            if (Eq(tok, "--accept-model-download", "--yes-download")) { a.AcceptModelDownload = true; i++; continue; }
             if (Eq(tok, "--include-regex"))                  { a.IncludeFilterModeIndex = 1; i++; continue; }
             if (Eq(tok, "--include-glob"))                   { a.IncludeFilterModeIndex = 0; i++; continue; }
             if (Eq(tok, "--exclude-regex"))                  { a.ExcludeFilterModeIndex = 1; i++; continue; }
@@ -2341,6 +2898,10 @@ internal sealed class CliArgs
                 { a.Directory = v.Trim('"'); continue; }
             if (TryGetVal(raw, ref i, out v, "--pattern", "-p"))
                 { a.Pattern = v; continue; }
+            if (TryGetVal(raw, ref i, out v, "--semantic-pattern", "-SP"))
+                { a.SemanticPattern = v; continue; }
+            if (TryGetVal(raw, ref i, out v, "--semantic-model"))
+                { a.SemanticModel = v.Trim(); continue; }
             if (TryGetVal(raw, ref i, out v, "--glob", "-g"))
                 { a.IncludeGlobs.Add(v); continue; }
             if (TryGetVal(raw, ref i, out v, "--exclude-glob", "--exclude"))
@@ -2407,17 +2968,36 @@ internal sealed class CliArgs
             {
                 a.SortBy = v.ToLowerInvariant();
                 if (a.SortBy is not ("matches" or "count" or "date" or "modified"
-                    or "size" or "name" or "filename" or "path"))
+                    or "size" or "name" or "filename" or "directory" or "dir" or "path"))
                 {
                     Console.Error.WriteLine(
                         $"warning: unknown sort key '{v}' - results will be unsorted. " +
-                        "Valid keys: matches, date, size, name, path.");
+                        "Valid keys: matches, date, size, name, directory, path.");
                     a.SortBy = null;
                 }
                 continue;
             }
             if (Eq(tok, "--sort-desc", "--sort-descending"))              { a.SortDescending = true; i++; continue; }
             if (Eq(tok, "--sort-asc", "--sort-ascending"))                { a.SortDescending = false; i++; continue; }
+
+            // Group options
+            if (TryGetVal(raw, ref i, out v, "--group"))
+            {
+                a.GroupBy = NormalizeGroupKey(v);
+                if (a.GroupBy is null)
+                {
+                    Console.Error.WriteLine(
+                        $"warning: unknown group key '{v}' - results will not be grouped. " +
+                        "Valid keys: directory, extension, size, modified, created, date, none.");
+                }
+                else if (a.GroupBy.Length == 0)
+                {
+                    a.GroupBy = null; // "none" — explicit no-grouping
+                }
+                continue;
+            }
+            if (Eq(tok, "--group-desc", "--group-descending"))            { a.GroupDescending = true; i++; continue; }
+            if (Eq(tok, "--group-asc", "--group-ascending"))              { a.GroupDescending = false; i++; continue; }
 
             // Session file options
             if (TryGetVal(raw, ref i, out v, "--load-session"))           { a.LoadSessionPath = v.Trim('"'); continue; }
@@ -2434,7 +3014,93 @@ internal sealed class CliArgs
         return a;
     }
 
+    /// <summary>
+    /// Drops semantic mode to a literal Traditional search when the user declines the model download:
+    /// reuses the typed <see cref="SemanticPattern"/> as the search pattern and defaults the directory
+    /// to the current one. Explicit <c>--pattern</c>/<c>--directory</c> values are preserved.
+    /// </summary>
+    internal void FallBackSemanticToTraditional()
+    {
+        if (string.IsNullOrWhiteSpace(Pattern) && !string.IsNullOrWhiteSpace(SemanticPattern))
+            Pattern = SemanticPattern;
+        if (string.IsNullOrWhiteSpace(Directory))
+            Directory = Environment.CurrentDirectory;
+    }
+
+    /// <summary>
+    /// Folds a model-produced <see cref="SemanticSearchOverlay"/> into these args. Only fills fields
+    /// the user did NOT set explicitly on the command line, so explicit flags always win over the
+    /// model's interpretation.
+    /// </summary>
+    internal void ApplySemanticOverlay(SemanticSearchOverlay overlay)
+    {
+        if (overlay is null) return;
+
+        if (string.IsNullOrWhiteSpace(Directory) && !string.IsNullOrWhiteSpace(overlay.Directory))
+            Directory = overlay.Directory!.Trim('"');
+        if (string.IsNullOrWhiteSpace(Pattern) && !string.IsNullOrWhiteSpace(overlay.Query))
+            Pattern = overlay.Query;
+
+        if (overlay.SearchMode is { } sm && SearchMode is null) SearchMode = sm;
+        if (overlay.CaseSensitive is { } cs && CaseSensitive is null) CaseSensitive = cs;
+        if (overlay.UseRegex is { } rx && UseRegex is null) UseRegex = rx;
+        if (overlay.ExactMatch is { } em && ExactMatch is null) ExactMatch = em;
+
+        if (overlay.IncludeGlobs is { } inc && IncludeGlobs.Count == 0)
+        {
+            IncludeGlobs.AddRange(inc);
+            IncludeFilterModeIndex ??= 0;
+        }
+        if (overlay.ExcludeGlobs is { } exc && ExcludeGlobs.Count == 0)
+        {
+            ExcludeGlobs.AddRange(exc);
+            ExcludeFilterModeIndex ??= 0;
+        }
+
+        if (overlay.MinFileSizeBytes is { } mn && MinFileSizeBytes is null) MinFileSizeBytes = mn;
+        if (overlay.MaxFileSizeBytes is { } mx && MaxFileSizeBytes is null) MaxFileSizeBytes = mx;
+        if (overlay.CreatedAfterDate is { } ca && CreatedAfter is null) CreatedAfter = ca;
+        if (overlay.CreatedBeforeDate is { } cb && CreatedBefore is null) CreatedBefore = cb;
+        if (overlay.ModifiedAfterDate is { } ma && ModifiedAfter is null) ModifiedAfter = ma;
+        if (overlay.ModifiedBeforeDate is { } mb && ModifiedBefore is null) ModifiedBefore = mb;
+        if (overlay.MaxSearchDepth is { } depth && MaxSearchDepth is null) MaxSearchDepth = depth < 0 ? 0 : depth;
+        if (overlay.ObeyGitignore is { } gi && ObeyGitignore is null) ObeyGitignore = gi;
+        if (overlay.SearchInsideArchives is { } arc && SearchInsideArchives is null) SearchInsideArchives = arc;
+
+        // Sort/group: only fill from the model when the user did not set them explicitly.
+        if (overlay.SortBy is { } sortKey && SortBy is null)
+        {
+            SortBy = sortKey;
+            if (overlay.SortDescending is { } desc) SortDescending = desc;
+        }
+        if (overlay.GroupBy is { } groupKey && GroupBy is null)
+        {
+            GroupBy = groupKey;
+            if (overlay.GroupDescending is { } gdesc) GroupDescending = gdesc;
+        }
+    }
+
     // ---- Helpers -------------------------------------------------------
+
+    /// <summary>
+    /// Normalizes a <c>--group</c> key to its canonical form. Returns the canonical key for a known
+    /// group field, an empty string for "none" (explicit no-grouping), or null for an unknown key.
+    /// </summary>
+    internal static string? NormalizeGroupKey(string raw)
+    {
+        string v = raw.Trim().ToLowerInvariant().Replace("_", "-").Replace(" ", "-");
+        return v switch
+        {
+            "none" or "off" or "no" or "ungrouped" => "",
+            "directory" or "dir" or "folder" or "path" or "location" => "directory",
+            "extension" or "ext" or "type" or "filetype" or "file-type" or "kind" => "extension",
+            "size" or "filesize" or "file-size" => "size",
+            "modified" or "date-modified" or "datemodified" or "modified-date" or "lastmodified" or "last-modified" => "modified",
+            "created" or "date-created" or "datecreated" or "created-date" or "creation" => "created",
+            "date" or "date-range" or "daterange" or "modified-created" or "modified+created" => "date",
+            _ => null,
+        };
+    }
 
     private static bool Eq(string tok, params string[] candidates) =>
         candidates.Any(c => string.Equals(tok, c, StringComparison.OrdinalIgnoreCase));

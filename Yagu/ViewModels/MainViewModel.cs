@@ -6,6 +6,7 @@ using Microsoft.UI.Dispatching;
 using Yagu.Models;
 using Yagu.Helpers;
 using Yagu.Services;
+using Yagu.Services.Ai;
 
 namespace Yagu.ViewModels;
 
@@ -34,12 +35,16 @@ public readonly record struct HydrationPayload(
     int MatchLength,
     int SourceMatchStartColumn);
 
-public sealed partial class MainViewModel : ObservableObject, IDisposable
+public sealed partial class MainViewModel : ObservableObject, IDisposable, ISemanticPlanTarget
 {
     private readonly SearchService _search;
     private readonly SettingsService _settingsService;
     private readonly EditorLauncher _editor;
     private readonly DispatcherQueue _dispatcher;
+    private readonly ISemanticQueryTranslator? _semanticTranslator;
+    private readonly ISemanticCapabilityDetector _capabilityDetector;
+    private CancellationTokenSource? _semanticCts;
+    private bool _queryModeInitialized;
     private CancellationTokenSource? _searchStatusHeartbeatCts;
 
     private CancellationTokenSource? _cts;
@@ -84,7 +89,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                                    DispatcherQueue.GetForCurrentThread())
     { }
 
-    public MainViewModel(SearchService search, SettingsService settingsService, EditorLauncher editor, DispatcherQueue dispatcher)
+    public MainViewModel(SearchService search, SettingsService settingsService, EditorLauncher editor, DispatcherQueue dispatcher,
+                         ISemanticQueryTranslator? semanticTranslator = null,
+                         ISemanticCapabilityDetector? capabilityDetector = null)
     {
         _search = search;
         _settingsService = settingsService;
@@ -95,6 +102,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         _settings = _settingsService.Load();
         _editor.Command = _settings.EditorCommand;
+
+        // Semantic search (Foundry Local). The translator is cheap to construct; it only downloads
+        // the execution provider/model lazily on first use. A caller may inject a fake for testing.
+        _semanticTranslator = semanticTranslator
+            ?? new FoundryLocalSemanticQueryTranslator(_settings.SemanticSearchEnabled, _settings.SemanticModelAlias);
+        _capabilityDetector = capabilityDetector ?? new GpuNpuCapabilityDetector();
+        SemanticSearchAvailable = _settings.SemanticSearchEnabled;
+        SemanticHardwareAccelerated = SafeDetectAcceleratedHardware();
+        DefaultToTraditionalSearchMode = _settings.DefaultToTraditionalSearchMode;
+        // Launch mode: once the user has explicitly chosen, honor that; otherwise follow the
+        // hardware-based default (Semantic on accelerated machines, Traditional elsewhere).
+        IsSemanticQueryMode = ResolveLaunchQueryMode();
+        _queryModeInitialized = true;
 
         Directory = _settings.LastDirectory ?? string.Empty;
         CaseSensitive = _settings.CaseSensitive;
@@ -322,10 +342,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         try { _cts?.Cancel(); } catch { }
         try { _dirAutoCompleteCts?.Cancel(); } catch { }
         try { _metadataCts.Cancel(); } catch { }
+        try { _semanticCts?.Cancel(); } catch { }
         StopSearchStatusHeartbeat();
         _cts?.Dispose();
         _dirAutoCompleteCts?.Dispose();
         _metadataCts.Dispose();
+        _semanticCts?.Dispose();
+        if (_semanticTranslator is IAsyncDisposable semanticDisposable)
+        {
+            try { _ = semanticDisposable.DisposeAsync(); } catch { }
+        }
         _searchLifecycleGate.Dispose();
         _resultStore?.Dispose();
         GC.SuppressFinalize(this);
@@ -341,6 +367,137 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         string.IsNullOrEmpty(Query) ? Microsoft.UI.Xaml.Visibility.Collapsed : Microsoft.UI.Xaml.Visibility.Visible;
 
     partial void OnQueryChanged(string value) => OnPropertyChanged(nameof(HasQueryText));
+
+    // ── Semantic search (Foundry Local) ──
+    /// <summary>True when the search bar is in natural-language (Semantic) mode rather than the
+    /// traditional literal/regex mode.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsTraditionalQueryMode))]
+    [NotifyPropertyChangedFor(nameof(QueryPlaceholderText))]
+    [NotifyPropertyChangedFor(nameof(InlineSearchTogglesVisibility))]
+    [NotifyPropertyChangedFor(nameof(QueryModeLabel))]
+    [NotifyPropertyChangedFor(nameof(QueryModeGlyph))]
+    public partial bool IsSemanticQueryMode { get; set; }
+
+    /// <summary>Inverse of <see cref="IsSemanticQueryMode"/> for binding the Traditional toggle.</summary>
+    public bool IsTraditionalQueryMode => !IsSemanticQueryMode;
+
+    /// <summary>Whether the Semantic toggle is offered at all (feature enabled in settings).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SemanticDefaultOverrideEnabled))]
+    public partial bool SemanticSearchAvailable { get; set; }
+
+    /// <summary>True when the machine has a GPU/NPU accelerator capable of running a Semantic model.
+    /// Drives the launch-mode default and gates the Settings override.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SemanticDefaultOverrideEnabled))]
+    public partial bool SemanticHardwareAccelerated { get; set; }
+
+    /// <summary>User override: when true, default the search bar to Traditional even on accelerated
+    /// machines. Bound to the Settings toggle; only editable when <see cref="SemanticDefaultOverrideEnabled"/>.</summary>
+    [ObservableProperty]
+    public partial bool DefaultToTraditionalSearchMode { get; set; }
+
+    /// <summary>The Settings override is editable only when Semantic search is offered AND the machine
+    /// has a supported accelerator; otherwise it is greyed out and unset (Traditional is forced anyway).</summary>
+    public bool SemanticDefaultOverrideEnabled => SemanticSearchAvailable && SemanticHardwareAccelerated;
+
+    /// <summary>True while a natural-language query is being translated by the local model.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SemanticStatusBarVisibility))]
+    public partial bool IsTranslatingSemanticQuery { get; set; }
+
+    /// <summary>Status/progress line shown next to the mode toggle during translation.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SemanticStatusBarVisibility))]
+    public partial string SemanticStatusText { get; set; } = string.Empty;
+
+    /// <summary>Whether a semantic model has already been downloaded (skip the first-run prompt).</summary>
+    public bool IsSemanticModelDownloaded => _settings.SemanticModelDownloaded;
+
+    /// <summary>Short label for the single query-mode dropdown button.</summary>
+    public string QueryModeLabel => IsSemanticQueryMode ? "Semantic" : "Traditional";
+
+    /// <summary>Segoe icon glyph for the single query-mode dropdown button.</summary>
+    public string QueryModeGlyph => IsSemanticQueryMode ? "\uE945" : "\uE721";
+
+    /// <summary>Visibility of the Traditional|Semantic mode bar (feature-gated).</summary>
+    public Microsoft.UI.Xaml.Visibility SemanticModeBarVisibility =>
+        SemanticSearchAvailable ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+    /// <summary>The search button is a SplitButton (with a chevron mode picker) only while semantic
+    /// search is available AND idle. During a search it is replaced by the morphing Cancel button.</summary>
+    public Microsoft.UI.Xaml.Visibility SearchModeSplitButtonVisibility =>
+        SemanticSearchAvailable && !IsSearching
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+    /// <summary>The plain Search/Cancel button is shown when semantic search is unavailable (no mode
+    /// chevron) or whenever a search is running (so it can morph into the red Cancel action).</summary>
+    public Microsoft.UI.Xaml.Visibility SearchActionButtonVisibility =>
+        !SemanticSearchAvailable || IsSearching
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+    /// <summary>Visibility of the translation status line — only while translating or when a result
+    /// explanation is showing.</summary>
+    public Microsoft.UI.Xaml.Visibility SemanticStatusBarVisibility =>
+        SemanticSearchAvailable && (IsTranslatingSemanticQuery || !string.IsNullOrEmpty(SemanticStatusText))
+            ? Microsoft.UI.Xaml.Visibility.Visible
+            : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+    /// <summary>The Case/Regex/Exact inline toggles only apply in Traditional mode.</summary>
+    public Microsoft.UI.Xaml.Visibility InlineSearchTogglesVisibility =>
+        IsSemanticQueryMode ? Microsoft.UI.Xaml.Visibility.Collapsed : Microsoft.UI.Xaml.Visibility.Visible;
+
+    /// <summary>Placeholder text that adapts to the current query mode.</summary>
+    public string QueryPlaceholderText => IsSemanticQueryMode
+        ? "Describe what to find — e.g. \"png files on C: modified in the past year, ignore mov files\""
+        : "Search query (Enter to run)";
+
+    partial void OnSemanticSearchAvailableChanged(bool value)
+    {
+        OnPropertyChanged(nameof(SemanticModeBarVisibility));
+        OnPropertyChanged(nameof(SearchModeSplitButtonVisibility));
+        OnPropertyChanged(nameof(SearchActionButtonVisibility));
+    }
+
+    partial void OnIsSemanticQueryModeChanged(bool value)
+    {
+        if (!value) SemanticStatusText = string.Empty;
+        if (!_queryModeInitialized) return;
+        _settings.LastQueryModeIsSemantic = value;
+        _settings.HasChosenQueryMode = true;
+        _ = PersistSettingsAsync();
+    }
+
+    partial void OnDefaultToTraditionalSearchModeChanged(bool value)
+    {
+        if (!_queryModeInitialized) return;
+        _settings.DefaultToTraditionalSearchMode = value;
+        // Re-evaluate the launch default only when the user hasn't already pinned a mode this
+        // session; respecting an explicit choice avoids yanking the toggle out from under them.
+        if (!_settings.HasChosenQueryMode)
+            IsSemanticQueryMode = ResolveLaunchQueryMode();
+        _ = PersistSettingsAsync();
+    }
+
+    /// <summary>Resolves the search bar's launch mode. An explicit prior choice wins; otherwise the
+    /// hardware-based default applies (Semantic when accelerated and not overridden, else Traditional).</summary>
+    private bool ResolveLaunchQueryMode()
+    {
+        if (!SemanticSearchAvailable) return false;
+        if (_settings.HasChosenQueryMode)
+            return _settings.LastQueryModeIsSemantic && SemanticHardwareAccelerated;
+        return SemanticHardwareAccelerated && !_settings.DefaultToTraditionalSearchMode;
+    }
+
+    /// <summary>Detects accelerated hardware without ever letting a detector fault break startup.</summary>
+    private bool SafeDetectAcceleratedHardware()
+    {
+        try { return _capabilityDetector.HasAcceleratedHardware(); }
+        catch { return false; }
+    }
 
     [ObservableProperty] public partial int ContextLines { get; set; } = 3;
     [ObservableProperty] public partial int PreviewContextLines { get; set; } = 20;
@@ -1206,7 +1363,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    [ObservableProperty] public partial bool IsSearching { get; set; }
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SearchModeSplitButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(SearchActionButtonVisibility))]
+    public partial bool IsSearching { get; set; }
     [ObservableProperty] public partial string StatusText { get; set; } = string.Empty;
     [ObservableProperty] public partial string? ErrorText { get; set; }
     [ObservableProperty] public partial string? FallbackReason { get; set; }
@@ -1469,6 +1629,128 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var backend = (FileListerBackend)value;
         FileLister.Backend = backend;
         LogService.Instance.Info("Settings", $"FileLister backend set to {backend}");
+    }
+
+    /// <summary>
+    /// Entry point for an interactive search submission. In Semantic mode the natural-language
+    /// query is first translated by the local model and applied to this view-model; in Traditional
+    /// mode it goes straight to <see cref="StartSearchAsync"/>.
+    /// </summary>
+    public async Task SubmitSearchAsync()
+    {
+        if (IsSemanticQueryMode && SemanticSearchAvailable)
+        {
+            var applied = await TranslateSemanticQueryAsync().ConfigureAwait(true);
+            if (!applied) return; // failed/cancelled — status already shown, don't run a stale search
+        }
+
+        await StartSearchAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Translates the current natural-language <see cref="Query"/> into concrete search settings via
+    /// the local model and applies them to this view-model. Returns true when settings were applied.
+    /// </summary>
+    public async Task<bool> TranslateSemanticQueryAsync()
+    {
+        if (_semanticTranslator is null || !_semanticTranslator.IsAvailable)
+        {
+            ErrorText = "Semantic search is not available on this machine.";
+            return false;
+        }
+
+        var text = Query?.Trim() ?? string.Empty;
+        if (text.Length == 0)
+        {
+            ErrorText = "Describe what you want to find.";
+            return false;
+        }
+
+        try { _semanticCts?.Cancel(); } catch { }
+        _semanticCts?.Dispose();
+        _semanticCts = new CancellationTokenSource();
+        var token = _semanticCts.Token;
+
+        IsTranslatingSemanticQuery = true;
+        SemanticStatusText = "Preparing the local AI model…";
+        ErrorText = string.Empty;
+
+        var progress = new Progress<SemanticTranslationProgress>(p =>
+        {
+            if (!token.IsCancellationRequested) SemanticStatusText = p.Message;
+        });
+
+        try
+        {
+            var context = new SemanticTranslationContext
+            {
+                Now = DateTimeOffset.Now,
+                DefaultDirectory = string.IsNullOrWhiteSpace(Directory) ? null : Directory,
+            };
+
+            var result = await _semanticTranslator
+                .TranslateAsync(text, context, progress, token)
+                .ConfigureAwait(true);
+
+            if (token.IsCancellationRequested)
+            {
+                SemanticStatusText = string.Empty;
+                return false;
+            }
+
+            if (!result.Success || result.Plan is null)
+            {
+                ErrorText = result.Error ?? "Could not interpret that request.";
+                SemanticStatusText = string.Empty;
+                return false;
+            }
+
+            var resolved = SemanticPlanApplier.ApplyToTarget(result.Plan, context, this);
+            SemanticStatusText = string.IsNullOrWhiteSpace(resolved.Explanation)
+                ? "Interpreted your request."
+                : resolved.Explanation!;
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            SemanticStatusText = string.Empty;
+            return false;
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("SemanticSearch", $"Translation failed: {ex.Message}", ex);
+            ErrorText = $"Semantic search failed: {ex.Message}";
+            SemanticStatusText = string.Empty;
+            return false;
+        }
+        finally
+        {
+            IsTranslatingSemanticQuery = false;
+        }
+    }
+
+    /// <summary>Enumerates the locally-runnable model options for the first-run download prompt.</summary>
+    public Task<IReadOnlyList<SemanticModelOption>> GetSemanticModelOptionsAsync(
+        IProgress<SemanticTranslationProgress>? progress, CancellationToken cancellationToken)
+    {
+        if (_semanticTranslator is null || !_semanticTranslator.IsAvailable)
+            return Task.FromResult<IReadOnlyList<SemanticModelOption>>(Array.Empty<SemanticModelOption>());
+        return _semanticTranslator.ListModelOptionsAsync(progress, cancellationToken);
+    }
+
+    /// <summary>Downloads and selects the given semantic model, persisting it as the chosen model.</summary>
+    public async Task PrepareSemanticModelAsync(
+        string? modelAlias, IProgress<SemanticTranslationProgress>? progress, CancellationToken cancellationToken)
+    {
+        if (_semanticTranslator is null || !_semanticTranslator.IsAvailable)
+            throw new InvalidOperationException("Semantic search is not available on this machine.");
+
+        await _semanticTranslator.PrepareModelAsync(modelAlias, progress, cancellationToken).ConfigureAwait(true);
+
+        _settings.SemanticModelAlias = modelAlias?.Trim() ?? string.Empty;
+        _settings.SemanticModelDownloaded = true;
+        OnPropertyChanged(nameof(IsSemanticModelDownloaded));
+        await PersistSettingsAsync().ConfigureAwait(true);
     }
 
     [RelayCommand]
@@ -2892,6 +3174,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.ObeyGitignore = ObeyGitignore;
         _settings.GitignoreTakesPrecedence = GitignoreTakesPrecedence;
         _settings.GitignorePrecedencePreference = GitignorePrecedencePreference;
+        _settings.DefaultToTraditionalSearchMode = DefaultToTraditionalSearchMode;
         _settings.IncludeGlobs = IncludeGlobs;
         _settings.ExcludeGlobs = ExcludeGlobs;
         _settings.IncludeFilterModeIndex = IncludeFilterModeIndex;

@@ -459,13 +459,13 @@ public sealed class PreviewCoreRegressionTests
         AssertContainsInOrder(buttonSearch,
             "if (!await CheckHddAndWarnAsync()) return;",
             "CollapseAdvancedOptionsForSearch();",
-            "await ViewModel.StartSearchAsync();");
+            "await ViewModel.SubmitSearchAsync();");
 
         string querySubmitted = ExtractMethodWindow(MainWindowSource, "OnQuerySubmitted", 1400);
         AssertContainsInOrder(querySubmitted,
             "if (!await CheckHddAndWarnAsync()) return;",
             "CollapseAdvancedOptionsForSearch();",
-            "await ViewModel.StartSearchAsync();");
+            "await ViewModel.SubmitSearchAsync();");
 
         string autoSearch = ExtractMethodWindow(MainWindowSource, "OnContentLoaded", 1800);
         AssertContainsInOrder(autoSearch,
@@ -647,7 +647,8 @@ public sealed class PreviewCoreRegressionTests
     [Fact]
     public void SearchCard_LoadSessionButtonSitsBesideTerminalChevron()
     {
-        string searchBar = ExtractXamlWindow("<StackPanel Grid.Row=\"1\" Grid.Column=\"2\" Orientation=\"Horizontal\" Spacing=\"6\">", 1200);
+        string searchBar = ExtractXamlWindow("<StackPanel Grid.Row=\"1\" Grid.Column=\"2\" Orientation=\"Horizontal\" Spacing=\"6\">", 3200);
+        Assert.Contains("x:Name=\"SearchSplitButton\"", searchBar);
         Assert.Contains("x:Name=\"SearchCancelButton\"", searchBar);
         Assert.DoesNotContain("x:Name=\"SearchCardLoadSessionButton\"", searchBar);
 

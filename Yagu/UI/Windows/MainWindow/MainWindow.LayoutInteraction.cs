@@ -451,6 +451,7 @@ public sealed partial class MainWindow
         _topSearchDrawerCompact = compact;
         BrowseDirectoryLabel.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         SearchCancelLabel.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        SearchSplitLabel.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
 
         if (compact)
         {

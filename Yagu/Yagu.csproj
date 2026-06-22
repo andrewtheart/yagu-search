@@ -128,12 +128,23 @@
     <PackageReference Include="Microsoft.Graphics.Win2D" Version="1.3.2" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.*" />
     <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.*" />
+    <!-- Foundry Local SDK: on-device model management + hardware-optimized execution
+         provider selection (GPU/NPU/CPU fallback) for semantic search translation. -->
+    <PackageReference Include="Microsoft.AI.Foundry.Local.WinML" Version="1.2.3" />
+    <!-- Required by framework-dependent WindowsAppSDK apps that pull in the WinML stack
+         (transitively via Foundry Local). Version tracks Microsoft.Windows.AI.MachineLearning. -->
+    <PackageReference Include="Microsoft.WindowsAppSDK.ML" Version="2.1.1" />
     <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="9.*" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\vendor\TextControlBox-WinUI\TextControlBox\TextControlBox.csproj" />
     <ProjectReference Include="..\vendor\SharpSevenZip\SharpSevenZip\SharpSevenZip\SharpSevenZip.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Semantic-search system prompt for the local model (loaded at runtime via reflection). -->
+    <EmbeddedResource Include="Services\Ai\Prompts\SemanticSearchSystemPrompt.txt" />
   </ItemGroup>
 
   <ItemGroup>

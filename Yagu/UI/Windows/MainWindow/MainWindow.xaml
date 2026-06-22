@@ -368,7 +368,7 @@
                 <Grid Grid.Row="1" Grid.Column="1">
                     <AutoSuggestBox
                         x:Name="QueryBox"
-                        PlaceholderText="Search query (Enter to run)"
+                        PlaceholderText="{x:Bind ViewModel.QueryPlaceholderText, Mode=OneWay}"
                         Text="{x:Bind ViewModel.Query, Mode=TwoWay}"
                         ItemsSource="{x:Bind ViewModel.SearchHistory, Mode=OneWay}"
                         QuerySubmitted="OnQuerySubmitted"
@@ -379,7 +379,8 @@
                     <StackPanel x:Name="InlineSearchToggles"
                                 Orientation="Horizontal" Spacing="2"
                                 HorizontalAlignment="Right" VerticalAlignment="Center"
-                                Margin="0,0,36,0">
+                                Margin="0,0,36,0"
+                                Visibility="{x:Bind ViewModel.InlineSearchTogglesVisibility, Mode=OneWay}">
                         <ToggleButton x:Name="CaseSensitiveToggle"
                                       IsChecked="{x:Bind ViewModel.CaseSensitive, Mode=TwoWay}"
                                       ToolTipService.ToolTip="Match Case (Alt+C)"
@@ -417,7 +418,44 @@
                     </Button>
                 </Grid>
                 <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal" Spacing="6">
+                    <!-- Search action with a chevron mode picker (Traditional/Semantic). The SplitButton
+                         only shows while semantic search is available AND idle; during a search the plain
+                         button below takes over and morphs into the red Cancel action. -->
+                    <SplitButton x:Name="SearchSplitButton"
+                                 Click="OnSearchSplitButtonClick"
+                                 Visibility="{x:Bind ViewModel.SearchModeSplitButtonVisibility, Mode=OneWay}"
+                                 Padding="12,6" MinWidth="0"
+                                 ToolTipService.ToolTip="Search (F5) — use the chevron to switch mode">
+                        <SplitButton.Resources>
+                            <SolidColorBrush x:Key="SplitButtonBackground" Color="{ThemeResource SystemAccentColor}" />
+                            <SolidColorBrush x:Key="SplitButtonBackgroundPointerOver" Color="{ThemeResource SystemAccentColorLight1}" />
+                            <SolidColorBrush x:Key="SplitButtonBackgroundPressed" Color="{ThemeResource SystemAccentColorDark1}" />
+                            <SolidColorBrush x:Key="SplitButtonForeground" Color="White" />
+                            <SolidColorBrush x:Key="SplitButtonForegroundPointerOver" Color="White" />
+                            <SolidColorBrush x:Key="SplitButtonForegroundPressed" Color="White" />
+                        </SplitButton.Resources>
+                        <SplitButton.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="F5" />
+                        </SplitButton.KeyboardAccelerators>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon x:Name="SearchSplitIcon" Glyph="&#xE721;" FontSize="14" />
+                            <TextBlock x:Name="SearchSplitLabel" Text="Search" />
+                        </StackPanel>
+                        <SplitButton.Flyout>
+                            <MenuFlyout Placement="Bottom">
+                                <RadioMenuFlyoutItem x:Name="TraditionalModeItem" Text="Traditional"
+                                                     GroupName="QueryMode"
+                                                     IsChecked="{x:Bind ViewModel.IsTraditionalQueryMode, Mode=OneWay}"
+                                                     Click="OnSelectTraditionalMode" />
+                                <RadioMenuFlyoutItem x:Name="SemanticModeItem" Text="Semantic"
+                                                     GroupName="QueryMode"
+                                                     IsChecked="{x:Bind ViewModel.IsSemanticQueryMode, Mode=OneWay}"
+                                                     Click="OnSelectSemanticMode" />
+                            </MenuFlyout>
+                        </SplitButton.Flyout>
+                    </SplitButton>
                     <Button x:Name="SearchCancelButton" Click="OnSearchCancelClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,6" MinWidth="0"
+                            Visibility="{x:Bind ViewModel.SearchActionButtonVisibility, Mode=OneWay}"
                             ToolTipService.ToolTip="Search (F5)">
                         <Button.KeyboardAccelerators>
                             <KeyboardAccelerator Key="F5" />
@@ -978,6 +1016,17 @@
             <TextBlock Foreground="Red"
                        Visibility="{x:Bind ViewModel.HasErrorText, Mode=OneWay}"
                        Text="{x:Bind ViewModel.ErrorText, Mode=OneWay}" />
+            <!-- Semantic translation status / interpretation (Foundry Local). Lives here, below the
+                 search card, so it never shifts the search box when it appears. -->
+            <StackPanel x:Name="QueryModeBar" Orientation="Horizontal" Spacing="8"
+                        VerticalAlignment="Center"
+                        Visibility="{x:Bind ViewModel.SemanticStatusBarVisibility, Mode=OneWay}">
+                <ProgressRing Width="16" Height="16"
+                              IsActive="{x:Bind ViewModel.IsTranslatingSemanticQuery, Mode=OneWay}" />
+                <TextBlock Text="{x:Bind ViewModel.SemanticStatusText, Mode=OneWay}"
+                           VerticalAlignment="Center" FontSize="12" Opacity="0.8"
+                           TextWrapping="Wrap" />
+            </StackPanel>
         </StackPanel>
 
         <!-- Split pane: results + preview -->

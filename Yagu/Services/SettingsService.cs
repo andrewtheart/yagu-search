@@ -321,6 +321,28 @@ public sealed class AppSettings
     public int ArchiveMaxEntryMB { get; set; }
 
     public const int MaxRecent = 20; // kept for backward compat; prefer MaxRecentItems
+
+    // ── Semantic search (Foundry Local) settings ──
+    /// <summary>When true (default), the Semantic query mode is offered in the UI and the
+    /// CLI <c>--semantic-pattern</c> flag is honored. The local model is never downloaded
+    /// until the first semantic search is actually run.</summary>
+    public bool SemanticSearchEnabled { get; set; } = true;
+    /// <summary>Optional Foundry Local model alias override. When empty, Yagu picks the
+    /// smallest capable instruct model available for the current hardware.</summary>
+    public string SemanticModelAlias { get; set; } = string.Empty;
+    /// <summary>True once a semantic model has been downloaded at least once. Lets the UI skip the
+    /// first-run model-download prompt on subsequent switches into Semantic mode.</summary>
+    public bool SemanticModelDownloaded { get; set; }
+    /// <summary>Persisted UI state: whether the search bar was last in Semantic mode.</summary>
+    public bool LastQueryModeIsSemantic { get; set; }
+    /// <summary>True once the user has explicitly picked a query mode (via the search-button chevron
+    /// or the Settings override). Until then, the launch mode follows the hardware-based default
+    /// (Semantic when a GPU/NPU accelerator is present, otherwise Traditional).</summary>
+    public bool HasChosenQueryMode { get; set; }
+    /// <summary>User override of the hardware-based default: when true, Yagu defaults to Traditional
+    /// mode even on machines whose GPU/NPU could run Semantic search. Only meaningful (and editable)
+    /// when an accelerator is present; ignored on machines that fall back to Traditional anyway.</summary>
+    public bool DefaultToTraditionalSearchMode { get; set; }
 }
 
 public sealed class SettingsService

@@ -1,0 +1,126 @@
+using System.Text.Json.Serialization;
+
+namespace Yagu.Models;
+
+/// <summary>
+/// Structured translation of a natural-language search request into the subset of
+/// <see cref="SearchOptions"/> fields that Yagu can map. Produced by an
+/// <see cref="Services.Ai.ISemanticQueryTranslator"/> (the local model emits this as JSON)
+/// and applied to the UI view-model or a CLI <see cref="SearchOptions"/> by
+/// <see cref="Services.Ai.SemanticPlanApplier"/>.
+///
+/// Every field is nullable so that "unspecified" is distinct from "explicitly set". The
+/// applier only overrides a baseline value when the corresponding field is non-null.
+/// </summary>
+public sealed class SemanticSearchPlan
+{
+    /// <summary>Directory to search, e.g. <c>C:\</c>. Drive shorthands like "C drive" are
+    /// resolved to a rooted path by the applier when the model does not.</summary>
+    [JsonPropertyName("directory")]
+    public string? Directory { get; init; }
+
+    /// <summary>The literal/regex term to match. May be empty when the intent is purely a
+    /// filename/metadata filter (e.g. "all png files").</summary>
+    [JsonPropertyName("pattern")]
+    public string? Pattern { get; init; }
+
+    /// <summary>One of <see cref="SearchMode"/>: <c>both</c>, <c>content</c>,
+    /// <c>filenames</c>, <c>filename-then-content</c>.</summary>
+    [JsonPropertyName("searchMode")]
+    public string? SearchMode { get; init; }
+
+    [JsonPropertyName("caseSensitive")]
+    public bool? CaseSensitive { get; init; }
+
+    [JsonPropertyName("useRegex")]
+    public bool? UseRegex { get; init; }
+
+    /// <summary>Whole-word/whole-query exact match. When false, the query is split on
+    /// whitespace and any term may match.</summary>
+    [JsonPropertyName("exactMatch")]
+    public bool? ExactMatch { get; init; }
+
+    /// <summary>Include filters — extensions or globs, e.g. <c>["*.png"]</c> or
+    /// <c>["png","jpg"]</c>.</summary>
+    [JsonPropertyName("includeGlobs")]
+    public List<string>? IncludeGlobs { get; init; }
+
+    /// <summary>Exclude filters — extensions or globs, e.g. <c>["*.mov"]</c>.</summary>
+    [JsonPropertyName("excludeGlobs")]
+    public List<string>? ExcludeGlobs { get; init; }
+
+    /// <summary>Bare file names (without extension) to exclude, e.g. <c>["abc"]</c>. The
+    /// applier converts these into exclude globs like <c>abc.*</c> / <c>*abc*</c>.</summary>
+    [JsonPropertyName("excludeFileNames")]
+    public List<string>? ExcludeFileNames { get; init; }
+
+    [JsonPropertyName("minFileSizeBytes")]
+    public long? MinFileSizeBytes { get; init; }
+
+    [JsonPropertyName("maxFileSizeBytes")]
+    public long? MaxFileSizeBytes { get; init; }
+
+    /// <summary>ISO-8601 date (yyyy-MM-dd) — only files created on/after are included.</summary>
+    [JsonPropertyName("createdAfter")]
+    public string? CreatedAfter { get; init; }
+
+    [JsonPropertyName("createdBefore")]
+    public string? CreatedBefore { get; init; }
+
+    /// <summary>ISO-8601 date (yyyy-MM-dd) — only files modified on/after are included.</summary>
+    [JsonPropertyName("modifiedAfter")]
+    public string? ModifiedAfter { get; init; }
+
+    [JsonPropertyName("modifiedBefore")]
+    public string? ModifiedBefore { get; init; }
+
+    /// <summary>Maximum recursion depth. 0 = unlimited.</summary>
+    [JsonPropertyName("maxSearchDepth")]
+    public int? MaxSearchDepth { get; init; }
+
+    [JsonPropertyName("obeyGitignore")]
+    public bool? ObeyGitignore { get; init; }
+
+    [JsonPropertyName("searchInsideArchives")]
+    public bool? SearchInsideArchives { get; init; }
+
+    /// <summary>Field to sort the results by, e.g. <c>name</c>, <c>size</c>, <c>date</c>/<c>modified</c>,
+    /// <c>relevance</c>/<c>matches</c>, or <c>directory</c>/<c>path</c>. Null = leave the current sort.</summary>
+    [JsonPropertyName("sortBy")]
+    public string? SortBy { get; init; }
+
+    /// <summary>Sort direction, e.g. <c>asc</c>/<c>ascending</c> or <c>desc</c>/<c>descending</c>. When a
+    /// <see cref="SortBy"/> field is given without a direction, the applier defaults to descending.</summary>
+    [JsonPropertyName("sortDirection")]
+    public string? SortDirection { get; init; }
+
+    /// <summary>Field to group the results by, e.g. <c>directory</c>/<c>folder</c>, <c>extension</c>/<c>type</c>,
+    /// <c>size</c>, <c>modified</c>/<c>date</c>, <c>created</c>, or <c>none</c>. Null = leave the current grouping.</summary>
+    [JsonPropertyName("groupBy")]
+    public string? GroupBy { get; init; }
+
+    /// <summary>Optional direction for the group order, e.g. <c>asc</c>/<c>a-z</c>/<c>recent</c> or
+    /// <c>desc</c>/<c>z-a</c>/<c>older</c>. Defaults to the natural order (A-Z / recent-first / small-first).</summary>
+    [JsonPropertyName("groupDirection")]
+    public string? GroupDirection { get; init; }
+
+    /// <summary>Short human-readable summary of how the request was interpreted. Surfaced to
+    /// the user so the mapping is transparent. Not applied to the search.</summary>
+    [JsonPropertyName("explanation")]
+    public string? Explanation { get; init; }
+}
+
+/// <summary>
+/// Source-generated <see cref="System.Text.Json"/> context for <see cref="SemanticSearchPlan"/>.
+/// Tolerant of unknown members and case so partial/loosely-formatted model output still binds.
+/// Keeping this separate from <c>AppSettingsJsonContext</c> avoids coupling persisted settings
+/// to model-output deserialization rules.
+/// </summary>
+[JsonSourceGenerationOptions(
+    PropertyNameCaseInsensitive = true,
+    ReadCommentHandling = System.Text.Json.JsonCommentHandling.Skip,
+    AllowTrailingCommas = true)]
+[JsonSerializable(typeof(SemanticSearchPlan))]
+public sealed partial class SemanticSearchPlanJsonContext : System.Text.Json.Serialization.JsonSerializerContext
+{
+}

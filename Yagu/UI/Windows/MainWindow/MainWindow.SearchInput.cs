@@ -131,12 +131,21 @@ public sealed partial class MainWindow
         }
         else
         {
-            HideQuerySuggestions();
-            if (!await ClearPreviewPanelForNewSearchAsync()) return;
-            if (!await CheckHddAndWarnAsync()) return;
-            CollapseAdvancedOptionsForSearch();
-            await ViewModel.StartSearchAsync();
+            await StartSearchFromUiAsync();
         }
+    }
+
+    // SplitButton primary action — only visible while idle, so it always starts a search.
+    private async void OnSearchSplitButtonClick(SplitButton sender, SplitButtonClickEventArgs args) =>
+        await StartSearchFromUiAsync();
+
+    private async Task StartSearchFromUiAsync()
+    {
+        HideQuerySuggestions();
+        if (!await ClearPreviewPanelForNewSearchAsync()) return;
+        if (!await CheckHddAndWarnAsync()) return;
+        CollapseAdvancedOptionsForSearch();
+        await ViewModel.SubmitSearchAsync();
     }
 
     private async void OnQuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
@@ -154,8 +163,52 @@ public sealed partial class MainWindow
         if (!await ClearPreviewPanelForNewSearchAsync()) return;
         if (!await CheckHddAndWarnAsync()) return;
         CollapseAdvancedOptionsForSearch();
-        await ViewModel.StartSearchAsync();
+        await ViewModel.SubmitSearchAsync();
     }
+
+    private void OnSelectTraditionalMode(object sender, RoutedEventArgs e)
+    {
+        ViewModel.IsSemanticQueryMode = false;
+    }
+
+    private async void OnSelectSemanticMode(object sender, RoutedEventArgs e)
+    {
+        if (!ViewModel.SemanticSearchAvailable)
+            return;
+
+        // Already downloaded a model before — just switch.
+        if (ViewModel.IsSemanticModelDownloaded)
+        {
+            ViewModel.IsSemanticQueryMode = true;
+            return;
+        }
+
+        // First time: ask the user to download a local model. Semantic search can't run without one.
+        var chosenAlias = await ShowSemanticModelDownloadDialogAsync();
+        if (chosenAlias is not null)
+        {
+            ViewModel.IsSemanticQueryMode = true;
+        }
+        else
+        {
+            // Declined or failed — stay in Traditional mode and re-sync the radio items.
+            ViewModel.IsSemanticQueryMode = false;
+            TraditionalModeItem.IsChecked = true;
+            SemanticModeItem.IsChecked = false;
+        }
+    }
+
+    /// <summary>
+    /// Shows the borderless first-run model-download modal. Returns the chosen model alias on a
+    /// successful download (empty string means "use the recommended/auto model"), or null when the
+    /// user declined or the download failed.
+    /// </summary>
+    private Task<string?> ShowSemanticModelDownloadDialogAsync() =>
+        SemanticModelDownloadDialog.ShowAsync(
+            _hwnd,
+            RootGrid.ActualTheme,
+            (progress, token) => ViewModel.GetSemanticModelOptionsAsync(progress, token),
+            (alias, progress, token) => ViewModel.PrepareSemanticModelAsync(alias, progress, token));
 
     private void CollapseAdvancedOptionsForSearch()
     {

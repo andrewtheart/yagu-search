@@ -65,6 +65,32 @@ Literal searches are faster than regex. Use regex when you need pattern matching
 
 ---
 
+## Semantic Search (Local AI)
+
+The **Search** button has a **chevron** on its right edge (shown when semantic search is enabled in Settings). Click the chevron to open the mode menu and pick **Traditional** or **Semantic**. In **Semantic** mode you describe what you want in plain language and a local on‑device AI model translates it into concrete Yagu search options — directory, include/exclude filters, dates, sizes, search mode, and result **sorting** and **grouping** — then runs the search.
+
+Example query:
+
+> *search the C drive for all png files that were modified in the past year. ignore mov files and any file named "abc"*
+
+Yagu sets the directory to `C:\`, adds an include filter for `*.png`, excludes `*.mov` and `abc`/`abc.*`, sets a "modified after" date one year ago, switches to **File names only** mode, and searches.
+
+You can also ask Yagu to **sort** or **group** the results in the same sentence — e.g. *"find all files on C:\ with andrew in the name, sort by file name and group by directory"* sets the Sort and Group controls accordingly. When you name a sort field without a direction (e.g. *"sort by file name"*), Yagu defaults to **descending**; say *"ascending"* / *"a to z"* for the other direction.
+
+Notes:
+
+- **Runs entirely on your machine.** Your query is never sent off the device. The model is downloaded once via Microsoft **Foundry Local** and cached for reuse.
+- **Hardware‑aware.** Yagu auto‑picks the best small instruct model your machine can run, preferring NPU, then GPU, then CPU, so it works even without a dedicated GPU/NPU.
+- **Smart default mode.** On machines with a supported GPU/NPU, the search bar starts in **Semantic** mode automatically; machines with no supported accelerator start in **Traditional**. You can override the default for accelerated machines under **Settings → Search Defaults → Default to Traditional search mode** (that option is greyed out when no supported GPU/NPU is present). Either way you can switch modes any time from the Search‑button chevron.
+- **First run asks before downloading.** The first time you switch to Semantic, a borderless dialog lists the available models with their download sizes. The model best suited to your hardware is pre‑selected and marked **Recommended**; smaller or lower‑ranked models show a ⚠ warning that they *may be less accurate*. Choose **Use this model** to download (a progress bar shows the percentage), or **Not now** to cancel — declining switches you back to **Traditional**. Already‑cached models are tagged **Downloaded** and start instantly. After the first download the prompt is not shown again.
+- **Status while translating.** A progress line appears just below the search card (in the status area above the results) while the runtime/model loads and the query is being translated, so it never pushes the search box down.
+- **Transparent.** After translating, Yagu fills in the Advanced Options so you can see and tweak exactly what it set before or after searching.
+- **Switching back to Traditional** (via the same Search‑button chevron menu) restores the literal/regex query behavior; the inline Case/Regex/Exact toggles apply in Traditional mode only.
+
+Configure availability and the optional preferred model under **Settings → Search Defaults**. The same capability is available from the CLI via `--semantic-pattern` (see [Command-Line Interface](#command-line-interface-cli-mode)).
+
+---
+
 ## Advanced Options
 
 Click the **Advanced Options** expander below the search bar to reveal a tabbed panel. The left tabs group controls into **Search**, **Filters**, **Size**, **Dates**, and **Advanced**. Advanced Options are per-session and reset to defaults on next launch (defaults can be configured in Settings). Changes apply immediately; **Apply** closes the panel, and **Reset** restores the controls to the current settings defaults.
@@ -86,6 +112,8 @@ Click the **Advanced Options** expander below the search bar to reveal a tabbed 
 | Search binary | When enabled, files detected as binary (null bytes, magic headers) are included in content search. Off by default. |
 | Search archives | Opens ZIP-format containers (ZIP, DOCX, XLSX, JAR, NUPKG, etc.) and searches text entries inside. Has a performance cost. |
 | Archive Extensions | Visible when Search archives is on. Controls which extensions are treated as ZIP containers. |
+| Search online-only cloud files | When enabled, OneDrive/Google Drive online-only placeholder files are downloaded on demand and searched — but only while the sync provider is running to serve them. Off by default: cloud-only files are skipped so the scan can't hang on a download. Can be slow and use network/disk. |
+| Search hidden files | When enabled (default), files and folders carrying the Windows Hidden attribute are searched. When disabled, hidden items are excluded — the managed file walker skips them and the Everything backends filter them with `!attrib:h`. System files (e.g. `pagefile.sys`, `hiberfil.sys`) are always skipped by the file walker regardless of this setting. The default for this per-search toggle comes from **Settings ▸ Path and File Type Filters ▸ Search hidden files**. |
 
 ### Size Tab
 
@@ -310,6 +338,8 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 | Default include patterns | Include filter applied by default on app start. Leave blank to include every eligible file. |
 | Default exclude pattern mode | Whether default exclude patterns are interpreted as Glob or Regex. |
 | Default exclude patterns | Exclude filter applied by default before content scanning. |
+| .gitignore vs Include filter precedence | Which side wins when a file is both matched by your Include filter and excluded by .gitignore (only relevant when Obey .gitignore is on). Choose **Ask me each time** (default), **.gitignore wins**, or **Include filter wins**. The precedence prompt's **Don't ask again** option also updates this setting. |
+| Default to Traditional search mode | Overrides the hardware-based startup mode. When your machine has a GPU/NPU that can run Semantic search, the search bar defaults to **Semantic**; check this to default to **Traditional** instead. Greyed out and unset on machines with no supported GPU/NPU (those always default to Traditional). You can still switch modes any time from the Search-button chevron. |
 
 ### Search Limits Tab
 
@@ -322,6 +352,7 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 | Default modified date filter | Modified-after and modified-before defaults for Advanced Options. Blank = any date. |
 | Clear date defaults | Clears all saved created/modified date defaults. |
 | Search binary files | Includes files detected as binary by null bytes or magic bytes. Off by default. |
+| Search hidden files | Default for the Advanced Options ▸ Content options "Search hidden files" toggle. On by default — items with the Windows Hidden attribute are included. System files are always skipped by the file walker. |
 | Skip admin-protected paths | Excludes system directories that deny access when not elevated. |
 | Admin-protected path segments | Custom path segments to skip (semicolon-separated). |
 | Skip extensions | Extensions skipped before contents are read. Use semicolon-separated names without dots. |
@@ -421,6 +452,7 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 | Show build number in title bar | Adds the current Yagu version to the main title bar for diagnostics and screenshots. Hidden by default. |
 | Show Auto-scroll checkbox | Shows the results-toolbar Auto-scroll checkbox for testing continuously appended result rows. Hidden by default. |
 | Reset font contrast reminders | Allows theme/font contrast warnings to appear again after Remind me later or Don't remind me again. |
+| Reset .gitignore vs include filter warning | Re-enables the precedence prompt after you chose Don't ask again or set a fixed preference in Search Defaults. |
 | Reset first-time introductory tooltips | Allows the file drawer, line-number, and preview-match introductory tooltips to appear again. |
 | Re-enable admin privilege warning | Re-enables the non-administrator warning after it was dismissed. Visible only after the warning has been suppressed. |
 | File log level | Controls file logging: None, Critical, Warning, Info, or Verbose. Verbose can degrade performance. |
@@ -852,6 +884,42 @@ Yagu.exe --cli --directory <path> PATTERN [OPTIONS]
 | `--exact-match` | Match whole words only (default). |
 | `--no-exact-match` | Allow substring matches. |
 
+### Semantic Search (local AI)
+
+Describe the search in plain language and let a local on-device model fill in the
+flags. The query never leaves the machine; the model is downloaded once via Microsoft
+Foundry Local and auto-selected for your hardware (NPU > GPU > CPU).
+
+| Flag | Description |
+| --- | --- |
+| `-SP`, `--semantic-pattern <text>` | Natural-language request translated into the search flags (directory, globs, dates, sizes, search mode) and then executed. Replaces the positional `PATTERN`; `--directory` becomes optional (defaults to the current directory). |
+| `--semantic-model <alias>` | Force a specific Foundry Local model. Default: auto-pick the best small model for this machine's hardware. Skips the first-run model-download prompt. |
+| `--accept-model-download` | Auto-download the recommended model without prompting — for scripts and non-interactive consoles. Without it, a redirected console falls back to Traditional search instead of downloading. |
+| `--explain` | With `--semantic-pattern`, print the interpreted search parameters and exit **without** searching (a dry-run). Also reports the selected model and the model's raw JSON output (to stderr) to help diagnose interpretation. |
+
+**First-run model prompt.** The first time you run a semantic query (and no model has been
+downloaded yet), Yagu lists the local models suited to your hardware — the recommended pick
+first, with smaller/lower-ranked options flagged `(!) may give less accurate results` and
+already-downloaded models tagged. Press **Enter** to download the recommended model, type a
+**number** to choose another, or **n** to decline. Declining (or a non-interactive console
+without `--accept-model-download`) falls back to a literal **Traditional** search of your text.
+Your choice is saved, so later runs skip the prompt. Pass `--semantic-model <alias>` to choose
+up front and bypass the prompt entirely.
+
+Explicit flags always win over the model's choices, so you can override any part of the
+interpretation (e.g. add `--directory` or `--search-mode`). Progress, the model prompt, and the
+interpreted plan are written to stderr so stdout stays clean for piping.
+
+```
+Yagu.exe --cli --semantic-pattern "find png files on the C drive modified in the past year, ignore mov files"
+Yagu.exe --cli --semantic-pattern "large pdf reports created since January" --explain
+Yagu.exe --cli --semantic-pattern "config files under the repo" --semantic-model "qwen2.5-1.5b-instruct-generic-cpu"
+Yagu.exe --cli --semantic-pattern "log files changed this week" --accept-model-download
+Yagu.exe --cli --semantic-pattern "find all files on C:\ with andrew in the name, sort by file name and group by directory"
+```
+
+Semantic requests can also set **sorting** and **grouping** (e.g. *"sort by file name"*, *"group by directory"*). As with traditional `--sort`/`--group`, the results are collected and rendered after the scan completes rather than streamed. See [Sort (CLI)](#sort-cli) and [Group (CLI)](#group-cli) for the underlying flags.
+
 ### File Filtering
 
 | Flag | Description |
@@ -892,6 +960,13 @@ Yagu.exe --cli --directory <path> PATTERN [OPTIONS]
 | --- | --- |
 | `--search-archives` | Search inside ZIP-like archives. |
 | `--archive-extensions <ext>` | Semicolon-separated archive extensions. |
+
+### Content Options
+
+| Flag | Description |
+| --- | --- |
+| `--hidden` (aliases `--search-hidden`) | Include files/folders carrying the Windows Hidden attribute (default; falls back to the **Search hidden files** setting). |
+| `--no-hidden` (aliases `--no-search-hidden`) | Exclude hidden files/folders. System files are always skipped by the file walker regardless of this flag. |
 
 ### Output
 
@@ -969,6 +1044,36 @@ Yagu.exe --cli --directory src "TODO" --sort matches --sort-desc
 Yagu.exe --cli --directory logs "error" --sort date --sort-desc
 ```
 
+### Group (CLI)
+
+Group CLI output into buckets by a file attribute. Like `--sort`, grouping collects the whole result set and renders it **after** the scan completes — grouped output is never streamed live. Each group is printed under a header showing the bucket label and its file/match counts. Combine with `--sort` to order the files **within** each group.
+
+| Flag | Description |
+| --- | --- |
+| `--group <key>` | Group results by: `directory`, `extension`, `size`, `modified`, `created`, `date`, `none`. Default: ungrouped. |
+| `--group-desc` | Reverse the natural group order (Z–A / oldest / largest first). |
+| `--group-asc` | Natural group order: A–Z / recent / smallest first (default). |
+
+Natural group ordering depends on the key: directory/extension buckets sort A–Z, size buckets smallest-first, and date buckets most-recent-first. `--group-desc` reverses whichever orientation applies.
+
+**Example — group matches by folder:**
+
+```
+Yagu.exe --cli --directory src "TODO" --group directory
+```
+
+**Example — group by file type, biggest files first within each group:**
+
+```
+Yagu.exe --cli --directory src "TODO" --group extension --sort size --sort-desc
+```
+
+**Example — group by modified date, oldest groups first:**
+
+```
+Yagu.exe --cli --directory logs "ERROR" --group modified --group-desc
+```
+
 ### Help
 
 | Flag | Description |
@@ -1016,6 +1121,7 @@ For most users:
 | Max results | 0 (unlimited) |
 | Log verbosity | Warning or Info |
 | Archive search | Off unless needed |
+| Search hidden files | On (matches Everything's default; turn off to skip dotfiles/hidden trees) |
 | Close to tray | On (keeps Yagu available) |
 
 Then tune filters and query until the result set is manageable.
