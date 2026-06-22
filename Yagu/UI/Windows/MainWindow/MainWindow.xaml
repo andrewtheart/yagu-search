@@ -765,6 +765,22 @@
                                                         </DropDownButton.Flyout>
                                                     </DropDownButton>
                                                 </StackPanel>
+                                                <StackPanel x:Name="CloudFilesRow" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                                    <ToggleSwitch OnContent="Search online-only cloud files" OffContent="Search online-only cloud files"
+                                                                  IsOn="{x:Bind ViewModel.SearchOnlineOnlyFiles, Mode=TwoWay}"
+                                                                  MinWidth="0" />
+                                                    <FontIcon Glyph="&#xE7BA;" FontSize="12" VerticalAlignment="Center"
+                                                              Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                                                              ToolTipService.ToolTip="When on, OneDrive/Google Drive online-only placeholder files are downloaded on demand and searched — but only while the sync provider is running. Off by default: cloud-only files are skipped so the scan can't hang on a download. Can be slow and use network/disk." />
+                                               </StackPanel>
+                                               <StackPanel x:Name="HiddenFilesRow" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                                   <ToggleSwitch OnContent="Search hidden files" OffContent="Search hidden files"
+                                                                 IsOn="{x:Bind ViewModel.SearchHiddenFiles, Mode=TwoWay}"
+                                                                 MinWidth="0" />
+                                                   <FontIcon Glyph="&#xE946;" FontSize="12" VerticalAlignment="Center"
+                                                             Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                                                             ToolTipService.ToolTip="When on (default), files and folders with the Windows Hidden attribute are searched. When off, hidden items are excluded. System files (e.g. pagefile.sys) are always skipped by the file walker regardless of this setting." />
+                                               </StackPanel>
                                             </StackPanel>
                                         </StackPanel>
 

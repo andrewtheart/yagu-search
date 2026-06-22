@@ -2258,6 +2258,11 @@ public sealed partial class SettingsWindow : Window
             pathTypeGroup.Children.Add(searchCloud);
             pathTypeGroup.Children.Add(new TextBlock { Text = "When enabled, OneDrive/Google Drive ‘online-only’ placeholder files are downloaded on demand and searched — but only when the sync provider is running to serve them. Off by default: cloud-only files are skipped so the scan can never hang waiting on a download that may never complete. Searching them can be slow and use network/disk.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
+            var searchHidden = new ToggleSwitch { OnContent = NextSearchLabel("Search hidden files"), OffContent = NextSearchLabel("Search hidden files"), IsOn = _viewModel.SearchHiddenFiles };
+            searchHidden.Toggled += (_, _) => _viewModel.SearchHiddenFiles = searchHidden.IsOn;
+            pathTypeGroup.Children.Add(searchHidden);
+            pathTypeGroup.Children.Add(new TextBlock { Text = "When enabled (default), files and folders carrying the Windows Hidden attribute are included in searches. When disabled, hidden items are excluded — the file walker skips them and the Everything backends filter them with !attrib:h. System files (e.g. pagefile.sys, hiberfil.sys) are always skipped by the file walker regardless of this setting. This is the default for the Advanced Options ▸ Content options toggle.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
             var skipAdmin = new CheckBox { Content = NextSearchLabel("Skip admin-protected paths when not elevated"), IsChecked = _viewModel.ExcludeAdminProtectedPaths };
             skipAdmin.Checked += (_, _) => _viewModel.ExcludeAdminProtectedPaths = true;
             skipAdmin.Unchecked += (_, _) => _viewModel.ExcludeAdminProtectedPaths = false;

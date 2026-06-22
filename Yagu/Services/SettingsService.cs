@@ -198,6 +198,8 @@ public sealed class AppSettings
     /// provider is present. When false (default), such files are skipped so the scan can
     /// never block on a hydration that may never complete. Default false.</summary>
     public bool SearchOnlineOnlyFiles { get; set; }
+    /// <summary>When true (default), files and folders with the Windows Hidden attribute are searched. When false, hidden items are excluded. Persisted; also the default for the per-search Advanced Options toggle.</summary>
+    public bool SearchHiddenFiles { get; set; } = true;
     /// <summary>When true, detect ZIP archives by file header and search text files inside them. Default true.</summary>
     [JsonIgnore] public bool SearchInsideArchives { get; set; }
     /// <summary>Semicolon-separated file extensions that are known ZIP-like containers (bypassed from skip-extensions when archive search is on). e.g. "zip;jar;docx;xlsx".</summary>

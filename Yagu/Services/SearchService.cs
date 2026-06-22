@@ -175,6 +175,7 @@ public sealed class SearchService
             concreteLister.AdminProtectedPathSegmentsOverride = options.AdminProtectedPathSegments;
             concreteLister.MaxSearchDepth = options.MaxSearchDepth;
             concreteLister.SearchOnlineOnlyFiles = options.SearchOnlineOnlyFiles;
+            concreteLister.SearchHiddenFiles = options.SearchHiddenFiles;
 
             // Dynamic gitignore: create a matcher that loads .gitignore files
             // lazily as directories are encountered during the scan.
@@ -1503,6 +1504,7 @@ public sealed class SearchService
             MaxResults = maxResults ?? options.MaxResults,
             MaxMatchesPerFile = options.MaxMatchesPerFile,
             SkipBinary = options.SkipBinary,
+            SearchHiddenFiles = options.SearchHiddenFiles,
             ObeyGitignore = options.ObeyGitignore,
             GitignoreTakesPrecedence = options.GitignoreTakesPrecedence,
             MaxDegreeOfParallelism = options.MaxDegreeOfParallelism,

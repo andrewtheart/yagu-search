@@ -70,6 +70,17 @@ public sealed class SearchOptions
     public bool SkipBinary { get; init; } = true;
 
     /// <summary>
+    /// When true (the default), files and folders carrying the Windows Hidden
+    /// attribute are included in the search. When false, hidden items are excluded:
+    /// the managed file walker skips hidden entries (and does not recurse hidden
+    /// folders), and the Everything backends append <c>!attrib:h</c> so hidden files
+    /// are filtered natively. Pure-system files are unaffected by this flag (they are
+    /// handled separately). The default preserves existing behavior — the Everything
+    /// index already returns hidden files — so no extra per-file work is added.
+    /// </summary>
+    public bool SearchHiddenFiles { get; init; } = true;
+
+    /// <summary>
     /// When true, the scanner may open cloud-only placeholder files (OneDrive
     /// Files On-Demand / Google Drive online-only files), hydrating them on
     /// demand — but only when a live sync provider is present to service the

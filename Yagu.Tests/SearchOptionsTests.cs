@@ -51,4 +51,18 @@ public class SearchOptionsTests
         var opts = new SearchOptions { Directory = ".", Query = "x", ObeyGitignore = true };
         Assert.True(opts.ObeyGitignore);
     }
+
+    [Fact]
+    public void SearchHiddenFiles_DefaultsToTrue()
+    {
+        var opts = new SearchOptions { Directory = ".", Query = "x" };
+        Assert.True(opts.SearchHiddenFiles);
+    }
+
+    [Fact]
+    public void SearchHiddenFiles_CanBeSetToFalse()
+    {
+        var opts = new SearchOptions { Directory = ".", Query = "x", SearchHiddenFiles = false };
+        Assert.False(opts.SearchHiddenFiles);
+    }
 }

@@ -827,6 +827,58 @@ public class FileListerManagedTests : IDisposable
     }
 
     [Fact]
+    public async Task Managed_SearchHiddenTrue_IncludesHiddenFile()
+    {
+        File.WriteAllText(Path.Combine(_root, "visible.txt"), "");
+        var hidden = Path.Combine(_root, "secret.txt");
+        File.WriteAllText(hidden, "");
+        File.SetAttributes(hidden, File.GetAttributes(hidden) | FileAttributes.Hidden);
+
+        var lister = new FileLister { SearchHiddenFiles = true };
+        var files = new List<string>();
+        await foreach (var p in lister.ListFilesAsync(_root, Array.Empty<string>(), 0, default))
+            files.Add(p);
+
+        Assert.Contains(files, f => f.EndsWith("secret.txt", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(files, f => f.EndsWith("visible.txt", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Managed_SearchHiddenFalse_ExcludesHiddenFile()
+    {
+        File.WriteAllText(Path.Combine(_root, "visible.txt"), "");
+        var hidden = Path.Combine(_root, "secret.txt");
+        File.WriteAllText(hidden, "");
+        File.SetAttributes(hidden, File.GetAttributes(hidden) | FileAttributes.Hidden);
+
+        var lister = new FileLister { SearchHiddenFiles = false };
+        var files = new List<string>();
+        await foreach (var p in lister.ListFilesAsync(_root, Array.Empty<string>(), 0, default))
+            files.Add(p);
+
+        Assert.DoesNotContain(files, f => f.EndsWith("secret.txt", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(files, f => f.EndsWith("visible.txt", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Managed_SearchHiddenFalse_SkipsHiddenFolderContents()
+    {
+        var hiddenDir = Path.Combine(_root, "hiddendir");
+        Directory.CreateDirectory(hiddenDir);
+        File.WriteAllText(Path.Combine(hiddenDir, "inside.txt"), "");
+        File.SetAttributes(hiddenDir, File.GetAttributes(hiddenDir) | FileAttributes.Hidden);
+        File.WriteAllText(Path.Combine(_root, "top.txt"), "");
+
+        var lister = new FileLister { SearchHiddenFiles = false };
+        var files = new List<string>();
+        await foreach (var p in lister.ListFilesAsync(_root, Array.Empty<string>(), 0, default))
+            files.Add(p);
+
+        Assert.DoesNotContain(files, f => f.EndsWith("inside.txt", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(files, f => f.EndsWith("top.txt", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task Managed_NonExistentDir_YieldsNothing()
     {
         var lister = new FileLister();

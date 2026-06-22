@@ -192,6 +192,13 @@ public sealed class FileLister : IFileLister
     /// placeholders are listed and the scanner gates them by provider liveness.</summary>
     public bool SearchOnlineOnlyFiles { get; set; }
 
+    /// <summary>When true (the default), files and folders with the Windows Hidden
+    /// attribute are listed. When false, the managed walker skips hidden entries (and
+    /// does not recurse hidden folders) and the Everything backends append
+    /// <c>!attrib:h</c> to exclude hidden files natively. Pure-system files are always
+    /// skipped by the managed walker regardless of this flag.</summary>
+    public bool SearchHiddenFiles { get; set; } = true;
+
     /// <summary>
     /// When true and the current process is NOT elevated, skip directories that
     /// typically require administrator rights (e.g. <c>C:\Windows\System32\config</c>,
@@ -332,12 +339,30 @@ public sealed class FileLister : IFileLister
     // EnumerationOptions used by the managed fallback path. IgnoreInaccessible suppresses
     // UnauthorizedAccessException / IOException from the kernel enumerator, eliminating tens of
     // thousands of exception objects (and the GC pressure they cause) on system-wide scans.
-    private static readonly EnumerationOptions s_enumOpts = new()
+    //
+    // Two cached variants avoid per-directory allocation on huge trees. Both always skip
+    // pure-System entries (pagefile.sys, hiberfil.sys, OS internals). The "include hidden"
+    // variant (the default) lists hidden files and recurses hidden folders; the "skip hidden"
+    // variant adds FileAttributes.Hidden so the kernel enumerator omits hidden entries and
+    // never recurses hidden folders. Selection is driven by <see cref="SearchHiddenFiles"/>.
+    private static readonly EnumerationOptions s_enumOptsIncludeHidden = new()
     {
         IgnoreInaccessible = true,
         RecurseSubdirectories = false,
         ReturnSpecialDirectories = false,
+        AttributesToSkip = FileAttributes.System,
     };
+
+    private static readonly EnumerationOptions s_enumOptsSkipHidden = new()
+    {
+        IgnoreInaccessible = true,
+        RecurseSubdirectories = false,
+        ReturnSpecialDirectories = false,
+        AttributesToSkip = FileAttributes.System | FileAttributes.Hidden,
+    };
+
+    private EnumerationOptions EffectiveEnumOpts =>
+        SearchHiddenFiles ? s_enumOptsIncludeHidden : s_enumOptsSkipHidden;
 
     public FileLister() : this(null, null) { }
 
@@ -545,6 +570,11 @@ public sealed class FileLister : IFileLister
 
         // Always exclude .git from the SDK query (unconditional).
         query += " !\"\\.git\\\"";
+
+        // When hidden search is disabled, exclude files carrying the Hidden attribute
+        // natively in the Everything query (no per-file attribute syscalls).
+        if (!SearchHiddenFiles)
+            query += " !attrib:h";
 
         LogService.Instance.Warning("FileLister", $"Everything SDK query: {query}");
 
@@ -1107,6 +1137,9 @@ public sealed class FileLister : IFileLister
             args.Add(sizeTerm);
         foreach (var dateTerm in BuildEverythingDateFilterTerms(EarlyCreatedAfterDate, EarlyCreatedBeforeDate, EarlyModifiedAfterDate, EarlyModifiedBeforeDate))
             args.Add(dateTerm);
+        // When hidden search is disabled, exclude hidden files natively via Everything's attribute filter.
+        if (!SearchHiddenFiles)
+            args.Add("!attrib:h");
         var fileNameFilter = BuildEverythingFileNameFilter(EarlyFileNameLiteralTerms);
         if (fileNameFilter is not null)
             args.Add(fileNameFilter);
@@ -1572,9 +1605,10 @@ public sealed class FileLister : IFileLister
     {
         try
         {
-            // s_enumOpts has IgnoreInaccessible=true: access-denied entries are silently
-            // skipped by the OS enumerator rather than thrown as exceptions.
-            return new DirectoryInfo(canonical).EnumerateFileSystemInfos("*", s_enumOpts).GetEnumerator();
+            // EffectiveEnumOpts has IgnoreInaccessible=true: access-denied entries are silently
+            // skipped by the OS enumerator rather than thrown as exceptions. It also drives
+            // hidden-file handling (skip hidden entries when SearchHiddenFiles is false).
+            return new DirectoryInfo(canonical).EnumerateFileSystemInfos("*", EffectiveEnumOpts).GetEnumerator();
         }
         catch (UnauthorizedAccessException ex)
         {

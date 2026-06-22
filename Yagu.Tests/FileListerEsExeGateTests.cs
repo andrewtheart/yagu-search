@@ -104,6 +104,44 @@ public sealed class FileListerEsExeGateTests : IDisposable
         Assert.Null(FileLister.BuildEverythingFileNameFilter(["bad\"term"]));
     }
 
+    [Fact]
+    public async Task RunEverythingAsync_SearchHiddenFalse_AddsAttribHExclusion()
+    {
+        FileLister.Backend = FileListerBackend.EsExe;
+        var dir = Path.GetTempPath().TrimEnd('\\');
+
+        var capturedArgs = new List<IReadOnlyList<string>>();
+        var lister = new FileLister((path, psi) =>
+        {
+            capturedArgs.Add(psi.ArgumentList.ToList());
+            return new FakeProcess(lines: new[] { dir + @"\file1.txt", "" }, exitCode: 0);
+        })
+        { SearchHiddenFiles = false };
+
+        await foreach (var _ in lister.ListFilesAsync(dir, Array.Empty<string>(), 0, CancellationToken.None)) { }
+
+        Assert.Contains(capturedArgs, a => a.Contains("!attrib:h"));
+    }
+
+    [Fact]
+    public async Task RunEverythingAsync_SearchHiddenTrue_OmitsAttribHExclusion()
+    {
+        FileLister.Backend = FileListerBackend.EsExe;
+        var dir = Path.GetTempPath().TrimEnd('\\');
+
+        var capturedArgs = new List<IReadOnlyList<string>>();
+        var lister = new FileLister((path, psi) =>
+        {
+            capturedArgs.Add(psi.ArgumentList.ToList());
+            return new FakeProcess(lines: new[] { dir + @"\file1.txt", "" }, exitCode: 0);
+        })
+        { SearchHiddenFiles = true };
+
+        await foreach (var _ in lister.ListFilesAsync(dir, Array.Empty<string>(), 0, CancellationToken.None)) { }
+
+        Assert.DoesNotContain(capturedArgs, a => a.Contains("!attrib:h"));
+    }
+
     private sealed class FakeProcess : FileLister.IProcess
     {
         private readonly string[] _lines;

@@ -241,6 +241,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         ApplyMaxMatchesPerFile(MaxMatchesPerFile);
         SkipBinary = _settings.SkipBinary;
         SearchOnlineOnlyFiles = _settings.SearchOnlineOnlyFiles;
+        SearchHiddenFiles = _settings.SearchHiddenFiles;
         SearchInsideArchives = _settings.SearchInsideArchives;
         SettingsSkipExtensions = _settings.SkipExtensions;
         SettingsBinaryExtensions = _settings.BinaryExtensions;
@@ -694,6 +695,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// them on demand when a live provider is present; when false (default) they are
     /// skipped so the scan never blocks on hydration.</summary>
     [ObservableProperty] public partial bool SearchOnlineOnlyFiles { get; set; }
+
+    /// <summary>When true (default), files and folders carrying the Windows Hidden
+    /// attribute are included in the search; when false they are excluded. Seeded from
+    /// the persisted <c>SearchHiddenFiles</c> setting and surfaced as the Advanced
+    /// Options ▸ Content options toggle.</summary>
+    [ObservableProperty] public partial bool SearchHiddenFiles { get; set; } = true;
 
     /// <summary>UI-facing inverse of <see cref="SkipBinary"/> for the "Search binary" toggle.</summary>
     public bool SearchBinary
@@ -1545,6 +1552,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 MaxResults = MaxResults,
                 SkipBinary = SkipBinary,
                 SearchOnlineOnlyFiles = SearchOnlineOnlyFiles,
+                SearchHiddenFiles = SearchHiddenFiles,
                 ObeyGitignore = ObeyGitignore,
                 GitignoreTakesPrecedence = GitignoreTakesPrecedence,
                 SkipExtensions = effectiveSkipExtensions,
@@ -3003,6 +3011,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _settings.MaxMatchesPerFile = MaxMatchesPerFile;
         _settings.SkipBinary = SkipBinary;
         _settings.SearchOnlineOnlyFiles = SearchOnlineOnlyFiles;
+        _settings.SearchHiddenFiles = SearchHiddenFiles;
         _settings.SearchInsideArchives = SearchInsideArchives;
         _settings.ArchiveExtensions = SettingsArchiveExtensions;
         _settings.SkipExtensions = SettingsSkipExtensions;
