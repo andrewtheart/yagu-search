@@ -182,6 +182,7 @@ internal sealed class AdminProtectedPathsDialog : Window
                 presenter.IsMaximizable = false;
                 presenter.IsMinimizable = false;
                 presenter.IsResizable = false;
+                presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);
             }
         }
         catch { }

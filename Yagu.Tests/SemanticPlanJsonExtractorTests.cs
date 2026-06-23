@@ -132,6 +132,32 @@ public sealed class SemanticPlanJsonExtractorTests
     }
 
     [Fact]
+    public void TryParsePlan_BalancedButExplanationQuotedEarlyClose_DropsExplanationKeepsFields()
+    {
+        // phi-4-mini's "all word documents with Andrew in them" failure: it closed the explanation
+        // string early (...for the term 'Andrew") and left a stray '.' before '}'. The object is
+        // brace-balanced but invalid; the trailing-field repair must drop the broken explanation and
+        // keep the structured fields so the search still runs.
+        const string raw = "{\"directory\":\"\",\"pattern\":\"Andrew\",\"searchMode\":\"content\"," +
+                           "\"includeGlobs\":[\"*.doc\",\"*.docx\",\"*.pdf\",\"*.txt\",\"*.rtf\",\"*.odt\"]," +
+                           "\"explanation\":\"Searching the contents of word documents for the term 'Andrew\".}";
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(raw, out SemanticSearchPlan? plan, out string? error));
+        Assert.Null(error);
+        Assert.NotNull(plan);
+        Assert.Equal("Andrew", plan!.Pattern);
+        Assert.Equal("content", plan.SearchMode);
+        Assert.Equal(new[] { "*.doc", "*.docx", "*.pdf", "*.txt", "*.rtf", "*.odt" }, plan.IncludeGlobs!);
+        Assert.True(string.IsNullOrEmpty(plan.Explanation)); // the malformed trailing field was dropped
+    }
+
+    [Fact]
+    public void RepairBalancedObject_FirstFieldMalformed_ReturnsNull()
+    {
+        // No top-level comma precedes the break, so there is no earlier field to trim back to.
+        Assert.Null(SemanticPlanJsonExtractor.RepairBalancedObject("{\"pattern\":\"a\"b\"}"));
+    }
+
+    [Fact]
     public void ExtractJsonObject_NestedObject_ReturnedWhole()
     {
         const string raw = "{\"a\":{\"b\":1}}";
@@ -203,5 +229,55 @@ public sealed class SemanticPlanJsonExtractorTests
         // at length 0 instead of indexing past the start, and the resulting "}" is not valid JSON.
         string? result = SemanticPlanJsonExtractor.CloseAndValidate(",", endsInString: false, openStack: ['{']);
         Assert.Null(result);
+    }
+
+    [Fact]
+    public void TryParsePlan_ArithmeticInSizeField_FoldedToLiteralAndParses()
+    {
+        // The "all files greater than 100Mb in size" failure: phi-4-mini emitted an arithmetic
+        // expression (1048576*100) in minFileSizeBytes, which is not valid JSON. The fold must turn
+        // it into the literal product so the plan parses.
+        const string raw = "{\"minFileSizeBytes\": 1048576*100,\"explanation\":\"Listing files greater than 100 MB in size.\"}";
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(raw, out SemanticSearchPlan? plan, out string? error));
+        Assert.Null(error);
+        Assert.NotNull(plan);
+        Assert.Equal(104857600, plan!.MinFileSizeBytes);
+        Assert.Equal("Listing files greater than 100 MB in size.", plan.Explanation);
+    }
+
+    [Fact]
+    public void TryParsePlan_MultiFactorArithmeticWithSpaces_FoldedToProduct()
+    {
+        // A three-factor chain with spaces (100 * 1024 * 1024) must also fold to its product.
+        const string raw = "{\"maxFileSizeBytes\": 100 * 1024 * 1024,\"pattern\":\"*.bin\"}";
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(raw, out SemanticSearchPlan? plan, out _));
+        Assert.Equal(104857600, plan!.MaxFileSizeBytes);
+        Assert.Equal("*.bin", plan.Pattern);
+    }
+
+    [Fact]
+    public void FoldIntegerMultiplication_InsideStringValue_IsNotAltered()
+    {
+        // Arithmetic that appears inside a string value (e.g. the explanation) must be left verbatim.
+        const string raw = "{\"explanation\":\"about 2*3 things\",\"pattern\":\"*.txt\"}";
+        Assert.Equal(raw, SemanticPlanJsonExtractor.FoldIntegerMultiplication(raw));
+    }
+
+    [Fact]
+    public void FoldIntegerMultiplication_PlainNumbersAndAsteriskGlobs_Unchanged()
+    {
+        // A lone integer and an unquoted-looking glob asterisk that is not a digit*digit chain must
+        // be left exactly as-is.
+        const string raw = "{\"minFileSizeBytes\":5242880,\"pattern\":\"*.png\"}";
+        Assert.Equal(raw, SemanticPlanJsonExtractor.FoldIntegerMultiplication(raw));
+    }
+
+    [Fact]
+    public void FoldIntegerMultiplication_DecimalFollowedByChain_LeftAlone()
+    {
+        // A chain that begins right after a decimal point must not be folded (it is part of a decimal,
+        // not a standalone integer product).
+        const string raw = "{\"x\":1.5*2}";
+        Assert.Equal(raw, SemanticPlanJsonExtractor.FoldIntegerMultiplication(raw));
     }
 }

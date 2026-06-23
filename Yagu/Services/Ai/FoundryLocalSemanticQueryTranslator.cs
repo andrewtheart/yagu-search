@@ -20,7 +20,6 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
 
     private readonly bool _enabled;
     private string? _preferredAlias;
-    private readonly FoundryModelSelector _selector;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private readonly Lazy<string> _systemPromptTemplate = new(LoadSystemPromptTemplate);
 
@@ -33,11 +32,10 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     /// successful <see cref="TranslateAsync"/> call. Useful for diagnostics (which model ran).</summary>
     public string? SelectedModelAlias { get; private set; }
 
-    public FoundryLocalSemanticQueryTranslator(bool enabled, string? modelOverrideAlias = null, FoundryModelSelector? selector = null)
+    public FoundryLocalSemanticQueryTranslator(bool enabled, string? modelOverrideAlias = null)
     {
         _enabled = enabled;
         _preferredAlias = string.IsNullOrWhiteSpace(modelOverrideAlias) ? null : modelOverrideAlias.Trim();
-        _selector = selector ?? new FoundryModelSelector();
         LogService.Instance.Verbose(LogSource,
             $"Created (enabled={_enabled}, preferredAlias={_preferredAlias ?? "<auto>"}).");
     }
@@ -158,7 +156,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             var catalog = await EnsureCatalogLockedAsync(progress, cancellationToken).ConfigureAwait(false);
 
             log.Verbose(LogSource, $"Selecting model (preferredAlias={_preferredAlias ?? "<auto>"}).");
-            var model = await _selector.SelectAsync(catalog, _preferredAlias, cancellationToken).ConfigureAwait(false);
+            var model = await FoundryModelSelector.SelectAsync(catalog, _preferredAlias, cancellationToken).ConfigureAwait(false);
             if (model is null)
             {
                 log.Warning(LogSource, "No compatible local model is available for this machine.");
@@ -373,7 +371,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             var catalog = await EnsureCatalogLockedAsync(progress, cancellationToken).ConfigureAwait(false);
             string? alias = string.IsNullOrWhiteSpace(modelAlias) ? _preferredAlias : modelAlias.Trim();
             log.Info(LogSource, $"Preparing model (requested='{alias ?? "<auto>"}').");
-            var model = await _selector.SelectAsync(catalog, alias, cancellationToken).ConfigureAwait(false);
+            var model = await FoundryModelSelector.SelectAsync(catalog, alias, cancellationToken).ConfigureAwait(false);
             if (model is null)
             {
                 log.Warning(LogSource, $"No compatible local model is available for this machine (requested='{alias ?? "<auto>"}').");

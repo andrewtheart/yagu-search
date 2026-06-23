@@ -792,9 +792,22 @@ public sealed partial class MainWindow
         try { toOverlay = block.TransformToVisual(PreviewSelectionOverlay); }
         catch { return false; }
 
-        // Text wraps between the paragraph's first-character X and the block's content
-        // right edge; continuation rows start back at that same left margin.
+        // Continuation (wrapped) rows start at the paragraph's true content-left edge,
+        // i.e. the position BEFORE any leading inline such as a prefix "show more"
+        // ellipsis InlineUIContainer. paragraphFirstCharRect is the first *Run*'s X,
+        // which sits AFTER such a leading inline, so using it would push the continuation
+        // bands right and leave an un-highlighted gap on the left of every wrapped row.
         double contentLeftBlock = paragraphFirstCharRect.X;
+        try
+        {
+            var paragraphStartRect = paragraph.ContentStart.GetCharacterRect(LogicalDirection.Forward);
+            if (IsUsableTextRect(paragraphStartRect))
+                contentLeftBlock = Math.Min(contentLeftBlock, paragraphStartRect.X);
+        }
+        catch
+        {
+            // Keep the first-run X fallback when the paragraph start rect is unavailable.
+        }
         double contentRightBlock = Math.Max(contentLeftBlock + 1, block.ActualWidth);
         double rowHeight = Math.Max(markerHeight, startRect.Height > 0 ? startRect.Height : markerHeight);
         bool sameRow = Math.Abs(startRect.Y - endRect.Y) <= rowHeight * 0.5;

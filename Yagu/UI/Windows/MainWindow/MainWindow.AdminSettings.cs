@@ -37,9 +37,10 @@ public sealed partial class MainWindow
         var contentPanel = new StackPanel { Spacing = 12, MinWidth = 360 };
         contentPanel.Children.Add(new TextBlock
         {
-            Text = "Should .gitignore exclusions take precedence over your Include filter?\n\n" +
-                   "Yes - files excluded by .gitignore will be skipped even if they match your Include filter.\n\n" +
-                   "No - your Include filter takes priority; matching files will be searched even if .gitignore would exclude them.",
+            Text = "When a file is both matched by your Include filter and excluded by .gitignore, which one should take precedence?\n\n" +
+                   "Yes, .gitignore wins - the file is skipped, even though it matches your Include filter.\n\n" +
+                   "No, Include filter wins - the file is searched, even though .gitignore would exclude it.\n\n" +
+                   "This choice only applies to files where the two conflict.",
             TextWrapping = TextWrapping.Wrap,
         });
         var dontAskAgain = new CheckBox { Content = "Don't ask again" };
@@ -49,12 +50,13 @@ public sealed partial class MainWindow
             _hwnd,
             new YaguDialogOptions
             {
-                Title = ".gitignore precedence",
+                Title = ".gitignore vs Include filter",
                 Content = contentPanel,
                 PrimaryButtonText = "Yes, .gitignore wins",
                 SecondaryButtonText = "No, Include filter wins",
                 CloseButtonText = null,
                 DefaultButton = YaguDialogDefaultButton.Primary,
+                ShowTitleBar = false,
                 Width = 620,
                 Height = 360,
             });

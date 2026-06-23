@@ -197,11 +197,26 @@ public sealed partial class MainWindow
         }
         else
         {
-            // Declined or failed — stay in Traditional mode and re-sync the radio items.
+            // Declined or failed — stay in Traditional mode and re-sync the menu highlight.
             ViewModel.IsSemanticQueryMode = false;
-            TraditionalModeItem.IsChecked = true;
-            SemanticModeItem.IsChecked = false;
+            UpdateSearchModeMenuHighlight();
         }
+    }
+
+    private void OnSearchModeFlyoutOpening(object? sender, object e) => UpdateSearchModeMenuHighlight();
+
+    /// <summary>
+    /// Marks the active query mode with a subtle highlight background instead of a radio bullet.
+    /// </summary>
+    private void UpdateSearchModeMenuHighlight()
+    {
+        Microsoft.UI.Xaml.Media.Brush? highlight = null;
+        if (Application.Current.Resources.TryGetValue("SubtleFillColorSecondaryBrush", out var res))
+            highlight = res as Microsoft.UI.Xaml.Media.Brush;
+
+        var semantic = ViewModel.IsSemanticQueryMode;
+        SemanticModeItem.Background = semantic ? highlight : null;
+        TraditionalModeItem.Background = semantic ? null : highlight;
     }
 
     /// <summary>
@@ -238,7 +253,7 @@ public sealed partial class MainWindow
         // Down arrow opens the search history dropdown.
         else if (e.Key == VirtualKey.Down && !QueryBox.IsSuggestionListOpen
                  && !AreQuerySuggestionsSuppressed()
-                 && ViewModel.SearchHistory.Count > 0)
+                 && ActiveQueryHistory().Count > 0)
         {
             ApplyQuerySuggestions(QueryBox, open: true);
         }
@@ -303,14 +318,20 @@ public sealed partial class MainWindow
 
     private List<string> BuildQuerySuggestions(string? queryText)
     {
+        var history = ActiveQueryHistory();
         string filter = queryText?.Trim() ?? string.Empty;
         if (filter.Length == 0)
-            return ViewModel.SearchHistory.ToList();
+            return history.ToList();
 
-        return ViewModel.SearchHistory
+        return history
             .Where(entry => entry.Contains(filter, StringComparison.OrdinalIgnoreCase))
             .ToList();
     }
+
+    /// <summary>The autocomplete history that backs the query box for the active search mode:
+    /// the Semantic natural-language history in Semantic mode, otherwise the Traditional history.</summary>
+    private System.Collections.ObjectModel.ObservableCollection<string> ActiveQueryHistory()
+        => ViewModel.IsSemanticQueryMode ? ViewModel.SemanticSearchHistory : ViewModel.SearchHistory;
 
     private bool AreQuerySuggestionsSuppressed()
         => Environment.TickCount64 < _suppressQuerySuggestionsUntilTick;
@@ -352,7 +373,7 @@ public sealed partial class MainWindow
 
     private void ShowQuerySuggestionsFromPointerFocus()
     {
-        if (AreQuerySuggestionsSuppressed() || ViewModel.SearchHistory.Count == 0)
+        if (AreQuerySuggestionsSuppressed() || ActiveQueryHistory().Count == 0)
             return;
 
         ApplyQuerySuggestions(QueryBox, open: true);

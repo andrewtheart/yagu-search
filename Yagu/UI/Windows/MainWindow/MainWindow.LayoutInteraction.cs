@@ -18,6 +18,9 @@ public sealed partial class MainWindow
     private bool _advancedOptionsDrawerMaxHeightRetryQueued;
     private int _advancedOptionsDrawerMaxHeightRetryCount;
     private bool _advancedOptionsOverlayActive;
+    // Default (collapsed) Advanced Options header color, captured the first time the header is
+    // recolored so it can be restored exactly when the drawer collapses.
+    private Windows.UI.Color? _advancedOptionsHeaderCollapsedColor;
     private const double CompactTopSearchDrawerThreshold = 440;
     private const double CompactTopSearchActionButtonWidth = 38;
     private const int MaxAdvancedOptionsDrawerMaxHeightRetries = 8;
@@ -53,6 +56,7 @@ public sealed partial class MainWindow
 
     private void OnAdvancedOptionsExpanding(Expander sender, ExpanderExpandingEventArgs args)
     {
+        SetAdvancedOptionsHeaderExpandedState(expanded: true);
         _advancedOptionsDrawerMaxHeightRetryQueued = false;
         _advancedOptionsDrawerMaxHeightRetryCount = 0;
         SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: true);
@@ -83,6 +87,7 @@ public sealed partial class MainWindow
 
     private void OnAdvancedOptionsCollapsed(Expander sender, ExpanderCollapsedEventArgs args)
     {
+        SetAdvancedOptionsHeaderExpandedState(expanded: false);
         SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: false);
 
         if (_advancedOptionsOverlayActive)
@@ -96,6 +101,30 @@ public sealed partial class MainWindow
             ListenForExpanderResize();
         else
             ListenForExpanderLayoutSync();
+    }
+
+    /// <summary>
+    /// Recolors the Advanced Options expander header so it blends into the dark drawer body while
+    /// expanded, and restores the default card header color while collapsed. Mutates the
+    /// <c>ExpanderHeaderBackground</c> brush override declared on the expander in XAML.
+    /// </summary>
+    private void SetAdvancedOptionsHeaderExpandedState(bool expanded)
+    {
+        if (AdvancedOptionsExpander is null) return;
+        if (AdvancedOptionsExpander.Resources["ExpanderHeaderBackground"] is not Microsoft.UI.Xaml.Media.SolidColorBrush headerBrush)
+            return;
+
+        _advancedOptionsHeaderCollapsedColor ??= headerBrush.Color;
+
+        if (expanded)
+        {
+            if (AdvancedOptionsDrawerBodyBorder?.Background is Microsoft.UI.Xaml.Media.SolidColorBrush bodyBrush)
+                headerBrush.Color = bodyBrush.Color;
+        }
+        else if (_advancedOptionsHeaderCollapsedColor is Windows.UI.Color collapsedColor)
+        {
+            headerBrush.Color = collapsedColor;
+        }
     }
 
     /// <summary>
@@ -469,7 +498,6 @@ public sealed partial class MainWindow
         BrowseDirectoryButton.Padding = new Thickness(8, 6, 8, 6);
         SearchCancelButton.Padding = new Thickness(12, 6, 12, 6);
         SearchCancelButton.Width = double.NaN;
-        AlignBrowseButtonToSearchButton();
     }
 
     private void OnSplitterPointerEntered(object sender, PointerRoutedEventArgs e)

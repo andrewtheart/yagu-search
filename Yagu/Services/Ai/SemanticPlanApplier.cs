@@ -306,6 +306,46 @@ public static class SemanticPlanApplier
     }
 
     /// <summary>
+    /// Returns the bare (dot-less, lower-case) extensions among <paramref name="includeGlobs"/> that
+    /// are known archive containers (present in <paramref name="knownArchiveExtensions"/>). Office and
+    /// OpenDocument formats (.docx/.xlsx/.pptx/.odt/…) are ZIP files, so when a plan filters to them
+    /// the caller must enable "Search archives" and select those extensions for their inner text to be
+    /// searched. Returns an empty list when nothing matches.
+    /// </summary>
+    public static IReadOnlyList<string> GetArchiveExtensionsToEnable(
+        IReadOnlyList<string>? includeGlobs,
+        IReadOnlySet<string> knownArchiveExtensions)
+    {
+        if (includeGlobs is null || includeGlobs.Count == 0
+            || knownArchiveExtensions is null || knownArchiveExtensions.Count == 0)
+            return [];
+
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var glob in includeGlobs)
+        {
+            string ext = ExtractGlobExtension(glob);
+            if (ext.Length > 0 && knownArchiveExtensions.Contains(ext) && seen.Add(ext))
+                result.Add(ext);
+        }
+        return result;
+    }
+
+    /// <summary>Extracts the bare, lower-case file extension from a glob/extension token such as
+    /// <c>*.docx</c>, <c>**/*.ZIP</c>, <c>.docx</c>, or <c>docx</c>. Returns an empty string when none
+    /// can be determined.</summary>
+    internal static string ExtractGlobExtension(string? glob)
+    {
+        if (string.IsNullOrWhiteSpace(glob)) return string.Empty;
+        string s = glob.Trim();
+        int slash = s.LastIndexOfAny(['/', '\\']);
+        if (slash >= 0) s = s[(slash + 1)..];
+        int dot = s.LastIndexOf('.');
+        if (dot >= 0) s = s[(dot + 1)..];
+        return s.Trim().Trim('*', '?', ' ').ToLowerInvariant();
+    }
+
+    /// <summary>
     /// Produces a CLI-style overlay from a resolved plan: only the values the model set are returned
     /// (as nullables) so the caller can fold them into its own <c>SearchOptions</c> construction
     /// without this method needing to know the surrounding defaults.

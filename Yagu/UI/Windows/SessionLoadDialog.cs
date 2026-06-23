@@ -122,7 +122,7 @@ internal static class SessionLoadDialog
 
     private enum SortColumn { Name, Directory, Size, Created }
 
-    private static FrameworkElement BuildSessionTable(IReadOnlyList<SessionFileCandidate> sessions, Action<string> loadPath)
+    private static Grid BuildSessionTable(IReadOnlyList<SessionFileCandidate> sessions, Action<string> loadPath)
     {
         var sortedSessions = sessions.OrderByDescending(s => s.CreatedUtc ?? DateTimeOffset.MinValue).ToList();
         var currentSort = SortColumn.Created;

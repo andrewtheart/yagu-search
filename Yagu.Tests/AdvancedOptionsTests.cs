@@ -1,14 +1,16 @@
 namespace Yagu.Tests;
 
 /// <summary>
-/// Source-scraping tests for MainWindow.AdvancedOptions.cs —
-/// tab switching, reset-to-defaults, and responsive dropdown reflow.
+/// Source-scraping tests for MainWindow.AdvancedOptions.cs and MainWindow.xaml —
+/// tab switching, reset-to-defaults, and Filters-tab dropdown alignment.
 /// </summary>
 public sealed class AdvancedOptionsTests
 {
     private static readonly string RepoRoot = FindRepoRoot();
     private static readonly string AdvancedOptionsSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdvancedOptions.cs"));
+    private static readonly string MainWindowXaml = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
 
     // ══════════════════════════════════════════════════════════════════
     // Tab switching logic
@@ -134,50 +136,51 @@ public sealed class AdvancedOptionsTests
     }
 
     // ══════════════════════════════════════════════════════════════════
-    // Responsive dropdown reflow
+    // Filters-tab extension dropdown alignment (vertical, half-width offset)
     // ══════════════════════════════════════════════════════════════════
 
-    [Fact]
-    public void FiltersTabWrapThreshold_IsDefined()
+    [Theory]
+    [InlineData("SkipExtRow")]
+    [InlineData("BinaryExtRow")]
+    [InlineData("ArchiveExtRow")]
+    public void ExtensionRow_IsGridWithTwoStarColumns(string rowName)
     {
-        Assert.Contains("private const double FiltersTabWrapThreshold = 280;", AdvancedOptionsSource);
+        string row = ExtractXamlElement($"x:Name=\"{rowName}\"", 700);
+        Assert.StartsWith("<Grid", row);
+        AssertContainsInOrder(row,
+            "<ColumnDefinition Width=\"*\" />",
+            "<ColumnDefinition Width=\"*\" />");
+    }
+
+    [Theory]
+    [InlineData("SkipExtRow")]
+    [InlineData("BinaryExtRow")]
+    [InlineData("ArchiveExtRow")]
+    public void ExtensionRowDropdown_SitsDirectlyBelowToggle(string rowName)
+    {
+        // Dropdown lives in the second row, first column, i.e. directly below its toggle
+        // and left-aligned under it (not offset into the right column).
+        string row = ExtractXamlElement($"x:Name=\"{rowName}\"", 3000);
+        Assert.Contains("<DropDownButton Grid.Row=\"1\" Grid.Column=\"0\" HorizontalAlignment=\"Left\"", row);
+    }
+
+    [Theory]
+    [InlineData("SkipExtensionsSummary")]
+    [InlineData("BinaryExtensionsSummary")]
+    [InlineData("ArchiveExtensionsSummary")]
+    public void ExtensionRowFlyout_OpensBelow(string summaryBinding)
+    {
+        string dropdown = ExtractXamlElement(summaryBinding, 1600);
+        Assert.Contains("Placement=\"Bottom\"", dropdown);
+        Assert.Contains("ShouldConstrainToRootBounds=\"False\"", dropdown);
     }
 
     [Fact]
-    public void FiltersTabSizeChanged_GuardsNullRows()
+    public void FiltersTab_NoLongerUsesOrientationReflow()
     {
-        string method = ExtractMethodWindow("OnFiltersTabSizeChanged", 500);
-        Assert.Contains("if (SkipExtRow is null) return;", method);
-    }
-
-    [Fact]
-    public void FiltersTabSizeChanged_SetsOrientationBasedOnWidth()
-    {
-        string method = ExtractMethodWindow("OnFiltersTabSizeChanged", 500);
-        AssertContainsInOrder(method,
-            "e.NewSize.Width < FiltersTabWrapThreshold",
-            "Orientation.Vertical",
-            "Orientation.Horizontal");
-    }
-
-    [Fact]
-    public void FiltersTabSizeChanged_AffectsAllThreeExtensionRows()
-    {
-        string method = ExtractMethodWindow("OnFiltersTabSizeChanged", 500);
-        Assert.Contains("SkipExtRow.Orientation = orientation;", method);
-        Assert.Contains("BinaryExtRow.Orientation = orientation;", method);
-        Assert.Contains("ArchiveExtRow.Orientation = orientation;", method);
-    }
-
-    [Fact]
-    public void FiltersTabSizeChanged_AdjustsSpacing()
-    {
-        string method = ExtractMethodWindow("OnFiltersTabSizeChanged", 900);
-        AssertContainsInOrder(method,
-            "orientation == Orientation.Vertical ? 6.0 : 12.0",
-            "SkipExtRow.Spacing = spacing;",
-            "BinaryExtRow.Spacing = spacing;",
-            "ArchiveExtRow.Spacing = spacing;");
+        Assert.DoesNotContain("OnFiltersTabSizeChanged", AdvancedOptionsSource);
+        Assert.DoesNotContain("SkipExtRow.Orientation", AdvancedOptionsSource);
+        Assert.DoesNotContain("FiltersTabWrapThreshold", AdvancedOptionsSource);
     }
 
     [Fact]
@@ -197,6 +200,16 @@ public sealed class AdvancedOptionsTests
         Assert.True(start >= 0, $"Could not find method '{methodName}' in AdvancedOptions source.");
         int end = Math.Min(start + windowSize, AdvancedOptionsSource.Length);
         return AdvancedOptionsSource[start..end];
+    }
+
+    private static string ExtractXamlElement(string anchor, int windowSize)
+    {
+        int anchorIndex = MainWindowXaml.IndexOf(anchor, StringComparison.Ordinal);
+        Assert.True(anchorIndex >= 0, $"Could not find '{anchor}' in MainWindow.xaml.");
+        int tagStart = MainWindowXaml.LastIndexOf('<', anchorIndex);
+        if (tagStart < 0) tagStart = anchorIndex;
+        int end = Math.Min(tagStart + windowSize, MainWindowXaml.Length);
+        return MainWindowXaml[tagStart..end];
     }
 
     private static void AssertContainsInOrder(string text, params string[] parts)

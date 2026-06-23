@@ -12,7 +12,6 @@ public sealed partial class MainWindow
     private async void OnContentLoaded(object sender, RoutedEventArgs e)
     {
         ((FrameworkElement)sender).Loaded -= OnContentLoaded;
-        AlignBrowseButtonToSearchButton();
         SyncWrapModeToggles(ViewModel.PreviewWrapModeIndex);
         ApplyWordWrap(ViewModel.PreviewWordWrap);
         ApplyPreviewColors();
@@ -56,17 +55,6 @@ public sealed partial class MainWindow
         {
             FocusSearchBox();
         }
-    }
-
-    private void AlignBrowseButtonToSearchButton()
-    {
-        if (_topSearchDrawerCompact) return;
-        // Match the Browse button to whichever search control is currently visible.
-        double width = SearchSplitButton.Visibility == Visibility.Visible
-            ? SearchSplitButton.ActualWidth
-            : SearchCancelButton.ActualWidth;
-        if (width <= 0) return;
-        BrowseDirectoryButton.Width = width;
     }
 
     private void FocusSearchBox(bool suppressSuggestions = false)

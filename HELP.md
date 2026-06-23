@@ -77,6 +77,18 @@ Yagu sets the directory to `C:\`, adds an include filter for `*.png`, excludes `
 
 You can also ask Yagu to **sort** or **group** the results in the same sentence — e.g. *"find all files on C:\ with invoice2024 in the name, sort by file name and group by directory"* sets the Sort and Group controls accordingly. When you name a sort field without a direction (e.g. *"sort by file name"*), Yagu defaults to **descending**; say *"ascending"* / *"a to z"* for the other direction.
 
+**More things you can ask.** Semantic mode understands file types, content vs. file-name matches, dates, sizes, exclusions, structured patterns, and sorting/grouping. A few examples:
+
+- **By file type:** *"all PDF files in D:\docs larger than 5 MB"* · *"log files changed this week"* · *"images created in the last 30 days"*
+- **Find text inside files:** *"search for TODO in all python files in the current folder"* · *"all files on C:\ that have \"1111-1111-1111\" in them"* (the phrase *in them* / *inside* means file **contents**, not names)
+- **Office documents** — because `.docx`/`.xlsx`/`.pptx` files are ZIP containers, Yagu turns on **Search archives** automatically: *"word documents with \"Andrew\" in them"* (→ `*.docx`, `*.doc`) · *"excel spreadsheets containing revenue"* (→ `*.xlsx`, `*.xls`)
+- **By file name:** *"files named invoice2024 on C:\"* · *"anything with backup in the name"*
+- **Structured patterns (Yagu writes the regex for you):** *"find email addresses in C:\dump"* · *"IP addresses in the logs folder"* · *"GUIDs in the source folder"* · *"lines that start with ERROR"* · *"files where the word andrew appears at least twice"*
+- **Exclusions:** *"png files on C:, ignore mov files and anything named thumbnail"*
+- **Sort & group:** *"search src for TODO, biggest files first, grouped by file type"*
+
+For relative dates just say the phrase (*"in the past year"*, *"last 7 days"*, *"since January"*, *"yesterday"*) and Yagu resolves it against today's date; sizes accept plain units (*"5 MB"*, *"larger than 1 GB"*). Keep each request to a single search — one directory, one thing to find.
+
 Notes:
 
 - **Runs entirely on your machine.** Your query is never sent off the device. The model is downloaded once via Microsoft **Foundry Local** and cached for reuse.

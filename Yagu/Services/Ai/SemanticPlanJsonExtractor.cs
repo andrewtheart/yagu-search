@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Yagu.Models;
@@ -67,8 +68,32 @@ internal static class SemanticPlanJsonExtractor
         int start = text.IndexOf('{');
         if (start < 0) return null;
 
+        // Small on-device models sometimes emit arithmetic in numeric fields (e.g.
+        // "minFileSizeBytes": 1048576*100 or 100*1024*1024) despite the prompt forbidding it. That is
+        // not valid JSON, and trailing-field repair cannot fix it because the malformed value is not
+        // the last field. Fold any integer multiplication chains in value positions into a single
+        // literal up front so the object parses. Only the object body is touched; start is unchanged.
+        text = string.Concat(text.AsSpan(0, start), FoldIntegerMultiplication(text.Substring(start)));
+
         string? balanced = FindBalancedObject(text, start);
-        if (balanced is not null) return balanced;
+        if (balanced is not null)
+        {
+            if (IsParseableObject(balanced))
+                return balanced;
+
+            // The object is brace-balanced but does not parse. A common small-model failure is a
+            // string value that closes early (e.g. an unescaped quote inside the explanation, like
+            // ...for the term 'Andrew".}), which leaves stray characters before a delimiter. Drop the
+            // trailing malformed field(s) and retry so the structured fields still survive.
+            LogService.Instance.Verbose(LogSource,
+                "Brace-balanced object did not parse; attempting trailing-field repair.");
+            string? trimmed = RepairBalancedObject(balanced);
+            LogService.Instance.Verbose(LogSource,
+                trimmed is null
+                    ? "Trailing-field repair failed; surfacing the original parse error."
+                    : "Trailing-field repair succeeded.");
+            return trimmed ?? balanced;
+        }
 
         // No closing brace was found — the model was almost certainly truncated mid-object (e.g. it
         // hit the token limit). Attempt a best-effort repair so a usable prefix can still be parsed.
@@ -190,5 +215,160 @@ internal static class SemanticPlanJsonExtractor
         {
             return null;
         }
+    }
+
+    /// <summary>Returns true when <paramref name="json"/> parses as a JSON document.</summary>
+    private static bool IsParseableObject(string json)
+    {
+        try
+        {
+            using var _ = JsonDocument.Parse(json);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Repairs a brace-balanced object that fails to parse (most often a string value closed
+    /// early by an unescaped quote, leaving stray characters before a delimiter) by trimming back to a
+    /// top-level (depth-1) comma — dropping the trailing malformed field(s) — and re-closing the
+    /// object with <c>}</c>. Tries the rightmost comma first so the fewest fields are dropped. Returns
+    /// null when no trim yields valid JSON (e.g. the first field itself is malformed).</summary>
+    internal static string? RepairBalancedObject(string obj)
+    {
+        var topLevelCommas = new List<int>();
+        int depth = 0;
+        bool inString = false;
+        bool escaped = false;
+        for (int i = 0; i < obj.Length; i++)
+        {
+            char c = obj[i];
+            if (inString)
+            {
+                if (escaped) escaped = false;
+                else if (c == '\\') escaped = true;
+                else if (c == '"') inString = false;
+                continue;
+            }
+
+            switch (c)
+            {
+                case '"': inString = true; break;
+                case '{':
+                case '[': depth++; break;
+                case '}':
+                case ']': depth--; break;
+                case ',': if (depth == 1) topLevelCommas.Add(i); break;
+            }
+        }
+
+        for (int k = topLevelCommas.Count - 1; k >= 0; k--)
+        {
+            string candidate = string.Concat(obj.AsSpan(0, topLevelCommas[k]), "}");
+            try
+            {
+                using var _ = JsonDocument.Parse(candidate);
+                return candidate;
+            }
+            catch (JsonException)
+            {
+                // The trailing field was not the only malformed one; keep trimming earlier fields.
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Folds integer multiplication chains that on-device models sometimes emit in numeric
+    /// value positions (e.g. <c>1048576*100</c> or <c>100 * 1024 * 1024</c>) into a single literal,
+    /// since arithmetic expressions are not valid JSON. Scanning tracks string state so text inside
+    /// string values (such as the explanation) is never altered, and a chain that follows a decimal
+    /// point is left alone. Products that overflow <see cref="long"/> saturate to <c>long.MaxValue</c>.
+    /// </summary>
+    internal static string FoldIntegerMultiplication(string text)
+    {
+        if (string.IsNullOrEmpty(text) || !text.Contains('*')) return text;
+
+        var sb = new StringBuilder(text.Length);
+        bool inString = false;
+        bool escaped = false;
+        int i = 0;
+        while (i < text.Length)
+        {
+            char c = text[i];
+            if (inString)
+            {
+                sb.Append(c);
+                if (escaped) escaped = false;
+                else if (c == '\\') escaped = true;
+                else if (c == '"') inString = false;
+                i++;
+                continue;
+            }
+
+            if (c == '"')
+            {
+                inString = true;
+                sb.Append(c);
+                i++;
+                continue;
+            }
+
+            if (char.IsDigit(c))
+            {
+                // Consume a run of the form  digits ( * digits )*  with optional spaces/tabs around '*'.
+                var factors = new List<long>();
+                bool factorOverflow = false;
+                int j = i;
+                while (j < text.Length && char.IsDigit(text[j]))
+                {
+                    int numStart = j;
+                    while (j < text.Length && char.IsDigit(text[j])) j++;
+                    if (long.TryParse(text.AsSpan(numStart, j - numStart), NumberStyles.None, CultureInfo.InvariantCulture, out long factor))
+                        factors.Add(factor);
+                    else { factorOverflow = true; break; }
+
+                    int k = j;
+                    while (k < text.Length && (text[k] == ' ' || text[k] == '\t')) k++;
+                    if (k < text.Length && text[k] == '*')
+                    {
+                        int m = k + 1;
+                        while (m < text.Length && (text[m] == ' ' || text[m] == '\t')) m++;
+                        if (m < text.Length && char.IsDigit(text[m]))
+                        {
+                            j = m; // continue the chain at the next factor
+                            continue;
+                        }
+                    }
+                    break; // no further '* digits'
+                }
+
+                bool precededByDot = i > 0 && text[i - 1] == '.';
+                if (!factorOverflow && !precededByDot && factors.Count >= 2)
+                {
+                    long product = 1;
+                    bool productOverflow = false;
+                    foreach (long f in factors)
+                    {
+                        try { product = checked(product * f); }
+                        catch (OverflowException) { productOverflow = true; break; }
+                    }
+                    sb.Append((productOverflow ? long.MaxValue : product).ToString(CultureInfo.InvariantCulture));
+                    i = j;
+                    continue;
+                }
+
+                // Not a multiplication chain (or unparseable) — copy the original digits verbatim.
+                sb.Append(text, i, j - i);
+                i = j;
+                continue;
+            }
+
+            sb.Append(c);
+            i++;
+        }
+
+        return sb.ToString();
     }
 }

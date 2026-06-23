@@ -21,6 +21,7 @@ This README is the entry point for new contributors.
 - Fast recursive text search across a directory and all subdirectories, with streaming results while the scan is still running.
 - Literal, exact-match, and .NET regex search, with optional case-sensitive matching.
 - Search modes for content plus file names, content only, file names only, or file-name-gated content search.
+- Semantic search (local, on-device AI): describe a search in plain English and a small instruct model running locally through Microsoft Foundry Local translates it into concrete Yagu options — directory, include/exclude filters, dates, sizes, search mode, and result sorting/grouping — with no query ever leaving the machine.
 - Advanced include/exclude filters with glob/path or regex modes, `.gitignore` support, skip-extension lists, optional binary-file inclusion, size/date filters, and maximum search depth.
 - ZIP-format archive search for ZIP, DOCX, XLSX, JAR, NUPKG, and other configured archive-like containers, including nesting and entry-size safeguards.
 - voidtools Everything support for file discovery through the in-process SDK or `es.exe`, with automatic fallback to built-in .NET enumeration.
@@ -46,6 +47,16 @@ This README is the entry point for new contributors.
 - Recent directory and search-query history, directory autocomplete, drag-and-drop folders, and optional global `Ctrl+Shift+letter` hotkey.
 - Admin elevation banner with a "Restart as Admin" action, access-denied/skipped-file breakdowns, and optional admin-protected path skipping.
 - Searchable Settings window with persisted settings, reset/use-default actions, theme/display controls, developer diagnostics, rotating logs, and crash logging.
+
+## Semantic Search (Local AI)
+
+Yagu can translate a natural-language request (e.g. *"word documents with 'Andrew' in them, modified this year"*) into concrete search options and run it. The translation happens **entirely on-device** — the query is never sent over the network.
+
+- **On-device model via Microsoft Foundry Local.** [`FoundryLocalSemanticQueryTranslator`](Yagu/Services/Ai/FoundryLocalSemanticQueryTranslator.cs) hosts a small instruct model in-process through the `Microsoft.AI.Foundry.Local` SDK. The model and its hardware execution providers are downloaded once on first use and cached; there is no HTTP server and no network egress of the user's query.
+- **Hardware-aware model selection.** [`FoundryModelSelector`](Yagu/Services/Ai/FoundryModelSelector.cs) ranks the hardware-compatible catalog models and auto-picks a small instruct model (e.g. `phi-4-mini`), preferring the less-quantized **GPU** build for accuracy and falling back to **NPU** then **CPU**. A specific model can be forced by family alias or exact variant id.
+- **Strict JSON search plan.** The model is driven by an embedded system prompt ([`SemanticSearchSystemPrompt.prompt.md`](Yagu/Services/Ai/Prompts/SemanticSearchSystemPrompt.prompt.md)) that constrains it to emit a single JSON object describing the search. [`SemanticPlanJsonExtractor`](Yagu/Services/Ai/SemanticPlanJsonExtractor.cs) extracts and repairs that JSON (small local models are chatty and occasionally emit malformed output), and [`SemanticPlanApplier`](Yagu/Services/Ai/SemanticPlanApplier.cs) normalizes it — rooting drive shorthands, resolving relative dates against "today", expanding name-excludes to globs, clamping sizes, and parsing the search mode — into a `ResolvedSearchPlan` that is applied to the search inputs.
+- **Archive-aware.** Office Open XML and OpenDocument files (`.docx`/`.xlsx`/`.pptx`/`.odt`…) are ZIP containers, so when a plan targets those formats Yagu automatically enables **Search archives** so their inner text is searched.
+- **Available in the GUI and CLI.** In the GUI, switch the Search button's chevron to **Semantic**; from the CLI, use `--semantic-pattern "<text>"` (add `--explain` for a dry-run that prints the interpreted plan). The query is translated to a plan, the plan fills in the Advanced Options, and the normal search runs. See [HELP.md](HELP.md) for step-by-step usage and example prompts.
 
 ## Prerequisites
 

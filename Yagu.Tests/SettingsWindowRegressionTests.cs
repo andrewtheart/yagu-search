@@ -93,7 +93,7 @@ public sealed class SettingsWindowRegressionTests
             "if (!_isLoaded) return;",
             "if (sender is ToggleSwitch ts && !ts.IsOn) return;",
             "if (!HasUserDefinedIncludeFilterText()) return;",
-            "Title = \".gitignore precedence\"");
+            "Title = \".gitignore vs Include filter\"");
 
         string helper = ExtractMethod(MainWindowSource, "HasUserDefinedIncludeFilterText", window: 900);
         AssertContainsInOrder(helper,
@@ -111,7 +111,8 @@ public sealed class SettingsWindowRegressionTests
             "if (ViewModel.GitignorePrecedencePreference is bool saved)",
             "ViewModel.GitignoreTakesPrecedence = saved;",
             "var dontAskAgain = new CheckBox",
-            "Title = \".gitignore precedence\"",
+            "Title = \".gitignore vs Include filter\"",
+            "ShowTitleBar = false,",
             "if (dontAskAgain.IsChecked == true)",
             "ViewModel.GitignorePrecedencePreference = gitignoreWins;",
             "await ViewModel.PersistSettingsAsync();");
@@ -241,6 +242,7 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("private const int DialogHeight = 540;", AdminProtectedPathsDialogSource);
         Assert.Contains("WindowForegroundHelper.CenterWindowOverOwner(appWindow, _ownerHwnd, DialogWidth, DialogHeight, minHeight: 300);", AdminProtectedPathsDialogSource);
         Assert.Contains("presenter.IsResizable = false;", AdminProtectedPathsDialogSource);
+        Assert.Contains("presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);", AdminProtectedPathsDialogSource);
         Assert.Contains("EnableWindow(_ownerHwnd, false);", AdminProtectedPathsDialogSource);
         Assert.Contains("EnableWindow(_ownerHwnd, true);", AdminProtectedPathsDialogSource);
         Assert.Contains("ScrollViewer", AdminProtectedPathsDialogSource);

@@ -459,11 +459,46 @@ year ago, switches to <strong>File names only</strong> mode, and
 searches.</p>
 <p>You can also ask Yagu to <strong>sort</strong> or
 <strong>group</strong> the results in the same sentence — e.g. <em>“find
-all files on C: with invoice2024 in the name, sort by file name and group by
-directory”</em> sets the Sort and Group controls accordingly. When you
-name a sort field without a direction (e.g. <em>“sort by file
+all files on C: with invoice2024 in the name, sort by file name and
+group by directory”</em> sets the Sort and Group controls accordingly.
+When you name a sort field without a direction (e.g. <em>“sort by file
 name”</em>), Yagu defaults to <strong>descending</strong>; say
 <em>“ascending”</em> / <em>“a to z”</em> for the other direction.</p>
+<p><strong>More things you can ask.</strong> Semantic mode understands
+file types, content vs. file-name matches, dates, sizes, exclusions,
+structured patterns, and sorting/grouping. A few examples:</p>
+<ul>
+<li><strong>By file type:</strong> <em>“all PDF files in D:larger than 5
+MB”</em> · <em>“log files changed this week”</em> · <em>“images created
+in the last 30 days”</em></li>
+<li><strong>Find text inside files:</strong> <em>“search for TODO in all
+python files in the current folder”</em> · <em>“all files on C: that
+have "1111-1111-1111" in them”</em> (the phrase <em>in them</em> /
+<em>inside</em> means file <strong>contents</strong>, not names)</li>
+<li><strong>Office documents</strong> — because
+<code>.docx</code>/<code>.xlsx</code>/<code>.pptx</code> files are ZIP
+containers, Yagu turns on <strong>Search archives</strong>
+automatically: <em>“word documents with "Andrew" in them”</em> (→
+<code>*.docx</code>, <code>*.doc</code>) · <em>“excel spreadsheets
+containing revenue”</em> (→ <code>*.xlsx</code>,
+<code>*.xls</code>)</li>
+<li><strong>By file name:</strong> <em>“files named invoice2024 on
+C:"</em> · <em>“anything with backup in the name”</em></li>
+<li><strong>Structured patterns (Yagu writes the regex for
+you):</strong> <em>“find email addresses in C:”</em> · <em>“IP addresses
+in the logs folder”</em> · <em>“GUIDs in the source folder”</em> ·
+<em>“lines that start with ERROR”</em> · <em>“files where the word
+andrew appears at least twice”</em></li>
+<li><strong>Exclusions:</strong> <em>“png files on C:, ignore mov files
+and anything named thumbnail”</em></li>
+<li><strong>Sort &amp; group:</strong> <em>“search src for TODO, biggest
+files first, grouped by file type”</em></li>
+</ul>
+<p>For relative dates just say the phrase (<em>“in the past year”</em>,
+<em>“last 7 days”</em>, <em>“since January”</em>, <em>“yesterday”</em>)
+and Yagu resolves it against today’s date; sizes accept plain units
+(<em>“5 MB”</em>, <em>“larger than 1 GB”</em>). Keep each request to a
+single search — one directory, one thing to find.</p>
 <p>Notes:</p>
 <ul>
 <li><strong>Runs entirely on your machine.</strong> Your query is never
@@ -471,8 +506,9 @@ sent off the device. The model is downloaded once via Microsoft
 <strong>Foundry Local</strong> and cached for reuse.</li>
 <li><strong>Hardware‑aware.</strong> Yagu auto‑picks the best small
 instruct model your machine can run. Within that model it prefers the
-less‑quantized GPU build for accuracy, falling back to NPU then CPU,
-so it still works even without a dedicated GPU/NPU.</li>
+less‑quantized <strong>GPU</strong> build for accuracy, falling back to
+<strong>NPU</strong> then <strong>CPU</strong>, so it still works even
+without a dedicated GPU/NPU.</li>
 <li><strong>Smart default mode.</strong> On machines with a supported
 GPU/NPU, the search bar starts in <strong>Semantic</strong> mode
 automatically; machines with no supported accelerator start in
@@ -2606,8 +2642,8 @@ integration:</p>
 <p>Describe the search in plain language and let a local on-device model
 fill in the flags. The query never leaves the machine; the model is
 downloaded once via Microsoft Foundry Local and auto-selected for your
-hardware (prefers the less-quantized GPU build for accuracy, falling back
-to NPU then CPU).</p>
+hardware (prefers the less-quantized GPU build for accuracy, falling
+back to NPU then CPU).</p>
 <table>
 <colgroup>
 <col style="width: 50%" />
@@ -2629,11 +2665,12 @@ becomes optional (defaults to the current directory).</td>
 </tr>
 <tr>
 <td><code>--semantic-model &lt;alias&gt;</code></td>
-<td>Force a specific Foundry Local model, by family alias (e.g.
-<code>phi-4-mini</code>) or by exact variant id (e.g.
-<code>Phi-4-mini-instruct-cuda-gpu:5</code>). Default: auto-pick the best
-small model for this machine’s hardware, preferring the less-quantized GPU
-build for accuracy. Skips the first-run model-download prompt.</td>
+<td>Force a specific Foundry Local model, by family alias
+(e.g. <code>phi-4-mini</code>) or by exact variant id
+(e.g. <code>Phi-4-mini-instruct-cuda-gpu:5</code>). Default: auto-pick
+the best small model for this machine’s hardware, preferring the
+less-quantized GPU build for accuracy. Skips the first-run
+model-download prompt.</td>
 </tr>
 <tr>
 <td><code>--accept-model-download</code></td>

@@ -943,4 +943,57 @@ public sealed class SemanticPlanApplierTests
     {
         Assert.Equal(expected, SemanticPlanApplier.MentionsModified(explanation));
     }
+
+    // ---- archive-container detection (Office/OpenDocument are ZIPs) ---------
+
+    private static readonly HashSet<string> KnownArchiveExtensions =
+        new(StringComparer.OrdinalIgnoreCase) { "zip", "7z", "docx", "xlsx", "pptx", "odt", "nupkg" };
+
+    [Fact]
+    public void GetArchiveExtensionsToEnable_WordDocGlobs_ReturnsOnlyContainerExtensions()
+    {
+        // .docx is a ZIP container (needs archive search to read its text); .doc is a binary, not one.
+        var result = SemanticPlanApplier.GetArchiveExtensionsToEnable(
+            new[] { "*.docx", "*.doc" }, KnownArchiveExtensions);
+
+        Assert.Equal(new[] { "docx" }, result);
+    }
+
+    [Fact]
+    public void GetArchiveExtensionsToEnable_MixedGlobs_DeduplicatesAndIgnoresNonArchives()
+    {
+        var result = SemanticPlanApplier.GetArchiveExtensionsToEnable(
+            new[] { "**/*.ZIP", "*.txt", "*.zip", "*.png" }, KnownArchiveExtensions);
+
+        Assert.Equal(new[] { "zip" }, result);
+    }
+
+    [Fact]
+    public void GetArchiveExtensionsToEnable_NoArchiveGlobs_ReturnsEmpty()
+    {
+        Assert.Empty(SemanticPlanApplier.GetArchiveExtensionsToEnable(
+            new[] { "*.txt", "*.png" }, KnownArchiveExtensions));
+    }
+
+    [Fact]
+    public void GetArchiveExtensionsToEnable_NullOrEmptyInputs_ReturnEmpty()
+    {
+        Assert.Empty(SemanticPlanApplier.GetArchiveExtensionsToEnable(null, KnownArchiveExtensions));
+        Assert.Empty(SemanticPlanApplier.GetArchiveExtensionsToEnable(Array.Empty<string>(), KnownArchiveExtensions));
+        Assert.Empty(SemanticPlanApplier.GetArchiveExtensionsToEnable(
+            new[] { "*.docx" }, new HashSet<string>(StringComparer.OrdinalIgnoreCase)));
+    }
+
+    [Theory]
+    [InlineData("*.docx", "docx")]
+    [InlineData("**/*.ZIP", "zip")]
+    [InlineData(".odt", "odt")]
+    [InlineData("nupkg", "nupkg")]
+    [InlineData("C:\\dir\\*.7z", "7z")]
+    [InlineData("", "")]
+    [InlineData(null, "")]
+    public void ExtractGlobExtension_NormalizesToBareLowerCaseExtension(string? glob, string expected)
+    {
+        Assert.Equal(expected, SemanticPlanApplier.ExtractGlobExtension(glob));
+    }
 }

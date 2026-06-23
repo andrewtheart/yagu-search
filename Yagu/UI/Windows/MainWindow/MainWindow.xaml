@@ -7,6 +7,7 @@
     xmlns:vm="using:Yagu.ViewModels"
     xmlns:models="using:Yagu.Models"
     xmlns:tcb="using:TextControlBoxNS"
+    xmlns:ui="using:Yagu.UI"
     Title="Yagu - Yet Another Grep Utility">
 
     <Window.SystemBackdrop>
@@ -345,36 +346,57 @@
                           Glyph="&#xE8B7;" FontSize="24"
                           HorizontalAlignment="Center"
                           VerticalAlignment="Center" Opacity="0.7" />
-                <AutoSuggestBox
-                    x:Name="DirectoryBox" Grid.Row="0" Grid.Column="1"
-                    PlaceholderText="Directory to search (e.g. D:\projects\myapp)"
-                    Text="{x:Bind ViewModel.Directory, Mode=TwoWay}"
-                    ItemsSource="{x:Bind ViewModel.DirectorySuggestions, Mode=OneWay}"
-                    TextChanged="OnDirectoryTextChanged"
-                    SuggestionChosen="OnDirectorySuggestionChosen"
-                    QuerySubmitted="OnDirectoryQuerySubmitted" />
-                <Button x:Name="BrowseDirectoryButton" Grid.Row="0" Grid.Column="2" Click="OnBrowseDirectory" ToolTipService.ToolTip="Browse for folder" Padding="8,6" MinWidth="0">
-                    <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center">
-                        <FontIcon Glyph="&#xED25;" FontSize="14" />
-                        <TextBlock x:Name="BrowseDirectoryLabel" Text="Browse" />
-                    </StackPanel>
-                </Button>
+                <Grid Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2">
+                    <AutoSuggestBox
+                        x:Name="DirectoryBox"
+                        PlaceholderText="Directory to search (e.g. D:\projects\myapp)"
+                        Text="{x:Bind ViewModel.Directory, Mode=TwoWay}"
+                        ItemsSource="{x:Bind ViewModel.DirectorySuggestions, Mode=OneWay}"
+                        TextChanged="OnDirectoryTextChanged"
+                        SuggestionChosen="OnDirectorySuggestionChosen"
+                        QuerySubmitted="OnDirectoryQuerySubmitted" />
+                    <!-- Browse embedded at the trailing edge of the directory box (overlay, like the
+                         query box's clear button). -->
+                    <Button x:Name="BrowseDirectoryButton" Click="OnBrowseDirectory" ToolTipService.ToolTip="Browse for folder"
+                            HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                            Margin="0,1,1,1" Padding="10,0" MinWidth="0"
+                            CornerRadius="0,4,4,0"
+                            Background="Transparent"
+                            BorderThickness="1,0,0,0"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <FontIcon Glyph="&#xED25;" FontSize="14" />
+                            <TextBlock x:Name="BrowseDirectoryLabel" Text="Browse" />
+                        </StackPanel>
+                    </Button>
+                </Grid>
 
                 <!-- Search bar -->
                 <FontIcon Grid.Row="1" Grid.Column="0"
                           Glyph="&#xE721;" FontSize="24"
                           HorizontalAlignment="Center"
                           VerticalAlignment="Center" Opacity="0.7" />
-                <Grid Grid.Row="1" Grid.Column="1">
+                <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2">
                     <AutoSuggestBox
                         x:Name="QueryBox"
+                        MinHeight="60"
                         PlaceholderText="{x:Bind ViewModel.QueryPlaceholderText, Mode=OneWay}"
                         Text="{x:Bind ViewModel.Query, Mode=TwoWay}"
                         ItemsSource="{x:Bind ViewModel.SearchHistory, Mode=OneWay}"
                         QuerySubmitted="OnQuerySubmitted"
                         TextChanged="OnQueryTextChanged"
                         LostFocus="OnQueryLostFocus"
-                        KeyDown="OnQueryKeyDown" />
+                        KeyDown="OnQueryKeyDown">
+                        <!-- Style the inner TextBox so long queries wrap and fill the tall box
+                             instead of staying on a single top line. AcceptsReturn stays false so
+                             Enter still submits the search. -->
+                        <AutoSuggestBox.TextBoxStyle>
+                            <Style TargetType="TextBox" BasedOn="{StaticResource AutoSuggestBoxTextBoxStyle}">
+                                <Setter Property="TextWrapping" Value="Wrap" />
+                                <Setter Property="VerticalContentAlignment" Value="Top" />
+                            </Style>
+                        </AutoSuggestBox.TextBoxStyle>
+                    </AutoSuggestBox>
                     <!-- Inline toggle buttons for search options -->
                     <StackPanel x:Name="InlineSearchToggles"
                                 Orientation="Horizontal" Spacing="2"
@@ -417,14 +439,42 @@
                         <FontIcon Glyph="&#xE894;" FontSize="12" />
                     </Button>
                 </Grid>
-                <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal" Spacing="6">
+                <!-- Bottom action bar: Advanced Options (fills, left), then the utility icons, then
+                     the primary Search action on the right. One grid so Search's right edge lines up
+                     with the Browse button above it. -->
+                <Grid Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel x:Name="SearchCardBottomActions" Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <Button x:Name="SearchCardLoadSessionButton"
+                                Click="OnLoadSession"
+                                Style="{StaticResource SearchCardBottomIconButtonStyle}"
+                                Width="32" Height="32"
+                                IsEnabled="{x:Bind ViewModel.IsSessionIdle, Mode=OneWay}"
+                                ToolTipService.ToolTip="Load a previously saved .yagu-session file">
+                            <FontIcon Glyph="&#xE8E5;" FontSize="14" />
+                        </Button>
+                        <Button x:Name="PreSearchTerminalChevron"
+                                Click="OnToggleTerminalPane"
+                                Style="{StaticResource SearchCardBottomIconButtonStyle}"
+                                Width="36" Height="32" MinWidth="0" MinHeight="0"
+                                ToolTipService.ToolTip="Toggle embedded terminal">
+                            <FontIcon x:Name="PreSearchTerminalChevronIcon"
+                                      FontFamily="{StaticResource SymbolThemeFontFamily}"
+                                      Glyph="&#xE70D;" FontSize="12" />
+                        </Button>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                     <!-- Search action with a chevron mode picker (Traditional/Semantic). The SplitButton
                          only shows while semantic search is available AND idle; during a search the plain
                          button below takes over and morphs into the red Cancel action. -->
                     <SplitButton x:Name="SearchSplitButton"
                                  Click="OnSearchSplitButtonClick"
                                  Visibility="{x:Bind ViewModel.SearchModeSplitButtonVisibility, Mode=OneWay}"
-                                 Padding="12,6" MinWidth="0"
+                                 Padding="12,9" MinWidth="0" MinHeight="40" CornerRadius="6"
                                  ToolTipService.ToolTip="Search (F5) — use the chevron to switch mode">
                         <SplitButton.Resources>
                             <SolidColorBrush x:Key="SplitButtonBackground" Color="{ThemeResource SystemAccentColor}" />
@@ -442,19 +492,23 @@
                             <TextBlock x:Name="SearchSplitLabel" Text="Search" />
                         </StackPanel>
                         <SplitButton.Flyout>
-                            <MenuFlyout Placement="Bottom">
-                                <RadioMenuFlyoutItem x:Name="TraditionalModeItem" Text="Traditional"
-                                                     GroupName="QueryMode"
-                                                     IsChecked="{x:Bind ViewModel.IsTraditionalQueryMode, Mode=OneWay}"
-                                                     Click="OnSelectTraditionalMode" />
-                                <RadioMenuFlyoutItem x:Name="SemanticModeItem" Text="Semantic"
-                                                     GroupName="QueryMode"
-                                                     IsChecked="{x:Bind ViewModel.IsSemanticQueryMode, Mode=OneWay}"
-                                                     Click="OnSelectSemanticMode" />
+                            <MenuFlyout Placement="Bottom" Opening="OnSearchModeFlyoutOpening">
+                                <MenuFlyoutItem x:Name="TraditionalModeItem" Text="Traditional"
+                                                Click="OnSelectTraditionalMode">
+                                    <MenuFlyoutItem.Icon>
+                                        <FontIcon Glyph="&#xE721;" />
+                                    </MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem x:Name="SemanticModeItem" Text="Semantic"
+                                                Click="OnSelectSemanticMode">
+                                    <MenuFlyoutItem.Icon>
+                                        <FontIcon Glyph="&#xF4A5;" />
+                                    </MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
                             </MenuFlyout>
                         </SplitButton.Flyout>
                     </SplitButton>
-                    <Button x:Name="SearchCancelButton" Click="OnSearchCancelClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,6" MinWidth="0"
+                    <Button x:Name="SearchCancelButton" Click="OnSearchCancelClick" Style="{ThemeResource AccentButtonStyle}" Padding="12,9" MinWidth="0" MinHeight="40" CornerRadius="6"
                             Visibility="{x:Bind ViewModel.SearchActionButtonVisibility, Mode=OneWay}"
                             ToolTipService.ToolTip="Search (F5)">
                         <Button.KeyboardAccelerators>
@@ -469,12 +523,19 @@
 
                 <!-- Advanced options (collapsed by default) -->
                 <Expander x:Name="AdvancedOptionsExpander"
-                          Grid.Row="2" Grid.Column="1"
+                          Grid.Column="0"
                           IsExpanded="False" HorizontalAlignment="Stretch"
                           HorizontalContentAlignment="Stretch" Padding="0"
                           MinHeight="0" FontSize="12"
                           Expanding="OnAdvancedOptionsExpanding"
                           Collapsed="OnAdvancedOptionsCollapsed">
+                    <Expander.Resources>
+                        <!-- Header background is overridden so it can be recolored to match the
+                             drawer body (a dark "base" shade) while expanded, and restored to the
+                             default card color while collapsed. The Color is swapped in code-behind
+                             from OnAdvancedOptionsExpanding / OnAdvancedOptionsCollapsed. -->
+                        <SolidColorBrush x:Key="ExpanderHeaderBackground" Color="{ThemeResource CardBackgroundFillColorDefault}" />
+                    </Expander.Resources>
                     <Expander.Header>
                         <TextBlock Text="Advanced Options" VerticalAlignment="Center" />
                     </Expander.Header>
@@ -487,7 +548,8 @@
                                   VerticalScrollMode="Auto"
                                   HorizontalScrollMode="Disabled"
                                   HorizontalScrollBarVisibility="Disabled">
-                        <Border Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+                        <Border x:Name="AdvancedOptionsDrawerBodyBorder"
+                                Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
                                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                 BorderThickness="1" CornerRadius="4" Padding="0">
                             <Grid MinHeight="272">
@@ -560,7 +622,6 @@
                                             <StackPanel Spacing="6">
                                                 <TextBlock Text="Search mode" Opacity="0.75" />
                                                 <ComboBox SelectedIndex="{x:Bind ViewModel.SearchModeIndex, Mode=TwoWay}"
-                                                          Width="220"
                                                           HorizontalAlignment="Left"
                                                           VerticalAlignment="Center">
                                                     <ComboBoxItem Content="Content + Names"
@@ -602,13 +663,19 @@
                                                             <x:String>Glob</x:String>
                                                             <x:String>Regex</x:String>
                                                         </ComboBox>
-                                                        <TextBox x:Name="IncludeFilterBox" Grid.Row="1" Grid.ColumnSpan="3"
-                                                                 PlaceholderText="{x:Bind ViewModel.IncludeFilterPlaceholder, Mode=OneWay}"
-                                                                 Text="{x:Bind ViewModel.IncludeGlobs, Mode=TwoWay}"
-                                                                 Padding="8,4"
-                                                                 TextChanged="OnFilterBoxTextChanged"
-                                                                 GotFocus="OnFilterBoxGotFocus"
-                                                                 LostFocus="OnFilterBoxLostFocus" />
+                                                        <Grid Grid.Row="1" Grid.ColumnSpan="3">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="*" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBox x:Name="IncludeFilterBox"
+                                                                     PlaceholderText="{x:Bind ViewModel.IncludeFilterPlaceholder, Mode=OneWay}"
+                                                                     Text="{x:Bind ViewModel.IncludeGlobs, Mode=TwoWay}"
+                                                                     Padding="8,4"
+                                                                     TextChanged="OnFilterBoxTextChanged"
+                                                                     GotFocus="OnFilterBoxGotFocus"
+                                                                     LostFocus="OnFilterBoxLostFocus" />
+                                                        </Grid>
                                                     </Grid>
                                                     <Grid RowSpacing="4" ColumnSpacing="6">
                                                         <Grid.RowDefinitions>
@@ -634,26 +701,39 @@
                                                             <x:String>Glob</x:String>
                                                             <x:String>Regex</x:String>
                                                         </ComboBox>
-                                                        <TextBox x:Name="ExcludeFilterBox" Grid.Row="1" Grid.ColumnSpan="3"
-                                                                 PlaceholderText="{x:Bind ViewModel.ExcludeFilterPlaceholder, Mode=OneWay}"
-                                                                 Text="{x:Bind ViewModel.ExcludeGlobs, Mode=TwoWay}"
-                                                                 Padding="8,4"
-                                                                 TextChanged="OnFilterBoxTextChanged"
-                                                                 GotFocus="OnFilterBoxGotFocus"
-                                                                 LostFocus="OnFilterBoxLostFocus" />
+                                                        <Grid Grid.Row="1" Grid.ColumnSpan="3">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="*" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBox x:Name="ExcludeFilterBox"
+                                                                     PlaceholderText="{x:Bind ViewModel.ExcludeFilterPlaceholder, Mode=OneWay}"
+                                                                     Text="{x:Bind ViewModel.ExcludeGlobs, Mode=TwoWay}"
+                                                                     Padding="8,4"
+                                                                     TextChanged="OnFilterBoxTextChanged"
+                                                                     GotFocus="OnFilterBoxGotFocus"
+                                                                     LostFocus="OnFilterBoxLostFocus" />
+                                                        </Grid>
                                                     </Grid>
                                                 </StackPanel>
                                             </StackPanel>
                                         </StackPanel>
 
                                         <!-- Filters tab -->
-                                        <StackPanel x:Name="AdvancedOptionsFiltersTabContent" Spacing="18" Visibility="Collapsed"
-                                                    SizeChanged="OnFiltersTabSizeChanged">
+                                        <StackPanel x:Name="AdvancedOptionsFiltersTabContent" Spacing="18" Visibility="Collapsed">
                                             <TextBlock Text="Filters" FontSize="16" FontWeight="SemiBold" />
                                             <StackPanel Spacing="10">
                                                 <TextBlock Text="File type filter" Opacity="0.75" FontWeight="SemiBold" />
-                                                <StackPanel x:Name="SkipExtRow" Orientation="Horizontal" Spacing="12">
-                                                    <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                                <Grid x:Name="SkipExtRow">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <Grid.RowDefinitions>
+                                                        <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="Auto" />
+                                                    </Grid.RowDefinitions>
+                                                    <StackPanel Grid.Row="0" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" Margin="0,0,0,6">
                                                         <ToggleSwitch x:Name="ObeyGitignoreCheckBox" OnContent="Obey .gitignore" OffContent="Obey .gitignore"
                                                                       IsOn="{x:Bind ViewModel.ObeyGitignore, Mode=TwoWay}" MinWidth="0"
                                                                       Toggled="OnObeyGitignoreToggled" />
@@ -661,11 +741,12 @@
                                                                   Foreground="{ThemeResource SystemFillColorCautionBrush}"
                                                                   ToolTipService.ToolTip="Enabling this decreases search performance due to extra .gitignore processing on every folder encountered during the scan." />
                                                     </StackPanel>
-                                                    <DropDownButton Content="{x:Bind ViewModel.SkipExtensionsSummary, Mode=OneWay}"
-                                                                    VerticalAlignment="Center" FontSize="12"
+                                                    <DropDownButton Grid.Row="1" Grid.Column="0" HorizontalAlignment="Left"
+                                                                    Content="{x:Bind ViewModel.SkipExtensionsSummary, Mode=OneWay}"
+                                                                    FontSize="12"
                                                                     ToolTipService.ToolTip="Extensions to skip during search">
                                                         <DropDownButton.Flyout>
-                                                            <Flyout Placement="BottomEdgeAlignedLeft">
+                                                            <Flyout Placement="Bottom" ShouldConstrainToRootBounds="False">
                                                                 <StackPanel Width="320" Spacing="2">
                                                                     <Grid Margin="0,0,0,6">
                                                                         <Grid.ColumnDefinitions>
@@ -701,21 +782,30 @@
                                                             </Flyout>
                                                         </DropDownButton.Flyout>
                                                     </DropDownButton>
-                                                </StackPanel>
+                                                </Grid>
                                             </StackPanel>
 
                                             <StackPanel Spacing="10">
                                                 <TextBlock Text="Content options" Opacity="0.75" FontWeight="SemiBold" />
-                                                <StackPanel x:Name="BinaryExtRow" Orientation="Horizontal" Spacing="12">
-                                                    <ToggleSwitch OnContent="Search binary" OffContent="Search binary"
+                                                <Grid x:Name="BinaryExtRow">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <Grid.RowDefinitions>
+                                                        <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="Auto" />
+                                                    </Grid.RowDefinitions>
+                                                    <ToggleSwitch Grid.Row="0" Grid.ColumnSpan="2" OnContent="Search binary" OffContent="Search binary"
                                                                   IsOn="{x:Bind ViewModel.SearchBinary, Mode=TwoWay}"
-                                                                  VerticalAlignment="Center" MinWidth="0" />
-                                                    <DropDownButton Content="{x:Bind ViewModel.BinaryExtensionsSummary, Mode=OneWay}"
+                                                                  VerticalAlignment="Center" MinWidth="0" Margin="0,0,0,6" />
+                                                    <DropDownButton Grid.Row="1" Grid.Column="0" HorizontalAlignment="Left"
+                                                                    Content="{x:Bind ViewModel.BinaryExtensionsSummary, Mode=OneWay}"
                                                                     Visibility="{x:Bind ViewModel.BinaryExtensionsVisibility, Mode=OneWay}"
-                                                                    VerticalAlignment="Center" FontSize="12"
+                                                                    FontSize="12"
                                                                     ToolTipService.ToolTip="Known compiled binary/build artifact extensions to skip even when binary search is enabled">
                                                         <DropDownButton.Flyout>
-                                                            <Flyout Placement="BottomEdgeAlignedLeft">
+                                                            <Flyout Placement="Bottom" ShouldConstrainToRootBounds="False">
                                                                 <StackPanel Width="320" Spacing="2">
                                                                     <Grid Margin="0,0,0,6">
                                                                         <Grid.ColumnDefinitions>
@@ -751,9 +841,17 @@
                                                             </Flyout>
                                                         </DropDownButton.Flyout>
                                                     </DropDownButton>
-                                                </StackPanel>
-                                                <StackPanel x:Name="ArchiveExtRow" Orientation="Horizontal" Spacing="12">
-                                                    <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                                </Grid>
+                                                <Grid x:Name="ArchiveExtRow">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <Grid.RowDefinitions>
+                                                        <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="Auto" />
+                                                    </Grid.RowDefinitions>
+                                                    <StackPanel Grid.Row="0" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" Margin="0,0,0,6">
                                                         <ToggleSwitch OnContent="Search archives" OffContent="Search archives"
                                                                       IsOn="{x:Bind ViewModel.SearchInsideArchives, Mode=TwoWay}"
                                                                       MinWidth="0" />
@@ -761,12 +859,13 @@
                                                                   Foreground="{ThemeResource SystemFillColorCautionBrush}"
                                                                   ToolTipService.ToolTip="Enabling this decreases search performance — archives must be decompressed and scanned individually. Only enable if you expect results inside ZIP files." />
                                                     </StackPanel>
-                                                    <DropDownButton Content="{x:Bind ViewModel.ArchiveExtensionsSummary, Mode=OneWay}"
+                                                    <DropDownButton Grid.Row="1" Grid.Column="0" HorizontalAlignment="Left"
+                                                                    Content="{x:Bind ViewModel.ArchiveExtensionsSummary, Mode=OneWay}"
                                                                     Visibility="{x:Bind ViewModel.ArchiveExtensionsVisibility, Mode=OneWay}"
-                                                                    VerticalAlignment="Center" FontSize="12"
+                                                                    FontSize="12"
                                                                     ToolTipService.ToolTip="ZIP-like extensions to bypass from skip list when archive search is on">
                                                         <DropDownButton.Flyout>
-                                                            <Flyout Placement="BottomEdgeAlignedLeft">
+                                                            <Flyout Placement="Bottom" ShouldConstrainToRootBounds="False">
                                                                 <StackPanel Width="320" Spacing="2">
                                                                     <Grid Margin="0,0,0,6">
                                                                         <Grid.ColumnDefinitions>
@@ -802,7 +901,7 @@
                                                             </Flyout>
                                                         </DropDownButton.Flyout>
                                                     </DropDownButton>
-                                                </StackPanel>
+                                                </Grid>
                                                 <StackPanel x:Name="CloudFilesRow" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                                                     <ToggleSwitch OnContent="Search online-only cloud files" OffContent="Search online-only cloud files"
                                                                   IsOn="{x:Bind ViewModel.SearchOnlineOnlyFiles, Mode=TwoWay}"
@@ -829,6 +928,9 @@
                                                 <TextBlock Text="Min MB" FontSize="11" Opacity="0.75" />
                                                 <NumberBox Value="{x:Bind ViewModel.MinFileSizeMB, Mode=TwoWay}"
                                                            Minimum="0"
+                                                           Width="150"
+                                                           HorizontalAlignment="Left"
+                                                           ui:PlaceholderTextStyler.Italic="True"
                                                            PlaceholderText="e.g. 1, 10.5, 100"
                                                            SpinButtonPlacementMode="Hidden"
                                                            ToolTipService.ToolTip="Minimum file size in MB. Leave blank for no lower limit." />
@@ -837,6 +939,9 @@
                                                 <TextBlock Text="Max MB" FontSize="11" Opacity="0.75" />
                                                 <NumberBox Value="{x:Bind ViewModel.MaxFileSizeMB, Mode=TwoWay}"
                                                            Minimum="0"
+                                                           Width="150"
+                                                           HorizontalAlignment="Left"
+                                                           ui:PlaceholderTextStyler.Italic="True"
                                                            PlaceholderText="e.g. 50, 500, 1024"
                                                            SpinButtonPlacementMode="Hidden"
                                                            ToolTipService.ToolTip="Maximum file size in MB. Leave blank for no upper limit." />
@@ -860,6 +965,7 @@
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="*" />
                                                         <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="2*" />
                                                     </Grid.ColumnDefinitions>
                                                     <StackPanel Spacing="3">
                                                         <TextBlock Text="From" FontSize="11" Opacity="0.65" />
@@ -881,6 +987,7 @@
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="*" />
                                                         <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="2*" />
                                                     </Grid.ColumnDefinitions>
                                                     <StackPanel Spacing="3">
                                                         <TextBlock Text="From" FontSize="11" Opacity="0.65" />
@@ -913,8 +1020,9 @@
                                                 <TextBlock Text="Max depth" FontSize="11" Opacity="0.75" />
                                                 <NumberBox Value="{x:Bind ViewModel.MaxSearchDepth, Mode=TwoWay}"
                                                            Minimum="0"
-                                                           Width="280"
+                                                           Width="150"
                                                            HorizontalAlignment="Left"
+                                                           ui:PlaceholderTextStyler.Italic="True"
                                                            PlaceholderText="e.g. 1, 2, 10"
                                                            SpinButtonPlacementMode="Hidden"
                                                            ToolTipService.ToolTip="Maximum subdirectory depth for the current search only (0 = unlimited)." />
@@ -961,29 +1069,7 @@
                         </Border>
                     </ScrollViewer>
                 </Expander>
-                <StackPanel x:Name="SearchCardBottomActions"
-                            Grid.Row="2" Grid.Column="2"
-                            Orientation="Horizontal" Spacing="6"
-                            HorizontalAlignment="Right"
-                            VerticalAlignment="Top">
-                    <Button x:Name="SearchCardLoadSessionButton"
-                            Click="OnLoadSession"
-                            Style="{StaticResource SearchCardBottomIconButtonStyle}"
-                            Width="32" Height="32"
-                            IsEnabled="{x:Bind ViewModel.IsSessionIdle, Mode=OneWay}"
-                            ToolTipService.ToolTip="Load a previously saved .yagu-session file">
-                        <FontIcon Glyph="&#xE8E5;" FontSize="14" />
-                    </Button>
-                    <Button x:Name="PreSearchTerminalChevron"
-                            Click="OnToggleTerminalPane"
-                            Style="{StaticResource SearchCardBottomIconButtonStyle}"
-                            Width="36" Height="32" MinWidth="0" MinHeight="0"
-                            ToolTipService.ToolTip="Toggle embedded terminal">
-                        <FontIcon x:Name="PreSearchTerminalChevronIcon"
-                                  FontFamily="{StaticResource SymbolThemeFontFamily}"
-                                  Glyph="&#xE70D;" FontSize="12" />
-                    </Button>
-                </StackPanel>
+                </Grid>
             </Grid>
         </Border>
 
@@ -1058,7 +1144,7 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                        <DropDownButton Height="30" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Sort results">
+                        <DropDownButton MinWidth="64" Height="24" MinHeight="0" Padding="6,2" HorizontalContentAlignment="Left" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Sort results">
                             <StackPanel Orientation="Horizontal" Spacing="4">
                                 <FontIcon Glyph="&#xE8CB;" FontSize="12" />
                                 <TextBlock Text="Sort" />
@@ -1181,7 +1267,7 @@
                                 </Flyout>
                             </DropDownButton.Flyout>
                         </DropDownButton>
-                        <DropDownButton Height="30" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Group results by…">
+                        <DropDownButton MinWidth="88" Height="24" MinHeight="0" Padding="6,2" HorizontalContentAlignment="Left" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Group results by…">
                             <StackPanel Orientation="Horizontal" Spacing="4">
                                 <FontIcon Glyph="&#xE8FD;" FontSize="12" />
                                 <TextBlock Text="Group" />
@@ -1216,7 +1302,7 @@
                                 </MenuFlyout>
                             </DropDownButton.Flyout>
                         </DropDownButton>
-                        <DropDownButton Height="30" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Filter results">
+                        <DropDownButton MinWidth="64" Height="24" MinHeight="0" Padding="6,2" HorizontalContentAlignment="Left" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Filter results">
                             <StackPanel Orientation="Horizontal" Spacing="4">
                                 <FontIcon Glyph="&#xE71C;" FontSize="12" />
                                 <TextBlock Text="Filter" />

@@ -44,6 +44,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     private readonly ISemanticQueryTranslator? _semanticTranslator;
     private readonly ISemanticCapabilityDetector _capabilityDetector;
     private CancellationTokenSource? _semanticCts;
+    // Natural-language query captured at submit time (before translation overwrites Query) so it can
+    // be stored in the separate Semantic autocomplete history once the search actually starts.
+    private string? _pendingSemanticHistoryEntry;
     private bool _queryModeInitialized;
     private CancellationTokenSource? _searchStatusHeartbeatCts;
 
@@ -246,6 +249,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         IoOversubscriptionIndex = _settings.IoOversubscriptionIndex;
         LineTruncationLength = _settings.LineTruncationLength;
         MaxRecentItems = _settings.MaxRecentItems;
+        MaxSemanticRecentItems = _settings.MaxSemanticRecentItems;
         GlobalHotkeyEnabled = _settings.GlobalHotkeyEnabled;
         GlobalHotkeyKey = HotkeyService.TryNormalizeLetter(_settings.GlobalHotkeyKey, out var hotkeyKey)
             ? hotkeyKey.ToString()
@@ -316,6 +320,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         foreach (var d in _settings.RecentDirectories) RecentDirectories.Add(d);
         foreach (var d in _settings.RecentDirectories) DirectorySuggestions.Add(d);
         foreach (var q in _settings.SearchHistory) SearchHistory.Add(q);
+        foreach (var q in _settings.SemanticSearchHistory) SemanticSearchHistory.Add(q);
 
         SyncSkipExtensionItems();
         SyncBinaryExtensionItems();
@@ -350,7 +355,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _semanticCts?.Dispose();
         if (_semanticTranslator is IAsyncDisposable semanticDisposable)
         {
-            try { _ = semanticDisposable.DisposeAsync(); } catch { }
+            try { _ = semanticDisposable.DisposeAsync().AsTask(); } catch { }
         }
         _searchLifecycleGate.Dispose();
         _resultStore?.Dispose();
@@ -421,7 +426,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     public string QueryModeLabel => IsSemanticQueryMode ? "Semantic" : "Traditional";
 
     /// <summary>Segoe icon glyph for the single query-mode dropdown button.</summary>
-    public string QueryModeGlyph => IsSemanticQueryMode ? "\uE945" : "\uE721";
+    public string QueryModeGlyph => IsSemanticQueryMode ? "\uF4A5" : "\uE721";
 
     /// <summary>Visibility of the Traditional|Semantic mode bar (feature-gated).</summary>
     public Microsoft.UI.Xaml.Visibility SemanticModeBarVisibility =>
@@ -830,6 +835,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
     [ObservableProperty] public partial int LineTruncationLength { get; set; } = 500;
     [ObservableProperty] public partial int MaxRecentItems { get; set; } = 20;
+    [ObservableProperty] public partial int MaxSemanticRecentItems { get; set; } = 20;
     [ObservableProperty] public partial bool GlobalHotkeyEnabled { get; set; }
     [ObservableProperty] public partial int MemoryLimitMB { get; set; }
     [ObservableProperty] public partial int MemoryPressurePercent { get; set; } = 75;
@@ -1355,6 +1361,35 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         OnPropertyChanged(nameof(ArchiveExtensionsSummary));
     }
 
+    /// <summary>
+    /// When a semantic plan filters to archive-container extensions (e.g. .docx/.xlsx/.pptx, which are
+    /// ZIP files), turn on "Search archives" and select those extensions in the archive-extensions
+    /// list so their inner text is actually searched. Asking to search a container format implies
+    /// searching inside it.
+    /// </summary>
+    private void EnableArchiveSearchForContainerGlobs(IReadOnlyList<string>? includeGlobs)
+    {
+        var toEnable = SemanticPlanApplier.GetArchiveExtensionsToEnable(
+            includeGlobs,
+            ArchiveExtensionCategories.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase));
+        if (toEnable.Count == 0)
+            return;
+
+        if (!SearchInsideArchives)
+            SearchInsideArchives = true;
+
+        var enabled = ParseExtensionSet(ArchiveExtensions);
+        bool changed = false;
+        foreach (var ext in toEnable)
+            if (enabled.Add(ext))
+                changed = true;
+
+        if (changed)
+            ArchiveExtensions = string.Join(';', enabled);
+
+        SyncArchiveExtensionItems();
+    }
+
     private string _globalHotkeyKey = HotkeyService.DefaultStartKey.ToString();
     public string GlobalHotkeyKey
     {
@@ -1424,6 +1459,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     public ObservableCollection<string> RecentDirectories { get; } = [];
     public ObservableCollection<string> DirectorySuggestions { get; } = [];
     public ObservableCollection<string> SearchHistory { get; } = [];
+    /// <summary>Autocomplete history for the Semantic (natural-language) query mode, kept separate
+    /// from <see cref="SearchHistory"/> so Traditional and Semantic suggestions never mix.</summary>
+    public ObservableCollection<string> SemanticSearchHistory { get; } = [];
 
     public bool HasResults => ResultGroups.Count > 0;
     public bool ShowEmptyState => !IsSearching && ResultGroups.Count == 0;
@@ -1651,6 +1689,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
         if (IsSemanticQueryMode && SemanticSearchAvailable)
         {
+            // Capture the natural-language text before translation overwrites Query with the resolved
+            // literal pattern, so the Semantic autocomplete history records what the user actually typed.
+            _pendingSemanticHistoryEntry = Query?.Trim();
             var applied = await TranslateSemanticQueryAsync().ConfigureAwait(true);
             if (!applied) return; // failed/cancelled — status already shown, don't run a stale search
         }
@@ -1726,6 +1767,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             }
 
             var resolved = SemanticPlanApplier.ApplyToTarget(result.Plan, context, this);
+            EnableArchiveSearchForContainerGlobs(resolved.IncludeGlobs);
             SemanticStatusText = string.IsNullOrWhiteSpace(resolved.Explanation)
                 ? "Interpreted your request."
                 : resolved.Explanation!;
@@ -1841,7 +1883,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             ResetStateForNewSearch();
 
             SettingsService.PushRecent(_settings.RecentDirectories, Directory, MaxRecentItems);
-            SettingsService.PushRecent(_settings.SearchHistory, Query, MaxRecentItems);
+            // In Semantic mode the user-typed natural-language query (captured before translation)
+            // goes to the separate Semantic history; Traditional searches use the literal Query.
+            if (IsSemanticQueryMode)
+            {
+                if (!string.IsNullOrWhiteSpace(_pendingSemanticHistoryEntry))
+                    SettingsService.PushRecent(_settings.SemanticSearchHistory, _pendingSemanticHistoryEntry!, MaxSemanticRecentItems);
+            }
+            else
+            {
+                SettingsService.PushRecent(_settings.SearchHistory, Query, MaxRecentItems);
+            }
+            _pendingSemanticHistoryEntry = null;
             SyncRecent();
             await PersistSettingsAsync();
 
@@ -3181,6 +3234,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         foreach (var d in _settings.RecentDirectories) RecentDirectories.Add(d);
         SearchHistory.Clear();
         foreach (var q in _settings.SearchHistory) SearchHistory.Add(q);
+        SemanticSearchHistory.Clear();
+        foreach (var q in _settings.SemanticSearchHistory) SemanticSearchHistory.Add(q);
     }
 
     public async Task PersistSettingsAsync()
@@ -3313,6 +3368,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.IoOversubscriptionIndex = IoOversubscriptionIndex;
         _settings.LineTruncationLength = LineTruncationLength;
         _settings.MaxRecentItems = MaxRecentItems;
+        _settings.MaxSemanticRecentItems = MaxSemanticRecentItems;
         _settings.GlobalHotkeyEnabled = GlobalHotkeyEnabled;
         _settings.GlobalHotkeyKey = HotkeyService.TryNormalizeLetter(GlobalHotkeyKey, out var hotkeyKey)
             ? hotkeyKey.ToString()

@@ -65,6 +65,11 @@ The JSON object uses these fields (OMIT any field the user did not ask for — d
   units, commas, or quotes around numbers. Compute the value yourself: 5 MB -> 5242880.
 - 1 KB = 1024 bytes, 1 MB = 1048576, 1 GB = 1073741824, 1 TB = 1099511627776. Always compute the
   integer value yourself.
+- The "explanation" MUST be a single plain sentence with NO double quotes (") and NO apostrophes/
+  single quotes (') anywhere inside it, and NOTHING after the final closing brace }. Quotation marks
+  inside a value are the #1 cause of invalid JSON — never wrap a term in quotes in the explanation
+  (write: the term Andrew — NOT "Andrew" or 'Andrew'). End the sentence with the closing brace, not a
+  period outside the string.
 
 ## INTERPRETATION RULES
 
@@ -117,6 +122,11 @@ The JSON object uses these fields (OMIT any field the user did not ask for — d
   "images" / "photos" / "pictures" -> ["*.jpg","*.jpeg","*.png","*.gif","*.bmp","*.webp","*.tiff"].
   "videos" -> ["*.mp4","*.mov","*.avi","*.mkv","*.wmv"].
   "documents" -> ["*.doc","*.docx","*.pdf","*.txt","*.rtf","*.odt"].
+- OFFICE APP SYNONYMS: when the user names a SPECIFIC office application or its file kind, map it to
+  ONLY that application's formats — do NOT use the generic "documents" group.
+  "word document(s)" / "word doc(s)" / "ms word" / "winword" -> ["*.docx","*.doc"].
+  "excel" / "excel document(s)" / "excel file(s)" / "spreadsheet(s)" / "workbook(s)" -> ["*.xlsx","*.xls"].
+  "powerpoint" / "powerpoint file(s)" / "presentation(s)" / "slide deck(s)" -> ["*.pptx","*.ppt"].
 - "<extension> files" / "<type> files" (e.g. "log files", "csv files", "xml files") names a FILE
   TYPE, not text to find: set "pattern" to "", put the single glob in "includeGlobs" (e.g.
   ["*.log"]), and use "searchMode":"filenames". Do NOT put the type word in "pattern".
@@ -310,3 +320,13 @@ JSON:
 User: all files on C:\ with "1111-1111-1111" in the name
 JSON:
 {"directory":"C:\\","pattern":"1111-1111-1111","searchMode":"filenames","explanation":"Listing files on C:\\ whose names contain 1111-1111-1111."}
+
+### Example 19
+User: all word documents with "Andrew" in them
+JSON:
+{"pattern":"Andrew","searchMode":"content","includeGlobs":["*.docx","*.doc"],"explanation":"Searching the contents of Word documents for the term Andrew."}
+
+### Example 20
+User: excel spreadsheets containing revenue
+JSON:
+{"pattern":"revenue","searchMode":"content","includeGlobs":["*.xlsx","*.xls"],"explanation":"Searching the contents of Excel spreadsheets for the term revenue."}

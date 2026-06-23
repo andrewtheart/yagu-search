@@ -85,22 +85,4 @@ public sealed partial class MainWindow
 
     private void OnAdvancedOptionsApplyClick(object sender, RoutedEventArgs e)
         => CollapseAdvancedOptionsForSearch();
-
-    private const double FiltersTabWrapThreshold = 280;
-
-    private void OnFiltersTabSizeChanged(object sender, SizeChangedEventArgs e)
-    {
-        if (SkipExtRow is null) return;
-        var orientation = e.NewSize.Width < FiltersTabWrapThreshold
-            ? Orientation.Vertical
-            : Orientation.Horizontal;
-        SkipExtRow.Orientation = orientation;
-        BinaryExtRow.Orientation = orientation;
-        ArchiveExtRow.Orientation = orientation;
-
-        var spacing = orientation == Orientation.Vertical ? 6.0 : 12.0;
-        SkipExtRow.Spacing = spacing;
-        BinaryExtRow.Spacing = spacing;
-        ArchiveExtRow.Spacing = spacing;
-    }
 }

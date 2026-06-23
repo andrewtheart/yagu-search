@@ -3306,7 +3306,13 @@ public sealed partial class SettingsWindow : Window
             var recent = new NumberBox { Value = _viewModel.MaxRecentItems, Minimum = 1, Maximum = 100 };
             recent.ValueChanged += (_, args) => _viewModel.MaxRecentItems = (int)args.NewValue;
             historyGroup.Children.Add(recent);
-            historyGroup.Children.Add(new TextBlock { Text = "Controls how many directory and search-query suggestions Yagu keeps in the launcher and search fields.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            historyGroup.Children.Add(new TextBlock { Text = "Controls how many directory and Traditional search-query suggestions Yagu keeps in the launcher and search fields.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            historyGroup.Children.Add(new TextBlock { Text = "Max semantic queries to remember:", Margin = new Thickness(0, 8, 0, 0) });
+            var semanticRecent = new NumberBox { Value = _viewModel.MaxSemanticRecentItems, Minimum = 1, Maximum = 100 };
+            semanticRecent.ValueChanged += (_, args) => _viewModel.MaxSemanticRecentItems = (int)args.NewValue;
+            historyGroup.Children.Add(semanticRecent);
+            historyGroup.Children.Add(new TextBlock { Text = "Controls how many natural-language Semantic-mode queries Yagu keeps for autocomplete, separate from Traditional search history.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
         }
     }
 }

@@ -80,6 +80,9 @@ public sealed class AppSettings
     public string? LastDirectory { get; set; }
     public List<string> RecentDirectories { get; set; } = [];
     public List<string> SearchHistory { get; set; } = [];
+    /// <summary>Separate autocomplete history for the Semantic (natural-language) query mode, kept
+    /// distinct from the Traditional <see cref="SearchHistory"/> so the two suggestion lists never mix.</summary>
+    public List<string> SemanticSearchHistory { get; set; } = [];
     [JsonIgnore] public bool CaseSensitive { get; set; }
     [JsonIgnore] public bool UseRegex { get; set; }
     [JsonIgnore] public bool ExactMatch { get; set; } = true;
@@ -170,6 +173,8 @@ public sealed class AppSettings
     public int IoOversubscriptionIndex { get; set; } // 0 = Auto (SSD 1x, HDD 2x), 1 = 1x, 2 = 2x, 3 = 3x
     public int LineTruncationLength { get; set; } = 500;
     public int MaxRecentItems { get; set; } = 20;
+    /// <summary>Max Semantic-mode natural-language queries to remember for autocomplete.</summary>
+    public int MaxSemanticRecentItems { get; set; } = 20;
     /// <summary>Hard process memory cap in MB. 0 = automatic sub-GB paging target.</summary>
     public int MemoryLimitMB { get; set; }
     /// <summary>System-wide memory pressure threshold (0-100). Search evicts cached results and switches to memory-saving mode when total machine memory usage exceeds this %. 0 = disabled.</summary>

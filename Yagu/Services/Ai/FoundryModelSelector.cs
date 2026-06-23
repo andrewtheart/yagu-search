@@ -54,7 +54,7 @@ public sealed class FoundryModelSelector
     /// fetched directly (throws via the SDK if it does not exist). Otherwise the hardware-filtered
     /// catalog is ranked by <see cref="SelectAlias"/>.
     /// </summary>
-    public async Task<IModel?> SelectAsync(ICatalog catalog, string? overrideAlias, CancellationToken cancellationToken)
+    public static async Task<IModel?> SelectAsync(ICatalog catalog, string? overrideAlias, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(catalog);
 
@@ -124,7 +124,7 @@ public sealed class FoundryModelSelector
                 Alias: !string.IsNullOrWhiteSpace(m.Alias) ? m.Alias : m.Info?.Alias ?? m.Id,
                 FileSizeMb: m.Info?.FileSizeMb,
                 Task: m.Info?.Task,
-                Device: m.Info?.Runtime.DeviceType ?? DeviceType.CPU))
+                Device: m.Info?.Runtime?.DeviceType ?? DeviceType.CPU))
             .ToList();
         LogService.Instance.Verbose(LogSource, $"Ranking {candidates.Count} hardware-compatible catalog model(s).");
 
@@ -165,7 +165,7 @@ public sealed class FoundryModelSelector
     private static async Task<IModel> PreferAccurateVariantAsync(
         ICatalog catalog, IModel family, CancellationToken cancellationToken)
     {
-        IReadOnlyList<IModel>? variants = null;
+        List<IModel>? variants = null;
         try { variants = family.Variants?.ToList(); } catch { /* SDK may not populate variants */ }
 
         if (variants is null || variants.Count <= 1) return family;
@@ -197,7 +197,7 @@ public sealed class FoundryModelSelector
     private static int VariantAccuracyScore(IModel variant)
     {
         string id = (variant.Id ?? variant.Alias ?? string.Empty).ToLowerInvariant();
-        DeviceType device = variant.Info?.Runtime.DeviceType ?? DeviceType.CPU;
+        DeviceType device = variant.Info?.Runtime?.DeviceType ?? DeviceType.CPU;
 
         int deviceTier = device switch
         {
