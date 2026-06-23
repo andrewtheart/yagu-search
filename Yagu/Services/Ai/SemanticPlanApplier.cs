@@ -1,5 +1,7 @@
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.Win32;
 using Yagu.Models;
 
 namespace Yagu.Services.Ai;
@@ -303,6 +305,86 @@ public static class SemanticPlanApplier
             if (resolved.GroupSortDirectionIndex is { } groupDir)
                 target.GroupSortDirectionIndex = groupDir;
         }
+    }
+
+    /// <summary>
+    /// Builds a deterministic, human-readable summary of a resolved plan for display, instead of
+    /// trusting the model's free-text <see cref="ResolvedSearchPlan.Explanation"/>. Small on-device
+    /// models routinely garble the literal search term in prose (e.g. writing "yagursd" for "yagu"),
+    /// so this summary is derived only from the resolved fields and can never drift from what is
+    /// actually searched.
+    /// </summary>
+    public static string BuildExplanation(ResolvedSearchPlan resolved)
+    {
+        ArgumentNullException.ThrowIfNull(resolved);
+
+        string directory = string.IsNullOrWhiteSpace(resolved.Directory)
+            ? "the current directory"
+            : resolved.Directory!.Trim();
+
+        string scope = resolved.SearchMode switch
+        {
+            SearchMode.FileNames => "file names",
+            SearchMode.Content => "file contents",
+            SearchMode.FileNameThenContent => "the contents of files whose names match",
+            _ => "file names and contents",
+        };
+
+        var sb = new StringBuilder();
+        sb.Append("Searching ").Append(directory).Append(" \u2014 ").Append(scope);
+
+        if (!string.IsNullOrWhiteSpace(resolved.Pattern))
+        {
+            sb.Append(resolved.UseRegex == true
+                ? $" matching the regular expression {resolved.Pattern}"
+                : $" containing \u201c{resolved.Pattern}\u201d");
+        }
+
+        if (resolved.IncludeGlobs is { Count: > 0 } includes)
+            sb.Append(", limited to ").Append(string.Join(", ", includes));
+
+        if (resolved.ExcludeGlobs is { Count: > 0 } excludes)
+            sb.Append(", excluding ").Append(string.Join(", ", excludes));
+
+        AppendSizeClause(sb, resolved.MinFileSizeBytes, resolved.MaxFileSizeBytes);
+        AppendDateClause(sb, "modified", resolved.ModifiedAfterDate, resolved.ModifiedBeforeDate);
+        AppendDateClause(sb, "created", resolved.CreatedAfterDate, resolved.CreatedBeforeDate);
+
+        sb.Append('.');
+        return sb.ToString();
+    }
+
+    private static void AppendSizeClause(StringBuilder sb, long? min, long? max)
+    {
+        bool hasMin = min is > 0;
+        bool hasMax = max is > 0;
+        if (hasMin && hasMax)
+            sb.Append(CultureInfo.InvariantCulture, $", between {FormatSize(min!.Value)} and {FormatSize(max!.Value)}");
+        else if (hasMin)
+            sb.Append(CultureInfo.InvariantCulture, $", larger than {FormatSize(min!.Value)}");
+        else if (hasMax)
+            sb.Append(CultureInfo.InvariantCulture, $", smaller than {FormatSize(max!.Value)}");
+    }
+
+    private static void AppendDateClause(StringBuilder sb, string label, DateTimeOffset? after, DateTimeOffset? before)
+    {
+        // Show the calendar date as stored (no time-zone conversion) since these are date-only filters.
+        static string D(DateTimeOffset d) => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        if (after.HasValue && before.HasValue)
+            sb.Append(CultureInfo.InvariantCulture, $", {label} between {D(after.Value)} and {D(before.Value)}");
+        else if (after.HasValue)
+            sb.Append(CultureInfo.InvariantCulture, $", {label} after {D(after.Value)}");
+        else if (before.HasValue)
+            sb.Append(CultureInfo.InvariantCulture, $", {label} before {D(before.Value)}");
+    }
+
+    private static string FormatSize(long bytes)
+    {
+        const long kb = 1024, mb = kb * 1024, gb = mb * 1024;
+        if (bytes >= gb && bytes % gb == 0) return $"{bytes / gb} GB";
+        if (bytes >= mb && bytes % mb == 0) return $"{bytes / mb} MB";
+        if (bytes >= kb && bytes % kb == 0) return $"{bytes / kb} KB";
+        return $"{bytes} bytes";
     }
 
     /// <summary>
@@ -618,6 +700,7 @@ public static class SemanticPlanApplier
             if (string.IsNullOrWhiteSpace(t)) continue;
             string token = SanitizeGlobToken(t);
             if (token.Length == 0) continue;
+            token = DepluralizeGlobExtension(token, KnownFileExtensions.Default);
             if (seen.Add(token)) result.Add(token);
         }
         return result;
@@ -634,6 +717,37 @@ public static class SemanticPlanApplier
         // Collapse whitespace that hugs a dot or wildcard, the only places a glob never has spaces.
         token = Regex.Replace(token, @"\s*([.*?])\s*", "$1");
         return token;
+    }
+
+    /// <summary>
+    /// Repairs file-extension globs that a small model pluralized (e.g. <c>*.exes</c> -&gt;
+    /// <c>*.exe</c>, <c>*.pdfs</c> -&gt; <c>*.pdf</c>, <c>*.pngs</c> -&gt; <c>*.png</c>) while leaving
+    /// real extensions that end in 's' untouched (<c>*.cs</c>, <c>*.css</c>, <c>*.js</c>, <c>*.ts</c>,
+    /// <c>*.xls</c>, <c>*.class</c>, <c>*.props</c>). The trailing-'s' form is only de-pluralized when
+    /// its singular IS a known extension and the plural is NOT, so legitimate extensions (which are
+    /// themselves "known") are never altered. To stay safe it (1) only touches tokens whose final
+    /// path segment contains a '.', leaving folder excludes like <c>docs</c> or <c>builds</c> intact,
+    /// and (2) never de-pluralizes down to a single-character extension (so <c>*.hs</c>/<c>*.as</c>
+    /// are preserved). Original casing of the kept characters is retained.
+    /// </summary>
+    internal static string DepluralizeGlobExtension(string glob, IReadOnlySet<string> known)
+    {
+        if (string.IsNullOrEmpty(glob) || known is null || known.Count == 0) return glob;
+        int slash = glob.LastIndexOfAny(['/', '\\']);
+        int dot = glob.LastIndexOf('.');
+        if (dot <= slash) return glob; // no extension dot in the final path segment
+
+        string ext = glob[(dot + 1)..];
+        // Only plain alphanumeric extensions ending in 's' (with a >=2-char singular) are candidates.
+        if (ext.Length < 3 || (ext[^1] != 's' && ext[^1] != 'S')) return glob;
+        foreach (char c in ext)
+            if (!char.IsLetterOrDigit(c)) return glob;
+
+        if (known.Contains(ext)) return glob;          // the plural is itself a real extension -> keep it
+        string singular = ext[..^1];
+        if (!known.Contains(singular)) return glob;    // singular isn't real either -> not a pluralization
+
+        return string.Concat(glob.AsSpan(0, dot + 1), singular);
     }
 
     /// <summary>Expands bare file names ("abc") into exclude globs that catch both the
@@ -759,4 +873,68 @@ public sealed class SemanticSearchOverlay
 
     /// <summary>True reverses the natural group order. Null when no group field is set.</summary>
     public bool? GroupDescending { get; init; }
+}
+
+/// <summary>
+/// Supplies the set of "real" bare (dot-less, lower-case) file extensions used to detect and repair
+/// extensions that small models sometimes pluralize ("exes" -&gt; "exe"). Combines a curated baseline
+/// (Yagu's own skip/binary/archive defaults plus common source/text/document extensions) with the
+/// file extensions registered under the local machine's <c>HKEY_CLASSES_ROOT</c>, so machine-specific
+/// types are recognized too. The registry lookup is best-effort and cached once: any failure simply
+/// falls back to the curated baseline.
+/// </summary>
+internal static class KnownFileExtensions
+{
+    // Common source/markup/text/config/document extensions that may not appear in Yagu's
+    // skip/binary/archive defaults but are real and must never be treated as a pluralized mistake.
+    private const string CuratedExtensions =
+        "cs;js;mjs;cjs;jsx;ts;tsx;json;jsonc;xml;yaml;yml;toml;ini;cfg;conf;config;props;targets;" +
+        "html;htm;css;scss;sass;less;md;markdown;rst;txt;text;log;csv;tsv;sql;sh;bash;zsh;ps1;psm1;psd1;" +
+        "bat;cmd;py;pyw;pyi;rb;go;rs;java;kt;kts;scala;swift;c;h;hpp;hh;cc;cpp;cxx;hxx;m;mm;php;pl;pm;lua;" +
+        "r;dart;vb;fs;fsx;fsi;clj;cljs;ex;exs;erl;hrl;jl;groovy;gradle;tf;tfvars;cmake;asm;s;ipynb;" +
+        "resx;xaml;razor;cshtml;vue;svelte;sln;csproj;vbproj;fsproj;vcxproj;proj;lock;env";
+
+    private static readonly Lazy<IReadOnlySet<string>> LazySet = new(Build);
+
+    /// <summary>Combined curated + machine-registered known extensions (bare, lower-case).</summary>
+    public static IReadOnlySet<string> Default => LazySet.Value;
+
+    private static HashSet<string> Build()
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        AddSemicolonList(set, CuratedExtensions);
+        AddSemicolonList(set, AppSettings.DefaultSkipExtensions);
+        AddSemicolonList(set, AppSettings.DefaultBinaryExtensions);
+        AddSemicolonList(set, AppSettings.DefaultArchiveExtensions);
+        TryAddRegisteredExtensions(set);
+        return set;
+    }
+
+    private static void AddSemicolonList(HashSet<string> set, string list)
+    {
+        foreach (var raw in list.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            string ext = raw.TrimStart('.').Trim();
+            if (ext.Length > 0) set.Add(ext);
+        }
+    }
+
+    private static void TryAddRegisteredExtensions(HashSet<string> set)
+    {
+        try
+        {
+            using RegistryKey hkcr = Registry.ClassesRoot;
+            foreach (string keyName in hkcr.GetSubKeyNames())
+            {
+                // Extension keys are the only ones that begin with a dot (e.g. ".png"); ProgIDs do not.
+                if (keyName.Length > 1 && keyName[0] == '.')
+                    set.Add(keyName[1..]);
+            }
+        }
+        catch (Exception ex) when (ex is System.Security.SecurityException
+            or UnauthorizedAccessException or System.IO.IOException or ObjectDisposedException)
+        {
+            // Best-effort: keep the curated baseline when the registry can't be read.
+        }
+    }
 }

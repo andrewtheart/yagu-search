@@ -174,6 +174,61 @@ public class SettingsServiceCoverageTests
     }
 
     [Fact]
+    public void PushRecent_WithTimestamps_RecordsTimeAndDeduplicatesCaseInsensitively()
+    {
+        var list = new List<string>();
+        var times = new Dictionary<string, DateTimeOffset>();
+        var before = DateTimeOffset.Now.AddSeconds(-1);
+
+        SettingsService.PushRecent(list, times, "Foo", 10);
+        SettingsService.PushRecent(list, times, "foo", 10); // same entry, different case
+
+        Assert.Single(list);
+        Assert.Equal("foo", list[0]);
+        Assert.Single(times);
+        Assert.True(times.ContainsKey("foo"));
+        Assert.False(times.ContainsKey("Foo"));
+        Assert.True(times["foo"] >= before);
+    }
+
+    [Fact]
+    public void PushRecent_WithTimestamps_MovesExistingToFrontAndRefreshesTime()
+    {
+        var list = new List<string>();
+        var times = new Dictionary<string, DateTimeOffset>();
+        SettingsService.PushRecent(list, times, "a", 10);
+        SettingsService.PushRecent(list, times, "b", 10);
+        var firstA = times["a"];
+
+        SettingsService.PushRecent(list, times, "a", 10);
+
+        Assert.Equal(new[] { "a", "b" }, list);
+        Assert.True(times["a"] >= firstA);
+    }
+
+    [Fact]
+    public void PushRecent_WithTimestamps_TrimsTimestampsWhenCapping()
+    {
+        var list = new List<string>();
+        var times = new Dictionary<string, DateTimeOffset>();
+        for (int i = 0; i < 10; i++) SettingsService.PushRecent(list, times, $"item{i}", 3);
+
+        Assert.Equal(3, list.Count);
+        Assert.Equal(3, times.Count);
+        foreach (var key in times.Keys) Assert.Contains(key, list); // only survivors keep timestamps
+    }
+
+    [Fact]
+    public void PushRecent_WithTimestamps_EmptyValueIsNoOp()
+    {
+        var list = new List<string>();
+        var times = new Dictionary<string, DateTimeOffset>();
+        SettingsService.PushRecent(list, times, "  ", 10);
+        Assert.Empty(list);
+        Assert.Empty(times);
+    }
+
+    [Fact]
     public void DefaultPath_ContainsAppName()
     {
         var path = SettingsService.DefaultPath();

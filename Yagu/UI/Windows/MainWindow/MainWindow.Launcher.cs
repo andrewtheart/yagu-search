@@ -577,15 +577,95 @@ public sealed partial class MainWindow
         if (_forceClose || !ViewModel.CloseToTray) return;
 
         args.Cancel = true;
-        HideToTray(isCloseToTray: true);
+        RequestCloseToTray();
     }
 
-    private void HideToTray(bool isCloseToTray = false)
+    /// <summary>
+    /// Entry point for the window/title-bar close action when "dock to tray" is enabled. The very
+    /// first time, shows an explanatory dialog (with a "Don't remind me again" option and a way to
+    /// switch to fully exiting) before docking; afterwards it docks silently.
+    /// </summary>
+    private void RequestCloseToTray()
+    {
+        if (!ViewModel.HasShownCloseToTrayNotification)
+        {
+            // Defer so the originating Closing event can return (with Cancel = true) before the
+            // modal dialog opens over the still-visible window.
+            DispatcherQueue.TryEnqueue(async () => await ShowFirstCloseToTrayDialogAsync());
+            return;
+        }
+
+        HideToTray();
+    }
+
+    private async Task ShowFirstCloseToTrayDialogAsync()
+    {
+        var panel = new StackPanel { Spacing = 12, MinWidth = 360 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Closing the window doesn't quit Yagu \u2014 it keeps running in the system tray so you can reopen it instantly.",
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        var hint = "Right-click the tray icon to bring Yagu back or exit it completely.";
+        if (ViewModel.GlobalHotkeyEnabled && _hotkeyService.IsRegistered)
+            hint += $" You can also press {HotkeyService.FormatCtrlShift(ViewModel.GlobalHotkeyKey[0])} to restore it.";
+        hint += " You can change this anytime in Settings \u2192 Window.";
+        panel.Children.Add(new TextBlock
+        {
+            Text = hint,
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 12,
+            Opacity = 0.8,
+        });
+
+        var dontRemind = new CheckBox { Content = "Don't remind me again", IsChecked = true };
+        panel.Children.Add(dontRemind);
+
+        var result = await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "Yagu keeps running in the tray",
+                Content = panel,
+                PrimaryButtonText = "Got it, keep in tray",
+                SecondaryButtonText = "Exit fully from now on",
+                CloseButtonText = null,
+                DefaultButton = YaguDialogDefaultButton.Primary,
+                RequestedTheme = RootGrid.ActualTheme,
+                ShowTitleBar = false,
+                Width = 600,
+                Height = 320,
+                MaxContentHeight = 220,
+            });
+
+        if (dontRemind.IsChecked == true)
+        {
+            ViewModel.HasShownCloseToTrayNotification = true;
+            await ViewModel.PersistSettingsAsync();
+        }
+
+        if (result == YaguDialogResult.Secondary)
+        {
+            // The user chose to change the close behavior to fully exit; honor it now and onward.
+            ViewModel.CloseToTray = false;
+            await ViewModel.PersistSettingsAsync();
+            _forceClose = true;
+            Close();
+            return;
+        }
+
+        // Primary or dismissed: dock to tray. The dialog already explained the tray, so suppress
+        // the redundant first-dock balloon.
+        MarkTrayNotificationShown();
+        HideToTray();
+    }
+
+    private void HideToTray()
     {
         if (_hwnd == IntPtr.Zero) return;
 
         bool firstDock = false;
-        bool firstCloseToTray = false;
 
         if (_trayIcon is null)
         {
@@ -607,27 +687,9 @@ public sealed partial class MainWindow
             firstDock = !HasShownTrayNotification();
         }
 
-        if (isCloseToTray)
-        {
-            var settings = new SettingsService().Load();
-            firstCloseToTray = !settings.HasShownCloseToTrayNotification;
-        }
-
         ShowWindow(_hwnd, SW_HIDE);
 
-        if (firstCloseToTray)
-        {
-            var msg = "Yagu docked to the system tray instead of closing. You can change this in Settings \u2192 Window.";
-            if (ViewModel.GlobalHotkeyEnabled && _hotkeyService.IsRegistered)
-                msg += $" Press {HotkeyService.FormatCtrlShift(ViewModel.GlobalHotkeyKey[0])} to restore.";
-            _trayIcon!.ShowBalloon("Yagu is still running", msg);
-
-            var svc = new SettingsService();
-            var s = svc.Load();
-            s.HasShownCloseToTrayNotification = true;
-            _ = svc.SaveAsync(s);
-        }
-        else if (firstDock)
+        if (firstDock)
         {
             var msg = "Yagu is still running in the system tray. Right-click the tray icon to reopen or close it.";
             if (ViewModel.GlobalHotkeyEnabled && _hotkeyService.IsRegistered)

@@ -2457,6 +2457,17 @@ public sealed partial class SettingsWindow : Window
             searchEngineGroup.Children.Add(hddToggle);
             searchEngineGroup.Children.Add(new TextBlock { Text = "When enabled, if the search target is on a rotational hard disk, Yagu will automatically set parallelism to 1 and show a warning before searching. Disable to suppress the warning and allow any parallelism level on HDDs.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
+            var excludedExtToggle = new ToggleSwitch
+            {
+                IsOn = !_viewModel.SuppressExcludedExtensionWarnings,
+                OnContent = "Warn when a search targets an excluded file type",
+                OffContent = "Warn when a search targets an excluded file type",
+                Margin = new Thickness(0, 4, 0, 0),
+            };
+            excludedExtToggle.Toggled += (_, _) => _viewModel.SuppressExcludedExtensionWarnings = !excludedExtToggle.IsOn;
+            searchEngineGroup.Children.Add(excludedExtToggle);
+            searchEngineGroup.Children.Add(new TextBlock { Text = "When enabled, Yagu warns before searching if your query names a file whose extension is currently excluded by the Skip or Binary extension lists or an Include/Exclude filter, so those files would not appear in results.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
             searchEngineGroup.Children.Add(NextSearchLabel("SDK channel buffer size:"));
             var sdkBuf = new NumberBox { Value = _viewModel.SdkChannelBufferSize, Minimum = 16, Maximum = 1000000 };
             sdkBuf.ValueChanged += (_, args) => _viewModel.SdkChannelBufferSize = (int)args.NewValue;
@@ -3201,6 +3212,31 @@ public sealed partial class SettingsWindow : Window
             remindersGroup.Children.Add(new TextBlock
             {
                 Text = "Allows the file drawer, line-number, and preview-match introductory tooltips to appear again.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var resetCloseToTrayReminder = new Button
+            {
+                Content = "Reset close-to-tray reminder",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetCloseToTrayReminder.Click += (_, _) =>
+            {
+                _viewModel.HasShownCloseToTrayNotification = false;
+                MarkSettingsDirty(requireValueChanges: false);
+                resetCloseToTrayReminder.Content = "Close-to-tray reminder reset";
+                resetCloseToTrayReminder.IsEnabled = false;
+            };
+            RegisterDefaultResetButton(resetCloseToTrayReminder,
+                () => !_viewModel.HasShownCloseToTrayNotification);
+            remindersGroup.Children.Add(resetCloseToTrayReminder);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Shows the explanatory dialog again the next time you close Yagu while \u201cDock to system tray when closed\u201d is enabled.",
                 FontSize = 11,
                 Opacity = 0.6,
                 TextWrapping = TextWrapping.Wrap,

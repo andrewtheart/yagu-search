@@ -996,4 +996,160 @@ public sealed class SemanticPlanApplierTests
     {
         Assert.Equal(expected, SemanticPlanApplier.ExtractGlobExtension(glob));
     }
+
+    // ---- extension de-pluralization ----------------------------------------
+
+    private static readonly HashSet<string> DepluralizeKnown =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            // singular extensions a model might wrongly pluralize...
+            "exe", "png", "pdf", "doc", "jpeg", "txt", "log",
+            // ...and real s-ending extensions that must be left alone.
+            "cs", "css", "js", "ts", "xls", "class", "props", "hs", "as", "a", "h",
+        };
+
+    [Theory]
+    [InlineData("*.exes", "*.exe")]
+    [InlineData("*.pngs", "*.png")]
+    [InlineData("*.pdfs", "*.pdf")]
+    [InlineData("*.docs", "*.doc")]
+    [InlineData("*.jpegs", "*.jpeg")]
+    [InlineData("*.txts", "*.txt")]
+    [InlineData("**/*.exes", "**/*.exe")]
+    [InlineData("C:\\dir\\*.pngs", "C:\\dir\\*.png")]
+    [InlineData(".exes", ".exe")]
+    [InlineData("*.EXES", "*.EXE")]            // casing of kept characters is preserved
+    public void DepluralizeGlobExtension_RepairsPluralizedExtensions(string glob, string expected)
+    {
+        Assert.Equal(expected, SemanticPlanApplier.DepluralizeGlobExtension(glob, DepluralizeKnown));
+    }
+
+    [Theory]
+    [InlineData("*.cs")]      // singular "c" is known but "cs" is itself a real extension
+    [InlineData("*.css")]     // "css" is real; "cs" is real -> guarded by known-plural check
+    [InlineData("*.js")]
+    [InlineData("*.ts")]
+    [InlineData("*.xls")]
+    [InlineData("*.class")]
+    [InlineData("*.props")]
+    [InlineData("*.hs")]      // singular "h" known, but "hs" would de-pluralize to 1 char -> skipped
+    [InlineData("*.as")]      // singular "a" known, but 1-char target -> skipped
+    [InlineData("docs")]      // no extension dot -> folder-name token left intact
+    [InlineData("builds")]
+    [InlineData("*.unknowns")] // neither plural nor singular is known -> not a pluralization
+    [InlineData("*.tar.gz")]  // compound: last ext "gz" doesn't end in 's'
+    public void DepluralizeGlobExtension_LeavesLegitimateTokensUnchanged(string glob)
+    {
+        Assert.Equal(glob, SemanticPlanApplier.DepluralizeGlobExtension(glob, DepluralizeKnown));
+    }
+
+    [Fact]
+    public void DepluralizeGlobExtension_NullOrEmptyKnownSet_ReturnsInput()
+    {
+        Assert.Equal("*.exes", SemanticPlanApplier.DepluralizeGlobExtension("*.exes", null!));
+        Assert.Equal("*.exes", SemanticPlanApplier.DepluralizeGlobExtension(
+            "*.exes", new HashSet<string>(StringComparer.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
+    public void KnownFileExtensions_Default_ContainsCommonExtensions()
+    {
+        var known = KnownFileExtensions.Default;
+        // Curated + Yagu defaults guarantee these regardless of machine registry state.
+        Assert.Contains("exe", known);
+        Assert.Contains("png", known);
+        Assert.Contains("pdf", known);
+        Assert.Contains("cs", known);
+        Assert.Contains("css", known);
+        Assert.Contains("js", known);
+        Assert.Contains("xls", known);
+        // Pluralized forms must NOT be present so the de-pluralizer fires.
+        Assert.DoesNotContain("exes", known);
+        Assert.DoesNotContain("pngs", known);
+    }
+
+    [Fact]
+    public void Resolve_PluralizedExtensionGlob_IsDepluralized()
+    {
+        // The reported regression: "exe files" -> model emits "*.exes".
+        var plan = new SemanticSearchPlan { Pattern = "yagu", IncludeGlobs = new() { "*.exes" } };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.Equal(new[] { "*.exe" }, resolved.IncludeGlobs);
+    }
+
+    [Theory]
+    [InlineData("*.cs")]
+    [InlineData("*.css")]
+    [InlineData("*.js")]
+    [InlineData("*.ts")]
+    [InlineData("*.xls")]
+    public void Resolve_LegitimateSEndingExtensionGlob_IsPreserved(string glob)
+    {
+        var plan = new SemanticSearchPlan { Pattern = "x", IncludeGlobs = new() { glob } };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.Equal(new[] { glob }, resolved.IncludeGlobs);
+    }
+
+    [Fact]
+    public void BuildExplanation_UsesResolvedPattern_NotModelProse()
+    {
+        // The "yagursd" regression: the explanation must come from the resolved pattern, not the model.
+        var resolved = new ResolvedSearchPlan
+        {
+            Directory = "D:/",
+            Pattern = "yagu",
+            SearchMode = SearchMode.FileNames,
+            IncludeGlobs = new[] { "*.exe" },
+            Explanation = "Listing .exes files on D:/ whose names contain the string 'yagursd.",
+        };
+
+        string text = SemanticPlanApplier.BuildExplanation(resolved);
+
+        Assert.Contains("D:/", text);
+        Assert.Contains("file names", text);
+        Assert.Contains("yagu", text);
+        Assert.DoesNotContain("yagursd", text);
+        Assert.Contains("*.exe", text);
+    }
+
+    [Fact]
+    public void BuildExplanation_RegexPattern_DescribedAsRegex()
+    {
+        var resolved = new ResolvedSearchPlan { Directory = "C:/", Pattern = @"\d+", UseRegex = true, SearchMode = SearchMode.Content };
+        string text = SemanticPlanApplier.BuildExplanation(resolved);
+        Assert.Contains("regular expression", text);
+        Assert.Contains(@"\d+", text);
+        Assert.Contains("file contents", text);
+    }
+
+    [Fact]
+    public void BuildExplanation_IncludesSizeAndDateAndExcludeClauses()
+    {
+        var resolved = new ResolvedSearchPlan
+        {
+            Directory = "C:/",
+            Pattern = "report",
+            SearchMode = SearchMode.Both,
+            ExcludeGlobs = new[] { "*.tmp" },
+            MinFileSizeBytes = 100L * 1024 * 1024,
+            ModifiedAfterDate = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
+        };
+
+        string text = SemanticPlanApplier.BuildExplanation(resolved);
+
+        Assert.Contains("excluding *.tmp", text);
+        Assert.Contains("larger than 100 MB", text);
+        Assert.Contains("modified after 2026-01-01", text);
+    }
+
+    [Fact]
+    public void BuildExplanation_EmptyPlan_FallsBackToGenericSummary()
+    {
+        string text = SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan());
+        Assert.Equal("Searching the current directory \u2014 file names and contents.", text);
+    }
 }

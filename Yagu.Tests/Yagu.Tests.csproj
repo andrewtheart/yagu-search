@@ -42,6 +42,7 @@
   <!-- Pull in only the engine source so tests don't depend on WindowsAppSDK. -->
   <ItemGroup>
     <Compile Include="..\Yagu\Models\SearchResult.cs" Link="Source\Models\SearchResult.cs" />
+    <Compile Include="..\Yagu\Models\HistorySuggestion.cs" Link="Source\Models\HistorySuggestion.cs" />
     <Compile Include="..\Yagu\Models\SearchResultCollection.cs" Link="Source\Models\SearchResultCollection.cs" />
     <Compile Include="..\Yagu\Models\SortCriterion.cs" Link="Source\Models\SortCriterion.cs" />
     <Compile Include="..\Yagu\Models\SearchOptions.cs" Link="Source\Models\SearchOptions.cs" />
@@ -64,6 +65,7 @@
     <Compile Include="..\Yagu\Services\FileMetadataCache.cs" Link="Source\Services\FileMetadataCache.cs" />
     <Compile Include="..\Yagu\Services\SearchService.cs" Link="Source\Services\SearchService.cs" />
     <Compile Include="..\Yagu\Services\SearchQueryParser.cs" Link="Source\Services\SearchQueryParser.cs" />
+    <Compile Include="..\Yagu\Services\ExcludedExtensionPredictor.cs" Link="Source\Services\ExcludedExtensionPredictor.cs" />
     <Compile Include="..\Yagu\Services\SettingsService.cs" Link="Source\Services\SettingsService.cs" />
     <Compile Include="..\Yagu\Services\HotkeyService.cs" Link="Source\Services\HotkeyService.cs" />
     <Compile Include="..\Yagu\Services\EditorLauncher.cs" Link="Source\Services\EditorLauncher.cs" />

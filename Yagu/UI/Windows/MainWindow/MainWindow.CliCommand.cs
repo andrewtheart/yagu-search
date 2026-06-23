@@ -17,7 +17,54 @@ public sealed partial class MainWindow
         if (TryGetGeneratedCliCommandControls(out var commandText, out var commandOverlay))
         {
             commandText.Text = BuildGeneratedCliCommand(_includeGeneratedCliCommandSavedSettingOptions);
+            // Center the overlay over the drawer contents before showing so it does not flash in at
+            // its default top-left slot, then re-center once full layout has run.
+            PositionGeneratedCliCommandOverlayOverDrawer(commandOverlay);
             commandOverlay.Visibility = Visibility.Visible;
+            DispatcherQueue.TryEnqueue(
+                Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                () => PositionGeneratedCliCommandOverlayOverDrawer(commandOverlay));
+        }
+    }
+
+    /// <summary>
+    /// Positions the generated-CLI-command overlay centered over the Advanced Options drawer content
+    /// box (<c>AdvancedOptionsDrawerBodyBorder</c>), which is valid whether the drawer is inline
+    /// (launcher mode) or floating in the traditional-mode overlay host. Both the overlay and the
+    /// drawer live under <c>RootGrid</c>, so the drawer's transform gives a margin in matching
+    /// coordinates. Falls back gracefully (no move) when the drawer has not been laid out yet.
+    /// </summary>
+    private void PositionGeneratedCliCommandOverlayOverDrawer(FrameworkElement overlay)
+    {
+        if (RootGrid is null || AdvancedOptionsDrawerBodyBorder is not { } drawer) return;
+        if (drawer.ActualWidth <= 0 || drawer.ActualHeight <= 0) return;
+
+        overlay.HorizontalAlignment = HorizontalAlignment.Left;
+        overlay.VerticalAlignment = VerticalAlignment.Top;
+
+        double overlayWidth = overlay.ActualWidth;
+        double overlayHeight = overlay.ActualHeight;
+        if (overlayWidth <= 0 || overlayHeight <= 0)
+        {
+            double measureWidth = overlay.MaxWidth > 0 && !double.IsInfinity(overlay.MaxWidth) ? overlay.MaxWidth : 760;
+            overlay.Measure(new Windows.Foundation.Size(measureWidth, double.PositiveInfinity));
+            overlayWidth = overlay.DesiredSize.Width;
+            overlayHeight = overlay.DesiredSize.Height;
+        }
+
+        try
+        {
+            var origin = drawer.TransformToVisual(RootGrid).TransformPoint(new Windows.Foundation.Point(0, 0));
+            double centerX = origin.X + drawer.ActualWidth / 2.0;
+            double centerY = origin.Y + drawer.ActualHeight / 2.0;
+            double left = Math.Max(0, centerX - overlayWidth / 2.0);
+            double top = Math.Max(0, centerY - overlayHeight / 2.0);
+            overlay.Margin = new Thickness(left, top, 0, 0);
+        }
+        catch
+        {
+            // TransformToVisual can throw if the drawer is detached mid-reparent; leave the overlay
+            // at its current position rather than crash.
         }
     }
 
@@ -104,7 +151,12 @@ public sealed partial class MainWindow
         };
 
         AddValue(parts, "--directory", ViewModel.Directory);
-        AddValue(parts, "--pattern", ViewModel.Query);
+        // Semantic mode sends the natural-language query to the on-device model via --semantic-pattern;
+        // Traditional mode passes the literal search term via --pattern.
+        if (ViewModel.IsSemanticQueryMode)
+            AddValue(parts, "--semantic-pattern", ViewModel.Query);
+        else
+            AddValue(parts, "--pattern", ViewModel.Query);
 
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.UseRegex == setting.UseRegex))
             parts.Add(ViewModel.UseRegex ? "--regex" : "--no-regex");
@@ -153,6 +205,8 @@ public sealed partial class MainWindow
 
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.SkipBinary == setting.SkipBinary))
             parts.Add(ViewModel.SearchBinary ? "--binary" : "--no-binary");
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.SearchHiddenFiles == setting.SearchHiddenFiles))
+            parts.Add(ViewModel.SearchHiddenFiles ? "--hidden" : "--no-hidden");
         var skipExtensions = FormatExtensionList(BuildEffectiveSkipExtensionsForCli());
         if (!string.IsNullOrWhiteSpace(skipExtensions)
             && ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ExtensionSetsEqual(ParseExtensionSetForCli(skipExtensions), ParseExtensionSetForCli(setting.SkipExtensions))))

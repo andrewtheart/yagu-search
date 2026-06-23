@@ -277,6 +277,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         BinaryExtensions = SettingsBinaryExtensions;
         ArchiveExtensions = SettingsArchiveExtensions;
         SuppressAdminWarning = _settings.SuppressAdminWarning;
+        SuppressExcludedExtensionWarnings = _settings.SuppressExcludedExtensionWarnings;
         SuppressFontContrastWarnings = _settings.SuppressFontContrastWarnings;
         FontContrastReminderAfterUtc = _settings.FontContrastReminderAfterUtc;
         ExcludeAdminProtectedPaths = _settings.ExcludeAdminProtectedPaths;
@@ -294,6 +295,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         WindowFocusBehavior = _settings.WindowFocusBehavior;
         StartInLauncherMode = _settings.StartInLauncherMode;
         CloseToTray = _settings.CloseToTray;
+        HasShownCloseToTrayNotification = _settings.HasShownCloseToTrayNotification;
         MaximizeOnStartup = _settings.MaximizeOnStartup;
         AdvancedOptionsCollapsedWidthModeIndex = NormalizeAdvancedOptionsCollapsedWidthModeIndex(_settings.AdvancedOptionsCollapsedWidthModeIndex);
         TerminalDefaultWorkingDirectory = _settings.TerminalDefaultWorkingDirectory ?? string.Empty;
@@ -318,7 +320,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         Helpers.LineTruncator.TruncatedLength = LineTruncationLength;
 
         foreach (var d in _settings.RecentDirectories) RecentDirectories.Add(d);
-        foreach (var d in _settings.RecentDirectories) DirectorySuggestions.Add(d);
+        foreach (var d in _settings.RecentDirectories) DirectorySuggestions.Add(new HistorySuggestion(d, LookupRecentDirectoryTimestamp(d)));
         foreach (var q in _settings.SearchHistory) SearchHistory.Add(q);
         foreach (var q in _settings.SemanticSearchHistory) SemanticSearchHistory.Add(q);
 
@@ -985,6 +987,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     }
 
     [ObservableProperty] public partial bool SuppressFontContrastWarnings { get; set; }
+    [ObservableProperty] public partial bool SuppressExcludedExtensionWarnings { get; set; }
     [ObservableProperty] public partial DateTimeOffset? FontContrastReminderAfterUtc { get; set; }
 
     [ObservableProperty] public partial bool ExcludeAdminProtectedPaths { get; set; } = true;
@@ -1053,6 +1056,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty] public partial int WindowFocusBehavior { get; set; } = 1; // 0 = MinimizeToTray, 1 = StayOpen (default), 2 = AlwaysOnTop
     [ObservableProperty] public partial bool StartInLauncherMode { get; set; } = true;
     [ObservableProperty] public partial bool CloseToTray { get; set; } = true;
+    [ObservableProperty] public partial bool HasShownCloseToTrayNotification { get; set; }
     [ObservableProperty] public partial bool MaximizeOnStartup { get; set; }
     [ObservableProperty] public partial int AdvancedOptionsCollapsedWidthModeIndex { get; set; }
     [ObservableProperty] public partial string TerminalDefaultWorkingDirectory { get; set; } = string.Empty;
@@ -1457,11 +1461,38 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     public ObservableCollection<FileGroup> ResultGroups => _resultCollection.VisibleGroups;
     public BatchObservableCollection<object> ResultRows { get; } = new();
     public ObservableCollection<string> RecentDirectories { get; } = [];
-    public ObservableCollection<string> DirectorySuggestions { get; } = [];
+    public ObservableCollection<HistorySuggestion> DirectorySuggestions { get; } = [];
     public ObservableCollection<string> SearchHistory { get; } = [];
     /// <summary>Autocomplete history for the Semantic (natural-language) query mode, kept separate
     /// from <see cref="SearchHistory"/> so Traditional and Semantic suggestions never mix.</summary>
     public ObservableCollection<string> SemanticSearchHistory { get; } = [];
+
+    private DateTimeOffset? LookupRecentDirectoryTimestamp(string value)
+        => _settings.RecentDirectoryTimes.TryGetValue(value, out var t) ? t : null;
+
+    /// <summary>
+    /// Builds the query autocomplete dropdown items for the active mode (Semantic vs Traditional),
+    /// filtered by <paramref name="filter"/> (substring, case-insensitive), annotated with each entry's
+    /// last-used timestamp, and sorted newest-first. Entries without a timestamp (recorded before
+    /// timestamps were tracked) sort to the end while preserving their existing relative order.
+    /// </summary>
+    public List<HistorySuggestion> BuildQuerySuggestionItems(string? filter)
+    {
+        var history = IsSemanticQueryMode ? SemanticSearchHistory : SearchHistory;
+        var times = IsSemanticQueryMode ? _settings.SemanticSearchHistoryTimes : _settings.SearchHistoryTimes;
+
+        string trimmed = filter?.Trim() ?? string.Empty;
+        IEnumerable<string> values = trimmed.Length == 0
+            ? history
+            : history.Where(entry => entry.Contains(trimmed, StringComparison.OrdinalIgnoreCase));
+
+        return values
+            .Select((value, index) => (value, index, ts: times.TryGetValue(value, out var t) ? (DateTimeOffset?)t : null))
+            .OrderByDescending(x => x.ts ?? DateTimeOffset.MinValue)
+            .ThenBy(x => x.index)
+            .Select(x => new HistorySuggestion(x.value, x.ts))
+            .ToList();
+    }
 
     public bool HasResults => ResultGroups.Count > 0;
     public bool ShowEmptyState => !IsSearching && ResultGroups.Count == 0;
@@ -1679,7 +1710,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// query is first translated by the local model and applied to this view-model; in Traditional
     /// mode it goes straight to <see cref="StartSearchAsync"/>.
     /// </summary>
-    public async Task SubmitSearchAsync()
+    public async Task SubmitSearchAsync(Func<Task<bool>>? postTranslationGate = null)
     {
         // Re-entrancy guard: a second submit (Enter in the query box, F5, a double-click on the
         // Search button) while a semantic translation is already in flight would start a concurrent
@@ -1695,6 +1726,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             var applied = await TranslateSemanticQueryAsync().ConfigureAwait(true);
             if (!applied) return; // failed/cancelled — status already shown, don't run a stale search
         }
+
+        // Run an optional pre-search gate AFTER any semantic translation, so it sees the resolved
+        // search target (include globs / literal query) the model produced rather than the raw
+        // natural-language text. Used for the excluded-extension warning.
+        if (postTranslationGate is not null && !await postTranslationGate().ConfigureAwait(true))
+            return;
 
         await StartSearchAsync().ConfigureAwait(true);
     }
@@ -1768,9 +1805,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
             var resolved = SemanticPlanApplier.ApplyToTarget(result.Plan, context, this);
             EnableArchiveSearchForContainerGlobs(resolved.IncludeGlobs);
-            SemanticStatusText = string.IsNullOrWhiteSpace(resolved.Explanation)
-                ? "Interpreted your request."
-                : resolved.Explanation!;
+            // Render the summary deterministically from the resolved plan rather than the model's
+            // free-text explanation, which small on-device models often garble (e.g. "yagursd").
+            SemanticStatusText = SemanticPlanApplier.BuildExplanation(resolved);
             return true;
         }
         catch (OperationCanceledException)
@@ -1882,17 +1919,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
             ResetStateForNewSearch();
 
-            SettingsService.PushRecent(_settings.RecentDirectories, Directory, MaxRecentItems);
+            SettingsService.PushRecent(_settings.RecentDirectories, _settings.RecentDirectoryTimes, Directory, MaxRecentItems);
             // In Semantic mode the user-typed natural-language query (captured before translation)
             // goes to the separate Semantic history; Traditional searches use the literal Query.
             if (IsSemanticQueryMode)
             {
                 if (!string.IsNullOrWhiteSpace(_pendingSemanticHistoryEntry))
-                    SettingsService.PushRecent(_settings.SemanticSearchHistory, _pendingSemanticHistoryEntry!, MaxSemanticRecentItems);
+                    SettingsService.PushRecent(_settings.SemanticSearchHistory, _settings.SemanticSearchHistoryTimes, _pendingSemanticHistoryEntry!, MaxSemanticRecentItems);
             }
             else
             {
-                SettingsService.PushRecent(_settings.SearchHistory, Query, MaxRecentItems);
+                SettingsService.PushRecent(_settings.SearchHistory, _settings.SearchHistoryTimes, Query, MaxRecentItems);
             }
             _pendingSemanticHistoryEntry = null;
             SyncRecent();
@@ -3392,6 +3429,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.SkipExtensions = SettingsSkipExtensions;
         _settings.BinaryExtensions = SettingsBinaryExtensions;
         _settings.SuppressAdminWarning = SuppressAdminWarning;
+        _settings.SuppressExcludedExtensionWarnings = SuppressExcludedExtensionWarnings;
         _settings.SuppressFontContrastWarnings = SuppressFontContrastWarnings;
         _settings.FontContrastReminderAfterUtc = FontContrastReminderAfterUtc;
         _settings.ExcludeAdminProtectedPaths = ExcludeAdminProtectedPaths;
@@ -3407,6 +3445,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.WindowFocusBehavior = WindowFocusBehavior;
         _settings.StartInLauncherMode = StartInLauncherMode;
         _settings.CloseToTray = CloseToTray;
+        _settings.HasShownCloseToTrayNotification = HasShownCloseToTrayNotification;
         _settings.MaximizeOnStartup = MaximizeOnStartup;
         _settings.AdvancedOptionsCollapsedWidthModeIndex = NormalizeAdvancedOptionsCollapsedWidthModeIndex(AdvancedOptionsCollapsedWidthModeIndex);
         _settings.TerminalDefaultWorkingDirectory = string.IsNullOrWhiteSpace(TerminalDefaultWorkingDirectory)
@@ -3767,6 +3806,70 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         return effective;
     }
 
+    /// <summary>
+    /// Returns the predicted excluded-extension warning for the current query and advanced options, or
+    /// null when there is nothing to warn about. Suppressed when the user opted out, in Semantic mode,
+    /// or when the query does not name a file whose extension is currently excluded.
+    /// </summary>
+    internal ExcludedExtensionWarning? TryGetExcludedExtensionWarning()
+    {
+        if (SuppressExcludedExtensionWarnings) return null;
+        // Note: this runs AFTER semantic translation (via the SubmitSearchAsync gate), so in Semantic
+        // mode Query/IncludeGlobs already reflect the model's resolved plan (e.g. include glob *.exe).
+
+        return ExcludedExtensionPredictor.Predict(
+            Query,
+            UseRegex,
+            ExactMatch,
+            (SearchMode)SearchModeIndex,
+            ParseExtensionSet(SkipExtensions),
+            ParseExtensionSet(BinaryExtensions),
+            IncludeGlobs,
+            IncludeFilterMode,
+            EffectiveExcludeGlobsText,
+            ExcludeFilterMode);
+    }
+
+    /// <summary>
+    /// Stops excluding <paramref name="warning"/>'s extension for the current (and future) searches by
+    /// editing whichever advanced options were hiding it, then persists. Skip/Binary list edits are
+    /// removed from both the active and available (universe) strings so the change survives a restart;
+    /// session-only Include/Exclude filter edits take effect for this search.
+    /// </summary>
+    internal async Task IncludeExtensionForSearchAsync(ExcludedExtensionWarning warning)
+    {
+        string ext = warning.Extension;
+
+        if (warning.Reasons.HasFlag(ExtensionExclusionReason.BinaryExtensions))
+        {
+            BinaryExtensions = ExcludedExtensionPredictor.RemoveExtensionToken(BinaryExtensions, ext);
+            SettingsBinaryExtensions = ExcludedExtensionPredictor.RemoveExtensionToken(SettingsBinaryExtensions, ext);
+            SyncBinaryExtensionItems();
+        }
+
+        if (warning.Reasons.HasFlag(ExtensionExclusionReason.SkipExtensions))
+        {
+            SkipExtensions = ExcludedExtensionPredictor.RemoveExtensionToken(SkipExtensions, ext);
+            SettingsSkipExtensions = ExcludedExtensionPredictor.RemoveExtensionToken(SettingsSkipExtensions, ext);
+            SyncSkipExtensionItems();
+        }
+
+        if (warning.Reasons.HasFlag(ExtensionExclusionReason.ExcludeFilter))
+        {
+            // EffectiveExcludeGlobsText may be the built-in default; materialize it minus the extension
+            // into the editable (session) ExcludeGlobs so the file is no longer excluded.
+            ExcludeGlobs = ExcludedExtensionPredictor.RemoveExtensionToken(EffectiveExcludeGlobsText, ext);
+        }
+
+        if (warning.Reasons.HasFlag(ExtensionExclusionReason.IncludeFilter))
+        {
+            // The restrictive Include filter omits this extension — add it so the file is included.
+            IncludeGlobs = ExcludedExtensionPredictor.AppendExtensionToken(IncludeGlobs, ext);
+        }
+
+        await PersistSettingsAsync();
+    }
+
     /// <summary>Parse a semicolon-separated extension string into a set WITH leading dots (e.g. ".zip", ".docx").</summary>
     private static HashSet<string> ParseDottedExtensionSet(string s)
     {
@@ -3871,7 +3974,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         {
             DirectorySuggestions.Clear();
             foreach (var suggestion in suggestions)
-                DirectorySuggestions.Add(suggestion);
+                DirectorySuggestions.Add(new HistorySuggestion(suggestion, LookupRecentDirectoryTimestamp(suggestion)));
             completion.SetResult();
         }))
         {

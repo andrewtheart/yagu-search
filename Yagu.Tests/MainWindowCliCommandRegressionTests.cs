@@ -66,6 +66,13 @@ public sealed class MainWindowCliCommandRegressionTests
 
         Assert.Contains("\"--directory\"", source);
         Assert.Contains("\"--pattern\"", source);
+        // Semantic mode must emit --semantic-pattern instead of --pattern.
+        Assert.Contains("\"--semantic-pattern\"", source);
+        Assert.Contains("ViewModel.IsSemanticQueryMode", source);
+        // Hidden-files scope must be reproducible via --hidden / --no-hidden.
+        Assert.Contains("\"--hidden\"", source);
+        Assert.Contains("\"--no-hidden\"", source);
+        Assert.Contains("ViewModel.SearchHiddenFiles == setting.SearchHiddenFiles", source);
         Assert.Contains("\"--regex\"", source);
         Assert.Contains("\"--no-regex\"", source);
         Assert.Contains("\"--case-sensitive\"", source);

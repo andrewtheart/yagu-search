@@ -200,6 +200,94 @@ public sealed partial class MainWindow
     }
 
     /// <summary>
+    /// Warns before searching when the query names a file whose extension is currently excluded by an
+    /// advanced option (Skip/Binary extensions or an Include/Exclude filter). Returns false to cancel
+    /// the search (user chose Cancel). "Include &amp; search" un-excludes the extension, then proceeds.
+    /// </summary>
+    private async Task<bool> CheckExcludedExtensionAndWarnAsync()
+    {
+        var warning = ViewModel.TryGetExcludedExtensionWarning();
+        if (warning is null) return true;
+
+        string ext = warning.Extension;
+        string sources = DescribeExclusionReasons(warning.Reasons);
+
+        var contentPanel = new StackPanel { Spacing = 12, MinWidth = 360 };
+        var message = new TextBlock { TextWrapping = TextWrapping.Wrap };
+        message.Inlines.Add(new Run { Text = "You're searching for a file ending in " });
+        message.Inlines.Add(new Run { Text = "." + ext, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+        message.Inlines.Add(new Run { Text = $", but .{ext} files are currently excluded by your {sources}, so they won't appear in the results." });
+        contentPanel.Children.Add(message);
+
+        contentPanel.Children.Add(new TextBlock
+        {
+            Text = $"Choose \"Include .{ext} & search\" to stop excluding this file type, or search anyway to continue without it.",
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 12,
+            Opacity = 0.8,
+        });
+
+        var dontWarnAgain = new CheckBox { Content = "Don't warn me again about excluded file types" };
+        contentPanel.Children.Add(dontWarnAgain);
+
+        var result = await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "Excluded file type",
+                Content = contentPanel,
+                PrimaryButtonText = $"Include .{ext} & search",
+                SecondaryButtonText = "Search anyway",
+                CloseButtonText = null,
+                DefaultButton = YaguDialogDefaultButton.Primary,
+                RequestedTheme = RootGrid.ActualTheme,
+                ShowTitleBar = false,
+                Width = 600,
+                Height = 340,
+                MaxContentHeight = 230,
+            });
+
+        bool dontWarn = dontWarnAgain.IsChecked == true;
+        if (dontWarn)
+            ViewModel.SuppressExcludedExtensionWarnings = true;
+
+        if (result == YaguDialogResult.Close)
+        {
+            // Dismissed without choosing (Esc / window close) — cancel the search rather than run one
+            // that would not find the file. Still persist the suppress preference if the user set it.
+            if (dontWarn) await ViewModel.PersistSettingsAsync();
+            return false;
+        }
+
+        if (result == YaguDialogResult.Secondary)
+        {
+            // "Search anyway" — run the search without un-excluding the type.
+            if (dontWarn) await ViewModel.PersistSettingsAsync();
+            return true;
+        }
+
+        // Primary: un-exclude the extension; this persists settings (including the suppress flag if set).
+        await ViewModel.IncludeExtensionForSearchAsync(warning);
+        return true;
+    }
+
+    private static string DescribeExclusionReasons(Yagu.Services.ExtensionExclusionReason reasons)
+    {
+        var parts = new List<string>();
+        if (reasons.HasFlag(Yagu.Services.ExtensionExclusionReason.BinaryExtensions)) parts.Add("Binary extensions list");
+        if (reasons.HasFlag(Yagu.Services.ExtensionExclusionReason.SkipExtensions)) parts.Add("Skip extensions list");
+        if (reasons.HasFlag(Yagu.Services.ExtensionExclusionReason.ExcludeFilter)) parts.Add("Exclude filter");
+        if (reasons.HasFlag(Yagu.Services.ExtensionExclusionReason.IncludeFilter)) parts.Add("Include filter");
+        return parts.Count switch
+        {
+            0 => "advanced options",
+            1 => parts[0],
+            2 => $"{parts[0]} and {parts[1]}",
+            _ => string.Join(", ", parts.Take(parts.Count - 1)) + ", and " + parts[^1],
+        };
+    }
+
+    /// <summary>
     /// Returns a stable per-disk key for the HDD warning dedup set. Uses the path root
     /// (drive letter or UNC share) so repeated searches under the same disk share one key.
     /// </summary>
@@ -218,7 +306,7 @@ public sealed partial class MainWindow
     {
         if (!_forceClose && ViewModel.CloseToTray)
         {
-            HideToTray(isCloseToTray: true);
+            RequestCloseToTray();
             return;
         }
         Close();

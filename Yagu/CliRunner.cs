@@ -241,8 +241,8 @@ internal static class CliRunner
             return (0, true); // dry-run: stop before searching
         }
 
-        if (!string.IsNullOrWhiteSpace(resolved.Explanation))
-            WriteError($"interpreted: {resolved.Explanation}");
+        if (!string.IsNullOrWhiteSpace(args.Pattern) || resolved.SearchMode is not null)
+            WriteError($"interpreted: {SemanticPlanApplier.BuildExplanation(resolved)}");
 
         return (0, false);
     }
@@ -424,7 +424,7 @@ internal static class CliRunner
     {
         var o = Console.Out;
         o.WriteLine("Semantic query interpreted as:");
-        if (!string.IsNullOrWhiteSpace(resolved.Explanation)) o.WriteLine($"  summary        : {resolved.Explanation}");
+        o.WriteLine($"  summary        : {SemanticPlanApplier.BuildExplanation(resolved)}");
         o.WriteLine($"  directory      : {args.Directory}");
         o.WriteLine($"  pattern        : {(string.IsNullOrEmpty(args.Pattern) ? "(none)" : args.Pattern)}");
         if (resolved.SearchMode is { } sm)        o.WriteLine($"  search-mode    : {sm}");

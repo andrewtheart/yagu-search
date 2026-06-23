@@ -83,6 +83,11 @@ public sealed class AppSettings
     /// <summary>Separate autocomplete history for the Semantic (natural-language) query mode, kept
     /// distinct from the Traditional <see cref="SearchHistory"/> so the two suggestion lists never mix.</summary>
     public List<string> SemanticSearchHistory { get; set; } = [];
+    /// <summary>When each entry was last added/used, keyed by the entry value, for the autocomplete
+    /// dropdowns' trailing date column. Entries recorded before this existed simply have no key.</summary>
+    public Dictionary<string, DateTimeOffset> RecentDirectoryTimes { get; set; } = new();
+    public Dictionary<string, DateTimeOffset> SearchHistoryTimes { get; set; } = new();
+    public Dictionary<string, DateTimeOffset> SemanticSearchHistoryTimes { get; set; } = new();
     [JsonIgnore] public bool CaseSensitive { get; set; }
     [JsonIgnore] public bool UseRegex { get; set; }
     [JsonIgnore] public bool ExactMatch { get; set; } = true;
@@ -218,6 +223,9 @@ public sealed class AppSettings
     public string BinaryExtensions { get; set; } = DefaultBinaryExtensions;
     /// <summary>When true, do not show the non-admin access warning banner on startup.</summary>
     public bool SuppressAdminWarning { get; set; }
+    /// <summary>When true, do not warn before searching when the query names a file whose extension is
+    /// currently excluded by Skip/Binary extensions or an Include/Exclude filter.</summary>
+    public bool SuppressExcludedExtensionWarnings { get; set; }
     /// <summary>When true, do not show theme/font contrast warnings.</summary>
     public bool SuppressFontContrastWarnings { get; set; }
     /// <summary>UTC time before which theme/font contrast warnings are snoozed.</summary>
@@ -657,5 +665,36 @@ public sealed class SettingsService
         list.RemoveAll(s => string.Equals(s, value, StringComparison.OrdinalIgnoreCase));
         list.Insert(0, value);
         while (list.Count > max) list.RemoveAt(list.Count - 1);
+    }
+
+    /// <summary>
+    /// Pushes <paramref name="value"/> to the front of <paramref name="list"/> and records its
+    /// last-used time in <paramref name="times"/>, keeping the two in sync. Re-using an existing entry
+    /// moves it to the front and refreshes its timestamp rather than adding a duplicate; trimming the
+    /// list past <paramref name="max"/> also drops the corresponding timestamps.
+    /// </summary>
+    public static void PushRecent(List<string> list, Dictionary<string, DateTimeOffset> times, string value, int max = AppSettings.MaxRecent)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return;
+
+        // Remove any case-insensitive duplicate from both the list and the timestamp map.
+        for (int i = list.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(list[i], value, StringComparison.OrdinalIgnoreCase))
+            {
+                times.Remove(list[i]);
+                list.RemoveAt(i);
+            }
+        }
+
+        list.Insert(0, value);
+        times[value] = DateTimeOffset.Now;
+
+        while (list.Count > max)
+        {
+            string removed = list[^1];
+            list.RemoveAt(list.Count - 1);
+            times.Remove(removed);
+        }
     }
 }

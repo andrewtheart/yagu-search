@@ -354,7 +354,21 @@
                         ItemsSource="{x:Bind ViewModel.DirectorySuggestions, Mode=OneWay}"
                         TextChanged="OnDirectoryTextChanged"
                         SuggestionChosen="OnDirectorySuggestionChosen"
-                        QuerySubmitted="OnDirectoryQuerySubmitted" />
+                        QuerySubmitted="OnDirectoryQuerySubmitted">
+                        <AutoSuggestBox.ItemTemplate>
+                            <DataTemplate x:DataType="models:HistorySuggestion">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{x:Bind Value}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Grid.Column="1" Text="{x:Bind TimestampDisplay}" Opacity="0.55" FontSize="11"
+                                               Margin="16,0,0,0" VerticalAlignment="Center" />
+                                </Grid>
+                            </DataTemplate>
+                        </AutoSuggestBox.ItemTemplate>
+                    </AutoSuggestBox>
                     <!-- Browse embedded at the trailing edge of the directory box (overlay, like the
                          query box's clear button). -->
                     <Button x:Name="BrowseDirectoryButton" Click="OnBrowseDirectory" ToolTipService.ToolTip="Browse for folder"
@@ -382,11 +396,23 @@
                         MinHeight="60"
                         PlaceholderText="{x:Bind ViewModel.QueryPlaceholderText, Mode=OneWay}"
                         Text="{x:Bind ViewModel.Query, Mode=TwoWay}"
-                        ItemsSource="{x:Bind ViewModel.SearchHistory, Mode=OneWay}"
                         QuerySubmitted="OnQuerySubmitted"
                         TextChanged="OnQueryTextChanged"
                         LostFocus="OnQueryLostFocus"
                         KeyDown="OnQueryKeyDown">
+                        <AutoSuggestBox.ItemTemplate>
+                            <DataTemplate x:DataType="models:HistorySuggestion">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{x:Bind Value}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Grid.Column="1" Text="{x:Bind TimestampDisplay}" Opacity="0.55" FontSize="11"
+                                               Margin="16,0,0,0" VerticalAlignment="Center" />
+                                </Grid>
+                            </DataTemplate>
+                        </AutoSuggestBox.ItemTemplate>
                         <!-- Style the inner TextBox so long queries wrap and fill the tall box
                              instead of staying on a single top line. AcceptsReturn stays false so
                              Enter still submits the search. -->
@@ -535,6 +561,11 @@
                              default card color while collapsed. The Color is swapped in code-behind
                              from OnAdvancedOptionsExpanding / OnAdvancedOptionsCollapsed. -->
                         <SolidColorBrush x:Key="ExpanderHeaderBackground" Color="{ThemeResource CardBackgroundFillColorDefault}" />
+                        <!-- Remove the built-in grey divider between the Expander header and its
+                             content. The visible content box is provided by AdvancedOptionsDrawerBodyBorder
+                             below, so the Expander's own header/content borders are not needed. -->
+                        <SolidColorBrush x:Key="ExpanderHeaderBorderBrush" Color="Transparent" />
+                        <Thickness x:Key="ExpanderContentDownBorderThickness">0</Thickness>
                     </Expander.Resources>
                     <Expander.Header>
                         <TextBlock Text="Advanced Options" VerticalAlignment="Center" />
@@ -551,7 +582,7 @@
                         <Border x:Name="AdvancedOptionsDrawerBodyBorder"
                                 Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
                                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                BorderThickness="1" CornerRadius="4" Padding="0">
+                                BorderThickness="1,0,1,1" CornerRadius="0,0,4,4" Padding="0">
                             <Grid MinHeight="272">
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="*" />
@@ -639,81 +670,81 @@
                                                 <TextBlock Text="Path filters" Opacity="0.75"
                                                            FontWeight="SemiBold" />
                                                 <StackPanel Spacing="8">
-                                                    <Grid RowSpacing="4" ColumnSpacing="6">
+                                                    <Grid RowSpacing="4">
                                                         <Grid.RowDefinitions>
                                                             <RowDefinition Height="Auto" />
                                                             <RowDefinition Height="Auto" />
                                                         </Grid.RowDefinitions>
                                                         <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="Auto" />
                                                             <ColumnDefinition Width="*" />
-                                                            <ColumnDefinition Width="Auto" />
+                                                            <ColumnDefinition Width="*" />
                                                         </Grid.ColumnDefinitions>
-                                                        <Border Background="#0078D4" CornerRadius="8" Padding="8,2"
-                                                                VerticalAlignment="Center"
-                                                                ToolTipService.ToolTip="Files to include. In Glob mode, use extensions, globs, or path segments. In Regex mode, match the normalized full path.">
-                                                            <TextBlock Text="Include" FontSize="11" Foreground="White"
-                                                                       FontWeight="SemiBold" />
-                                                        </Border>
-                                                        <ComboBox Grid.Column="2"
-                                                                  SelectedIndex="{x:Bind ViewModel.IncludeFilterModeIndex, Mode=TwoWay}"
-                                                                  Width="88" Height="30" MinWidth="0" Padding="8,0"
-                                                                  FontSize="12" VerticalAlignment="Center"
-                                                                  ToolTipService.ToolTip="Include filter mode">
-                                                            <x:String>Glob</x:String>
-                                                            <x:String>Regex</x:String>
-                                                        </ComboBox>
-                                                        <Grid Grid.Row="1" Grid.ColumnSpan="3">
+                                                        <Grid Grid.Row="0" Grid.Column="0" ColumnSpacing="6">
                                                             <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="Auto" />
                                                                 <ColumnDefinition Width="*" />
-                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="Auto" />
                                                             </Grid.ColumnDefinitions>
-                                                            <TextBox x:Name="IncludeFilterBox"
-                                                                     PlaceholderText="{x:Bind ViewModel.IncludeFilterPlaceholder, Mode=OneWay}"
-                                                                     Text="{x:Bind ViewModel.IncludeGlobs, Mode=TwoWay}"
-                                                                     Padding="8,4"
-                                                                     TextChanged="OnFilterBoxTextChanged"
-                                                                     GotFocus="OnFilterBoxGotFocus"
-                                                                     LostFocus="OnFilterBoxLostFocus" />
+                                                            <Border Background="#0078D4" CornerRadius="8" Padding="8,2"
+                                                                    VerticalAlignment="Center"
+                                                                    ToolTipService.ToolTip="Files to include. In Glob mode, use extensions, globs, or path segments. In Regex mode, match the normalized full path.">
+                                                                <TextBlock Text="Include" FontSize="11" Foreground="White"
+                                                                           FontWeight="SemiBold" />
+                                                            </Border>
+                                                            <ComboBox Grid.Column="2"
+                                                                      SelectedIndex="{x:Bind ViewModel.IncludeFilterModeIndex, Mode=TwoWay}"
+                                                                      Width="88" Height="30" MinWidth="0" Padding="8,0"
+                                                                      FontSize="12" VerticalAlignment="Center"
+                                                                      ToolTipService.ToolTip="Include filter mode">
+                                                                <x:String>Glob</x:String>
+                                                                <x:String>Regex</x:String>
+                                                            </ComboBox>
                                                         </Grid>
+                                                        <TextBox Grid.Row="1" Grid.Column="0" x:Name="IncludeFilterBox"
+                                                                 PlaceholderText="{x:Bind ViewModel.IncludeFilterPlaceholder, Mode=OneWay}"
+                                                                 Text="{x:Bind ViewModel.IncludeGlobs, Mode=TwoWay}"
+                                                                 Padding="8,4"
+                                                                 TextChanged="OnFilterBoxTextChanged"
+                                                                 GotFocus="OnFilterBoxGotFocus"
+                                                                 LostFocus="OnFilterBoxLostFocus" />
                                                     </Grid>
-                                                    <Grid RowSpacing="4" ColumnSpacing="6">
+                                                    <Grid RowSpacing="4">
                                                         <Grid.RowDefinitions>
                                                             <RowDefinition Height="Auto" />
                                                             <RowDefinition Height="Auto" />
                                                         </Grid.RowDefinitions>
                                                         <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="Auto" />
                                                             <ColumnDefinition Width="*" />
-                                                            <ColumnDefinition Width="Auto" />
+                                                            <ColumnDefinition Width="*" />
                                                         </Grid.ColumnDefinitions>
-                                                        <Border Background="#0078D4" CornerRadius="8" Padding="8,2"
-                                                                VerticalAlignment="Center"
-                                                                ToolTipService.ToolTip="Files to exclude. In Glob mode, use extensions, globs, or path segments. In Regex mode, match the normalized full path.">
-                                                            <TextBlock Text="Exclude" FontSize="11" Foreground="White"
-                                                                       FontWeight="SemiBold" />
-                                                        </Border>
-                                                        <ComboBox Grid.Column="2"
-                                                                  SelectedIndex="{x:Bind ViewModel.ExcludeFilterModeIndex, Mode=TwoWay}"
-                                                                  Width="88" Height="30" MinWidth="0" Padding="8,0"
-                                                                  FontSize="12" VerticalAlignment="Center"
-                                                                  ToolTipService.ToolTip="Exclude filter mode">
-                                                            <x:String>Glob</x:String>
-                                                            <x:String>Regex</x:String>
-                                                        </ComboBox>
-                                                        <Grid Grid.Row="1" Grid.ColumnSpan="3">
+                                                        <Grid Grid.Row="0" Grid.Column="0" ColumnSpacing="6">
                                                             <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="Auto" />
                                                                 <ColumnDefinition Width="*" />
-                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="Auto" />
                                                             </Grid.ColumnDefinitions>
-                                                            <TextBox x:Name="ExcludeFilterBox"
-                                                                     PlaceholderText="{x:Bind ViewModel.ExcludeFilterPlaceholder, Mode=OneWay}"
-                                                                     Text="{x:Bind ViewModel.ExcludeGlobs, Mode=TwoWay}"
-                                                                     Padding="8,4"
-                                                                     TextChanged="OnFilterBoxTextChanged"
-                                                                     GotFocus="OnFilterBoxGotFocus"
-                                                                     LostFocus="OnFilterBoxLostFocus" />
+                                                            <Border Background="#0078D4" CornerRadius="8" Padding="8,2"
+                                                                    VerticalAlignment="Center"
+                                                                    ToolTipService.ToolTip="Files to exclude. In Glob mode, use extensions, globs, or path segments. In Regex mode, match the normalized full path.">
+                                                                <TextBlock Text="Exclude" FontSize="11" Foreground="White"
+                                                                           FontWeight="SemiBold" />
+                                                            </Border>
+                                                            <ComboBox Grid.Column="2"
+                                                                      SelectedIndex="{x:Bind ViewModel.ExcludeFilterModeIndex, Mode=TwoWay}"
+                                                                      Width="88" Height="30" MinWidth="0" Padding="8,0"
+                                                                      FontSize="12" VerticalAlignment="Center"
+                                                                      ToolTipService.ToolTip="Exclude filter mode">
+                                                                <x:String>Glob</x:String>
+                                                                <x:String>Regex</x:String>
+                                                            </ComboBox>
                                                         </Grid>
+                                                        <TextBox Grid.Row="1" Grid.Column="0" x:Name="ExcludeFilterBox"
+                                                                 PlaceholderText="{x:Bind ViewModel.ExcludeFilterPlaceholder, Mode=OneWay}"
+                                                                 Text="{x:Bind ViewModel.ExcludeGlobs, Mode=TwoWay}"
+                                                                 Padding="8,4"
+                                                                 TextChanged="OnFilterBoxTextChanged"
+                                                                 GotFocus="OnFilterBoxGotFocus"
+                                                                 LostFocus="OnFilterBoxLostFocus" />
                                                     </Grid>
                                                 </StackPanel>
                                             </StackPanel>
@@ -1144,7 +1175,7 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                        <DropDownButton MinWidth="64" Height="24" MinHeight="0" Padding="6,2" HorizontalContentAlignment="Left" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Sort results">
+                        <DropDownButton Height="28" MinHeight="0" Padding="6,2" HorizontalContentAlignment="Left" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Sort results">
                             <StackPanel Orientation="Horizontal" Spacing="4">
                                 <FontIcon Glyph="&#xE8CB;" FontSize="12" />
                                 <TextBlock Text="Sort" />
@@ -1267,7 +1298,7 @@
                                 </Flyout>
                             </DropDownButton.Flyout>
                         </DropDownButton>
-                        <DropDownButton MinWidth="88" Height="24" MinHeight="0" Padding="6,2" HorizontalContentAlignment="Left" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Group results by…">
+                        <DropDownButton Height="28" MinHeight="0" Padding="6,2" HorizontalContentAlignment="Left" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Group results by…">
                             <StackPanel Orientation="Horizontal" Spacing="4">
                                 <FontIcon Glyph="&#xE8FD;" FontSize="12" />
                                 <TextBlock Text="Group" />
@@ -1302,7 +1333,7 @@
                                 </MenuFlyout>
                             </DropDownButton.Flyout>
                         </DropDownButton>
-                        <DropDownButton MinWidth="64" Height="24" MinHeight="0" Padding="6,2" HorizontalContentAlignment="Left" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Filter results">
+                        <DropDownButton Height="28" MinHeight="0" Padding="6,2" HorizontalContentAlignment="Left" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Filter results">
                             <StackPanel Orientation="Horizontal" Spacing="4">
                                 <FontIcon Glyph="&#xE71C;" FontSize="12" />
                                 <TextBlock Text="Filter" />
@@ -2081,13 +2112,14 @@
                        Text="Results truncated — refine your query" />
         </Grid>
 
-        <!-- Generated CLI command overlay -->
+        <!-- Generated CLI command overlay. Positioned in code-behind centered over the Advanced
+             Options drawer contents (see PositionGeneratedCliCommandOverlayOverDrawer). -->
         <Border x:Name="GeneratedCliCommandOverlay"
                 Grid.RowSpan="7"
                 Visibility="Collapsed"
-                HorizontalAlignment="Right"
+                HorizontalAlignment="Left"
                 VerticalAlignment="Top"
-                Margin="0,92,24,0"
+                Margin="0"
                 MaxWidth="760"
                 Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"

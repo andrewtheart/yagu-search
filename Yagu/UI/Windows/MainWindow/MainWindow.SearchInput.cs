@@ -151,12 +151,14 @@ public sealed partial class MainWindow
         if (!await ClearPreviewPanelForNewSearchAsync()) return;
         if (!await CheckHddAndWarnAsync()) return;
         CollapseAdvancedOptionsForSearch();
-        await ViewModel.SubmitSearchAsync();
+        // The excluded-extension check runs as a gate inside SubmitSearchAsync, AFTER any semantic
+        // translation, so it sees the model's resolved target extension (e.g. include glob *.exe).
+        await ViewModel.SubmitSearchAsync(CheckExcludedExtensionAndWarnAsync);
     }
 
     private async void OnQuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
     {
-        var submittedQuery = args.ChosenSuggestion as string;
+        var submittedQuery = (args.ChosenSuggestion as Yagu.Models.HistorySuggestion)?.Value;
         if (string.IsNullOrEmpty(submittedQuery))
             submittedQuery = args.QueryText;
         if (string.IsNullOrEmpty(submittedQuery))
@@ -169,7 +171,7 @@ public sealed partial class MainWindow
         if (!await ClearPreviewPanelForNewSearchAsync()) return;
         if (!await CheckHddAndWarnAsync()) return;
         CollapseAdvancedOptionsForSearch();
-        await ViewModel.SubmitSearchAsync();
+        await ViewModel.SubmitSearchAsync(CheckExcludedExtensionAndWarnAsync);
     }
 
     private void OnSelectTraditionalMode(object sender, RoutedEventArgs e)
@@ -316,17 +318,8 @@ public sealed partial class MainWindow
         target.IsSuggestionListOpen = open && suggestions.Count > 0;
     }
 
-    private List<string> BuildQuerySuggestions(string? queryText)
-    {
-        var history = ActiveQueryHistory();
-        string filter = queryText?.Trim() ?? string.Empty;
-        if (filter.Length == 0)
-            return history.ToList();
-
-        return history
-            .Where(entry => entry.Contains(filter, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-    }
+    private List<Yagu.Models.HistorySuggestion> BuildQuerySuggestions(string? queryText)
+        => ViewModel.BuildQuerySuggestionItems(queryText);
 
     /// <summary>The autocomplete history that backs the query box for the active search mode:
     /// the Semantic natural-language history in Semantic mode, otherwise the Traditional history.</summary>
@@ -435,9 +428,10 @@ public sealed partial class MainWindow
     [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML event handlers are bound as instance methods.")]
     private void OnDirectorySuggestionChosen(AutoSuggestBox sender, AutoSuggestBoxSuggestionChosenEventArgs args)
     {
-        if (args.SelectedItem is string chosen)
+        if (args.SelectedItem is Yagu.Models.HistorySuggestion suggestion)
         {
             // Append trailing backslash so user can continue drilling down.
+            string chosen = suggestion.Value;
             sender.Text = chosen.EndsWith('\\') ? chosen : chosen + '\\';
         }
     }

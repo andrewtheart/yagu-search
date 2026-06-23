@@ -114,6 +114,9 @@ The JSON object uses these fields (OMIT any field the user did not ask for — d
   ["*.<ext>"] using that exact extension. NEVER substitute a different extension, and NEVER add
   extra extensions the user did not name. ONLY the generic GROUP words listed below expand to
   multiple extensions. ("jsonl files" -> ["*.jsonl"], NOT ["*.json"] or ["*.txt","*.csv",...].)
+- NEVER PLURALIZE AN EXTENSION: the glob extension is always the singular file type, even when the
+  user writes the plural noun. "exe files" -> ["*.exe"] (NOT ["*.exes"]); "png files" -> ["*.png"]
+  (NOT ["*.pngs"]); "pdf files" -> ["*.pdf"]. Do NOT append an 's' to the extension.
 - MULTIPLE NAMED EXTENSIONS: when the user lists several extensions or types (e.g. "json and jsonl
   and txt files", "png, gif or bmp"), output ONE glob per named extension, preserving EVERY one in
   the order given: ["*.json","*.jsonl","*.txt"]. Never drop, merge, or deduplicate extensions that

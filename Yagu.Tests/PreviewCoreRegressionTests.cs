@@ -455,17 +455,17 @@ public sealed class PreviewCoreRegressionTests
     [Fact]
     public void SearchStart_CollapsesAdvancedOptions()
     {
-        string buttonSearch = ExtractMethodWindow(MainWindowSource, "OnSearchCancelClick", 1200);
+        string buttonSearch = ExtractMethodWindow(MainWindowSource, "OnSearchCancelClick", 1700);
         AssertContainsInOrder(buttonSearch,
             "if (!await CheckHddAndWarnAsync()) return;",
             "CollapseAdvancedOptionsForSearch();",
-            "await ViewModel.SubmitSearchAsync();");
+            "await ViewModel.SubmitSearchAsync(CheckExcludedExtensionAndWarnAsync);");
 
-        string querySubmitted = ExtractMethodWindow(MainWindowSource, "OnQuerySubmitted", 1400);
+        string querySubmitted = ExtractMethodWindow(MainWindowSource, "OnQuerySubmitted", 1700);
         AssertContainsInOrder(querySubmitted,
             "if (!await CheckHddAndWarnAsync()) return;",
             "CollapseAdvancedOptionsForSearch();",
-            "await ViewModel.SubmitSearchAsync();");
+            "await ViewModel.SubmitSearchAsync(CheckExcludedExtensionAndWarnAsync);");
 
         string autoSearch = ExtractMethodWindow(MainWindowSource, "OnContentLoaded", 1800);
         AssertContainsInOrder(autoSearch,
