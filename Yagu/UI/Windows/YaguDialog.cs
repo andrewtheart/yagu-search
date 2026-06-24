@@ -41,6 +41,11 @@ internal sealed record YaguDialogOptions
     public bool ShowTitle { get; init; } = true;
     public bool ShowTitleBar { get; init; } = true;
     public bool ShowTopRightCloseButton { get; init; }
+
+    /// <summary>Optional Segoe Fluent/MDL2 glyph shown to the left of the title (e.g. a warning icon). Null = no glyph.</summary>
+    public string? TitleGlyph { get; init; }
+    /// <summary>Optional color for <see cref="TitleGlyph"/>. Null uses the default foreground.</summary>
+    public Windows.UI.Color? TitleGlyphColor { get; init; }
 }
 
 internal sealed class YaguDialog : Window
@@ -131,8 +136,30 @@ internal sealed class YaguDialog : Window
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 TextWrapping = TextWrapping.WrapWholeWords,
             };
-            Grid.SetRow(title, 0);
-            root.Children.Add(title);
+
+            if (options.TitleGlyph is { Length: > 0 } glyph)
+            {
+                // Render the glyph (e.g. a warning icon) to the left of the title text.
+                var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+                var titleIcon = new FontIcon
+                {
+                    Glyph = glyph,
+                    FontSize = 22,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                if (options.TitleGlyphColor is { } glyphColor)
+                    titleIcon.Foreground = new SolidColorBrush(glyphColor);
+                title.VerticalAlignment = VerticalAlignment.Center;
+                titleRow.Children.Add(titleIcon);
+                titleRow.Children.Add(title);
+                Grid.SetRow(titleRow, 0);
+                root.Children.Add(titleRow);
+            }
+            else
+            {
+                Grid.SetRow(title, 0);
+                root.Children.Add(title);
+            }
         }
 
         if (options.ShowTopRightCloseButton)

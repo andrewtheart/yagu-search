@@ -107,6 +107,14 @@ public sealed class SearchOptions
     /// </summary>
     public int MaxDegreeOfParallelism { get; init; }
 
+    /// <summary>
+    /// Optional per-search override of the global <see cref="Services.FileLister.Backend"/>. Used by
+    /// the "search all drives" sweep to force the built-in managed walker (<see cref="FileListerBackend.Managed"/>)
+    /// on drives Everything does not reliably auto-index (non-NTFS, removable, network), so their
+    /// files are never silently missed. Null = use the global backend selection.
+    /// </summary>
+    public FileListerBackend? FileListerBackendOverride { get; init; }
+
     public static int ResolveContentSearchParallelism(int index, int processorCount)
     {
         int cores = Math.Max(1, processorCount);

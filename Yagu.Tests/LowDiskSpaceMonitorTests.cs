@@ -7,7 +7,7 @@ public class LowDiskSpaceMonitorTests
     [Theory]
     [InlineData(98, 0.98)]
     [InlineData(75, 0.75)]
-    [InlineData(0, 0.98)]
+    [InlineData(0, AppSettings.DefaultLowDiskSpaceWarningPercent / 100d)]
     [InlineData(100, 0.99)]
     public void PercentToThreshold_NormalizesConfiguredPercent(int percent, double expectedThreshold)
     {
@@ -17,9 +17,14 @@ public class LowDiskSpaceMonitorTests
     [Fact]
     public void IsOverThreshold_UsesUsedSpaceRatio()
     {
-        var below = new DiskSpaceSnapshot(@"C:\", TotalBytes: 100, AvailableBytes: 3);
-        var atThreshold = new DiskSpaceSnapshot(@"C:\", TotalBytes: 100, AvailableBytes: 2);
-        var above = new DiskSpaceSnapshot(@"C:\", TotalBytes: 100, AvailableBytes: 1);
+        // Build snapshots straddling the configured default threshold so the test stays correct
+        // regardless of the default percent value.
+        const long total = 10000;
+        long atThresholdUsed = (long)Math.Round(LowDiskSpaceMonitor.DefaultFullThreshold * total);
+        long margin = total / 50; // 2% of capacity
+        var below = new DiskSpaceSnapshot(@"C:\", TotalBytes: total, AvailableBytes: total - atThresholdUsed + margin);
+        var atThreshold = new DiskSpaceSnapshot(@"C:\", TotalBytes: total, AvailableBytes: total - atThresholdUsed);
+        var above = new DiskSpaceSnapshot(@"C:\", TotalBytes: total, AvailableBytes: total - atThresholdUsed - margin);
 
         Assert.False(LowDiskSpaceMonitor.IsOverThreshold(below, LowDiskSpaceMonitor.DefaultFullThreshold));
         Assert.False(LowDiskSpaceMonitor.IsOverThreshold(atThreshold, LowDiskSpaceMonitor.DefaultFullThreshold));
@@ -286,7 +291,7 @@ public sealed class LowDiskSpaceMonitorValidationTests
 
             // Should complete (via cancellation) without throwing
             await task.WaitAsync(TimeSpan.FromSeconds(5));
-            // Default threshold is 98% — unlikely to fire on a dev machine
+            // Default threshold (see AppSettings.DefaultLowDiskSpaceWarningPercent) is unlikely to fire on a dev machine
             Assert.False(fired);
         }
         finally

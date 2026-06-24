@@ -40,6 +40,125 @@ public sealed class SearchService
     }
 
     /// <summary>
+    /// Runs one logical search across several root directories (the "search all drives" case),
+    /// streaming a single unified event sequence. Each element of <paramref name="perRootOptions"/>
+    /// is a fully-built <see cref="SearchOptions"/> for one root — crucially allowing a different
+    /// <see cref="SearchOptions.MaxDegreeOfParallelism"/> per root (e.g. 1 for an HDD while SSDs use
+    /// the configured value). Roots are scanned sequentially so the configured parallelism is not
+    /// multiplied across drives. Intermediate <see cref="SearchEvent.ScanCompleted"/> and
+    /// <see cref="SearchEvent.Completed"/> events are suppressed and replaced by a single aggregated
+    /// pair at the end; <see cref="SearchEvent.DiscoveryComplete"/> totals are accumulated. The first
+    /// root's <see cref="SearchOptions.MaxResults"/> acts as the global cap: once reached, no further
+    /// roots are started.
+    /// </summary>
+    public IAsyncEnumerable<SearchEvent> SearchManyAsync(
+        IReadOnlyList<SearchOptions> perRootOptions,
+        CancellationToken cancellationToken)
+        => AggregateManyAsync(perRootOptions, SearchAsync, cancellationToken);
+
+    /// <summary>
+    /// Pure orchestration core for <see cref="SearchManyAsync"/>: aggregates the per-root event
+    /// streams produced by <paramref name="runRoot"/> into one unified sequence. Decoupled from the
+    /// real search pipeline (which <see cref="SearchManyAsync"/> injects) so every branch — the
+    /// count==0 / count==1 fast paths, the per-event forwarding/suppression, the global
+    /// <see cref="SearchOptions.MaxResults"/> cap, and cancellation — is unit-testable with a
+    /// synthetic event stream.
+    /// </summary>
+    internal static async IAsyncEnumerable<SearchEvent> AggregateManyAsync(
+        IReadOnlyList<SearchOptions> perRootOptions,
+        Func<SearchOptions, CancellationToken, IAsyncEnumerable<SearchEvent>> runRoot,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        if (perRootOptions is null || perRootOptions.Count == 0)
+        {
+            yield return new SearchEvent.Completed(new SearchSummary(0, 0, 0, 0, 0, 0, TimeSpan.Zero, false, false, false, null));
+            yield break;
+        }
+
+        // A single root behaves exactly like the normal pipeline — delegate verbatim so the
+        // heavily-tested single-root path is untouched.
+        if (perRootOptions.Count == 1)
+        {
+            await foreach (var ev in runRoot(perRootOptions[0], cancellationToken).ConfigureAwait(false))
+                yield return ev;
+            yield break;
+        }
+
+        var sw = Stopwatch.StartNew();
+        int cap = perRootOptions[0].MaxResults; // > 0 = global cap; <= 0 = unlimited.
+        long forwardedMatches = 0;
+        int totalFiles = 0, filesScanned = 0, filesSkipped = 0, filesWithMatches = 0, totalMatches = 0;
+        long bytesScanned = 0;
+        bool truncated = false, degraded = false, cancelled = false;
+        string? fallbackReason = null;
+
+        foreach (var rootOptions in perRootOptions)
+        {
+            if (cancellationToken.IsCancellationRequested) { cancelled = true; break; }
+
+            await foreach (var ev in runRoot(rootOptions, cancellationToken).ConfigureAwait(false))
+            {
+                switch (ev)
+                {
+                    case SearchEvent.DiscoveryComplete dc:
+                        totalFiles += dc.TotalFiles;
+                        yield return new SearchEvent.DiscoveryComplete(totalFiles);
+                        break;
+                    case SearchEvent.ScanCompleted:
+                        break; // suppressed; aggregated below
+                    case SearchEvent.Completed c:
+                        var s = c.Summary;
+                        filesScanned += s.FilesScanned;
+                        filesSkipped += s.FilesSkipped;
+                        filesWithMatches += s.FilesWithMatches;
+                        totalMatches += s.TotalMatches;
+                        bytesScanned += s.BytesScanned;
+                        truncated |= s.Truncated;
+                        degraded |= s.Degraded;
+                        cancelled |= s.Cancelled;
+                        fallbackReason ??= s.FallbackReason;
+                        break;
+                    case SearchEvent.Fallback:
+                        // Per-root fallback notices (e.g. one empty drive reporting "Everything SDK
+                        // returned no results") must NOT surface mid-stream while other roots are
+                        // producing results — that made the warning appear next to a full result set.
+                        // Suppress them here; the aggregated reason comes from the per-root Completed
+                        // summaries and is only re-emitted at the end if the whole search found nothing.
+                        break;
+                    case SearchEvent.Match:
+                        forwardedMatches++;
+                        yield return ev;
+                        break;
+                    case SearchEvent.MatchBatch mb:
+                        forwardedMatches += mb.Results.Count;
+                        yield return ev;
+                        break;
+                    case SearchEvent.SourceBackedMatchBatch sb:
+                        forwardedMatches += sb.Results.Count;
+                        yield return ev;
+                        break;
+                    default:
+                        yield return ev;
+                        break;
+                }
+            }
+
+            if (cap > 0 && forwardedMatches >= cap) { truncated = true; break; }
+        }
+
+        // Only surface a fallback notice for the whole multi-root run when it produced no results at
+        // all. When any root returned matches, a single empty drive's "no results" reason is noise.
+        if (forwardedMatches == 0 && fallbackReason is not null)
+            yield return new SearchEvent.Fallback(fallbackReason);
+
+        var summary = new SearchSummary(
+            totalFiles, filesScanned, filesSkipped, filesWithMatches, totalMatches,
+            bytesScanned, sw.Elapsed, cancelled, truncated, degraded, fallbackReason);
+        yield return new SearchEvent.ScanCompleted(summary);
+        yield return new SearchEvent.Completed(summary);
+    }
+
+    /// <summary>
     /// Stream search results. Caller iterates the channel; the returned task completes
     /// when all files are scanned, the search is cancelled, or the result cap is hit.
     /// </summary>
@@ -176,6 +295,7 @@ public sealed class SearchService
             concreteLister.MaxSearchDepth = options.MaxSearchDepth;
             concreteLister.SearchOnlineOnlyFiles = options.SearchOnlineOnlyFiles;
             concreteLister.SearchHiddenFiles = options.SearchHiddenFiles;
+            concreteLister.BackendOverride = options.FileListerBackendOverride;
 
             // Dynamic gitignore: create a matcher that loads .gitignore files
             // lazily as directories are encountered during the scan.
@@ -1508,6 +1628,7 @@ public sealed class SearchService
             ObeyGitignore = options.ObeyGitignore,
             GitignoreTakesPrecedence = options.GitignoreTakesPrecedence,
             MaxDegreeOfParallelism = options.MaxDegreeOfParallelism,
+            FileListerBackendOverride = options.FileListerBackendOverride,
             MaxProcessMemoryBytes = options.MaxProcessMemoryBytes,
             MemoryPressurePercent = options.MemoryPressurePercent,
             SkipExtensions = options.SkipExtensions,

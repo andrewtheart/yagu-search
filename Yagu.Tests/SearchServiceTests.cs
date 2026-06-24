@@ -81,6 +81,77 @@ public class SearchServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task SearchManyAsync_AggregatesAcrossRoots_IntoSingleCompleted()
+    {
+        Write("a.txt", "foo\nfoo");          // 2 content matches under _root
+        var root2 = Path.Combine(Path.GetTempPath(), "qg-svc2-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root2);
+        try
+        {
+            File.WriteAllText(Path.Combine(root2, "b.txt"), "foo", new UTF8Encoding(false)); // 1 match under root2
+
+            var svc = new SearchService();
+            static SearchOptions Make(string dir) => new SearchOptions
+            {
+                Directory = dir,
+                Query = "foo",
+                SearchMode = SearchMode.Content,
+                MaxFileSizeBytes = 0,
+                MaxResults = 0,
+            };
+
+            int matches = 0, completed = 0;
+            SearchSummary? summary = null;
+            await foreach (var evt in svc.SearchManyAsync(new[] { Make(_root), Make(root2) }, default))
+            {
+                switch (evt)
+                {
+                    case SearchEvent.Match: matches++; break;
+                    case SearchEvent.MatchBatch mb: matches += mb.Results.Count; break;
+                    case SearchEvent.Completed c: completed++; summary = c.Summary; break;
+                }
+            }
+
+            Assert.Equal(3, matches);
+            Assert.Equal(1, completed); // intermediate per-root Completed events are suppressed
+            Assert.NotNull(summary);
+            Assert.Equal(3, summary!.TotalMatches);
+            Assert.Equal(2, summary.FilesWithMatches);
+        }
+        finally { try { Directory.Delete(root2, recursive: true); } catch { } }
+    }
+
+    [Fact]
+    public async Task SearchManyAsync_SingleRoot_DelegatesToSearchAsync()
+    {
+        Write("a.txt", "foo\nfoo");
+        var svc = new SearchService();
+        var opts = new SearchOptions { Directory = _root, Query = "foo", SearchMode = SearchMode.Content, MaxFileSizeBytes = 0, MaxResults = 0 };
+
+        int matches = 0, completed = 0;
+        await foreach (var evt in svc.SearchManyAsync(new[] { opts }, default))
+        {
+            if (evt is SearchEvent.Match) matches++;
+            else if (evt is SearchEvent.MatchBatch mb) matches += mb.Results.Count;
+            else if (evt is SearchEvent.Completed) completed++;
+        }
+
+        Assert.Equal(2, matches);
+        Assert.Equal(1, completed);
+    }
+
+    [Fact]
+    public async Task SearchManyAsync_EmptyList_EmitsSingleCompleted()
+    {
+        var svc = new SearchService();
+        int completed = 0;
+        await foreach (var evt in svc.SearchManyAsync(Array.Empty<SearchOptions>(), default))
+            if (evt is SearchEvent.Completed) completed++;
+
+        Assert.Equal(1, completed);
+    }
+
+    [Fact]
     public async Task FileSizeRange_FiltersBeforeMatching()
     {
         Write("too-small.txt", "needle");

@@ -1345,7 +1345,7 @@ public sealed partial class MainWindow
             // Update copy/save items: plural only when >1 file checked
             int count = checkedCount > 0 ? checkedCount : 1; // at least the right-clicked file
             bool plural = count > 1;
-            // Items layout: [0]=Preview, [1]=PreviewAll, [2]=Sep, [3]=CopyPath, [4]=Sep, [5]=CopyPaths, [6]=CopyWithContent, [7]=Sep, [8]=SavePaths, [9]=SaveWithContent
+            // Items layout: [0]=Preview, [1]=PreviewAll, [2]=Sep, [3]=CopyPath, [4]=OpenFolder, [5]=Sep, [6]=CopyPaths, [7]=CopyWithContent, [8]=Sep, [9]=SavePaths, [10]=SaveWithContent
             foreach (var item in flyout.Items.OfType<MenuFlyoutItem>())
             {
                 if (item.Text.StartsWith("Copy Selected File Path", StringComparison.Ordinal))

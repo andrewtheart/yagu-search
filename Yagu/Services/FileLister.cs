@@ -336,6 +336,13 @@ public sealed class FileLister : IFileLister
     /// </summary>
     public static FileListerBackend Backend { get; set; } = FileListerBackend.Auto;
 
+    /// <summary>
+    /// Per-search override of <see cref="Backend"/>. When set, it wins over the global value for the
+    /// current listing. The "search all drives" sweep sets this to <see cref="FileListerBackend.Managed"/>
+    /// for drives Everything does not reliably auto-index. Null = use the global <see cref="Backend"/>.
+    /// </summary>
+    public FileListerBackend? BackendOverride { get; set; }
+
     // EnumerationOptions used by the managed fallback path. IgnoreInaccessible suppresses
     // UnauthorizedAccessException / IOException from the kernel enumerator, eliminating tens of
     // thousands of exception objects (and the GC pressure they cause) on system-wide scans.
@@ -405,7 +412,7 @@ public sealed class FileLister : IFileLister
             yield break;
         }
 
-        var backend = Backend;
+        var backend = BackendOverride ?? Backend;
 
         // ── Tier 1: Everything SDK (in-process, fastest) ──
         bool sdkYielded = false;
@@ -438,6 +445,10 @@ public sealed class FileLister : IFileLister
         {
             var esPath = FindEsExe();
             bool esYielded = false;
+            // Any FallbackReason already set was produced by the (empty/skipped) SDK tier. Remember it
+            // so that, if es.exe serves a full result set without adding its own diagnostic, we can drop
+            // the stale upstream message instead of showing it next to complete results.
+            var reasonBeforeEs = FallbackReason;
             if (esPath is not null)
             {
                 IAsyncEnumerable<string>? esResults = TryCreateEsEnumerable(esPath, fullDir, includeExtensions, maxFiles, cancellationToken);
@@ -451,7 +462,14 @@ public sealed class FileLister : IFileLister
                         esYielded = true;
                         yield return p;
                     }
-                    if (esYielded) yield break;
+                    if (esYielded)
+                    {
+                        // es.exe served results. Drop the stale SDK diagnostic, but keep any warning
+                        // es.exe itself raised during this run (e.g. an exit-code warning emitted
+                        // alongside partial results).
+                        if (FallbackReason == reasonBeforeEs) FallbackReason = null;
+                        yield break;
+                    }
                     if (FallbackReason is null) FallbackReason = "es.exe returned no results";
                 }
             }
@@ -464,9 +482,19 @@ public sealed class FileLister : IFileLister
         }
 
         // ── Tier 3: .NET recursive enumeration ──
+        bool fallbackYielded = false;
         await foreach (var p in EnumerateFallbackAsync(fullDir, includeExtensions, maxFiles, cancellationToken))
         {
+            fallbackYielded = true;
             yield return p;
+        }
+        if (fallbackYielded)
+        {
+            // The built-in walker served these results because the Everything backends (SDK and es.exe)
+            // were unavailable or returned nothing for this path. Drop the stale per-tier diagnostic
+            // (e.g. "Everything SDK returned no results") so it doesn't read as a failure next to a full
+            // result set.
+            FallbackReason = null;
         }
     }
 

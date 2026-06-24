@@ -383,7 +383,7 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 | Limit parallelism on HDD | When the search target is on a rotational drive, warn and force 1 thread. |
 | SDK channel buffer size | Number of file paths buffered between Everything SDK discovery and search workers. |
 | Search result temp-file drive | Drive used for disk-backed result temp files during memory-saving mode. Only writable drives with enough free space are listed. |
-| Temp-drive full warning threshold (%) | Active searches are terminated when the search result temp-file drive is more than this full. Default 98%; valid range 1-99. Checked every 30 seconds. |
+| Temp-drive full warning threshold (%) | Active searches are terminated when the search result temp-file drive is more than this full. Default 90%; valid range 1-99. Checked every 30 seconds. |
 | System memory pressure limit (%) | System RAM usage threshold for memory-saving mode. 0 = disabled. |
 | Process memory hard cap (MB) | Working-set limit before memory-saving activates. |
 | Max matches per file | Cap on stored matches per file (0 = unlimited). |
@@ -792,7 +792,7 @@ If the native DLL is missing or incompatible, Yagu logs the reason and uses the 
 | Max file size | Prevents accidental reads of enormous files. |
 | Skip binary / extensions | Reduces unnecessary reads. |
 | Memory-pressure mode | Pages result payloads to the configured search result temp-file drive. |
-| Temp-drive low-space monitor | Checks the search result temp-file drive every 30 seconds during search and terminates the search if that drive is more than the configured Performance threshold full. Default 98%. |
+| Temp-drive low-space monitor | Checks the search result temp-file drive every 30 seconds during search and terminates the search if that drive is more than the configured Performance threshold full. Default 90%. |
 | Process memory cap | Hard limit on working set before eviction kicks in. |
 | System memory pressure | Activates when system-wide RAM usage exceeds threshold. |
 

@@ -2314,6 +2314,24 @@ public sealed partial class SettingsWindow : Window
             pathTypeGroup.Children.Add(searchHidden);
             pathTypeGroup.Children.Add(new TextBlock { Text = "When enabled (default), files and folders carrying the Windows Hidden attribute are included in searches. When disabled, hidden items are excluded — the file walker skips them and the Everything backends filter them with !attrib:h. System files (e.g. pagefile.sys, hiberfil.sys) are always skipped by the file walker regardless of this setting. This is the default for the Advanced Options ▸ Content options toggle.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
+            var allDrivesNetwork = new ToggleSwitch { OnContent = NextSearchLabel("All-drives search includes network drives"), OffContent = NextSearchLabel("All-drives search includes network drives"), IsOn = _viewModel.SearchAllDrivesIncludesNetwork };
+            allDrivesNetwork.Toggled += (_, _) => _viewModel.SearchAllDrivesIncludesNetwork = allDrivesNetwork.IsOn;
+            pathTypeGroup.Children.Add(allDrivesNetwork);
+
+            var allDrivesRemovable = new ToggleSwitch { OnContent = NextSearchLabel("All-drives search includes removable/USB drives"), OffContent = NextSearchLabel("All-drives search includes removable/USB drives"), IsOn = _viewModel.SearchAllDrivesIncludesRemovable };
+            allDrivesRemovable.Toggled += (_, _) => _viewModel.SearchAllDrivesIncludesRemovable = allDrivesRemovable.IsOn;
+            pathTypeGroup.Children.Add(allDrivesRemovable);
+
+            var allDrivesCloud = new ToggleSwitch { OnContent = NextSearchLabel("All-drives search includes cloud drives"), OffContent = NextSearchLabel("All-drives search includes cloud drives"), IsOn = _viewModel.SearchAllDrivesIncludesCloud };
+            allDrivesCloud.Toggled += (_, _) => _viewModel.SearchAllDrivesIncludesCloud = allDrivesCloud.IsOn;
+            pathTypeGroup.Children.Add(allDrivesCloud);
+            pathTypeGroup.Children.Add(new TextBlock { Text = "When the directory box is left empty, Yagu searches all drives. Fixed internal drives are always included; enable these to also search ready network/mapped drives, removable/USB drives, and detected cloud-backed drives (e.g. Google Drive). They are off by default because they can be slow, metered, or trigger downloads.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            var allDrivesFullScan = new ToggleSwitch { OnContent = NextSearchLabel("All-drives search does a full scan (bypass Everything index)"), OffContent = NextSearchLabel("All-drives search does a full scan (bypass Everything index)"), IsOn = _viewModel.SearchAllDrivesForceFullScan };
+            allDrivesFullScan.Toggled += (_, _) => _viewModel.SearchAllDrivesForceFullScan = allDrivesFullScan.IsOn;
+            pathTypeGroup.Children.Add(allDrivesFullScan);
+            pathTypeGroup.Children.Add(new TextBlock { Text = "Off by default. When off, the all-drives sweep uses the fast Everything index for any drive it covers (including drives you added manually in Everything's settings) and automatically falls back to a built-in full scan only for drives Everything does not index. Turn this on to walk every drive directly with the built-in scanner — slower, but it also catches drives whose Everything index is partial (e.g. folders you excluded from indexing in Everything).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
             var skipAdmin = new CheckBox { Content = NextSearchLabel("Skip admin-protected paths when not elevated"), IsChecked = _viewModel.ExcludeAdminProtectedPaths };
             skipAdmin.Checked += (_, _) => _viewModel.ExcludeAdminProtectedPaths = true;
             skipAdmin.Unchecked += (_, _) => _viewModel.ExcludeAdminProtectedPaths = false;
@@ -2449,13 +2467,24 @@ public sealed partial class SettingsWindow : Window
             var hddToggle = new ToggleSwitch
             {
                 IsOn = _viewModel.LimitParallelismOnHdd,
-                OnContent = "Limit parallelism on HDD (warn and set to 1 thread)",
-                OffContent = "Limit parallelism on HDD (warn and set to 1 thread)",
+                OnContent = "Limit parallelism on HDD (set to 1 thread)",
+                OffContent = "Limit parallelism on HDD (set to 1 thread)",
                 Margin = new Thickness(0, 4, 0, 0),
             };
             hddToggle.Toggled += (_, _) => _viewModel.LimitParallelismOnHdd = hddToggle.IsOn;
             searchEngineGroup.Children.Add(hddToggle);
-            searchEngineGroup.Children.Add(new TextBlock { Text = "When enabled, if the search target is on a rotational hard disk, Yagu will automatically set parallelism to 1 and show a warning before searching. Disable to suppress the warning and allow any parallelism level on HDDs.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            searchEngineGroup.Children.Add(new TextBlock { Text = "When enabled, if the search target is on a rotational hard disk, Yagu automatically sets parallelism to 1 to avoid excessive disk thrashing. Disable to allow any parallelism level on HDDs.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            var hddWarnToggle = new ToggleSwitch
+            {
+                IsOn = !_viewModel.SuppressHddParallelismWarnings,
+                OnContent = "Warn before searching an HDD",
+                OffContent = "Warn before searching an HDD",
+                Margin = new Thickness(0, 4, 0, 0),
+            };
+            hddWarnToggle.Toggled += (_, _) => _viewModel.SuppressHddParallelismWarnings = !hddWarnToggle.IsOn;
+            searchEngineGroup.Children.Add(hddWarnToggle);
+            searchEngineGroup.Children.Add(new TextBlock { Text = "When enabled, Yagu shows a one-time-per-disk notice before searching a rotational hard disk. This only controls the notice; it does not change whether parallelism is limited (above). Only applies while parallelism limiting on HDD is enabled.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             var excludedExtToggle = new ToggleSwitch
             {
@@ -2486,7 +2515,7 @@ public sealed partial class SettingsWindow : Window
                     _viewModel.LowDiskSpaceWarningPercent = AppSettings.NormalizeLowDiskSpaceWarningPercent((int)args.NewValue);
             };
             memoryGroup.Children.Add(lowDiskWarning);
-            memoryGroup.Children.Add(new TextBlock { Text = "Yagu terminates the active search if the search result temp-file drive is more than this full. Checked every 30 seconds. Default 98%.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            memoryGroup.Children.Add(new TextBlock { Text = "Yagu terminates the active search if the search result temp-file drive is more than this full. Checked every 30 seconds. Default 90%.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             memoryGroup.Children.Add(NextSearchLabel("System memory pressure limit (%, 0 = disabled):"));
             var memPressure = new NumberBox { Value = _viewModel.MemoryPressurePercent, Minimum = 0, Maximum = 100 };

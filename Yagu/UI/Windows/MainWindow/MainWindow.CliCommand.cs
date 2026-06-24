@@ -14,6 +14,14 @@ public sealed partial class MainWindow
 
     private void OnGenerateCliCommandClick(object sender, RoutedEventArgs e)
     {
+        if (string.IsNullOrWhiteSpace(ViewModel.Query))
+        {
+            ViewModel.ErrorText = ViewModel.IsSemanticQueryMode
+                ? "Describe what you want to find before generating a CLI command."
+                : "Enter a search query before generating a CLI command.";
+            return;
+        }
+
         if (TryGetGeneratedCliCommandControls(out var commandText, out var commandOverlay))
         {
             commandText.Text = BuildGeneratedCliCommand(_includeGeneratedCliCommandSavedSettingOptions);
@@ -99,6 +107,15 @@ public sealed partial class MainWindow
         if (!TryGetGeneratedCliCommandControls(out var commandText, out _))
             return;
 
+        if (string.IsNullOrWhiteSpace(ViewModel.Query))
+        {
+            ViewModel.ErrorText = ViewModel.IsSemanticQueryMode
+                ? "Describe what you want to find before sending a CLI command to the terminal."
+                : "Enter a search query before sending a CLI command to the terminal.";
+            CloseGeneratedCliCommandOverlay();
+            return;
+        }
+
         EnsureGeneratedCliCommandText(commandText);
         if (string.IsNullOrWhiteSpace(commandText.Text))
             return;
@@ -150,7 +167,9 @@ public sealed partial class MainWindow
             "--cli",
         };
 
-        AddValue(parts, "--directory", ViewModel.Directory);
+        // An empty directory means "search all drives" — omit --directory so the CLI does the same.
+        if (!string.IsNullOrWhiteSpace(ViewModel.Directory))
+            AddValue(parts, "--directory", ViewModel.Directory);
         // Semantic mode sends the natural-language query to the on-device model via --semantic-pattern;
         // Traditional mode passes the literal search term via --pattern.
         if (ViewModel.IsSemanticQueryMode)

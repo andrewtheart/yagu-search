@@ -420,6 +420,20 @@ public class FileListerListFilesTests : IDisposable
     }
 
     [Fact]
+    public async Task BackendOverride_Managed_ListsFilesViaManagedWalker()
+    {
+        File.WriteAllText(Path.Combine(_root, "x.txt"), "hi");
+
+        // Per-search override forces the managed walker regardless of the global FileLister.Backend.
+        var lister = new FileLister { BackendOverride = FileListerBackend.Managed };
+        var files = new List<string>();
+        await foreach (var p in lister.ListFilesAsync(_root, Array.Empty<string>(), 0, default))
+            files.Add(p);
+
+        Assert.Contains(files, f => f.EndsWith("x.txt", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task ExtensionFilter_FiltersCorrectly()
     {
         File.WriteAllText(Path.Combine(_root, "a.cs"), "");

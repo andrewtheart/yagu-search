@@ -69,7 +69,7 @@ public sealed class AppSettings
     public const string DefaultDrawerMetadataFontColor = "#73FFFFFF"; // White @ 45% opacity
     public const string DefaultDrawerMetadataFontFamily = "Segoe UI";
 
-    public const int DefaultLowDiskSpaceWarningPercent = 98;
+    public const int DefaultLowDiskSpaceWarningPercent = 90;
     public const int MinimumLowDiskSpaceWarningPercent = 1;
     public const int MaximumLowDiskSpaceWarningPercent = 99;
 
@@ -213,6 +213,14 @@ public sealed class AppSettings
     public bool SearchOnlineOnlyFiles { get; set; }
     /// <summary>When true (default), files and folders with the Windows Hidden attribute are searched. When false, hidden items are excluded. Persisted; also the default for the per-search Advanced Options toggle.</summary>
     public bool SearchHiddenFiles { get; set; } = true;
+    /// <summary>When the directory is left empty ("search all drives"), include ready network/mapped drives. Default false (can be slow/metered).</summary>
+    public bool SearchAllDrivesIncludesNetwork { get; set; }
+    /// <summary>When the directory is left empty ("search all drives"), include ready removable/USB drives. Default false.</summary>
+    public bool SearchAllDrivesIncludesRemovable { get; set; }
+    /// <summary>When the directory is left empty ("search all drives"), include detected cloud-backed drives (e.g. Google Drive). Default false (can trigger downloads).</summary>
+    public bool SearchAllDrivesIncludesCloud { get; set; }
+    /// <summary>When searching all drives, bypass the Everything index and walk every drive with the built-in scanner. Default false. Slower, but guarantees completeness on drives whose Everything index is partial (e.g. folders excluded in Everything's settings).</summary>
+    public bool SearchAllDrivesForceFullScan { get; set; }
     /// <summary>When true, detect ZIP archives by file header and search text files inside them. Default true.</summary>
     [JsonIgnore] public bool SearchInsideArchives { get; set; }
     /// <summary>Semicolon-separated file extensions that are known ZIP-like containers (bypassed from skip-extensions when archive search is on). e.g. "zip;jar;docx;xlsx".</summary>
@@ -262,8 +270,10 @@ public sealed class AppSettings
     public bool HasShownPreviewMatchIntroTip { get; set; }
     /// <summary>When true, do not show the "another instance is already running" dialog on startup.</summary>
     public bool SuppressMultiInstanceWarning { get; set; }
-    /// <summary>When true (default), automatically limit parallelism to 1 on HDD drives and warn the user. When false, no auto-limit or warning.</summary>
+    /// <summary>When true (default), automatically limit parallelism to 1 on HDD drives. Independent of the HDD warning.</summary>
     public bool LimitParallelismOnHdd { get; set; } = true;
+    /// <summary>When true, do not show the HDD parallelism warning dialog before searching an HDD. Does NOT affect whether parallelism is limited (see <see cref="LimitParallelismOnHdd"/>).</summary>
+    public bool SuppressHddParallelismWarnings { get; set; }
     /// <summary>When true, back up the file to .yagubak before saving in the built-in editor. Default true.</summary>
     public bool BackupBeforeSave { get; set; } = true;
     /// <summary>When true, show a brief confirmation overlay after the built-in editor successfully saves. Default true.</summary>
@@ -356,6 +366,10 @@ public sealed class AppSettings
     /// mode even on machines whose GPU/NPU could run Semantic search. Only meaningful (and editable)
     /// when an accelerator is present; ignored on machines that fall back to Traditional anyway.</summary>
     public bool DefaultToTraditionalSearchMode { get; set; }
+    /// <summary>Preferred execution-device order for choosing which accelerator build of the AI model
+    /// to run, as a comma-separated subset/order of GPU/NPU/CPU. Default "GPU,NPU,CPU". Invalid values
+    /// fall back to the default order when parsed.</summary>
+    public string SemanticDevicePreferenceOrder { get; set; } = "GPU,NPU,CPU";
 }
 
 public sealed class SettingsService

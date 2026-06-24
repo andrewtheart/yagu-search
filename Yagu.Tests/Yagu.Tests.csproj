@@ -67,6 +67,7 @@
     <Compile Include="..\Yagu\Services\SearchQueryParser.cs" Link="Source\Services\SearchQueryParser.cs" />
     <Compile Include="..\Yagu\Services\ExcludedExtensionPredictor.cs" Link="Source\Services\ExcludedExtensionPredictor.cs" />
     <Compile Include="..\Yagu\Services\SettingsService.cs" Link="Source\Services\SettingsService.cs" />
+    <Compile Include="..\Yagu\Services\DriveEnumerator.cs" Link="Source\Services\DriveEnumerator.cs" />
     <Compile Include="..\Yagu\Services\HotkeyService.cs" Link="Source\Services\HotkeyService.cs" />
     <Compile Include="..\Yagu\Services\EditorLauncher.cs" Link="Source\Services\EditorLauncher.cs" />
     <Compile Include="..\Yagu\Services\ZipArchiveSearcher.cs" Link="Source\Services\ZipArchiveSearcher.cs" />

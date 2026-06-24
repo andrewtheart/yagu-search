@@ -125,29 +125,79 @@ public sealed partial class MainWindow
 
     /// <summary>
     /// Checks if the search directory is on a rotational HDD and, if LimitParallelismOnHdd is enabled,
-    /// forces parallelism to 1 and warns the user. Returns false if the user cancels.
+    /// forces parallelism to 1. Shows a warning dialog unless SuppressHddParallelismWarnings is set.
+    /// Returns false if the user cancels.
     /// </summary>
     private async Task<bool> CheckHddAndWarnAsync()
     {
         if (!ViewModel.LimitParallelismOnHdd) return true;
-        if (string.IsNullOrWhiteSpace(ViewModel.Directory)) return true;
-        if (!Helpers.DiskTypeDetector.IsHardDisk(ViewModel.Directory)) return true;
 
-        // Force parallelism to 1 (sequential) for this session only. This is a temporary override
-        // that affects searches in the current session but is NOT written back to the persisted
-        // ParallelismIndex setting, so the user's saved preference is preserved across restarts.
-        ViewModel.SetSessionParallelismOverride(1);
+        var roots = ViewModel.ResolveTargetRoots();
+        if (roots.Count == 0) return true;
 
-        // Only warn once per disk per session; subsequent searches on the same disk
+        var hddRoots = roots.Where(r => Helpers.DiskTypeDetector.IsHardDisk(r)).ToList();
+        if (hddRoots.Count == 0) return true;
+
+        bool singleRoot = roots.Count == 1;
+        if (singleRoot)
+        {
+            // Single explicit directory on an HDD: force parallelism to 1 (sequential) for this
+            // session only. This temporary override is NOT written back to the persisted
+            // ParallelismIndex setting, so the user's saved preference is preserved across restarts.
+            // (All-drives runs apply per-drive parallelism in StartSearchAsync instead, so the
+            // non-HDD drives keep the configured parallelism.)
+            ViewModel.SetSessionParallelismOverride(1);
+        }
+
+        // Parallelism limiting above always applies while LimitParallelismOnHdd is on. The warning
+        // dialog is a separate, independently suppressible notice: when the user has opted out of the
+        // warning, still limit parallelism but skip the dialog. Changing the parallelism behavior
+        // itself requires the Settings page.
+        if (ViewModel.SuppressHddParallelismWarnings) return true;
+
+        // Only warn once per HDD-drive-set per session; subsequent searches on the same disks
         // still limit parallelism but skip the dialog until the app is restarted.
-        var driveKey = GetHddWarningDriveKey(ViewModel.Directory);
+        var driveKey = string.Join(";", hddRoots
+            .Select(GetHddWarningDriveKey)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(k => k, StringComparer.OrdinalIgnoreCase));
         if (!_hddWarningShownDrives.Add(driveKey)) return true;
 
         var contentPanel = new StackPanel { Spacing = 8, MinWidth = 360 };
         contentPanel.Children.Add(new TextBlock
         {
-            Text = "The selected search directory is on a rotational hard disk (HDD). " +
-                   "Parallelism has been set to 1 thread to avoid excessive disk thrashing.",
+            Text = singleRoot
+                ? "The selected search directory is on a rotational hard disk (HDD). " +
+                  "Parallelism has been set to 1 thread to avoid excessive disk thrashing."
+                : $"{hddRoots.Count} of the drives being searched are on rotational hard disks (HDD). " +
+                  "Parallelism is limited to 1 thread on those drives to avoid excessive disk thrashing; " +
+                  "the other drives use your configured parallelism.",
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        // Per-search parallelism override for the HDD drive(s). Defaults to the limited "1 thread"
+        // value; choosing a higher value applies to this search only (consumed by StartSearchAsync)
+        // and never changes the persisted setting.
+        contentPanel.Children.Add(new TextBlock
+        {
+            Text = "Override parallelism for the HDD on this search:",
+            FontSize = 12,
+            Opacity = 0.9,
+        });
+        int processorCount = Environment.ProcessorCount;
+        var parallelismOverride = new ComboBox { MinWidth = 260, HorizontalAlignment = HorizontalAlignment.Left };
+        parallelismOverride.Items.Add($"Safe cap (up to {Math.Min(16, processorCount)})");
+        parallelismOverride.Items.Add("1 thread (sequential, HDD safe)");
+        parallelismOverride.Items.Add($"Half cores ({Math.Max(1, processorCount / 2)})");
+        parallelismOverride.Items.Add($"2\u00d7 cores ({processorCount * 2}, I/O heavy)");
+        parallelismOverride.Items.Add($"All cores ({Math.Max(1, processorCount)})");
+        parallelismOverride.SelectedIndex = 1; // default to the limited, HDD-safe 1-thread value
+        contentPanel.Children.Add(parallelismOverride);
+        contentPanel.Children.Add(new TextBlock
+        {
+            Text = "Applies to this search only and doesn't change your saved setting. Higher values can thrash a rotational disk.",
+            FontSize = 11,
+            Opacity = 0.6,
             TextWrapping = TextWrapping.Wrap,
         });
 
@@ -157,7 +207,7 @@ public sealed partial class MainWindow
             FontSize = 12,
             Opacity = 0.8,
         };
-        secondBlock.Inlines.Add(new Run { Text = "You can increase parallelism or disable this warning in " });
+        secondBlock.Inlines.Add(new Run { Text = "You can change the default for all searches or disable this warning in " });
         var settingsLink = new Hyperlink();
         settingsLink.Inlines.Add(new Run { Text = "Settings \u2192 Performance" });
         var openSettingsRequested = false;
@@ -174,21 +224,42 @@ public sealed partial class MainWindow
         secondBlock.Inlines.Add(new Run { Text = "." });
         contentPanel.Children.Add(secondBlock);
 
+        // Lets the user stop seeing this warning without opening Settings. This ONLY suppresses the
+        // dialog — parallelism is still limited on HDDs while LimitParallelismOnHdd is on. Changing the
+        // parallelism behavior itself requires Settings -> Performance.
+        var dontWarnAgain = new CheckBox
+        {
+            Content = "Don't warn me about HDDs again",
+            IsChecked = false,
+        };
+        contentPanel.Children.Add(dontWarnAgain);
+
         var result = await YaguDialog.ShowAsync(
             _hwnd,
             new YaguDialogOptions
             {
                 Title = "HDD detected - parallelism limited",
+                TitleGlyph = "\uE7BA",
+                TitleGlyphColor = Microsoft.UI.Colors.Gold,
                 Content = contentPanel,
                 PrimaryButtonText = "Continue search",
                 CloseButtonText = "Cancel",
                 DefaultButton = YaguDialogDefaultButton.Primary,
                 ShowTitleBar = false,
                 Width = 560,
-                Height = 330,
-                MaxContentHeight = 220,
+                Height = 470,
+                MaxContentHeight = 360,
             },
             dlg => hddDialog = dlg);
+
+        // Apply the "don't warn again" preference however the dialog was dismissed: persist
+        // SuppressHddParallelismWarnings = true so future searches still limit parallelism on HDDs but
+        // skip this dialog. It does NOT change the parallelism behavior.
+        if (dontWarnAgain.IsChecked == true)
+        {
+            ViewModel.SuppressHddParallelismWarnings = true;
+            await ViewModel.PersistSettingsAsync();
+        }
 
         if (openSettingsRequested)
         {
@@ -196,7 +267,71 @@ public sealed partial class MainWindow
             return false;
         }
 
+        // Continuing the search: apply the chosen per-search HDD parallelism (one-shot, not persisted).
+        if (result == YaguDialogResult.Primary)
+            ViewModel.SetHddParallelismOverrideForNextSearch(parallelismOverride.SelectedIndex);
+
         return result == YaguDialogResult.Primary;
+    }
+
+    /// <summary>
+    /// Shows a modal notice (no title bar) when the active search was terminated because the result
+    /// temp-file drive became too full. Includes a link to Settings &#8594; Performance where the user
+    /// can adjust the temp-drive full warning threshold. Invoked on the UI thread via the
+    /// <see cref="MainViewModel.SearchTerminatedByLowDiskSpace"/> event.
+    /// </summary>
+    private async Task ShowLowDiskSpaceTerminationDialogAsync(string message)
+    {
+        try
+        {
+            var contentPanel = new StackPanel { Spacing = 8, MinWidth = 360 };
+            contentPanel.Children.Add(new TextBlock
+            {
+                Text = message,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var linkBlock = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = 0.8 };
+            linkBlock.Inlines.Add(new Run { Text = "You can change the temp-drive full warning threshold in " });
+            var settingsLink = new Hyperlink();
+            settingsLink.Inlines.Add(new Run { Text = "Settings \u2192 Performance" });
+            var openSettingsRequested = false;
+            YaguDialog? dialog = null;
+            settingsLink.Click += (_, _) =>
+            {
+                // The dialog is modal (the owner window is disabled while it is shown), so close it
+                // first, then open Settings -> Performance after it has fully dismissed.
+                openSettingsRequested = true;
+                dialog?.AcceptClose();
+            };
+            linkBlock.Inlines.Add(settingsLink);
+            linkBlock.Inlines.Add(new Run { Text = "." });
+            contentPanel.Children.Add(linkBlock);
+
+            await YaguDialog.ShowAsync(
+                _hwnd,
+                new YaguDialogOptions
+                {
+                    Title = "Search canceled - low disk space",
+                    Content = contentPanel,
+                    PrimaryButtonText = "OK",
+                    CloseButtonText = null,
+                    DefaultButton = YaguDialogDefaultButton.Primary,
+                    RequestedTheme = RootGrid.ActualTheme,
+                    ShowTitleBar = false,
+                    Width = 560,
+                    Height = 320,
+                    MaxContentHeight = 220,
+                },
+                dlg => dialog = dlg);
+
+            if (openSettingsRequested)
+                OpenSettingsTab(SettingsPerformanceTabIndex);
+        }
+        catch (Exception ex)
+        {
+            Yagu.Services.LogService.Instance.Warning("Search", $"Low disk-space notice dialog failed: {ex.Message}", ex);
+        }
     }
 
     /// <summary>

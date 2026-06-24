@@ -88,6 +88,9 @@
                                 <MenuFlyoutItem Text="Copy Full Path" Click="OnCopyFileGroupPath" Tag="{x:Bind FilePath}">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
+                                <MenuFlyoutItem Text="Open containing folder in Explorer" Click="OnShowFileGroupInExplorer" Tag="{x:Bind FilePath}">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xED25;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
                                 <MenuFlyoutSeparator />
                                 <MenuFlyoutItem Text="Copy Selected File Paths" Click="OnCopySelectedFilePaths">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;" /></MenuFlyoutItem.Icon>
@@ -349,7 +352,7 @@
                 <Grid Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2">
                     <AutoSuggestBox
                         x:Name="DirectoryBox"
-                        PlaceholderText="Directory to search (e.g. D:\projects\myapp)"
+                        PlaceholderText="Directory to search (leave empty to search all drives)"
                         Text="{x:Bind ViewModel.Directory, Mode=TwoWay}"
                         ItemsSource="{x:Bind ViewModel.DirectorySuggestions, Mode=OneWay}"
                         TextChanged="OnDirectoryTextChanged"

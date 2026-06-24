@@ -98,15 +98,8 @@ internal static class CliRunner
             if (stop) return semCode;
         }
 
-        if (string.IsNullOrWhiteSpace(args.Directory))
-        {
-            WriteError("error: --directory is required when using --cli.");
-            WriteError("usage: Yagu.exe --cli --directory <path> PATTERN [options]");
-            WriteError("       Yagu.exe --cli --help");
-            return 2;
-        }
-
-        if (!Directory.Exists(args.Directory))
+        // An omitted --directory means "search all drives". A specified directory must exist.
+        if (!string.IsNullOrWhiteSpace(args.Directory) && !Directory.Exists(args.Directory))
         {
             WriteError($"error: directory does not exist: {args.Directory}");
             return 2;
@@ -135,9 +128,14 @@ internal static class CliRunner
         FileLister.Backend = (FileListerBackend)settings.FileListerBackendIndex;
         LogService.Init((LogLevel)settings.LogLevelIndex, LogLevel.Critical);
 
-        var options = BuildSearchOptions(args, settings);
+        var perRootOptions = BuildPerRootSearchOptions(args, settings);
+        if (perRootOptions.Count == 0)
+        {
+            WriteError("error: no drives are available to search.");
+            return 2;
+        }
 
-        return RunSearchAsync(options, args, vtEnabled).GetAwaiter().GetResult();
+        return RunSearchAsync(perRootOptions, args, vtEnabled).GetAwaiter().GetResult();
     }
 
     // -----------------------------------------------------------------------
@@ -782,7 +780,31 @@ internal static class CliRunner
     // Build SearchOptions: merge base settings with CLI overrides
     // -----------------------------------------------------------------------
 
-    private static SearchOptions BuildSearchOptions(CliArgs args, AppSettings s)
+    // Builds one SearchOptions per target root. With an explicit --directory there is a single root;
+    // when it is omitted ("search all drives") every eligible drive becomes a root, and HDD roots are
+    // forced to parallelism 1 while other drives keep the configured value — all in one search.
+    private static List<SearchOptions> BuildPerRootSearchOptions(CliArgs args, AppSettings s)
+    {
+        if (!string.IsNullOrWhiteSpace(args.Directory))
+            return new List<SearchOptions> { BuildSearchOptions(args, s) };
+
+        var roots = Yagu.Services.DriveEnumerator.GetSearchRoots(
+            s.SearchAllDrivesIncludesNetwork, s.SearchAllDrivesIncludesRemovable, s.SearchAllDrivesIncludesCloud);
+        int baseParallelism = args.Parallelism ?? SearchOptions.ResolveContentSearchParallelism(s.ParallelismIndex, Environment.ProcessorCount);
+        // Backend stays Auto per root (fast Everything where it indexes the drive, automatic managed
+        // fallback where it does not) unless the user opts into a full scan of every drive.
+        FileListerBackend? backendOverride = s.SearchAllDrivesForceFullScan ? FileListerBackend.Managed : null;
+        var list = new List<SearchOptions>(roots.Count);
+        foreach (var root in roots)
+        {
+            int p = baseParallelism;
+            if (s.LimitParallelismOnHdd && Yagu.Helpers.DiskTypeDetector.IsHardDisk(root)) p = 1;
+            list.Add(BuildSearchOptions(args, s, root, p, backendOverride));
+        }
+        return list;
+    }
+
+    private static SearchOptions BuildSearchOptions(CliArgs args, AppSettings s, string? directoryOverride = null, int? parallelismOverride = null, FileListerBackend? backendOverride = null)
     {
         bool caseSensitive  = args.CaseSensitive ?? s.CaseSensitive;
         bool useRegex       = args.UseRegex       ?? s.UseRegex;
@@ -790,7 +812,7 @@ internal static class CliRunner
         long minFileSize    = args.MinFileSizeBytes ?? s.DefaultMinFileSizeBytes;
         long maxFileSize    = args.MaxFileSizeBytes ?? s.DefaultMaxFileSizeBytes;
         bool skipBinary     = args.SkipBinary     ?? s.SkipBinary;
-        int  parallelism    = args.Parallelism    ?? SearchOptions.ResolveContentSearchParallelism(s.ParallelismIndex, Environment.ProcessorCount);
+        int  parallelism    = parallelismOverride ?? args.Parallelism ?? SearchOptions.ResolveContentSearchParallelism(s.ParallelismIndex, Environment.ProcessorCount);
         long memoryBytes    = args.MemoryLimitMB.HasValue
             ? (long)args.MemoryLimitMB.Value * 1024 * 1024
             : (long)s.MemoryLimitMB         * 1024 * 1024;
@@ -824,7 +846,7 @@ internal static class CliRunner
 
         return new SearchOptions
         {
-            Directory             = args.Directory!,
+            Directory             = directoryOverride ?? args.Directory ?? string.Empty,
             Query                 = args.Pattern!,
             CaseSensitive         = caseSensitive,
             UseRegex              = useRegex,
@@ -850,6 +872,7 @@ internal static class CliRunner
             ObeyGitignore         = obeyGitignore,
             GitignoreTakesPrecedence = gitignorePrecedence,
             MaxDegreeOfParallelism = parallelism,
+            FileListerBackendOverride = backendOverride,
             IoOversubscriptionIndex = s.IoOversubscriptionIndex,
             MaxProcessMemoryBytes = memoryBytes,
             MemoryPressurePercent = memoryPressure,
@@ -881,8 +904,11 @@ internal static class CliRunner
     // Search + ripgrep-style output
     // -----------------------------------------------------------------------
 
-    private static async Task<int> RunSearchAsync(SearchOptions options, CliArgs args, bool vtEnabled)
+    private static async Task<int> RunSearchAsync(List<SearchOptions> perRootOptions, CliArgs args, bool vtEnabled)
     {
+        // Representative options for the flags that are identical across every root (query,
+        // case-sensitivity, export/replace settings, etc.).
+        var options = perRootOptions[0];
         bool useColor = vtEnabled;
         bool exporting = !string.IsNullOrWhiteSpace(args.ExportPath);
         bool replacing = args.ReplaceText is not null;
@@ -891,31 +917,21 @@ internal static class CliRunner
         bool savingSession = !string.IsNullOrWhiteSpace(args.SaveSessionPath);
         bool needsCollection = exporting || replacing || sorting || grouping || savingSession;
 
-        // When collecting results, disable direct output so results are available via events
-        if (needsCollection)
-        {
-            options.DirectOutputStream = null;
-            options.DirectOutputColor = false;
-        }
-
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
         var service  = new SearchService();
 
-        // Direct output mode: bypass RipgrepWriter entirely — the DirectOutputSink
-        // writes ripgrep-formatted UTF-8 directly from Rust's byte buffers.
-        if (!needsCollection)
+        // Direct output mode: bypass RipgrepWriter entirely — the DirectOutputSink writes
+        // ripgrep-formatted UTF-8 directly from Rust's byte buffers. A single 128 KiB buffered stdout
+        // stream is shared by every root (roots are scanned sequentially), coalescing the many tiny
+        // per-match writes into block writes like ripgrep's buffered stdout. Disabled while collecting
+        // results for post-processing (sort/export/replace/group/save-session).
+        Stream? directStream = needsCollection ? null : new BufferedStream(Console.OpenStandardOutput(), 1 << 17);
+        foreach (var rootOptions in perRootOptions)
         {
-            // Console.OpenStandardOutput() is UNBUFFERED: every per-match write
-            // (line number, ':', line bytes, newline) became its own WriteFile
-            // syscall, so a match-heavy search paid ~4 syscalls per match (e.g.
-            // ~56K syscalls / ~3s for 14K matches). Wrap it in a 128 KiB
-            // BufferedStream so those tiny writes coalesce into block writes,
-            // matching ripgrep's buffered stdout. The DirectOutputSink flushes
-            // this stream after the scan (and per-file while interactive).
-            options.DirectOutputStream = new BufferedStream(Console.OpenStandardOutput(), 1 << 17);
-            options.DirectOutputColor = useColor;
+            rootOptions.DirectOutputStream = directStream;
+            rootOptions.DirectOutputColor = !needsCollection && useColor;
         }
 
         var progress = vtEnabled ? new ProgressLine(useColor) : null;
@@ -926,7 +942,7 @@ internal static class CliRunner
 
         try
         {
-            await foreach (var ev in service.SearchAsync(options, cts.Token).ConfigureAwait(false))
+            await foreach (var ev in service.SearchManyAsync(perRootOptions, cts.Token).ConfigureAwait(false))
             {
                 switch (ev)
                 {
@@ -3019,15 +3035,15 @@ internal sealed class CliArgs
 
     /// <summary>
     /// Drops semantic mode to a literal Traditional search when the user declines the model download:
-    /// reuses the typed <see cref="SemanticPattern"/> as the search pattern and defaults the directory
-    /// to the current one. Explicit <c>--pattern</c>/<c>--directory</c> values are preserved.
+    /// reuses the typed <see cref="SemanticPattern"/> as the search pattern. An empty directory is
+    /// preserved (it means "search all drives"). Explicit <c>--pattern</c>/<c>--directory</c> values
+    /// are preserved.
     /// </summary>
     internal void FallBackSemanticToTraditional()
     {
         if (string.IsNullOrWhiteSpace(Pattern) && !string.IsNullOrWhiteSpace(SemanticPattern))
             Pattern = SemanticPattern;
-        if (string.IsNullOrWhiteSpace(Directory))
-            Directory = Environment.CurrentDirectory;
+        // An empty Directory is intentionally preserved: it means "search all drives".
     }
 
     /// <summary>

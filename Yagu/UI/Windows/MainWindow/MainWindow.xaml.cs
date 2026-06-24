@@ -243,6 +243,13 @@ public sealed partial class MainWindow : Window, IDisposable
 
         InitializeGlobalHotkey();
 
+        ViewModel.SearchTerminatedByLowDiskSpace += message =>
+        {
+            // Raised on the UI thread from the search consumer's cancellation handler. Defer the modal
+            // notice to the dispatcher so it doesn't run re-entrantly inside that handler.
+            DispatcherQueue.TryEnqueue(async () => await ShowLowDiskSpaceTerminationDialogAsync(message));
+        };
+
         ViewModel.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(ViewModel.PreviewContextLines))

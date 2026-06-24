@@ -289,6 +289,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         HasShownFileDrawerLineNumberIntroTip = _settings.HasShownFileDrawerLineNumberIntroTip;
         HasShownPreviewMatchIntroTip = _settings.HasShownPreviewMatchIntroTip;
         LimitParallelismOnHdd = _settings.LimitParallelismOnHdd;
+        SuppressHddParallelismWarnings = _settings.SuppressHddParallelismWarnings;
+        SearchAllDrivesIncludesNetwork = _settings.SearchAllDrivesIncludesNetwork;
+        SearchAllDrivesIncludesRemovable = _settings.SearchAllDrivesIncludesRemovable;
+        SearchAllDrivesIncludesCloud = _settings.SearchAllDrivesIncludesCloud;
+        SearchAllDrivesForceFullScan = _settings.SearchAllDrivesForceFullScan;
         BackupBeforeSave = _settings.BackupBeforeSave;
         ShowEditorSavedOverlay = _settings.ShowEditorSavedOverlay;
         EditorSyntaxHighlightingEnabled = _settings.EditorSyntaxHighlightingEnabled;
@@ -831,6 +836,20 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// </summary>
     public void SetSessionParallelismOverride(int index) => _sessionParallelismOverrideIndex = index;
 
+    /// <summary>
+    /// One-shot per-search parallelism override for HDD roots, chosen from the HDD warning dialog.
+    /// When set, the next search uses <see cref="ResolveParallelism"/> of this index for HDD roots
+    /// instead of forcing them to 1 thread. Consumed (cleared) when the search starts, so it applies
+    /// to that single search only and is never persisted.
+    /// </summary>
+    private int? _hddParallelismOverrideIndexForNextSearch;
+
+    /// <summary>
+    /// Overrides the HDD parallelism limit for the next search only (consumed on search start). The
+    /// index uses the same scale as <see cref="ParallelismIndex"/>. Does not change any saved setting.
+    /// </summary>
+    public void SetHddParallelismOverrideForNextSearch(int index) => _hddParallelismOverrideIndexForNextSearch = index;
+
     // When the user (or settings load) explicitly changes the persisted parallelism index, drop any
     // session-only HDD override so the user's choice takes effect.
     partial void OnParallelismIndexChanged(int value) => _sessionParallelismOverrideIndex = null;
@@ -1050,6 +1069,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty] public partial string SearchResultTempDirectory { get; set; } = string.Empty;
     [ObservableProperty] public partial bool HasChosenSearchResultTempDirectory { get; set; }
     [ObservableProperty] public partial bool LimitParallelismOnHdd { get; set; } = true;
+    [ObservableProperty] public partial bool SuppressHddParallelismWarnings { get; set; }
+    [ObservableProperty] public partial bool SearchAllDrivesIncludesNetwork { get; set; }
+    [ObservableProperty] public partial bool SearchAllDrivesIncludesRemovable { get; set; }
+    [ObservableProperty] public partial bool SearchAllDrivesIncludesCloud { get; set; }
+    [ObservableProperty] public partial bool SearchAllDrivesForceFullScan { get; set; }
     [ObservableProperty] public partial bool BackupBeforeSave { get; set; } = true;
     [ObservableProperty] public partial bool ShowEditorSavedOverlay { get; set; } = true;
     [ObservableProperty] public partial bool EditorSyntaxHighlightingEnabled { get; set; } = true;
@@ -1458,6 +1482,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
     public event EventHandler? ResultGroupsChanging;
 
+    /// <summary>
+    /// Raised when the active search is terminated because the result temp-file drive became too full.
+    /// The argument is the user-facing termination message. The View surfaces this as a modal notice
+    /// (with a link to the disk-space threshold setting) in addition to the inline status/error text.
+    /// </summary>
+    public event Action<string>? SearchTerminatedByLowDiskSpace;
+
     public ObservableCollection<FileGroup> ResultGroups => _resultCollection.VisibleGroups;
     public BatchObservableCollection<object> ResultRows { get; } = new();
     public ObservableCollection<string> RecentDirectories { get; } = [];
@@ -1852,17 +1883,37 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         await PersistSettingsAsync().ConfigureAwait(true);
     }
 
+    /// <summary>
+    /// Resolves the directory roots a search will target. When the <see cref="Directory"/> box has a
+    /// value, that single directory is used; when it is empty the user is asking to "search all
+    /// drives", so every eligible drive root is returned (fixed always; network/removable/cloud per
+    /// the corresponding settings). An empty result means there is nothing to search.
+    /// </summary>
+    public IReadOnlyList<string> ResolveTargetRoots()
+    {
+        if (!string.IsNullOrWhiteSpace(Directory))
+            return [Directory.Trim()];
+
+        return DriveEnumerator.GetSearchRoots(
+            SearchAllDrivesIncludesNetwork,
+            SearchAllDrivesIncludesRemovable,
+            SearchAllDrivesIncludesCloud);
+    }
+
     [RelayCommand]
     public async Task StartSearchAsync()
     {
-        if (string.IsNullOrWhiteSpace(Directory))
-        {
-            ErrorText = "Choose a directory to search.";
-            return;
-        }
-        if (!System.IO.Directory.Exists(Directory))
+        bool directorySpecified = !string.IsNullOrWhiteSpace(Directory);
+        if (directorySpecified && !System.IO.Directory.Exists(Directory))
         {
             ErrorText = $"Directory does not exist: {Directory}";
+            return;
+        }
+        // An empty directory means "search all drives" — resolve the eligible roots now.
+        var targetRoots = ResolveTargetRoots();
+        if (targetRoots.Count == 0)
+        {
+            ErrorText = "No drives are available to search.";
             return;
         }
         if (string.IsNullOrEmpty(Query))
@@ -1919,7 +1970,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
             ResetStateForNewSearch();
 
-            SettingsService.PushRecent(_settings.RecentDirectories, _settings.RecentDirectoryTimes, Directory, MaxRecentItems);
+            if (directorySpecified)
+                SettingsService.PushRecent(_settings.RecentDirectories, _settings.RecentDirectoryTimes, Directory, MaxRecentItems);
             // In Semantic mode the user-typed natural-language query (captured before translation)
             // goes to the separate Semantic history; Traditional searches use the literal Query.
             if (IsSemanticQueryMode)
@@ -1937,9 +1989,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
             var effectiveSkipExtensions = BuildEffectiveSkipExtensionSet();
 
-            var options = new SearchOptions
+            int baseParallelism = ResolveParallelism(_sessionParallelismOverrideIndex ?? ParallelismIndex);
+            // One-shot HDD parallelism override chosen in the warning dialog; applies to this search
+            // only. Consume it now so it never leaks into a later search.
+            int? hddParallelismOverride = _hddParallelismOverrideIndexForNextSearch;
+            _hddParallelismOverrideIndexForNextSearch = null;
+            SearchOptions BuildOptionsForRoot(string dir, int parallelism, FileListerBackend? backendOverride) => new SearchOptions
             {
-                Directory = Directory,
+                Directory = dir,
                 Query = Query,
                 CaseSensitive = CaseSensitive,
                 UseRegex = UseRegex,
@@ -1965,7 +2022,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 SkipExtensions = effectiveSkipExtensions,
                 SearchInsideArchives = SearchInsideArchives,
                 ArchiveExtensions = ParseDottedExtensionSet(ArchiveExtensions),
-                MaxDegreeOfParallelism = ResolveParallelism(_sessionParallelismOverrideIndex ?? ParallelismIndex),
+                MaxDegreeOfParallelism = parallelism,
+                FileListerBackendOverride = backendOverride,
                 IoOversubscriptionIndex = IoOversubscriptionIndex,
                 MaxProcessMemoryBytes = MemoryLimitMB > 0 ? (long)MemoryLimitMB * 1024 * 1024 : 0,
                 MemoryPressurePercent = MemoryPressurePercent,
@@ -1975,11 +2033,28 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 DegradedResultStore = _resultStore,
             };
 
+            // One options set per target root. When searching all drives, each root gets its own
+            // parallelism: HDD roots are forced to 1 (avoid thrashing) while other drives use the
+            // configured value. Backend stays Auto so each root uses the fast Everything index when
+            // it covers that drive (including drives the user added manually in Everything's settings)
+            // and automatically falls back to the managed walker only for drives Everything does not
+            // index — except when "force full scan" is enabled, which walks every drive directly.
+            var perRootOptions = new List<SearchOptions>(targetRoots.Count);
+            FileListerBackend? allDrivesBackendOverride =
+                (!directorySpecified && SearchAllDrivesForceFullScan) ? FileListerBackend.Managed : null;
+            foreach (var root in targetRoots)
+            {
+                int parallelism = baseParallelism;
+                if (LimitParallelismOnHdd && Yagu.Helpers.DiskTypeDetector.IsHardDisk(root))
+                    parallelism = hddParallelismOverride is int overrideIndex ? ResolveParallelism(overrideIndex) : 1;
+                perRootOptions.Add(BuildOptionsForRoot(root, parallelism, allDrivesBackendOverride));
+            }
+
             cts = new CancellationTokenSource();
             _cts = cts;
             var token = cts.Token;
             lowDiskMonitorTask = StartLowDiskSpaceMonitor(runId, cts, _resultStore);
-            LogService.Instance.Warning("Search", $"Starting search #{runId}: query='{Query}', dir='{Directory}', regex={UseRegex}, caseSensitive={CaseSensitive}, mode={SearchModeIndex}");
+            LogService.Instance.Warning("Search", $"Starting search #{runId}: query='{Query}', dir='{(directorySpecified ? Directory : $"<all drives: {targetRoots.Count}>")}', regex={UseRegex}, caseSensitive={CaseSensitive}, mode={SearchModeIndex}");
 
             // Yield to the UI message pump periodically so the app stays responsive
             // when the events channel is draining many buffered items synchronously.
@@ -2011,7 +2086,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 UpdateFilesPerSecond();
             }
 
-            await foreach (var evt in _search.SearchAsync(options, token).ConfigureAwait(true))
+            await foreach (var evt in _search.SearchManyAsync(perRootOptions, token).ConfigureAwait(true))
             {
                 uiEventsReceived++;
                 long now = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -2042,7 +2117,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 switch (evt)
                 {
                     case SearchEvent.Fallback f:
-                        FallbackReason = f.Reason;
+                        // "Everything SDK returned no results" is an internal tiered-fallback
+                        // diagnostic that is never useful on the main screen: when matches exist it
+                        // looks like an error, and when none exist the status already shows 0 matches.
+                        // Suppress it; any other fallback reason still surfaces.
+                        if (f.Reason is null ||
+                            !f.Reason.StartsWith("Everything SDK returned no results", StringComparison.Ordinal))
+                            FallbackReason = f.Reason;
                         break;
                     case SearchEvent.DiscoveryComplete d:
                         TotalFiles = d.TotalFiles;
@@ -2186,6 +2267,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                     StatusText = message;
                     ErrorText = message;
                     LogService.Instance.Warning("Search", $"Search #{runId} terminated because temp-file drive {lowDiskSpace.DriveDisplayName} is {lowDiskSpace.UsedPercent:F1}% full");
+                    SearchTerminatedByLowDiskSpace?.Invoke(message);
                 }
                 else
                 {
@@ -3439,6 +3521,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.HasShownFileDrawerLineNumberIntroTip = HasShownFileDrawerLineNumberIntroTip;
         _settings.HasShownPreviewMatchIntroTip = HasShownPreviewMatchIntroTip;
         _settings.LimitParallelismOnHdd = LimitParallelismOnHdd;
+        _settings.SuppressHddParallelismWarnings = SuppressHddParallelismWarnings;
+        _settings.SearchAllDrivesIncludesNetwork = SearchAllDrivesIncludesNetwork;
+        _settings.SearchAllDrivesIncludesRemovable = SearchAllDrivesIncludesRemovable;
+        _settings.SearchAllDrivesIncludesCloud = SearchAllDrivesIncludesCloud;
+        _settings.SearchAllDrivesForceFullScan = SearchAllDrivesForceFullScan;
         _settings.BackupBeforeSave = BackupBeforeSave;
         _settings.ShowEditorSavedOverlay = ShowEditorSavedOverlay;
         _settings.EditorSyntaxHighlightingEnabled = EditorSyntaxHighlightingEnabled;
