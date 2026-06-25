@@ -14,6 +14,12 @@ public interface ISemanticCapabilityDetector
 {
     /// <summary>True when a non-software GPU or an NPU is present on a physical bus.</summary>
     bool HasAcceleratedHardware();
+
+    /// <summary>True when a real (non-software) GPU is present on a physical bus.</summary>
+    bool HasGpu();
+
+    /// <summary>True when a compute accelerator / NPU is present on a physical bus.</summary>
+    bool HasNpu();
 }
 
 /// <summary>
@@ -86,6 +92,28 @@ public sealed class GpuNpuCapabilityDetector : ISemanticCapabilityDetector
                 return true;
 
         return false;
+    }
+
+    /// <summary>True when a real (non-software) GPU sits in the display-adapter class.</summary>
+    public bool HasGpu()
+    {
+        try { return HasHardwareDeviceInClass(DisplayClassKey); }
+        catch (Exception ex)
+        {
+            LogService.Instance.Verbose("Semantic.Capability", "GPU detection failed; assuming none.", ex);
+            return false;
+        }
+    }
+
+    /// <summary>True when an NPU sits in the compute-accelerator class.</summary>
+    public bool HasNpu()
+    {
+        try { return HasHardwareDeviceInClass(ComputeAcceleratorClassKey); }
+        catch (Exception ex)
+        {
+            LogService.Instance.Verbose("Semantic.Capability", "NPU detection failed; assuming none.", ex);
+            return false;
+        }
     }
 
     /// <summary>Thin registry adapter: walks a device class's 4-digit instance subkeys and yields

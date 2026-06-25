@@ -49,6 +49,8 @@ Use the search mode dropdown to decide what the query matches:
 | File names only | File names only. | Finding files by name without reading contents. |
 | File name, then content | File contents, but only for files whose names match the query first. | Narrowing content search to files with relevant names. |
 
+> **Tip — open a specific file directly.** If you paste a complete file path (and nothing else) into the Traditional search box and press Enter, Yagu skips the normal scan and shows just that one file. This works no matter what's in the Directory box. Surrounding quotes are allowed (e.g. `"C:\path with spaces\app.log"`).
+
 ---
 
 ## Query Options
@@ -368,7 +370,7 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 | Skip admin-protected paths | Excludes system directories that deny access when not elevated. |
 | Admin-protected path segments | Custom path segments to skip (semicolon-separated). |
 | Skip extensions | Extensions skipped before contents are read. Use semicolon-separated names without dots. |
-| Binary extensions | Extensions that remain classified as binary/build artifacts, and populate the Binary ext dropdown when binary search is enabled. |
+| Binary extensions | The set of file types treated as binary/build artifacts. When binary search is on, the Advanced Options ▸ Binary ext dropdown lets you pick which of these to include in the search (checked = searched; unchecked types are skipped). |
 | Reset binary extensions | Restores the default binary extension list. |
 | Archive extensions | Extensions treated as ZIP-like containers when archive search is on. Detection still checks file-header magic bytes. |
 | Max archive nesting depth | How deep to recurse into nested archives. 0 = default 5. |
@@ -436,9 +438,11 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 | Setting | What It Controls |
 | --- | --- |
 | Start in compact launcher mode | Launches as a small search bar when enabled, or as a traditional window when disabled. |
-| Launcher focus-loss behavior | Minimize to tray, Stay open, or Always on top when the compact launcher loses focus. |
+| Launcher focus-loss behavior | Minimize to tray, Stay open, or Always on top when the window loses focus. Applies in both the compact launcher and the traditional window. |
 | Close to tray | Closing the window minimizes to tray instead of exiting (on by default). |
 | Maximize window on startup | Starts the main window maximized instead of at the default size. |
+| Traditional window launch position | Where the traditional window appears on screen at launch: Centered (default), or any of the eight edge/corner anchors (Top Left, Top Middle, Top Right, Middle Left, Middle Right, Bottom Left, Bottom Middle, Bottom Right). Ignored when Maximize window on startup is on or while in the compact launcher. |
+| Compact launcher launch position | Where the compact launcher (Spotlight-style search bar) appears on screen at launch. Same nine anchors as above, defaulting to Top Middle. |
 
 ### Interaction Tab
 
@@ -469,7 +473,7 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 | Re-enable admin privilege warning | Re-enables the non-administrator warning after it was dismissed. Visible only after the warning has been suppressed. |
 | File log level | Controls file logging: None, Critical, Warning, Info, or Verbose. Verbose can degrade performance. |
 | Console log level | Controls console logging with the same levels as file logging. |
-| Log file | Shows the path to the active Yagu log file. |
+| Log file | Shows the path to the active Yagu log file as a clickable link — click it to open the log in Notepad. |
 
 ---
 
@@ -812,6 +816,14 @@ If memory-saving mode appears often, reduce result volume with narrower queries,
 | Editor backups | `{filename}.yagubak` (same directory as original) |
 
 Log levels: None → Critical → Warning → Info → Verbose. Use Info for normal troubleshooting. Verbose adds overhead during large searches.
+
+**Force verbose logging from the very first launch.** The default file log level is Warning, and it is normally changed in Settings. When you need verbose logs of something that happens during Yagu's *first* launch — before the Settings window is reachable — run the installer with the `/VERBOSELOG` switch. This records `Verbose` to `HKCU\Software\Yagu\LogLevelOverride`, which Yagu reads at startup and applies as a minimum file log level on every run:
+
+```
+YaguSetup-<version>-<arch>.exe /VERBOSELOG
+```
+
+It works with silent installs too (`YaguSetup-<version>-<arch>.exe /VERYSILENT /VERBOSELOG`). The override stays in effect until you reinstall normally (without `/VERBOSELOG`, which clears it) or uninstall Yagu.
 
 ---
 

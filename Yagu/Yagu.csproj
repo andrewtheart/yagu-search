@@ -190,7 +190,7 @@
   -->
   <Target Name="CopyXbfAndPriToPublish" AfterTargets="Publish">
     <ItemGroup>
-      <_YaguXbfFiles Include="$(OutDir)**\*.xbf" />
+      <_YaguXbfFiles Include="$(OutDir)**\*.xbf" Exclude="$(PublishDir)**\*.xbf" />
       <_YaguPriFiles Include="$(OutDir)*.pri" />
     </ItemGroup>
     <Copy SourceFiles="@(_YaguXbfFiles)"
@@ -320,5 +320,49 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
+
+  <!--
+    Visual C++ Runtime (app-local). onnxruntime.dll / onnxruntime-genai.dll (pulled in by
+    Foundry Local + Microsoft.WindowsAppSDK.ML for local semantic-search model loading) import
+    VCRUNTIME140.dll, VCRUNTIME140_1.dll and MSVCP140.dll. A clean Windows install (e.g. Windows
+    Sandbox or a machine that has never had a VC++ Redistributable) does not have these, so the
+    native model load fails with "Unable to load DLL 'onnxruntime-genai' or one of its
+    dependencies. The specified module could not be found." Shipping the redistributable CRT DLLs
+    next to onnxruntime.dll lets the model load without a separate VC++ redist install. The DLLs
+    are vendored under vendor\vc-runtime\<arch>\ from the VS-shipped redistributable CRT folder
+    (Microsoft permits app-local redistribution of these runtime DLLs).
+  -->
+  <PropertyGroup>
+    <YaguVcRuntimeArch Condition="'$(YaguVcRuntimeArch)' == '' And '$(RuntimeIdentifier)' == 'win-x64'">x64</YaguVcRuntimeArch>
+    <YaguVcRuntimeArch Condition="'$(YaguVcRuntimeArch)' == '' And '$(RuntimeIdentifier)' == 'win-x86'">x86</YaguVcRuntimeArch>
+    <YaguVcRuntimeArch Condition="'$(YaguVcRuntimeArch)' == '' And '$(RuntimeIdentifier)' == 'win-arm64'">arm64</YaguVcRuntimeArch>
+    <YaguVcRuntimeArch Condition="'$(YaguVcRuntimeArch)' == '' And ('$(PlatformTarget)' == 'x86' Or '$(Platform)' == 'x86')">x86</YaguVcRuntimeArch>
+    <YaguVcRuntimeArch Condition="'$(YaguVcRuntimeArch)' == '' And ('$(PlatformTarget)' == 'arm64' Or '$(Platform)' == 'arm64')">arm64</YaguVcRuntimeArch>
+    <YaguVcRuntimeArch Condition="'$(YaguVcRuntimeArch)' == ''">x64</YaguVcRuntimeArch>
+    <YaguVcRuntimeDir>$(MSBuildThisFileDirectory)..\vendor\vc-runtime\$(YaguVcRuntimeArch)\</YaguVcRuntimeDir>
+  </PropertyGroup>
+
+  <ItemGroup Condition="Exists('$(YaguVcRuntimeDir)')">
+    <None Include="$(YaguVcRuntimeDir)*.dll">
+      <Link>%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!--
+    Self-contained publish (the installer) flattens native assets to the app root; the <None>
+    items above cover normal builds, but copy explicitly after Publish to be certain the CRT
+    DLLs land next to onnxruntime.dll in the published output the installer stages.
+  -->
+  <Target Name="CopyVcRuntimeToPublish"
+          AfterTargets="Publish"
+          Condition="Exists('$(YaguVcRuntimeDir)')">
+    <ItemGroup>
+      <_YaguVcRuntimeFiles Include="$(YaguVcRuntimeDir)*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_YaguVcRuntimeFiles)"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

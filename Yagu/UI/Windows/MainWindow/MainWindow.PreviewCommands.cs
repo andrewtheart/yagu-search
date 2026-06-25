@@ -246,6 +246,7 @@ public sealed partial class MainWindow
         double restoreHorizontalOffset = PreviewScrollViewer.HorizontalOffset;
         double restoreVerticalOffset = PreviewScrollViewer.VerticalOffset;
         int restoreMatchIndex = preserveScroll ? _currentMatchIndex : -1;
+        string? restoreActiveSectionFilePath = preserveScroll ? GetActiveSectionFilePath() : null;
         bool previousSuppressInitialMatchAutoScroll = _suppressInitialMatchAutoScroll;
         if (preserveScroll)
             _suppressInitialMatchAutoScroll = true;
@@ -268,6 +269,10 @@ public sealed partial class MainWindow
             if (preserveScroll)
             {
                 _suppressInitialMatchAutoScroll = previousSuppressInitialMatchAutoScroll;
+                // Re-select the section the user had active before the rebuild (its black
+                // "selected" background) — a rebuild allocates new section instances, so the
+                // prior _activeSectionNav reference is stale and must be matched by file path.
+                RestoreActiveSectionByFilePath(restoreActiveSectionFilePath);
                 RestorePreviewScrollOffset(restoreHorizontalOffset, restoreVerticalOffset);
                 RestoreActiveMatchAfterPreviewRefresh(restoreMatchIndex);
             }
@@ -922,6 +927,11 @@ public sealed partial class MainWindow
 
     private void OnSelectAllFilesUnchecked(object sender, RoutedEventArgs e)
     {
+        // A null→false correction of the phantom-indeterminate glyph (see OnSelectAllFilesIndeterminate)
+        // also raises Unchecked; it is not a real user toggle, so don't wipe the current selection.
+        if (_correctingSelectAllIndeterminate)
+            return;
+
         _suppressPreviewUpdate = true;
         try
         {
@@ -929,6 +939,40 @@ public sealed partial class MainWindow
                 g.DeselectAll();
         }
         finally { _suppressPreviewUpdate = false; }
+    }
+
+    // The select-all checkbox is strictly two-state (IsThreeState="False"), but WinUI can still drop a
+    // CheckBox into the indeterminate (IsChecked == null) state — e.g. when its implicit style/template
+    // is re-applied and IsChecked resets to its bool? default — which paints a stray "dash" glyph. These
+    // two guards keep it definite. The flag stops the null→false correction from running the Unchecked
+    // side effect (which would deselect everything).
+    private bool _correctingSelectAllIndeterminate;
+
+    private void OnSelectAllFilesIndeterminate(object sender, RoutedEventArgs e)
+    {
+        if (sender is not CheckBox cb || cb.IsChecked is not null)
+            return;
+
+        _correctingSelectAllIndeterminate = true;
+        try { cb.IsChecked = false; }
+        finally { _correctingSelectAllIndeterminate = false; }
+    }
+
+    private void OnSelectAllFilesLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not CheckBox cb)
+            return;
+
+        if (cb.IsChecked is null)
+        {
+            _correctingSelectAllIndeterminate = true;
+            try { cb.IsChecked = false; }
+            finally { _correctingSelectAllIndeterminate = false; }
+        }
+
+        // Re-assert the correct visual state once the template is realized, clearing any phantom
+        // indeterminate glyph painted before the visual-state machine settled on first show.
+        VisualStateManager.GoToState(cb, cb.IsChecked == true ? "Checked" : "Unchecked", false);
     }
 
     private async void OnFileGroupCheckBoxClicked(object sender, RoutedEventArgs e)
@@ -2085,6 +2129,9 @@ public sealed partial class MainWindow
     {
         if (TryBuildPreviewCustomSelectionText(block, withLineNumbers, out string customSelectedText))
         {
+            LogService.Instance.Verbose("PreviewSelection",
+                $"CopyPreviewSelection: custom-selection path, block={DescribePreviewSelectionBlock(block)}, " +
+                $"withLineNumbers={withLineNumbers}, copiedChars={customSelectedText.Length}");
             var customDataPackage = new DataPackage();
             customDataPackage.SetText(customSelectedText);
             Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(customDataPackage);
@@ -2467,7 +2514,7 @@ public sealed partial class MainWindow
         InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
         int previewLines = ViewModel.PreviewContextLines;
-        Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+        Regex? rx = BuildSearchHighlightRegex();
         SetPreviewMatchTotals(ComputeMatchCount(selected, null, isHighlight: false, previewLines, rx), byFile.Count);
 
         RichTextBlock? scrollBlock = null;
@@ -2613,7 +2660,7 @@ public sealed partial class MainWindow
         _sectionOverflow.Clear();
         InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
-        Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+        Regex? rx = BuildSearchHighlightRegex();
         SetPreviewMatchTotals(ComputeMatchCount(selected, null, isHighlight: true, ViewModel.PreviewContextLines, rx), byFile.Count);
 
         RichTextBlock? scrollBlock = null;

@@ -167,7 +167,7 @@ public sealed partial class MainWindow
     /// </summary>
     private bool TryRecoverUnregisteredMatchRuns(Paragraph para)
     {
-        System.Text.RegularExpressions.Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+        var rx = BuildSearchHighlightRegex();
         if (rx is null)
             return false;
 
@@ -2547,7 +2547,7 @@ public sealed partial class MainWindow
         int matches = 0;
         bool isHighlight = ViewModel.PreviewModeIndex == 1;
         int previewLines = ViewModel.PreviewContextLines;
-        var rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+        var rx = BuildSearchHighlightRegex();
         for (int i = _deferredCursor; i < list.Count; i++)
             matches += ComputeMatchCount(list[i].Value, null, isHighlight, previewLines, rx);
         _cachedDeferredCountsList = list;
@@ -2851,6 +2851,36 @@ public sealed partial class MainWindow
             HighlightActiveExpander();
             UpdateSectionNavOverlay();
             UpdateStickyHorizontalScrollBar();
+        }
+    }
+
+    /// <summary>
+    /// File path of the currently-active preview section (the one painted with the
+    /// "selected" background), or null when no section is active. Captured before a
+    /// preview rebuild so the selection can be restored afterwards (see
+    /// <see cref="RestoreActiveSectionByFilePath"/>); a rebuild allocates new
+    /// <see cref="SectionMatchNav"/>/block instances, so the file path is the only
+    /// stable identity that survives it.
+    /// </summary>
+    private string? GetActiveSectionFilePath()
+        => _activeSectionNav?.Block is { } block ? ResolvePreviewBlockFilePath(block) : null;
+
+    /// <summary>
+    /// Re-activates the preview section whose file matches <paramref name="filePath"/> after
+    /// a rebuild, so the "selected" background survives operations that re-render the preview
+    /// (e.g. toggling word wrap). No-op when the path is empty or its section is gone.
+    /// </summary>
+    private void RestoreActiveSectionByFilePath(string? filePath)
+    {
+        if (string.IsNullOrEmpty(filePath))
+            return;
+        foreach (var block in _sectionMatchNavs.Keys)
+        {
+            if (string.Equals(ResolvePreviewBlockFilePath(block), filePath, StringComparison.OrdinalIgnoreCase))
+            {
+                ActivateSectionForBlock(block);
+                return;
+            }
         }
     }
 

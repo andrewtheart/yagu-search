@@ -86,7 +86,7 @@ public static class SelectedFileExportService
             if (probe.Length > 0)
                 read = await stream.ReadAsync(probe.AsMemory(0, probe.Length), cancellationToken).ConfigureAwait(false);
 
-            if (read > 0 && BinaryDetector.IsBinary(probe.AsSpan(0, read)))
+            if (read > 0 && BinaryDetector.HasDefiniteBinarySignature(probe.AsSpan(0, read)))
             {
                 await writer.WriteLineAsync("[Binary file skipped.]").ConfigureAwait(false);
                 return;

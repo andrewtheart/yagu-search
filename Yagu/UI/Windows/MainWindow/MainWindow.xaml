@@ -192,17 +192,18 @@
                                         </Grid.ColumnDefinitions>
                                         <ToggleButton Grid.Column="0" IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
                                                       AutomationProperties.AutomationId="MatchLineLocationButton"
-                                                      AutomationProperties.Name="{x:Bind LineLocationDisplay, Mode=OneWay}"
+                                                      AutomationProperties.Name="{x:Bind LineLocationTooltip, Mode=OneWay}"
                                                       Click="OnMatchLineCheckBoxClicked"
                                                       Loaded="OnMatchLineNumberLoaded"
                                                       ToolTipService.ToolTip="{x:Bind LineLocationTooltip, Mode=OneWay}"
                                                       MinWidth="34" MinHeight="22" Padding="5,1" Margin="4,0,2,0"
                                                       CornerRadius="4"
                                                       VerticalAlignment="Center"
-                                                      HorizontalContentAlignment="Center">
+                                                      HorizontalContentAlignment="Right">
                                            <TextBlock Text="{x:Bind LineLocationDisplay, Mode=OneWay}"
                                                       FontFamily="Consolas"
                                                       FontSize="12"
+                                                      TextAlignment="Right"
                                                       FontWeight="SemiBold" />
                                         </ToggleButton>
                                         <RichTextBlock Grid.Column="1" TextTrimming="CharacterEllipsis" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="False" Loaded="OnMatchLineLoaded" VerticalAlignment="Center" />
@@ -418,11 +419,15 @@
                         </AutoSuggestBox.ItemTemplate>
                         <!-- Style the inner TextBox so long queries wrap and fill the tall box
                              instead of staying on a single top line. AcceptsReturn stays false so
-                             Enter still submits the search. -->
+                             Enter still submits the search. The right padding reserves room for the
+                             overlaid InlineSearchToggles (Case/Regex/Exact, ~88px + 36px margin) and
+                             the QueryClearButton (32px + 4px margin) so wrapped text never flows
+                             underneath those controls. -->
                         <AutoSuggestBox.TextBoxStyle>
                             <Style TargetType="TextBox" BasedOn="{StaticResource AutoSuggestBoxTextBoxStyle}">
                                 <Setter Property="TextWrapping" Value="Wrap" />
                                 <Setter Property="VerticalContentAlignment" Value="Top" />
+                                <Setter Property="Padding" Value="10,6,128,6" />
                             </Style>
                         </AutoSuggestBox.TextBoxStyle>
                     </AutoSuggestBox>
@@ -559,19 +564,32 @@
                           Expanding="OnAdvancedOptionsExpanding"
                           Collapsed="OnAdvancedOptionsCollapsed">
                     <Expander.Resources>
-                        <!-- Header background is overridden so it can be recolored to match the
-                             drawer body (a dark "base" shade) while expanded, and restored to the
-                             default card color while collapsed. The Color is swapped in code-behind
-                             from OnAdvancedOptionsExpanding / OnAdvancedOptionsCollapsed. -->
-                        <SolidColorBrush x:Key="ExpanderHeaderBackground" Color="{ThemeResource CardBackgroundFillColorDefault}" />
-                        <!-- Remove the built-in grey divider between the Expander header and its
-                             content. The visible content box is provided by AdvancedOptionsDrawerBodyBorder
-                             below, so the Expander's own header/content borders are not needed. -->
+                        <!-- Flat header: transparent background + no border so the collapsed
+                             "Advanced Options" row reads as plain text + chevron rather than a
+                             bordered card. While expanded the header is recolored to the drawer-body
+                             shade in code-behind (OnAdvancedOptionsExpanding / OnAdvancedOptionsCollapsed).
+                             The visible content box is provided by AdvancedOptionsDrawerBodyBorder below. -->
+                        <SolidColorBrush x:Key="ExpanderHeaderBackground" Color="Transparent" />
                         <SolidColorBrush x:Key="ExpanderHeaderBorderBrush" Color="Transparent" />
+                        <Thickness x:Key="ExpanderHeaderBorderThickness">0</Thickness>
                         <Thickness x:Key="ExpanderContentDownBorderThickness">0</Thickness>
                     </Expander.Resources>
                     <Expander.Header>
-                        <TextBlock Text="Advanced Options" VerticalAlignment="Center" />
+                        <!-- The Expander's built-in chevron is template-pinned to the far right edge;
+                             it is hidden in code-behind (HideNativeExpanderChevron) and replaced by this
+                             custom chevron sitting right after the text. The glyph flips up/down from the
+                             expand/collapse handlers. MinHeight keeps the header from collapsing tight
+                             around the text (the Expander itself has MinHeight=0), so the "Advanced
+                             Options" label stays vertically padded in both collapsed and expanded states. -->
+                        <StackPanel Orientation="Horizontal" Spacing="6"
+                                    HorizontalAlignment="Left" VerticalAlignment="Center"
+                                    MinHeight="48">
+                            <TextBlock Text="Advanced Options" VerticalAlignment="Center" />
+                            <FontIcon x:Name="AdvancedOptionsExpandGlyph"
+                                      FontFamily="{StaticResource SymbolThemeFontFamily}"
+                                      Glyph="&#xE70D;" FontSize="12"
+                                      VerticalAlignment="Center" Opacity="0.9" />
+                        </StackPanel>
                     </Expander.Header>
                     <!-- ScrollViewer keeps the drawer fully usable at short window
                          heights: when the options exceed the available space a vertical
@@ -837,7 +855,7 @@
                                                                     Content="{x:Bind ViewModel.BinaryExtensionsSummary, Mode=OneWay}"
                                                                     Visibility="{x:Bind ViewModel.BinaryExtensionsVisibility, Mode=OneWay}"
                                                                     FontSize="12"
-                                                                    ToolTipService.ToolTip="Known compiled binary/build artifact extensions to skip even when binary search is enabled">
+                                                                    ToolTipService.ToolTip="Select which binary / build-artifact file types to include in the search (checked = searched; unchecked types are skipped)">
                                                         <DropDownButton.Flyout>
                                                             <Flyout Placement="Bottom" ShouldConstrainToRootBounds="False">
                                                                 <StackPanel Width="320" Spacing="2">
@@ -1448,6 +1466,8 @@
                                       IsChecked="False"
                                       Width="24" Height="24" MinWidth="0" MinHeight="0" Padding="0"
                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                      Loaded="OnSelectAllFilesLoaded"
+                                      Indeterminate="OnSelectAllFilesIndeterminate"
                                       Checked="OnSelectAllFilesChecked"
                                       Unchecked="OnSelectAllFilesUnchecked" />
                         </Grid>
@@ -2227,6 +2247,24 @@
         <!-- Embedded terminal panel (ConPTY + xterm.js in WebView2) -->
         <Grid x:Name="TerminalHost" Grid.Row="5" Visibility="Collapsed" Background="#1E1E1E">
             <WebView2 x:Name="TerminalWebView" DefaultBackgroundColor="#1E1E1E" IsTabStop="True" />
+            <!-- Shown instead of a black WebView when the Microsoft Edge WebView2 Runtime is missing
+                 (e.g. a clean Windows install/Sandbox). The embedded terminal is the only feature that
+                 needs WebView2; the rest of Yagu works without it. The installer normally installs the
+                 runtime, so this is a fallback for offline installs or machines that still lack it. -->
+            <StackPanel x:Name="TerminalWebView2MissingPanel"
+                        Visibility="Collapsed"
+                        HorizontalAlignment="Center" VerticalAlignment="Center"
+                        MaxWidth="440" Spacing="10" Padding="24">
+                <FontIcon FontFamily="{StaticResource SymbolThemeFontFamily}" Glyph="&#xE946;"
+                          FontSize="26" Foreground="#CFCFCF" HorizontalAlignment="Center" />
+                <TextBlock Text="The embedded terminal needs the Microsoft Edge WebView2 Runtime, which isn't installed on this machine."
+                           TextWrapping="Wrap" TextAlignment="Center" Foreground="#E4E4E4" />
+                <HyperlinkButton Content="Get the WebView2 Runtime"
+                                 NavigateUri="https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+                                 HorizontalAlignment="Center" />
+                <TextBlock Text="After installing it, restart Yagu and reopen the terminal."
+                           TextWrapping="Wrap" TextAlignment="Center" Foreground="#9A9A9A" FontSize="12" />
+            </StackPanel>
             <Button x:Name="TerminalChevron"
                     Click="OnToggleTerminalPane"
                     HorizontalAlignment="Right"

@@ -27,6 +27,14 @@ public sealed partial class MainWindow
 
     private PinState _pinState = PinState.StayOpen;
 
+    /// <summary>Active focus-loss behavior (0 = minimize to tray, 1 = stay open, 2 = always on top),
+    /// applied to the window in EVERY mode (compact launcher AND traditional window) — not just the
+    /// launcher. Seeded from the saved <c>WindowFocusBehavior</c> setting at startup, updated live when
+    /// the setting changes, and overridable per session via the launcher pin button. Kept separate from
+    /// <see cref="_pinState"/> (whose <see cref="PinState.FullWindow"/> value is a window-MODE switch,
+    /// not a focus behavior) so switching to the full window doesn't discard the configured behavior.</summary>
+    private int _focusLossBehavior = 1;
+
     /// <summary>
     /// Compact "launcher" mode: hides the results panel and status bar,
     /// switches to a borderless small window centered at the top of the screen.
@@ -64,9 +72,10 @@ public sealed partial class MainWindow
         catch { }
         SetNativeCaptionButtonsVisible(false);
 
-        // Apply saved window-focus behaviour as the initial pin state. WindowFocusBehavior only
-        // governs the launcher's response to focus loss; launcher-vs-traditional startup is
-        // controlled by the separate StartInLauncherMode setting.
+        // Apply saved window-focus behaviour as the initial pin state. WindowFocusBehavior governs the
+        // window's response to focus loss in EVERY mode (tracked by _focusLossBehavior, applied via
+        // ApplyPinState below); launcher-vs-traditional startup is controlled by the separate
+        // StartInLauncherMode setting.
         _pinState = ViewModel.WindowFocusBehavior switch
         {
             0 => PinState.MinimizeToTray,
@@ -117,8 +126,7 @@ public sealed partial class MainWindow
             int width = (int)(1400 * scale);
             int height = (int)((desiredHeightDip + 2) * scale) + chromeHeight;
             if (height > wa.Height) height = wa.Height; // never extend past the work area
-            int x = wa.X + Math.Max(0, (wa.Width - width) / 2);
-            int y = wa.Y + (int)(4 * scale);
+            (int x, int y) = ComputeLauncherPosition(wa, width, height, scale);
             AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(x, y, width, height));
 
             // Apply the scroll bound now that the window has its final height so a
@@ -158,9 +166,8 @@ public sealed partial class MainWindow
                         UpdateAdvancedOptionsDrawerMaxHeight();
                         return;
                     }
-                    int newY = wa.Y + (int)(4 * deferredScale);
                     int newWidth = (int)(1400 * deferredScale);
-                    int newX = wa.X + Math.Max(0, (wa.Width - newWidth) / 2);
+                    (int newX, int newY) = ComputeLauncherPosition(wa, newWidth, newHeight, deferredScale);
                     AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(newX, newY, newWidth, newHeight));
                     RootGrid.UpdateLayout();
                     UpdateAdvancedOptionsDrawerMaxHeight();
@@ -304,6 +311,98 @@ public sealed partial class MainWindow
         catch { }
     }
 
+    /// <summary>
+    /// Places the traditional (non-launcher) window on screen at launch according to the user's
+    /// <c>LaunchWindowPosition</c> setting (0 = Centered default, 1..8 = the eight edge/corner
+    /// anchors). Keeps the window's current size and clamps it fully within the monitor work area.
+    /// No-op while maximized or in compact launcher mode (the launcher docks top-center via
+    /// <see cref="PositionLauncherWindow"/>).
+    /// </summary>
+    private void PositionWindowOnLaunch()
+    {
+        try
+        {
+            if (AppWindow is null || _launcherMode) return;
+            if (AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter { State: Microsoft.UI.Windowing.OverlappedPresenterState.Maximized })
+                return;
+
+            var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(
+                AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
+            if (displayArea is null) return;
+            var wa = displayArea.WorkArea;
+            if (wa.Width <= 0 || wa.Height <= 0) return;
+
+            int w = AppWindow.Size.Width;
+            int h = AppWindow.Size.Height;
+
+            // col: 0 = left, 1 = horizontal center, 2 = right.
+            // row: 0 = top,  1 = vertical center,   2 = bottom.
+            (int col, int row) = LaunchPositionToAnchors(ViewModel.LaunchWindowPosition);
+
+            int x = col switch
+            {
+                0 => wa.X,
+                2 => wa.X + wa.Width - w,
+                _ => wa.X + (wa.Width - w) / 2,
+            };
+            int y = row switch
+            {
+                0 => wa.Y,
+                2 => wa.Y + wa.Height - h,
+                _ => wa.Y + (wa.Height - h) / 2,
+            };
+
+            // Clamp fully on-screen; a window larger than the work area pins to the top/left edge.
+            x = Math.Max(wa.X, Math.Min(x, wa.X + Math.Max(0, wa.Width - w)));
+            y = Math.Max(wa.Y, Math.Min(y, wa.Y + Math.Max(0, wa.Height - h)));
+
+            AppWindow.Move(new Windows.Graphics.PointInt32(x, y));
+        }
+        catch { }
+    }
+
+    /// <summary>Maps a <c>LaunchWindowPosition</c> index to (column, row) anchors where 0/1/2 mean
+    /// left/center/right and top/center/bottom respectively. Out-of-range falls back to Centered.</summary>
+    private static (int col, int row) LaunchPositionToAnchors(int position) => position switch
+    {
+        1 => (0, 0), // Top Left
+        2 => (1, 0), // Top Middle
+        3 => (2, 0), // Top Right
+        4 => (0, 1), // Middle Left
+        5 => (2, 1), // Middle Right
+        6 => (0, 2), // Bottom Left
+        7 => (1, 2), // Bottom Middle
+        8 => (2, 2), // Bottom Right
+        _ => (1, 1), // Centered (default)
+    };
+
+    /// <summary>Computes the compact launcher's top-left placement within the work area for its
+    /// configured <c>LauncherWindowPosition</c> anchor, keeping a small edge margin and clamping the
+    /// window fully on-screen. Top Middle (the default) reproduces the classic top-center dock.</summary>
+    private (int x, int y) ComputeLauncherPosition(Windows.Graphics.RectInt32 wa, int width, int height, double scale)
+    {
+        (int col, int row) = LaunchPositionToAnchors(ViewModel.LauncherWindowPosition);
+        int margin = (int)(4 * scale);
+
+        int x = col switch
+        {
+            0 => wa.X + margin,
+            2 => wa.X + wa.Width - width - margin,
+            _ => wa.X + Math.Max(0, (wa.Width - width) / 2),
+        };
+        int y = row switch
+        {
+            0 => wa.Y + margin,
+            2 => wa.Y + wa.Height - height - margin,
+            _ => wa.Y + Math.Max(0, (wa.Height - height) / 2),
+        };
+
+        // Clamp fully on-screen; a window larger than the work area pins to the top/left edge.
+        x = Math.Max(wa.X, Math.Min(x, wa.X + Math.Max(0, wa.Width - width)));
+        y = Math.Max(wa.Y, Math.Min(y, wa.Y + Math.Max(0, wa.Height - height)));
+        return (x, y);
+    }
+
     private void InitializeGlobalHotkey()
     {
         _hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
@@ -436,30 +535,46 @@ public sealed partial class MainWindow
         switch (_pinState)
         {
             case PinState.MinimizeToTray:
+                _focusLossBehavior = 0;
                 PinIcon.Glyph = "\uE77A";
                 ToolTipService.SetToolTip(PinButton, "Minimize to system tray when window loses focus");
-                SetAlwaysOnTop(false);
+                ApplyWindowFocusBehavior();
                 RestoreToLauncherChrome();
                 break;
             case PinState.StayOpen:
+                _focusLossBehavior = 1;
                 PinIcon.Glyph = "\uE840";
                 ToolTipService.SetToolTip(PinButton, "Window stays open (won't minimize to tray)");
-                SetAlwaysOnTop(false);
+                ApplyWindowFocusBehavior();
                 RestoreToLauncherChrome();
                 break;
             case PinState.AlwaysOnTop:
+                _focusLossBehavior = 2;
                 PinIcon.Glyph = "\uE72E";
                 ToolTipService.SetToolTip(PinButton, "Window stays on top of all other windows");
-                SetAlwaysOnTop(true);
+                ApplyWindowFocusBehavior();
                 RestoreToLauncherChrome();
                 break;
             case PinState.FullWindow:
+                // Switching to the full traditional window reverts the focus-loss behavior to the saved
+                // setting (the three launcher pin states are per-session overrides; the full window uses
+                // the configured default). The behavior still applies — it is not tied to the mode.
+                _focusLossBehavior = ViewModel.WindowFocusBehavior;
                 PinIcon.Glyph = "\uE740";
                 ToolTipService.SetToolTip(PinButton, "Traditional window with title bar (click to return to launcher)");
-                SetAlwaysOnTop(false);
+                ApplyWindowFocusBehavior();
                 SwitchToFullWindow();
                 break;
         }
+    }
+
+    /// <summary>Applies <see cref="_focusLossBehavior"/> to the window regardless of launcher vs
+    /// traditional mode: "always on top" (2) pins the window above all others; the other behaviors clear
+    /// it. Minimize-to-tray (0) is handled on deactivation in <see cref="OnWindowActivated"/>. Called at
+    /// startup, when the WindowFocusBehavior setting changes, and on pin/mode transitions.</summary>
+    private void ApplyWindowFocusBehavior()
+    {
+        SetAlwaysOnTop(_focusLossBehavior == 2);
     }
 
     /// <summary>Switch from compact launcher to a traditional window with title bar and all chrome.</summary>
@@ -556,7 +671,9 @@ public sealed partial class MainWindow
 
     private void OnWindowActivated(object sender, WindowActivatedEventArgs args)
     {
-        if (args.WindowActivationState == WindowActivationState.Deactivated && _pinState == PinState.MinimizeToTray)
+        // Focus-loss behavior is governed by the configured WindowFocusBehavior at ALL times (compact
+        // launcher AND traditional window), tracked by _focusLossBehavior — not tied to launcher mode.
+        if (args.WindowActivationState == WindowActivationState.Deactivated && _focusLossBehavior == 0)
         {
             if (HasOpenAppOwnedWindowOrModal()) return;
             HideToTray();

@@ -1469,7 +1469,7 @@ public sealed partial class MainWindow
         BeginPreviewContentUpdate();
         EnsurePreviewPanelVisible();
         EnsureSectionsSurface();
-        Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+        Regex? rx = BuildSearchHighlightRegex();
         bool isHighlight = ViewModel.PreviewModeIndex == 1;
         int previewLines = ViewModel.PreviewContextLines;
         AddPreviewMatchTotals(

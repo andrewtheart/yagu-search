@@ -580,7 +580,7 @@ public sealed partial class MainWindow
 
     private async Task AppendCheckedMatchContextAsync(RichTextBlock section, SearchResult result)
     {
-        Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+        Regex? rx = BuildSearchHighlightRegex();
         int previewLines = ViewModel.PreviewContextLines;
         string[]? allLines = null;
 

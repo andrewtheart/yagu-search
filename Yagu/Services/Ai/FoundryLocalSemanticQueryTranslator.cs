@@ -18,8 +18,11 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     private const string PromptResourceName = "Yagu.Services.Ai.Prompts.SemanticSearchSystemPrompt.prompt.md";
     private const string LogSource = "Semantic.Translator";
 
-    private readonly bool _enabled;
+    private bool _enabled;
     private string? _preferredAlias;
+    private IReadOnlyList<DeviceType> _deviceOrder;
+    private bool _hasGpu = true;
+    private bool _hasNpu = true;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private readonly Lazy<string> _systemPromptTemplate = new(LoadSystemPromptTemplate);
 
@@ -32,15 +35,75 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     /// successful <see cref="TranslateAsync"/> call. Useful for diagnostics (which model ran).</summary>
     public string? SelectedModelAlias { get; private set; }
 
-    public FoundryLocalSemanticQueryTranslator(bool enabled, string? modelOverrideAlias = null)
+    public FoundryLocalSemanticQueryTranslator(bool enabled, string? modelOverrideAlias = null, string? devicePreferenceOrder = null)
     {
         _enabled = enabled;
         _preferredAlias = string.IsNullOrWhiteSpace(modelOverrideAlias) ? null : modelOverrideAlias.Trim();
+        _deviceOrder = FoundryModelSelector.ParseDeviceOrder(devicePreferenceOrder);
         LogService.Instance.Verbose(LogSource,
-            $"Created (enabled={_enabled}, preferredAlias={_preferredAlias ?? "<auto>"}).");
+            $"Created (enabled={_enabled}, preferredAlias={_preferredAlias ?? "<auto>"}, deviceOrder={string.Join(">", _deviceOrder)}).");
     }
 
     public bool IsAvailable => _enabled;
+
+    public void SetEnabled(bool enabled)
+    {
+        if (_enabled == enabled) return;
+        _enabled = enabled;
+        LogService.Instance.Info(LogSource, $"Semantic translation {(enabled ? "enabled" : "disabled")} at runtime.");
+        // Drop any loaded model so a later re-enable re-selects from scratch.
+        ResetLoadedModel();
+    }
+
+    public void SetDevicePreferenceOrder(string? order)
+    {
+        var parsed = FoundryModelSelector.ParseDeviceOrder(order);
+        if (parsed.SequenceEqual(_deviceOrder)) return;
+        _deviceOrder = parsed;
+        LogService.Instance.Info(LogSource, $"Device preference order set to {string.Join(">", _deviceOrder)}; will re-select on next translation.");
+        // Force the next translation to re-select the model variant for the new device order.
+        ResetLoadedModel();
+    }
+
+    public void SetModelOverride(string? modelAlias)
+    {
+        string? normalized = string.IsNullOrWhiteSpace(modelAlias) ? null : modelAlias.Trim();
+        if (string.Equals(normalized, _preferredAlias, StringComparison.OrdinalIgnoreCase)) return;
+        _preferredAlias = normalized;
+        LogService.Instance.Info(LogSource, $"Model override set to '{normalized ?? "<auto>"}'; will re-select on next translation.");
+        ResetLoadedModel();
+    }
+
+    public void SetAvailableAccelerators(bool hasGpu, bool hasNpu)
+    {
+        if (_hasGpu == hasGpu && _hasNpu == hasNpu) return;
+        _hasGpu = hasGpu;
+        _hasNpu = hasNpu;
+        LogService.Instance.Info(LogSource, $"Available accelerators set (GPU={hasGpu}, NPU={hasNpu}); will re-select on next translation.");
+        // A model variant for an absent accelerator must not stay loaded; force re-selection.
+        ResetLoadedModel();
+    }
+
+    /// <summary>The execution devices this machine can actually run, per Yagu's capability detector.
+    /// CPU is always present; GPU/NPU only when detected. Passed to the model selector so a build for an
+    /// absent accelerator is never chosen (it could load via DirectML yet crash during inference).</summary>
+    private HashSet<DeviceType> AvailableDevices()
+    {
+        var set = new HashSet<DeviceType> { DeviceType.CPU };
+        if (_hasGpu) set.Add(DeviceType.GPU);
+        if (_hasNpu) set.Add(DeviceType.NPU);
+        return set;
+    }
+
+    /// <summary>Drops the cached chat client/model so the next translation re-selects and reloads.
+    /// The previously loaded Foundry model stays resident until process exit (no async unload here),
+    /// which is acceptable for a rare settings change.</summary>
+    private void ResetLoadedModel()
+    {
+        _chatClient = null;
+        _model = null;
+        _initialized = false;
+    }
 
     public async Task<SemanticTranslationResult> TranslateAsync(
         string naturalLanguageQuery,
@@ -155,8 +218,8 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
 
             var catalog = await EnsureCatalogLockedAsync(progress, cancellationToken).ConfigureAwait(false);
 
-            log.Verbose(LogSource, $"Selecting model (preferredAlias={_preferredAlias ?? "<auto>"}).");
-            var model = await FoundryModelSelector.SelectAsync(catalog, _preferredAlias, cancellationToken).ConfigureAwait(false);
+            log.Verbose(LogSource, $"Selecting model (preferredAlias={_preferredAlias ?? "<auto>"}, deviceOrder={string.Join(">", _deviceOrder)}).");
+            var model = await FoundryModelSelector.SelectAsync(catalog, _preferredAlias, _deviceOrder, AvailableDevices(), cancellationToken).ConfigureAwait(false);
             if (model is null)
             {
                 log.Warning(LogSource, "No compatible local model is available for this machine.");
@@ -309,8 +372,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                     Alias: AliasOf(m),
                     FileSizeMb: m.Info?.FileSizeMb,
                     Task: m.Info?.Task,
-                    Device: m.Info?.Runtime?.DeviceType ?? DeviceType.CPU)).ToList());
-            int recommendedRank = recommendedAlias is null
+                    Device: m.Info?.Runtime?.DeviceType ?? DeviceType.CPU)).ToList());            int recommendedRank = recommendedAlias is null
                 ? int.MaxValue
                 : FoundryModelSelector.RankOf(recommendedAlias);
 
@@ -328,6 +390,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                 {
                     Alias = alias,
                     DisplayName = alias,
+                    Id = m.Id,
                     SizeBytes = sizeMb is > 0 ? sizeMb.Value * 1024L * 1024L : null,
                     IsRecommended = isRecommended,
                     IsBelowRecommended = !isRecommended && rank > recommendedRank,
@@ -371,7 +434,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             var catalog = await EnsureCatalogLockedAsync(progress, cancellationToken).ConfigureAwait(false);
             string? alias = string.IsNullOrWhiteSpace(modelAlias) ? _preferredAlias : modelAlias.Trim();
             log.Info(LogSource, $"Preparing model (requested='{alias ?? "<auto>"}').");
-            var model = await FoundryModelSelector.SelectAsync(catalog, alias, cancellationToken).ConfigureAwait(false);
+            var model = await FoundryModelSelector.SelectAsync(catalog, alias, _deviceOrder, AvailableDevices(), cancellationToken).ConfigureAwait(false);
             if (model is null)
             {
                 log.Warning(LogSource, $"No compatible local model is available for this machine (requested='{alias ?? "<auto>"}').");

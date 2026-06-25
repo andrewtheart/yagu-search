@@ -20,21 +20,22 @@ public sealed class ExcludedExtensionWarningWiringTests
     private static readonly string SettingsWindowSource = ReadSource("Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs");
 
     [Fact]
-    public void SearchEntryPoints_RunExcludedExtensionCheckAsPostTranslationGate()
+    public void SearchEntryPoints_RunHddAndExcludedChecksAsPostTranslationGate()
     {
-        // The check is passed as the post-translation gate to SubmitSearchAsync so it runs AFTER any
-        // semantic translation (seeing the model's resolved target), ordered after the HDD check.
-        int occurrences = CountOccurrences(SearchInputSource, "await ViewModel.SubmitSearchAsync(CheckExcludedExtensionAndWarnAsync);");
+        // Both interactive entry points pass the combined warning gate to SubmitSearchAsync, so the
+        // HDD + excluded-extension notices run AFTER any semantic translation — against the directory
+        // the model resolved. A semantic query resolving to an SSD must not show a spurious HDD
+        // warning before the model has run, so neither entry point may call the HDD check directly.
+        int occurrences = CountOccurrences(SearchInputSource, "await ViewModel.SubmitSearchAsync(RunPreSearchWarningGatesAsync);");
         Assert.Equal(2, occurrences);
 
-        foreach (var block in new[] { "StartSearchFromUiAsync", "OnQuerySubmitted" })
-        {
-            int methodStart = SearchInputSource.IndexOf(block, StringComparison.Ordinal);
-            Assert.True(methodStart >= 0, $"Expected method {block} in MainWindow.SearchInput.cs");
-            int hdd = SearchInputSource.IndexOf("CheckHddAndWarnAsync", methodStart, StringComparison.Ordinal);
-            int gate = SearchInputSource.IndexOf("SubmitSearchAsync(CheckExcludedExtensionAndWarnAsync)", methodStart, StringComparison.Ordinal);
-            Assert.True(hdd >= 0 && gate > hdd, $"Excluded-extension gate must follow the HDD check in {block}");
-        }
+        // The gate itself runs the HDD check first, then the excluded-extension check.
+        int gateStart = SearchInputSource.IndexOf("private async Task<bool> RunPreSearchWarningGatesAsync(", StringComparison.Ordinal);
+        Assert.True(gateStart >= 0, "Expected RunPreSearchWarningGatesAsync in MainWindow.SearchInput.cs");
+        string gate = Slice(SearchInputSource, gateStart, 600);
+        int hdd = gate.IndexOf("CheckHddAndWarnAsync", StringComparison.Ordinal);
+        int excluded = gate.IndexOf("CheckExcludedExtensionAndWarnAsync", StringComparison.Ordinal);
+        Assert.True(hdd >= 0 && excluded > hdd, "The gate must run the HDD check before the excluded-extension check.");
     }
 
     [Fact]
@@ -42,7 +43,7 @@ public sealed class ExcludedExtensionWarningWiringTests
     {
         int idx = MainViewModelSource.IndexOf("public async Task SubmitSearchAsync(", StringComparison.Ordinal);
         Assert.True(idx >= 0, "Expected SubmitSearchAsync in MainViewModel.cs");
-        string method = Slice(MainViewModelSource, idx, 2000);
+        string method = Slice(MainViewModelSource, idx, 2600);
 
         int translate = method.IndexOf("TranslateSemanticQueryAsync()", StringComparison.Ordinal);
         int gate = method.IndexOf("postTranslationGate is not null", StringComparison.Ordinal);

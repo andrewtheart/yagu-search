@@ -32,6 +32,7 @@ public sealed partial class SettingsWindow : Window
         "Terminal Emulator",
         "Developer Options",
         "Shortcuts & History",
+        "AI",
     ];
 
     private readonly MainViewModel _viewModel;
@@ -210,6 +211,42 @@ public sealed partial class SettingsWindow : Window
             or nameof(MainViewModel.PreviewMatchTextColor)
             or nameof(MainViewModel.PreviewMatchLineColor)
             or nameof(MainViewModel.ResultListMatchHighlightColor);
+
+    /// <summary>Opens the active Yagu log file in Notepad. Resolves notepad.exe by its full System32
+    /// path so the launch does not depend on the process working directory or PATH (an installed app
+    /// runs from C:\Program Files\Yagu, where a bare "notepad.exe" with UseShellExecute=false fails
+    /// with "The system cannot find the file specified"). Falls back to opening the log with its
+    /// default handler via the shell. Swallows any launch failure (logged) so it never crashes the
+    /// Settings window.</summary>
+    private static void OpenLogFileInNotepad(string logPath)
+    {
+        try
+        {
+            string notepadPath = System.IO.Path.Combine(System.Environment.SystemDirectory, "notepad.exe");
+            if (System.IO.File.Exists(notepadPath))
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = notepadPath,
+                    Arguments = $"\"{logPath}\"",
+                    UseShellExecute = false,
+                });
+                return;
+            }
+
+            // Notepad not present at the canonical location (e.g. Store-only Notepad): let the shell
+            // open the log file with whatever text handler is registered.
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = logPath,
+                UseShellExecute = true,
+            });
+        }
+        catch (System.Exception ex)
+        {
+            LogService.Instance.Warning("Settings", $"Failed to open log file in Notepad: {ex.Message}", ex);
+        }
+    }
 
     private void ApplySettingsTheme()
     {
@@ -1849,6 +1886,7 @@ public sealed partial class SettingsWindow : Window
         "Terminal Emulator" => "\uE756",
         "Developer Options" => "\uE713",
         "Shortcuts & History" => "\uE765",
+        "AI" => "\uE99A",
         _ => "\uE7FC",
     };
 
@@ -2145,27 +2183,6 @@ public sealed partial class SettingsWindow : Window
             };
             precedenceGroup.Children.Add(precedence);
             precedenceGroup.Children.Add(new TextBlock { Text = "Controls which side wins when a file is both matched by your Include filter and excluded by .gitignore (only relevant when Obey .gitignore is on). Leave on \"Ask me each time\" to be prompted; the prompt's \"Don't ask again\" option also updates this setting.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
-
-            var semanticGroup = AddSettingsGroupBox(g, "Semantic Search");
-            bool overrideEnabled = _viewModel.SemanticDefaultOverrideEnabled;
-            var defaultTraditional = new CheckBox
-            {
-                Content = NextSearchLabel("Default to Traditional search mode"),
-                IsChecked = overrideEnabled && _viewModel.DefaultToTraditionalSearchMode,
-                IsEnabled = overrideEnabled,
-            };
-            defaultTraditional.Checked += (_, _) => { _viewModel.DefaultToTraditionalSearchMode = true; MarkSettingsDirty(requireValueChanges: false); };
-            defaultTraditional.Unchecked += (_, _) => { _viewModel.DefaultToTraditionalSearchMode = false; MarkSettingsDirty(requireValueChanges: false); };
-            semanticGroup.Children.Add(defaultTraditional);
-            semanticGroup.Children.Add(new TextBlock
-            {
-                Text = overrideEnabled
-                    ? "Your machine has a GPU/NPU that can run Semantic search, so the search bar defaults to Semantic. Check this to default to Traditional instead. You can always switch modes from the search-button chevron."
-                    : "Disabled: no supported GPU/NPU was detected, so Yagu always defaults to Traditional search. Semantic mode can still be selected manually from the search-button chevron when available.",
-                FontSize = 11,
-                Opacity = 0.6,
-                TextWrapping = TextWrapping.Wrap,
-            });
         }
 
         // ── Search Limits ──
@@ -3058,7 +3075,7 @@ public sealed partial class SettingsWindow : Window
                 : 1;
             focusBehavior.SelectionChanged += (_, _) => _viewModel.WindowFocusBehavior = focusBehavior.SelectedIndex;
             focusTrayGroup.Children.Add(focusBehavior);
-            focusTrayGroup.Children.Add(new TextBlock { Text = "Controls what happens when the compact launcher window loses focus. You can override per-session using the pin button next to Browse.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            focusTrayGroup.Children.Add(new TextBlock { Text = "Controls what happens when the window loses focus, in any mode (compact launcher or traditional window). You can also override it for the current session with the pin button next to Browse.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             var closeToTray = new CheckBox { Content = "Dock to system tray when closed (instead of exiting)", IsChecked = _viewModel.CloseToTray };
             closeToTray.Checked += (_, _) => _viewModel.CloseToTray = true;
@@ -3071,6 +3088,50 @@ public sealed partial class SettingsWindow : Window
             maximizeOnStartup.Unchecked += (_, _) => _viewModel.MaximizeOnStartup = false;
             layoutGroup.Children.Add(maximizeOnStartup);
             layoutGroup.Children.Add(new TextBlock { Text = "When enabled, the main window starts maximized instead of its default size.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            layoutGroup.Children.Add(new TextBlock { Text = "Traditional window launch position:", Margin = new Thickness(0, 8, 0, 0) });
+            var launchPosition = new ComboBox();
+            launchPosition.Items.Add("Centered (default)");
+            launchPosition.Items.Add("Top Left");
+            launchPosition.Items.Add("Top Middle");
+            launchPosition.Items.Add("Top Right");
+            launchPosition.Items.Add("Middle Left");
+            launchPosition.Items.Add("Middle Right");
+            launchPosition.Items.Add("Bottom Left");
+            launchPosition.Items.Add("Bottom Middle");
+            launchPosition.Items.Add("Bottom Right");
+            launchPosition.SelectedIndex = _viewModel.LaunchWindowPosition is >= 0 and <= 8
+                ? _viewModel.LaunchWindowPosition
+                : 0;
+            launchPosition.SelectionChanged += (_, _) =>
+            {
+                if (launchPosition.SelectedIndex >= 0)
+                    _viewModel.LaunchWindowPosition = launchPosition.SelectedIndex;
+            };
+            layoutGroup.Children.Add(launchPosition);
+            layoutGroup.Children.Add(new TextBlock { Text = "Where the main window appears on screen when Yagu launches as a traditional window. Ignored when \u201CMaximize window on startup\u201D is on or while in the compact launcher.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            layoutGroup.Children.Add(new TextBlock { Text = "Compact launcher launch position:", Margin = new Thickness(0, 8, 0, 0) });
+            var launcherPosition = new ComboBox();
+            launcherPosition.Items.Add("Centered");
+            launcherPosition.Items.Add("Top Left");
+            launcherPosition.Items.Add("Top Middle (default)");
+            launcherPosition.Items.Add("Top Right");
+            launcherPosition.Items.Add("Middle Left");
+            launcherPosition.Items.Add("Middle Right");
+            launcherPosition.Items.Add("Bottom Left");
+            launcherPosition.Items.Add("Bottom Middle");
+            launcherPosition.Items.Add("Bottom Right");
+            launcherPosition.SelectedIndex = _viewModel.LauncherWindowPosition is >= 0 and <= 8
+                ? _viewModel.LauncherWindowPosition
+                : 2;
+            launcherPosition.SelectionChanged += (_, _) =>
+            {
+                if (launcherPosition.SelectedIndex >= 0)
+                    _viewModel.LauncherWindowPosition = launcherPosition.SelectedIndex;
+            };
+            layoutGroup.Children.Add(launcherPosition);
+            layoutGroup.Children.Add(new TextBlock { Text = "Where the compact launcher (Spotlight-style search bar) appears on screen at launch. Defaults to Top Middle.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
         }
 
         // ── Interaction ──
@@ -3331,7 +3392,16 @@ public sealed partial class SettingsWindow : Window
             consoleLogRow.Children.Add(consoleLogWarn);
             loggingGroup.Children.Add(consoleLogRow);
 
-            loggingGroup.Children.Add(new TextBlock { Text = $"Log file: {LogService.DefaultLogPath()}", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            // Log file path is a clickable link that opens the active log file in Notepad.
+            var logPath = LogService.DefaultLogPath();
+            var logFileBlock = new TextBlock { FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap };
+            logFileBlock.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = "Log file: " });
+            var logHyperlink = new Microsoft.UI.Xaml.Documents.Hyperlink();
+            logHyperlink.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = logPath });
+            logHyperlink.Click += (_, _) => OpenLogFileInNotepad(logPath);
+            logFileBlock.Inlines.Add(logHyperlink);
+            ToolTipService.SetToolTip(logFileBlock, "Open the log file in Notepad");
+            loggingGroup.Children.Add(logFileBlock);
         }
 
         // ── Shortcuts & History ──
@@ -3378,6 +3448,145 @@ public sealed partial class SettingsWindow : Window
             semanticRecent.ValueChanged += (_, args) => _viewModel.MaxSemanticRecentItems = (int)args.NewValue;
             historyGroup.Children.Add(semanticRecent);
             historyGroup.Children.Add(new TextBlock { Text = "Controls how many natural-language Semantic-mode queries Yagu keeps for autocomplete, separate from Traditional search history.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+        }
+
+        // ── AI ──
+        {
+            var g = AddTab("AI");
+            var aiGroup = AddSettingsGroupBox(g, "AI (Semantic) Search");
+            var modelGroup = AddSettingsGroupBox(g, "Model");
+            var deviceGroup = AddSettingsGroupBox(g, "Accelerator Preference");
+            var hardwareGroup = AddSettingsGroupBox(g, "Detected Hardware");
+
+            // Controls disabled while the feature is off; re-enabled live by the toggle below.
+            var dependentControls = new List<Control>();
+
+            var enableToggle = new ToggleSwitch
+            {
+                IsOn = _viewModel.SemanticSearchAvailable,
+                OnContent = "Enable AI (semantic) search",
+                OffContent = "Enable AI (semantic) search",
+            };
+            enableToggle.Toggled += (_, _) =>
+            {
+                _viewModel.SemanticSearchAvailable = enableToggle.IsOn;
+                foreach (var c in dependentControls) c.IsEnabled = enableToggle.IsOn;
+                MarkSettingsDirty(requireValueChanges: false);
+            };
+            aiGroup.Children.Add(enableToggle);
+            aiGroup.Children.Add(new TextBlock { Text = "Lets you search with plain-English requests (e.g. \"png files on C: modified last year\"), translated on-device by a small local AI model. No query ever leaves your PC. Turn off to use only Traditional search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            bool overrideEnabled = _viewModel.SemanticDefaultOverrideEnabled;
+            var defaultTraditional = new CheckBox
+            {
+                Content = NextSearchLabel("Default to Traditional search mode"),
+                IsChecked = overrideEnabled && _viewModel.DefaultToTraditionalSearchMode,
+                IsEnabled = overrideEnabled,
+                Margin = new Thickness(0, 4, 0, 0),
+            };
+            defaultTraditional.Checked += (_, _) => { _viewModel.DefaultToTraditionalSearchMode = true; MarkSettingsDirty(requireValueChanges: false); };
+            defaultTraditional.Unchecked += (_, _) => { _viewModel.DefaultToTraditionalSearchMode = false; MarkSettingsDirty(requireValueChanges: false); };
+            aiGroup.Children.Add(defaultTraditional);
+            aiGroup.Children.Add(new TextBlock
+            {
+                Text = overrideEnabled
+                    ? "Your machine has a GPU/NPU that can run AI search, so the search bar defaults to Semantic. Check this to default to Traditional instead. You can always switch modes from the search-button chevron."
+                    : "Disabled: no supported GPU/NPU was detected, so Yagu always defaults to Traditional search. Semantic mode can still be selected manually from the search-button chevron when available.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var modelAlerts = new CheckBox
+            {
+                Content = "Alert me when new on-device models are available",
+                IsChecked = _viewModel.FoundryModelUpdateAlertsEnabled,
+                Margin = new Thickness(0, 4, 0, 0),
+            };
+            modelAlerts.Checked += (_, _) => { _viewModel.FoundryModelUpdateAlertsEnabled = true; MarkSettingsDirty(requireValueChanges: false); };
+            modelAlerts.Unchecked += (_, _) => { _viewModel.FoundryModelUpdateAlertsEnabled = false; MarkSettingsDirty(requireValueChanges: false); };
+            aiGroup.Children.Add(modelAlerts);
+            aiGroup.Children.Add(new TextBlock
+            {
+                Text = "About once a day, Yagu checks Foundry Local for new, updated, or variant on-device models and shows a one-time alert. Only runs after you've used AI search at least once.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+            dependentControls.Add(modelAlerts);
+
+            // ── Model ──
+            modelGroup.Children.Add(NextSearchLabel("Current model:"));
+            var modelValue = new TextBlock
+            {
+                Text = _viewModel.CurrentSemanticModelDisplay,
+                TextWrapping = TextWrapping.Wrap,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            };
+            modelGroup.Children.Add(modelValue);
+
+            var modelButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 6, 0, 0) };
+            var chooseModel = new Button { Content = "Choose / download model\u2026" };
+            chooseModel.Click += async (_, _) =>
+            {
+                var theme = (Content as FrameworkElement)?.ActualTheme ?? ElementTheme.Default;
+                await SemanticModelDownloadDialog.ShowAsync(
+                    _settingsHwnd,
+                    theme,
+                    (progress, token) => _viewModel.GetSemanticModelOptionsAsync(progress, token),
+                    (alias, progress, token) => _viewModel.PrepareSemanticModelAsync(alias, progress, token),
+                    _viewModel.SemanticModelAlias);
+                modelValue.Text = _viewModel.CurrentSemanticModelDisplay;
+            };
+            var resetModel = new Button { Content = "Use recommended (automatic)" };
+            resetModel.Click += async (_, _) =>
+            {
+                await _viewModel.ClearSemanticModelOverrideAsync();
+                modelValue.Text = _viewModel.CurrentSemanticModelDisplay;
+            };
+            modelButtons.Children.Add(chooseModel);
+            modelButtons.Children.Add(resetModel);
+            modelGroup.Children.Add(modelButtons);
+            modelGroup.Children.Add(new TextBlock { Text = "Pick which on-device model translates your requests. The recommended model is the best fit for your hardware; in the picker, any model that is not the one you're currently using is flagged \"Results may vary.\" Changing the model takes effect on your next AI search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            dependentControls.Add(chooseModel);
+            dependentControls.Add(resetModel);
+
+            // ── Accelerator preference ──
+            deviceGroup.Children.Add(NextSearchLabel("Preferred accelerator order (which device runs the model):"));
+            var deviceOrders = new (string Value, string Display)[]
+            {
+                ("GPU,NPU,CPU", "GPU \u2192 NPU \u2192 CPU"),
+                ("GPU,CPU,NPU", "GPU \u2192 CPU \u2192 NPU"),
+                ("NPU,GPU,CPU", "NPU \u2192 GPU \u2192 CPU"),
+                ("NPU,CPU,GPU", "NPU \u2192 CPU \u2192 GPU"),
+                ("CPU,GPU,NPU", "CPU \u2192 GPU \u2192 NPU"),
+                ("CPU,NPU,GPU", "CPU \u2192 NPU \u2192 GPU"),
+            };
+            var deviceCombo = new ComboBox { Width = 240, MinWidth = 0, Padding = new Thickness(8, 0, 8, 0) };
+            foreach (var o in deviceOrders) deviceCombo.Items.Add(o.Display);
+            int curDeviceIdx = Array.FindIndex(deviceOrders, o => string.Equals(o.Value, _viewModel.SemanticDevicePreferenceOrder, StringComparison.OrdinalIgnoreCase));
+            deviceCombo.SelectedIndex = curDeviceIdx >= 0 ? curDeviceIdx : 0;
+            deviceCombo.SelectionChanged += (_, _) =>
+            {
+                if (deviceCombo.SelectedIndex >= 0)
+                {
+                    _viewModel.SemanticDevicePreferenceOrder = deviceOrders[deviceCombo.SelectedIndex].Value;
+                    MarkSettingsDirty(requireValueChanges: false);
+                }
+            };
+            deviceGroup.Children.Add(deviceCombo);
+            deviceGroup.Children.Add(new TextBlock { Text = "Yagu prefers the first listed device that can run the model. GPU usually gives the most accurate results for this task; NPU is most power-efficient. Applies to your next AI search \u2014 no restart needed.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            dependentControls.Add(deviceCombo);
+
+            // ── Detected hardware (read-only) ──
+            hardwareGroup.Children.Add(new TextBlock
+            {
+                Text = $"GPU: {(_viewModel.SemanticHasGpu ? "Detected" : "Not detected")}\nNPU: {(_viewModel.SemanticHasNpu ? "Detected" : "Not detected")}\nCPU: Always available (fallback)",
+                TextWrapping = TextWrapping.Wrap,
+            });
+            hardwareGroup.Children.Add(new TextBlock { Text = "Detected via the Windows device registry. The available model builds and accelerators ultimately depend on what Foundry Local can run on this machine.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            foreach (var c in dependentControls) c.IsEnabled = _viewModel.SemanticSearchAvailable;
         }
     }
 }

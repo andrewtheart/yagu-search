@@ -125,12 +125,75 @@ begin
   end;
 end;
 
+{ True when the installer was launched with the /VERBOSELOG switch. This forces Yagu to log
+  verbosely from its VERY FIRST launch (the in-app log-level setting is unreachable then because
+  startup modals block the settings UI). Works with silent installs too, e.g.:
+      YaguSetup-x.y.z-x64.exe /VERYSILENT /VERBOSELOG }
+function VerboseLoggingRequested(): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/VERBOSELOG') = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+end;
+
+{ Publish (or clear) the install-time log-level override that Yagu reads at startup from
+  HKCU\Software\Yagu\LogLevelOverride. With /VERBOSELOG the first run logs verbosely to yagu.log;
+  a normal install clears any stale override left by a previous verbose install so logging reverts
+  to the saved setting. The Software\Yagu key is removed at uninstall (CurUninstallStepChanged). }
+procedure ApplyLogLevelOverride();
+begin
+  if VerboseLoggingRequested() then
+    RegWriteStringValue(HKCU, 'Software\Yagu', 'LogLevelOverride', 'Verbose')
+  else
+    RegDeleteValue(HKCU, 'Software\Yagu', 'LogLevelOverride');
+end;
+
+{ True when the Microsoft Edge WebView2 Evergreen Runtime is already installed. It registers its
+  version ("pv") under the EdgeUpdate client GUID F3017226-FE2A-4295-8BDF-00C3A9A7E4C5: per-machine
+  in WOW6432Node (EdgeUpdate is 32-bit) or the native view, or per-user under HKCU. }
+function WebView2RuntimeInstalled(): Boolean;
+var
+  pv: String;
+begin
+  Result :=
+    (RegQueryStringValue(HKLM, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', pv) and (pv <> '') and (pv <> '0.0.0.0')) or
+    (RegQueryStringValue(HKLM, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', pv) and (pv <> '') and (pv <> '0.0.0.0')) or
+    (RegQueryStringValue(HKCU, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', pv) and (pv <> '') and (pv <> '0.0.0.0'));
+end;
+
+{ Installs the WebView2 Evergreen Runtime (needed only by the embedded terminal) from the bundled
+  bootstrapper, unless it is already present. BEST-EFFORT: the terminal is optional, so a failure
+  (e.g. no internet) never aborts Yagu's install -- the app shows an in-terminal install prompt. }
+procedure InstallWebView2Runtime();
+var
+  ResultCode: Integer;
+  Bootstrapper: String;
+begin
+  if WebView2RuntimeInstalled() then
+    exit;
+
+  Bootstrapper := ExpandConstant('{app}\Prerequisites\WebView2\MicrosoftEdgeWebView2Setup.exe');
+  if not FileExists(Bootstrapper) then
+    exit;
+
+  WizardForm.StatusLabel.Caption := 'Installing Microsoft Edge WebView2 Runtime (for the embedded terminal)...';
+  Exec(Bootstrapper, '/silent /install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
     if not InstallWindowsAppRuntime() then
       Abort;
+    ApplyLogLevelOverride();
+    InstallWebView2Runtime();
   end;
 end;
 

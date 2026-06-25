@@ -1,7 +1,10 @@
 using System.Diagnostics;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Windows.System;
 using Yagu.Services;
+using Yagu.Services.Ai;
 namespace Yagu;
 
 /// <summary>
@@ -26,6 +29,12 @@ public sealed partial class MainWindow
         else if (!_launcherMode)
         {
             InitializeTraditionalAdvancedOptionsOverlay();
+            // Place the window per the user's launch-position setting once its height has settled.
+            // InitializeTraditionalAdvancedOptionsOverlay enqueues a deferred height fit at Low
+            // priority; enqueueing here (also Low, FIFO) positions the window with its final size.
+            DispatcherQueue.TryEnqueue(
+                Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                PositionWindowOnLaunch);
         }
 
         if (_autoSearchOnLoad)
@@ -41,6 +50,7 @@ public sealed partial class MainWindow
         await CheckEverythingAsync();
         await CheckFirstRunContextMenuAsync();
         await ShowFontContrastWarningIfNeededAsync();
+        await ShowCpuSemanticWarningIfNeededAsync();
 
         if (_autoSearchOnLoad)
         {
@@ -55,6 +65,10 @@ public sealed partial class MainWindow
         {
             FocusSearchBox();
         }
+
+        // Non-blocking: alert (once) if Foundry Local has new/updated on-device models available.
+        // Fire-and-forget so a slow catalog query never delays the search box or startup focus.
+        _ = CheckForNewFoundryModelsAsync();
     }
 
     private void FocusSearchBox(bool suppressSuggestions = false)
@@ -75,6 +89,209 @@ public sealed partial class MainWindow
                 DispatcherQueue.TryEnqueue(() => QueryBox.IsSuggestionListOpen = false);
             }
         });
+    }
+
+    /// <summary>
+    /// First-run only: when AI (Semantic) search is available but no GPU/NPU was detected, warn that the
+    /// suggested model would run on the CPU (slower, variable results) and offer to make Traditional the
+    /// default search mode. Shown at most once. Titleless modal with a warning glyph, matching the app's
+    /// other warning dialogs. Accepting persists the Traditional default and switches the UI immediately.
+    /// </summary>
+    private async Task ShowCpuSemanticWarningIfNeededAsync()
+    {
+        if (!ViewModel.ShouldShowCpuSemanticWarning)
+            return;
+        // Don't stack on another startup prompt; the warning is not marked shown yet, so it simply
+        // tries again on the next launch.
+        if (YaguDialog.HasOpenOwnedWindow(_hwnd))
+            return;
+
+        var result = await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "AI search will run on your CPU",
+                TitleGlyph = "\uE7BA",
+                TitleGlyphColor = Microsoft.UI.Colors.Gold,
+                Content = BuildCpuSemanticWarningContent(),
+                PrimaryButtonText = "Use Traditional search",
+                CloseButtonText = "Keep AI search",
+                DefaultButton = YaguDialogDefaultButton.Primary,
+                RequestedTheme = RootGrid.ActualTheme,
+                ShowTitleBar = false,
+                Width = 560,
+                Height = 360,
+                MaxContentHeight = 240,
+            });
+
+        await ViewModel.DismissCpuSemanticWarningAsync(result == YaguDialogResult.Primary);
+    }
+
+    /// <summary>Body of the first-run CPU-mode AI-search warning: what CPU mode means and the
+    /// recommendation to keep Traditional search as the default.</summary>
+    private static StackPanel BuildCpuSemanticWarningContent()
+    {
+        var panel = new StackPanel { Spacing = 12 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Yagu didn't find a compatible GPU or NPU on this PC, so AI (Semantic) search would run on "
+                 + "your CPU. It still works, but it can be slow and the quality of results may vary.",
+            TextWrapping = TextWrapping.WrapWholeWords,
+            FontSize = 14,
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "We recommend keeping Traditional search as your default. You can still switch to AI search "
+                 + "any time from the search bar.",
+            TextWrapping = TextWrapping.WrapWholeWords,
+            FontSize = 13,
+            Opacity = 0.85,
+        });
+        return panel;
+    }
+
+    private async Task CheckForNewFoundryModelsAsync()
+    {
+        // Don't stack on top of another startup prompt (Everything, font-contrast, etc.). If one is
+        // open we skip entirely this session — the VM has not committed a baseline yet, so the check
+        // simply runs again next launch.
+        if (YaguDialog.HasOpenOwnedWindow(_hwnd))
+            return;
+
+        IReadOnlyList<FoundryModelChange> changes;
+        try
+        {
+            changes = await ViewModel.CheckForNewFoundryModelsAsync(System.Threading.CancellationToken.None);
+        }
+        catch (System.Exception ex)
+        {
+            LogService.Instance.Warning("MainWindow", $"CheckForNewFoundryModelsAsync failed: {ex.Message}", ex);
+            return;
+        }
+
+        if (changes.Count == 0 || YaguDialog.HasOpenOwnedWindow(_hwnd))
+            return;
+
+        var (content, dontAlertAgain) = BuildFoundryModelAlertContent(changes);
+        var theme = (Content as FrameworkElement)?.ActualTheme ?? ElementTheme.Default;
+
+        var result = await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = changes.Count == 1 ? "New AI model available" : "New AI models available",
+                Content = content,
+                TitleGlyph = "\uE99A",
+                PrimaryButtonText = "Choose a model\u2026",
+                CloseButtonText = "Dismiss",
+                DefaultButton = YaguDialogDefaultButton.Primary,
+                RequestedTheme = theme,
+                Width = 560,
+                Height = 420,
+                MaxContentHeight = 320,
+            });
+
+        if (dontAlertAgain.IsChecked == true)
+            ViewModel.FoundryModelUpdateAlertsEnabled = false;
+
+        if (result == YaguDialogResult.Primary)
+        {
+            await SemanticModelDownloadDialog.ShowAsync(
+                _hwnd,
+                theme,
+                (progress, token) => ViewModel.GetSemanticModelOptionsAsync(progress, token),
+                (alias, progress, token) => ViewModel.PrepareSemanticModelAsync(alias, progress, token),
+                ViewModel.SemanticModelAlias);
+        }
+    }
+
+    /// <summary>Builds the body of the new-model alert: an intro line, a row per new/updated model, and
+    /// a "Don't alert me again" checkbox (returned so the caller can read its state after the dialog).</summary>
+    private static (FrameworkElement Content, CheckBox DontAlertAgain) BuildFoundryModelAlertContent(
+        IReadOnlyList<FoundryModelChange> changes)
+    {
+        var panel = new StackPanel { Spacing = 12 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = changes.Count == 1
+                ? "A new on-device model is available for AI (Semantic) search:"
+                : $"{changes.Count} new on-device models are available for AI (Semantic) search:",
+            TextWrapping = TextWrapping.WrapWholeWords,
+            FontSize = 14,
+        });
+
+        var list = new StackPanel { Spacing = 6 };
+        foreach (var change in changes)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+            row.Children.Add(new FontIcon
+            {
+                Glyph = "\uE753",
+                FontSize = 15,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+
+            var parts = new List<string> { change.Alias };
+            if (!string.IsNullOrWhiteSpace(change.DeviceLabel))
+                parts.Add(change.DeviceLabel!);
+            string size = FormatModelSize(change.SizeBytes);
+            if (size.Length > 0)
+                parts.Add(size);
+
+            row.Children.Add(new TextBlock
+            {
+                Text = string.Join("  \u00b7  ", parts),
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+
+            var tagText = new TextBlock
+            {
+                Text = change.Kind == FoundryModelChangeKind.New ? "New" : "Updated",
+                FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            var tag = new Border
+            {
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(7, 1, 7, 1),
+                VerticalAlignment = VerticalAlignment.Center,
+                Background = new SolidColorBrush(change.Kind == FoundryModelChangeKind.New
+                    ? Windows.UI.Color.FromArgb(0x40, 0x4C, 0x9E, 0xFF)
+                    : Windows.UI.Color.FromArgb(0x40, 0x5C, 0xB8, 0x5C)),
+                Child = tagText,
+            };
+            row.Children.Add(tag);
+            list.Children.Add(row);
+        }
+        panel.Children.Add(list);
+
+        var dontAlertAgain = new CheckBox
+        {
+            Content = "Don't alert me about new models again",
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        panel.Children.Add(dontAlertAgain);
+
+        var scroller = new ScrollViewer
+        {
+            Content = panel,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollMode = ScrollMode.Disabled,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
+        return (scroller, dontAlertAgain);
+    }
+
+    private static string FormatModelSize(long? bytes)
+    {
+        if (bytes is not { } b || b <= 0)
+            return string.Empty;
+        double gb = b / (1024.0 * 1024 * 1024);
+        if (gb >= 1)
+            return $"{gb:0.#} GB";
+        double mb = b / (1024.0 * 1024);
+        return $"{mb:0} MB";
     }
 
     private async Task CheckEverythingAsync()
@@ -106,6 +323,7 @@ public sealed partial class MainWindow
                         PrimaryButtonText = "Start Everything",
                         CloseButtonText = "Skip",
                         DefaultButton = YaguDialogDefaultButton.Primary,
+                        ShowTitleBar = false,
                         Width = 560,
                         Height = 300,
                     }) == YaguDialogResult.Primary)
@@ -143,6 +361,7 @@ public sealed partial class MainWindow
                     PrimaryButtonText = "Start Everything",
                     CloseButtonText = "Skip",
                     DefaultButton = YaguDialogDefaultButton.Primary,
+                    ShowTitleBar = false,
                     Width = 560,
                     Height = 300,
                 }) == YaguDialogResult.Primary)

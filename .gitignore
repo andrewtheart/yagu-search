@@ -35,6 +35,10 @@ Yagu.Tests/AzurePublishRegressionTests.local.cs
 # Installer staging (built by build-installer.ps1)
 installer/staging/
 installer/output/
+# Cached WebView2 bootstrapper (downloaded by scripts/webview2-prereq.ps1)
+installer/prerequisites/
+# Vendored VC++ runtime redistributable (bundled locally for the installer)
+vendor/vc-runtime/
 !installer/*.exe
 build_debug.txt
 Yagu/Native/yagu_core.dll

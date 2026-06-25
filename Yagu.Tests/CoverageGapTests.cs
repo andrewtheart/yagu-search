@@ -1223,6 +1223,28 @@ public sealed class SelectedFileExportServiceCoverageTests : IDisposable
     }
 
     [Fact]
+    public async Task WriteFilesWithContentAsync_TextLogWithEscapeCodes_CopiesContent()
+    {
+        // A text log full of ANSI escape sequences (e.g. a model-download progress dump) trips the
+        // control-byte-ratio heuristic but has no magic number / NUL byte. "Copy File With Content"
+        // must copy its actual text instead of writing "[Binary file skipped.]".
+        var logPath = Path.Combine(_root, "yagu.log");
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < 200; i++)
+            sb.Append("\u001b[31mDownloading phi-3\u001b[0m \u001b[2K\rprogress " + i + "%\n");
+        var marker = "UNIQUE_LOG_MARKER_42";
+        sb.Append(marker).Append('\n');
+        File.WriteAllText(logPath, sb.ToString());
+
+        using var writer = new StringWriter();
+        await SelectedFileExportService.WriteFilesWithContentAsync([logPath], writer);
+        var output = writer.ToString();
+
+        Assert.DoesNotContain("[Binary file skipped.]", output);
+        Assert.Contains(marker, output);
+    }
+
+    [Fact]
     public async Task WriteFilesWithContentAsync_InvalidPathChars_ShowsFallbackHeader()
     {
         // Use a path that fails to construct a FileInfo (e.g. control chars)

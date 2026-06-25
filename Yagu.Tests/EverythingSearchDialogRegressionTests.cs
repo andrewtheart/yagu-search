@@ -17,6 +17,10 @@ public sealed class EverythingSearchDialogRegressionTests
 
         Assert.Contains("internal sealed class YaguDialog : Window", dialog);
         Assert.Contains("presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);", dialog);
+        // SetBorderAndTitleBar alone does not reliably remove the OS title bar; the window must also
+        // extend content into the title bar (matching MainWindow/SettingsWindow/ResultStoreTempLocationWindow).
+        Assert.Contains("if (!options.ShowTitleBar)", dialog);
+        Assert.Contains("ExtendsContentIntoTitleBar = true;", dialog);
         Assert.Contains("WindowForegroundHelper.ConfigureOwnedWindow(hwnd, _ownerHwnd);", dialog);
         Assert.Contains("EnableWindow(_ownerHwnd, false);", dialog);
         Assert.Contains("WindowForegroundHelper.CenterWindowOverOwner(appWindow, _ownerHwnd, options.Width, options.Height);", dialog);
@@ -37,6 +41,28 @@ public sealed class EverythingSearchDialogRegressionTests
             Assert.DoesNotContain("ContentDialogResult", source, StringComparison.Ordinal);
             Assert.DoesNotContain("ContentDialogButton", source, StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public void EverythingNotRunningPrompts_AreTitleless()
+    {
+        string root = FindRepoRoot();
+        string startupChecks = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+
+        const string titleMarker = "Title = \"Everything Search Not Running\"";
+        int count = 0;
+        int index = startupChecks.IndexOf(titleMarker, StringComparison.Ordinal);
+        while (index >= 0)
+        {
+            count++;
+            int blockEnd = startupChecks.IndexOf("}) == YaguDialogResult.Primary", index, StringComparison.Ordinal);
+            Assert.True(blockEnd > index, "Could not find end of 'Everything Search Not Running' dialog options block.");
+            string block = startupChecks.Substring(index, blockEnd - index);
+            Assert.Contains("ShowTitleBar = false", block);
+            index = startupChecks.IndexOf(titleMarker, index + titleMarker.Length, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(2, count);
     }
 
     private static string FindRepoRoot()

@@ -51,7 +51,7 @@ public sealed partial class App : Application, IDisposable
         // Initialize logging from persisted settings
         var settings = new SettingsService().Load();
         LogService.Instance.RotateIfNeeded();
-        LogService.Init((LogLevel)settings.LogLevelIndex, (LogLevel)settings.ConsoleLogLevelIndex);
+        LogService.InitFromSettings((LogLevel)settings.LogLevelIndex, (LogLevel)settings.ConsoleLogLevelIndex);
         FileLister.Backend = (FileListerBackend)settings.FileListerBackendIndex;
         _ = ResultStore.CleanupOrphanedTempFilesAsync(settings.SearchResultTempDirectory);
 

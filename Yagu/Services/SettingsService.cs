@@ -303,6 +303,15 @@ public sealed class AppSettings
     public bool HasShownCloseToTrayNotification { get; set; }
     /// <summary>When true, maximize the window on startup. Default false.</summary>
     public bool MaximizeOnStartup { get; set; }
+    /// <summary>Where the traditional (non-launcher) window is placed on screen at launch.
+    /// 0 = Centered (default), 1 = Top Left, 2 = Top Middle, 3 = Top Right, 4 = Middle Left,
+    /// 5 = Middle Right, 6 = Bottom Left, 7 = Bottom Middle, 8 = Bottom Right. Ignored when
+    /// <see cref="MaximizeOnStartup"/> is set or while in the compact launcher (which always docks top-center).</summary>
+    public int LaunchWindowPosition { get; set; }
+    /// <summary>Where the compact launcher window is placed on screen at launch. Same anchor indices
+    /// as <see cref="LaunchWindowPosition"/> (0 = Centered .. 8 = Bottom Right) but defaults to
+    /// 2 = Top Middle, matching the launcher's classic Spotlight-style top-center dock.</summary>
+    public int LauncherWindowPosition { get; set; } = 2;
     /// <summary>Legacy Advanced Options width setting. Retained for settings-file compatibility; the drawer now always uses the query-box width.</summary>
     public int AdvancedOptionsCollapsedWidthModeIndex { get; set; }
     /// <summary>Optional default working directory for the embedded terminal. Empty uses the Yagu launch directory.</summary>
@@ -370,6 +379,24 @@ public sealed class AppSettings
     /// to run, as a comma-separated subset/order of GPU/NPU/CPU. Default "GPU,NPU,CPU". Invalid values
     /// fall back to the default order when parsed.</summary>
     public string SemanticDevicePreferenceOrder { get; set; } = "GPU,NPU,CPU";
+
+    // ── Foundry model update alerts ──
+    /// <summary>When true (default), Yagu checks the Foundry Local catalog about once a day and shows a
+    /// one-time modal when a new, updated, or variant text-chat model becomes available. Only runs for
+    /// users who have already used semantic search (so it never triggers a model/EP download by itself).</summary>
+    public bool FoundryModelUpdateAlertsEnabled { get; set; } = true;
+    /// <summary>Variant ids of the text-chat models seen at the last catalog check — the baseline used
+    /// to detect newcomers. Empty until the first check seeds it silently.</summary>
+    public List<string> KnownFoundryModelIds { get; set; } = [];
+    /// <summary>UTC of the last successful Foundry catalog check (throttles checks to about once a day).</summary>
+    public DateTimeOffset? LastFoundryModelCheckUtc { get; set; }
+    /// <summary>UTC of the last time the new-model alert modal was shown (diagnostic/throttle aid).</summary>
+    public DateTimeOffset? LastFoundryModelAlertUtc { get; set; }
+
+    /// <summary>True once Yagu has shown the first-run "AI search will run on the CPU" warning (no
+    /// GPU/NPU detected). Set when the warning modal is displayed — regardless of the user's choice —
+    /// so it appears at most once.</summary>
+    public bool CpuSemanticWarningShown { get; set; }
 }
 
 public sealed class SettingsService

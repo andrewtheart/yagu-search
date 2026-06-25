@@ -38,6 +38,7 @@ internal sealed class SemanticModelDownloadDialog : Window
     private readonly ElementTheme _theme;
     private readonly LoadOptionsDelegate _loadOptions;
     private readonly DownloadDelegate _download;
+    private readonly string? _currentAlias;
     private readonly CancellationTokenSource _cts = new();
 
     private Grid _root = null!;
@@ -52,16 +53,21 @@ internal sealed class SemanticModelDownloadDialog : Window
     private bool _completed;
 
     private SemanticModelDownloadDialog(
-        IntPtr ownerHwnd, ElementTheme theme, LoadOptionsDelegate loadOptions, DownloadDelegate download)
+        IntPtr ownerHwnd, ElementTheme theme, LoadOptionsDelegate loadOptions, DownloadDelegate download, string? currentAlias)
     {
         _ownerHwnd = ownerHwnd;
         _theme = theme;
         _loadOptions = loadOptions;
         _download = download;
+        _currentAlias = string.IsNullOrWhiteSpace(currentAlias) ? null : currentAlias.Trim();
 
         Title = "Semantic Search";
         Content = BuildSkeleton();
         Closed += OnClosed;
+
+        // Hide the OS title bar reliably (SetBorderAndTitleBar alone is not enough); matches the
+        // title-bar-less pattern used by MainWindow/SettingsWindow/ResultStoreTempLocationWindow.
+        ExtendsContentIntoTitleBar = true;
 
         IntPtr hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         WindowForegroundHelper.ConfigureOwnedWindow(hwnd, _ownerHwnd);
@@ -75,9 +81,9 @@ internal sealed class SemanticModelDownloadDialog : Window
     }
 
     public static Task<string?> ShowAsync(
-        IntPtr ownerHwnd, ElementTheme theme, LoadOptionsDelegate loadOptions, DownloadDelegate download)
+        IntPtr ownerHwnd, ElementTheme theme, LoadOptionsDelegate loadOptions, DownloadDelegate download, string? currentAlias = null)
     {
-        var dialog = new SemanticModelDownloadDialog(ownerHwnd, theme, loadOptions, download);
+        var dialog = new SemanticModelDownloadDialog(ownerHwnd, theme, loadOptions, download, currentAlias);
         return dialog.ShowModalAsync();
     }
 
@@ -102,10 +108,9 @@ internal sealed class SemanticModelDownloadDialog : Window
         _root = new Grid
         {
             Padding = new Thickness(28, 26, 28, 24),
-            Background = ResourceBrush("ApplicationPageBackgroundThemeBrush", ColorHelper.FromArgb(0xFF, 0x20, 0x20, 0x20)),
-            RequestedTheme = _theme,
             RowSpacing = 16,
         };
+        Yagu.Services.AppThemeService.ApplyThemedDialogSurface(_root, _theme);
         _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });   // header
         _root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // body
         _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });   // footer
@@ -270,6 +275,17 @@ internal sealed class SemanticModelDownloadDialog : Window
             titleLine.Children.Add(BuildPill("Recommended", accent: true));
         if (option.IsCached)
             titleLine.Children.Add(BuildPill("Downloaded", accent: false));
+
+        // The "current" model is the one a search runs right now: the user's pinned override when set,
+        // otherwise the recommended pick. Every OTHER model is flagged so the user knows switching may
+        // change accuracy.
+        bool isCurrent = _currentAlias is not null
+            ? string.Equals(option.Alias, _currentAlias, StringComparison.OrdinalIgnoreCase)
+            : option.IsRecommended;
+        if (isCurrent && !option.IsRecommended)
+            titleLine.Children.Add(BuildPill("Current", accent: true));
+        if (!isCurrent)
+            titleLine.Children.Add(BuildPill("Results may vary", accent: false));
         if (option.IsBelowRecommended)
         {
             var warn = new FontIcon
@@ -351,7 +367,10 @@ internal sealed class SemanticModelDownloadDialog : Window
                 return;
             }
 
-            _selected = _options.FirstOrDefault(o => o.IsRecommended) ?? _options[0];
+            _selected = _options.FirstOrDefault(o =>
+                _currentAlias is not null && string.Equals(o.Alias, _currentAlias, StringComparison.OrdinalIgnoreCase))
+                ?? _options.FirstOrDefault(o => o.IsRecommended)
+                ?? _options[0];
             ShowChooseState();
         }
         catch (OperationCanceledException)

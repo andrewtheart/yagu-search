@@ -44,6 +44,11 @@ if (-not (Test-Path -LiteralPath $prereqHelper)) {
 }
 . $prereqHelper
 
+$webView2PrereqHelper = Join-Path $repoRoot 'scripts\webview2-prereq.ps1'
+if (Test-Path -LiteralPath $webView2PrereqHelper) {
+  . $webView2PrereqHelper
+}
+
 # Read version from build-version.txt
 $versionFile = Join-Path $projectDir 'Properties\build-version.txt'
 function Get-YaguBuildVersion {
@@ -124,6 +129,11 @@ foreach ($arch in $architectures) {
   Copy-Item -Path "$publishDir\*" -Destination $stagingDir -Recurse -Force
 
   Copy-YaguWindowsAppRuntimePrerequisite -ProjectXml $projectXml -RepoRoot $repoRoot -DestinationRoot $stagingDir
+
+  # Best-effort: stage the WebView2 Evergreen bootstrapper for the embedded terminal. Never throws.
+  if (Get-Command -Name Copy-YaguWebView2Prerequisite -ErrorAction SilentlyContinue) {
+    Copy-YaguWebView2Prerequisite -RepoRoot $repoRoot -DestinationRoot $stagingDir
+  }
 
   $version = Get-YaguBuildVersion
   Write-Host "Installer app version: $version"

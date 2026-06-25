@@ -149,11 +149,11 @@ public sealed partial class MainWindow
     {
         HideQuerySuggestions();
         if (!await ClearPreviewPanelForNewSearchAsync()) return;
-        if (!await CheckHddAndWarnAsync()) return;
         CollapseAdvancedOptionsForSearch();
-        // The excluded-extension check runs as a gate inside SubmitSearchAsync, AFTER any semantic
-        // translation, so it sees the model's resolved target extension (e.g. include glob *.exe).
-        await ViewModel.SubmitSearchAsync(CheckExcludedExtensionAndWarnAsync);
+        // The HDD and excluded-extension warnings run as a gate inside SubmitSearchAsync, AFTER any
+        // semantic translation, so they evaluate the directory/target the AI model actually resolved
+        // (e.g. a query resolving to "C:\" — an SSD — no longer shows a spurious HDD warning first).
+        await ViewModel.SubmitSearchAsync(RunPreSearchWarningGatesAsync);
     }
 
     private async void OnQuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
@@ -164,14 +164,55 @@ public sealed partial class MainWindow
         if (string.IsNullOrEmpty(submittedQuery))
             submittedQuery = sender.Text;
 
+        bool textApplied = false;
         if (!string.IsNullOrEmpty(submittedQuery))
+        {
+            // Show the chosen text in the box as the VERY FIRST thing, before any search work. Setting
+            // sender.Text directly makes a clicked history item appear immediately instead of only once
+            // the UI thread next yields — the delay the user sees in Semantic mode, where translation
+            // briefly occupies the thread before the bound text repaints.
+            if (sender.Text != submittedQuery)
+                sender.Text = submittedQuery;
             ViewModel.Query = submittedQuery;
+            textApplied = true;
+        }
 
         HideQuerySuggestions(sender);
+
+        // Let the box paint the chosen text before the (possibly slow) search pipeline begins.
+        if (textApplied)
+            await YieldUntilRenderedAsync();
+
         if (!await ClearPreviewPanelForNewSearchAsync()) return;
-        if (!await CheckHddAndWarnAsync()) return;
         CollapseAdvancedOptionsForSearch();
-        await ViewModel.SubmitSearchAsync(CheckExcludedExtensionAndWarnAsync);
+        await ViewModel.SubmitSearchAsync(RunPreSearchWarningGatesAsync);
+    }
+
+    /// <summary>
+    /// Completes after the UI thread has processed its pending layout/render work, so a visual change
+    /// made immediately before the call (e.g. the query text set from a chosen history item) paints
+    /// before slower follow-up work (such as semantic translation) starts occupying the thread. A
+    /// Low-priority dispatcher callback runs after the in-flight frame, giving the text time to show.
+    /// </summary>
+    private Task YieldUntilRenderedAsync()
+    {
+        var rendered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => rendered.SetResult()))
+            rendered.SetResult();
+        return rendered.Task;
+    }
+
+    /// <summary>
+    /// Combined pre-search warning gate, run by <see cref="MainViewModel.SubmitSearchAsync"/> AFTER
+    /// any semantic translation. Running both notices here (rather than before the search) means a
+    /// semantic search evaluates them against the directory/target the AI model resolved — so a query
+    /// that resolves to an SSD no longer shows a spurious HDD warning before the model has even run.
+    /// Returns false to abort the search. The HDD check runs first, then the excluded-extension check.
+    /// </summary>
+    private async Task<bool> RunPreSearchWarningGatesAsync()
+    {
+        if (!await CheckHddAndWarnAsync()) return false;
+        return await CheckExcludedExtensionAndWarnAsync();
     }
 
     private void OnSelectTraditionalMode(object sender, RoutedEventArgs e)
@@ -231,7 +272,8 @@ public sealed partial class MainWindow
             _hwnd,
             RootGrid.ActualTheme,
             (progress, token) => ViewModel.GetSemanticModelOptionsAsync(progress, token),
-            (alias, progress, token) => ViewModel.PrepareSemanticModelAsync(alias, progress, token));
+            (alias, progress, token) => ViewModel.PrepareSemanticModelAsync(alias, progress, token),
+            ViewModel.SemanticModelAlias);
 
     private void CollapseAdvancedOptionsForSearch()
     {
@@ -389,6 +431,7 @@ public sealed partial class MainWindow
 
     private async void OnBrowseDirectory(object sender, RoutedEventArgs e)
     {
+        _directoryBrowseInProgress = true;
         try
         {
             var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
@@ -408,6 +451,10 @@ public sealed partial class MainWindow
             LogService.Instance.Warning("MainWindow", "Folder browse dialog failed.", ex);
             ViewModel.StatusText = "Could not open the folder browse dialog.";
         }
+        finally
+        {
+            _directoryBrowseInProgress = false;
+        }
     }
 
     [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "XAML event handlers are bound as instance methods.")]
@@ -418,10 +465,21 @@ public sealed partial class MainWindow
 
     private void OnDirectoryTextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
     {
-        // Only respond to user typing, not programmatic changes.
         if (args.Reason == AutoSuggestionBoxTextChangeReason.UserInput)
         {
+            // User typing: fetch subdirectory suggestions for the new text.
             _ = ViewModel.UpdateDirectorySuggestionsAsync(sender.Text);
+        }
+        else if (args.Reason == AutoSuggestionBoxTextChangeReason.ProgrammaticChange && !_directoryBrowseInProgress)
+        {
+            // A programmatic Directory change — e.g. a semantic search applying its resolved
+            // directory and then restoring the user's default as the search starts — must NOT pop
+            // the history dropdown open. (The Browse button sets the text too, but opens the list
+            // deliberately afterward, so it is excluded via _directoryBrowseInProgress.) The
+            // AutoSuggestBox can re-open its popup just after the change, so close it now and again
+            // on the next tick.
+            sender.IsSuggestionListOpen = false;
+            DispatcherQueue.TryEnqueue(() => sender.IsSuggestionListOpen = false);
         }
     }
 
@@ -434,6 +492,30 @@ public sealed partial class MainWindow
             string chosen = suggestion.Value;
             sender.Text = chosen.EndsWith('\\') ? chosen : chosen + '\\';
         }
+    }
+
+    /// <summary>
+    /// Closes the directory history dropdown when the user presses anywhere outside the directory
+    /// box. An <see cref="AutoSuggestBox"/>'s suggestion list only auto-closes when the box loses
+    /// keyboard focus, so clicking a non-focusable surface (an icon, an empty panel, the results
+    /// background) would otherwise leave the dropdown stranded open. Wired window-wide on RootGrid.
+    /// Presses on the suggestion items themselves route through the popup layer rather than RootGrid,
+    /// so they never reach this handler and choosing a suggestion still works.
+    /// </summary>
+    private void OnRootPointerPressedDismissDirectorySuggestions(object sender, PointerRoutedEventArgs e)
+    {
+        if (!DirectoryBox.IsSuggestionListOpen) return;
+        if (e.OriginalSource is DependencyObject source && IsDescendantOf(source, DirectoryBox)) return;
+        DirectoryBox.IsSuggestionListOpen = false;
+    }
+
+    /// <summary>Walks the visual tree from <paramref name="node"/> upward, returning true if
+    /// <paramref name="ancestor"/> is the node itself or any of its ancestors.</summary>
+    private static bool IsDescendantOf(DependencyObject? node, DependencyObject ancestor)
+    {
+        for (; node is not null; node = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(node))
+            if (ReferenceEquals(node, ancestor)) return true;
+        return false;
     }
 
     private void OnRestartAsAdmin(object sender, RoutedEventArgs e)

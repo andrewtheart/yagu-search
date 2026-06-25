@@ -339,6 +339,46 @@ public class SettingsServiceNewFieldTests
     }
 
     [Fact]
+    public void RoundTrip_FoundryModelUpdateFields()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-foundry-update-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var checkUtc = new DateTimeOffset(2026, 6, 1, 12, 0, 0, TimeSpan.Zero);
+            var alertUtc = new DateTimeOffset(2026, 6, 2, 9, 30, 0, TimeSpan.Zero);
+            var svc = new SettingsService(tmp);
+            var s = new AppSettings
+            {
+                FoundryModelUpdateAlertsEnabled = false,
+                LastFoundryModelCheckUtc = checkUtc,
+                LastFoundryModelAlertUtc = alertUtc,
+            };
+            s.KnownFoundryModelIds.Add("phi-4-mini-cuda-gpu:1");
+            s.KnownFoundryModelIds.Add("qwen2.5-cpu:1");
+            svc.Save(s);
+
+            var loaded = svc.Load();
+            Assert.False(loaded.FoundryModelUpdateAlertsEnabled);
+            Assert.Equal(checkUtc, loaded.LastFoundryModelCheckUtc);
+            Assert.Equal(alertUtc, loaded.LastFoundryModelAlertUtc);
+            Assert.Equal(
+                new[] { "phi-4-mini-cuda-gpu:1", "qwen2.5-cpu:1" },
+                loaded.KnownFoundryModelIds);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
+    public void FoundryModelUpdateFields_DefaultToEnabledWithEmptyBaseline()
+    {
+        var s = new AppSettings();
+        Assert.True(s.FoundryModelUpdateAlertsEnabled);
+        Assert.Empty(s.KnownFoundryModelIds);
+        Assert.Null(s.LastFoundryModelCheckUtc);
+        Assert.Null(s.LastFoundryModelAlertUtc);
+    }
+
+    [Fact]
     public void RoundTrip_PreviewEditorGutterColor()
     {
         var tmp = Path.Combine(Path.GetTempPath(), "qg-editor-gutter-" + Guid.NewGuid() + ".json");

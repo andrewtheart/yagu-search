@@ -50,13 +50,41 @@ public sealed partial class MainWindow
                 SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: false);
         });
 
+        // The Expander's built-in chevron is template-pinned to the far right of the header. We render
+        // our own chevron next to the "Advanced Options" text instead, so collapse the native one once
+        // the header template has materialized.
+        AdvancedOptionsExpander.Loaded += (_, _) => HideNativeExpanderChevron(AdvancedOptionsExpander);
+
         if (AdvancedOptionsScrollViewer.Content is FrameworkElement drawerContent)
             drawerContent.SizeChanged += (_, _) => UpdateAdvancedOptionsDrawerMaxHeight();
+    }
+
+    /// <summary>
+    /// Collapses the WinUI Expander's built-in chevron so only our custom chevron (rendered next to
+    /// the "Advanced Options" text) is visible. Matched by element name containing "Chevron" and by
+    /// the <see cref="AnimatedIcon"/> type so it stays robust across the chevron representations used
+    /// by different WinUI versions. Our custom glyph is named without "Chevron" so it is never hidden.
+    /// </summary>
+    private static void HideNativeExpanderChevron(DependencyObject root)
+    {
+        int count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < count; i++)
+        {
+            var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(root, i);
+            if (child is FrameworkElement fe &&
+                ((!string.IsNullOrEmpty(fe.Name) && fe.Name.Contains("Chevron", StringComparison.OrdinalIgnoreCase))
+                 || child is AnimatedIcon))
+            {
+                fe.Visibility = Visibility.Collapsed;
+            }
+            HideNativeExpanderChevron(child);
+        }
     }
 
     private void OnAdvancedOptionsExpanding(Expander sender, ExpanderExpandingEventArgs args)
     {
         SetAdvancedOptionsHeaderExpandedState(expanded: true);
+        AdvancedOptionsExpandGlyph.Glyph = "\uE70E"; // chevron up
         _advancedOptionsDrawerMaxHeightRetryQueued = false;
         _advancedOptionsDrawerMaxHeightRetryCount = 0;
         SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: true);
@@ -88,6 +116,7 @@ public sealed partial class MainWindow
     private void OnAdvancedOptionsCollapsed(Expander sender, ExpanderCollapsedEventArgs args)
     {
         SetAdvancedOptionsHeaderExpandedState(expanded: false);
+        AdvancedOptionsExpandGlyph.Glyph = "\uE70D"; // chevron down
         SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: false);
 
         if (_advancedOptionsOverlayActive)

@@ -92,8 +92,9 @@ internal sealed class ResultStoreTempLocationWindow : Window
         var root = new Grid
         {
             Padding = new Thickness(32, 28, 32, 28),
-            Background = new SolidColorBrush(ColorHelper.FromArgb(0xFF, 0x20, 0x20, 0x20)),
         };
+        // Honor the Yagu theme (Auto/Dark/Light) instead of the previous hardcoded dark surface.
+        AppThemeService.ApplyThemedDialogSurface(root, ElementTheme.Default);
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -103,7 +104,6 @@ internal sealed class ResultStoreTempLocationWindow : Window
             Text = "Search Result Temp Files",
             FontSize = 24,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Foreground = new SolidColorBrush(Colors.White),
         };
         Grid.SetRow(title, 0);
         root.Children.Add(title);
@@ -182,7 +182,6 @@ internal sealed class ResultStoreTempLocationWindow : Window
         TextWrapping = TextWrapping.Wrap,
         FontSize = 15,
         LineHeight = 22,
-        Foreground = new SolidColorBrush(Colors.White),
     };
 
     private static TextBlock CreateMutedText(string text) => new()
@@ -191,7 +190,6 @@ internal sealed class ResultStoreTempLocationWindow : Window
         TextWrapping = TextWrapping.Wrap,
         FontSize = 13,
         Opacity = 0.75,
-        Foreground = new SolidColorBrush(Colors.White),
     };
 
     private static void AddFooter(Grid root, string buttonText, Action onClick)

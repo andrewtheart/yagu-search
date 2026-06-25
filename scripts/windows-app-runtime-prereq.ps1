@@ -40,12 +40,20 @@ function Copy-YaguWindowsAppRuntimePrerequisite {
     )
 
     $runtimePackageRoot = Get-YaguWindowsAppRuntimePackageRoot -ProjectXml $ProjectXml
-    $runtimeVersion = Get-YaguWindowsAppSdkVersion -ProjectXml $ProjectXml
-    $majorMinor = ($runtimeVersion -split '\.' | Select-Object -First 2) -join '.'
     $sourceDir = Join-Path $runtimePackageRoot 'tools\MSIX\win10-x64'
     if (-not (Test-Path -LiteralPath $sourceDir)) {
         throw "Windows App Runtime x64 MSIX payload not found: $sourceDir"
     }
+
+    # The MSIX filename version token differs across Windows App Runtime majors (WAR 1.x uses a
+    # major.minor token such as "1.8"; WAR 2.x uses the major only, e.g. "2"), so discover it from the
+    # base runtime MSIX in the package rather than deriving it from the SDK package version.
+    $baseMsix = @(Get-ChildItem -LiteralPath $sourceDir -Filter 'Microsoft.WindowsAppRuntime.*.msix' |
+        Where-Object { $_.Name -notmatch '\.(Main|Singleton|DDLM)\.' })[0]
+    if ($null -eq $baseMsix -or $baseMsix.Name -notmatch '^Microsoft\.WindowsAppRuntime\.(.+)\.msix$') {
+        throw "No Microsoft.WindowsAppRuntime.<version>.msix payload found in $sourceDir"
+    }
+    $runtimeToken = $Matches[1]
 
     $prereqRoot = Join-Path $DestinationRoot 'Prerequisites\WindowsAppRuntime'
     $destDir = Join-Path $prereqRoot 'win10-x64'
@@ -53,10 +61,10 @@ function Copy-YaguWindowsAppRuntimePrerequisite {
 
     $files = @(
         'MSIX.inventory',
-        "Microsoft.WindowsAppRuntime.$majorMinor.msix",
-        "Microsoft.WindowsAppRuntime.Main.$majorMinor.msix",
-        "Microsoft.WindowsAppRuntime.Singleton.$majorMinor.msix",
-        "Microsoft.WindowsAppRuntime.DDLM.$majorMinor.msix"
+        "Microsoft.WindowsAppRuntime.$runtimeToken.msix",
+        "Microsoft.WindowsAppRuntime.Main.$runtimeToken.msix",
+        "Microsoft.WindowsAppRuntime.Singleton.$runtimeToken.msix",
+        "Microsoft.WindowsAppRuntime.DDLM.$runtimeToken.msix"
     )
 
     foreach ($file in $files) {
@@ -73,5 +81,5 @@ function Copy-YaguWindowsAppRuntimePrerequisite {
     }
     Copy-Item -LiteralPath $installScript -Destination (Join-Path $prereqRoot 'Install-WindowsAppRuntime.ps1') -Force
 
-    Write-Host "  Included Windows App Runtime $majorMinor x64 prerequisite"
+    Write-Host "  Included Windows App Runtime $runtimeToken x64 prerequisite"
 }

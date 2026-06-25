@@ -1,6 +1,8 @@
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 
 namespace Yagu.Services;
 
@@ -77,5 +79,43 @@ public static class AppThemeService
         titleBar.ButtonHoverForegroundColor = lightForeground;
         titleBar.ButtonPressedBackgroundColor = ColorHelper.FromArgb(0xFF, 0xDA, 0xDA, 0xDA);
         titleBar.ButtonPressedForegroundColor = lightForeground;
+    }
+
+    /// <summary>
+    /// Paints a dialog's root surface so its background honors the app's Yagu theme setting
+    /// (Auto/Dark/Light) instead of the system/app theme that an <c>Application.Current.Resources</c>
+    /// lookup of <c>ApplicationPageBackgroundThemeBrush</c> would resolve to. When
+    /// <paramref name="requestedTheme"/> is explicit it wins; otherwise the current Yagu theme
+    /// setting is used. The background is re-painted on load and whenever the effective theme
+    /// changes at runtime.
+    /// </summary>
+    public static void ApplyThemedDialogSurface(Grid surface, ElementTheme requestedTheme)
+    {
+        surface.RequestedTheme = requestedTheme != ElementTheme.Default
+            ? requestedTheme
+            : ToElementTheme(CurrentThemeModeIndex);
+
+        PaintDialogSurface(surface);
+        surface.Loaded += (_, _) => PaintDialogSurface(surface);
+        surface.ActualThemeChanged += (_, _) => PaintDialogSurface(surface);
+    }
+
+    private static void PaintDialogSurface(Grid surface)
+    {
+        bool light = ResolveSurfaceTheme(surface) == ElementTheme.Light;
+        surface.Background = new SolidColorBrush(light
+            ? ColorHelper.FromArgb(0xFF, 0xF3, 0xF3, 0xF3)
+            : ColorHelper.FromArgb(0xFF, 0x20, 0x20, 0x20));
+    }
+
+    private static ElementTheme ResolveSurfaceTheme(FrameworkElement element)
+    {
+        if (element.RequestedTheme != ElementTheme.Default)
+            return element.RequestedTheme;
+        if (element.ActualTheme != ElementTheme.Default)
+            return element.ActualTheme;
+        return Application.Current.RequestedTheme == ApplicationTheme.Light
+            ? ElementTheme.Light
+            : ElementTheme.Dark;
     }
 }

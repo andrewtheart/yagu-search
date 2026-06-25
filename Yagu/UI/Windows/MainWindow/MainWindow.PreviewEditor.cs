@@ -349,7 +349,7 @@ public sealed partial class MainWindow
                 // the first match on that line so the editor can highlight it.
                 int col = 0, len = 0;
                 string matchLine = string.Empty;
-                var rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex);
+                var rx = BuildSearchHighlightRegex();
                 if (rx is not null)
                 {
                     var paraText = new System.Text.StringBuilder();
@@ -1006,7 +1006,7 @@ public sealed partial class MainWindow
         int resolvedLength = Math.Clamp(result.MatchLength, 0, Math.Max(0, lineText.Length - resolvedColumn));
         string source = "result-column";
 
-        var rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+        var rx = BuildSearchHighlightRegex();
         if (rx is not null && TryFindNearestRegexMatch(lineText, rx, requestedColumn, out int regexColumn, out int regexLength))
         {
             resolvedColumn = regexColumn;

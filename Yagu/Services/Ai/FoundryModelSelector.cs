@@ -50,13 +50,69 @@ public sealed class FoundryModelSelector
         ["embed", "audio", "transcription", "whisper", "speech", "vision", "image", "rerank"];
 
     /// <summary>
+    /// Default accelerator-build preference order: GPU first (its less-quantized build is the most
+    /// accurate for this structured-JSON task), then NPU, then CPU. Used when no user override is set.
+    /// </summary>
+    public static readonly IReadOnlyList<DeviceType> DefaultDeviceOrder =
+        [DeviceType.GPU, DeviceType.NPU, DeviceType.CPU];
+
+    /// <summary>
+    /// Parses a comma/semicolon-separated device-order string (e.g. "NPU,GPU,CPU") into an ordered,
+    /// de-duplicated device list. Unrecognized tokens are ignored; any of GPU/NPU/CPU missing from the
+    /// input are appended in <see cref="DefaultDeviceOrder"/> order. Empty/invalid input yields the
+    /// default order, so callers always get a complete, valid ranking.
+    /// </summary>
+    public static IReadOnlyList<DeviceType> ParseDeviceOrder(string? order)
+    {
+        if (string.IsNullOrWhiteSpace(order)) return DefaultDeviceOrder;
+
+        var result = new List<DeviceType>(3);
+        foreach (var token in order.Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            DeviceType? device = token.ToUpperInvariant() switch
+            {
+                "GPU" => DeviceType.GPU,
+                "NPU" => DeviceType.NPU,
+                "CPU" => DeviceType.CPU,
+                _ => null,
+            };
+            if (device is { } d && !result.Contains(d)) result.Add(d);
+        }
+        // Ensure every device is present so ranking is total even if the user omitted one.
+        foreach (var d in DefaultDeviceOrder)
+            if (!result.Contains(d)) result.Add(d);
+        return result.Count == 0 ? DefaultDeviceOrder : result;
+    }
+
+    /// <summary>
     /// Resolves the model to use. When <paramref name="overrideAlias"/> is non-empty, that model is
     /// fetched directly (throws via the SDK if it does not exist). Otherwise the hardware-filtered
     /// catalog is ranked by <see cref="SelectAlias"/>.
     /// </summary>
     public static async Task<IModel?> SelectAsync(ICatalog catalog, string? overrideAlias, CancellationToken cancellationToken)
+        => await SelectAsync(catalog, overrideAlias, DefaultDeviceOrder, availableDevices: null, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// Resolves the model to use, honoring a caller-supplied <paramref name="deviceOrder"/> when
+    /// choosing which accelerator build of the chosen family to run.
+    /// </summary>
+    public static async Task<IModel?> SelectAsync(ICatalog catalog, string? overrideAlias, IReadOnlyList<DeviceType>? deviceOrder, CancellationToken cancellationToken)
+        => await SelectAsync(catalog, overrideAlias, deviceOrder, availableDevices: null, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// Resolves the model to use, honoring a caller-supplied <paramref name="deviceOrder"/> (which
+    /// accelerator build to PREFER) and <paramref name="availableDevices"/> (which execution devices
+    /// this machine can ACTUALLY run). Variants whose device is not in <paramref name="availableDevices"/>
+    /// are hard-excluded so a GPU/NPU build is never loaded on hardware that would crash during
+    /// inference: Foundry's <c>download_and_register_eps</c> registers DirectML on virtually any Windows
+    /// box (even one with no usable GPU), so a "generic-gpu" variant can LOAD yet fault (native access
+    /// violation) on the first inference. Pass a null <paramref name="availableDevices"/> to disable the
+    /// filter (legacy behavior). CPU should always be included by the caller.
+    /// </summary>
+    public static async Task<IModel?> SelectAsync(ICatalog catalog, string? overrideAlias, IReadOnlyList<DeviceType>? deviceOrder, IReadOnlySet<DeviceType>? availableDevices, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(catalog);
+        deviceOrder ??= DefaultDeviceOrder;
 
         if (!string.IsNullOrWhiteSpace(overrideAlias))
         {
@@ -71,7 +127,7 @@ public sealed class FoundryModelSelector
             if (direct is not null)
             {
                 LogService.Instance.Verbose(LogSource, $"Override '{wanted}' resolved as a family alias.");
-                return await PreferAccurateVariantAsync(catalog, direct, cancellationToken).ConfigureAwait(false);
+                return await PreferAccurateVariantAsync(catalog, direct, deviceOrder, availableDevices, cancellationToken).ConfigureAwait(false);
             }
 
             // The alias lookup above only resolves family aliases, never specific variant Ids
@@ -140,7 +196,7 @@ public sealed class FoundryModelSelector
         // hardware-available variants, then upgrade to the most accurate one this machine can run.
         var chosenFamily = await catalog.GetModelAsync(chosenAlias, cancellationToken).ConfigureAwait(false);
         if (chosenFamily is not null)
-            return await PreferAccurateVariantAsync(catalog, chosenFamily, cancellationToken).ConfigureAwait(false);
+            return await PreferAccurateVariantAsync(catalog, chosenFamily, deviceOrder, availableDevices, cancellationToken).ConfigureAwait(false);
 
         return models.FirstOrDefault(m =>
             string.Equals(m.Alias, chosenAlias, StringComparison.OrdinalIgnoreCase) ||
@@ -163,7 +219,7 @@ public sealed class FoundryModelSelector
     /// <paramref name="family"/> unchanged when no better, separately-resolvable variant exists.
     /// </summary>
     private static async Task<IModel> PreferAccurateVariantAsync(
-        ICatalog catalog, IModel family, CancellationToken cancellationToken)
+        ICatalog catalog, IModel family, IReadOnlyList<DeviceType> deviceOrder, IReadOnlySet<DeviceType>? availableDevices, CancellationToken cancellationToken)
     {
         List<IModel>? variants = null;
         try { variants = family.Variants?.ToList(); } catch { /* SDK may not populate variants */ }
@@ -175,7 +231,17 @@ public sealed class FoundryModelSelector
         foreach (var v in variants)
         {
             if (v is null) continue;
-            int score = VariantAccuracyScore(v);
+            // Hard-exclude variants whose execution device this machine cannot actually run. Foundry's
+            // download_and_register_eps registers DirectML on virtually any Windows box (even one with
+            // no usable GPU), so a "generic-gpu" variant can LOAD yet crash (native access violation)
+            // during inference. availableDevices is what Yagu's own capability detector confirmed; CPU is
+            // always included, so an unaccelerated machine deterministically falls back to the CPU build.
+            if (availableDevices is not null)
+            {
+                DeviceType variantDevice = v.Info?.Runtime?.DeviceType ?? DeviceType.CPU;
+                if (!availableDevices.Contains(variantDevice)) continue;
+            }
+            int score = VariantAccuracyScore(v, deviceOrder);
             if (score > bestScore) { best = v; bestScore = score; }
         }
         if (best is null || string.IsNullOrWhiteSpace(best.Id) ||
@@ -194,18 +260,16 @@ public sealed class FoundryModelSelector
     /// the chosen policy); within GPU, less-quantized runtimes win (CUDA &gt; DirectML/generic &gt;
     /// TensorRT-RTX &gt; OpenVINO-GPU).
     /// </summary>
-    private static int VariantAccuracyScore(IModel variant)
+    private static int VariantAccuracyScore(IModel variant, IReadOnlyList<DeviceType> deviceOrder)
     {
         string id = (variant.Id ?? variant.Alias ?? string.Empty).ToLowerInvariant();
         DeviceType device = variant.Info?.Runtime?.DeviceType ?? DeviceType.CPU;
 
-        int deviceTier = device switch
-        {
-            DeviceType.GPU => 300,
-            DeviceType.NPU => 200,
-            DeviceType.CPU => 100,
-            _ => 0,
-        };
+        // Earlier in the configured order = higher tier. A device not listed scores 0.
+        int idx = -1;
+        for (int i = 0; i < deviceOrder.Count; i++)
+            if (deviceOrder[i] == device) { idx = i; break; }
+        int deviceTier = idx >= 0 ? (deviceOrder.Count - idx) * 100 : 0;
 
         int runtimeBonus =
             id.Contains("cuda") ? 40 :

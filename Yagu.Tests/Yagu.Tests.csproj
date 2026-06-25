@@ -55,6 +55,7 @@
     <Compile Include="..\Yagu\Helpers\BinaryDetector.cs" Link="Source\Helpers\BinaryDetector.cs" />
     <Compile Include="..\Yagu\Helpers\DiskTypeDetector.cs" Link="Source\Helpers\DiskTypeDetector.cs" />
     <Compile Include="..\Yagu\Helpers\GlobMatcher.cs" Link="Source\Helpers\GlobMatcher.cs" />
+    <Compile Include="..\Yagu\Helpers\SingleFilePathQueryDetector.cs" Link="Source\Helpers\SingleFilePathQueryDetector.cs" />
     <Compile Include="..\Yagu\Helpers\EditorSyntaxHighlightingResolver.cs" Link="Source\Helpers\EditorSyntaxHighlightingResolver.cs" />
     <Compile Include="..\Yagu\Helpers\EncodingDetector.cs" Link="Source\Helpers\EncodingDetector.cs" />
     <Compile Include="..\Yagu\Helpers\LineTruncator.cs" Link="Source\Helpers\LineTruncator.cs" />
@@ -94,8 +95,8 @@
     <!-- Semantic search: pure model→SearchOptions mapping (no Foundry/WindowsAppSDK deps). -->
     <Compile Include="..\Yagu\Models\SemanticSearchPlan.cs" Link="Source\Models\SemanticSearchPlan.cs" />
     <Compile Include="..\Yagu\Services\Ai\ISemanticQueryTranslator.cs" Link="Source\Services\Ai\ISemanticQueryTranslator.cs" />
-    <Compile Include="..\Yagu\Services\Ai\SemanticPlanApplier.cs" Link="Source\Services\Ai\SemanticPlanApplier.cs" />
-    <Compile Include="..\Yagu\Services\Ai\SemanticPlanJsonExtractor.cs" Link="Source\Services\Ai\SemanticPlanJsonExtractor.cs" />
+    <Compile Include="..\Yagu\Services\Ai\FoundryModelUpdateChecker.cs" Link="Source\Services\Ai\FoundryModelUpdateChecker.cs" />
+    <Compile Include="..\Yagu\Services\Ai\SemanticPlanApplier.cs" Link="Source\Services\Ai\SemanticPlanApplier.cs" />    <Compile Include="..\Yagu\Services\Ai\SemanticPlanJsonExtractor.cs" Link="Source\Services\Ai\SemanticPlanJsonExtractor.cs" />
     <Compile Include="..\Yagu\Services\Ai\SemanticCapabilityDetector.cs" Link="Source\Services\Ai\SemanticCapabilityDetector.cs" />
     <Compile Include="..\Yagu\Services\Ai\SemanticPromptText.cs" Link="Source\Services\Ai\SemanticPromptText.cs" />
   </ItemGroup>

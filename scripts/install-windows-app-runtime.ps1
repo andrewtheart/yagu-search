@@ -51,11 +51,21 @@ if (-not (Test-Path -LiteralPath $RuntimeDir)) {
     throw "Windows App Runtime payload directory not found: $RuntimeDir"
 }
 
+# The MSIX filename version token differs across Windows App Runtime majors (WAR 1.x uses a
+# major.minor token such as "1.8"; WAR 2.x uses the major only, e.g. "2"), so discover it from the
+# base runtime MSIX in the payload rather than hardcoding it.
+$baseMsix = @(Get-ChildItem -LiteralPath $RuntimeDir -Filter 'Microsoft.WindowsAppRuntime.*.msix' |
+    Where-Object { $_.Name -notmatch '\.(Main|Singleton|DDLM)\.' })[0]
+if ($null -eq $baseMsix -or $baseMsix.Name -notmatch '^Microsoft\.WindowsAppRuntime\.(.+)\.msix$') {
+    throw "No Microsoft.WindowsAppRuntime.<version>.msix payload found in $RuntimeDir"
+}
+$runtimeToken = $Matches[1]
+
 $installOrder = @(
-    'Microsoft.WindowsAppRuntime.1.8.msix',
-    'Microsoft.WindowsAppRuntime.Main.1.8.msix',
-    'Microsoft.WindowsAppRuntime.Singleton.1.8.msix',
-    'Microsoft.WindowsAppRuntime.DDLM.1.8.msix'
+    "Microsoft.WindowsAppRuntime.$runtimeToken.msix",
+    "Microsoft.WindowsAppRuntime.Main.$runtimeToken.msix",
+    "Microsoft.WindowsAppRuntime.Singleton.$runtimeToken.msix",
+    "Microsoft.WindowsAppRuntime.DDLM.$runtimeToken.msix"
 )
 
 foreach ($fileName in $installOrder) {
@@ -74,4 +84,4 @@ foreach ($fileName in $installOrder) {
     Add-AppxPackage -Path $msixPath -ErrorAction Stop
 }
 
-Write-Host 'Windows App Runtime 1.8 prerequisite is installed.'
+Write-Host "Windows App Runtime $runtimeToken prerequisite is installed."

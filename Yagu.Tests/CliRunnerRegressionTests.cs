@@ -7,8 +7,8 @@ public sealed class CliRunnerRegressionTests
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
 
-        Assert.Contains("LogService.Init((LogLevel)settings.LogLevelIndex, LogLevel.Critical);", source);
-        Assert.DoesNotContain("LogService.Init((LogLevel)settings.LogLevelIndex, (LogLevel)settings.ConsoleLogLevelIndex);", source);
+        Assert.Contains("LogService.InitFromSettings((LogLevel)settings.LogLevelIndex, LogLevel.Critical);", source);
+        Assert.DoesNotContain("LogService.InitFromSettings((LogLevel)settings.LogLevelIndex, (LogLevel)settings.ConsoleLogLevelIndex);", source);
     }
 
     [Fact]

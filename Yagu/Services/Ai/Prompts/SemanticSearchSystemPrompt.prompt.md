@@ -47,6 +47,7 @@ The JSON object uses these fields (OMIT any field the user did not ask for — d
   "maxSearchDepth":   integer // recursion depth; omit for unlimited.
   "obeyGitignore":    boolean // true if the user wants .gitignore respected.
   "searchInsideArchives": boolean // true to look inside zip/archive files.
+  "searchHidden":     boolean // true to INCLUDE hidden files/folders, false to EXCLUDE them. "hidden files" / "show hidden" -> true; "not hidden" / "no hidden files" / "exclude hidden" -> false. NEVER use excludeGlobs for this.
   "sortBy":           string  // sort the results by: "name" | "size" | "date" (modified) | "relevance" (match count) | "directory". Omit if the user did not ask to sort.
   "sortDirection":    string  // "asc" or "desc". Omit when no direction is stated (the tool defaults to descending).
   "groupBy":          string  // group the results by: "directory" | "extension" | "size" | "modified" | "created" | "none". Omit if the user did not ask to group.
@@ -101,6 +102,9 @@ The JSON object uses these fields (OMIT any field the user did not ask for — d
   "logs", "src", "notes"); the tool will resolve it relative to the current directory.
 - EXCLUSIONS: "ignore X files" / "exclude X" -> excludeGlobs.
   'files named "Y"' / "skip files called Y" -> excludeFileNames.
+- HIDDEN FILES: "hidden files" / "include hidden" / "show hidden" -> searchHidden:true. "not hidden" /
+  "no hidden files" / "exclude hidden" / "without hidden files" -> searchHidden:false. NEVER approximate
+  hidden-file filtering with excludeGlobs (e.g. a dotfile regex) -- always use the searchHidden field.
 - DATES: For relative requests, output the PHRASE verbatim — never a date you computed yourself.
   "modified in the past year" -> modifiedAfter:"past year"; "created in the last 7 days" ->
   createdAfter:"last 7 days"; "changed since yesterday" -> modifiedAfter:"yesterday". The tool

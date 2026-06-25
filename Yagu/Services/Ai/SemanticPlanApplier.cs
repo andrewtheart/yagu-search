@@ -32,6 +32,7 @@ public interface ISemanticPlanTarget
     double MaxSearchDepth { get; set; }
     bool ObeyGitignore { get; set; }
     bool SearchInsideArchives { get; set; }
+    bool SearchHiddenFiles { get; set; }
     int SortModeIndex { get; set; }
     int SortDirectionIndex { get; set; }
     int GroupModeIndex { get; set; }
@@ -62,6 +63,7 @@ public sealed class ResolvedSearchPlan
     public int? MaxSearchDepth { get; init; }
     public bool? ObeyGitignore { get; init; }
     public bool? SearchInsideArchives { get; init; }
+    public bool? SearchHiddenFiles { get; init; }
 
     /// <summary>Sort column: 1=matches, 2=date(modified), 3=size, 4=name, 5=directory. Null = leave unchanged.</summary>
     public int? SortModeIndex { get; init; }
@@ -106,6 +108,26 @@ public static class SemanticPlanApplier
         var include = NormalizeFilterTokens(plan.IncludeGlobs);
         var exclude = NormalizeFilterTokens(plan.ExcludeGlobs);
         AppendNameExcludes(exclude, plan.ExcludeFileNames);
+
+        // Deterministically correct the include filter for programming-language names the model
+        // can't represent as a glob (e.g. "c# files" -> the model emits "*.c" or nothing). Read from
+        // the ORIGINAL query, where the '#'/'++' still exists, so this is independent of the guess.
+        ApplyLanguageExtensionGlobs(include, context.OriginalQuery);
+
+        // Force the include glob for a file extension the user named EXPLICITLY with a leading dot
+        // (e.g. ".com files on C:"). Small models mishandle uncommon/ambiguous extensions — phi-4-mini
+        // hallucinated ".com" (also a TLD) into a content search for "*.gitignore". When the query
+        // states a literal ".ext", drive the filter from the query, not the model's guess.
+        var explicitExtensions = ApplyExplicitExtensionGlobs(include, context.OriginalQuery);
+
+        // "hidden file(s)" / "not hidden files" controls the Advanced Options "Search hidden files"
+        // toggle, NOT an exclude glob. Detect the intent from the ORIGINAL query (independent of the
+        // model's guess) and, when present, drop the dotfile/hidden-exclusion glob the model emits to
+        // approximate it (e.g. ".\.[A-Za-z0-9].+" or ".*") so the toggle alone controls hidden files.
+        bool? searchHidden = DetectHiddenFilePreference(context.OriginalQuery);
+        if (searchHidden is not null)
+            exclude.RemoveAll(IsLikelyHiddenExclusionToken);
+        searchHidden ??= plan.SearchHidden;
 
         long? minSize = ClampSize(plan.MinFileSizeBytes);
         long? maxSize = ClampSize(plan.MaxFileSizeBytes);
@@ -164,6 +186,18 @@ public static class SemanticPlanApplier
         if (pattern is not null && include.Count > 0 && IsRedundantGlobPattern(pattern, include))
             pattern = null;
 
+        // When the user explicitly named a file extension ("X files on C:"), the request is a filename
+        // listing. A weak model sometimes routes the (often hallucinated) extension into a content
+        // pattern + content mode instead of an include glob — e.g. ".com files" -> pattern
+        // "*.gitignore", mode content. The include glob is already forced above; drop a glob-shaped
+        // pattern and force filename mode so the forced include glob drives the result. A real content
+        // term ("X files containing Y") is not glob-shaped, so a genuine content search is preserved.
+        if (explicitExtensions.Count > 0 && pattern is not null && LooksLikeGlobToken(pattern))
+        {
+            pattern = null;
+            mode = Models.SearchMode.FileNames;
+        }
+
         // A request like "all png files modified last year" carries no text term — the model emits
         // an empty pattern and relies purely on globs/metadata filters. Yagu's engine yields nothing
         // for an empty query, so synthesize a match-all filename query (regex ".") that enumerates
@@ -198,6 +232,7 @@ public static class SemanticPlanApplier
             MaxSearchDepth = plan.MaxSearchDepth is { } d ? Math.Max(0, d) : null,
             ObeyGitignore = plan.ObeyGitignore,
             SearchInsideArchives = plan.SearchInsideArchives,
+            SearchHiddenFiles = searchHidden,
             SortModeIndex = sortModeIndex,
             SortDirectionIndex = sortDirectionIndex,
             GroupMode = groupMode,
@@ -239,6 +274,7 @@ public static class SemanticPlanApplier
         if (r.MaxSearchDepth is { } md) parts.Add($"maxDepth={md}");
         if (r.ObeyGitignore is { } gi) parts.Add($"obeyGitignore={gi}");
         if (r.SearchInsideArchives is { } ar) parts.Add($"archives={ar}");
+        if (r.SearchHiddenFiles is { } sh) parts.Add($"searchHidden={sh}");
         if (r.SortModeIndex is { } sm) parts.Add($"sortMode={sm}");
         if (r.SortDirectionIndex is { } sd) parts.Add($"sortDir={sd}");
         if (r.GroupMode is { } gm) parts.Add($"group={gm}");
@@ -290,6 +326,7 @@ public static class SemanticPlanApplier
         if (resolved.MaxSearchDepth is { } depth) target.MaxSearchDepth = depth <= 0 ? double.NaN : depth;
         if (resolved.ObeyGitignore is { } gi) target.ObeyGitignore = gi;
         if (resolved.SearchInsideArchives is { } arc) target.SearchInsideArchives = arc;
+        if (resolved.SearchHiddenFiles is { } sh) target.SearchHiddenFiles = sh;
 
         // Sort: set the column first, then the direction, so the view-model's change handlers
         // settle on the final (mode, direction) pair regardless of the target's prior state.
@@ -345,6 +382,9 @@ public static class SemanticPlanApplier
 
         if (resolved.ExcludeGlobs is { Count: > 0 } excludes)
             sb.Append(", excluding ").Append(string.Join(", ", excludes));
+
+        if (resolved.SearchHiddenFiles is { } hidden)
+            sb.Append(hidden ? ", including hidden files" : ", excluding hidden files");
 
         AppendSizeClause(sb, resolved.MinFileSizeBytes, resolved.MaxFileSizeBytes);
         AppendDateClause(sb, "modified", resolved.ModifiedAfterDate, resolved.ModifiedBeforeDate);
@@ -413,6 +453,32 @@ public static class SemanticPlanApplier
         return result;
     }
 
+    /// <summary>
+    /// Returns the bare (dot-less, lower-case) extensions among <paramref name="includeGlobs"/> that
+    /// are known binary types (present in <paramref name="knownBinaryExtensions"/>, e.g. .com/.exe/.cpl).
+    /// Yagu skips known-binary extensions by name, so when a plan explicitly filters to one the caller
+    /// must enable binary search and stop skipping it, or the very files the user asked for are
+    /// excluded. Returns an empty list when nothing matches.
+    /// </summary>
+    public static IReadOnlyList<string> GetBinaryExtensionsToEnable(
+        IReadOnlyList<string>? includeGlobs,
+        IReadOnlySet<string> knownBinaryExtensions)
+    {
+        if (includeGlobs is null || includeGlobs.Count == 0
+            || knownBinaryExtensions is null || knownBinaryExtensions.Count == 0)
+            return [];
+
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var glob in includeGlobs)
+        {
+            string ext = ExtractGlobExtension(glob);
+            if (ext.Length > 0 && knownBinaryExtensions.Contains(ext) && seen.Add(ext))
+                result.Add(ext);
+        }
+        return result;
+    }
+
     /// <summary>Extracts the bare, lower-case file extension from a glob/extension token such as
     /// <c>*.docx</c>, <c>**/*.ZIP</c>, <c>.docx</c>, or <c>docx</c>. Returns an empty string when none
     /// can be determined.</summary>
@@ -454,6 +520,7 @@ public static class SemanticPlanApplier
             MaxSearchDepth = resolved.MaxSearchDepth,
             ObeyGitignore = resolved.ObeyGitignore,
             SearchInsideArchives = resolved.SearchInsideArchives,
+            SearchHiddenFiles = resolved.SearchHiddenFiles,
             SortBy = SortModeIndexToCliKey(resolved.SortModeIndex),
             SortDescending = resolved.SortModeIndex is null ? null : resolved.SortDirectionIndex != 1,
             GroupBy = GroupModeToCliKey(resolved.GroupMode),
@@ -750,6 +817,151 @@ public static class SemanticPlanApplier
         return string.Concat(glob.AsSpan(0, dot + 1), singular);
     }
 
+    /// <summary>
+    /// Forces the correct extension glob for any programming-language file-type the user named in
+    /// <paramref name="originalQuery"/> (e.g. "c# files" -&gt; <c>*.cs</c>). Small on-device models
+    /// can't turn a symbol-bearing language name into a glob — phi-4-mini emits <c>*.c</c> for "c#",
+    /// or no glob at all — so this reads the language from the raw query (where the '#'/'++' survives)
+    /// and overrides the guess. If the model already produced the canonical extension it is left
+    /// alone (so a deliberate "C and C# files" request keeps both <c>*.c</c> and <c>*.cs</c>);
+    /// otherwise the symbol-stripped extension the model substituted is removed and the canonical one
+    /// added. Mutates <paramref name="include"/> in place.
+    /// </summary>
+    internal static void ApplyLanguageExtensionGlobs(List<string> include, string? originalQuery)
+    {
+        foreach (var (canonical, stripped) in LanguageExtensionGlobs.FromQuery(originalQuery))
+        {
+            // Model already emitted the right extension -> trust it and whatever siblings it kept.
+            if (include.Any(g => GlobHasBareExtension(g, canonical))) continue;
+
+            // Model substituted the wrong, symbol-stripped extension (or emitted none) -> replace it.
+            if (stripped is not null)
+                include.RemoveAll(g => GlobHasBareExtension(g, stripped));
+            include.Add("*." + canonical);
+        }
+    }
+
+    private static readonly Regex ExplicitExtensionRegex = new(
+        @"(?<![\w.])\.([A-Za-z0-9]{1,8})\s+(?:files?|extensions?)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Forces <c>*.ext</c> include globs for file extensions the user named EXPLICITLY with a leading
+    /// dot in the original query (e.g. <c>".com files on C:"</c> -&gt; <c>*.com</c>). Small models
+    /// mishandle uncommon or ambiguous extensions — phi-4-mini turned ".com" (also a TLD) into a
+    /// content search for "*.gitignore" — so a literal <c>.ext</c> is taken from the query, not the
+    /// model's guess. Only a dotted token is matched (a bare "text files" stays a category phrase the
+    /// model maps to *.txt). Returns the bare extensions it forced (empty when none were named).
+    /// </summary>
+    internal static IReadOnlyList<string> ApplyExplicitExtensionGlobs(List<string> include, string? originalQuery)
+    {
+        if (string.IsNullOrWhiteSpace(originalQuery))
+            return [];
+
+        List<string>? forced = null;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match m in ExplicitExtensionRegex.Matches(originalQuery))
+        {
+            string ext = m.Groups[1].Value.ToLowerInvariant();
+            if (!seen.Add(ext))
+                continue;
+            (forced ??= []).Add(ext);
+            if (!include.Any(g => GlobHasBareExtension(g, ext)))
+                include.Add("*." + ext);
+        }
+        return (IReadOnlyList<string>?)forced ?? [];
+    }
+
+    /// <summary>True when <paramref name="pattern"/> looks like a glob/extension token rather than a
+    /// real content search term — i.e. it contains a wildcard or is a bare <c>.ext</c>. Internal so the
+    /// empty/bare-<c>.ext</c> branches can be unit-tested directly (it is only reached from
+    /// <see cref="Resolve"/> with a non-empty, non-bare pattern).</summary>
+    internal static bool LooksLikeGlobToken(string pattern)
+    {
+        string s = pattern.Trim();
+        if (s.Length == 0) return false;
+        if (s.IndexOfAny(['*', '?']) >= 0) return true;
+        return s[0] == '.' && s.Length > 1 && s.AsSpan(1).IndexOfAnyExcept(BareExtensionChars) < 0;
+    }
+
+    private static readonly System.Buffers.SearchValues<char> BareExtensionChars =
+        System.Buffers.SearchValues.Create("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+
+    /// <summary>True when <paramref name="glob"/>'s final extension equals <paramref name="bareExt"/>
+    /// (dot-less, case-insensitive), e.g. <c>"*.cs"</c> matches <c>"cs"</c>.</summary>
+    private static bool GlobHasBareExtension(string glob, string bareExt)
+    {
+        int dot = glob.LastIndexOf('.');
+        return dot >= 0 && string.Equals(glob[(dot + 1)..].Trim(), bareExt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // "hidden" used as a file-attribute filter: "hidden file(s)/folder(s)/item(s)/…", or a bare
+    // "hidden" governed by an include/exclude verb ("show hidden", "exclude hidden"). Anything else
+    // (e.g. searching for the literal word "hidden" in file contents) is left to the model.
+    private static readonly Regex HiddenFileMentionRegex = new(
+        @"\bhidden\s+(?:files?|folders?|directories|director(?:y|ies)|items?|entries|entry|elements?|ones?|stuff|dot[\s-]?files?)\b"
+        + @"|\b(?:include|including|show|showing|display|displaying|reveal|revealing|with|exclude|excluding|skip|skipping|ignore|ignoring|omit|omitting|without|no|hide|hiding)\s+hidden\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    // Negation/exclusion cues that, in the clause preceding a hidden-file mention, mean the user wants
+    // hidden items EXCLUDED rather than included.
+    private static readonly Regex HiddenExclusionCueRegex = new(
+        @"\b(?:not|no|non|without|exclude|excluding|skip|skipping|ignore|ignoring|omit|omitting|except|excepting|hide|hiding|aren'?t|isn'?t|don'?t|doesn'?t|remove|removing|drop|dropping|avoid|avoiding|minus|sans)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly string[] HiddenClauseSeparators = [",", ";", " but ", " and ", " or ", " then "];
+
+    /// <summary>
+    /// Detects whether the ORIGINAL query asks to include or exclude hidden files/folders — which Yagu
+    /// controls via the "Search hidden files" toggle, not an exclude glob. Returns <c>true</c> to
+    /// include hidden items ("hidden files", "show hidden"), <c>false</c> to exclude them ("not hidden",
+    /// "no hidden files", "exclude hidden", "without hidden files"), or <c>null</c> when the query does
+    /// not mention hidden files.
+    /// </summary>
+    internal static bool? DetectHiddenFilePreference(string? query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return null;
+
+        var match = HiddenFileMentionRegex.Match(query);
+        if (!match.Success)
+            return null;
+
+        // Scope the negation scan to the clause that contains the "hidden" word so a negation in an
+        // earlier, unrelated clause ("exclude tmp files, show hidden files") doesn't flip the result.
+        int hiddenIndex = query.IndexOf("hidden", match.Index, StringComparison.OrdinalIgnoreCase);
+        if (hiddenIndex < 0)
+            hiddenIndex = match.Index;
+        string before = HiddenClauseBefore(query, hiddenIndex);
+        return !HiddenExclusionCueRegex.IsMatch(before);
+    }
+
+    /// <summary>The text within the same clause leading up to <paramref name="index"/> — i.e. after the
+    /// last hard separator (comma/semicolon or a connecting word). Scopes the hidden-files negation scan.</summary>
+    private static string HiddenClauseBefore(string query, int index)
+    {
+        int start = 0;
+        foreach (var sep in HiddenClauseSeparators)
+        {
+            int at = query.LastIndexOf(sep, index, StringComparison.OrdinalIgnoreCase);
+            if (at >= 0 && at + sep.Length <= index && at + sep.Length > start)
+                start = at + sep.Length;
+        }
+        return query[start..index];
+    }
+
+    /// <summary>True when an exclude token is the model's attempt to filter out hidden/dotfile entries
+    /// (a "starts with a dot" matcher such as <c>.*</c>, <c>.?*</c>, <c>.[a-z]+</c>, or
+    /// <c>.\.[A-Za-z0-9].+</c>) rather than a real extension/name exclude (which starts with <c>*</c> or
+    /// a name character). Dropped when the query's hidden-file intent is handled by the toggle instead.</summary>
+    private static bool IsLikelyHiddenExclusionToken(string token)
+    {
+        string s = token.Trim();
+        if (s.StartsWith("**/", StringComparison.Ordinal) || s.StartsWith("**\\", StringComparison.Ordinal))
+            s = s[3..].TrimStart();
+        return s.Length > 0 && s[0] == '.';
+    }
+
     /// <summary>Expands bare file names ("abc") into exclude globs that catch both the
     /// extensionless file and any extension ("abc", "abc.*"). Tokens that already look like
     /// globs/paths are passed through unchanged.</summary>
@@ -861,6 +1073,7 @@ public sealed class SemanticSearchOverlay
     public int? MaxSearchDepth { get; init; }
     public bool? ObeyGitignore { get; init; }
     public bool? SearchInsideArchives { get; init; }
+    public bool? SearchHiddenFiles { get; init; }
 
     /// <summary>CLI <c>--sort</c> key (matches, date, size, name, directory), or null when unset.</summary>
     public string? SortBy { get; init; }
@@ -873,6 +1086,53 @@ public sealed class SemanticSearchOverlay
 
     /// <summary>True reverses the natural group order. Null when no group field is set.</summary>
     public bool? GroupDescending { get; init; }
+}
+
+/// <summary>
+/// Maps programming-language names a user might name in a search ("c# files", "c++ source") to the
+/// canonical file-extension glob. Exists because small on-device models can't reliably turn a
+/// language name into an extension — especially the symbol-bearing ones ("c#", "c++", "f#") whose
+/// glyph cannot appear in a glob — so phi-4-mini emits the wrong extension ("*.c" for "c#") or none.
+/// Reading the language from the raw query lets <see cref="SemanticPlanApplier"/> correct the include
+/// filter deterministically, independent of the model's guess.
+/// </summary>
+internal static class LanguageExtensionGlobs
+{
+    // Each entry: a matcher for the language name + canonical bare extension + the symbol-stripped
+    // extension the model commonly substitutes (null when there is no predictable wrong guess). Only
+    // languages whose name carries a glyph a glob can't hold are listed — plain-word languages
+    // (python, java, typescript) the model maps correctly on its own, so forcing them risks
+    // clobbering a legitimate content search.
+    private static readonly (Regex Matcher, string Canonical, string? Stripped)[] Languages =
+    [
+        (Alias(@"c\s*#|c\s*sharp|csharp"), "cs", "c"),
+        (Alias(@"c\s*\+\+|c\s*plus\s*plus|cpp"), "cpp", "c"),
+        (Alias(@"f\s*#|f\s*sharp|fsharp"), "fs", "f"),
+        (Alias(@"objective[\s-]*c|objc"), "m", null),
+    ];
+
+    // The language name must be FOLLOWED by a file-type noun to count as a file filter (so "files
+    // about c#" or a bare mention isn't treated as one). The leading lookbehind keeps the name from
+    // matching inside a larger token (e.g. "abc# ..."). '#'/'+' are not word chars, so a normal
+    // trailing \b can't be used after the symbol — the explicit noun list is the right anchor.
+    private static Regex Alias(string core) => new(
+        @"(?<![\w#+])(?:" + core + @")\s+(?:source\s+|src\s+)?(?:files?|scripts?|sources?|code|programs?|projects?)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>The (canonicalExt, strippedExt) pairs implied by "&lt;language&gt; files" mentions in
+    /// <paramref name="query"/>, in first-seen order and de-duplicated by canonical extension. Quoted
+    /// spans are ignored so a content term like containing "c#" is never read as a file-type filter.</summary>
+    public static IReadOnlyList<(string Canonical, string? Stripped)> FromQuery(string? query)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return [];
+        string scan = Regex.Replace(query, "\"[^\"]*\"|'[^']*'", " ");
+        var hits = new List<(string, string?)>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (matcher, canonical, stripped) in Languages)
+            if (matcher.IsMatch(scan) && seen.Add(canonical))
+                hits.Add((canonical, stripped));
+        return hits;
+    }
 }
 
 /// <summary>

@@ -65,6 +65,15 @@ internal sealed class YaguDialog : Window
         Content = BuildContent(options);
         Closed += OnClosed;
 
+        // Hide the OS title bar reliably when requested. Setting ExtendsContentIntoTitleBar
+        // directly on the Window guarantees the caption strip is not drawn even if the
+        // OverlappedPresenter.SetBorderAndTitleBar call below fails to apply — matching the
+        // title-bar-less pattern used by MainWindow/SettingsWindow/ResultStoreTempLocationWindow.
+        // No SetTitleBar() call is made, so no drag region is created and all content (including
+        // a top-right close button) stays interactive.
+        if (!options.ShowTitleBar)
+            ExtendsContentIntoTitleBar = true;
+
         IntPtr hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         WindowForegroundHelper.ConfigureOwnedWindow(hwnd, _ownerHwnd);
 
@@ -120,9 +129,8 @@ internal sealed class YaguDialog : Window
         var root = new Grid
         {
             Padding = new Thickness(28, 24, 28, 24),
-            Background = ResourceBrush("ApplicationPageBackgroundThemeBrush", ColorHelper.FromArgb(0xFF, 0x20, 0x20, 0x20)),
-            RequestedTheme = options.RequestedTheme,
         };
+        Yagu.Services.AppThemeService.ApplyThemedDialogSurface(root, options.RequestedTheme);
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -279,14 +287,6 @@ internal sealed class YaguDialog : Window
     {
         _result = result;
         Close();
-    }
-
-    private static Brush ResourceBrush(string key, Windows.UI.Color fallback)
-    {
-        if (Application.Current.Resources.TryGetValue(key, out object resource) && resource is Brush brush)
-            return brush;
-
-        return new SolidColorBrush(fallback);
     }
 
     private static void TryConfigurePresenter(AppWindow appWindow, bool isResizable, bool showTitleBar)

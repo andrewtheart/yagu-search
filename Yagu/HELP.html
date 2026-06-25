@@ -388,6 +388,14 @@ first.</td>
 </tr>
 </tbody>
 </table>
+<blockquote>
+<p><strong>Tip — open a specific file directly.</strong> If you paste a
+complete file path (and nothing else) into the Traditional search box
+and press Enter, Yagu skips the normal scan and shows just that one
+file. This works no matter what’s in the Directory box. Surrounding
+quotes are allowed
+(e.g. <code>"C:\path with spaces\app.log"</code>).</p>
+</blockquote>
 <hr />
 <h2 id="query-options">Query Options</h2>
 <table>
@@ -1382,8 +1390,10 @@ names without dots.</td>
 </tr>
 <tr>
 <td>Binary extensions</td>
-<td>Extensions that remain classified as binary/build artifacts, and
-populate the Binary ext dropdown when binary search is enabled.</td>
+<td>The set of file types treated as binary/build artifacts. When binary
+search is on, the Advanced Options ▸ Binary ext dropdown lets you pick
+which of these to include in the search (checked = searched; unchecked
+types are skipped).</td>
 </tr>
 <tr>
 <td>Reset binary extensions</td>
@@ -1664,8 +1674,9 @@ window when disabled.</td>
 </tr>
 <tr>
 <td>Launcher focus-loss behavior</td>
-<td>Minimize to tray, Stay open, or Always on top when the compact
-launcher loses focus.</td>
+<td>Minimize to tray, Stay open, or Always on top when the window loses
+focus. Applies in both the compact launcher and the traditional
+window.</td>
 </tr>
 <tr>
 <td>Close to tray</td>
@@ -1676,6 +1687,20 @@ default).</td>
 <td>Maximize window on startup</td>
 <td>Starts the main window maximized instead of at the default
 size.</td>
+</tr>
+<tr>
+<td>Traditional window launch position</td>
+<td>Where the traditional window appears on screen at launch: Centered
+(default), or any of the eight edge/corner anchors (Top Left, Top
+Middle, Top Right, Middle Left, Middle Right, Bottom Left, Bottom Middle,
+Bottom Right). Ignored when Maximize window on startup is on or while in
+the compact launcher.</td>
+</tr>
+<tr>
+<td>Compact launcher launch position</td>
+<td>Where the compact launcher (Spotlight-style search bar) appears on
+screen at launch. Same nine anchors as above, defaulting to Top
+Middle.</td>
 </tr>
 </tbody>
 </table>
@@ -1797,7 +1822,8 @@ Verbose can degrade performance.</td>
 </tr>
 <tr>
 <td>Log file</td>
-<td>Shows the path to the active Yagu log file.</td>
+<td>Shows the path to the active Yagu log file as a clickable link —
+click it to open the log in Notepad.</td>
 </tr>
 </tbody>
 </table>
@@ -2503,6 +2529,19 @@ again.</p>
 </table>
 <p>Log levels: None → Critical → Warning → Info → Verbose. Use Info for
 normal troubleshooting. Verbose adds overhead during large searches.</p>
+<p><strong>Force verbose logging from the very first launch.</strong>
+The default file log level is Warning, and it is normally changed in
+Settings. When you need verbose logs of something that happens during
+Yagu’s <em>first</em> launch — before the Settings window is reachable —
+run the installer with the <code>/VERBOSELOG</code> switch. This records
+<code>Verbose</code> to
+<code>HKCU\Software\Yagu\LogLevelOverride</code>, which Yagu reads at
+startup and applies as a minimum file log level on every run:</p>
+<pre><code>YaguSetup-&lt;version&gt;-&lt;arch&gt;.exe /VERBOSELOG</code></pre>
+<p>It works with silent installs too
+(<code>YaguSetup-&lt;version&gt;-&lt;arch&gt;.exe /VERYSILENT /VERBOSELOG</code>).
+The override stays in effect until you reinstall normally (without
+<code>/VERBOSELOG</code>, which clears it) or uninstall Yagu.</p>
 <hr />
 <h2 id="troubleshooting">Troubleshooting</h2>
 <h3 id="no-results-appear">No results appear</h3>

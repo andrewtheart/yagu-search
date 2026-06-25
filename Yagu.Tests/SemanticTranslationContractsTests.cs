@@ -22,6 +22,7 @@ public sealed class SemanticTranslationContractsTests
         var option = new SemanticModelOption
         {
             Alias = "phi-3.5-mini",
+            Id = "phi-3.5-mini-cuda-gpu:1",
             DisplayName = "Phi 3.5 Mini",
             SizeBytes = 2_500_000_000,
             IsRecommended = true,
@@ -31,6 +32,7 @@ public sealed class SemanticTranslationContractsTests
         };
 
         Assert.Equal("phi-3.5-mini", option.Alias);
+        Assert.Equal("phi-3.5-mini-cuda-gpu:1", option.Id);
         Assert.Equal("Phi 3.5 Mini", option.DisplayName);
         Assert.Equal(2_500_000_000, option.SizeBytes);
         Assert.True(option.IsRecommended);
@@ -44,6 +46,7 @@ public sealed class SemanticTranslationContractsTests
     {
         var option = new SemanticModelOption { Alias = "x", DisplayName = "X" };
 
+        Assert.Null(option.Id);
         Assert.Null(option.SizeBytes);
         Assert.False(option.IsRecommended);
         Assert.False(option.IsBelowRecommended);
@@ -156,14 +159,14 @@ public sealed class SemanticTranslationContractsTests
             Stage = SemanticTranslationStage.DownloadingModel,
             Percent = 7.0,
         };
-        Assert.Equal("Downloading model — 7%", p.Message);
+        Assert.Equal("Downloading model — 7% (one-time per model)", p.Message);
     }
 
     [Fact]
     public void Progress_Message_DownloadingModel_Indeterminate()
     {
         var p = new SemanticTranslationProgress { Stage = SemanticTranslationStage.DownloadingModel };
-        Assert.Equal("Downloading model…", p.Message);
+        Assert.Equal("Downloading model… (one-time per model)", p.Message);
     }
 
     [Fact]

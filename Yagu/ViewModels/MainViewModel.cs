@@ -43,10 +43,23 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     private readonly DispatcherQueue _dispatcher;
     private readonly ISemanticQueryTranslator? _semanticTranslator;
     private readonly ISemanticCapabilityDetector _capabilityDetector;
+    private readonly bool _semanticHasGpu;
+    private readonly bool _semanticHasNpu;
     private CancellationTokenSource? _semanticCts;
     // Natural-language query captured at submit time (before translation overwrites Query) so it can
     // be stored in the separate Semantic autocomplete history once the search actually starts.
     private string? _pendingSemanticHistoryEntry;
+    // The user's saved search-filter defaults, captured before a semantic plan is applied so they can
+    // be restored after the per-root options are built — ensuring a semantic search applies its
+    // resolved settings to that ONE run only and never changes the persisted defaults. Null outside a
+    // semantic run; consumed by StartSearchAsync, or restored by SubmitSearchAsync if the run is
+    // cancelled before reaching that point.
+    private SemanticSearchInputSnapshot? _semanticDefaultsSnapshot;
+    // True while a completed semantic search's resolved settings are intentionally LEFT visible in
+    // Advanced Options (so the user can see what the AI search applied). While set, PersistSettingsAsync
+    // writes the saved defaults (from the snapshot) instead of the resolved values, and the next search
+    // resets the view-model back to those defaults.
+    private bool _semanticResolutionVisible;
     private bool _queryModeInitialized;
     private CancellationTokenSource? _searchStatusHeartbeatCts;
 
@@ -113,7 +126,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _capabilityDetector = capabilityDetector ?? new GpuNpuCapabilityDetector();
         SemanticSearchAvailable = _settings.SemanticSearchEnabled;
         SemanticHardwareAccelerated = SafeDetectAcceleratedHardware();
+        _semanticHasGpu = SafeDetect(() => _capabilityDetector.HasGpu());
+        _semanticHasNpu = SafeDetect(() => _capabilityDetector.HasNpu());
+        // Tell the translator which accelerators actually exist so it never selects a GPU/NPU model
+        // build on a machine that lacks one (such a build can load via DirectML yet crash during
+        // inference). A CPU-only machine deterministically gets the CPU model build.
+        _semanticTranslator.SetAvailableAccelerators(_semanticHasGpu, _semanticHasNpu);
         DefaultToTraditionalSearchMode = _settings.DefaultToTraditionalSearchMode;
+        SemanticModelAlias = _settings.SemanticModelAlias;
+        SemanticDevicePreferenceOrder = _settings.SemanticDevicePreferenceOrder;
+        FoundryModelUpdateAlertsEnabled = _settings.FoundryModelUpdateAlertsEnabled;
         // Launch mode: once the user has explicitly chosen, honor that; otherwise follow the
         // hardware-based default (Semantic on accelerated machines, Traditional elsewhere).
         IsSemanticQueryMode = ResolveLaunchQueryMode();
@@ -302,6 +324,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         CloseToTray = _settings.CloseToTray;
         HasShownCloseToTrayNotification = _settings.HasShownCloseToTrayNotification;
         MaximizeOnStartup = _settings.MaximizeOnStartup;
+        LaunchWindowPosition = _settings.LaunchWindowPosition is >= 0 and <= 8 ? _settings.LaunchWindowPosition : 0;
+        LauncherWindowPosition = _settings.LauncherWindowPosition is >= 0 and <= 8 ? _settings.LauncherWindowPosition : 2;
         AdvancedOptionsCollapsedWidthModeIndex = NormalizeAdvancedOptionsCollapsedWidthModeIndex(_settings.AdvancedOptionsCollapsedWidthModeIndex);
         TerminalDefaultWorkingDirectory = _settings.TerminalDefaultWorkingDirectory ?? string.Empty;
         FileHeaderCheckAddsToPreview = _settings.FileHeaderCheckAddsToPreview;
@@ -375,6 +399,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty] public partial bool UseRegex { get; set; }
     [ObservableProperty] public partial bool ExactMatch { get; set; } = true;
 
+    /// <summary>The pattern + flags the MOST RECENT search actually ran with, captured at search
+    /// start. For a semantic search these are the model's RESOLVED literal pattern and flags — not
+    /// the natural-language box text (which stays in <see cref="Query"/> for display) nor the user
+    /// defaults that the semantic run restores afterward. Preview/editor match highlighting reads
+    /// these so it boxes exactly the matches the engine found, independent of later Query/flag drift.</summary>
+    public string LastSearchPattern { get; private set; } = string.Empty;
+    public bool LastSearchCaseSensitive { get; private set; }
+    public bool LastSearchUseRegex { get; private set; }
+    public bool LastSearchExactMatch { get; private set; } = true;
+
     public Microsoft.UI.Xaml.Visibility HasQueryText =>
         string.IsNullOrEmpty(Query) ? Microsoft.UI.Xaml.Visibility.Collapsed : Microsoft.UI.Xaml.Visibility.Visible;
 
@@ -409,6 +443,38 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// machines. Bound to the Settings toggle; only editable when <see cref="SemanticDefaultOverrideEnabled"/>.</summary>
     [ObservableProperty]
     public partial bool DefaultToTraditionalSearchMode { get; set; }
+
+    /// <summary>The model alias override the user has chosen (empty = automatic recommended pick).
+    /// Mirrors <c>AppSettings.SemanticModelAlias</c>; updated when a model is chosen or reset.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CurrentSemanticModelDisplay))]
+    [NotifyPropertyChangedFor(nameof(HasSemanticModelOverride))]
+    public partial string SemanticModelAlias { get; set; } = string.Empty;
+
+    /// <summary>Friendly description of the model currently selected for semantic translation.</summary>
+    public string CurrentSemanticModelDisplay => string.IsNullOrWhiteSpace(SemanticModelAlias)
+        ? "Automatic (recommended for your hardware)"
+        : SemanticModelAlias;
+
+    /// <summary>Whether the user has pinned a specific model rather than using automatic selection.</summary>
+    public bool HasSemanticModelOverride => !string.IsNullOrWhiteSpace(SemanticModelAlias);
+
+    /// <summary>Preferred accelerator order (e.g. "GPU,NPU,CPU") for running the AI model. Applied
+    /// live to the translator and persisted.</summary>
+    [ObservableProperty]
+    public partial string SemanticDevicePreferenceOrder { get; set; } = "GPU,NPU,CPU";
+
+    /// <summary>When true (default), Yagu checks the Foundry Local catalog about once a day and alerts
+    /// the user when a new/updated/variant on-device model becomes available. Bound to the AI settings
+    /// tab toggle and the alert modal's "Don't alert me again" option.</summary>
+    [ObservableProperty]
+    public partial bool FoundryModelUpdateAlertsEnabled { get; set; } = true;
+
+    /// <summary>True when a real GPU was detected (read-only info for the AI settings tab).</summary>
+    public bool SemanticHasGpu => _semanticHasGpu;
+
+    /// <summary>True when an NPU was detected (read-only info for the AI settings tab).</summary>
+    public bool SemanticHasNpu => _semanticHasNpu;
 
     /// <summary>The Settings override is editable only when Semantic search is offered AND the machine
     /// has a supported accelerator; otherwise it is greyed out and unset (Traditional is forced anyway).</summary>
@@ -477,6 +543,27 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         OnPropertyChanged(nameof(SemanticModeBarVisibility));
         OnPropertyChanged(nameof(SearchModeSplitButtonVisibility));
         OnPropertyChanged(nameof(SearchActionButtonVisibility));
+        if (!_queryModeInitialized) return;
+        // The AI-search toggle: persist, flip the translator live, and leave Semantic mode if turning off.
+        _settings.SemanticSearchEnabled = value;
+        _semanticTranslator?.SetEnabled(value);
+        if (!value) IsSemanticQueryMode = false;
+        _ = PersistSettingsAsync();
+    }
+
+    partial void OnSemanticDevicePreferenceOrderChanged(string value)
+    {
+        if (!_queryModeInitialized) return;
+        _settings.SemanticDevicePreferenceOrder = value;
+        _semanticTranslator?.SetDevicePreferenceOrder(value);
+        _ = PersistSettingsAsync();
+    }
+
+    partial void OnFoundryModelUpdateAlertsEnabledChanged(bool value)
+    {
+        if (!_queryModeInitialized) return;
+        _settings.FoundryModelUpdateAlertsEnabled = value;
+        _ = PersistSettingsAsync();
     }
 
     partial void OnIsSemanticQueryModeChanged(bool value)
@@ -513,6 +600,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     private bool SafeDetectAcceleratedHardware()
     {
         try { return _capabilityDetector.HasAcceleratedHardware(); }
+        catch { return false; }
+    }
+
+    /// <summary>Runs a capability probe, swallowing any fault as "not present" so startup never breaks.</summary>
+    private static bool SafeDetect(Func<bool> probe)
+    {
+        try { return probe(); }
         catch { return false; }
     }
 
@@ -699,6 +793,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     }
     [ObservableProperty] public partial int PreviewModeIndex { get; set; } = 1; // 0 = Concatenated, 1 = Multi-highlight
     [ObservableProperty] public partial int ThemeModeIndex { get; set; } // 0 = Auto (system theme), 1 = Dark, 2 = Light
+    partial void OnThemeModeIndexChanged(int value)
+        => AppThemeService.CurrentThemeModeIndex = AppThemeService.NormalizeThemeModeIndex(value);
     [ObservableProperty] public partial bool PreviewWordWrap { get; set; }
     [ObservableProperty] public partial int PreviewWrapModeIndex { get; set; } = 2; // 0 = Wrap, 1 = legacy PartialWrap, 2 = NoWrap
     [ObservableProperty] public partial int PreviewAutoLoadMatches { get; set; } = 50;
@@ -1082,6 +1178,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty] public partial bool CloseToTray { get; set; } = true;
     [ObservableProperty] public partial bool HasShownCloseToTrayNotification { get; set; }
     [ObservableProperty] public partial bool MaximizeOnStartup { get; set; }
+    // 0 = Centered (default), 1 = Top Left, 2 = Top Middle, 3 = Top Right, 4 = Middle Left,
+    // 5 = Middle Right, 6 = Bottom Left, 7 = Bottom Middle, 8 = Bottom Right.
+    [ObservableProperty] public partial int LaunchWindowPosition { get; set; }
+    // Compact launcher position; same anchors as LaunchWindowPosition but defaults to 2 = Top Middle.
+    [ObservableProperty] public partial int LauncherWindowPosition { get; set; } = 2;
     [ObservableProperty] public partial int AdvancedOptionsCollapsedWidthModeIndex { get; set; }
     [ObservableProperty] public partial string TerminalDefaultWorkingDirectory { get; set; } = string.Empty;
     [ObservableProperty] public partial bool FileHeaderCheckAddsToPreview { get; set; } = true;
@@ -1257,7 +1358,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             {
                 foreach (var ext in group.OrderBy(e => e, StringComparer.OrdinalIgnoreCase))
                 {
-                    BinaryExtensionItems.Add(new SkipExtensionItem(ext, group.Key, enabled.Contains(ext)));
+                    // "checked = search this binary type": an item is selected when it is NOT in the
+                    // skip list. (Internally BinaryExtensions stays the skip list, so the search engine,
+                    // CLI generator, and excluded-extension predictor are unaffected.)
+                    BinaryExtensionItems.Add(new SkipExtensionItem(ext, group.Key, !enabled.Contains(ext)));
                 }
             }
             OnPropertyChanged(nameof(BinaryExtensionsSummary));
@@ -1275,7 +1379,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _updatingBinaryExtensionsFromItems = true;
         try
         {
-            BinaryExtensions = string.Join(';', BinaryExtensionItems.Where(i => i.IsEnabled).Select(i => i.Extension));
+            // Selected items are the binary types to SEARCH; the skip list is the UNSELECTED ones.
+            BinaryExtensions = string.Join(';', BinaryExtensionItems.Where(i => !i.IsEnabled).Select(i => i.Extension));
         }
         finally
         {
@@ -1416,6 +1521,149 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             ArchiveExtensions = string.Join(';', enabled);
 
         SyncArchiveExtensionItems();
+    }
+
+    /// <summary>
+    /// When a semantic plan explicitly filters to known-binary extensions (e.g. ".com"/".cpl"/".exe"),
+    /// make those files findable AND show the intent: enable binary search and SELECT exactly the
+    /// targeted binary types in the dropdown (so only they are searched; every other binary type stays
+    /// skipped). Internally <see cref="BinaryExtensions"/> is the skip list, so the selection is the
+    /// universe minus the targeted extensions. Changes are session-only — visible in Advanced Options
+    /// until the next search resets them, and never written to the saved defaults.
+    /// </summary>
+    private void EnableBinarySearchForBinaryGlobs(IReadOnlyList<string>? includeGlobs)
+    {
+        var toEnable = SemanticPlanApplier.GetBinaryExtensionsToEnable(
+            includeGlobs,
+            ParseExtensionSet(AppSettings.DefaultBinaryExtensions));
+        if (toEnable.Count == 0)
+            return;
+
+        if (!SearchBinary)
+            SearchBinary = true;
+
+        // Skip every binary type in the universe EXCEPT the targeted ones, so the dropdown shows only
+        // the targeted extension(s) selected (= searched).
+        var targeted = new HashSet<string>(toEnable, StringComparer.OrdinalIgnoreCase);
+        var universe = ParseExtensionSet(SettingsBinaryExtensions);
+        foreach (var ext in ParseExtensionSet(BinaryExtensions))
+            universe.Add(ext);
+        foreach (var ext in targeted)
+            universe.Add(ext);
+
+        var newSkip = string.Join(';', universe.Where(e => !targeted.Contains(e)));
+        if (!string.Equals(BinaryExtensions, newSkip, StringComparison.OrdinalIgnoreCase))
+        {
+            BinaryExtensions = newSkip;
+            SyncBinaryExtensionItems();
+        }
+    }
+
+    /// <summary>
+    /// Immutable snapshot of the user's current search-filter inputs. Captured before a semantic
+    /// plan is applied so the same values can be restored afterward — a semantic search must never
+    /// change the saved filter defaults shown in Settings/Advanced Options, and any input it does NOT
+    /// set must reset to the user's default on the next search. NOTE: <c>Directory</c> is intentionally
+    /// NOT captured/restored: when the model resolves a directory it should OVERRIDE and replace whatever
+    /// was manually in the directory box (and persist), and when it resolves none the box value is left
+    /// untouched anyway. <c>SearchModeIndex</c> IS captured (it is session-only, not persisted) so the
+    /// Search-mode dropdown resets to the user's default — e.g. "File names + content" — each search
+    /// rather than keeping a previous plan's mode.
+    /// </summary>
+    private sealed record SemanticSearchInputSnapshot(
+        string IncludeGlobs,
+        string ExcludeGlobs,
+        int IncludeFilterModeIndex,
+        int ExcludeFilterModeIndex,
+        bool CaseSensitive,
+        bool UseRegex,
+        bool ExactMatch,
+        bool ObeyGitignore,
+        long MinFileSizeBytes,
+        long MaxFileSizeBytes,
+        DateTimeOffset? CreatedAfterDate,
+        DateTimeOffset? CreatedBeforeDate,
+        DateTimeOffset? ModifiedAfterDate,
+        DateTimeOffset? ModifiedBeforeDate,
+        bool SearchInsideArchives,
+        string ArchiveExtensions,
+        bool SkipBinary,
+        string BinaryExtensions,
+        bool SearchHiddenFiles,
+        int SearchModeIndex);
+
+    /// <summary>Captures the current user search-filter defaults so a semantic plan can be reverted.</summary>
+    private SemanticSearchInputSnapshot CaptureSearchDefaults() => new(
+        IncludeGlobs,
+        ExcludeGlobs,
+        IncludeFilterModeIndex,
+        ExcludeFilterModeIndex,
+        CaseSensitive,
+        UseRegex,
+        ExactMatch,
+        ObeyGitignore,
+        MinFileSizeBytes,
+        MaxFileSizeBytes,
+        CreatedAfterDate,
+        CreatedBeforeDate,
+        ModifiedAfterDate,
+        ModifiedBeforeDate,
+        SearchInsideArchives,
+        ArchiveExtensions,
+        SkipBinary,
+        BinaryExtensions,
+        SearchHiddenFiles,
+        SearchModeIndex);
+
+    /// <summary>Restores search-filter defaults captured by <see cref="CaptureSearchDefaults"/>,
+    /// reverting any changes a semantic plan made so they apply only to the run that just consumed them.
+    /// Directory is deliberately excluded — a resolved directory overrides the box and persists.</summary>
+    private void RestoreSearchDefaults(SemanticSearchInputSnapshot s)
+    {
+        IncludeGlobs = s.IncludeGlobs;
+        ExcludeGlobs = s.ExcludeGlobs;
+        IncludeFilterModeIndex = s.IncludeFilterModeIndex;
+        ExcludeFilterModeIndex = s.ExcludeFilterModeIndex;
+        CaseSensitive = s.CaseSensitive;
+        UseRegex = s.UseRegex;
+        ExactMatch = s.ExactMatch;
+        ObeyGitignore = s.ObeyGitignore;
+        MinFileSizeBytes = s.MinFileSizeBytes;
+        MaxFileSizeBytes = s.MaxFileSizeBytes;
+        CreatedAfterDate = s.CreatedAfterDate;
+        CreatedBeforeDate = s.CreatedBeforeDate;
+        ModifiedAfterDate = s.ModifiedAfterDate;
+        ModifiedBeforeDate = s.ModifiedBeforeDate;
+        SearchInsideArchives = s.SearchInsideArchives;
+        if (!string.Equals(ArchiveExtensions, s.ArchiveExtensions, StringComparison.Ordinal))
+        {
+            ArchiveExtensions = s.ArchiveExtensions;
+            SyncArchiveExtensionItems();
+        }
+        SkipBinary = s.SkipBinary;
+        if (!string.Equals(BinaryExtensions, s.BinaryExtensions, StringComparison.Ordinal))
+        {
+            BinaryExtensions = s.BinaryExtensions;
+            SyncBinaryExtensionItems();
+        }
+        SearchHiddenFiles = s.SearchHiddenFiles;
+        SearchModeIndex = s.SearchModeIndex;
+    }
+
+    /// <summary>
+    /// Clears a completed semantic search's resolved settings from Advanced Options, resetting the
+    /// filter view-model back to the saved defaults captured before that search. Called at the start of
+    /// every new search so a previous resolution never leaks into the next run; a fresh semantic search
+    /// then re-applies its own. No-op when nothing semantic is currently shown.
+    /// </summary>
+    private void ResetVisibleSemanticResolution()
+    {
+        if (!_semanticResolutionVisible)
+            return;
+        if (_semanticDefaultsSnapshot is { } snapshot)
+            RestoreSearchDefaults(snapshot);
+        _semanticDefaultsSnapshot = null;
+        _semanticResolutionVisible = false;
     }
 
     private string _globalHotkeyKey = HotkeyService.DefaultStartKey.ToString();
@@ -1749,22 +1997,50 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         // a JSON object"). Ignore additional submits until the translation finishes or is cancelled.
         if (IsTranslatingSemanticQuery) return;
 
+        // Clear any previous semantic search's resolved settings from Advanced Options back to the saved
+        // defaults before this run; a new semantic search re-applies its own.
+        ResetVisibleSemanticResolution();
+
         if (IsSemanticQueryMode && SemanticSearchAvailable)
         {
-            // Capture the natural-language text before translation overwrites Query with the resolved
-            // literal pattern, so the Semantic autocomplete history records what the user actually typed.
+            // Capture the typed NL text (translation overwrites Query) and snapshot the filter defaults.
             _pendingSemanticHistoryEntry = Query?.Trim();
-            var applied = await TranslateSemanticQueryAsync().ConfigureAwait(true);
-            if (!applied) return; // failed/cancelled — status already shown, don't run a stale search
+            var defaultsSnapshot = CaptureSearchDefaults();
+            var outcome = await TranslateSemanticQueryAsync().ConfigureAwait(true);
+            if (outcome == SemanticTranslationOutcome.Aborted) return;
+            if (outcome == SemanticTranslationOutcome.Applied)
+                _semanticDefaultsSnapshot = defaultsSnapshot; // armed: StartSearchAsync leaves the plan visible
+            else
+            {
+                // No plan (e.g. a bare token like "#define") — fall back to a plain Traditional search.
+                ErrorText = string.Empty;
+                SemanticStatusText = "AI couldn't interpret that — searching for the text directly.";
+            }
         }
 
-        // Run an optional pre-search gate AFTER any semantic translation, so it sees the resolved
-        // search target (include globs / literal query) the model produced rather than the raw
-        // natural-language text. Used for the excluded-extension warning.
-        if (postTranslationGate is not null && !await postTranslationGate().ConfigureAwait(true))
-            return;
+        try
+        {
+            // Run an optional pre-search gate AFTER any semantic translation, so it sees the resolved
+            // search target (include globs / literal query) the model produced rather than the raw
+            // natural-language text. Used for the excluded-extension warning.
+            if (postTranslationGate is not null && !await postTranslationGate().ConfigureAwait(true))
+                return;
 
-        await StartSearchAsync().ConfigureAwait(true);
+            await StartSearchAsync().ConfigureAwait(true);
+        }
+        finally
+        {
+            // If the run didn't reach the commit point in StartSearchAsync (gate cancelled, or an early
+            // validation error returned), revert the plan now — a cancelled semantic search should not
+            // leave its resolution behind. A committed search sets _semanticResolutionVisible and is left
+            // visible on purpose (reset at the start of the next search).
+            if (_semanticDefaultsSnapshot is { } leftover && !_semanticResolutionVisible)
+            {
+                RestoreSearchDefaults(leftover);
+                _semanticDefaultsSnapshot = null;
+                await PersistSettingsAsync().ConfigureAwait(true);
+            }
+        }
     }
 
     /// <summary>Cancels an in-flight semantic translation (the local-model inference that turns a
@@ -1776,23 +2052,34 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         SemanticStatusText = string.Empty;
     }
 
+    /// <summary>Outcome of <see cref="TranslateSemanticQueryAsync"/>.</summary>
+    public enum SemanticTranslationOutcome
+    {
+        /// <summary>The model's plan was applied to this view-model; run the semantic search.</summary>
+        Applied,
+        /// <summary>The model could not produce a usable plan; the caller may fall back to a literal search.</summary>
+        Failed,
+        /// <summary>Translation was cancelled or there was nothing to translate; do not search.</summary>
+        Aborted,
+    }
+
     /// <summary>
     /// Translates the current natural-language <see cref="Query"/> into concrete search settings via
-    /// the local model and applies them to this view-model. Returns true when settings were applied.
+    /// the local model and applies them to this view-model. Returns <see cref="SemanticTranslationOutcome.Applied"/>
+    /// when settings were applied, <see cref="SemanticTranslationOutcome.Failed"/> when the model produced no
+    /// usable plan (caller may fall back to a literal search), and <see cref="SemanticTranslationOutcome.Aborted"/>
+    /// when the user cancelled or there was nothing to translate.
     /// </summary>
-    public async Task<bool> TranslateSemanticQueryAsync()
+    public async Task<SemanticTranslationOutcome> TranslateSemanticQueryAsync()
     {
         if (_semanticTranslator is null || !_semanticTranslator.IsAvailable)
-        {
-            ErrorText = "Semantic search is not available on this machine.";
-            return false;
-        }
+            return SemanticTranslationOutcome.Failed;
 
         var text = Query?.Trim() ?? string.Empty;
         if (text.Length == 0)
         {
             ErrorText = "Describe what you want to find.";
-            return false;
+            return SemanticTranslationOutcome.Aborted;
         }
 
         try { _semanticCts?.Cancel(); } catch { }
@@ -1815,43 +2102,52 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             {
                 Now = DateTimeOffset.Now,
                 DefaultDirectory = string.IsNullOrWhiteSpace(Directory) ? null : Directory,
+                OriginalQuery = text,
             };
 
-            var result = await _semanticTranslator
-                .TranslateAsync(text, context, progress, token)
+            // Run the translation on a background thread. The translator's first-call initialization
+            // (Foundry catalog/EP setup, model selection and load) runs SYNCHRONOUSLY up to its first
+            // real await — the init SemaphoreSlim.WaitAsync completes inline when uncontended — so calling
+            // it directly would block the UI thread on the first semantic search of each launch, delaying
+            // the just-set query text from painting. Task.Run keeps that one-time cost off the UI thread;
+            // progress still marshals back via the captured context, and ConfigureAwait(true) resumes here
+            // on the UI thread to apply the plan.
+            var result = await Task.Run(
+                () => _semanticTranslator.TranslateAsync(text, context, progress, token), token)
                 .ConfigureAwait(true);
 
             if (token.IsCancellationRequested)
             {
                 SemanticStatusText = string.Empty;
-                return false;
+                return SemanticTranslationOutcome.Aborted;
             }
 
             if (!result.Success || result.Plan is null)
             {
-                ErrorText = result.Error ?? "Could not interpret that request.";
+                // The model returned no usable plan (small on-device models often do this for bare
+                // code tokens like "#define"). Let the caller fall back to a literal Traditional search.
                 SemanticStatusText = string.Empty;
-                return false;
+                return SemanticTranslationOutcome.Failed;
             }
 
             var resolved = SemanticPlanApplier.ApplyToTarget(result.Plan, context, this);
             EnableArchiveSearchForContainerGlobs(resolved.IncludeGlobs);
+            EnableBinarySearchForBinaryGlobs(resolved.IncludeGlobs);
             // Render the summary deterministically from the resolved plan rather than the model's
             // free-text explanation, which small on-device models often garble (e.g. "yagursd").
             SemanticStatusText = SemanticPlanApplier.BuildExplanation(resolved);
-            return true;
+            return SemanticTranslationOutcome.Applied;
         }
         catch (OperationCanceledException)
         {
             SemanticStatusText = string.Empty;
-            return false;
+            return SemanticTranslationOutcome.Aborted;
         }
         catch (Exception ex)
         {
             LogService.Instance.Warning("SemanticSearch", $"Translation failed: {ex.Message}", ex);
-            ErrorText = $"Semantic search failed: {ex.Message}";
             SemanticStatusText = string.Empty;
-            return false;
+            return SemanticTranslationOutcome.Failed;
         }
         finally
         {
@@ -1878,8 +2174,111 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         await _semanticTranslator.PrepareModelAsync(modelAlias, progress, cancellationToken).ConfigureAwait(true);
 
         _settings.SemanticModelAlias = modelAlias?.Trim() ?? string.Empty;
+        SemanticModelAlias = _settings.SemanticModelAlias;
         _settings.SemanticModelDownloaded = true;
         OnPropertyChanged(nameof(IsSemanticModelDownloaded));
+        await PersistSettingsAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>Reverts to automatic (recommended) model selection. Applied live — the next semantic
+    /// search re-selects the best model for the current hardware and device order — and persisted.</summary>
+    public async Task ClearSemanticModelOverrideAsync()
+    {
+        _semanticTranslator?.SetModelOverride(null);
+        _settings.SemanticModelAlias = string.Empty;
+        SemanticModelAlias = string.Empty;
+        await PersistSettingsAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Checks the Foundry Local catalog for newly-available, updated, or variant text-chat models and
+    /// returns the ones the user has not seen, so the caller can show a one-time alert. Self-gating: it
+    /// no-ops (returns empty) when alerts are disabled, semantic search is off/unavailable, the user has
+    /// never used semantic search (so a catalog query would needlessly initialize Foundry), or it was
+    /// already checked within <see cref="FoundryModelUpdateChecker.DefaultCheckInterval"/>. The very first
+    /// successful check silently seeds the baseline and returns empty. Persists the refreshed baseline and
+    /// check time. Failures (offline, etc.) are swallowed and leave the baseline unchanged.
+    /// </summary>
+    public async Task<IReadOnlyList<FoundryModelChange>> CheckForNewFoundryModelsAsync(CancellationToken cancellationToken)
+    {
+        var none = (IReadOnlyList<FoundryModelChange>)Array.Empty<FoundryModelChange>();
+
+        if (!FoundryModelUpdateAlertsEnabled || !_settings.SemanticSearchEnabled || !_settings.SemanticModelDownloaded)
+            return none;
+        if (_semanticTranslator is null || !_semanticTranslator.IsAvailable)
+            return none;
+        if (!FoundryModelUpdateChecker.ShouldCheck(
+                _settings.LastFoundryModelCheckUtc, DateTimeOffset.UtcNow, FoundryModelUpdateChecker.DefaultCheckInterval))
+            return none;
+
+        try
+        {
+            var options = await _semanticTranslator.ListModelOptionsAsync(null, cancellationToken).ConfigureAwait(true);
+            var currentModels = options
+                .Where(o => !string.IsNullOrEmpty(o.Id))
+                .Select(o => new FoundryModelDescriptor(o.Id!, o.Alias, o.DeviceLabel, o.SizeBytes))
+                .ToList();
+
+            // An empty/failed catalog query must not clobber the baseline (it would mask real models
+            // next time, or — on the very first run — seed an empty baseline).
+            if (currentModels.Count == 0)
+                return none;
+
+            bool hasBaseline = _settings.LastFoundryModelCheckUtc is not null || _settings.KnownFoundryModelIds.Count > 0;
+            var result = FoundryModelUpdateChecker.Detect(_settings.KnownFoundryModelIds, currentModels, hasBaseline);
+
+            _settings.KnownFoundryModelIds = result.CurrentIds.ToList();
+            _settings.LastFoundryModelCheckUtc = DateTimeOffset.UtcNow;
+            if (result.Changes.Count > 0)
+                _settings.LastFoundryModelAlertUtc = DateTimeOffset.UtcNow;
+            await PersistSettingsAsync().ConfigureAwait(true);
+
+            LogService.Instance.Info("SemanticSearch",
+                $"Foundry model update check: {currentModels.Count} catalog model(s), {result.Changes.Count} new, baselineSeeded={result.BaselineSeeded}.");
+            return result.Changes;
+        }
+        catch (OperationCanceledException)
+        {
+            return none;
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("SemanticSearch", $"Foundry model update check failed: {ex.Message}", ex);
+            return none;
+        }
+    }
+
+    /// <summary>
+    /// True when the first-run "AI search will run on the CPU" warning should be shown: AI (Semantic)
+    /// search is available, no GPU/NPU was detected (so the suggested model would fall back to CPU), and
+    /// the warning has not been shown before. Shown at most once.
+    /// </summary>
+    public bool ShouldShowCpuSemanticWarning =>
+        SemanticSearchAvailable && !SemanticHardwareAccelerated && !_settings.CpuSemanticWarningShown;
+
+    /// <summary>
+    /// Dismisses the first-run CPU-mode AI-search warning, recording that it has been shown so it never
+    /// reappears. When <paramref name="useTraditionalDefault"/> is true (the user accepted the
+    /// recommendation), Traditional becomes the persisted default search mode and the search bar switches
+    /// to Traditional immediately. When false (the user chose to keep AI search anyway), Semantic becomes
+    /// the selected mode and the persisted default, both in the search bar and in settings.
+    /// </summary>
+    public async Task DismissCpuSemanticWarningAsync(bool useTraditionalDefault)
+    {
+        _settings.CpuSemanticWarningShown = true;
+        if (useTraditionalDefault)
+        {
+            DefaultToTraditionalSearchMode = true; // OnChanged persists + re-resolves launch mode when unpinned
+            IsSemanticQueryMode = false;           // immediate switch to Traditional (idempotent if already off)
+        }
+        else
+        {
+            // User explicitly opted into AI (Semantic) search despite the CPU warning. Select it now and
+            // make it the persisted default. Setting IsSemanticQueryMode first records the explicit choice
+            // (HasChosenQueryMode = true) so flipping the default below does not re-resolve it away.
+            IsSemanticQueryMode = true;            // immediate switch to Semantic + persists the explicit choice
+            DefaultToTraditionalSearchMode = false; // persisted default = AI/Semantic, reflected in settings
+        }
         await PersistSettingsAsync().ConfigureAwait(true);
     }
 
@@ -1903,6 +2302,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [RelayCommand]
     public async Task StartSearchAsync()
     {
+        // A complete file path typed into the Traditional search box (and nothing else) is a request
+        // to show exactly that file, regardless of the Directory box. Detect and short-circuit here,
+        // before any directory validation, so the Directory box never affects this lookup.
+        if (!IsSemanticQueryMode && Yagu.Helpers.SingleFilePathQueryDetector.Resolve(Query) is { } singleFilePath)
+        {
+            await RunSingleFilePathDisplayAsync(singleFilePath).ConfigureAwait(true);
+            return;
+        }
+
         bool directorySpecified = !string.IsNullOrWhiteSpace(Directory);
         if (directorySpecified && !System.IO.Directory.Exists(Directory))
         {
@@ -1985,7 +2393,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             }
             _pendingSemanticHistoryEntry = null;
             SyncRecent();
-            await PersistSettingsAsync();
 
             var effectiveSkipExtensions = BuildEffectiveSkipExtensionSet();
 
@@ -2049,6 +2456,22 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                     parallelism = hddParallelismOverride is int overrideIndex ? ResolveParallelism(overrideIndex) : 1;
                 perRootOptions.Add(BuildOptionsForRoot(root, parallelism, allDrivesBackendOverride));
             }
+
+            // Capture the parameters THIS search actually ran with, for preview/editor match
+            // highlighting (the model's resolved literal pattern + flags).
+            LastSearchPattern = Query;
+            LastSearchCaseSensitive = CaseSensitive;
+            LastSearchUseRegex = UseRegex;
+            LastSearchExactMatch = ExactMatch;
+
+            // A semantic plan's resolved settings stay applied to this view-model so they are VISIBLE in
+            // Advanced Options (the user wanted to see what the AI search applied). They are NOT written
+            // to the saved defaults: while the resolution is visible, PersistSettingsAsync persists the
+            // pre-search defaults from the snapshot instead; the next search resets the view-model back
+            // to those defaults. (Traditional searches have no snapshot and persist their own values.)
+            if (_semanticDefaultsSnapshot is not null)
+                _semanticResolutionVisible = true;
+            await PersistSettingsAsync();
 
             cts = new CancellationTokenSource();
             _cts = cts;
@@ -2301,6 +2724,83 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             if (lowDiskMonitorTask is not null)
                 await lowDiskMonitorTask.ConfigureAwait(true);
 
+            cts?.Dispose();
+            _searchLifecycleGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Shows exactly one file as a file-name match, bypassing the search engine entirely. Used when the
+    /// Traditional query is a complete file path: the file is displayed regardless of the Directory box.
+    /// Reuses the normal search lifecycle (run id, gate, state reset, history, result collection) so the
+    /// results list, status bar, and clipboard export behave just like any other completed search.
+    /// </summary>
+    private async Task RunSingleFilePathDisplayAsync(string filePath)
+    {
+        int runId = System.Threading.Interlocked.Increment(ref _searchRunId);
+        CancelPreviousSearchForNewRun(runId);
+
+        await _searchLifecycleGate.WaitAsync();
+
+        CancellationTokenSource? cts = null;
+        try
+        {
+            if (runId != Volatile.Read(ref _searchRunId))
+                return;
+
+            ResetStateForNewSearch();
+            cts = new CancellationTokenSource();
+            _cts = cts;
+
+            // The query was a complete path, not a content pattern: highlight nothing in the preview.
+            LastSearchPattern = string.Empty;
+            LastSearchCaseSensitive = CaseSensitive;
+            LastSearchUseRegex = false;
+            LastSearchExactMatch = false;
+
+            var result = new SearchResult(
+                FilePath: filePath,
+                LineNumber: 0,
+                MatchLine: string.Empty,
+                MatchStartColumn: 0,
+                MatchLength: 0,
+                ContextBefore: Array.Empty<string>(),
+                ContextAfter: Array.Empty<string>());
+            await AddMatchAsync(result, cts.Token).ConfigureAwait(true);
+
+            var elapsed = StopSearchTimer();
+            FilesScanned = 1;
+            TotalFiles = 1;
+            MatchesFound = 1;
+            Truncated = false;
+            Degraded = false;
+            StatusText = $"1 file matched the path \u2014 {System.IO.Path.GetFileName(filePath)} ({FormatElapsed(elapsed)})";
+            ApplySortAndFilter();
+
+            // Record the typed path in Traditional search history (mirrors StartSearchAsync).
+            SettingsService.PushRecent(_settings.SearchHistory, _settings.SearchHistoryTimes, Query, MaxRecentItems);
+            _pendingSemanticHistoryEntry = null;
+            SyncRecent();
+            await PersistSettingsAsync();
+        }
+        catch (Exception ex)
+        {
+            StopSearchTimer();
+            ErrorText = $"Search failed: {ex.Message}";
+            LogService.Instance.Critical("Search", "Single-file-path display failed", ex);
+        }
+        finally
+        {
+            if (cts is not null && IsCurrentSearch(runId, cts))
+            {
+                IsSearching = false;
+                FilesPerSecondText = string.Empty;
+                OnPropertyChanged(nameof(HasResults));
+                OnPropertyChanged(nameof(ShowEmptyState));
+                _cts = null;
+            }
+
+            try { cts?.Cancel(); } catch { }
             cts?.Dispose();
             _searchLifecycleGate.Release();
         }
@@ -3359,26 +3859,36 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
     public async Task PersistSettingsAsync()
     {
+        // While a completed semantic search's resolution is shown in Advanced Options, persist the saved
+        // filter DEFAULTS (from the snapshot) instead of the resolved values, so a semantic search never
+        // changes what a fresh Yagu instance opens with. (Directory is the one exception — a model-
+        // resolved directory is meant to override and persist. The Skip/Binary/Archive extension lists
+        // already persist their Settings* defaults below, so they need no guard.)
+        var d = _semanticResolutionVisible ? _semanticDefaultsSnapshot : null;
+
         _settings.LastDirectory = Directory;
-        _settings.CaseSensitive = CaseSensitive;
-        _settings.UseRegex = UseRegex;
-        _settings.ExactMatch = ExactMatch;
+        _settings.CaseSensitive = d is null ? CaseSensitive : d.CaseSensitive;
+        _settings.UseRegex = d is null ? UseRegex : d.UseRegex;
+        _settings.ExactMatch = d is null ? ExactMatch : d.ExactMatch;
         _settings.ContextLines = ContextLines;
         _settings.PreviewContextLines = PreviewContextLines;
-        _settings.ObeyGitignore = ObeyGitignore;
+        _settings.ObeyGitignore = d is null ? ObeyGitignore : d.ObeyGitignore;
         _settings.GitignoreTakesPrecedence = GitignoreTakesPrecedence;
         _settings.GitignorePrecedencePreference = GitignorePrecedencePreference;
         _settings.DefaultToTraditionalSearchMode = DefaultToTraditionalSearchMode;
-        _settings.IncludeGlobs = IncludeGlobs;
-        _settings.ExcludeGlobs = ExcludeGlobs;
-        _settings.IncludeFilterModeIndex = IncludeFilterModeIndex;
-        _settings.ExcludeFilterModeIndex = ExcludeFilterModeIndex;
-        _settings.MinFileSizeBytes = MinFileSizeBytes;
-        _settings.MaxFileSizeBytes = MaxFileSizeBytes;
-        _settings.CreatedAfterDate = CreatedAfterDate;
-        _settings.CreatedBeforeDate = CreatedBeforeDate;
-        _settings.ModifiedAfterDate = ModifiedAfterDate;
-        _settings.ModifiedBeforeDate = ModifiedBeforeDate;
+        _settings.SemanticSearchEnabled = SemanticSearchAvailable;
+        _settings.SemanticModelAlias = SemanticModelAlias;
+        _settings.SemanticDevicePreferenceOrder = SemanticDevicePreferenceOrder;
+        _settings.IncludeGlobs = d is null ? IncludeGlobs : d.IncludeGlobs;
+        _settings.ExcludeGlobs = d is null ? ExcludeGlobs : d.ExcludeGlobs;
+        _settings.IncludeFilterModeIndex = d is null ? IncludeFilterModeIndex : d.IncludeFilterModeIndex;
+        _settings.ExcludeFilterModeIndex = d is null ? ExcludeFilterModeIndex : d.ExcludeFilterModeIndex;
+        _settings.MinFileSizeBytes = d is null ? MinFileSizeBytes : d.MinFileSizeBytes;
+        _settings.MaxFileSizeBytes = d is null ? MaxFileSizeBytes : d.MaxFileSizeBytes;
+        _settings.CreatedAfterDate = d is null ? CreatedAfterDate : d.CreatedAfterDate;
+        _settings.CreatedBeforeDate = d is null ? CreatedBeforeDate : d.CreatedBeforeDate;
+        _settings.ModifiedAfterDate = d is null ? ModifiedAfterDate : d.ModifiedAfterDate;
+        _settings.ModifiedBeforeDate = d is null ? ModifiedBeforeDate : d.ModifiedBeforeDate;
         _settings.DefaultMinFileSizeBytes = DefaultMinFileSizeBytes;
         _settings.DefaultMaxFileSizeBytes = DefaultMaxFileSizeBytes;
         _settings.DefaultCreatedAfterDate = DefaultCreatedAfterDate;
@@ -3503,10 +4013,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.ShowAutoScrollResultsCheckbox = ShowAutoScrollResultsCheckbox;
         _settings.SdkChannelBufferSize = SdkChannelBufferSize;
         _settings.MaxMatchesPerFile = MaxMatchesPerFile;
-        _settings.SkipBinary = SkipBinary;
+        _settings.SkipBinary = d is null ? SkipBinary : d.SkipBinary;
         _settings.SearchOnlineOnlyFiles = SearchOnlineOnlyFiles;
-        _settings.SearchHiddenFiles = SearchHiddenFiles;
-        _settings.SearchInsideArchives = SearchInsideArchives;
+        _settings.SearchHiddenFiles = d is null ? SearchHiddenFiles : d.SearchHiddenFiles;
+        _settings.SearchInsideArchives = d is null ? SearchInsideArchives : d.SearchInsideArchives;
         _settings.ArchiveExtensions = SettingsArchiveExtensions;
         _settings.SkipExtensions = SettingsSkipExtensions;
         _settings.BinaryExtensions = SettingsBinaryExtensions;
@@ -3534,6 +4044,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.CloseToTray = CloseToTray;
         _settings.HasShownCloseToTrayNotification = HasShownCloseToTrayNotification;
         _settings.MaximizeOnStartup = MaximizeOnStartup;
+        _settings.LaunchWindowPosition = LaunchWindowPosition;
+        _settings.LauncherWindowPosition = LauncherWindowPosition;
         _settings.AdvancedOptionsCollapsedWidthModeIndex = NormalizeAdvancedOptionsCollapsedWidthModeIndex(AdvancedOptionsCollapsedWidthModeIndex);
         _settings.TerminalDefaultWorkingDirectory = string.IsNullOrWhiteSpace(TerminalDefaultWorkingDirectory)
             ? string.Empty

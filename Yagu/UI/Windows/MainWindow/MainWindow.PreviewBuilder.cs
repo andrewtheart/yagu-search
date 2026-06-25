@@ -606,7 +606,7 @@ public sealed partial class MainWindow
                 : new Dictionary<string, string[]?>(StringComparer.OrdinalIgnoreCase);
             if (_previewUpdateGen != gen) { HideProgressOverlay(); return; }
 
-            Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+            Regex? rx = BuildSearchHighlightRegex();
             bool isHighlight = ViewModel.PreviewModeIndex == 1;
             int previewLines = ViewModel.PreviewContextLines;
 
@@ -1134,7 +1134,7 @@ public sealed partial class MainWindow
             }
         }
 
-        Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+        Regex? rx = BuildSearchHighlightRegex();
         if (lazy.IsHighlight)
             await BuildHighlightSectionAsync(section, lazy.Results, allLines, lazy.PreviewLines, rx);
         else
@@ -1350,7 +1350,7 @@ public sealed partial class MainWindow
         var matchLines = new HashSet<int>(results.Select(r => r.LineNumber));
         bool hasContentMatches = results.Any(result => result.LineNumber > 0);
         Regex? rx = hasContentMatches
-            ? BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch)
+            ? BuildSearchHighlightRegex()
             : null;
 
         int insertionIndex = _matchParagraphs.FindIndex(m => ReferenceEquals(m.block, section));
@@ -1503,7 +1503,7 @@ public sealed partial class MainWindow
         PreviewBlock.Blocks.Clear();
         Regex? rx = isFileNameOnlyPreview
             ? null
-            : BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+            : BuildSearchHighlightRegex();
 
         int lineCount = 0;
         bool truncatePreviewLines = !fullFile && ShouldTruncateInitialPreviewLines();
@@ -2149,7 +2149,7 @@ public sealed partial class MainWindow
 
         try
         {
-            Regex? rx = BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch);
+            Regex? rx = BuildSearchHighlightRegex();
             ShowPreviewSectionsSurface();
             SetPreviewMatchTotals(targets.Sum(t => ComputeMatchCount(t.Matches, null, isHighlight: true, previewLines: 0, rx)), targets.Count);
 
@@ -2530,6 +2530,19 @@ public sealed partial class MainWindow
             return null;
         }
     }
+
+    /// <summary>
+    /// Builds the preview/editor highlight regex from the parameters the most recent SEARCH actually
+    /// ran with (<see cref="MainViewModel.LastSearchPattern"/> &amp; flags), NOT the live
+    /// <c>ViewModel.Query</c>/flags. A semantic search keeps the natural-language text in the Query box
+    /// while the engine matched the model's resolved literal pattern, and it restores the user's
+    /// default flags afterward — so highlighting off the live values boxes nothing. Falls back to the
+    /// live Query/flags only before any search has run (LastSearchPattern still empty).
+    /// </summary>
+    private Regex? BuildSearchHighlightRegex()
+        => string.IsNullOrEmpty(ViewModel.LastSearchPattern)
+            ? BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch)
+            : BuildHighlightRegex(ViewModel.LastSearchPattern, ViewModel.LastSearchCaseSensitive, ViewModel.LastSearchUseRegex, ViewModel.LastSearchExactMatch);
 
     private SolidColorBrush s_matchGutterBrush = new(Windows.UI.Color.FromArgb(255, 156, 220, 254));
 

@@ -83,6 +83,42 @@ public sealed class BinaryDetectorBranchCoverageTests
         Assert.False(BinaryDetector.IsBinary(data));
     }
 
+    [Fact]
+    public void HasDefiniteBinarySignature_HighControlByteRatioText_ReturnsFalse()
+    {
+        // A text log full of ANSI escape sequences (ESC = 0x1B) trips IsBinary's control-byte
+        // ratio heuristic, but has no magic number and no NUL byte — so the definite-signature
+        // check (used by "Copy File With Content") must treat it as text and copy it.
+        var data = new byte[1024];
+        Array.Fill(data, (byte)'A');
+        for (int i = 0; i < 200; i++)
+            data[i * 5 % 1024] = 0x1B; // many ESC control bytes → >5% suspicious
+        Assert.True(BinaryDetector.IsBinary(data));                      // heuristic flags it
+        Assert.False(BinaryDetector.HasDefiniteBinarySignature(data));   // but it's not definitely binary
+    }
+
+    [Fact]
+    public void HasDefiniteBinarySignature_MagicNumber_ReturnsTrue()
+    {
+        var png = new byte[64];
+        png[0] = 0x89; png[1] = 0x50; png[2] = 0x4E; png[3] = 0x47; // PNG magic
+        Assert.True(BinaryDetector.HasDefiniteBinarySignature(png));
+    }
+
+    [Fact]
+    public void HasDefiniteBinarySignature_NulByte_ReturnsTrue()
+    {
+        var data = "hello\0world"u8.ToArray();
+        Assert.True(BinaryDetector.HasDefiniteBinarySignature(data));
+    }
+
+    [Fact]
+    public void HasDefiniteBinarySignature_PlainTextAndEmpty_ReturnFalse()
+    {
+        Assert.False(BinaryDetector.HasDefiniteBinarySignature("plain text"u8.ToArray()));
+        Assert.False(BinaryDetector.HasDefiniteBinarySignature(ReadOnlySpan<byte>.Empty));
+    }
+
     // ═══════════════════════════════════════════════════════════════
     //  Magic Number Detection
     // ═══════════════════════════════════════════════════════════════

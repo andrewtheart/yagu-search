@@ -53,9 +53,10 @@ public sealed record SearchResult(
     /// <summary>Match start adjusted for <see cref="ShortPreview" />.</summary>
     public int ShortPreviewMatchStart => EnsureShortPreview().MatchStart;
 
-    public string LineLocationDisplay => LineNumber > 0
-        ? string.Create(CultureInfo.InvariantCulture, $"L{LineNumber} C{GetOneBasedSourceColumn()}")
-        : LineNumber.ToString(CultureInfo.InvariantCulture);
+    /// <summary>Gutter label for a match: just the 1-based line number (the column is shown on hover
+    /// via <see cref="LineLocationTooltip"/> and is already implied by the match highlight). Keeping
+    /// the column out of the chip avoids the wide, content-shoving pill that line:col produced.</summary>
+    public string LineLocationDisplay => LineNumber.ToString(CultureInfo.InvariantCulture);
 
     public string LineLocationTooltip => LineNumber > 0
         ? string.Create(CultureInfo.InvariantCulture, $"Line {LineNumber}, column {GetOneBasedSourceColumn()}")

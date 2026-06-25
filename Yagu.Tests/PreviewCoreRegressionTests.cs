@@ -341,6 +341,36 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void RefreshCurrentPreview_PreservesSelectedSectionAcrossWrapToggleRebuild()
+    {
+        // Toggling word wrap (to/from NoWrap) rebuilds the multi-document preview via
+        // RefreshCurrentPreview(preserveScroll: true). The rebuild allocates fresh
+        // SectionMatchNav/block instances, so the prior _activeSectionNav reference is
+        // stale and the file the user had selected (its black "selected" background) lost
+        // its selection. RefreshCurrentPreview must capture the active section's file path
+        // before the rebuild and re-select it afterwards.
+        string refresh = ExtractMethodWindow(MainWindowSource, "RefreshCurrentPreview", 2200);
+        AssertContainsInOrder(refresh,
+            "string? restoreActiveSectionFilePath = preserveScroll ? GetActiveSectionFilePath() : null;",
+            "await UpdateMultiSelectPreviewAsync();",
+            "RestoreActiveSectionByFilePath(restoreActiveSectionFilePath);");
+
+        // GetActiveSectionFilePath resolves the active section's stable identity (file path).
+        string getPath = ExtractMethodWindow(MainWindowSource, "GetActiveSectionFilePath", 400);
+        Assert.Contains("_activeSectionNav?.Block", getPath);
+        Assert.Contains("ResolvePreviewBlockFilePath(block)", getPath);
+
+        // RestoreActiveSectionByFilePath matches the rebuilt section by file path and
+        // re-activates it (no-op when empty or its section is gone).
+        string restore = ExtractMethodWindow(MainWindowSource, "RestoreActiveSectionByFilePath", 700);
+        AssertContainsInOrder(restore,
+            "if (string.IsNullOrEmpty(filePath))",
+            "foreach (var block in _sectionMatchNavs.Keys)",
+            "ResolvePreviewBlockFilePath(block), filePath",
+            "ActivateSectionForBlock(block);");
+    }
+
+    [Fact]
     public void PreviewAndEditorContextMenus_OpenDisplaySettingsWithSurfaceSpecificLabels()
     {
         string previewFlyout = ExtractMethodWindow(MainWindowSource, "AttachPreviewBlockContextFlyout", 3400);
@@ -457,15 +487,13 @@ public sealed class PreviewCoreRegressionTests
     {
         string buttonSearch = ExtractMethodWindow(MainWindowSource, "OnSearchCancelClick", 1700);
         AssertContainsInOrder(buttonSearch,
-            "if (!await CheckHddAndWarnAsync()) return;",
             "CollapseAdvancedOptionsForSearch();",
-            "await ViewModel.SubmitSearchAsync(CheckExcludedExtensionAndWarnAsync);");
+            "await ViewModel.SubmitSearchAsync(RunPreSearchWarningGatesAsync);");
 
         string querySubmitted = ExtractMethodWindow(MainWindowSource, "OnQuerySubmitted", 1700);
         AssertContainsInOrder(querySubmitted,
-            "if (!await CheckHddAndWarnAsync()) return;",
             "CollapseAdvancedOptionsForSearch();",
-            "await ViewModel.SubmitSearchAsync(CheckExcludedExtensionAndWarnAsync);");
+            "await ViewModel.SubmitSearchAsync(RunPreSearchWarningGatesAsync);");
 
         string autoSearch = ExtractMethodWindow(MainWindowSource, "OnContentLoaded", 1800);
         AssertContainsInOrder(autoSearch,
@@ -1133,6 +1161,38 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void DeveloperOptions_LogFilePath_IsClickableLinkThatOpensNotepad()
+    {
+        // The log file path in Developer Options is a Hyperlink whose Click opens the active log in Notepad.
+        Assert.Contains("var logHyperlink = new Microsoft.UI.Xaml.Documents.Hyperlink();", SettingsWindowSource);
+        Assert.Contains("logHyperlink.Click += (_, _) => OpenLogFileInNotepad(logPath);", SettingsWindowSource);
+        Assert.Contains("ToolTipService.SetToolTip(logFileBlock, \"Open the log file in Notepad\");", SettingsWindowSource);
+
+        string openLogMethod = ExtractMethodWindow(SettingsWindowSource, "OpenLogFileInNotepad", window: 600);
+        AssertContainsInOrder(openLogMethod,
+            "System.IO.Path.Combine(System.Environment.SystemDirectory, \"notepad.exe\")",
+            "Arguments = $\"\\\"{logPath}\\\"\",",
+            "UseShellExecute = false,");
+    }
+
+    [Fact]
+    public void SelectAll_TargetsSectionContentBlock_NotGutterBlock()
+    {
+        // Ctrl+A in section preview must select the CONTENT block, not the per-section gutter
+        // (line-number) block. The gutter block is first in the visual tree, so the old
+        // FindFirstRichTextBlock fallback selected it — yielding nothing for file-name-only previews
+        // (where no content match was clicked first to seed _previewCustomSelectionBlock).
+        string selectAll = ExtractMethodWindow(MainWindowSource, "TrySelectAllPreviewContent", window: 2000);
+        Assert.Contains("FindFirstSectionContentRichTextBlock(fe)", selectAll);
+        Assert.DoesNotContain("FindFirstRichTextBlock(fe)", selectAll);
+
+        // The content-block finder must skip gutter blocks (the values of _sectionGutterBlocks) by
+        // only returning RichTextBlocks that are registered as content blocks (its keys).
+        string finder = ExtractMethodWindow(MainWindowSource, "FindFirstSectionContentRichTextBlock", window: 600);
+        Assert.Contains("_sectionGutterBlocks.ContainsKey(rtb) ? rtb : null", finder);
+    }
+
+    [Fact]
     public void EditorTextColor_IsConfigurableWithThemeAutoDefault()
     {
         string settingsSource = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "Services", "SettingsService.cs"));
@@ -1434,6 +1494,34 @@ public sealed class PreviewCoreRegressionTests
             "ViewModel.ClearExtensionFilter();",
             "ViewModel.SetExtensionFilter(selectedExtensions);");
         Assert.DoesNotContain("ContentDialog", extensionToggle);
+    }
+
+    [Fact]
+    public void SelectAllFilesCheckBox_GuardsAgainstPhantomIndeterminateDash()
+    {
+        // The select-all checkbox is two-state, but WinUI can still drop it into the indeterminate
+        // (null) state and paint a stray "dash" glyph. The XAML wires Loaded + Indeterminate guards
+        // that snap it back to a definite state; the null→false correction must NOT run the Unchecked
+        // side effect (which would deselect everything).
+        string selectAllFiles = ExtractXamlWindow("x:Name=\"SelectAllFilesCheckBox\"", 700);
+        Assert.Contains("Loaded=\"OnSelectAllFilesLoaded\"", selectAllFiles);
+        Assert.Contains("Indeterminate=\"OnSelectAllFilesIndeterminate\"", selectAllFiles);
+
+        string indeterminate = ExtractMethodWindow(MainWindowSource, "OnSelectAllFilesIndeterminate", 600);
+        AssertContainsInOrder(indeterminate,
+            "cb.IsChecked is not null",
+            "_correctingSelectAllIndeterminate = true;",
+            "cb.IsChecked = false;");
+
+        string loaded = ExtractMethodWindow(MainWindowSource, "OnSelectAllFilesLoaded", 700);
+        Assert.Contains("VisualStateManager.GoToState(cb,", loaded);
+
+        // The Unchecked side effect must early-return during a phantom-indeterminate correction.
+        string unchecked2 = ExtractMethodWindow(MainWindowSource, "OnSelectAllFilesUnchecked", 600);
+        AssertContainsInOrder(unchecked2,
+            "if (_correctingSelectAllIndeterminate)",
+            "return;",
+            "g.DeselectAll();");
     }
 
     [Fact]
@@ -2324,7 +2412,7 @@ public sealed class PreviewCoreRegressionTests
         // the overlay-boxing path must recover run recognition from the live search regex so
         // the active-match overlay can be positioned and the run colored gold.
         string recover = ExtractMethodWindow(MainWindowSource, "TryRecoverUnregisteredMatchRuns", window: 2400);
-        Assert.Contains("BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch)", recover);
+        Assert.Contains("BuildSearchHighlightRegex()", recover);
         Assert.Contains("foreach (System.Text.RegularExpressions.Match m in rx.Matches(paragraphText))", recover);
         // Registration restores recognition only for runs fully inside a regex match span,
         // and never colors them (unselected siblings stay visually plain).

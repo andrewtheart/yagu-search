@@ -207,6 +207,26 @@ public sealed partial class MainWindow
         {
             LogService.Instance.Warning("Terminal", "Terminal WebView initialization failed", ex);
             System.Diagnostics.Debug.WriteLine($"Terminal init failed: {ex}");
+            ShowTerminalWebView2MissingMessage();
+        }
+    }
+
+    /// <summary>Replaces the (black, non-functional) terminal WebView with an actionable message when the
+    /// WebView2 Runtime is missing — the only failure mode that leaves the terminal a black box. The
+    /// embedded terminal is the sole WebView2 consumer, so the rest of Yagu is unaffected; the installer
+    /// normally installs the runtime, and this covers offline installs / machines that still lack it.</summary>
+    private void ShowTerminalWebView2MissingMessage()
+    {
+        try
+        {
+            if (TerminalWebView is not null)
+                TerminalWebView.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+            if (TerminalWebView2MissingPanel is not null)
+                TerminalWebView2MissingPanel.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("Terminal", "Failed to show WebView2-missing message", ex);
         }
     }
 

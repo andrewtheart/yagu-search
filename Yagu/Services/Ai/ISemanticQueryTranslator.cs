@@ -46,6 +46,25 @@ public interface ISemanticQueryTranslator
         string? modelAlias,
         IProgress<SemanticTranslationProgress>? progress,
         CancellationToken cancellationToken);
+
+    /// <summary>Enables or disables the translator at runtime (mirrors the AI-search setting).
+    /// Disabling drops any loaded model so a later re-enable re-selects cleanly.</summary>
+    void SetEnabled(bool enabled);
+
+    /// <summary>Sets the preferred execution-device order (e.g. "NPU,GPU,CPU") used to pick which
+    /// accelerator build of the model runs. Applied to the next model selection; drops the currently
+    /// loaded model so the change takes effect without an app restart.</summary>
+    void SetDevicePreferenceOrder(string? order);
+
+    /// <summary>Sets the model alias override (null/empty = automatic recommended pick). Applied to the
+    /// next selection; drops the loaded model so the change takes effect without an app restart.</summary>
+    void SetModelOverride(string? modelAlias);
+
+    /// <summary>Tells the translator which hardware accelerators this machine actually has (per Yagu's
+    /// capability detection). Builds for an absent accelerator are never selected, preventing a GPU/NPU
+    /// model from loading (via DirectML) and then crashing during inference on a CPU-only machine.
+    /// Applied to the next selection; drops the loaded model so the change takes effect immediately.</summary>
+    void SetAvailableAccelerators(bool hasGpu, bool hasNpu);
 }
 
 /// <summary>A locally-runnable model the user can choose for semantic translation.</summary>
@@ -53,6 +72,11 @@ public sealed class SemanticModelOption
 {
     /// <summary>Catalog alias used to select/download the model.</summary>
     public required string Alias { get; init; }
+
+    /// <summary>Unique catalog variant id (alias + accelerator build + quantization + version). Stable
+    /// per variant and used to detect newly-available/updated models. Null when the catalog does not
+    /// expose one.</summary>
+    public string? Id { get; init; }
 
     /// <summary>Friendly name shown to the user (usually the alias).</summary>
     public required string DisplayName { get; init; }
@@ -84,6 +108,12 @@ public sealed class SemanticTranslationContext
     /// <summary>Directory the user currently has selected, used as a fallback when the request
     /// does not name a location. May be null/empty.</summary>
     public string? DefaultDirectory { get; init; }
+
+    /// <summary>The user's raw natural-language query, before translation. Used to deterministically
+    /// recover information the model loses when it emits the plan — chiefly programming-language
+    /// names whose glyph can't appear in a glob (e.g. "c#"/"c++"/"f#"), which small models collapse
+    /// to the wrong extension. May be null/empty when a caller does not supply it.</summary>
+    public string? OriginalQuery { get; init; }
 }
 
 /// <summary>Outcome of a translation attempt.</summary>
@@ -135,7 +165,7 @@ public sealed class SemanticTranslationProgress
         SemanticTranslationStage.DownloadingExecutionProviders =>
             Percent is { } p ? $"Downloading AI runtime ({Detail}) — {p:F0}%" : "Downloading AI runtime…",
         SemanticTranslationStage.DownloadingModel =>
-            Percent is { } p ? $"Downloading model — {p:F0}%" : "Downloading model…",
+            Percent is { } p ? $"Downloading model — {p:F0}% (one-time per model)" : "Downloading model… (one-time per model)",
         SemanticTranslationStage.LoadingModel => "Loading the model…",
         SemanticTranslationStage.Interpreting => "Interpreting your request…",
         _ => "Working…",

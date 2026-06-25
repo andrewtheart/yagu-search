@@ -84,6 +84,13 @@ public sealed class SemanticSearchPlan
     [JsonPropertyName("searchInsideArchives")]
     public bool? SearchInsideArchives { get; init; }
 
+    /// <summary>Whether to include files/folders carrying the Windows Hidden attribute. <c>true</c> =
+    /// include hidden items ("hidden files"), <c>false</c> = exclude them ("not hidden" / "no hidden
+    /// files"). Null = leave the user's current toggle. Maps to the Advanced Options "Search hidden
+    /// files" toggle — NOT to an exclude glob.</summary>
+    [JsonPropertyName("searchHidden")]
+    public bool? SearchHidden { get; init; }
+
     /// <summary>Field to sort the results by, e.g. <c>name</c>, <c>size</c>, <c>date</c>/<c>modified</c>,
     /// <c>relevance</c>/<c>matches</c>, or <c>directory</c>/<c>path</c>. Null = leave the current sort.</summary>
     [JsonPropertyName("sortBy")]

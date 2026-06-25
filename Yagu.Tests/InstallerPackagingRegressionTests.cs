@@ -11,8 +11,10 @@ public sealed class InstallerPackagingRegressionTests
         Assert.Contains("windows-app-runtime-prereq.ps1", buildInstaller);
         Assert.Contains("Copy-YaguWindowsAppRuntimePrerequisite -ProjectXml $projectXml -RepoRoot $repoRoot -DestinationRoot $stagingDir", buildInstaller);
         Assert.Contains("Installer app version: $version", buildInstaller);
-        Assert.Contains("Microsoft.WindowsAppRuntime.$majorMinor.msix", File.ReadAllText(Path.Combine(root, "scripts", "windows-app-runtime-prereq.ps1")));
-        Assert.Contains("Microsoft.WindowsAppRuntime.DDLM.$majorMinor.msix", File.ReadAllText(Path.Combine(root, "scripts", "windows-app-runtime-prereq.ps1")));
+        // The MSIX filename version token is discovered from the package (works for WAR 1.x "1.8" and
+        // 2.x "2"), not derived as major.minor from the SDK version.
+        Assert.Contains("Microsoft.WindowsAppRuntime.$runtimeToken.msix", File.ReadAllText(Path.Combine(root, "scripts", "windows-app-runtime-prereq.ps1")));
+        Assert.Contains("Microsoft.WindowsAppRuntime.DDLM.$runtimeToken.msix", File.ReadAllText(Path.Combine(root, "scripts", "windows-app-runtime-prereq.ps1")));
     }
 
     [Fact]

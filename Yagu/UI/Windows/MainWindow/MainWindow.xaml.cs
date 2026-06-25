@@ -47,6 +47,9 @@ public sealed partial class MainWindow : Window, IDisposable
     private bool _querySuggestionsUserOpened;
     private long _hideSuggestionsTick;
     private long _suppressQuerySuggestionsUntilTick;
+    // True only while the Browse-folder flow is deliberately opening the directory history dropdown,
+    // so OnDirectoryTextChanged doesn't suppress that intentional open as a "programmatic" change.
+    private bool _directoryBrowseInProgress;
     private DispatcherTimer? _autoScrollTimer;
     private DispatcherTimer? _previewContextDebounceTimer;
     private readonly Services.DiskUtilizationService _diskUtilService = new();
@@ -198,6 +201,13 @@ public sealed partial class MainWindow : Window, IDisposable
         TextControlBoxNS.TextControlBoxDiagnostics.IsVerboseEnabledProvider = () => LogService.Instance.IsVerboseEnabled;
         QueryBox.AddHandler(UIElement.PointerPressedEvent,
             new PointerEventHandler(OnQueryBoxPointerPressed),
+            handledEventsToo: true);
+        // The directory history dropdown (an AutoSuggestBox suggestion list) only closes on focus
+        // loss, so a press on a non-focusable surface leaves it open. A window-wide pointer hook
+        // dismisses it on any press outside the directory box. handledEventsToo so presses already
+        // marked handled (buttons, checkboxes, the results list) still dismiss it.
+        RootGrid.AddHandler(UIElement.PointerPressedEvent,
+            new PointerEventHandler(OnRootPointerPressedDismissDirectorySuggestions),
             handledEventsToo: true);
         InitializeHelpKeyboardShortcut();
         SyncLayoutToggles(ViewModel.PreviewModeIndex);
@@ -431,6 +441,20 @@ public sealed partial class MainWindow : Window, IDisposable
 
         // Hide to system tray when the window loses focus.
         this.Activated += OnWindowActivated;
+
+        // The configured focus-loss behavior (minimize to tray / stay open / always on top) applies to
+        // the window in EVERY mode, not just the compact launcher. Seed it from the saved setting, apply
+        // it now (covers a traditional-mode start), and re-apply whenever the setting changes live.
+        _focusLossBehavior = ViewModel.WindowFocusBehavior;
+        ApplyWindowFocusBehavior();
+        ViewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ViewModel.WindowFocusBehavior))
+            {
+                _focusLossBehavior = ViewModel.WindowFocusBehavior;
+                ApplyWindowFocusBehavior();
+            }
+        };
 
         // Intercept window close: dock to tray instead of exiting (when enabled).
         AppWindow.Closing += OnAppWindowClosing;

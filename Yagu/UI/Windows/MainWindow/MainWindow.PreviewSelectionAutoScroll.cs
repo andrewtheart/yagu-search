@@ -482,7 +482,10 @@ public sealed partial class MainWindow
         _previewCustomSelectionDragging = true;
         try { block.Focus(FocusState.Pointer); } catch { }
 
-        if (TryResolvePreviewSelectionIndexFromCurrentPointer(block, scroller, out int index))
+        bool resolved = TryResolvePreviewSelectionIndexFromCurrentPointer(block, scroller, out int index);
+        LogService.Instance.Verbose("PreviewSelection",
+            $"BeginPreviewCustomSelection: clicked block={DescribePreviewSelectionBlock(block)}, indexResolved={resolved}, index={index}");
+        if (resolved)
         {
             _previewCustomSelectionAnchorIndex = index;
             _previewCustomSelectionCurrentIndex = index;
@@ -1056,42 +1059,74 @@ public sealed partial class MainWindow
     private bool TryCopyActivePreviewCustomSelection(DependencyObject? source)
     {
         var block = _previewCustomSelectionBlock;
-        if (block is null || !HasPreviewCustomSelection(block))
+        bool hasSelection = block is not null && HasPreviewCustomSelection(block);
+        LogService.Instance.Verbose("PreviewSelection",
+            $"TryCopyActivePreviewCustomSelection: block={DescribePreviewSelectionBlock(block)}, hasSelection={hasSelection}, " +
+            $"anchor={_previewCustomSelectionAnchorIndex}, current={_previewCustomSelectionCurrentIndex}, " +
+            $"sourceWithinPreview={(source is null ? "n/a" : IsElementWithin(source, PreviewScrollViewer).ToString())}");
+        if (block is null || !hasSelection)
             return false;
         if (source is not null
             && !IsElementWithin(source, PreviewScrollViewer)
             && !ReferenceEquals(source, block))
+        {
+            LogService.Instance.Verbose("PreviewSelection", "TryCopyActivePreviewCustomSelection: aborted \u2014 source outside preview");
             return false;
+        }
 
         CopyPreviewSelection(block, withLineNumbers: false);
         return true;
     }
 
+    /// <summary>Diagnostic label for a preview RichTextBlock: the single PreviewBlock, a section
+    /// CONTENT block (a key of <see cref="_sectionGutterBlocks"/>), a section GUTTER/line-number block
+    /// (a value), or other. Used by the verbose select-all/copy diagnostics so a silent failure on a
+    /// file-name-only preview can be diagnosed from the log without a repro round-trip.</summary>
+    private string DescribePreviewSelectionBlock(RichTextBlock? block)
+    {
+        if (block is null) return "null";
+        if (ReferenceEquals(block, PreviewBlock)) return "PreviewBlock";
+        if (_sectionGutterBlocks.ContainsKey(block)) return "section-content";
+        if (_sectionGutterBlocks.ContainsValue(block)) return "section-gutter";
+        return "other";
+    }
+
     private bool TrySelectAllPreviewContent(DependencyObject? source)
     {
         if (source is not null && !IsElementWithin(source, PreviewScrollViewer))
+        {
+            LogService.Instance.Verbose("PreviewSelection", "TrySelectAllPreviewContent: aborted \u2014 source outside preview");
             return false;
+        }
 
         // Find the target RichTextBlock: either PreviewBlock (single-block mode)
         // or the block that already has a custom selection, or the first visible section block.
         RichTextBlock? block = null;
+        string branch;
         if (_previewCustomSelectionBlock is not null
             && IsElementWithin(_previewCustomSelectionBlock, PreviewScrollViewer))
         {
             block = _previewCustomSelectionBlock;
+            branch = "existing-selection-block";
         }
         else if (PreviewBlock.Visibility == Visibility.Visible)
         {
             block = PreviewBlock;
+            branch = "preview-block";
         }
         else if (PreviewSectionsPanel.Visibility == Visibility.Visible)
         {
-            // Use the first section content block.
+            branch = "section-fallback";
+            // Use the first section's CONTENT block. Each section has two RichTextBlocks — the
+            // gutter (line-numbers) block sits first in the visual tree (column 0) but its
+            // paragraphs are untagged, so selecting/copying it yields nothing. FindFirstRichTextBlock
+            // would return that gutter block, which is exactly why Ctrl+A / Ctrl+C silently failed for
+            // file-name-only previews (no content match was clicked first to seed the content block).
             foreach (var child in PreviewSectionsPanel.Children)
             {
                 if (child is FrameworkElement fe && fe.Visibility == Visibility.Visible)
                 {
-                    var rtb = FindFirstRichTextBlock(fe);
+                    var rtb = FindFirstSectionContentRichTextBlock(fe);
                     if (rtb is not null)
                     {
                         block = rtb;
@@ -1100,11 +1135,18 @@ public sealed partial class MainWindow
                 }
             }
         }
+        else
+        {
+            branch = "none";
+        }
+
+        int totalLength = block is null ? 0 : GetBlockTotalTextLength(block);
+        LogService.Instance.Verbose("PreviewSelection",
+            $"TrySelectAllPreviewContent: branch={branch}, block={DescribePreviewSelectionBlock(block)}, totalLength={totalLength}");
 
         if (block is null)
             return false;
 
-        int totalLength = GetBlockTotalTextLength(block);
         if (totalLength <= 0)
             return false;
 
@@ -1140,6 +1182,27 @@ public sealed partial class MainWindow
         {
             var child = VisualTreeHelper.GetChild(parent, i);
             var found = FindFirstRichTextBlock(child);
+            if (found is not null)
+                return found;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Finds the first SELECTABLE section content RichTextBlock under <paramref name="parent"/>,
+    /// skipping the per-section gutter (line-number) blocks. Section content blocks are the keys of
+    /// <see cref="_sectionGutterBlocks"/>; gutter blocks are the values and carry only untagged
+    /// line-number paragraphs (selecting/copying them yields nothing). Used by Select-All so it
+    /// targets the real text even when no content match was clicked first (file-name-only previews).
+    /// </summary>
+    private RichTextBlock? FindFirstSectionContentRichTextBlock(DependencyObject parent)
+    {
+        if (parent is RichTextBlock rtb)
+            return _sectionGutterBlocks.ContainsKey(rtb) ? rtb : null;
+        int count = VisualTreeHelper.GetChildrenCount(parent);
+        for (int i = 0; i < count; i++)
+        {
+            var found = FindFirstSectionContentRichTextBlock(VisualTreeHelper.GetChild(parent, i));
             if (found is not null)
                 return found;
         }

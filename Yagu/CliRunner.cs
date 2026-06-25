@@ -126,7 +126,7 @@ internal static class CliRunner
 
         // Configure the file-lister backend from settings (same as App() constructor).
         FileLister.Backend = (FileListerBackend)settings.FileListerBackendIndex;
-        LogService.Init((LogLevel)settings.LogLevelIndex, LogLevel.Critical);
+        LogService.InitFromSettings((LogLevel)settings.LogLevelIndex, LogLevel.Critical);
 
         var perRootOptions = BuildPerRootSearchOptions(args, settings);
         if (perRootOptions.Count == 0)
@@ -163,10 +163,18 @@ internal static class CliRunner
 
         await using var translator = new FoundryLocalSemanticQueryTranslator(enabled: true, modelOverrideAlias: modelAlias);
 
+        // Match the GUI: never select a GPU/NPU model build on a machine that lacks one (a DirectML
+        // "generic-gpu" build can load yet crash during inference on CPU-only hardware). Detection
+        // failure falls back to CPU-only, the safe choice.
+        bool cliHasGpu = false, cliHasNpu = false;
+        try { var capability = new GpuNpuCapabilityDetector(); cliHasGpu = capability.HasGpu(); cliHasNpu = capability.HasNpu(); } catch { /* CPU-only fallback */ }
+        translator.SetAvailableAccelerators(cliHasGpu, cliHasNpu);
+
         var context = new SemanticTranslationContext
         {
             Now = DateTimeOffset.Now,
             DefaultDirectory = !string.IsNullOrWhiteSpace(args.Directory) ? args.Directory : Environment.CurrentDirectory,
+            OriginalQuery = args.SemanticPattern?.Trim(),
         };
 
         // Progress goes to stderr so stdout stays ripgrep-clean.
@@ -440,6 +448,7 @@ internal static class CliRunner
         if (resolved.MaxSearchDepth is { } depth) o.WriteLine($"  max-depth      : {(depth <= 0 ? "unlimited" : depth.ToString(System.Globalization.CultureInfo.InvariantCulture))}");
         if (resolved.ObeyGitignore is { } gi)     o.WriteLine($"  obey-gitignore : {gi}");
         if (resolved.SearchInsideArchives is { } arc) o.WriteLine($"  archives       : {arc}");
+        if (resolved.SearchHiddenFiles is { } sh) o.WriteLine($"  hidden         : {sh}");
         if (!string.IsNullOrWhiteSpace(args.SortBy))
             o.WriteLine($"  sort           : {args.SortBy} ({(args.SortDescending ? "descending" : "ascending")})");
         if (!string.IsNullOrWhiteSpace(args.GroupBy))
@@ -3085,6 +3094,7 @@ internal sealed class CliArgs
         if (overlay.MaxSearchDepth is { } depth && MaxSearchDepth is null) MaxSearchDepth = depth < 0 ? 0 : depth;
         if (overlay.ObeyGitignore is { } gi && ObeyGitignore is null) ObeyGitignore = gi;
         if (overlay.SearchInsideArchives is { } arc && SearchInsideArchives is null) SearchInsideArchives = arc;
+        if (overlay.SearchHiddenFiles is { } sh && SearchHiddenFiles is null) SearchHiddenFiles = sh;
 
         // Sort/group: only fill from the model when the user did not set them explicitly.
         if (overlay.SortBy is { } sortKey && SortBy is null)

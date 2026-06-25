@@ -652,7 +652,8 @@ public class SearchResultCoverageTests
         var r = MakeResult("short line", lineNumber: 611, matchStartColumn: 3, matchLength: 5);
         r.SourceMatchStartColumn = 1234;
 
-        Assert.Equal("L611 C1235", r.LineLocationDisplay);
+        // The gutter shows only the line number; the column lives in the hover tooltip.
+        Assert.Equal("611", r.LineLocationDisplay);
         Assert.Equal("Line 611, column 1235", r.LineLocationTooltip);
     }
 

@@ -41,6 +41,7 @@ public sealed class SemanticPlanApplierTests
         public double MaxSearchDepth { get; set; }
         public bool ObeyGitignore { get; set; }
         public bool SearchInsideArchives { get; set; }
+        public bool SearchHiddenFiles { get; set; } = true;
         public int SortModeIndex { get; set; }
         public int SortDirectionIndex { get; set; }
         public int GroupModeIndex { get; set; }
@@ -1093,6 +1094,381 @@ public sealed class SemanticPlanApplierTests
 
         Assert.Equal(new[] { glob }, resolved.IncludeGlobs);
     }
+
+    // ---- language-name -> extension correction -----------------------------
+
+    [Theory]
+    [InlineData("c# files on C:/", "cs", "c")]
+    [InlineData("c sharp files", "cs", "c")]
+    [InlineData("csharp scripts", "cs", "c")]
+    [InlineData("c++ source on D:", "cpp", "c")]
+    [InlineData("c plus plus files", "cpp", "c")]
+    [InlineData("f# files", "fs", "f")]
+    [InlineData("fsharp programs", "fs", "f")]
+    [InlineData("objective-c files", "m", null)]
+    public void LanguageExtensionGlobs_FromQuery_DetectsLanguageFileTypes(string query, string canonical, string? stripped)
+    {
+        var hits = LanguageExtensionGlobs.FromQuery(query);
+
+        var hit = Assert.Single(hits);
+        Assert.Equal(canonical, hit.Canonical);
+        Assert.Equal(stripped, hit.Stripped);
+    }
+
+    [Theory]
+    [InlineData("files containing \"c#\"")]          // quoted -> a content term, not a file filter
+    [InlineData("notes about c# in general")]        // no file-type noun after the language
+    [InlineData("python files")]                      // plain-word language the model maps itself
+    [InlineData("find the abc# token files")]        // "c#" is inside a larger token
+    [InlineData("")]
+    [InlineData(null)]
+    public void LanguageExtensionGlobs_FromQuery_IgnoresNonFileTypeMentions(string? query)
+    {
+        Assert.Empty(LanguageExtensionGlobs.FromQuery(query));
+    }
+
+    [Fact]
+    public void Resolve_CSharpFiles_ModelGuessedWrongExtension_IsCorrectedToCs()
+    {
+        // The reported bug: "c# files ..." -> phi-4-mini emits include "*.c".
+        var plan = new SemanticSearchPlan { Pattern = "test", IncludeGlobs = new() { "*.c" } };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "c# files on C:/ containing the word \"test\"" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal(new[] { "*.cs" }, resolved.IncludeGlobs);
+    }
+
+    [Fact]
+    public void Resolve_CSharpFiles_ModelEmittedNoGlob_AddsCs()
+    {
+        // The other observed failure mode: the model emits no include glob at all.
+        var plan = new SemanticSearchPlan { Pattern = "test" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "c# files containing test" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal(new[] { "*.cs" }, resolved.IncludeGlobs);
+    }
+
+    [Fact]
+    public void Resolve_CAndCSharpFiles_ModelGotBothRight_KeepsBoth()
+    {
+        // When the model already produced the canonical extension, its sibling globs are trusted —
+        // a deliberate "C and C# files" request must keep both *.c and *.cs.
+        var plan = new SemanticSearchPlan { Pattern = "x", IncludeGlobs = new() { "*.c", "*.cs" } };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "c and c# files" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal(new[] { "*.c", "*.cs" }, resolved.IncludeGlobs);
+    }
+
+    [Fact]
+    public void Resolve_CSharpAsContentTerm_DoesNotAddGlob()
+    {
+        // "c#" inside quotes is a content term; it must not become a file-type filter.
+        var plan = new SemanticSearchPlan { Pattern = "c#", SearchMode = "content" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "files containing \"c#\"" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Null(resolved.IncludeGlobs);
+    }
+
+    [Fact]
+    public void Resolve_NoOriginalQuery_LeavesModelGlobsUntouched()
+    {
+        // Backward compatible: callers (and tests) that don't supply the raw query are unaffected.
+        var plan = new SemanticSearchPlan { Pattern = "test", IncludeGlobs = new() { "*.c" } };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.Equal(new[] { "*.c" }, resolved.IncludeGlobs);
+    }
+
+    [Fact]
+    public void Resolve_ObjectiveCFiles_AddsM_WithNoStrippedExtensionToRemove()
+    {
+        // Objective-C has no predictable wrong guess (Stripped is null), so the canonical *.m is added
+        // without removing any sibling glob — exercises the Stripped-is-null path of the language fix.
+        var plan = new SemanticSearchPlan { Pattern = "test" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "objective-c files containing test" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal(new[] { "*.m" }, resolved.IncludeGlobs);
+    }
+
+    // ---- explicit "*.ext" extension requests (".com files") ----------------
+
+    [Fact]
+    public void Resolve_DotComFiles_OverridesHallucinatedPattern_ForcesGlobAndFilenameMode()
+    {
+        // Reported bug: ".com files on C:/" -> phi-4-mini emits a content search for "*.gitignore".
+        var plan = new SemanticSearchPlan
+        {
+            Directory = "C:/",
+            Pattern = "*.gitignore",
+            SearchMode = "content",
+            UseRegex = true,
+        };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = ".com files on C:/" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal(new[] { "*.com" }, resolved.IncludeGlobs);
+        Assert.Equal(SearchMode.FileNames, resolved.SearchMode);
+        Assert.Equal(".", resolved.Pattern);          // match-all filename synthesis
+        Assert.True(resolved.UseRegex);
+    }
+
+    [Fact]
+    public void Resolve_DotComFilesWithContentTerm_KeepsContentSearch()
+    {
+        // "containing MZ" is a real content term, so a genuine content search is preserved — only the
+        // include glob is forced from the explicit ".com".
+        var plan = new SemanticSearchPlan { Pattern = "MZ", SearchMode = "content" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = ".com files containing MZ" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal(new[] { "*.com" }, resolved.IncludeGlobs);
+        Assert.Equal("MZ", resolved.Pattern);
+        Assert.Equal(SearchMode.Content, resolved.SearchMode);
+    }
+
+    [Fact]
+    public void ApplyExplicitExtensionGlobs_DottedToken_ForcesGlob()
+    {
+        var include = new List<string>();
+
+        var forced = SemanticPlanApplier.ApplyExplicitExtensionGlobs(include, ".com files on C:/");
+
+        Assert.Equal(new[] { "com" }, forced);
+        Assert.Contains("*.com", include);
+    }
+
+    [Fact]
+    public void ApplyExplicitExtensionGlobs_BareCategoryWord_NotForced()
+    {
+        // "text" is a known extension token, but without a leading dot it is a category phrase the
+        // model maps to *.txt; only an explicit ".ext" is forced.
+        var include = new List<string>();
+
+        var forced = SemanticPlanApplier.ApplyExplicitExtensionGlobs(include, "text files on C:/");
+
+        Assert.Empty(forced);
+        Assert.Empty(include);
+    }
+
+    [Fact]
+    public void ApplyExplicitExtensionGlobs_ExtensionInsideFilename_NotForced()
+    {
+        // ".docx" embedded in a filename must not be read as a standalone extension request.
+        var include = new List<string>();
+
+        var forced = SemanticPlanApplier.ApplyExplicitExtensionGlobs(include, "find report.docx files");
+
+        Assert.Empty(forced);
+    }
+
+    [Fact]
+    public void ApplyExplicitExtensionGlobs_AlreadyPresent_NoDuplicate()
+    {
+        var include = new List<string> { "*.com" };
+
+        var forced = SemanticPlanApplier.ApplyExplicitExtensionGlobs(include, ".com files");
+
+        Assert.Equal(new[] { "com" }, forced);
+        Assert.Equal(new[] { "*.com" }, include);
+    }
+
+    [Fact]
+    public void ApplyExplicitExtensionGlobs_RepeatedExtension_ForcedOnce()
+    {
+        // The same explicit extension named twice must dedupe — forced once, single glob.
+        var include = new List<string>();
+
+        var forced = SemanticPlanApplier.ApplyExplicitExtensionGlobs(include, ".log files and .log extensions");
+
+        Assert.Equal(new[] { "log" }, forced);
+        Assert.Equal(new[] { "*.log" }, include);
+    }
+
+    [Fact]
+    public void ApplyExplicitExtensionGlobs_DotlessExistingGlob_StillForcesExtension()
+    {
+        // An include entry without a dot ("everything") must not block forcing the explicit extension —
+        // exercises the no-dot path of the bare-extension comparison.
+        var include = new List<string> { "everything" };
+
+        var forced = SemanticPlanApplier.ApplyExplicitExtensionGlobs(include, ".com files");
+
+        Assert.Equal(new[] { "com" }, forced);
+        Assert.Contains("*.com", include);
+    }
+
+    [Theory]
+    [InlineData("*.gitignore")]
+    [InlineData("a?b")]
+    [InlineData(".com")]
+    [InlineData(".CS")]
+    public void LooksLikeGlobToken_GlobShapedToken_True(string pattern)
+        => Assert.True(SemanticPlanApplier.LooksLikeGlobToken(pattern));
+
+    [Theory]
+    [InlineData("MZ")]              // plain content term
+    [InlineData("hello world")]    // multi-word content term
+    [InlineData("report.docx ok")] // has a dot but not a leading-dot bare extension
+    [InlineData(".")]              // single dot — not long enough to be an extension
+    [InlineData(".co m")]          // leading dot but contains a non-extension char
+    [InlineData("")]              // empty after trim
+    [InlineData("   ")]            // whitespace-only -> empty after trim
+    public void LooksLikeGlobToken_ContentTerm_False(string pattern)
+        => Assert.False(SemanticPlanApplier.LooksLikeGlobToken(pattern));
+
+    // ---- binary-extension detection (.com/.exe are skipped by name) --------
+
+    private static readonly HashSet<string> KnownBinaryExtensions =
+        new(StringComparer.OrdinalIgnoreCase) { "com", "exe", "dll", "cpl", "scr" };
+
+    [Fact]
+    public void GetBinaryExtensionsToEnable_BinaryGlobs_ReturnsBinaryExtensions()
+    {
+        var result = SemanticPlanApplier.GetBinaryExtensionsToEnable(
+            new[] { "*.com", "*.txt", "*.exe" }, KnownBinaryExtensions);
+
+        Assert.Equal(new[] { "com", "exe" }, result);
+    }
+
+    [Fact]
+    public void GetBinaryExtensionsToEnable_NoBinaryGlobs_ReturnsEmpty()
+    {
+        Assert.Empty(SemanticPlanApplier.GetBinaryExtensionsToEnable(
+            new[] { "*.txt", "*.png" }, KnownBinaryExtensions));
+    }
+
+    [Fact]
+    public void GetBinaryExtensionsToEnable_NullOrEmptyInputs_ReturnEmpty()
+    {
+        var emptyKnown = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        Assert.Empty(SemanticPlanApplier.GetBinaryExtensionsToEnable(null, KnownBinaryExtensions));
+        Assert.Empty(SemanticPlanApplier.GetBinaryExtensionsToEnable(Array.Empty<string>(), KnownBinaryExtensions));
+        Assert.Empty(SemanticPlanApplier.GetBinaryExtensionsToEnable(new[] { "*.com" }, null!));
+        Assert.Empty(SemanticPlanApplier.GetBinaryExtensionsToEnable(new[] { "*.com" }, emptyKnown));
+    }
+
+    // ---- hidden-file intent ("hidden files" -> the Search-hidden toggle, not an exclude glob) ----
+
+    [Theory]
+    [InlineData("hidden files")]
+    [InlineData("all hidden files on C:")]
+    [InlineData("show hidden files")]
+    [InlineData("include hidden files")]
+    [InlineData("png files including hidden files")]
+    [InlineData("list the hidden folders")]
+    public void DetectHiddenFilePreference_IncludeRequests_ReturnTrue(string query)
+        => Assert.True(SemanticPlanApplier.DetectHiddenFilePreference(query));
+
+    [Theory]
+    [InlineData("all png files that are not a hidden file")]
+    [InlineData("not hidden files")]
+    [InlineData("no hidden files")]
+    [InlineData("exclude hidden files")]
+    [InlineData("without hidden files")]
+    [InlineData("non-hidden files")]
+    [InlineData("png files but skip hidden files")]
+    [InlineData("find logs, ignore hidden files")]
+    public void DetectHiddenFilePreference_ExcludeRequests_ReturnFalse(string query)
+        => Assert.False(SemanticPlanApplier.DetectHiddenFilePreference(query));
+
+    [Theory]
+    [InlineData("all png files")]
+    [InlineData("files containing the word hidden")]   // "hidden" is a content term, not a file filter
+    [InlineData("")]
+    [InlineData(null)]
+    public void DetectHiddenFilePreference_NoHiddenFileMention_ReturnsNull(string? query)
+        => Assert.Null(SemanticPlanApplier.DetectHiddenFilePreference(query));
+
+    [Fact]
+    public void DetectHiddenFilePreference_NegationInEarlierClause_DoesNotFlipInclude()
+    {
+        // The negation belongs to the first clause; the hidden mention is a separate include request.
+        Assert.True(SemanticPlanApplier.DetectHiddenFilePreference("exclude tmp files, show hidden files"));
+    }
+
+    [Fact]
+    public void Resolve_NotHiddenFiles_TogglesHiddenOff_AndDropsDotfileExcludeGlob()
+    {
+        // The reported bug: "all png files that are not a hidden file" -> the model approximates "not
+        // hidden" with a dotfile-exclusion glob. The toggle should drive it and that glob be dropped.
+        var plan = new SemanticSearchPlan
+        {
+            Pattern = "",
+            IncludeGlobs = new() { "*.png" },
+            ExcludeGlobs = new() { @".\.[a-zA-Z0-9].+" },
+        };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "all png files that are not a hidden file" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.False(resolved.SearchHiddenFiles);
+        Assert.Null(resolved.ExcludeGlobs);                 // the dotfile-exclusion glob was removed
+        Assert.Equal(new[] { "*.png" }, resolved.IncludeGlobs);
+    }
+
+    [Fact]
+    public void Resolve_NotHidden_KeepsRealExcludesDropsOnlyDotfileGlob()
+    {
+        var plan = new SemanticSearchPlan
+        {
+            Pattern = "",
+            IncludeGlobs = new() { "*.png" },
+            ExcludeGlobs = new() { "*.mov", ".*" },
+        };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "png files that are not hidden" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.False(resolved.SearchHiddenFiles);
+        Assert.Equal(new[] { "*.mov" }, resolved.ExcludeGlobs);
+    }
+
+    [Fact]
+    public void Resolve_HiddenFiles_TogglesHiddenOn()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "find all hidden files" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.True(resolved.SearchHiddenFiles);
+    }
+
+    [Fact]
+    public void Resolve_NoHiddenMention_LeavesToggleUnset_UnlessModelSetsIt()
+    {
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "all png files" };
+
+        Assert.Null(SemanticPlanApplier.Resolve(
+            new SemanticSearchPlan { Pattern = "", IncludeGlobs = new() { "*.png" } }, ctx).SearchHiddenFiles);
+
+        // The model's own searchHidden is the fallback when the query itself is silent on hidden files.
+        Assert.False(SemanticPlanApplier.Resolve(
+            new SemanticSearchPlan { Pattern = "", IncludeGlobs = new() { "*.png" }, SearchHidden = false }, ctx).SearchHiddenFiles);
+    }
+
+    [Fact]
+    public void BuildExplanation_HiddenPreference_StatedInPlainWords()
+    {
+        Assert.Contains("excluding hidden files", SemanticPlanApplier.BuildExplanation(
+            new ResolvedSearchPlan { SearchHiddenFiles = false }));
+        Assert.Contains("including hidden files", SemanticPlanApplier.BuildExplanation(
+            new ResolvedSearchPlan { SearchHiddenFiles = true }));
+    }
+
 
     [Fact]
     public void BuildExplanation_UsesResolvedPattern_NotModelProse()

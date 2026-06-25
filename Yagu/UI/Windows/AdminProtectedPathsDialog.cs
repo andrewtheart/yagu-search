@@ -25,6 +25,10 @@ internal sealed class AdminProtectedPathsDialog : Window
         Content = BuildContent(segments);
         Closed += OnClosed;
 
+        // Hide the OS title bar reliably (SetBorderAndTitleBar alone is not enough); matches the
+        // title-bar-less pattern used by MainWindow/SettingsWindow/ResultStoreTempLocationWindow.
+        ExtendsContentIntoTitleBar = true;
+
         IntPtr dialogHwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         WindowForegroundHelper.ConfigureOwnedWindow(dialogHwnd, _ownerHwnd);
 
@@ -59,8 +63,8 @@ internal sealed class AdminProtectedPathsDialog : Window
         var root = new Grid
         {
             Padding = new Thickness(28, 24, 28, 24),
-            Background = ResourceBrush("ApplicationPageBackgroundThemeBrush", ColorHelper.FromArgb(0xFF, 0x20, 0x20, 0x20)),
         };
+        Yagu.Services.AppThemeService.ApplyThemedDialogSurface(root, ElementTheme.Default);
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });

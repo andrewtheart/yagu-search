@@ -66,6 +66,22 @@ public static class BinaryDetector
     }
 
     /// <summary>
+    /// Detects only the UNAMBIGUOUS binary signals — a known binary magic number or an embedded
+    /// NUL byte — and deliberately ignores the fuzzy control-byte-ratio heuristic used by
+    /// <see cref="IsBinary(ReadOnlySpan{byte})"/>. Use this when copying/exporting a file's text
+    /// content: a text log full of ANSI escape sequences (a high control-byte ratio, e.g. from a
+    /// model-download progress dump) should still be copied as text, while true binaries (images,
+    /// executables, archives) must not be dumped to the clipboard as garbage.
+    /// </summary>
+    public static bool HasDefiniteBinarySignature(ReadOnlySpan<byte> sample)
+    {
+        if (sample.IsEmpty) return false;
+        if (HasBinaryMagic(sample)) return true;
+        return sample.IndexOf((byte)0) >= 0;
+    }
+
+
+    /// <summary>
     /// Detects if the given sample bytes start with a ZIP magic number (PK\x03\x04, PK\x05\x06, PK\x07\x08).
     /// Used to identify ZIP archives for search-inside-archive support.
     /// </summary>

@@ -116,11 +116,47 @@ public sealed class SemanticCapabilityDetectorTests
     }
 
     [Fact]
+    public void HasGpu_OnlyReflectsDisplayClass()
+    {
+        var detector = DetectorWith(
+            display: [new("NVIDIA GeForce RTX 4070", "PCI\\VEN_10DE&DEV_2786")],
+            compute: []);
+        Assert.True(detector.HasGpu());
+        Assert.False(detector.HasNpu());
+    }
+
+    [Fact]
+    public void HasNpu_OnlyReflectsComputeClass()
+    {
+        var detector = DetectorWith(
+            display: [new("Microsoft Basic Display Adapter", "ROOT\\BasicDisplay")],
+            compute: [new("Some NPU", "ACPI\\NPU0000")]);
+        Assert.True(detector.HasNpu());
+        Assert.False(detector.HasGpu());
+    }
+
+    [Fact]
     public void HasAcceleratedHardware_FalseWhenReaderThrows()
     {
         var detector = new GpuNpuCapabilityDetector(
             _ => throw new InvalidOperationException("registry unreadable"));
         Assert.False(detector.HasAcceleratedHardware());
+    }
+
+    [Fact]
+    public void HasGpu_FalseWhenReaderThrows()
+    {
+        var detector = new GpuNpuCapabilityDetector(
+            _ => throw new InvalidOperationException("registry unreadable"));
+        Assert.False(detector.HasGpu());
+    }
+
+    [Fact]
+    public void HasNpu_FalseWhenReaderThrows()
+    {
+        var detector = new GpuNpuCapabilityDetector(
+            _ => throw new InvalidOperationException("registry unreadable"));
+        Assert.False(detector.HasNpu());
     }
 
     // ── ViewModel launch-mode wiring ──
@@ -180,7 +216,7 @@ public sealed class SemanticCapabilityDetectorTests
     [Fact]
     public void SettingsWindow_AddsGreyableSemanticDefaultToggle()
     {
-        Assert.Contains("AddSettingsGroupBox(g, \"Semantic Search\")", SettingsWindowSource);
+        Assert.Contains("AddSettingsGroupBox(g, \"AI (Semantic) Search\")", SettingsWindowSource);
         Assert.Contains("bool overrideEnabled = _viewModel.SemanticDefaultOverrideEnabled;", SettingsWindowSource);
         Assert.Contains("Default to Traditional search mode", SettingsWindowSource);
         Assert.Contains("IsEnabled = overrideEnabled,", SettingsWindowSource);
