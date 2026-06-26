@@ -103,7 +103,17 @@ public static class SemanticPlanApplier
         context ??= new SemanticTranslationContext();
         var warnings = new List<string>();
 
-        string? directory = ResolveDirectory(plan.Directory) ?? NormalizeDirectory(context.DefaultDirectory);
+        string? modelDirectory = ResolveDirectory(plan.Directory);
+        // Reject a hallucinated directory: a small model can echo a nonsense query into the plan's
+        // "directory" field. Applying it would overwrite the search location with a non-existent path
+        // and fail with "Directory does not exist". When a probe is supplied, drop a model directory
+        // that doesn't exist and fall back to the user's current directory instead.
+        if (modelDirectory is not null && context.DirectoryExists is { } directoryExists && !directoryExists(modelDirectory))
+        {
+            warnings.Add($"Ignored directory '{modelDirectory}' because it does not exist; used the current location instead.");
+            modelDirectory = null;
+        }
+        string? directory = modelDirectory ?? NormalizeDirectory(context.DefaultDirectory);
 
         var include = NormalizeFilterTokens(plan.IncludeGlobs);
         var exclude = NormalizeFilterTokens(plan.ExcludeGlobs);
@@ -356,7 +366,7 @@ public static class SemanticPlanApplier
         ArgumentNullException.ThrowIfNull(resolved);
 
         string directory = string.IsNullOrWhiteSpace(resolved.Directory)
-            ? "the current directory"
+            ? "all drives"
             : resolved.Directory!.Trim();
 
         string scope = resolved.SearchMode switch

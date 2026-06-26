@@ -212,7 +212,6 @@ public sealed partial class MainWindow : Window, IDisposable
         InitializeHelpKeyboardShortcut();
         SyncLayoutToggles(ViewModel.PreviewModeIndex);
         InitializeAdvancedOptionsDrawerStateTracking();
-        SetAdvancedOptionsDrawerExpandedWidthState(AdvancedOptionsExpander.IsExpanded);
         ApplyAppWindowTitle();
 
         // PreviewBlock's built-in text-selection swallows DoubleTapped by
@@ -243,7 +242,10 @@ public sealed partial class MainWindow : Window, IDisposable
         UpdateTitleBarInsets();
         AppWindow.Changed += (_, args) =>
         {
-            if (args.DidSizeChange) UpdateTitleBarInsets();
+            // Re-fit the custom title-bar actions when the window resizes (DPI/scale changes the
+            // reserved caption-button width) OR when the presenter changes (switching window modes
+            // shows/hides the native minimize/maximize/close buttons).
+            if (args.DidSizeChange || args.DidPresenterChange) UpdateTitleBarInsets();
         };
 
         // Set the window icon (unpackaged WinUI 3 doesn't pick up ApplicationIcon automatically)
@@ -285,11 +287,6 @@ public sealed partial class MainWindow : Window, IDisposable
             if (e.PropertyName == nameof(ViewModel.ShowBuildNumberInTitleBar))
             {
                 ApplyAppWindowTitle();
-            }
-
-            if (e.PropertyName == nameof(ViewModel.AdvancedOptionsCollapsedWidthModeIndex))
-            {
-                SetAdvancedOptionsDrawerExpandedWidthState(AdvancedOptionsExpander.IsExpanded);
             }
 
             if (!_suppressHotkeySettingChange &&

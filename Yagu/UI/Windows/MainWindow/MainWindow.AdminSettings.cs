@@ -401,7 +401,8 @@ public sealed partial class MainWindow
             return true;
         }
 
-        // Primary: un-exclude the extension; this persists settings (including the suppress flag if set).
+        // Primary: include the extension for THIS search only (no settings are changed); Advanced
+        // Options are reset to the saved defaults when the search finishes.
         await ViewModel.IncludeExtensionForSearchAsync(warning);
         return true;
     }
@@ -411,6 +412,7 @@ public sealed partial class MainWindow
         var parts = new List<string>();
         if (reasons.HasFlag(Yagu.Services.ExtensionExclusionReason.BinaryExtensions)) parts.Add("Binary extensions list");
         if (reasons.HasFlag(Yagu.Services.ExtensionExclusionReason.SkipExtensions)) parts.Add("Skip extensions list");
+        if (reasons.HasFlag(Yagu.Services.ExtensionExclusionReason.ArchiveExtensions)) parts.Add("Archive extensions list");
         if (reasons.HasFlag(Yagu.Services.ExtensionExclusionReason.ExcludeFilter)) parts.Add("Exclude filter");
         if (reasons.HasFlag(Yagu.Services.ExtensionExclusionReason.IncludeFilter)) parts.Add("Include filter");
         return parts.Count switch

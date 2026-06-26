@@ -175,6 +175,8 @@ internal static class CliRunner
             Now = DateTimeOffset.Now,
             DefaultDirectory = !string.IsNullOrWhiteSpace(args.Directory) ? args.Directory : Environment.CurrentDirectory,
             OriginalQuery = args.SemanticPattern?.Trim(),
+            // Drop a model-hallucinated directory that doesn't exist instead of failing the search.
+            DirectoryExists = static d => Directory.Exists(d),
         };
 
         // Progress goes to stderr so stdout stays ripgrep-clean.

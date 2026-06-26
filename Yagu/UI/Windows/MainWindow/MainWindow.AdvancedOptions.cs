@@ -47,37 +47,7 @@ public sealed partial class MainWindow
 
     private void OnAdvancedOptionsResetClick(object sender, RoutedEventArgs e)
     {
-        AppSettings settings = new SettingsService().Load();
-
-        ViewModel.SearchModeIndex = 0;
-        ViewModel.IncludeFilterModeIndex = settings.IncludeFilterModeIndex;
-        ViewModel.ExcludeFilterModeIndex = settings.ExcludeFilterModeIndex;
-        ViewModel.IncludeGlobs = settings.IncludeGlobs;
-        ViewModel.ExcludeGlobs = settings.ExcludeGlobs;
-        ViewModel.ObeyGitignore = settings.ObeyGitignore;
-
-        ViewModel.SettingsSkipExtensions = settings.SkipExtensions;
-        ViewModel.SkipExtensions = settings.SkipExtensions;
-        ViewModel.SearchBinary = !settings.SkipBinary;
-        ViewModel.SettingsBinaryExtensions = settings.BinaryExtensions;
-        ViewModel.BinaryExtensions = settings.BinaryExtensions;
-        ViewModel.SearchInsideArchives = settings.SearchInsideArchives;
-        ViewModel.SettingsArchiveExtensions = settings.ArchiveExtensions;
-        ViewModel.ArchiveExtensions = settings.ArchiveExtensions;
-
-        ViewModel.DefaultMinFileSizeBytes = settings.DefaultMinFileSizeBytes;
-        ViewModel.DefaultMaxFileSizeBytes = settings.DefaultMaxFileSizeBytes;
-        ViewModel.MinFileSizeBytes = settings.DefaultMinFileSizeBytes;
-        ViewModel.MaxFileSizeBytes = settings.DefaultMaxFileSizeBytes;
-        ViewModel.DefaultCreatedAfterDate = settings.DefaultCreatedAfterDate;
-        ViewModel.DefaultCreatedBeforeDate = settings.DefaultCreatedBeforeDate;
-        ViewModel.DefaultModifiedAfterDate = settings.DefaultModifiedAfterDate;
-        ViewModel.DefaultModifiedBeforeDate = settings.DefaultModifiedBeforeDate;
-        ViewModel.CreatedAfterDate = settings.DefaultCreatedAfterDate;
-        ViewModel.CreatedBeforeDate = settings.DefaultCreatedBeforeDate;
-        ViewModel.ModifiedAfterDate = settings.DefaultModifiedAfterDate;
-        ViewModel.ModifiedBeforeDate = settings.DefaultModifiedBeforeDate;
-        ViewModel.MaxSearchDepth = double.NaN;
+        ViewModel.ResetAdvancedOptionsToSavedDefaults();
 
         IncludeFilterBox.PlaceholderText = ViewModel.IncludeFilterPlaceholder;
         ExcludeFilterBox.PlaceholderText = ViewModel.ExcludeFilterPlaceholder;

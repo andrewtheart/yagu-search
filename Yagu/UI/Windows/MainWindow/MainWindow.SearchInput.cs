@@ -277,8 +277,7 @@ public sealed partial class MainWindow
 
     private void CollapseAdvancedOptionsForSearch()
     {
-        if (AdvancedOptionsExpander.IsExpanded)
-            AdvancedOptionsExpander.IsExpanded = false;
+        AdvancedOptionsFlyout?.Hide();
     }
 
     private async void OnQueryKeyDown(object sender, KeyRoutedEventArgs e)
@@ -384,6 +383,19 @@ public sealed partial class MainWindow
     {
         if (args.Reason == AutoSuggestionBoxTextChangeReason.UserInput && !AreQuerySuggestionsSuppressed())
             ApplyQuerySuggestions(sender, open: sender.IsSuggestionListOpen || _querySuggestionsUserOpened);
+    }
+
+    /// <summary>
+    /// In compact launcher mode the window is sized to its content height. The query and directory
+    /// boxes wrap and grow with multi-line text, so re-fit the launcher whenever either one's height
+    /// changes to keep the action bar below them (Search, load-session, and terminal buttons) visible
+    /// at all times. Beyond each box's MaxHeight the text scrolls internally, so the window never
+    /// outgrows the work area.
+    /// </summary>
+    private void OnSearchInputSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_launcherMode && e.NewSize.Height != e.PreviousSize.Height)
+            PositionLauncherWindow();
     }
 
     private void OnQueryClearClick(object sender, RoutedEventArgs e)

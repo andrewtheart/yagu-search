@@ -99,6 +99,10 @@ public sealed class FoundryModelSelector
     public static async Task<IModel?> SelectAsync(ICatalog catalog, string? overrideAlias, IReadOnlyList<DeviceType>? deviceOrder, CancellationToken cancellationToken)
         => await SelectAsync(catalog, overrideAlias, deviceOrder, availableDevices: null, cancellationToken).ConfigureAwait(false);
 
+    /// <summary>Backward-compatible overload without a memory budget (the memory guard is disabled).</summary>
+    public static async Task<IModel?> SelectAsync(ICatalog catalog, string? overrideAlias, IReadOnlyList<DeviceType>? deviceOrder, IReadOnlySet<DeviceType>? availableDevices, CancellationToken cancellationToken)
+        => await SelectAsync(catalog, overrideAlias, deviceOrder, availableDevices, availableMemoryMb: null, cancellationToken).ConfigureAwait(false);
+
     /// <summary>
     /// Resolves the model to use, honoring a caller-supplied <paramref name="deviceOrder"/> (which
     /// accelerator build to PREFER) and <paramref name="availableDevices"/> (which execution devices
@@ -109,7 +113,7 @@ public sealed class FoundryModelSelector
     /// violation) on the first inference. Pass a null <paramref name="availableDevices"/> to disable the
     /// filter (legacy behavior). CPU should always be included by the caller.
     /// </summary>
-    public static async Task<IModel?> SelectAsync(ICatalog catalog, string? overrideAlias, IReadOnlyList<DeviceType>? deviceOrder, IReadOnlySet<DeviceType>? availableDevices, CancellationToken cancellationToken)
+    public static async Task<IModel?> SelectAsync(ICatalog catalog, string? overrideAlias, IReadOnlyList<DeviceType>? deviceOrder, IReadOnlySet<DeviceType>? availableDevices, int? availableMemoryMb, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         deviceOrder ??= DefaultDeviceOrder;
@@ -182,9 +186,18 @@ public sealed class FoundryModelSelector
                 Task: m.Info?.Task,
                 Device: m.Info?.Runtime?.DeviceType ?? DeviceType.CPU))
             .ToList();
+
+        // Rank only variants this machine can actually run, so a family whose ONLY builds are GPU/NPU
+        // is never auto-chosen (loading it would fall back to a device default that crashes during
+        // inference). CPU is always available, so this keeps at least the CPU builds.
+        if (availableDevices is not null)
+        {
+            var runnable = candidates.Where(c => availableDevices.Contains(c.Device)).ToList();
+            if (runnable.Count > 0) candidates = runnable;
+        }
         LogService.Instance.Verbose(LogSource, $"Ranking {candidates.Count} hardware-compatible catalog model(s).");
 
-        string? chosenAlias = SelectAlias(candidates);
+        string? chosenAlias = SelectAlias(candidates, availableMemoryMb);
         if (chosenAlias is null)
         {
             LogService.Instance.Warning(LogSource, "No eligible text-chat model found among catalog candidates.");
@@ -238,7 +251,7 @@ public sealed class FoundryModelSelector
             // always included, so an unaccelerated machine deterministically falls back to the CPU build.
             if (availableDevices is not null)
             {
-                DeviceType variantDevice = v.Info?.Runtime?.DeviceType ?? DeviceType.CPU;
+                DeviceType variantDevice = ResolveVariantDevice(v);
                 if (!availableDevices.Contains(variantDevice)) continue;
             }
             int score = VariantAccuracyScore(v, deviceOrder);
@@ -263,7 +276,7 @@ public sealed class FoundryModelSelector
     private static int VariantAccuracyScore(IModel variant, IReadOnlyList<DeviceType> deviceOrder)
     {
         string id = (variant.Id ?? variant.Alias ?? string.Empty).ToLowerInvariant();
-        DeviceType device = variant.Info?.Runtime?.DeviceType ?? DeviceType.CPU;
+        DeviceType device = ResolveVariantDevice(variant);
 
         // Earlier in the configured order = higher tier. A device not listed scores 0.
         int idx = -1;
@@ -282,17 +295,81 @@ public sealed class FoundryModelSelector
     }
 
     /// <summary>
+    /// Determines a variant's execution device from its ID (the reliable signal — e.g. "...-generic-cpu:3",
+    /// "...-cuda-gpu:5", "...-qnn-npu:1"), falling back to the catalog-reported DeviceType. Foundry can
+    /// report a misleading FAMILY-level DeviceType (it reflects the registered execution provider —
+    /// DirectML registers on almost any Windows box, including Windows Sandbox — not the real hardware),
+    /// so the ID string is trusted first.
+    /// </summary>
+    internal static DeviceType ResolveVariantDevice(IModel variant)
+    {
+        string id = (variant?.Id ?? variant?.Alias ?? string.Empty).ToLowerInvariant();
+        if (id.Contains("-cpu")) return DeviceType.CPU;
+        if (id.Contains("-npu") || id.Contains("qnn") || id.Contains("vitisai")) return DeviceType.NPU;
+        if (id.Contains("-gpu") || id.Contains("cuda") || id.Contains("directml") ||
+            id.Contains("trtrtx") || id.Contains("tensorrt")) return DeviceType.GPU;
+        return variant?.Info?.Runtime?.DeviceType ?? DeviceType.CPU;
+    }
+
+    /// <summary>
+    /// Returns the best variant of <paramref name="family"/> that runs on one of
+    /// <paramref name="availableDevices"/> (device determined by <see cref="ResolveVariantDevice"/>), or
+    /// null when the family has no runnable variant. Used by the model picker to show the build Yagu will
+    /// actually use rather than Foundry's misleading family-level default. With a null
+    /// <paramref name="availableDevices"/> the device filter is skipped.
+    /// </summary>
+    public static IModel? BestRunnableVariant(IModel family, IReadOnlyList<DeviceType>? deviceOrder, IReadOnlySet<DeviceType>? availableDevices)
+    {
+        if (family is null) return null;
+        deviceOrder ??= DefaultDeviceOrder;
+
+        List<IModel>? variants = null;
+        try { variants = family.Variants?.Where(v => v is not null).ToList(); } catch { /* SDK may not populate */ }
+        if (variants is null || variants.Count == 0) variants = [family];
+
+        IModel? best = null;
+        int bestScore = int.MinValue;
+        foreach (var v in variants)
+        {
+            if (availableDevices is not null && !availableDevices.Contains(ResolveVariantDevice(v))) continue;
+            int score = VariantAccuracyScore(v, deviceOrder);
+            if (score > bestScore) { best = v; bestScore = score; }
+        }
+        return best;
+    }
+
+    /// <summary>
     /// Pure ranking over candidate models. Order: (1) earliest match in
     /// <see cref="PreferredAliasFragments"/>; ties broken by device (NPU &gt; GPU &gt; CPU) then
     /// smaller file size. (2) If nothing matches the preference list, the smallest eligible
     /// (non-embedding/audio/vision) text model. Returns null when no eligible model exists.
+    ///
+    /// Auto-selection excludes reasoning/chain-of-thought models (their &lt;think&gt; prose violates
+    /// the strict-JSON contract and they are far heavier at generation time). When
+    /// <paramref name="availableMemoryMb"/> is supplied (CPU inference), models whose weights plus
+    /// KV-cache/runtime headroom cannot fit available physical RAM are dropped first — such a model
+    /// downloads and even loads, then OOMs ("bad allocation") while allocating the large prompt's
+    /// token sequences.
     /// </summary>
-    public static string? SelectAlias(IReadOnlyList<ModelCandidate> candidates)
+    public static string? SelectAlias(IReadOnlyList<ModelCandidate> candidates, int? availableMemoryMb = null)
     {
         if (candidates is null || candidates.Count == 0) return null;
 
-        var eligible = candidates.Where(IsTextChatCandidate).ToList();
+        var eligible = candidates.Where(IsAutoSelectable).ToList();
+        if (eligible.Count == 0) eligible = candidates.Where(IsTextChatCandidate).ToList();
         if (eligible.Count == 0) eligible = candidates.ToList(); // fall back to anything compatible
+
+        // Memory guard (CPU only): prefer models that actually fit. If NOTHING fits the budget, give
+        // the lightest model the best chance rather than the highest-preference (heaviest) one, which
+        // would just OOM again.
+        if (availableMemoryMb is { } budgetMb)
+        {
+            var fits = eligible.Where(c => FitsInMemory(c, budgetMb)).ToList();
+            if (fits.Count > 0)
+                eligible = fits;
+            else
+                return SmallestAlias(eligible);
+        }
 
         ModelCandidate? best = null;
         int bestRank = int.MaxValue;
@@ -310,12 +387,41 @@ public sealed class FoundryModelSelector
         if (best is { } b && bestRank != int.MaxValue) return b.Alias;
 
         // No preference match: smallest by size, device as secondary preference.
-        var smallest = eligible
-            .OrderBy(c => c.FileSizeMb ?? int.MaxValue)
-            .ThenByDescending(c => DeviceWeight(c.Device))
-            .ThenBy(c => c.Alias, StringComparer.OrdinalIgnoreCase)
-            .First();
-        return smallest.Alias;
+        return SmallestAlias(eligible);
+    }
+
+    private static string SmallestAlias(IReadOnlyList<ModelCandidate> eligible) => eligible
+        .OrderBy(c => c.FileSizeMb ?? int.MaxValue)
+        .ThenByDescending(c => DeviceWeight(c.Device))
+        .ThenBy(c => c.Alias, StringComparer.OrdinalIgnoreCase)
+        .First().Alias;
+
+    /// <summary>
+    /// RAM (MB) to reserve on top of a model's on-disk weights for its KV cache, the ONNX runtime, and
+    /// OS headroom. The semantic system prompt is large (~6-7K tokens), so the KV cache is the dominant
+    /// extra cost; a model only "fits" when its weights plus this reserve sit within available physical
+    /// memory. This is why a ~3.8B model (e.g. phi-4-mini) is rejected on a ~4 GB machine.
+    /// </summary>
+    private const int ModelMemoryHeadroomMb = 1536;
+
+    /// <summary>Whether a candidate's estimated footprint (weights + <see cref="ModelMemoryHeadroomMb"/>)
+    /// fits within <paramref name="availableMemoryMb"/>. Models of unknown size pass (cannot judge).</summary>
+    private static bool FitsInMemory(ModelCandidate candidate, int availableMemoryMb)
+        => candidate.FileSizeMb is not int sizeMb || sizeMb + ModelMemoryHeadroomMb <= availableMemoryMb;
+
+    // Reasoning / chain-of-thought model markers, excluded from AUTO selection (an explicit user
+    // override can still force one). Matched as a lowercase substring of the alias — chiefly to stop the
+    // "phi-4-mini" preference fragment from accidentally selecting "phi-4-mini-reasoning".
+    private static readonly string[] ReasoningAliasFragments = ["reasoning"];
+
+    private static bool IsAutoSelectable(ModelCandidate c)
+        => IsTextChatCandidate(c) && !IsReasoningAlias(c.Alias);
+
+    private static bool IsReasoningAlias(string? alias)
+    {
+        if (string.IsNullOrWhiteSpace(alias)) return false;
+        string a = alias.ToLowerInvariant();
+        return ReasoningAliasFragments.Any(f => a.Contains(f, StringComparison.Ordinal));
     }
 
     /// <summary>Removes a trailing catalog version suffix (e.g. ":5") from a model id/alias.</summary>

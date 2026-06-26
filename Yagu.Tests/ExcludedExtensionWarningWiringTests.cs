@@ -16,6 +16,7 @@ public sealed class ExcludedExtensionWarningWiringTests
     private static readonly string RepoRoot = FindRepoRoot();
     private static readonly string SearchInputSource = ReadSource("Yagu", "UI", "Windows", "MainWindow", "MainWindow.SearchInput.cs");
     private static readonly string AdminSettingsSource = ReadSource("Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdminSettings.cs");
+    private static readonly string AdvancedOptionsSource = ReadSource("Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdvancedOptions.cs");
     private static readonly string MainViewModelSource = ReadSource("Yagu", "ViewModels", "MainViewModel.cs");
     private static readonly string SettingsWindowSource = ReadSource("Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs");
 
@@ -61,8 +62,8 @@ public sealed class ExcludedExtensionWarningWiringTests
 
         Assert.Contains("TryGetExcludedExtensionWarning()", method);
         Assert.Contains("ShowTitleBar = false", method);
-        Assert.Contains("PrimaryButtonText = \"Search anyway\"", method);
-        Assert.Contains("SecondaryButtonText = $\"Include .{ext} & search\"", method);
+        Assert.Contains("PrimaryButtonText = $\"Include .{ext} & search\"", method);
+        Assert.Contains("SecondaryButtonText = \"Search anyway\"", method);
         // No Cancel button — the modal only offers the two proceed actions.
         Assert.Contains("CloseButtonText = null", method);
         Assert.DoesNotContain("CloseButtonText = \"Cancel\"", method);
@@ -77,7 +78,7 @@ public sealed class ExcludedExtensionWarningWiringTests
     {
         int start = MainViewModelSource.IndexOf("internal ExcludedExtensionWarning? TryGetExcludedExtensionWarning()", StringComparison.Ordinal);
         Assert.True(start >= 0, "Expected TryGetExcludedExtensionWarning in MainViewModel.cs");
-        string method = Slice(MainViewModelSource, start, 800);
+        string method = Slice(MainViewModelSource, start, 1400);
 
         Assert.Contains("if (SuppressExcludedExtensionWarnings) return null;", method);
         Assert.Contains("ExcludedExtensionPredictor.Predict(", method);
@@ -87,19 +88,22 @@ public sealed class ExcludedExtensionWarningWiringTests
     }
 
     [Fact]
-    public void ViewModel_IncludeExtensionFix_HandlesEveryReasonAndPersists()
+    public void ViewModel_IncludeExtensionFix_HandlesEveryReasonTransiently()
     {
-        int start = MainViewModelSource.IndexOf("internal async Task IncludeExtensionForSearchAsync(", StringComparison.Ordinal);
+        int start = MainViewModelSource.IndexOf("internal Task IncludeExtensionForSearchAsync(", StringComparison.Ordinal);
         Assert.True(start >= 0, "Expected IncludeExtensionForSearchAsync in MainViewModel.cs");
         string method = Slice(MainViewModelSource, start, 1800);
 
         Assert.Contains("ExtensionExclusionReason.BinaryExtensions", method);
         Assert.Contains("ExtensionExclusionReason.SkipExtensions", method);
+        Assert.Contains("ExtensionExclusionReason.ArchiveExtensions", method);
         Assert.Contains("ExtensionExclusionReason.ExcludeFilter", method);
         Assert.Contains("ExtensionExclusionReason.IncludeFilter", method);
         Assert.Contains("ExcludedExtensionPredictor.RemoveExtensionToken", method);
         Assert.Contains("ExcludedExtensionPredictor.AppendExtensionToken", method);
-        Assert.Contains("await PersistSettingsAsync();", method);
+        // Transient: the fix applies to the current search only and must NOT write to saved settings.
+        Assert.Contains("_advancedOptionsTransientlyChanged = true;", method);
+        Assert.DoesNotContain("PersistSettingsAsync", method);
     }
 
     [Fact]
@@ -124,6 +128,93 @@ public sealed class ExcludedExtensionWarningWiringTests
     {
         Assert.Contains("_viewModel.SuppressExcludedExtensionWarnings = !excludedExtToggle.IsOn", SettingsWindowSource);
         Assert.Contains("_viewModel.MaxSemanticRecentItems", SettingsWindowSource);
+    }
+
+    [Fact]
+    public void ViewModel_TransientFix_ResetsAdvancedOptionsWhenSearchEnds()
+    {
+        // The "Include & search" fix marks the search as transiently changed; when IsSearching flips
+        // back to false (search finished OR canceled) the options are reset to the SAVED defaults,
+        // unless a semantic resolution is intentionally being shown in Advanced Options.
+        int start = MainViewModelSource.IndexOf("partial void OnIsSearchingChanged(bool value)", StringComparison.Ordinal);
+        Assert.True(start >= 0, "Expected OnIsSearchingChanged in MainViewModel.cs");
+        string method = Slice(MainViewModelSource, start, 700);
+
+        Assert.Contains("if (value) return;", method);                       // act only when a search ENDS
+        Assert.Contains("if (!_advancedOptionsTransientlyChanged) return;", method);
+        Assert.Contains("_advancedOptionsTransientlyChanged = false;", method);
+        Assert.Contains("if (_semanticResolutionVisible) return;", method);  // don't fight semantic display
+        Assert.Contains("ResetAdvancedOptionsToSavedDefaults();", method);
+    }
+
+    [Fact]
+    public void ViewModel_ResetAdvancedOptions_RestoresFromSavedSettings()
+    {
+        int start = MainViewModelSource.IndexOf("public void ResetAdvancedOptionsToSavedDefaults()", StringComparison.Ordinal);
+        Assert.True(start >= 0, "Expected ResetAdvancedOptionsToSavedDefaults in MainViewModel.cs");
+        string method = Slice(MainViewModelSource, start, 2400);
+
+        // Reset reads the SAVED settings (not hard-coded app defaults) ...
+        Assert.Contains("AppSettings settings = _settingsService.Load();", method);
+        // ... restores the three extension lists and their toggles ...
+        Assert.Contains("SkipExtensions = settings.SkipExtensions;", method);
+        Assert.Contains("BinaryExtensions = settings.BinaryExtensions;", method);
+        Assert.Contains("ArchiveExtensions = settings.ArchiveExtensions;", method);
+        Assert.Contains("SearchBinary = !settings.SkipBinary;", method);
+        Assert.Contains("SearchInsideArchives = settings.SearchInsideArchives;", method);
+        // ... and rebuilds every dropdown so the checkboxes reflect the restored lists.
+        Assert.Contains("SyncSkipExtensionItems();", method);
+        Assert.Contains("SyncBinaryExtensionItems();", method);
+        Assert.Contains("SyncArchiveExtensionItems();", method);
+    }
+
+    [Fact]
+    public void ViewModel_TransientHelpers_ApplyPerListRuleSessionOnly()
+    {
+        // Skip rule: keep skipping everything EXCEPT the searched extension, then resync the dropdown.
+        int unskip = MainViewModelSource.IndexOf("private void UnskipExtensionForSearch(", StringComparison.Ordinal);
+        Assert.True(unskip >= 0, "Expected UnskipExtensionForSearch in MainViewModel.cs");
+        string unskipBody = Slice(MainViewModelSource, unskip, 600);
+        Assert.Contains("universe.Remove(ext);", unskipBody);
+        Assert.Contains("SyncSkipExtensionItems();", unskipBody);
+
+        // Binary rule: enable binary search and select ONLY the searched binary type.
+        int binary = MainViewModelSource.IndexOf("private void EnableBinarySearchForExtension(", StringComparison.Ordinal);
+        Assert.True(binary >= 0, "Expected EnableBinarySearchForExtension in MainViewModel.cs");
+        string binaryBody = Slice(MainViewModelSource, binary, 700);
+        Assert.Contains("SearchBinary = true;", binaryBody);
+        Assert.Contains("SyncBinaryExtensionItems();", binaryBody);
+
+        // Archive rule: enable search-inside-archives and select ONLY the searched archive type.
+        int archive = MainViewModelSource.IndexOf("private void EnableArchiveSearchForExtension(", StringComparison.Ordinal);
+        Assert.True(archive >= 0, "Expected EnableArchiveSearchForExtension in MainViewModel.cs");
+        string archiveBody = Slice(MainViewModelSource, archive, 400);
+        Assert.Contains("SearchInsideArchives = true;", archiveBody);
+        Assert.Contains("ArchiveExtensions = ext;", archiveBody);
+        Assert.Contains("SyncArchiveExtensionItems();", archiveBody);
+    }
+
+    [Fact]
+    public void ViewModel_TryGetWarning_FeedsArchiveUniverseToPredictor()
+    {
+        int start = MainViewModelSource.IndexOf("internal ExcludedExtensionWarning? TryGetExcludedExtensionWarning()", StringComparison.Ordinal);
+        Assert.True(start >= 0, "Expected TryGetExcludedExtensionWarning in MainViewModel.cs");
+        string method = Slice(MainViewModelSource, start, 1400);
+
+        // The archive "universe" is the saved defaults plus whatever is active; contents only count as
+        // "searched" for the active types when Search-inside-archives is on.
+        Assert.Contains("ParseExtensionSet(SettingsArchiveExtensions)", method);
+        Assert.Contains("SearchInsideArchives", method);
+        Assert.Contains("archiveUniverse", method);
+        Assert.Contains("archiveSearched", method);
+    }
+
+    [Fact]
+    public void AdvancedOptionsResetButton_DelegatesToViewModel()
+    {
+        // The Reset button must reuse the single ResetAdvancedOptionsToSavedDefaults implementation
+        // (the same code path as the post-search auto-reset) instead of duplicating reset logic.
+        Assert.Contains("ViewModel.ResetAdvancedOptionsToSavedDefaults();", AdvancedOptionsSource);
     }
 
     private static int CountOccurrences(string haystack, string needle)

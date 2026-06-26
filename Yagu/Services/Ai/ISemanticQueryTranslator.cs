@@ -114,6 +114,14 @@ public sealed class SemanticTranslationContext
     /// names whose glyph can't appear in a glob (e.g. "c#"/"c++"/"f#"), which small models collapse
     /// to the wrong extension. May be null/empty when a caller does not supply it.</summary>
     public string? OriginalQuery { get; init; }
+
+    /// <summary>Optional probe used to reject a hallucinated directory. A small model can echo a
+    /// nonsense query into the plan's <c>directory</c> field; applying that would overwrite the
+    /// search location with a path that does not exist and guarantee a "Directory does not exist"
+    /// failure. When set, a model-supplied directory that does not satisfy this probe is dropped
+    /// (falling back to <see cref="DefaultDirectory"/>) and a warning is recorded. Null disables the
+    /// check, keeping resolution a pure function of its inputs for unit tests.</summary>
+    public Func<string, bool>? DirectoryExists { get; init; }
 }
 
 /// <summary>Outcome of a translation attempt.</summary>

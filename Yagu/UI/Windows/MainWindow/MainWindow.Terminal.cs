@@ -48,7 +48,6 @@ public sealed partial class MainWindow
             TerminalHost.Visibility = Visibility.Collapsed;
         }
 
-        SetAdvancedOptionsDrawerExpandedWidthState(AdvancedOptionsExpander.IsExpanded);
         UpdateTerminalChevronGlyphs();
         UpdateTerminalChevronVisibility();
 
@@ -179,6 +178,10 @@ public sealed partial class MainWindow
             LogService.Instance.Info("Terminal", "Initializing terminal WebView");
             EnsureWebView2LoaderLoaded();
 
+            // Point WebView2 at a per-user, writable user-data folder. The default is next to the exe
+            // (under Program Files for an all-users install), which a non-elevated process cannot write
+            // to, causing WebView2 init to fail.
+            Yagu.Helpers.WebView2Support.ConfigureUserDataFolder();
             var env = await CoreWebView2Environment.CreateAsync();
             await TerminalWebView.EnsureCoreWebView2Async(env);
 

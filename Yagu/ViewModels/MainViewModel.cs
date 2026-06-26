@@ -2101,8 +2101,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             var context = new SemanticTranslationContext
             {
                 Now = DateTimeOffset.Now,
-                DefaultDirectory = string.IsNullOrWhiteSpace(Directory) ? null : Directory,
+                // Do NOT seed the model with the current box value: the directory must reflect ONLY what
+                // the model interprets. A confidently-named path is applied below; anything else clears
+                // the box so the search targets all drives.
+                DefaultDirectory = null,
                 OriginalQuery = text,
+                // A model-hallucinated directory that does not exist is treated as "no confident path"
+                // (dropped to null), which clears the box so the search targets all drives rather than a
+                // bogus location.
+                DirectoryExists = static d => System.IO.Directory.Exists(d),
             };
 
             // Run the translation on a background thread. The translator's first-call initialization
@@ -2131,6 +2138,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             }
 
             var resolved = SemanticPlanApplier.ApplyToTarget(result.Plan, context, this);
+            // Make the directory box reflect EXACTLY what the model interpreted: the detected path when
+            // it confidently named one, or empty (= search all drives) when it did not. The HDD check
+            // runs against this location next, via the post-translation gate in SubmitSearchAsync.
+            Directory = resolved.Directory ?? string.Empty;
             EnableArchiveSearchForContainerGlobs(resolved.IncludeGlobs);
             EnableBinarySearchForBinaryGlobs(resolved.IncludeGlobs);
             // Render the summary deterministically from the resolved plan rather than the model's
@@ -4416,6 +4427,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         // Note: this runs AFTER semantic translation (via the SubmitSearchAsync gate), so in Semantic
         // mode Query/IncludeGlobs already reflect the model's resolved plan (e.g. include glob *.exe).
 
+        // Archive universe = every known archive type (saved defaults + whatever is active). Contents are
+        // only "searched" for the active archive types when Search-inside-archives is on.
+        var archiveUniverse = ParseExtensionSet(SettingsArchiveExtensions);
+        foreach (var ext in ParseExtensionSet(ArchiveExtensions))
+            archiveUniverse.Add(ext);
+        var archiveSearched = SearchInsideArchives
+            ? ParseExtensionSet(ArchiveExtensions)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         return ExcludedExtensionPredictor.Predict(
             Query,
             UseRegex,
@@ -4426,32 +4446,39 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             IncludeGlobs,
             IncludeFilterMode,
             EffectiveExcludeGlobsText,
-            ExcludeFilterMode);
+            ExcludeFilterMode,
+            archiveUniverse,
+            archiveSearched);
     }
 
     /// <summary>
-    /// Stops excluding <paramref name="warning"/>'s extension for the current (and future) searches by
-    /// editing whichever advanced options were hiding it, then persists. Skip/Binary list edits are
-    /// removed from both the active and available (universe) strings so the change survives a restart;
-    /// session-only Include/Exclude filter edits take effect for this search.
+    /// Makes <paramref name="warning"/>'s extension findable for the CURRENT search only, by adjusting
+    /// the offending Advanced Options list(s) transiently — nothing is written to the saved settings, and
+    /// every control is reset back to the saved defaults once the search finishes (see
+    /// <see cref="ResetAdvancedOptionsToSavedDefaults"/>). The rule per list:
+    /// <list type="bullet">
+    /// <item>Skip: keep skipping everything EXCEPT this extension (so only it is scanned).</item>
+    /// <item>Binary: turn on binary search and select ONLY this binary type (skip every other binary type).</item>
+    /// <item>Archive: turn on archive search and select ONLY this archive type.</item>
+    /// <item>Include/Exclude filter: edit the session-only filter so the extension is no longer filtered out.</item>
+    /// </list>
     /// </summary>
-    internal async Task IncludeExtensionForSearchAsync(ExcludedExtensionWarning warning)
+    internal Task IncludeExtensionForSearchAsync(ExcludedExtensionWarning warning)
     {
         string ext = warning.Extension;
 
+        // Mark that this search transiently changed Advanced Options so they are reset to the saved
+        // defaults once the search finishes (see OnIsSearchingChanged / ResetAdvancedOptionsToSavedDefaults).
+        _advancedOptionsTransientlyChanged = true;
+
         if (warning.Reasons.HasFlag(ExtensionExclusionReason.BinaryExtensions))
-        {
-            BinaryExtensions = ExcludedExtensionPredictor.RemoveExtensionToken(BinaryExtensions, ext);
-            SettingsBinaryExtensions = ExcludedExtensionPredictor.RemoveExtensionToken(SettingsBinaryExtensions, ext);
-            SyncBinaryExtensionItems();
-        }
+            EnableBinarySearchForExtension(ext);
 
         if (warning.Reasons.HasFlag(ExtensionExclusionReason.SkipExtensions))
-        {
-            SkipExtensions = ExcludedExtensionPredictor.RemoveExtensionToken(SkipExtensions, ext);
-            SettingsSkipExtensions = ExcludedExtensionPredictor.RemoveExtensionToken(SettingsSkipExtensions, ext);
-            SyncSkipExtensionItems();
-        }
+            UnskipExtensionForSearch(ext);
+
+        if (warning.Reasons.HasFlag(ExtensionExclusionReason.ArchiveExtensions))
+            EnableArchiveSearchForExtension(ext);
 
         if (warning.Reasons.HasFlag(ExtensionExclusionReason.ExcludeFilter))
         {
@@ -4466,7 +4493,122 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             IncludeGlobs = ExcludedExtensionPredictor.AppendExtensionToken(IncludeGlobs, ext);
         }
 
-        await PersistSettingsAsync();
+        // Deliberately NOT persisted: the change applies only to this search and is reverted afterward.
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Skip rule: stop skipping <paramref name="ext"/> (so it is scanned) while keeping every
+    /// other skip-extension skipped. Session-only edit of the active Skip Extensions list.</summary>
+    private void UnskipExtensionForSearch(string ext)
+    {
+        var universe = ParseExtensionSet(SettingsSkipExtensions);
+        foreach (var e in ParseExtensionSet(SkipExtensions))
+            universe.Add(e);
+        universe.Remove(ext);
+
+        var newSkip = string.Join(';', universe.OrderBy(e => e, StringComparer.OrdinalIgnoreCase));
+        if (!string.Equals(SkipExtensions, newSkip, StringComparison.OrdinalIgnoreCase))
+        {
+            SkipExtensions = newSkip;
+            SyncSkipExtensionItems();
+        }
+    }
+
+    /// <summary>Binary rule: turn on binary search and SELECT ONLY <paramref name="ext"/> in the binary
+    /// dropdown (every other binary type stays skipped). Session-only — internally BinaryExtensions is the
+    /// skip list, so "select only ext" means "skip everything except ext".</summary>
+    private void EnableBinarySearchForExtension(string ext)
+    {
+        if (!SearchBinary)
+            SearchBinary = true;
+
+        var universe = ParseExtensionSet(SettingsBinaryExtensions);
+        foreach (var e in ParseExtensionSet(BinaryExtensions))
+            universe.Add(e);
+        universe.Add(ext);
+
+        var newSkip = string.Join(';', universe.Where(e => !string.Equals(e, ext, StringComparison.OrdinalIgnoreCase)));
+        if (!string.Equals(BinaryExtensions, newSkip, StringComparison.OrdinalIgnoreCase))
+        {
+            BinaryExtensions = newSkip;
+            SyncBinaryExtensionItems();
+        }
+    }
+
+    /// <summary>Archive rule: turn on archive search and SELECT ONLY <paramref name="ext"/> in the archive
+    /// dropdown (every other archive type disabled). Session-only edit of the active Archive list.</summary>
+    private void EnableArchiveSearchForExtension(string ext)
+    {
+        if (!SearchInsideArchives)
+            SearchInsideArchives = true;
+
+        if (!string.Equals(ArchiveExtensions, ext, StringComparison.OrdinalIgnoreCase))
+        {
+            ArchiveExtensions = ext;
+            SyncArchiveExtensionItems();
+        }
+    }
+
+    /// <summary>Set while a search's Advanced Options were transiently changed (e.g. the excluded-extension
+    /// "Include &amp; search" flow), so they are reset to the saved defaults once the search finishes.</summary>
+    private bool _advancedOptionsTransientlyChanged;
+
+    partial void OnIsSearchingChanged(bool value)
+    {
+        if (value) return;                                // act only when a search ENDS (finish or cancel)
+        if (!_advancedOptionsTransientlyChanged) return;
+        _advancedOptionsTransientlyChanged = false;
+        // A semantic search intentionally leaves its resolved plan visible in Advanced Options and reverts
+        // it at the start of the next search; don't fight that here.
+        if (_semanticResolutionVisible) return;
+        ResetAdvancedOptionsToSavedDefaults();
+    }
+
+    /// <summary>
+    /// Resets every Advanced Options control back to the user's saved settings. Invoked by the Advanced
+    /// Options "Reset" button and automatically after a search that transiently changed the options, so a
+    /// one-off "Include &amp; search" adjustment never lingers into the next search.
+    /// </summary>
+    public void ResetAdvancedOptionsToSavedDefaults()
+    {
+        AppSettings settings = _settingsService.Load();
+
+        SearchModeIndex = 0;
+        IncludeFilterModeIndex = settings.IncludeFilterModeIndex;
+        ExcludeFilterModeIndex = settings.ExcludeFilterModeIndex;
+        IncludeGlobs = settings.IncludeGlobs;
+        // Mirror the constructor: when the exclude globs are the built-in default, leave the box EMPTY
+        // so it shows the greyed "e.g. …" placeholder instead of the literal default as real text (which
+        // would look — and behave — like a user-entered filter).
+        ExcludeGlobs = IsDefaultExcludeGlobs(settings.ExcludeGlobs) ? string.Empty : settings.ExcludeGlobs;
+        ObeyGitignore = settings.ObeyGitignore;
+
+        SettingsSkipExtensions = settings.SkipExtensions;
+        SkipExtensions = settings.SkipExtensions;
+        SearchBinary = !settings.SkipBinary;
+        SettingsBinaryExtensions = settings.BinaryExtensions;
+        BinaryExtensions = settings.BinaryExtensions;
+        SearchInsideArchives = settings.SearchInsideArchives;
+        SettingsArchiveExtensions = settings.ArchiveExtensions;
+        ArchiveExtensions = settings.ArchiveExtensions;
+
+        DefaultMinFileSizeBytes = settings.DefaultMinFileSizeBytes;
+        DefaultMaxFileSizeBytes = settings.DefaultMaxFileSizeBytes;
+        MinFileSizeBytes = settings.DefaultMinFileSizeBytes;
+        MaxFileSizeBytes = settings.DefaultMaxFileSizeBytes;
+        DefaultCreatedAfterDate = settings.DefaultCreatedAfterDate;
+        DefaultCreatedBeforeDate = settings.DefaultCreatedBeforeDate;
+        DefaultModifiedAfterDate = settings.DefaultModifiedAfterDate;
+        DefaultModifiedBeforeDate = settings.DefaultModifiedBeforeDate;
+        CreatedAfterDate = settings.DefaultCreatedAfterDate;
+        CreatedBeforeDate = settings.DefaultCreatedBeforeDate;
+        ModifiedAfterDate = settings.DefaultModifiedAfterDate;
+        ModifiedBeforeDate = settings.DefaultModifiedBeforeDate;
+        MaxSearchDepth = double.NaN;
+
+        SyncSkipExtensionItems();
+        SyncBinaryExtensionItems();
+        SyncArchiveExtensionItems();
     }
 
     /// <summary>Parse a semicolon-separated extension string into a set WITH leading dots (e.g. ".zip", ".docx").</summary>

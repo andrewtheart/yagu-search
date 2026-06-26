@@ -502,9 +502,7 @@ public sealed class PreviewCoreRegressionTests
             "await ViewModel.StartSearchAsync();");
 
         string helper = ExtractMethodWindow(MainWindowSource, "CollapseAdvancedOptionsForSearch", 500);
-        AssertContainsInOrder(helper,
-            "if (AdvancedOptionsExpander.IsExpanded)",
-            "AdvancedOptionsExpander.IsExpanded = false;");
+        Assert.Contains("AdvancedOptionsFlyout?.Hide();", helper);
     }
 
     [Fact]
@@ -538,66 +536,53 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void AdvancedOptionsDrawer_AlwaysMatchesQueryBoxWidth()
+    public void AdvancedOptionsDrawer_UsesLightDismissFlyoutWithoutGrowingWindow()
     {
-        string expander = ExtractXamlWindow("x:Name=\"AdvancedOptionsExpander\"", 1200);
-        Assert.Contains("IsExpanded=\"False\" HorizontalAlignment=\"Stretch\"", expander);
-        Assert.Contains("HorizontalContentAlignment=\"Stretch\"", expander);
-        Assert.Contains("<TextBlock Text=\"Advanced Options\"", expander);
-        Assert.DoesNotContain("x:Name=\"ChevronRotate\"", expander);
-        Assert.DoesNotContain("Glyph=\"&#xE76C;\"", expander);
+        // The drawer is a flat toggle button whose Flyout drops over the desktop
+        // (ShouldConstrainToRootBounds=False), so the window never grows vertically in either
+        // launcher or traditional mode.
+        string toggle = ExtractXamlWindow("x:Name=\"AdvancedOptionsToggle\"", 3500);
+        Assert.Contains("Grid.Column=\"0\"", toggle);
+        Assert.Contains("<TextBlock Text=\"Advanced Options\"", toggle);
+        Assert.Contains("x:Name=\"AdvancedOptionsExpandGlyph\"", toggle);
+        Assert.Contains("<Button.Flyout>", toggle);
+        Assert.Contains("x:Name=\"AdvancedOptionsFlyout\"", toggle);
+        Assert.Contains("ShouldConstrainToRootBounds=\"False\"", toggle);
+        Assert.Contains("Placement=\"BottomEdgeAlignedLeft\"", toggle);
+        Assert.Contains("Opened=\"OnAdvancedOptionsFlyoutOpened\"", toggle);
+        Assert.Contains("Closed=\"OnAdvancedOptionsFlyoutClosed\"", toggle);
+        Assert.Contains("x:Name=\"AdvancedOptionsScrollViewer\"", toggle);
 
-        string expanding = ExtractMethodWindow(MainWindowSource, "OnAdvancedOptionsExpanding", 700);
-        Assert.Contains("SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: true);", expanding);
-        Assert.DoesNotContain("ChevronRotate.Angle", expanding);
+        // The Expander and the in-window overlay host/scrim are gone.
+        Assert.DoesNotContain("x:Name=\"AdvancedOptionsExpander\"", MainWindowXaml);
+        Assert.DoesNotContain("x:Name=\"AdvancedOptionsOverlayHost\"", MainWindowXaml);
+        Assert.DoesNotContain("x:Name=\"AdvancedOptionsOverlayScrim\"", MainWindowXaml);
 
-        string collapsed = ExtractMethodWindow(MainWindowSource, "OnAdvancedOptionsCollapsed", 700);
-        Assert.Contains("SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: false);", collapsed);
-        Assert.DoesNotContain("ChevronRotate.Angle", collapsed);
-
-        string widthState = ExtractMethodWindow(MainWindowSource, "SetAdvancedOptionsDrawerExpandedWidthState", 1200);
-        AssertContainsInOrder(widthState,
-            "_advancedOptionsDrawerExpandedWidth = isExpanded;",
-            "Grid.SetColumnSpan(AdvancedOptionsExpander, 1);",
-            "AdvancedOptionsExpander.HorizontalAlignment = HorizontalAlignment.Stretch;",
-            "AdvancedOptionsExpander.Width = double.NaN;",
-            "AdvancedOptionsExpander.InvalidateMeasure();",
-            "UpdateTerminalChevronVisibility();");
-        Assert.DoesNotContain("shouldFillQueryColumnWidth", widthState);
-        Assert.DoesNotContain("HorizontalAlignment.Left", widthState);
-
-        Assert.Contains("SetAdvancedOptionsDrawerExpandedWidthState(AdvancedOptionsExpander.IsExpanded);", MainWindowSource);
-        Assert.Contains("InitializeAdvancedOptionsDrawerStateTracking();", MainWindowSource);
-        string stateTracking = ExtractMethodWindow(MainWindowSource, "InitializeAdvancedOptionsDrawerStateTracking", 900);
-        AssertContainsInOrder(stateTracking,
-            "AdvancedOptionsExpander.RegisterPropertyChangedCallback(Expander.IsExpandedProperty",
-            "if (!AdvancedOptionsExpander.IsExpanded)",
-            "SetAdvancedOptionsDrawerExpandedWidthState(isExpanded: false);",
-            "if (AdvancedOptionsScrollViewer.Content is FrameworkElement drawerContent)",
-            "drawerContent.SizeChanged += (_, _) => UpdateAdvancedOptionsDrawerMaxHeight();");
-
-        string maxHeight = ExtractMethodWindow(MainWindowSource, "UpdateAdvancedOptionsDrawerMaxHeight", 2600);
-        Assert.Contains("_advancedOptionsDrawerMaxHeightRetryQueued = false;", maxHeight);
-        Assert.Contains("_advancedOptionsDrawerMaxHeightRetryCount = 0;", maxHeight);
-        Assert.Contains("QueueAdvancedOptionsDrawerMaxHeightRetry();", maxHeight);
-        Assert.Contains("AdvancedOptionsScrollViewer.MaxHeight =", maxHeight);
-        string retry = ExtractMethodWindow(MainWindowSource, "QueueAdvancedOptionsDrawerMaxHeightRetry", 1800);
-        AssertContainsInOrder(retry,
-            "if (!AdvancedOptionsExpander.IsExpanded || _advancedOptionsDrawerMaxHeightRetryQueued)",
-            "if (_advancedOptionsDrawerMaxHeightRetryCount >= MaxAdvancedOptionsDrawerMaxHeightRetries)",
-            "DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low",
+        // Flyout open/close drives the chevron glyph + sizing.
+        string opened = ExtractMethodWindow(MainWindowSource, "OnAdvancedOptionsFlyoutOpened", 500);
+        AssertContainsInOrder(opened,
+            "AdvancedOptionsExpandGlyph.Glyph = \"\\uE70E\";",
+            "SyncAdvancedOptionsDrawerWidth();",
             "UpdateAdvancedOptionsDrawerMaxHeight();");
-        string ceiling = ExtractMethodWindow(MainWindowSource, "ResolveAdvancedOptionsDrawerCeiling", 2200);
-        AssertContainsInOrder(ceiling,
-            "double reserve = _launcherMode ? LauncherDrawerBottomReserve : FullModeDrawerBottomReserve;",
-            "double rootHeight = RootGrid.ActualHeight;",
-            "if (rootHeight > 0)",
-            "return rootHeight - reserve;",
-            "double clientHeightDip = AppWindow.ClientSize.Height / scale;",
-            "if (clientHeightDip > 0)",
-            "return clientHeightDip - reserve;",
-            "double workAreaHeightDip = displayArea.WorkArea.Height / scale;",
-            "return workAreaHeightDip - reserve;");
+        string closed = ExtractMethodWindow(MainWindowSource, "OnAdvancedOptionsFlyoutClosed", 300);
+        Assert.Contains("AdvancedOptionsExpandGlyph.Glyph = \"\\uE70D\";", closed);
+
+        string width = ExtractMethodWindow(MainWindowSource, "SyncAdvancedOptionsDrawerWidth", 700);
+        Assert.Contains("SearchCardBottomBar.ActualWidth", width);
+        Assert.Contains("AdvancedOptionsScrollViewer.Width = width;", width);
+
+        // Max-height is bounded by the monitor work area (the flyout is its own visual root).
+        string maxHeight = ExtractMethodWindow(MainWindowSource, "UpdateAdvancedOptionsDrawerMaxHeight", 1600);
+        Assert.Contains("if (!IsAdvancedOptionsDrawerOpen)", maxHeight);
+        Assert.Contains("DisplayArea.GetFromWindowId(", maxHeight);
+        Assert.Contains("AdvancedOptionsScrollViewer.MaxHeight =", maxHeight);
+
+        // The window-growth + overlay code paths are removed entirely.
+        Assert.DoesNotContain("FitTraditionalWindowHeightToContent", MainWindowSource);
+        Assert.DoesNotContain("SetAdvancedOptionsDrawerExpandedWidthState", MainWindowSource);
+        Assert.DoesNotContain("MoveAdvancedOptionsDrawerToOverlay", MainWindowSource);
+        Assert.DoesNotContain("InitializeTraditionalAdvancedOptionsOverlay", MainWindowSource);
+
         Assert.DoesNotContain("Advanced Options drawer width:", SettingsWindowSource);
         Assert.DoesNotContain("Fill search box width when collapsed and expanded", SettingsWindowSource);
         Assert.DoesNotContain("Compact when collapsed", SettingsWindowSource);
@@ -607,10 +592,9 @@ public sealed class PreviewCoreRegressionTests
     public void TerminalChevron_MovesIntoExpandedTerminalAndFreesSearchPanelSpace()
     {
         string bottomActions = ExtractXamlWindow("x:Name=\"SearchCardBottomActions\"", 1400);
-        Assert.Contains("Grid.Row=\"2\" Grid.Column=\"2\"", bottomActions);
+        Assert.Contains("Grid.Column=\"1\"", bottomActions);
         Assert.Contains("Orientation=\"Horizontal\" Spacing=\"6\"", bottomActions);
-        Assert.Contains("HorizontalAlignment=\"Right\"", bottomActions);
-        Assert.Contains("VerticalAlignment=\"Top\"", bottomActions);
+        Assert.Contains("VerticalAlignment=\"Center\"", bottomActions);
         Assert.DoesNotContain("VerticalAlignment=\"Bottom\"", bottomActions);
         AssertContainsInOrder(bottomActions,
             "x:Name=\"SearchCardLoadSessionButton\"",
@@ -630,7 +614,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("x:Name=\"PreSearchTerminalChevronIcon\"", preSearchChevron);
         Assert.Contains("ToolTipService.ToolTip=\"Toggle embedded terminal\"", preSearchChevron);
 
-        string terminalHost = ExtractXamlWindow("x:Name=\"TerminalHost\"", 1800);
+        string terminalHost = ExtractXamlWindow("x:Name=\"TerminalHost\"", 2800);
         AssertContainsInOrder(terminalHost,
             "<WebView2 x:Name=\"TerminalWebView\"",
             "<Button x:Name=\"TerminalChevron\"",
@@ -642,13 +626,12 @@ public sealed class PreviewCoreRegressionTests
 
         Assert.Contains("<Grid RowSpacing=\"12\" ColumnSpacing=\"8\">", MainWindowXaml);
         Assert.Contains("<ColumnDefinition Width=\"Auto\" />", MainWindowXaml);
-        Assert.Contains("<Grid Grid.Row=\"1\" Grid.Column=\"1\">", MainWindowXaml);
+        Assert.Contains("<Grid Grid.Row=\"1\" Grid.Column=\"1\" Grid.ColumnSpan=\"2\">", MainWindowXaml);
         Assert.Contains("x:Name=\"QueryBox\"", MainWindowXaml);
-        Assert.Contains("Grid.Row=\"2\" Grid.Column=\"1\"", ExtractXamlWindow("x:Name=\"AdvancedOptionsExpander\"", 400));
+        Assert.Contains("Grid.Column=\"0\"", ExtractXamlWindow("x:Name=\"AdvancedOptionsToggle\"", 400));
 
         string terminalToggle = ExtractMethodWindow(MainWindowSource, "SetTerminalPaneExpanded", 1200);
         AssertContainsInOrder(terminalToggle,
-            "SetAdvancedOptionsDrawerExpandedWidthState(AdvancedOptionsExpander.IsExpanded);",
             "UpdateTerminalChevronGlyphs();",
             "UpdateTerminalChevronVisibility();",
             "if (_launcherMode)",

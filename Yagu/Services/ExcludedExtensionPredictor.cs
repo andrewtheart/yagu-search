@@ -18,6 +18,9 @@ internal enum ExtensionExclusionReason
     ExcludeFilter = 4,
     /// <summary>A restrictive Include filter omits this extension (only other extensions are included).</summary>
     IncludeFilter = 8,
+    /// <summary>The extension is a known archive type whose contents are not currently being searched
+    /// (Search-inside-archives is off, or the type is unchecked in the Archive Extensions list).</summary>
+    ArchiveExtensions = 16,
 }
 
 /// <summary>The predicted extension a user searched for and why it would be excluded from results.</summary>
@@ -47,6 +50,9 @@ internal static class ExcludedExtensionPredictor
     /// <param name="includeMode">Include filter interpretation mode.</param>
     /// <param name="excludeGlobs">Raw Exclude filter text.</param>
     /// <param name="excludeMode">Exclude filter interpretation mode.</param>
+    /// <param name="archiveExtensions">Known archive extensions (the universe of types that CAN be searched into).</param>
+    /// <param name="archiveSearchedExtensions">Archive extensions whose contents are currently being searched
+    /// (the active Archive list when Search-inside-archives is on; empty otherwise).</param>
     internal static ExcludedExtensionWarning? Predict(
         string? query,
         bool useRegex,
@@ -57,7 +63,9 @@ internal static class ExcludedExtensionPredictor
         string includeGlobs,
         FilterPatternMode includeMode,
         string excludeGlobs,
-        FilterPatternMode excludeMode)
+        FilterPatternMode excludeMode,
+        IReadOnlySet<string> archiveExtensions,
+        IReadOnlySet<string> archiveSearchedExtensions)
     {
         // Regex queries: "." is a wildcard, so a trailing ".exe" is not a reliable file extension.
         if (useRegex) return null;
@@ -90,6 +98,8 @@ internal static class ExcludedExtensionPredictor
             if (skipExtensions.Contains(ext)) reasons |= ExtensionExclusionReason.SkipExtensions;
             if (excludeExts.Contains(ext)) reasons |= ExtensionExclusionReason.ExcludeFilter;
             if (includeExts.Count > 0 && !includeExts.Contains(ext)) reasons |= ExtensionExclusionReason.IncludeFilter;
+            if (archiveExtensions.Contains(ext) && !archiveSearchedExtensions.Contains(ext))
+                reasons |= ExtensionExclusionReason.ArchiveExtensions;
 
             if (reasons != ExtensionExclusionReason.None)
                 return new ExcludedExtensionWarning(ext, reasons);

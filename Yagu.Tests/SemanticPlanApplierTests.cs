@@ -173,6 +173,64 @@ public sealed class SemanticPlanApplierTests
         Assert.Equal(@"E:\data", resolved.Directory);
     }
 
+    [Fact]
+    public void Resolve_HallucinatedDirectory_FailingExistsProbe_FallsBackToDefaultWithWarning()
+    {
+        // A small model can echo a nonsense query into the directory field. With an existence probe,
+        // a model directory that doesn't exist must be dropped in favor of the user's current location.
+        var context = new SemanticTranslationContext
+        {
+            Now = Now,
+            DefaultDirectory = @"C:\Users\me\code",
+            DirectoryExists = _ => false,
+        };
+
+        var resolved = SemanticPlanApplier.Resolve(new SemanticSearchPlan { Directory = "dfsdfsdfdfsdf" }, context);
+
+        Assert.Equal(@"C:\Users\me\code", resolved.Directory);
+        Assert.Contains(resolved.Warnings, w => w.Contains("does not exist"));
+    }
+
+    [Fact]
+    public void Resolve_ModelDirectory_PassingExistsProbe_IsUsed()
+    {
+        var context = new SemanticTranslationContext
+        {
+            Now = Now,
+            DefaultDirectory = @"C:\fallback",
+            DirectoryExists = d => d == @"E:\data",
+        };
+
+        var resolved = SemanticPlanApplier.Resolve(new SemanticSearchPlan { Directory = @"E:\data" }, context);
+
+        Assert.Equal(@"E:\data", resolved.Directory);
+        Assert.DoesNotContain(resolved.Warnings, w => w.Contains("does not exist"));
+    }
+
+    [Fact]
+    public void Resolve_NonExistentDrive_FailingExistsProbe_FallsBackToDefault()
+    {
+        // "Z drive" with no Z: present resolves to "Z:\" but should still fall back rather than fail.
+        var context = new SemanticTranslationContext
+        {
+            Now = Now,
+            DefaultDirectory = @"C:\here",
+            DirectoryExists = d => d != @"Z:\",
+        };
+
+        var resolved = SemanticPlanApplier.Resolve(new SemanticSearchPlan { Directory = "Z drive" }, context);
+
+        Assert.Equal(@"C:\here", resolved.Directory);
+    }
+
+    [Fact]
+    public void Resolve_NoExistsProbe_KeepsModelDirectoryUnchanged()
+    {
+        // Without a probe (the unit-test default) resolution stays a pure function of its inputs.
+        var resolved = SemanticPlanApplier.Resolve(new SemanticSearchPlan { Directory = @"D:\nope" }, Context());
+        Assert.Equal(@"D:\nope", resolved.Directory);
+    }
+
     // ---- exclude file names -> globs ---------------------------------------
 
     [Fact]
@@ -1526,6 +1584,6 @@ public sealed class SemanticPlanApplierTests
     public void BuildExplanation_EmptyPlan_FallsBackToGenericSummary()
     {
         string text = SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan());
-        Assert.Equal("Searching the current directory \u2014 file names and contents.", text);
+        Assert.Equal("Searching all drives \u2014 file names and contents.", text);
     }
 }

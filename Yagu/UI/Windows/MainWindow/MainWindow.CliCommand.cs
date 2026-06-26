@@ -16,64 +16,32 @@ public sealed partial class MainWindow
     {
         if (string.IsNullOrWhiteSpace(ViewModel.Query))
         {
-            ViewModel.ErrorText = ViewModel.IsSemanticQueryMode
-                ? "Describe what you want to find before generating a CLI command."
-                : "Enter a search query before generating a CLI command.";
+            ShowCliCommandWarning("Specify a search pattern before generating the CLI command.");
             return;
         }
+
+        // The generate button lives inside the Advanced Options flyout (a light-dismiss popup), so
+        // close it before showing the centered command overlay.
+        AdvancedOptionsFlyout?.Hide();
 
         if (TryGetGeneratedCliCommandControls(out var commandText, out var commandOverlay))
         {
             commandText.Text = BuildGeneratedCliCommand(_includeGeneratedCliCommandSavedSettingOptions);
-            // Center the overlay over the drawer contents before showing so it does not flash in at
-            // its default top-left slot, then re-center once full layout has run.
-            PositionGeneratedCliCommandOverlayOverDrawer(commandOverlay);
             commandOverlay.Visibility = Visibility.Visible;
-            DispatcherQueue.TryEnqueue(
-                Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
-                () => PositionGeneratedCliCommandOverlayOverDrawer(commandOverlay));
         }
     }
 
     /// <summary>
-    /// Positions the generated-CLI-command overlay centered over the Advanced Options drawer content
-    /// box (<c>AdvancedOptionsDrawerBodyBorder</c>), which is valid whether the drawer is inline
-    /// (launcher mode) or floating in the traditional-mode overlay host. Both the overlay and the
-    /// drawer live under <c>RootGrid</c>, so the drawer's transform gives a margin in matching
-    /// coordinates. Falls back gracefully (no move) when the drawer has not been laid out yet.
+    /// Surfaces a CLI-command warning as a warning TeachingTip anchored to the search-pattern box
+    /// (<c>QueryBox</c>) so it is clearly associated with the empty field the user must fill. The
+    /// Advanced Options drawer is left open.
     /// </summary>
-    private void PositionGeneratedCliCommandOverlayOverDrawer(FrameworkElement overlay)
+    private void ShowCliCommandWarning(string message)
     {
-        if (RootGrid is null || AdvancedOptionsDrawerBodyBorder is not { } drawer) return;
-        if (drawer.ActualWidth <= 0 || drawer.ActualHeight <= 0) return;
-
-        overlay.HorizontalAlignment = HorizontalAlignment.Left;
-        overlay.VerticalAlignment = VerticalAlignment.Top;
-
-        double overlayWidth = overlay.ActualWidth;
-        double overlayHeight = overlay.ActualHeight;
-        if (overlayWidth <= 0 || overlayHeight <= 0)
-        {
-            double measureWidth = overlay.MaxWidth > 0 && !double.IsInfinity(overlay.MaxWidth) ? overlay.MaxWidth : 760;
-            overlay.Measure(new Windows.Foundation.Size(measureWidth, double.PositiveInfinity));
-            overlayWidth = overlay.DesiredSize.Width;
-            overlayHeight = overlay.DesiredSize.Height;
-        }
-
-        try
-        {
-            var origin = drawer.TransformToVisual(RootGrid).TransformPoint(new Windows.Foundation.Point(0, 0));
-            double centerX = origin.X + drawer.ActualWidth / 2.0;
-            double centerY = origin.Y + drawer.ActualHeight / 2.0;
-            double left = Math.Max(0, centerX - overlayWidth / 2.0);
-            double top = Math.Max(0, centerY - overlayHeight / 2.0);
-            overlay.Margin = new Thickness(left, top, 0, 0);
-        }
-        catch
-        {
-            // TransformToVisual can throw if the drawer is detached mid-reparent; leave the overlay
-            // at its current position rather than crash.
-        }
+        CliCommandWarningTip.Target = QueryBox;
+        CliCommandWarningTip.PreferredPlacement = TeachingTipPlacementMode.Bottom;
+        CliCommandWarningTip.Subtitle = message;
+        CliCommandWarningTip.IsOpen = true;
     }
 
     private void OnGeneratedCliCommandSavedSettingOptionsToggled(object sender, RoutedEventArgs e)
@@ -109,10 +77,8 @@ public sealed partial class MainWindow
 
         if (string.IsNullOrWhiteSpace(ViewModel.Query))
         {
-            ViewModel.ErrorText = ViewModel.IsSemanticQueryMode
-                ? "Describe what you want to find before sending a CLI command to the terminal."
-                : "Enter a search query before sending a CLI command to the terminal.";
             CloseGeneratedCliCommandOverlay();
+            ShowCliCommandWarning("Specify a search pattern before sending the CLI command to the terminal.");
             return;
         }
 

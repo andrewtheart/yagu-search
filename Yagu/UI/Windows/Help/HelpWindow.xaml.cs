@@ -55,6 +55,9 @@ public sealed partial class HelpWindow : Window
             html = await File.ReadAllTextAsync(_helpPath);
             EnsureWebView2LoaderLoaded();
 
+            // Point WebView2 at a per-user, writable user-data folder (the default beside the exe is
+            // read-only for a non-elevated all-users install, which would fail WebView2 init).
+            Yagu.Helpers.WebView2Support.ConfigureUserDataFolder();
             var environment = await CoreWebView2Environment.CreateAsync();
             await HelpWebView.EnsureCoreWebView2Async(environment);
             HelpWebView.DefaultBackgroundColor = Windows.UI.Color.FromArgb(255, 32, 32, 32);

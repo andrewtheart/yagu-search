@@ -25,11 +25,14 @@ public sealed class ExcludedExtensionPredictorTests
         string includeGlobs = "",
         FilterPatternMode includeMode = FilterPatternMode.GlobPath,
         string excludeGlobs = "",
-        FilterPatternMode excludeMode = FilterPatternMode.GlobPath)
+        FilterPatternMode excludeMode = FilterPatternMode.GlobPath,
+        IReadOnlySet<string>? archive = null,
+        IReadOnlySet<string>? archiveSearched = null)
         => ExcludedExtensionPredictor.Predict(
             query, useRegex, exactMatch, mode,
             skip ?? Set(), binary ?? Set(),
-            includeGlobs, includeMode, excludeGlobs, excludeMode);
+            includeGlobs, includeMode, excludeGlobs, excludeMode,
+            archive ?? Set(), archiveSearched ?? Set());
 
     [Fact]
     public void Predict_BinaryExtension_Warns()
@@ -47,6 +50,21 @@ public sealed class ExcludedExtensionPredictorTests
         Assert.NotNull(result);
         Assert.Equal("tmp", result!.Extension);
         Assert.Equal(ExtensionExclusionReason.SkipExtensions, result.Reasons);
+    }
+
+    [Fact]
+    public void Predict_ArchiveExtension_NotSearchedInside_Warns()
+    {
+        var result = Predict("backup.zip", archive: Set("zip", "7z"), archiveSearched: Set());
+        Assert.NotNull(result);
+        Assert.Equal("zip", result!.Extension);
+        Assert.Equal(ExtensionExclusionReason.ArchiveExtensions, result.Reasons);
+    }
+
+    [Fact]
+    public void Predict_ArchiveExtension_AlreadySearchedInside_ReturnsNull()
+    {
+        Assert.Null(Predict("backup.zip", archive: Set("zip", "7z"), archiveSearched: Set("zip")));
     }
 
     [Fact]

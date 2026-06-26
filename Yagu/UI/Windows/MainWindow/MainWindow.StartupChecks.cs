@@ -28,10 +28,7 @@ public sealed partial class MainWindow
         }
         else if (!_launcherMode)
         {
-            InitializeTraditionalAdvancedOptionsOverlay();
-            // Place the window per the user's launch-position setting once its height has settled.
-            // InitializeTraditionalAdvancedOptionsOverlay enqueues a deferred height fit at Low
-            // priority; enqueueing here (also Low, FIFO) positions the window with its final size.
+            // Place the window per the user's launch-position setting once its size has settled.
             DispatcherQueue.TryEnqueue(
                 Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
                 PositionWindowOnLaunch);

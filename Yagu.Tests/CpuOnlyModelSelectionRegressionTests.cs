@@ -20,9 +20,28 @@ public sealed class CpuOnlyModelSelectionRegressionTests
         Assert.Contains("PreferAccurateVariantAsync(catalog, direct, deviceOrder, availableDevices, cancellationToken)", source);
         Assert.Contains("PreferAccurateVariantAsync(catalog, chosenFamily, deviceOrder, availableDevices, cancellationToken)", source);
 
-        // The hard exclusion itself: a variant whose device is not available is skipped.
-        Assert.Contains("DeviceType variantDevice = v.Info?.Runtime?.DeviceType ?? DeviceType.CPU;", source);
+        // The hard exclusion itself: a variant whose device is not available is skipped. Device is read
+        // from the variant ID (Foundry's reported DeviceType is unreliable — DirectML registers in
+        // Sandbox), so a CPU build is correctly identified on a CPU-only machine.
+        Assert.Contains("DeviceType variantDevice = ResolveVariantDevice(v);", source);
         Assert.Contains("if (!availableDevices.Contains(variantDevice)) continue;", source);
+        Assert.Contains("id.Contains(\"-cpu\")", source);
+
+        // Auto-selection also ranks ONLY runnable variants, so a GPU/NPU-only family is never chosen.
+        Assert.Contains("var runnable = candidates.Where(c => availableDevices.Contains(c.Device)).ToList();", source);
+    }
+
+    [Fact]
+    public void Picker_OnlyListsAndRecommendsRunnableDeviceVariants()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
+
+        // The model picker must not list/recommend GPU/NPU variants on a CPU-only machine (DirectML
+        // registers even in Windows Sandbox, so those builds look compatible yet crash on inference).
+        // It resolves each family to the best variant the machine can actually run and shows ITS device.
+        Assert.Contains("var availableDevices = AvailableDevices();", source);
+        Assert.Contains("FoundryModelSelector.BestRunnableVariant(family, _deviceOrder, availableDevices)", source);
+        Assert.Contains("DeviceLabelOf(FoundryModelSelector.ResolveVariantDevice(variant))", source);
     }
 
     [Fact]
@@ -33,9 +52,43 @@ public sealed class CpuOnlyModelSelectionRegressionTests
         Assert.Contains("public void SetAvailableAccelerators(bool hasGpu, bool hasNpu)", source);
         Assert.Contains("private HashSet<DeviceType> AvailableDevices()", source);
         Assert.Contains("var set = new HashSet<DeviceType> { DeviceType.CPU };", source);
-        // Both selection call sites (translate path + prepare path) pass the available devices.
-        Assert.Contains("FoundryModelSelector.SelectAsync(catalog, _preferredAlias, _deviceOrder, AvailableDevices(), cancellationToken)", source);
-        Assert.Contains("FoundryModelSelector.SelectAsync(catalog, alias, _deviceOrder, AvailableDevices(), cancellationToken)", source);
+        // Both selection call sites (translate path + prepare path) pass the available devices AND the
+        // CPU-only memory budget.
+        Assert.Contains("FoundryModelSelector.SelectAsync(catalog, _preferredAlias, _deviceOrder, AvailableDevices(), AvailableMemoryBudgetMb(), cancellationToken)", source);
+        Assert.Contains("FoundryModelSelector.SelectAsync(catalog, alias, _deviceOrder, AvailableDevices(), AvailableMemoryBudgetMb(), cancellationToken)", source);
+    }
+
+    [Fact]
+    public void Selector_ExcludesReasoningModelsAndModelsThatDoNotFitMemory()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryModelSelector.cs"));
+
+        // Reasoning / chain-of-thought models are dropped from AUTO selection — the "phi-4-mini"
+        // preference fragment must not accidentally pick "phi-4-mini-reasoning".
+        Assert.Contains("ReasoningAliasFragments", source);
+        Assert.Contains("\"reasoning\"", source);
+        Assert.Contains("IsAutoSelectable", source);
+        Assert.Contains("!IsReasoningAlias(c.Alias)", source);
+
+        // Memory guard: SelectAlias takes a budget and drops models whose weights + headroom won't fit,
+        // so a too-large model is not auto-selected (it would load then OOM during generation).
+        Assert.Contains("SelectAlias(IReadOnlyList<ModelCandidate> candidates, int? availableMemoryMb", source);
+        Assert.Contains("FitsInMemory", source);
+        Assert.Contains("sizeMb + ModelMemoryHeadroomMb <= availableMemoryMb", source);
+        Assert.Contains("SelectAlias(candidates, availableMemoryMb)", source);
+    }
+
+    [Fact]
+    public void Translator_CapsAutoSelectionByAvailableMemoryOnCpuOnlyMachines()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
+
+        // The budget applies only to CPU inference (null on accelerated machines, where the model runs
+        // in device memory), and reads available physical RAM.
+        Assert.Contains("private int? AvailableMemoryBudgetMb()", source);
+        Assert.Contains("if (_hasGpu || _hasNpu) return null;", source);
+        Assert.Contains("GlobalMemoryStatusEx(ref status)", source);
+        Assert.Contains("status.ullAvailPhys", source);
     }
 
     [Fact]

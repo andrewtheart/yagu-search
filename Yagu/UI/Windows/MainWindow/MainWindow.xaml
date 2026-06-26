@@ -330,7 +330,7 @@
         </Border>
 
         <!-- Search controls card -->
-        <Border x:Name="SearchControlsBorder" Grid.Row="2" Margin="16,10,16,4" Padding="16,18"
+        <Border x:Name="SearchControlsBorder" Grid.Row="2" Margin="16,10,16,4" Padding="16,18,16,10"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1" CornerRadius="8">
@@ -353,10 +353,12 @@
                 <Grid Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2">
                     <AutoSuggestBox
                         x:Name="DirectoryBox"
+                        MaxHeight="60"
                         PlaceholderText="Directory to search (leave empty to search all drives)"
                         Text="{x:Bind ViewModel.Directory, Mode=TwoWay}"
                         ItemsSource="{x:Bind ViewModel.DirectorySuggestions, Mode=OneWay}"
                         TextChanged="OnDirectoryTextChanged"
+                        SizeChanged="OnSearchInputSizeChanged"
                         SuggestionChosen="OnDirectorySuggestionChosen"
                         QuerySubmitted="OnDirectoryQuerySubmitted">
                         <AutoSuggestBox.ItemTemplate>
@@ -372,6 +374,17 @@
                                 </Grid>
                             </DataTemplate>
                         </AutoSuggestBox.ItemTemplate>
+                        <!-- Wrap long paths to at most two lines (scrolling internally beyond that) and
+                             reserve room on the right so text never flows under the embedded Browse
+                             button overlaid at the trailing edge. -->
+                        <AutoSuggestBox.TextBoxStyle>
+                            <Style TargetType="TextBox" BasedOn="{StaticResource AutoSuggestBoxTextBoxStyle}">
+                                <Setter Property="TextWrapping" Value="Wrap" />
+                                <Setter Property="VerticalContentAlignment" Value="Center" />
+                                <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
+                                <Setter Property="Padding" Value="10,6,92,6" />
+                            </Style>
+                        </AutoSuggestBox.TextBoxStyle>
                     </AutoSuggestBox>
                     <!-- Browse embedded at the trailing edge of the directory box (overlay, like the
                          query box's clear button). -->
@@ -398,10 +411,12 @@
                     <AutoSuggestBox
                         x:Name="QueryBox"
                         MinHeight="60"
+                        MaxHeight="240"
                         PlaceholderText="{x:Bind ViewModel.QueryPlaceholderText, Mode=OneWay}"
                         Text="{x:Bind ViewModel.Query, Mode=TwoWay}"
                         QuerySubmitted="OnQuerySubmitted"
                         TextChanged="OnQueryTextChanged"
+                        SizeChanged="OnSearchInputSizeChanged"
                         LostFocus="OnQueryLostFocus"
                         KeyDown="OnQueryKeyDown">
                         <AutoSuggestBox.ItemTemplate>
@@ -427,6 +442,7 @@
                             <Style TargetType="TextBox" BasedOn="{StaticResource AutoSuggestBoxTextBoxStyle}">
                                 <Setter Property="TextWrapping" Value="Wrap" />
                                 <Setter Property="VerticalContentAlignment" Value="Top" />
+                                <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
                                 <Setter Property="Padding" Value="10,6,128,6" />
                             </Style>
                         </AutoSuggestBox.TextBoxStyle>
@@ -476,7 +492,7 @@
                 <!-- Bottom action bar: Advanced Options (fills, left), then the utility icons, then
                      the primary Search action on the right. One grid so Search's right edge lines up
                      with the Browse button above it. -->
-                <Grid Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" ColumnSpacing="8">
+                <Grid x:Name="SearchCardBottomBar" Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" ColumnSpacing="8">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -555,55 +571,58 @@
                     </Button>
                 </StackPanel>
 
-                <!-- Advanced options (collapsed by default) -->
-                <Expander x:Name="AdvancedOptionsExpander"
-                          Grid.Column="0"
-                          IsExpanded="False" HorizontalAlignment="Stretch"
-                          HorizontalContentAlignment="Stretch" Padding="0"
-                          MinHeight="0" FontSize="12"
-                          Expanding="OnAdvancedOptionsExpanding"
-                          Collapsed="OnAdvancedOptionsCollapsed">
-                    <Expander.Resources>
-                        <!-- Flat header: transparent background + no border so the collapsed
-                             "Advanced Options" row reads as plain text + chevron rather than a
-                             bordered card. While expanded the header is recolored to the drawer-body
-                             shade in code-behind (OnAdvancedOptionsExpanding / OnAdvancedOptionsCollapsed).
-                             The visible content box is provided by AdvancedOptionsDrawerBodyBorder below. -->
-                        <SolidColorBrush x:Key="ExpanderHeaderBackground" Color="Transparent" />
-                        <SolidColorBrush x:Key="ExpanderHeaderBorderBrush" Color="Transparent" />
-                        <Thickness x:Key="ExpanderHeaderBorderThickness">0</Thickness>
-                        <Thickness x:Key="ExpanderContentDownBorderThickness">0</Thickness>
-                    </Expander.Resources>
-                    <Expander.Header>
-                        <!-- The Expander's built-in chevron is template-pinned to the far right edge;
-                             it is hidden in code-behind (HideNativeExpanderChevron) and replaced by this
-                             custom chevron sitting right after the text. The glyph flips up/down from the
-                             expand/collapse handlers. MinHeight keeps the header from collapsing tight
-                             around the text (the Expander itself has MinHeight=0), so the "Advanced
-                             Options" label stays vertically padded in both collapsed and expanded states. -->
-                        <StackPanel Orientation="Horizontal" Spacing="6"
-                                    HorizontalAlignment="Left" VerticalAlignment="Center"
-                                    MinHeight="48">
-                            <TextBlock Text="Advanced Options" VerticalAlignment="Center" />
-                            <FontIcon x:Name="AdvancedOptionsExpandGlyph"
-                                      FontFamily="{StaticResource SymbolThemeFontFamily}"
-                                      Glyph="&#xE70D;" FontSize="12"
-                                      VerticalAlignment="Center" Opacity="0.9" />
-                        </StackPanel>
-                    </Expander.Header>
-                    <!-- ScrollViewer keeps the drawer fully usable at short window
-                         heights: when the options exceed the available space a vertical
-                         scrollbar appears instead of the content being clipped. The
-                         MaxHeight is set dynamically in code-behind. -->
-                    <ScrollViewer x:Name="AdvancedOptionsScrollViewer"
-                                  VerticalScrollBarVisibility="Auto"
-                                  VerticalScrollMode="Auto"
+                <!-- Advanced options drawer. A flat toggle button whose Flyout drops the tabbed
+                     drawer down OVER the desktop (ShouldConstrainToRootBounds="False"), so the
+                     window never has to grow vertically — same behavior in launcher and traditional
+                     modes. Light-dismiss closes it; the chevron flips up/down from the Flyout's
+                     Opened/Closed handlers. -->
+                <Button x:Name="AdvancedOptionsToggle"
+                        Grid.Column="0"
+                        HorizontalAlignment="Left" VerticalAlignment="Center"
+                        Background="Transparent" BorderThickness="0"
+                        MinWidth="0" MinHeight="48" Padding="4,0" FontSize="12">
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <TextBlock Text="Advanced Options" VerticalAlignment="Center" FontSize="15" />
+                        <FontIcon x:Name="AdvancedOptionsExpandGlyph"
+                                  FontFamily="{StaticResource SymbolThemeFontFamily}"
+                                  Glyph="&#xE70D;" FontSize="13"
+                                  VerticalAlignment="Center" Opacity="0.9" />
+                    </StackPanel>
+                    <Button.Flyout>
+                        <Flyout x:Name="AdvancedOptionsFlyout"
+                                Placement="BottomEdgeAlignedLeft"
+                                ShouldConstrainToRootBounds="False"
+                                Opened="OnAdvancedOptionsFlyoutOpened"
+                                Closed="OnAdvancedOptionsFlyoutClosed">
+                            <Flyout.FlyoutPresenterStyle>
+                                <Style TargetType="FlyoutPresenter">
+                                    <Setter Property="Padding" Value="0" />
+                                    <Setter Property="CornerRadius" Value="8" />
+                                    <Setter Property="MinWidth" Value="0" />
+                                    <Setter Property="MaxWidth" Value="2400" />
+                                    <Setter Property="MaxHeight" Value="2400" />
+                                    <Setter Property="Background" Value="{ThemeResource SolidBackgroundFillColorBaseBrush}" />
+                                    <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+                                    <Setter Property="BorderThickness" Value="1" />
+                                    <Setter Property="ScrollViewer.HorizontalScrollMode" Value="Disabled" />
+                                    <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+                                    <Setter Property="ScrollViewer.VerticalScrollMode" Value="Disabled" />
+                                    <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Disabled" />
+                                </Style>
+                            </Flyout.FlyoutPresenterStyle>
+                            <!-- ScrollViewer keeps the drawer fully usable at short window
+                                 heights: when the options exceed the available space a vertical
+                                 scrollbar appears instead of the content being clipped. The
+                                 MaxHeight is set dynamically in code-behind. -->
+                            <ScrollViewer x:Name="AdvancedOptionsScrollViewer"
+                                          VerticalScrollBarVisibility="Auto"
+                                          VerticalScrollMode="Auto"
                                   HorizontalScrollMode="Disabled"
                                   HorizontalScrollBarVisibility="Disabled">
                         <Border x:Name="AdvancedOptionsDrawerBodyBorder"
                                 Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
                                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                BorderThickness="1,0,1,1" CornerRadius="0,0,4,4" Padding="0">
+                                BorderThickness="0" CornerRadius="8" Padding="0">
                             <Grid MinHeight="272">
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="*" />
@@ -723,6 +742,7 @@
                                                         </Grid>
                                                         <TextBox Grid.Row="1" Grid.Column="0" x:Name="IncludeFilterBox"
                                                                  PlaceholderText="{x:Bind ViewModel.IncludeFilterPlaceholder, Mode=OneWay}"
+                                                                 ui:PlaceholderTextStyler.Italic="True"
                                                                  Text="{x:Bind ViewModel.IncludeGlobs, Mode=TwoWay}"
                                                                  Padding="8,4"
                                                                  TextChanged="OnFilterBoxTextChanged"
@@ -761,6 +781,7 @@
                                                         </Grid>
                                                         <TextBox Grid.Row="1" Grid.Column="0" x:Name="ExcludeFilterBox"
                                                                  PlaceholderText="{x:Bind ViewModel.ExcludeFilterPlaceholder, Mode=OneWay}"
+                                                                 ui:PlaceholderTextStyler.Italic="True"
                                                                  Text="{x:Bind ViewModel.ExcludeGlobs, Mode=TwoWay}"
                                                                  Padding="8,4"
                                                                  TextChanged="OnFilterBoxTextChanged"
@@ -999,7 +1020,8 @@
                                                            ToolTipService.ToolTip="Maximum file size in MB. Leave blank for no upper limit." />
                                             </StackPanel>
                                             <Border Background="#1A0078D4" BorderBrush="#445CA8D6"
-                                                    BorderThickness="1" CornerRadius="4" Padding="10,8">
+                                                    BorderThickness="1" CornerRadius="4" Padding="10,8"
+                                                    HorizontalAlignment="Left">
                                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                                     <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="#8CBCEB" />
                                                     <TextBlock Text="Leave a field empty to ignore that limit."
@@ -1056,10 +1078,11 @@
                                                 </Grid>
                                             </StackPanel>
                                             <Border Background="#1A0078D4" BorderBrush="#445CA8D6"
-                                                    BorderThickness="1" CornerRadius="4" Padding="10,8">
+                                                    BorderThickness="1" CornerRadius="4" Padding="10,8"
+                                                    HorizontalAlignment="Left">
                                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                                     <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="#8CBCEB" />
-                                                    <TextBlock Text="Dates are inclusive. Time is ignored (matches the whole day)."
+                                                    <TextBlock Text="Dates are inclusive."
                                                                TextWrapping="Wrap" Opacity="0.8" />
                                                 </StackPanel>
                                             </Border>
@@ -1120,7 +1143,9 @@
                             </Grid>
                         </Border>
                     </ScrollViewer>
-                </Expander>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
                 </Grid>
             </Grid>
         </Border>
@@ -2135,13 +2160,13 @@
                        Text="Results truncated — refine your query" />
         </Grid>
 
-        <!-- Generated CLI command overlay. Positioned in code-behind centered over the Advanced
-             Options drawer contents (see PositionGeneratedCliCommandOverlayOverDrawer). -->
+        <!-- Generated CLI command overlay. Centered over the window; the Advanced Options drawer
+             (a Flyout) is closed before this is shown (see OnGenerateCliCommandClick). -->
         <Border x:Name="GeneratedCliCommandOverlay"
                 Grid.RowSpan="7"
                 Visibility="Collapsed"
-                HorizontalAlignment="Left"
-                VerticalAlignment="Top"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
                 Margin="0"
                 MaxWidth="760"
                 Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
@@ -2292,27 +2317,20 @@
                      MaxWidth="360"
                      Canvas.ZIndex="300" />
 
-        <!-- Floating Advanced Options drawer (traditional mode only). The drawer subtree
-             (AdvancedOptionsScrollViewer) is reparented into AdvancedOptionsOverlayHost at
-             runtime so expanding it overlays the results pane instead of reflowing the layout
-             or growing the window. The transparent scrim dismisses the drawer on an outside
-             click; the host handles Esc. Both are collapsed until the drawer is opened. -->
-        <Border x:Name="AdvancedOptionsOverlayScrim"
-                Grid.Row="2" Grid.RowSpan="5"
-                Background="Transparent"
-                Visibility="Collapsed"
-                Canvas.ZIndex="50"
-                PointerPressed="OnAdvancedOptionsOverlayScrimPressed" />
-        <Border x:Name="AdvancedOptionsOverlayHost"
-                Grid.Row="0" Grid.RowSpan="7"
-                HorizontalAlignment="Left" VerticalAlignment="Top"
-                Visibility="Collapsed"
-                Canvas.ZIndex="51"
-                KeyDown="OnAdvancedOptionsOverlayKeyDown">
-            <Border.KeyboardAccelerators>
-                <KeyboardAccelerator Key="Escape" Invoked="OnAdvancedOptionsOverlayEscapeInvoked" />
-            </Border.KeyboardAccelerators>
-        </Border>
+        <!-- Warning shown when the user tries to generate/send a CLI command with no search pattern.
+             Target/placement are set in code: anchored to the search-pattern box (QueryBox).
+             ShouldConstrainToRootBounds=False so it can overlay the open drawer flyout. -->
+        <TeachingTip x:Name="CliCommandWarningTip"
+                     IsOpen="False"
+                     Title="Search pattern required"
+                     CloseButtonContent="OK"
+                     ShouldConstrainToRootBounds="False"
+                     MaxWidth="360"
+                     Canvas.ZIndex="300">
+            <TeachingTip.IconSource>
+                <FontIconSource Glyph="&#xE7BA;" Foreground="{ThemeResource SystemFillColorCautionBrush}" />
+            </TeachingTip.IconSource>
+        </TeachingTip>
 
     </Grid>
 </Window>

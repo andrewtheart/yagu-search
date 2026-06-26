@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.AI.Foundry.Local;
 using Betalgo.Ranul.OpenAI.ObjectModels.RequestModels;
@@ -94,6 +95,47 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         if (_hasNpu) set.Add(DeviceType.NPU);
         return set;
     }
+
+    /// <summary>
+    /// Available physical memory (MB) used to cap AUTO model selection on CPU-only machines, where the
+    /// model's weights and KV cache live in system RAM. Returns null on accelerated machines (the model
+    /// runs in GPU/NPU memory, so a system-RAM budget would wrongly exclude it) or when the query fails.
+    /// Prevents auto-selecting a model that downloads and loads, then OOMs ("bad allocation") while
+    /// allocating the large prompt's token sequences during generation.
+    /// </summary>
+    private int? AvailableMemoryBudgetMb()
+    {
+        if (_hasGpu || _hasNpu) return null;
+        try
+        {
+            var status = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
+            if (GlobalMemoryStatusEx(ref status))
+            {
+                ulong availMb = status.ullAvailPhys / (1024UL * 1024UL);
+                return (int)Math.Min(availMb, (ulong)int.MaxValue);
+            }
+        }
+        catch { /* P/Invoke unavailable; disable the memory guard */ }
+        return null;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MEMORYSTATUSEX
+    {
+        public uint dwLength;
+        public uint dwMemoryLoad;
+        public ulong ullTotalPhys;
+        public ulong ullAvailPhys;
+        public ulong ullTotalPageFile;
+        public ulong ullAvailPageFile;
+        public ulong ullTotalVirtual;
+        public ulong ullAvailVirtual;
+        public ulong ullAvailExtendedVirtual;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
 
     /// <summary>Drops the cached chat client/model so the next translation re-selects and reloads.
     /// The previously loaded Foundry model stays resident until process exit (no async unload here),
@@ -219,7 +261,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             var catalog = await EnsureCatalogLockedAsync(progress, cancellationToken).ConfigureAwait(false);
 
             log.Verbose(LogSource, $"Selecting model (preferredAlias={_preferredAlias ?? "<auto>"}, deviceOrder={string.Join(">", _deviceOrder)}).");
-            var model = await FoundryModelSelector.SelectAsync(catalog, _preferredAlias, _deviceOrder, AvailableDevices(), cancellationToken).ConfigureAwait(false);
+            var model = await FoundryModelSelector.SelectAsync(catalog, _preferredAlias, _deviceOrder, AvailableDevices(), AvailableMemoryBudgetMb(), cancellationToken).ConfigureAwait(false);
             if (model is null)
             {
                 log.Warning(LogSource, "No compatible local model is available for this machine.");
@@ -367,35 +409,59 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             if (usable.Count == 0)
                 usable = models.Where(m => m is not null).Select(m => m!).ToList();
 
+            // Resolve each family to the BEST variant this machine can actually run. Foundry reports a
+            // misleading family-level DeviceType (it reflects the registered execution provider —
+            // DirectML registers on almost any Windows box, including Windows Sandbox's basic display
+            // adapter — not the real hardware), so GPU/NPU builds look "compatible" yet crash during
+            // inference on hardware with no usable accelerator. We descend into each family's variants
+            // and pick by the device encoded in the variant ID, dropping families with no runnable
+            // variant. CPU is always available, so this rarely drops any. The picker then shows the
+            // device/build Yagu will actually load (not Foundry's GPU default).
+            var availableDevices = AvailableDevices();
+            var resolved = new List<(IModel Family, IModel Variant)>(usable.Count);
+            foreach (var m in usable)
+            {
+                IModel family = await catalog.GetModelAsync(AliasOf(m), cancellationToken).ConfigureAwait(false) ?? m;
+                IModel? variant = FoundryModelSelector.BestRunnableVariant(family, _deviceOrder, availableDevices);
+                if (variant is not null) resolved.Add((family, variant));
+            }
+            if (resolved.Count == 0)
+            {
+                log.Warning(LogSource, "No model variant matches the detected devices; listing families as a fallback.");
+                resolved = usable.Select(m => (m, m)).ToList();
+            }
+
             string? recommendedAlias = FoundryModelSelector.SelectAlias(
-                usable.Select(m => new FoundryModelSelector.ModelCandidate(
-                    Alias: AliasOf(m),
-                    FileSizeMb: m.Info?.FileSizeMb,
-                    Task: m.Info?.Task,
-                    Device: m.Info?.Runtime?.DeviceType ?? DeviceType.CPU)).ToList());            int recommendedRank = recommendedAlias is null
+                resolved.Select(p => new FoundryModelSelector.ModelCandidate(
+                    Alias: AliasOf(p.Family),
+                    FileSizeMb: p.Variant.Info?.FileSizeMb,
+                    Task: p.Variant.Info?.Task,
+                    Device: FoundryModelSelector.ResolveVariantDevice(p.Variant))).ToList(),
+                AvailableMemoryBudgetMb());
+            int recommendedRank = recommendedAlias is null
                 ? int.MaxValue
                 : FoundryModelSelector.RankOf(recommendedAlias);
 
-            var options = new List<SemanticModelOption>(usable.Count);
-            foreach (var m in usable)
+            var options = new List<SemanticModelOption>(resolved.Count);
+            foreach ((IModel family, IModel variant) in resolved)
             {
-                string alias = AliasOf(m);
+                string alias = AliasOf(family);
                 bool isRecommended = recommendedAlias is not null &&
                     string.Equals(alias, recommendedAlias, StringComparison.OrdinalIgnoreCase);
                 int rank = FoundryModelSelector.RankOf(alias);
-                bool isCached = await m.IsCachedAsync(cancellationToken).ConfigureAwait(false);
-                int? sizeMb = m.Info?.FileSizeMb;
+                bool isCached = await variant.IsCachedAsync(cancellationToken).ConfigureAwait(false);
+                int? sizeMb = variant.Info?.FileSizeMb;
 
                 options.Add(new SemanticModelOption
                 {
                     Alias = alias,
                     DisplayName = alias,
-                    Id = m.Id,
+                    Id = variant.Id,
                     SizeBytes = sizeMb is > 0 ? sizeMb.Value * 1024L * 1024L : null,
                     IsRecommended = isRecommended,
                     IsBelowRecommended = !isRecommended && rank > recommendedRank,
                     IsCached = isCached,
-                    DeviceLabel = DeviceLabelOf(m.Info?.Runtime?.DeviceType),
+                    DeviceLabel = DeviceLabelOf(FoundryModelSelector.ResolveVariantDevice(variant)),
                 });
             }
 
@@ -434,7 +500,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             var catalog = await EnsureCatalogLockedAsync(progress, cancellationToken).ConfigureAwait(false);
             string? alias = string.IsNullOrWhiteSpace(modelAlias) ? _preferredAlias : modelAlias.Trim();
             log.Info(LogSource, $"Preparing model (requested='{alias ?? "<auto>"}').");
-            var model = await FoundryModelSelector.SelectAsync(catalog, alias, _deviceOrder, AvailableDevices(), cancellationToken).ConfigureAwait(false);
+            var model = await FoundryModelSelector.SelectAsync(catalog, alias, _deviceOrder, AvailableDevices(), AvailableMemoryBudgetMb(), cancellationToken).ConfigureAwait(false);
             if (model is null)
             {
                 log.Warning(LogSource, $"No compatible local model is available for this machine (requested='{alias ?? "<auto>"}').");

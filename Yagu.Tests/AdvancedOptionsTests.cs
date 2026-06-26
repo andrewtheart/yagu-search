@@ -11,6 +11,8 @@ public sealed class AdvancedOptionsTests
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdvancedOptions.cs"));
     private static readonly string MainWindowXaml = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
+    private static readonly string MainViewModelSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
 
     // ══════════════════════════════════════════════════════════════════
     // Tab switching logic
@@ -72,59 +74,70 @@ public sealed class AdvancedOptionsTests
     // ══════════════════════════════════════════════════════════════════
 
     [Fact]
-    public void ResetClick_LoadsSettingsFromService()
+    public void ResetClick_DelegatesToViewModel()
     {
-        string method = ExtractMethodWindow("OnAdvancedOptionsResetClick", 2000);
-        Assert.Contains("AppSettings settings = new SettingsService().Load();", method);
+        // The reset button reuses the single ResetAdvancedOptionsToSavedDefaults implementation in the
+        // view-model (shared with the post-search auto-reset) rather than duplicating reset logic.
+        string method = ExtractMethodWindow("OnAdvancedOptionsResetClick", 600);
+        Assert.Contains("ViewModel.ResetAdvancedOptionsToSavedDefaults();", method);
     }
 
     [Fact]
-    public void ResetClick_ResetsSearchMode()
+    public void ResetDefaults_LoadsSettingsFromService()
     {
-        string method = ExtractMethodWindow("OnAdvancedOptionsResetClick", 2000);
-        Assert.Contains("ViewModel.SearchModeIndex = 0;", method);
+        string method = ExtractViewModelMethod("public void ResetAdvancedOptionsToSavedDefaults()");
+        Assert.Contains("AppSettings settings = _settingsService.Load();", method);
     }
 
     [Fact]
-    public void ResetClick_ResetsFilterModes()
+    public void ResetDefaults_ResetsSearchMode()
     {
-        string method = ExtractMethodWindow("OnAdvancedOptionsResetClick", 2000);
-        Assert.Contains("ViewModel.IncludeFilterModeIndex = settings.IncludeFilterModeIndex;", method);
-        Assert.Contains("ViewModel.ExcludeFilterModeIndex = settings.ExcludeFilterModeIndex;", method);
+        string method = ExtractViewModelMethod("public void ResetAdvancedOptionsToSavedDefaults()");
+        Assert.Contains("SearchModeIndex = 0;", method);
     }
 
     [Fact]
-    public void ResetClick_ResetsGlobs()
+    public void ResetDefaults_ResetsFilterModes()
     {
-        string method = ExtractMethodWindow("OnAdvancedOptionsResetClick", 2000);
-        Assert.Contains("ViewModel.IncludeGlobs = settings.IncludeGlobs;", method);
-        Assert.Contains("ViewModel.ExcludeGlobs = settings.ExcludeGlobs;", method);
+        string method = ExtractViewModelMethod("public void ResetAdvancedOptionsToSavedDefaults()");
+        Assert.Contains("IncludeFilterModeIndex = settings.IncludeFilterModeIndex;", method);
+        Assert.Contains("ExcludeFilterModeIndex = settings.ExcludeFilterModeIndex;", method);
     }
 
     [Fact]
-    public void ResetClick_ResetsExtensionSettings()
+    public void ResetDefaults_ResetsGlobs()
     {
-        string method = ExtractMethodWindow("OnAdvancedOptionsResetClick", 2000);
-        Assert.Contains("ViewModel.SkipExtensions = settings.SkipExtensions;", method);
-        Assert.Contains("ViewModel.BinaryExtensions = settings.BinaryExtensions;", method);
-        Assert.Contains("ViewModel.ArchiveExtensions = settings.ArchiveExtensions;", method);
+        string method = ExtractViewModelMethod("public void ResetAdvancedOptionsToSavedDefaults()");
+        Assert.Contains("IncludeGlobs = settings.IncludeGlobs;", method);
+        // The default exclude globs are stripped to empty so the box shows the greyed placeholder
+        // instead of the literal default as real, search-affecting text.
+        Assert.Contains("ExcludeGlobs = IsDefaultExcludeGlobs(settings.ExcludeGlobs) ? string.Empty : settings.ExcludeGlobs;", method);
     }
 
     [Fact]
-    public void ResetClick_ResetsFileSizeAndDateFilters()
+    public void ResetDefaults_ResetsExtensionSettings()
     {
-        string method = ExtractMethodWindow("OnAdvancedOptionsResetClick", 2000);
-        Assert.Contains("ViewModel.MinFileSizeBytes = settings.DefaultMinFileSizeBytes;", method);
-        Assert.Contains("ViewModel.MaxFileSizeBytes = settings.DefaultMaxFileSizeBytes;", method);
-        Assert.Contains("ViewModel.CreatedAfterDate = settings.DefaultCreatedAfterDate;", method);
-        Assert.Contains("ViewModel.ModifiedAfterDate = settings.DefaultModifiedAfterDate;", method);
+        string method = ExtractViewModelMethod("public void ResetAdvancedOptionsToSavedDefaults()");
+        Assert.Contains("SkipExtensions = settings.SkipExtensions;", method);
+        Assert.Contains("BinaryExtensions = settings.BinaryExtensions;", method);
+        Assert.Contains("ArchiveExtensions = settings.ArchiveExtensions;", method);
     }
 
     [Fact]
-    public void ResetClick_ResetsMaxSearchDepthToNaN()
+    public void ResetDefaults_ResetsFileSizeAndDateFilters()
     {
-        string method = ExtractMethodWindow("OnAdvancedOptionsResetClick", 2500);
-        Assert.Contains("ViewModel.MaxSearchDepth = double.NaN;", method);
+        string method = ExtractViewModelMethod("public void ResetAdvancedOptionsToSavedDefaults()");
+        Assert.Contains("MinFileSizeBytes = settings.DefaultMinFileSizeBytes;", method);
+        Assert.Contains("MaxFileSizeBytes = settings.DefaultMaxFileSizeBytes;", method);
+        Assert.Contains("CreatedAfterDate = settings.DefaultCreatedAfterDate;", method);
+        Assert.Contains("ModifiedAfterDate = settings.DefaultModifiedAfterDate;", method);
+    }
+
+    [Fact]
+    public void ResetDefaults_ResetsMaxSearchDepthToNaN()
+    {
+        string method = ExtractViewModelMethod("public void ResetAdvancedOptionsToSavedDefaults()");
+        Assert.Contains("MaxSearchDepth = double.NaN;", method);
     }
 
     [Fact]
@@ -200,6 +213,14 @@ public sealed class AdvancedOptionsTests
         Assert.True(start >= 0, $"Could not find method '{methodName}' in AdvancedOptions source.");
         int end = Math.Min(start + windowSize, AdvancedOptionsSource.Length);
         return AdvancedOptionsSource[start..end];
+    }
+
+    private static string ExtractViewModelMethod(string anchor, int windowSize = 2400)
+    {
+        int start = MainViewModelSource.IndexOf(anchor, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Could not find '{anchor}' in MainViewModel.cs.");
+        int end = Math.Min(start + windowSize, MainViewModelSource.Length);
+        return MainViewModelSource[start..end];
     }
 
     private static string ExtractXamlElement(string anchor, int windowSize)
