@@ -8,7 +8,18 @@ For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
 
 ## Download Installer
 
-To install Yagu without building from source, download the installer for your CPU architecture from GitHub and run it: [YaguSetup-1.0.0.2278-x64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2278-x64.exe) for most PCs, or the matching `-arm64` or `-x86` build for Arm64 or 32-bit Windows. Yagu ships as a self-contained Native AOT build, so no separate .NET runtime is required; the installer also includes the Windows App Runtime payloads needed by the desktop app.
+To install Yagu without building from source, download the installer for your CPU architecture from GitHub and run it:
+
+- **x64 (most PCs):** [YaguSetup-1.0.0.2286-x64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2286-x64.exe)
+- **Arm64:** [YaguSetup-1.0.0.2288-arm64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2288-arm64.exe)
+- **x86 (32-bit Windows):** [YaguSetup-1.0.0.2287-x86.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2287-x86.exe)
+
+Yagu ships as a self-contained Native AOT build, so no separate .NET runtime is required; the installer also includes the Windows App Runtime payloads needed by the desktop app.
+
+> **Note: Yagu is currently unsigned and is not supported on machines with Smart App Control enabled.**
+>
+> Yagu is an open-source project without a code-signing certificate. We applied for free open-source signing through SignPath, but it is not accepting new applications at the moment due to high volume (see [OSSign — Code Signing for Open Source](https://ossign.org/#apply)). Because Windows **Smart App Control** only allows programs that are signed by a recognized publisher, Yagu cannot run on PCs where Smart App Control is turned on. The installer detects this and stops with a message; to install Yagu, turn Smart App Control off (Windows Security → App & browser control → Smart App Control), or use a machine where it is not enabled. We will sign future releases once free open-source signing becomes available.
+
 
 ## Current Project Status
 

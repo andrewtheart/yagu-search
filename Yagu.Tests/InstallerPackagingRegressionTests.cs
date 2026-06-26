@@ -30,6 +30,23 @@ public sealed class InstallerPackagingRegressionTests
     }
 
     [Fact]
+    public void Installer_AbortsWhenSmartAppControlIsEnforcing()
+    {
+        string root = FindRepoRoot();
+        string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+
+        // SAC mode is read from the canonical CI policy DWORD; only Enforce (state 1) blocks.
+        Assert.Contains("function SmartAppControlEnforced(): Boolean;", inno);
+        Assert.Contains(@"SYSTEM\CurrentControlSet\Control\CI\Policy", inno);
+        Assert.Contains("VerifiedAndReputablePolicyState", inno);
+        Assert.Contains("Result := (State = 1);", inno);
+
+        // The check runs in InitializeSetup and cancels setup before any files are copied.
+        Assert.Contains("function InitializeSetup(): Boolean;", inno);
+        Assert.Contains("if SmartAppControlEnforced() then", inno);
+    }
+
+    [Fact]
     public void InnoInstaller_IsArchitectureParameterizedAndSelfContained()
     {
         string root = FindRepoRoot();

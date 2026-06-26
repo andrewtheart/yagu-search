@@ -101,6 +101,51 @@ Type: filesandordirs; Name: "{app}"
   The only prerequisite is the Windows App Runtime, which is bundled under the
   app's Prerequisites folder and installed at the post-install step. }
 
+{ True when Smart App Control (SAC) is turned on AND in *Enforce* mode. SAC in Enforce mode blocks
+  binaries that are not signed by a recognized publisher / lacking good cloud reputation from
+  running at all. Yagu's per-machine build is unsigned, so installing under SAC Enforce would
+  produce an app that Windows blocks the moment it launches (and would also block the bundled
+  prerequisites). SAC publishes its mode as the DWORD VerifiedAndReputablePolicyState under
+  HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy:
+    0 = Off, 1 = Enforce (blocks), 2 = Evaluation (observe only, does not block).
+  Only state 1 actually blocks, so Off and Evaluation are allowed to proceed. The CI\Policy key
+  lives in the (non-redirected) SYSTEM hive; we still read the 64-bit view explicitly so the x86
+  installer reports correctly on 64-bit Windows. }
+function SmartAppControlEnforced(): Boolean;
+var
+  State: Cardinal;
+  RootKey: Integer;
+begin
+  Result := False;
+  if IsWin64 then
+    RootKey := HKLM64
+  else
+    RootKey := HKLM;
+  if RegQueryDWordValue(RootKey, 'SYSTEM\CurrentControlSet\Control\CI\Policy', 'VerifiedAndReputablePolicyState', State) then
+    Result := (State = 1);
+end;
+
+{ Runs before the wizard is shown. Abort the install when Smart App Control is enforcing, because
+  the unsigned per-machine build cannot run on such a machine. Returning False here cancels setup
+  without copying any files. }
+function InitializeSetup(): Boolean;
+begin
+  Result := True;
+  if SmartAppControlEnforced() then
+  begin
+    Result := False;
+    if not WizardSilent() then
+      MsgBox(
+        'Smart App Control is turned on (Enforce mode) on this PC.' + #13#10#13#10 +
+        'Smart App Control blocks apps that are not signed by a recognized publisher, which would ' +
+        'prevent Yagu from running after it is installed. Setup will now stop.' + #13#10#13#10 +
+        'To install Yagu, turn Smart App Control off in Windows Security > App & browser control > ' +
+        'Smart App Control settings, then run this installer again.' + #13#10#13#10 +
+        'Note: turning Smart App Control off is permanent until Windows is reset.',
+        mbCriticalError, MB_OK);
+  end;
+end;
+
 function InstallWindowsAppRuntime(): Boolean;
 var
   ResultCode: Integer;

@@ -28,6 +28,12 @@ public sealed partial class MainWindow
     // scrollbar is preferred over shrinking further.
     private const double MinAdvancedOptionsDrawerHeight = 160;
 
+    // Minimum usable width for the Advanced Options drawer. The body is a 132px tab rail plus
+    // padded option rows whose inner two-column grids need room before controls clip. Half the
+    // search-card bottom bar is fine under a wide card, but when the preview pane is shown the
+    // search card lives in the narrow left pane, so the half-width must not fall below this floor.
+    private const double MinAdvancedOptionsDrawerWidth = 520;
+
     private void InitializeAdvancedOptionsDrawerStateTracking()
     {
         // The drawer body lives in a Flyout (AdvancedOptionsFlyout) so it drops over the desktop
@@ -59,7 +65,11 @@ public sealed partial class MainWindow
     private void SyncAdvancedOptionsDrawerWidth()
     {
         if (AdvancedOptionsScrollViewer is null || SearchCardBottomBar is null) return;
-        double width = SearchCardBottomBar.ActualWidth * 0.5;
+        // Clamp to a usable floor so the tabbed content stays fully visible when the preview pane
+        // narrows the search card (otherwise half the bottom bar squeezes the option rows until
+        // controls clip). The flyout is its own visual root, so a width wider than the search card
+        // simply overflows the window without growing it.
+        double width = Math.Max(SearchCardBottomBar.ActualWidth * 0.5, MinAdvancedOptionsDrawerWidth);
         if (width > 0)
             AdvancedOptionsScrollViewer.Width = width;
     }

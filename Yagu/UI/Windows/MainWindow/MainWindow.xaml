@@ -34,7 +34,8 @@
                     HorizontalContentAlignment="Stretch"
                     Background="Transparent"
                     BorderThickness="0"
-                    Padding="4,8,4,2"
+                    Padding="0,8,0,2"
+                    Margin="-5,0,-5,0"
                     MinHeight="0">
                 <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                         BorderThickness="1"
@@ -582,7 +583,7 @@
                         Background="Transparent" BorderThickness="0"
                         MinWidth="0" MinHeight="48" Padding="4,0" FontSize="12">
                     <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                        <TextBlock Text="Advanced Options" VerticalAlignment="Center" FontSize="15" />
+                        <TextBlock Text="Advanced Options" VerticalAlignment="Center" FontSize="13.5" />
                         <FontIcon x:Name="AdvancedOptionsExpandGlyph"
                                   FontFamily="{StaticResource SymbolThemeFontFamily}"
                                   Glyph="&#xE70D;" FontSize="13"
@@ -716,7 +717,8 @@
                                                             <RowDefinition Height="Auto" />
                                                         </Grid.RowDefinitions>
                                                         <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="*" />
+                                                            <!-- MinWidth keeps the Include box at least as wide as its example text when the drawer is compressed beside the preview pane. -->
+                                                            <ColumnDefinition Width="*" MinWidth="290" />
                                                             <ColumnDefinition Width="*" />
                                                         </Grid.ColumnDefinitions>
                                                         <Grid Grid.Row="0" Grid.Column="0" ColumnSpacing="6">
@@ -755,7 +757,8 @@
                                                             <RowDefinition Height="Auto" />
                                                         </Grid.RowDefinitions>
                                                         <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="*" />
+                                                            <!-- MinWidth keeps the Exclude box at least as wide as its example text when the drawer is compressed beside the preview pane. -->
+                                                            <ColumnDefinition Width="*" MinWidth="290" />
                                                             <ColumnDefinition Width="*" />
                                                         </Grid.ColumnDefinitions>
                                                         <Grid Grid.Row="0" Grid.Column="0" ColumnSpacing="6">
@@ -1126,6 +1129,87 @@
                                                 VerticalAlignment="Center"
                                                 MinWidth="0" Padding="8,5"
                                                 ToolTipService.ToolTip="Generate an equivalent command-line search">
+                                            <FlyoutBase.AttachedFlyout>
+                                                <Flyout x:Name="GeneratedCliCommandFlyout"
+                                                        Placement="Top"
+                                                        ShouldConstrainToRootBounds="False">
+                                                    <Flyout.FlyoutPresenterStyle>
+                                                        <Style TargetType="FlyoutPresenter">
+                                                            <Setter Property="Padding" Value="12,10" />
+                                                            <Setter Property="CornerRadius" Value="8" />
+                                                            <Setter Property="MinWidth" Value="0" />
+                                                            <Setter Property="MaxWidth" Value="760" />
+                                                            <Setter Property="MaxHeight" Value="600" />
+                                                        </Style>
+                                                    </Flyout.FlyoutPresenterStyle>
+                                                    <Grid RowSpacing="8" MinWidth="380" MaxWidth="720">
+                                                        <Grid.RowDefinitions>
+                                                            <RowDefinition Height="Auto" />
+                                                            <RowDefinition Height="Auto" />
+                                                            <RowDefinition Height="Auto" />
+                                                        </Grid.RowDefinitions>
+                                                        <Grid ColumnSpacing="8">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBlock Text="CLI command"
+                                                                       FontWeight="SemiBold"
+                                                                       FontSize="13"
+                                                                       VerticalAlignment="Center" />
+                                                            <Button x:Name="CopyGeneratedCliCommandButton" Grid.Column="1"
+                                                                    Click="OnCopyGeneratedCliCommandClick"
+                                                                    Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
+                                                                    Background="Transparent" BorderThickness="0"
+                                                                    ToolTipService.ToolTip="Copy command">
+                                                                <FontIcon Glyph="&#xE8C8;" FontSize="12" />
+                                                            </Button>
+                                                            <Button x:Name="SendGeneratedCliCommandToTerminalButton" Grid.Column="2"
+                                                                    Click="OnSendGeneratedCliCommandToTerminalClick"
+                                                                    Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
+                                                                    Background="Transparent" BorderThickness="0"
+                                                                    ToolTipService.ToolTip="Send command to terminal">
+                                                                <FontIcon Glyph="&#xE756;" FontSize="12" />
+                                                            </Button>
+                                                            <Button x:Name="CloseGeneratedCliCommandOverlayButton" Grid.Column="3"
+                                                                    Click="OnCloseGeneratedCliCommandOverlayClick"
+                                                                    Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
+                                                                    Background="Transparent" BorderThickness="0"
+                                                                    ToolTipService.ToolTip="Close">
+                                                                <FontIcon Glyph="&#xE711;" FontSize="10" />
+                                                            </Button>
+                                                        </Grid>
+                                                        <ToggleSwitch x:Name="IncludeSavedSettingCliOptionsToggle"
+                                                                      Grid.Row="1"
+                                                                      Header="Options already saved in settings"
+                                                                      IsOn="False"
+                                                                      OnContent="Include"
+                                                                      OffContent="Omit"
+                                                                      FontSize="12"
+                                                                      ToolTipService.ToolTip="Omit options that already match the current settings file to make the command shorter."
+                                                                      Toggled="OnGeneratedCliCommandSavedSettingOptionsToggled" />
+                                                        <Border x:Name="GeneratedCliCommandBubble"
+                                                                Grid.Row="2"
+                                                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                                                BorderThickness="1"
+                                                                CornerRadius="6"
+                                                                Padding="10,8">
+                                                            <ScrollViewer MaxHeight="360"
+                                                                          HorizontalScrollBarVisibility="Disabled"
+                                                                          VerticalScrollBarVisibility="Auto">
+                                                                <TextBlock x:Name="GeneratedCliCommandText"
+                                                                           FontFamily="Consolas"
+                                                                           FontSize="12"
+                                                                           TextWrapping="Wrap"
+                                                                           IsTextSelectionEnabled="True" />
+                                                            </ScrollViewer>
+                                                        </Border>
+                                                    </Grid>
+                                                </Flyout>
+                                            </FlyoutBase.AttachedFlyout>
                                             <StackPanel Orientation="Horizontal" Spacing="5">
                                                 <FontIcon Glyph="&#xE756;" FontSize="11" />
                                                 <TextBlock Text="Generate CLI command" FontSize="11" />
@@ -1379,13 +1463,13 @@
                                 </MenuFlyout>
                             </DropDownButton.Flyout>
                         </DropDownButton>
-                        <DropDownButton Height="28" MinHeight="0" Padding="6,2" HorizontalContentAlignment="Left" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Filter results">
+                        <DropDownButton x:Name="ResultsFilterButton" Height="28" MinHeight="0" Padding="6,2" HorizontalContentAlignment="Left" VerticalAlignment="Center" FontSize="12" ToolTipService.ToolTip="Filter results">
                             <StackPanel Orientation="Horizontal" Spacing="4">
                                 <FontIcon Glyph="&#xE71C;" FontSize="12" />
                                 <TextBlock Text="Filter" />
                             </StackPanel>
                             <DropDownButton.Flyout>
-                                <MenuFlyout Placement="BottomEdgeAlignedLeft" Opening="OnFilterFlyoutOpening">
+                                <MenuFlyout Placement="BottomEdgeAlignedLeft">
                                     <MenuFlyoutSubItem Text="By date">
                                         <MenuFlyoutItem Text="Any date" Click="OnDateFilterNone" />
                                         <MenuFlyoutSeparator />
@@ -1401,7 +1485,7 @@
                                         <MenuFlyoutItem Text="Last 3 years" Click="OnDateFilterPastThreeYears" />
                                         <MenuFlyoutItem Text="Last 5 years" Click="OnDateFilterPastFiveYears" />
                                     </MenuFlyoutSubItem>
-                                    <MenuFlyoutSubItem x:Name="ExtensionFilterSubMenu" Text="By extension" />
+                                    <MenuFlyoutItem x:Name="ExtensionFilterMenuItem" Text="By extension…" Click="OnByExtensionFilterMenuClicked" />
                                 </MenuFlyout>
                             </DropDownButton.Flyout>
                         </DropDownButton>
@@ -1552,6 +1636,7 @@
                     <Border x:Name="ResultsFileOverlay" Grid.Row="2"
                             Visibility="Collapsed"
                             VerticalAlignment="Top" HorizontalAlignment="Stretch"
+                            Margin="0,-6,0,0"
                             Background="{ThemeResource AcrylicBackgroundFillColorBaseBrush}"
                             BorderBrush="{ThemeResource SystemAccentColor}"
                             BorderThickness="0,0,0,1"
@@ -1909,7 +1994,7 @@
                                 Height="18"
                                 Background="#22FF6A00"
                                 BorderBrush="#FFFF4500"
-                                BorderThickness="4,0,0,0"
+                                BorderThickness="1.5"
                                 CornerRadius="3" />
                             <Border x:Name="ActiveMatchWordMarker"
                                 Canvas.ZIndex="21"
@@ -2160,93 +2245,6 @@
                        Text="Results truncated — refine your query" />
         </Grid>
 
-        <!-- Generated CLI command overlay. Centered over the window; the Advanced Options drawer
-             (a Flyout) is closed before this is shown (see OnGenerateCliCommandClick). -->
-        <Border x:Name="GeneratedCliCommandOverlay"
-                Grid.RowSpan="7"
-                Visibility="Collapsed"
-                HorizontalAlignment="Center"
-                VerticalAlignment="Center"
-                Margin="0"
-                MaxWidth="760"
-                Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="8"
-                Padding="12,10"
-                Canvas.ZIndex="220"
-                Translation="0,0,48">
-            <Border.Shadow>
-                <ThemeShadow />
-            </Border.Shadow>
-            <Grid RowSpacing="8">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-                <Grid ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Text="CLI command"
-                               FontWeight="SemiBold"
-                               FontSize="13"
-                               VerticalAlignment="Center" />
-                    <Button x:Name="CopyGeneratedCliCommandButton" Grid.Column="1"
-                            Click="OnCopyGeneratedCliCommandClick"
-                            Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
-                            Background="Transparent" BorderThickness="0"
-                            ToolTipService.ToolTip="Copy command">
-                        <FontIcon Glyph="&#xE8C8;" FontSize="12" />
-                    </Button>
-                    <Button x:Name="SendGeneratedCliCommandToTerminalButton" Grid.Column="2"
-                            Click="OnSendGeneratedCliCommandToTerminalClick"
-                            Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
-                            Background="Transparent" BorderThickness="0"
-                            ToolTipService.ToolTip="Send command to terminal">
-                        <FontIcon Glyph="&#xE756;" FontSize="12" />
-                    </Button>
-                    <Button x:Name="CloseGeneratedCliCommandOverlayButton" Grid.Column="3"
-                            Click="OnCloseGeneratedCliCommandOverlayClick"
-                            Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0"
-                            Background="Transparent" BorderThickness="0"
-                            ToolTipService.ToolTip="Close">
-                        <FontIcon Glyph="&#xE711;" FontSize="10" />
-                    </Button>
-                </Grid>
-                <ToggleSwitch x:Name="IncludeSavedSettingCliOptionsToggle"
-                              Grid.Row="1"
-                              Header="Options already saved in settings"
-                              IsOn="False"
-                              OnContent="Include"
-                              OffContent="Omit"
-                              FontSize="12"
-                              ToolTipService.ToolTip="Omit options that already match the current settings file to make the command shorter."
-                              Toggled="OnGeneratedCliCommandSavedSettingOptionsToggled" />
-                <Border x:Name="GeneratedCliCommandBubble"
-                        Grid.Row="2"
-                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                        BorderThickness="1"
-                        CornerRadius="6"
-                        Padding="10,8">
-                    <ScrollViewer MaxHeight="360"
-                                  HorizontalScrollBarVisibility="Disabled"
-                                  VerticalScrollBarVisibility="Auto">
-                        <TextBlock x:Name="GeneratedCliCommandText"
-                                   FontFamily="Consolas"
-                                   FontSize="12"
-                                   TextWrapping="Wrap"
-                                   IsTextSelectionEnabled="True" />
-                    </ScrollViewer>
-                </Border>
-            </Grid>
-        </Border>
-
         <!-- Skip breakdown overlay — floats above status bar, toggled by skip-count click -->
         <Border x:Name="SkipBreakdownOverlay"
                 Grid.Row="4"
@@ -2297,8 +2295,8 @@
                     Margin="0,0,32,10"
                     Width="36" Height="32" MinWidth="0" MinHeight="0"
                     Padding="0"
-                    Background="#CC252526"
-                    BorderBrush="#66454545"
+                    Background="#E6252526"
+                    BorderBrush="#80454545"
                     BorderThickness="1"
                     CornerRadius="6"
                     Canvas.ZIndex="10"

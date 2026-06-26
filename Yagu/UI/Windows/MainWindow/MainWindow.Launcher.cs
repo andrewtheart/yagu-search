@@ -586,7 +586,7 @@ public sealed partial class MainWindow
     }
 
     private bool HasOpenAppOwnedWindowOrModal()
-        => IsLauncherHideTemporarilySuppressed() || _settingsWindow is not null || _helpWindow is not null || _ownedModalWindowDepth > 0 || YaguDialog.HasOpenOwnedWindow(_hwnd);
+        => IsLauncherHideTemporarilySuppressed() || _directoryBrowseInProgress || _settingsWindow is not null || _helpWindow is not null || _ownedModalWindowDepth > 0 || YaguDialog.HasOpenOwnedWindow(_hwnd);
 
     private void SuppressLauncherHideToTrayForOwnedWindowClose()
         => _suppressLauncherHideUntilUtc = DateTimeOffset.UtcNow.AddSeconds(10);

@@ -1099,7 +1099,18 @@ public sealed partial class MainWindow
             var rawPoint = point;
             double markerHeight = Math.Max(12, rect.Height);
             double charWidth = Math.Max(GetPreviewCharWidth(block, targetPara), rect.Width > 0 ? rect.Width : 0);
-            double markerWidth = Math.Max(12, (targetRun.Text?.Length ?? 1) * charWidth);
+            // The active match is already rendered as this exact highlighted Run, so prefer its
+            // measured on-screen width (left edge of the first char -> right edge of the last char,
+            // when both sit on the same wrapped row) over the char-count * charWidth estimate. The
+            // estimate can drift badly and box neighbouring text; the measured run rect cannot.
+            double markerWidth = Math.Max(2, (targetRun.Text?.Length ?? 1) * charWidth);
+            if (IsUsableTextRect(endRect)
+                && Math.Abs(endRect.Y - rect.Y) <= Math.Max(4, markerHeight * 0.6))
+            {
+                double measuredRunWidth = endRect.X - rect.X;
+                if (measuredRunWidth > 0)
+                    markerWidth = measuredRunWidth;
+            }
 
             bool usedEndRect = false;
             bool usedWrappedEstimate = false;
@@ -1397,16 +1408,16 @@ public sealed partial class MainWindow
 
             ClearActiveMatchExtraWordMarkers();
 
-            // Span the active line band across the full preview viewport, including
-            // the gutter, so the current line reads as one continuous target.
-            double bandLeft = 0;
-            double bandWidth = Math.Max(viewportWidth, ActiveMatchOverlay.ActualWidth);
-
             // Clip the word marker to the visible overlay area.
-            double clippedMarkerLeft = Math.Max(point.X, bandLeft);
+            double clippedMarkerLeft = Math.Max(point.X, 0);
             double clippedMarkerRight = Math.Min(point.X + markerWidth, viewportWidth);
             double visibleMarkerWidth = Math.Max(0, clippedMarkerRight - clippedMarkerLeft);
             double markerLeft = clippedMarkerLeft;
+
+            // The active-match band boxes ONLY the matched text, not the whole line, so the overlay
+            // tightly marks just the current occurrence (previously it spanned the full viewport).
+            double bandLeft = markerLeft;
+            double bandWidth = visibleMarkerWidth;
 
             ActiveMatchBand.Height = markerHeight;
             ActiveMatchBand.Width = bandWidth;

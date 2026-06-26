@@ -796,45 +796,148 @@ public sealed partial class MainWindow
     private void OnDateFilterPastThreeYears(object sender, RoutedEventArgs e) => ViewModel.DateRangeFilterIndex = (int)DateRangeFilter.PastThreeYears;
     private void OnDateFilterPastFiveYears(object sender, RoutedEventArgs e) => ViewModel.DateRangeFilterIndex = (int)DateRangeFilter.PastFiveYears;
 
-    private void OnFilterFlyoutOpening(object sender, object e) => RebuildExtensionFilterSubMenu();
+    private Flyout? _extensionFilterFlyout;
+    private TextBox? _extensionFilterSearchBox;
+    private StackPanel? _extensionFilterListPanel;
+    private ScrollViewer? _extensionFilterScrollViewer;
 
-    private void RebuildExtensionFilterSubMenu()
+    private void OnByExtensionFilterMenuClicked(object sender, RoutedEventArgs e)
     {
-        ExtensionFilterSubMenu.Items.Clear();
+        // The owning Filter MenuFlyout closes as this item is clicked; defer so the custom
+        // extension flyout opens cleanly afterwards, anchored to the Filter button.
+        DispatcherQueue.TryEnqueue(ShowExtensionFilterFlyout);
+    }
+
+    private void ShowExtensionFilterFlyout()
+    {
+        EnsureExtensionFilterFlyout();
+        _extensionFilterSearchBox!.Text = string.Empty;
+        PopulateExtensionFilterList(string.Empty);
+
+        // Half the available height with a scrollbar, so a long extension list never fills the window.
+        double available = (Content as FrameworkElement)?.ActualHeight ?? 600;
+        _extensionFilterScrollViewer!.MaxHeight = Math.Max(180, available * 0.5);
+
+        _extensionFilterFlyout!.ShowAt(ResultsFilterButton);
+    }
+
+    private void EnsureExtensionFilterFlyout()
+    {
+        if (_extensionFilterFlyout is not null)
+            return;
+
+        _extensionFilterSearchBox = new TextBox
+        {
+            PlaceholderText = "Filter extensions\u2026",
+            FontSize = 12,
+            Margin = new Thickness(0, 0, 0, 6),
+        };
+        _extensionFilterSearchBox.TextChanged += (_, _) =>
+            PopulateExtensionFilterList(_extensionFilterSearchBox!.Text);
+
+        var selectAllButton = new Button
+        {
+            Content = "All extensions",
+            FontSize = 12,
+            Padding = new Thickness(8, 4, 8, 4),
+            Margin = new Thickness(0, 0, 0, 6),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+            BorderThickness = new Thickness(0),
+        };
+        selectAllButton.Click += (_, _) =>
+        {
+            // "All extensions" checks every extension in the list (select-all) rather than
+            // clearing the filter, so all checkboxes show as ticked.
+            var allExtensions = ViewModel.GetExtensionFilterOptions()
+                .Select(option => option.Extension)
+                .ToList();
+            ViewModel.SetExtensionFilter(allExtensions);
+            PopulateExtensionFilterList(_extensionFilterSearchBox!.Text);
+        };
+
+        _extensionFilterListPanel = new StackPanel { Spacing = 1 };
+        _extensionFilterScrollViewer = new ScrollViewer
+        {
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollMode = ScrollMode.Auto,
+            HorizontalScrollMode = ScrollMode.Disabled,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Content = _extensionFilterListPanel,
+        };
+
+        var root = new StackPanel { MinWidth = 240 };
+        root.Children.Add(_extensionFilterSearchBox);
+        root.Children.Add(selectAllButton);
+        root.Children.Add(_extensionFilterScrollViewer);
+
+        _extensionFilterFlyout = new Flyout
+        {
+            Content = root,
+            // A regular Flyout (unlike a MenuFlyout) is light-dismiss: toggling the checkboxes
+            // inside it does NOT close it, so multi-select stays open until the user clicks away.
+            Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.Bottom,
+        };
+    }
+
+    private void PopulateExtensionFilterList(string filterText)
+    {
+        if (_extensionFilterListPanel is null)
+            return;
+
+        _extensionFilterListPanel.Children.Clear();
         var options = ViewModel.GetExtensionFilterOptions();
         if (options.Count == 0)
         {
-            ExtensionFilterSubMenu.Items.Add(new MenuFlyoutItem
+            _extensionFilterListPanel.Children.Add(new TextBlock
             {
                 Text = "No extensions available",
-                IsEnabled = false,
+                Opacity = 0.6,
+                FontSize = 12,
+                Margin = new Thickness(4),
             });
             return;
         }
 
-        var clearItem = new MenuFlyoutItem { Text = "All extensions" };
-        clearItem.Click += OnClearExtensionFilterClicked;
-        ExtensionFilterSubMenu.Items.Add(clearItem);
-        ExtensionFilterSubMenu.Items.Add(new MenuFlyoutSeparator());
-
+        string needle = filterText?.Trim() ?? string.Empty;
+        bool anyShown = false;
         foreach (var option in options)
         {
-            var item = new ToggleMenuFlyoutItem
+            if (needle.Length > 0
+                && option.DisplayName.IndexOf(needle, StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+
+            anyShown = true;
+            var checkBox = new CheckBox
             {
-                Text = $"{option.DisplayName} ({option.Count:N0})",
+                Content = $"{option.DisplayName} ({option.Count:N0})",
                 IsChecked = option.IsSelected,
                 Tag = option.Extension,
+                FontSize = 12,
+                MinHeight = 0,
+                Padding = new Thickness(8, 2, 8, 2),
             };
-            item.Click += OnExtensionFilterItemClicked;
-            ExtensionFilterSubMenu.Items.Add(item);
+            checkBox.Checked += OnExtensionFilterCheckChanged;
+            checkBox.Unchecked += OnExtensionFilterCheckChanged;
+            _extensionFilterListPanel.Children.Add(checkBox);
+        }
+
+        if (!anyShown)
+        {
+            _extensionFilterListPanel.Children.Add(new TextBlock
+            {
+                Text = "No matching extensions",
+                Opacity = 0.6,
+                FontSize = 12,
+                Margin = new Thickness(4),
+            });
         }
     }
 
-    private void OnClearExtensionFilterClicked(object sender, RoutedEventArgs e) => ViewModel.ClearExtensionFilter();
-
-    private void OnExtensionFilterItemClicked(object sender, RoutedEventArgs e)
+    private void OnExtensionFilterCheckChanged(object sender, RoutedEventArgs e)
     {
-        if (sender is not ToggleMenuFlyoutItem item || item.Tag is not string extension)
+        if (sender is not CheckBox checkBox || checkBox.Tag is not string extension)
             return;
 
         var options = ViewModel.GetExtensionFilterOptions();
@@ -843,7 +946,7 @@ public sealed partial class MainWindow
             .Select(option => option.Extension)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        if (item.IsChecked)
+        if (checkBox.IsChecked == true)
             selectedExtensions.Add(extension);
         else
             selectedExtensions.Remove(extension);

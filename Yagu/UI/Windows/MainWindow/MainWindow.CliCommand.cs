@@ -20,15 +20,11 @@ public sealed partial class MainWindow
             return;
         }
 
-        // The generate button lives inside the Advanced Options flyout (a light-dismiss popup), so
-        // close it before showing the centered command overlay.
-        AdvancedOptionsFlyout?.Hide();
-
-        if (TryGetGeneratedCliCommandControls(out var commandText, out var commandOverlay))
-        {
-            commandText.Text = BuildGeneratedCliCommand(_includeGeneratedCliCommandSavedSettingOptions);
-            commandOverlay.Visibility = Visibility.Visible;
-        }
+        // The generated command shows in a flyout anchored to the Generate button (inside the
+        // Advanced Options drawer), so it materializes right next to the button and the drawer
+        // stays open behind it.
+        GeneratedCliCommandText.Text = BuildGeneratedCliCommand(_includeGeneratedCliCommandSavedSettingOptions);
+        Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase.ShowAttachedFlyout(GenerateCliCommandButton);
     }
 
     /// <summary>
@@ -49,48 +45,37 @@ public sealed partial class MainWindow
         if (sender is ToggleSwitch toggle)
             _includeGeneratedCliCommandSavedSettingOptions = toggle.IsOn;
 
-        if (TryGetGeneratedCliCommandControls(out var commandText, out var commandOverlay)
-            && commandOverlay.Visibility == Visibility.Visible)
-        {
-            commandText.Text = BuildGeneratedCliCommand(_includeGeneratedCliCommandSavedSettingOptions);
-        }
+        GeneratedCliCommandText.Text = BuildGeneratedCliCommand(_includeGeneratedCliCommandSavedSettingOptions);
     }
 
     private void OnCloseGeneratedCliCommandOverlayClick(object sender, RoutedEventArgs e)
-        => CloseGeneratedCliCommandOverlay();
+        => GeneratedCliCommandFlyout.Hide();
 
     private void OnCopyGeneratedCliCommandClick(object sender, RoutedEventArgs e)
     {
-        if (!TryGetGeneratedCliCommandControls(out var commandText, out _))
-            return;
-
-        EnsureGeneratedCliCommandText(commandText);
-
-        SetClipboardText(commandText.Text, "generated CLI command");
-        CloseGeneratedCliCommandOverlay();
+        EnsureGeneratedCliCommandText();
+        SetClipboardText(GeneratedCliCommandText.Text, "generated CLI command");
+        GeneratedCliCommandFlyout.Hide();
     }
 
     private async void OnSendGeneratedCliCommandToTerminalClick(object sender, RoutedEventArgs e)
     {
-        if (!TryGetGeneratedCliCommandControls(out var commandText, out _))
-            return;
-
         if (string.IsNullOrWhiteSpace(ViewModel.Query))
         {
-            CloseGeneratedCliCommandOverlay();
+            GeneratedCliCommandFlyout.Hide();
             ShowCliCommandWarning("Specify a search pattern before sending the CLI command to the terminal.");
             return;
         }
 
-        EnsureGeneratedCliCommandText(commandText);
-        if (string.IsNullOrWhiteSpace(commandText.Text))
+        EnsureGeneratedCliCommandText();
+        if (string.IsNullOrWhiteSpace(GeneratedCliCommandText.Text))
             return;
 
         try
         {
             CollapseAdvancedOptionsForSearch();
-            await SendTextToTerminalAsync(commandText.Text);
-            CloseGeneratedCliCommandOverlay();
+            await SendTextToTerminalAsync(GeneratedCliCommandText.Text);
+            GeneratedCliCommandFlyout.Hide();
         }
         catch (Exception ex)
         {
@@ -100,27 +85,11 @@ public sealed partial class MainWindow
         }
     }
 
-    private void EnsureGeneratedCliCommandText(TextBlock commandText)
+    private void EnsureGeneratedCliCommandText()
     {
-        if (string.IsNullOrWhiteSpace(commandText.Text))
-            commandText.Text = BuildGeneratedCliCommand(_includeGeneratedCliCommandSavedSettingOptions);
+        if (string.IsNullOrWhiteSpace(GeneratedCliCommandText.Text))
+            GeneratedCliCommandText.Text = BuildGeneratedCliCommand(_includeGeneratedCliCommandSavedSettingOptions);
     }
-
-    private void CloseGeneratedCliCommandOverlay()
-    {
-        if (FindGeneratedCliCommandElement("GeneratedCliCommandOverlay") is FrameworkElement commandOverlay)
-            commandOverlay.Visibility = Visibility.Collapsed;
-    }
-
-    private bool TryGetGeneratedCliCommandControls(out TextBlock commandText, out FrameworkElement commandOverlay)
-    {
-        commandText = FindGeneratedCliCommandElement("GeneratedCliCommandText") as TextBlock ?? null!;
-        commandOverlay = FindGeneratedCliCommandElement("GeneratedCliCommandOverlay") as FrameworkElement ?? null!;
-        return commandText is not null && commandOverlay is not null;
-    }
-
-    private object? FindGeneratedCliCommandElement(string name)
-        => (Content as FrameworkElement)?.FindName(name);
 
     private string BuildGeneratedCliCommand() => BuildGeneratedCliCommand(includeSavedSettingOptions: false);
 

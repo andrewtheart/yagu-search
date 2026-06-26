@@ -40,6 +40,7 @@ public sealed partial class MainWindow
     private RichTextBlock? _previewCustomSelectionLastRangeBlock;
     private Point _previewSelectionAutoScrollPointerPointInScroller;
     private double _previewSelectionAutoScrollPointerX;
+    private double _previewSelectionAutoScrollPointerY;
     private int _previewCustomSelectionAnchorIndex = -1;
     private int _previewCustomSelectionCurrentIndex = -1;
     private int _previewCustomSelectionLastRangeStart = -1;
@@ -59,6 +60,7 @@ public sealed partial class MainWindow
     private double _previewSelectionAutoScrollTotalRequestedDip;
     private double _previewSelectionAutoScrollLastRequestedX = double.NaN;
     private double _previewSelectionAutoScrollPrevBeforeX = double.NaN;
+    private double _previewSelectionAutoScrollPrevBeforeY = double.NaN;
     private int _previewSelectionAutoScrollStuckFrameCount;
 
     // Native RichTextBlock DoubleTapped is suppressed while the custom selection
@@ -155,6 +157,7 @@ public sealed partial class MainWindow
         _previewSelectionAutoScrollPointerId = e.Pointer.PointerId;
         _previewSelectionAutoScrollPointerPointInScroller = e.GetCurrentPoint(scroller).Position;
         _previewSelectionAutoScrollPointerX = _previewSelectionAutoScrollPointerPointInScroller.X;
+        _previewSelectionAutoScrollPointerY = _previewSelectionAutoScrollPointerPointInScroller.Y;
         _previewSelectionAutoScrollLastTick = Environment.TickCount64;
         _previewSelectionAutoScrollWasAtEdge = false;
         ResetPreviewSelectionAutoScrollDiagnostics(_previewSelectionAutoScrollLastTick);
@@ -235,6 +238,7 @@ public sealed partial class MainWindow
         }
 
         _previewSelectionAutoScrollPointerX = point.Position.X;
+        _previewSelectionAutoScrollPointerY = point.Position.Y;
         _previewSelectionAutoScrollPointerPointInScroller = point.Position;
         _previewSelectionAutoScrollPointerMoveCount++;
         if (_previewCustomSelectionDragging)
@@ -243,10 +247,15 @@ public sealed partial class MainWindow
             e.Handled = true;
         }
 
-        bool isAtEdge = TryGetPreviewSelectionAutoScrollVelocity(
+        bool horizontalEdge = TryGetPreviewSelectionAutoScrollVelocity(
             _previewSelectionAutoScrollScroller,
             _previewSelectionAutoScrollPointerX,
             out double velocity);
+        bool verticalEdge = TryGetPreviewSelectionAutoScrollVerticalVelocity(
+            _previewSelectionAutoScrollScroller,
+            _previewSelectionAutoScrollPointerY,
+            out _);
+        bool isAtEdge = horizontalEdge || verticalEdge;
 
         if (isAtEdge && !_previewSelectionAutoScrollWasAtEdge)
             LogPreviewSelectionAutoScrollEdge("edge-enter", _previewSelectionAutoScrollScroller, velocity);
@@ -357,15 +366,37 @@ public sealed partial class MainWindow
         }
 
         if (block.TextWrapping != TextWrapping.NoWrap
-            || scroller.HorizontalScrollMode != ScrollMode.Enabled
-            || scroller.ScrollableWidth <= 0.5)
+            && scroller.VerticalScrollMode == ScrollMode.Disabled)
         {
+            // Wrapped content cannot scroll horizontally and (here) cannot scroll vertically.
             StopPreviewSelectionAutoScroll(
-                $"invalid-state wrap={block.TextWrapping}, horizontalMode={scroller.HorizontalScrollMode}, scrollableW={scroller.ScrollableWidth:N1}");
+                $"invalid-state wrap={block.TextWrapping}, horizontalMode={scroller.HorizontalScrollMode}, verticalMode={scroller.VerticalScrollMode}");
             return;
         }
 
-        if (!TryGetPreviewSelectionAutoScrollVelocity(scroller, _previewSelectionAutoScrollPointerX, out double velocity))
+        // Horizontal auto-scroll only applies to no-wrap content that overflows sideways;
+        // vertical auto-scroll applies whenever the content overflows vertically. Supporting
+        // both keeps diagonal (45-degree) selection drags reacting naturally instead of only
+        // sliding along one axis.
+        bool canScrollHorizontally = block.TextWrapping == TextWrapping.NoWrap
+            && scroller.HorizontalScrollMode == ScrollMode.Enabled
+            && scroller.ScrollableWidth > 0.5;
+        bool canScrollVertically = scroller.VerticalScrollMode != ScrollMode.Disabled
+            && scroller.ScrollableHeight > 0.5;
+        if (!canScrollHorizontally && !canScrollVertically)
+        {
+            StopPreviewSelectionAutoScroll(
+                $"invalid-state wrap={block.TextWrapping}, horizontalMode={scroller.HorizontalScrollMode}, scrollableW={scroller.ScrollableWidth:N1}, scrollableH={scroller.ScrollableHeight:N1}");
+            return;
+        }
+
+        double velocity = 0;
+        bool hasHorizontalVelocity = canScrollHorizontally
+            && TryGetPreviewSelectionAutoScrollVelocity(scroller, _previewSelectionAutoScrollPointerX, out velocity);
+        double verticalVelocity = 0;
+        bool hasVerticalVelocity = canScrollVertically
+            && TryGetPreviewSelectionAutoScrollVerticalVelocity(scroller, _previewSelectionAutoScrollPointerY, out verticalVelocity);
+        if (!hasHorizontalVelocity && !hasVerticalVelocity)
         {
             StopPreviewSelectionAutoScrollTimer("no-velocity");
             return;
@@ -380,35 +411,52 @@ public sealed partial class MainWindow
             _previewSelectionAutoScrollDelayedFrameCount++;
 
         double beforeX = scroller.HorizontalOffset;
+        double beforeY = scroller.VerticalOffset;
         if (!double.IsNaN(_previewSelectionAutoScrollLastRequestedX))
             _previewSelectionAutoScrollMaxLagDip = Math.Max(
                 _previewSelectionAutoScrollMaxLagDip,
                 Math.Abs(beforeX - _previewSelectionAutoScrollLastRequestedX));
 
         double step = velocity * elapsedSeconds;
-        _previewSelectionAutoScrollTotalRequestedDip += Math.Abs(step);
+        double verticalStep = verticalVelocity * elapsedSeconds;
+        _previewSelectionAutoScrollTotalRequestedDip += Math.Abs(step) + Math.Abs(verticalStep);
         double targetX = Math.Clamp(scroller.HorizontalOffset + step, 0, scroller.ScrollableWidth);
-        if (Math.Abs(targetX - beforeX) <= 0.5)
+        double targetY = Math.Clamp(scroller.VerticalOffset + verticalStep, 0, scroller.ScrollableHeight);
+        bool horizontalMoved = Math.Abs(targetX - beforeX) > 0.5;
+        bool verticalMoved = Math.Abs(targetY - beforeY) > 0.5;
+        if (!horizontalMoved && !verticalMoved)
         {
             _previewSelectionAutoScrollNoOpFrameCount++;
             if (_previewCustomSelectionDragging)
                 UpdatePreviewCustomSelectionFromCurrentPointer();
             MaybeLogPreviewSelectionAutoScrollSample(scroller, velocity, step, beforeX, targetX, false, frameMs, rawFrameMs, "noop");
-            if ((beforeX <= 0.5 && step < 0) || (beforeX >= scroller.ScrollableWidth - 0.5 && step > 0))
+            bool horizontalAtBoundary = !hasHorizontalVelocity
+                || (beforeX <= 0.5 && step < 0)
+                || (beforeX >= scroller.ScrollableWidth - 0.5 && step > 0);
+            bool verticalAtBoundary = !hasVerticalVelocity
+                || (beforeY <= 0.5 && verticalStep < 0)
+                || (beforeY >= scroller.ScrollableHeight - 0.5 && verticalStep > 0);
+            if (horizontalAtBoundary && verticalAtBoundary)
                 StopPreviewSelectionAutoScrollTimer("scroll-boundary-noop");
             return;
         }
 
-        bool accepted = scroller.ChangeView(targetX, null, null, disableAnimation: true);
+        bool accepted = scroller.ChangeView(
+            horizontalMoved ? targetX : (double?)null,
+            verticalMoved ? targetY : (double?)null,
+            null,
+            disableAnimation: true);
         if (accepted)
             _previewSelectionAutoScrollChangeViewAcceptedCount++;
         else
             _previewSelectionAutoScrollChangeViewRejectedCount++;
         _previewSelectionAutoScrollLastRequestedX = targetX;
 
-        // Detect stuck scroller: ChangeView accepted but offset didn't move.
+        // Detect stuck scroller: ChangeView accepted but neither offset moved across frames.
         if (!double.IsNaN(_previewSelectionAutoScrollPrevBeforeX)
             && Math.Abs(beforeX - _previewSelectionAutoScrollPrevBeforeX) <= 0.5
+            && !double.IsNaN(_previewSelectionAutoScrollPrevBeforeY)
+            && Math.Abs(beforeY - _previewSelectionAutoScrollPrevBeforeY) <= 0.5
             && accepted)
         {
             _previewSelectionAutoScrollStuckFrameCount++;
@@ -419,6 +467,7 @@ public sealed partial class MainWindow
                 MaybeLogPreviewSelectionAutoScrollSample(scroller, velocity, step, beforeX, targetX, accepted, frameMs, rawFrameMs, "frame");
                 StopPreviewSelectionAutoScrollTimer("stuck-scroller");
                 _previewSelectionAutoScrollPrevBeforeX = beforeX;
+                _previewSelectionAutoScrollPrevBeforeY = beforeY;
                 return;
             }
         }
@@ -427,6 +476,7 @@ public sealed partial class MainWindow
             _previewSelectionAutoScrollStuckFrameCount = 0;
         }
         _previewSelectionAutoScrollPrevBeforeX = beforeX;
+        _previewSelectionAutoScrollPrevBeforeY = beforeY;
 
         if (_previewCustomSelectionDragging)
             UpdatePreviewCustomSelectionFromCurrentPointer();
@@ -446,6 +496,29 @@ public sealed partial class MainWindow
             distanceBeyondEdge = pointerX - (viewportWidth - edge);
         else if (pointerX < edge)
             distanceBeyondEdge = pointerX - edge;
+        else
+            return false;
+
+        double magnitude = Math.Clamp(Math.Abs(distanceBeyondEdge) * PreviewSelectionAutoScrollVelocityScale,
+            PreviewSelectionAutoScrollMinVelocityDipPerSecond,
+            PreviewSelectionAutoScrollMaxVelocityDipPerSecond);
+        velocity = Math.Sign(distanceBeyondEdge) * magnitude;
+        return Math.Abs(velocity) > 0.5;
+    }
+
+    private static bool TryGetPreviewSelectionAutoScrollVerticalVelocity(ScrollViewer scroller, double pointerY, out double velocity)
+    {
+        velocity = 0;
+        double viewportHeight = scroller.ViewportHeight > 0 ? scroller.ViewportHeight : scroller.ActualHeight;
+        if (viewportHeight <= 0)
+            return false;
+
+        double edge = Math.Min(PreviewSelectionAutoScrollEdgeDip, Math.Max(8, viewportHeight / 4));
+        double distanceBeyondEdge;
+        if (pointerY > viewportHeight - edge)
+            distanceBeyondEdge = pointerY - (viewportHeight - edge);
+        else if (pointerY < edge)
+            distanceBeyondEdge = pointerY - edge;
         else
             return false;
 

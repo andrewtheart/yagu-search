@@ -21,7 +21,9 @@ namespace Yagu;
 /// </summary>
 public sealed partial class MainWindow
 {
-    private const int PreviewEditorForceWrapLineLength = 50_000;
+    // Wrapping a line longer than this is dangerously expensive for XAML (it can hang or crash). When
+    // the editor would wrap a line at or beyond this length, the user is prompted to choose first.
+    private const int PreviewEditorWrapPromptLineLength = 200_000;
     private const long PreviewEditorChunkByteLength = 10L * 1024 * 1024;
     private long PreviewEditorMaxByteLength => (long)ViewModel.PreviewEditorMaxSizeMB * 1024 * 1024;
     private int PreviewEditorMaxTextLength => ViewModel.PreviewEditorMaxTextLength;
@@ -552,6 +554,16 @@ public sealed partial class MainWindow
                 return;
             }
 
+            var text = document.Text;
+            bool singleLine = !text.Contains('\n');
+            var wrapDecision = await ResolvePreviewEditorWrapAsync(result.FilePath, document.MaxLineLength, singleLine);
+            if (!wrapDecision.proceed)
+            {
+                RestorePreviewSurfaceAfterEditor();
+                ViewModel.StatusText = "Canceled opening the file for editing.";
+                return;
+            }
+
             _previewEditorPath = result.FilePath;
             _previewEditorEncoding = document.Encoding;
             ResetPreviewEditorChunkState(clearUi: false);
@@ -561,20 +573,12 @@ public sealed partial class MainWindow
             bool isArchive = ZipArchiveSearcher.IsArchivePath(result.FilePath);
             PreviewEditor.IsReadOnly = isArchive;
 
-            var text = document.Text;
-                    _previewEditorForcedWrap = false;
-            ApplyPreviewEditorWordWrap(ViewModel.PreviewWordWrap);
-                    if (document.MaxLineLength >= PreviewEditorForceWrapLineLength)
+            _previewEditorForcedWrap = wrapDecision.forced;
+            ApplyPreviewEditorWordWrap(wrapDecision.wrap);
+            if (document.MaxLineLength >= PreviewEditorWrapPromptLineLength)
             {
                 LogService.Instance.Info("Preview",
-                        $"ShowFullFileEditorAsync: long line loaded with user word-wrap setting, maxLen={document.MaxLineLength:N0}");
-            }
-
-            // Auto-enable word wrap for single-line files.
-            if (!text.Contains('\n'))
-            {
-                _previewEditorForcedWrap = true;
-                ApplyPreviewEditorWordWrap(true);
+                    $"ShowFullFileEditorAsync: long line, wrap={wrapDecision.wrap}, forced={wrapDecision.forced}, maxLen={document.MaxLineLength:N0}");
             }
 
             // Assign while collapsed so the editor does one document load instead of
@@ -672,6 +676,77 @@ public sealed partial class MainWindow
             || fileInfo.Length > PreviewEditorMaxTextLength
             || (PreviewEditorMaxLineLength > 0 && fileInfo.Length > PreviewEditorMaxLineLength);
 
+    private enum PreviewEditorWrapChoice { NoWrap, Wrap, Cancel }
+
+    /// <summary>
+    /// Decides the word-wrap mode for opening <paramref name="filePath"/> in the editor. Wrapping a
+    /// pathologically long line is extremely slow and can crash XAML, so when the editor would wrap a
+    /// line at or beyond <see cref="PreviewEditorWrapPromptLineLength"/> the user is prompted to choose
+    /// between opening without wrap (recommended), with wrap anyway, or cancelling. Returns whether to
+    /// proceed, the effective wrap state, and whether that wrap state is a forced override.
+    /// </summary>
+    private async Task<(bool proceed, bool wrap, bool forced)> ResolvePreviewEditorWrapAsync(
+        string filePath, int maxLineLength, bool singleLine)
+    {
+        // Single-line files default to wrap for readability; multi-line files honour the user setting.
+        bool desiredWrap = ViewModel.PreviewWordWrap || singleLine;
+        if (desiredWrap && maxLineLength >= PreviewEditorWrapPromptLineLength)
+        {
+            var choice = await PromptPreviewEditorLongLineWrapAsync(filePath, maxLineLength);
+            return choice switch
+            {
+                PreviewEditorWrapChoice.NoWrap => (true, false, true),    // forced no-wrap (safe)
+                PreviewEditorWrapChoice.Wrap => (true, true, singleLine), // wrap anyway (user override)
+                _ => (false, false, false),                              // cancel
+            };
+        }
+
+        // No prompt needed: keep the user setting; single-line files still auto-wrap (short lines).
+        return singleLine ? (true, true, true) : (true, ViewModel.PreviewWordWrap, false);
+    }
+
+    private async Task<PreviewEditorWrapChoice> PromptPreviewEditorLongLineWrapAsync(string filePath, int maxLineLength)
+    {
+        var panel = new StackPanel { Spacing = 12, MinWidth = 360 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"\u201c{System.IO.Path.GetFileName(filePath)}\u201d contains a very long line ({maxLineLength:N0} characters).",
+            TextWrapping = TextWrapping.Wrap,
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Turning on word wrap for a line this long can make the editor extremely slow and may crash the app. "
+                 + "Opening without word wrap is much faster, and you can still toggle wrap afterwards.",
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 12,
+            Opacity = 0.8,
+        });
+
+        var result = await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "This file has a very long line",
+                Content = panel,
+                PrimaryButtonText = "Open without word wrap",
+                SecondaryButtonText = "Open with word wrap",
+                CloseButtonText = "Cancel",
+                DefaultButton = YaguDialogDefaultButton.Primary,
+                RequestedTheme = RootGrid.ActualTheme,
+                ShowTitleBar = false,
+                Width = 600,
+                Height = 320,
+                MaxContentHeight = 220,
+            });
+
+        return result switch
+        {
+            YaguDialogResult.Primary => PreviewEditorWrapChoice.NoWrap,
+            YaguDialogResult.Secondary => PreviewEditorWrapChoice.Wrap,
+            _ => PreviewEditorWrapChoice.Cancel,
+        };
+    }
+
     private async Task ShowChunkedPreviewEditorAsync(SearchResult result, FileInfo fileInfo, bool scrollToMatch, CancellationToken cancellationToken)
     {
         var chunkSw = System.Diagnostics.Stopwatch.StartNew();
@@ -685,6 +760,15 @@ public sealed partial class MainWindow
         if (cancellationToken.IsCancellationRequested)
             return;
 
+        bool chunkSingleLine = !chunk.Text.Contains('\n');
+        var wrapDecision = await ResolvePreviewEditorWrapAsync(result.FilePath, chunk.MaxLineLength, chunkSingleLine);
+        if (!wrapDecision.proceed)
+        {
+            RestorePreviewSurfaceAfterEditor();
+            ViewModel.StatusText = "Canceled opening the file for editing.";
+            return;
+        }
+
         _previewEditorPath = result.FilePath;
         _previewEditorEncoding = chunk.Encoding;
         _previewEditorChunkEncoding = chunk.Encoding;
@@ -695,8 +779,8 @@ public sealed partial class MainWindow
         ApplyPreviewEditorSyntaxHighlighting(result.FilePath);
 
         PreviewEditor.IsReadOnly = false;
-        _previewEditorForcedWrap = false;
-        ApplyPreviewEditorWordWrap(ViewModel.PreviewWordWrap);
+        _previewEditorForcedWrap = wrapDecision.forced;
+        ApplyPreviewEditorWordWrap(wrapDecision.wrap);
 
         _suppressPreviewEditorTextChanged = true;
         LoadPreviewEditorText(chunk.Text);
