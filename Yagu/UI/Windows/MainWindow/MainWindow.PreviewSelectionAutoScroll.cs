@@ -800,6 +800,14 @@ public sealed partial class MainWindow
 
             double left = origin.X + localStart * charWidth;
             double right = origin.X + localEnd * charWidth;
+            // Prefer the real glyph edges over the uniform charWidth estimate so the
+            // highlight does not overshoot past the last character of the line (the
+            // estimate can be wider than the rendered glyphs, which made the blue band
+            // extend beyond the text boundary in NoWrap mode).
+            if (TryResolvePreviewSelectionEdgeX(block, paragraph, localStart, trailingEdge: false, out double actualLeft))
+                left = actualLeft;
+            if (TryResolvePreviewSelectionEdgeX(block, paragraph, localEnd, trailingEdge: true, out double actualRight))
+                right = actualRight;
             if (double.IsNaN(left) || double.IsNaN(right) || double.IsInfinity(left) || double.IsInfinity(right))
                 continue;
 
@@ -956,6 +964,29 @@ public sealed partial class MainWindow
             return;
 
         rows.Add(new Windows.Foundation.Rect(visibleLeft, top, width, height));
+    }
+
+    // Resolves the overlay-space X of a paragraph-local character edge using the real
+    // glyph rect (leading edge for the selection start, trailing edge for the end) so
+    // the NoWrap selection band ends exactly at the text rather than at an estimated
+    // charWidth multiple. Returns false when the rect cannot be measured.
+    private bool TryResolvePreviewSelectionEdgeX(RichTextBlock block, Paragraph paragraph, int localIndex, bool trailingEdge, out double overlayX)
+    {
+        overlayX = 0;
+        var pointer = GetPreviewParagraphTextPointerAtIndex(paragraph, localIndex);
+        if (pointer is null)
+            return false;
+        Windows.Foundation.Rect rect;
+        try { rect = pointer.GetCharacterRect(trailingEdge ? LogicalDirection.Backward : LogicalDirection.Forward); }
+        catch { return false; }
+        if (!IsUsableTextRect(rect))
+            return false;
+        try
+        {
+            overlayX = block.TransformToVisual(PreviewSelectionOverlay).TransformPoint(new Point(rect.X, rect.Y)).X;
+            return true;
+        }
+        catch { return false; }
     }
 
     // Resolves a TextPointer at a paragraph-local character index by walking the

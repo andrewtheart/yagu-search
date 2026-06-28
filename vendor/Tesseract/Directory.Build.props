@@ -1,0 +1,18 @@
+<Project>
+
+  <!--
+    Vendored third-party source (charlesw Tesseract 5.2.0). This file shadows the repo-root
+    Directory.Build.props for everything under vendor/Tesseract so upstream code does NOT get our
+    analyzers/style rules applied. Keeps Yagu's build output free of CA/CS warnings we will never
+    "fix" in vendored code.
+  -->
+  <PropertyGroup>
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <RunAnalyzersDuringBuild>false</RunAnalyzersDuringBuild>
+    <RunAnalyzersDuringLiveAnalysis>false</RunAnalyzersDuringLiveAnalysis>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS0659</NoWarn>
+  </PropertyGroup>
+
+</Project>

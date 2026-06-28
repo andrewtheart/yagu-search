@@ -15,7 +15,7 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("<FontIcon Glyph=\"&#xE756;\" FontSize=\"11\" />", xaml);
         Assert.Contains("<TextBlock Text=\"Generate CLI command\" FontSize=\"11\" />", xaml);
         Assert.Contains("Canvas.ZIndex=\"20\"", xaml);
-        Assert.Contains("x:Name=\"GeneratedCliCommandOverlay\"", xaml);
+        Assert.Contains("x:Name=\"GeneratedCliCommandFlyout\"", xaml);
         Assert.Contains("x:Name=\"GeneratedCliCommandBubble\"", xaml);
         Assert.Contains("x:Name=\"GeneratedCliCommandText\"", xaml);
         Assert.Contains("x:Name=\"IncludeSavedSettingCliOptionsToggle\"", xaml);
@@ -28,7 +28,7 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("Toggled=\"OnGeneratedCliCommandSavedSettingOptionsToggled\"", xaml);
         Assert.DoesNotContain("settings-backed", xaml);
         Assert.Contains("FontFamily=\"Consolas\"", xaml);
-        string commandTextSnippet = xaml.Substring(xaml.IndexOf("x:Name=\"GeneratedCliCommandText\"", StringComparison.Ordinal), 300);
+        string commandTextSnippet = xaml.Substring(xaml.IndexOf("x:Name=\"GeneratedCliCommandText\"", StringComparison.Ordinal), 400);
         Assert.Contains("TextWrapping=\"Wrap\"", commandTextSnippet);
         Assert.DoesNotContain("TextWrapping=\"WrapWholeWords\"", commandTextSnippet);
         Assert.Contains("Click=\"OnCopyGeneratedCliCommandClick\"", xaml);
@@ -51,9 +51,10 @@ public sealed class MainWindowCliCommandRegressionTests
 
         Assert.True(buttonIndex > tabListIndex, "The Generate CLI command button should be in the footer below Advanced Options tabs.");
         Assert.True(tabListIndex < searchTabIndex, "The tab rail should render before the selected Advanced Options tab content.");
+        Assert.Contains("<FlyoutBase.AttachedFlyout>", xaml);
         Assert.True(
-            xaml.IndexOf("x:Name=\"GeneratedCliCommandOverlay\"", StringComparison.Ordinal) > xaml.IndexOf("<!-- Bottom status bar -->", StringComparison.Ordinal),
-            "The generated CLI command should render in a root-level overlay, not inside Advanced Options.");
+            xaml.IndexOf("x:Name=\"GeneratedCliCommandFlyout\"", StringComparison.Ordinal) > buttonIndex,
+            "The generated CLI command should render in an attached flyout on the Generate CLI command button.");
     }
 
     [Fact]
@@ -73,6 +74,10 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("\"--hidden\"", source);
         Assert.Contains("\"--no-hidden\"", source);
         Assert.Contains("ViewModel.SearchHiddenFiles == setting.SearchHiddenFiles", source);
+        // Image-text (OCR) scope must be reproducible via --image-text / --no-image-text.
+        Assert.Contains("\"--image-text\"", source);
+        Assert.Contains("\"--no-image-text\"", source);
+        Assert.Contains("ViewModel.SearchImageText == setting.SearchImageText", source);
         Assert.Contains("\"--regex\"", source);
         Assert.Contains("\"--no-regex\"", source);
         Assert.Contains("\"--case-sensitive\"", source);
@@ -101,13 +106,13 @@ public sealed class MainWindowCliCommandRegressionTests
         Assert.Contains("SplitSettingsPatternsForCli", source);
         Assert.Contains("AdminProtectedPathSegmentsEqual", source);
         Assert.Contains("CloseGeneratedCliCommandOverlay", source);
-        Assert.Contains("Visibility.Collapsed", source);
+        Assert.Contains("FlyoutBase.ShowAttachedFlyout(GenerateCliCommandButton);", source);
         Assert.Contains("OnSendGeneratedCliCommandToTerminalClick", source);
         Assert.Contains("CollapseAdvancedOptionsForSearch();", source);
-        Assert.Contains("await SendTextToTerminalAsync(commandText.Text);", source);
-        Assert.Contains("CloseGeneratedCliCommandOverlay();", source);
+        Assert.Contains("await SendTextToTerminalAsync(GeneratedCliCommandText.Text);", source);
+        Assert.Contains("GeneratedCliCommandFlyout.Hide();", source);
         Assert.Contains("Could not send generated CLI command to terminal", source);
-        Assert.Contains("EnsureGeneratedCliCommandText(commandText);", source);
+        Assert.Contains("EnsureGeneratedCliCommandText();", source);
         Assert.Contains("private async Task SendTextToTerminalAsync(string text)", terminalSource);
         Assert.Contains("EnsureTerminalPaneExpandedAsync", terminalSource);
         Assert.Contains("await WaitForTerminalShellReadyAsync();", terminalSource);

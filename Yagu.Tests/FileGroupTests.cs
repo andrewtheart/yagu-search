@@ -10,6 +10,99 @@ public class FileGroupTests
                MatchStartColumn: 0, MatchLength: matchLine.Length,
                ContextBefore: Array.Empty<string>(), ContextAfter: Array.Empty<string>());
 
+    private static SearchResult MakeResultWithContext(string filePath, int line, int contextRadius)
+    {
+        var before = new string[contextRadius];
+        var after = new string[contextRadius];
+        for (int i = 0; i < contextRadius; i++)
+        {
+            before[i] = $"before-{line}-{i}";
+            after[i] = $"after-{line}-{i}";
+        }
+        return new(FilePath: filePath, LineNumber: line, MatchLine: "needle",
+                   MatchStartColumn: 0, MatchLength: 6,
+                   ContextBefore: before, ContextAfter: after);
+    }
+
+    // Flattens the file-list rendering order: each visible result's before-context line numbers,
+    // then the match line number, then its after-context line numbers.
+    private static List<int> FlattenDisplayedLineNumbers(FileGroup group)
+    {
+        var lines = new List<int>();
+        foreach (var r in group.VisibleResults)
+        {
+            foreach (var c in r.NumberedBefore) lines.Add(c.LineNum);
+            lines.Add(r.LineNumber);
+            foreach (var c in r.NumberedAfter) lines.Add(c.LineNum);
+        }
+        return lines;
+    }
+
+    [Fact]
+    public void OverlappingContext_StreamedExpanded_DoesNotRepeatLineNumbers()
+    {
+        var group = new FileGroup(@"D:\ocr.png");
+        group.IsExpanded = true;
+        // Matches on adjacent lines with overlapping +/-2 context windows (the OCR case).
+        foreach (int line in new[] { 3, 5, 7 })
+            group.Add(MakeResultWithContext(@"D:\ocr.png", line, contextRadius: 2));
+
+        var displayed = FlattenDisplayedLineNumbers(group);
+
+        Assert.Equal(new[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 }, displayed);
+        // Strictly increasing => no repeats.
+        for (int i = 1; i < displayed.Count; i++)
+            Assert.True(displayed[i] > displayed[i - 1], $"Line {displayed[i]} not greater than {displayed[i - 1]}");
+    }
+
+    [Fact]
+    public void OverlappingContext_ShowMore_DoesNotRepeatLineNumbers()
+    {
+        var group = new FileGroup(@"D:\ocr.png");
+        foreach (int line in new[] { 3, 5, 7, 9, 11 })
+            group.Add(MakeResultWithContext(@"D:\ocr.png", line, contextRadius: 2));
+
+        group.IsExpanded = true;
+        group.ShowAll();
+
+        var displayed = FlattenDisplayedLineNumbers(group);
+
+        Assert.NotEmpty(displayed);
+        for (int i = 1; i < displayed.Count; i++)
+            Assert.True(displayed[i] > displayed[i - 1], $"Line {displayed[i]} not greater than {displayed[i - 1]}");
+    }
+
+    [Fact]
+    public void FilenameOnlyMatch_Expanded_SkipsContextTrimGuard()
+    {
+        // A group with only a filename match (LineNumber == 0) has no content matches, so the
+        // filename row is rendered and routed through RegisterVisibleForTrim, which must no-op.
+        var group = new FileGroup(@"D:\name-hit.txt");
+        group.IsExpanded = true;
+        group.Add(MakeResult(@"D:\name-hit.txt", 0));
+
+        Assert.False(group.HasContentMatches);
+        Assert.Single(group.VisibleResults);
+        Assert.Equal(0, group.VisibleResults[0].LineNumber);
+        Assert.Empty(group.VisibleResults[0].NumberedBefore);
+        Assert.Empty(group.VisibleResults[0].NumberedAfter);
+    }
+
+    [Fact]
+    public void OverlappingContext_ReExpand_RecomputesTrimWithoutRepeats()
+    {
+        var group = new FileGroup(@"D:\ocr.png");
+        group.IsExpanded = true;
+        foreach (int line in new[] { 3, 5, 7 })
+            group.Add(MakeResultWithContext(@"D:\ocr.png", line, contextRadius: 2));
+
+        group.ClearVisibleResults();
+        group.ShowAll();
+
+        var displayed = FlattenDisplayedLineNumbers(group);
+        Assert.Equal(new[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 }, displayed);
+    }
+
     [Fact]
     public void FileName_ExtractsFileName()
     {

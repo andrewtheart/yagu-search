@@ -161,6 +161,8 @@ public sealed partial class MainWindow
             parts.Add(ViewModel.SearchBinary ? "--binary" : "--no-binary");
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.SearchHiddenFiles == setting.SearchHiddenFiles))
             parts.Add(ViewModel.SearchHiddenFiles ? "--hidden" : "--no-hidden");
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.SearchImageText == setting.SearchImageText))
+            parts.Add(ViewModel.SearchImageText ? "--image-text" : "--no-image-text");
         var skipExtensions = FormatExtensionList(BuildEffectiveSkipExtensionsForCli());
         if (!string.IsNullOrWhiteSpace(skipExtensions)
             && ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ExtensionSetsEqual(ParseExtensionSetForCli(skipExtensions), ParseExtensionSetForCli(setting.SkipExtensions))))

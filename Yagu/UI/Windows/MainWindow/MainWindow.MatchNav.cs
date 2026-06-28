@@ -1416,8 +1416,12 @@ public sealed partial class MainWindow
 
             // The active-match band boxes ONLY the matched text, not the whole line, so the overlay
             // tightly marks just the current occurrence (previously it spanned the full viewport).
-            double bandLeft = markerLeft;
-            double bandWidth = visibleMarkerWidth;
+            // Inflate the band a couple of pixels on each side so its border sits in the gap beside
+            // the glyphs instead of overlapping (and visually clipping) the first/last letter.
+            const double bandHorizontalInset = 2.0;
+            double bandLeft = Math.Max(0, markerLeft - bandHorizontalInset);
+            double bandRight = Math.Min(viewportWidth, markerLeft + visibleMarkerWidth + bandHorizontalInset);
+            double bandWidth = Math.Max(visibleMarkerWidth, bandRight - bandLeft);
 
             ActiveMatchBand.Height = markerHeight;
             ActiveMatchBand.Width = bandWidth;

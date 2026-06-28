@@ -1,0 +1,44 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+    <LangVersion>10</LangVersion>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/sdcb/PaddleSharp</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/sdcb/PaddleSharp.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>Sdcb;AI;Paddle;OCR;PaddleOCR;PaddleSharp</PackageTags>
+    <VersionPrefix>2.5</VersionPrefix>
+    <PackageIcon>icon.jpg</PackageIcon>
+    <Description>Provides on-demand downloading of PaddleOCR models.</Description>
+    <Authors>sdcb</Authors>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\build\icon.jpg">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="PolySharp" Version="1.15.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <!-- Yagu: bumped from 0.40.0 to clear NU1902 (GHSA-6c8g-7p36-r338 / CVE-2026-44788, affects <= 0.47.4).
+         Only the stable ArchiveFactory.Open / WriteToDirectory APIs are used (Details/Utils.cs). -->
+    <PackageReference Include="SharpCompress" Version="0.49.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Yagu: vendored — always reference the local projects so custom changes apply in all configs. -->
+    <ProjectReference Include="..\Sdcb.PaddleOCR.Models.Shared\Sdcb.PaddleOCR.Models.Shared.csproj" />
+    <ProjectReference Include="..\Sdcb.PaddleOCR\Sdcb.PaddleOCR.csproj" />
+  </ItemGroup>
+
+</Project>

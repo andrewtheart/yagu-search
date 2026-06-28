@@ -23,6 +23,22 @@ public sealed class SearchServiceGateTests
     }
 
     [Fact]
+    public void Discovery_ExcludesOcrCacheTextFilesSoOnlyImagePathsAreShown()
+    {
+        // OCR'd images must only ever appear under their image path (set by OcrTextMatcher). The
+        // internal OCR text cache (%LOCALAPPDATA%\Yagu\ocr-cache\*.txt) must never surface as its own
+        // result row, so discovery skips any path under that directory before glob/content/OCR routing.
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "SearchService.cs"));
+
+        Assert.Contains("string ocrCacheDirPrefix = Ocr.OcrTextCache.DefaultBaseDirectory() + Path.DirectorySeparatorChar;", source);
+        AssertContainsInOrder(source,
+            "string ocrCacheDirPrefix = Ocr.OcrTextCache.DefaultBaseDirectory() + Path.DirectorySeparatorChar;",
+            "if (path.StartsWith(ocrCacheDirPrefix, StringComparison.OrdinalIgnoreCase))",
+            "Interlocked.Increment(ref skipOcrCache);",
+            "if (!globMatcher.Matches(path))");
+    }
+
+    [Fact]
     public void StreamingScannerCancellationCleanup_FinishesBeforeDestroyingCallbacks()
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "SearchService.cs"));
@@ -130,6 +146,66 @@ public sealed class SearchServiceGateTests
     {
         long cap = SearchService.AutoProcessMemoryCap();
         Assert.InRange(cap, 512L * 1024 * 1024, 768L * 1024 * 1024);
+    }
+
+    // ── Image-text (OCR) search wiring ──
+    // The OCR session is set up and driven from inside the large SearchAsync orchestration
+    // (Rust scan + channels + content workers). That happy path only runs against a full search
+    // over real image files with a live worker, so it is pinned at the source level here.
+
+    [Fact]
+    public void ImageOcr_BypassesSkipExtensionsSoImagesReachTheOcrQueue()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "SearchService.cs"));
+
+        Assert.Contains("bool bypassImages = options.SearchImageText && skipExts.Count > 0 && options.ImageOcrExtensions.Count > 0;", source);
+        AssertContainsInOrder(source,
+            "if (bypassArchives || bypassImages)",
+            "if (bypassImages)",
+            "foreach (var ext in options.ImageOcrExtensions)",
+            "filtered.Remove(ext.TrimStart('.'));");
+    }
+
+    [Fact]
+    public void ImageOcr_SessionIsCreatedOnlyWhenContentSearchAndImageTextEnabled()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "SearchService.cs"));
+
+        AssertContainsInOrder(source,
+            "if (searchContent && options.SearchImageText)",
+            "ocrEngine = Ocr.OcrEngineFactory.Create(options.ImageOcrEngine);",
+            "Ocr.OcrTextCache.Cleanup();",
+            "var ocrCache = new Ocr.OcrTextCache();",
+            "imageOcr = new Ocr.ImageOcrSearchSession(",
+            "shouldStop: () => Volatile.Read(ref truncated) != 0);");
+    }
+
+    [Fact]
+    public void ImageOcr_RoutesImageCandidatesToTheQueueOnBothScanPaths()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "SearchService.cs"));
+
+        // The session is started alongside the content workers.
+        Assert.Contains("imageOcr?.Start();", source);
+        // Image candidates are diverted to the OCR queue instead of the native/managed content scanner.
+        Assert.Contains("else if (imageOcr != null && Ocr.ImageOcrSupport.IsImageCandidate(file, options.ImageOcrExtensions))", source);
+        Assert.Contains("if (imageOcr != null && Ocr.ImageOcrSupport.IsImageCandidate(file, options.ImageOcrExtensions))", source);
+        Assert.Contains("imageOcr.TryEnqueue(file);", source);
+    }
+
+    [Fact]
+    public void ImageOcr_DrainsAndDisposesEngineInFinallyBeforeClosingResults()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "SearchService.cs"));
+
+        AssertContainsInOrder(source,
+            "if (imageOcr != null)",
+            "imageOcr.Complete();",
+            "await imageOcr.DrainAsync().ConfigureAwait(false);",
+            "if (ocrEngine is IAsyncDisposable ocrEngineAsyncDisposable)",
+            "await ocrEngineAsyncDisposable.DisposeAsync().ConfigureAwait(false);",
+            "else if (ocrEngine is IDisposable ocrEngineDisposable)",
+            "ocrEngineDisposable.Dispose();");
     }
 
     private static string ExtractMethodWindow(string source, string methodName, int window)

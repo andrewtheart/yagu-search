@@ -299,6 +299,14 @@ public sealed partial class MainWindow
                 return false;
             }
 
+            // Image previews show OCR text and a thumbnail; double-click / inline editing is a NOOP.
+            if (IsImagePreviewPath(filePath))
+            {
+                LogService.Instance.Verbose("PreviewEditor",
+                    $"TryEnterPreviewEditorAtPoint: abort — image preview is read-only, file='{System.IO.Path.GetFileName(filePath)}'");
+                return false;
+            }
+
             // Abort only if the section body is not laid out yet (collapsed/unmeasured).
             // This is a side-effect-free, resolve-on-first-try check — NOT the stateful
             // overlay-centering settle ladder, which deliberately returns false on first
@@ -500,6 +508,11 @@ public sealed partial class MainWindow
     private async Task ShowFullFileEditorAsync(SearchResult result, bool scrollToMatch)
     {
         LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: start file='{System.IO.Path.GetFileName(result.FilePath)}', scrollToMatch={scrollToMatch}");
+        if (IsImagePreviewPath(result.FilePath))
+        {
+            LogService.Instance.Info("Preview", "ShowFullFileEditorAsync: blocked - image preview is read-only");
+            return;
+        }
         var editorSw = System.Diagnostics.Stopwatch.StartNew();
         if (PreviewEditor.Visibility == Visibility.Visible && HasRealEditorChanges())
         {

@@ -451,6 +451,7 @@ internal static class CliRunner
         if (resolved.ObeyGitignore is { } gi)     o.WriteLine($"  obey-gitignore : {gi}");
         if (resolved.SearchInsideArchives is { } arc) o.WriteLine($"  archives       : {arc}");
         if (resolved.SearchHiddenFiles is { } sh) o.WriteLine($"  hidden         : {sh}");
+        if (args.SearchImageText is { } img) o.WriteLine($"  image-text     : {img}{(img ? $" ({AppSettings.NormalizeImageOcrEngine(args.ImageOcrEngine)})" : string.Empty)}");
         if (!string.IsNullOrWhiteSpace(args.SortBy))
             o.WriteLine($"  sort           : {args.SortBy} ({(args.SortDescending ? "descending" : "ascending")})");
         if (!string.IsNullOrWhiteSpace(args.GroupBy))
@@ -834,6 +835,8 @@ internal static class CliRunner
         string adminSegments = args.AdminProtectedPathSegments ?? s.AdminProtectedPathSegments;
         bool searchArchives = args.SearchInsideArchives ?? s.SearchInsideArchives;
         string archiveExts = args.ArchiveExtensions ?? s.ArchiveExtensions;
+        bool searchImageText = args.SearchImageText ?? s.SearchImageText;
+        string imageOcrEngine = AppSettings.NormalizeImageOcrEngine(args.ImageOcrEngine ?? s.ImageOcrEngine);
 
         bool obeyGitignore = args.ObeyGitignore ?? s.ObeyGitignore;
         bool gitignorePrecedence = args.GitignoreTakesPrecedence ?? s.GitignoreTakesPrecedence;
@@ -891,6 +894,9 @@ internal static class CliRunner
             SdkChannelBufferSize  = sdkBuffer,
             SearchInsideArchives  = searchArchives,
             ArchiveExtensions     = SplitSemi(archiveExts).ToHashSet(StringComparer.OrdinalIgnoreCase),
+            SearchImageText       = searchImageText,
+            ImageOcrExtensions    = SplitSemi(AppSettings.DefaultImageOcrExtensions).ToHashSet(StringComparer.OrdinalIgnoreCase),
+            ImageOcrEngine        = imageOcrEngine,
             ExcludeAdminProtectedPaths = excludeAdminPaths,
             AdminProtectedPathSegments = Yagu.Services.FileLister.ParseAdminProtectedSegments(adminSegments),
         };
@@ -1691,6 +1697,9 @@ internal static class CliRunner
             CONTENT OPTIONS:
                   --hidden                Include files/folders with the Hidden attribute (default).
                   --no-hidden             Exclude hidden files/folders (system files always skipped).
+                  --image-text            OCR image files and search the recognized text (off by default).
+                  --no-image-text         Do not OCR images (default).
+                  --ocr-engine <name>     OCR engine for --image-text: paddle (default) or tesseract.
 
             ADMIN / SECURITY:
                   --no-admin-warning      Suppress the non-administrator privilege warning.
@@ -1749,7 +1758,7 @@ internal static class CliRunner
                             directory next, then falls back to global AppData settings. CLI flags
                             always override file-based settings.
 
-            EXAMPLES (210):
+            EXAMPLES (212):
               001. Basic search in the current folder
                   Does: Finds TODO anywhere under the current directory.
                   Cmd:  Yagu.exe --cli --directory . "TODO"
@@ -2590,6 +2599,14 @@ internal static class CliRunner
                   Does: Groups matches into modified-date ranges and reverses the natural recent-first order.
                   Cmd:  Yagu.exe --cli --directory logs "ERROR" --group modified --group-desc
 
+              211. Search text inside images (OCR)
+                  Does: OCRs image files with the default PaddleSharp engine and matches the recognized text.
+                  Cmd:  Yagu.exe --cli --directory screenshots "invoice" --image-text
+
+              212. Search image text with the Tesseract engine
+                  Does: Forces the Tesseract OCR engine instead of the default PaddleSharp.
+                  Cmd:  Yagu.exe --cli --directory scans "TOTAL" --image-text --ocr-engine tesseract
+
             EXIT CODES:
               0   One or more matches found.
               1   No matches found.
@@ -2834,6 +2851,8 @@ internal sealed class CliArgs
     public int?             FileListerBackendIndex { get; private set; }
     public bool?            SearchInsideArchives { get; private set; }
     public bool?            SearchHiddenFiles { get; private set; }
+    public bool?            SearchImageText { get; private set; }
+    public string?          ImageOcrEngine { get; private set; }
     public string?          ArchiveExtensions { get; private set; }
     public bool?            ExcludeAdminProtectedPaths { get; private set; }
     public string?          AdminProtectedPathSegments { get; private set; }
@@ -2908,6 +2927,8 @@ internal sealed class CliArgs
             if (Eq(tok, "--no-search-archives"))             { a.SearchInsideArchives = false; i++; continue; }
             if (Eq(tok, "--hidden", "--search-hidden"))      { a.SearchHiddenFiles = true; i++; continue; }
             if (Eq(tok, "--no-hidden", "--no-search-hidden")) { a.SearchHiddenFiles = false; i++; continue; }
+            if (Eq(tok, "--image-text", "--search-image-text", "--ocr")) { a.SearchImageText = true; i++; continue; }
+            if (Eq(tok, "--no-image-text", "--no-search-image-text", "--no-ocr")) { a.SearchImageText = false; i++; continue; }
             if (Eq(tok, "--exclude-admin-paths"))            { a.ExcludeAdminProtectedPaths = true; i++; continue; }
             if (Eq(tok, "--no-exclude-admin-paths"))         { a.ExcludeAdminProtectedPaths = false; i++; continue; }
             if (Eq(tok, "--obey-gitignore", "--gitignore"))  { a.ObeyGitignore = true; i++; continue; }
@@ -2972,6 +2993,7 @@ internal sealed class CliArgs
             if (TryGetInt(raw, ref i, out n, "--max-matches-per-file"))  { a.MaxMatchesPerFile = n; continue; }
             if (TryGetInt(raw, ref i, out n, "--max-depth"))             { a.MaxSearchDepth = n; continue; }
             if (TryGetVal(raw, ref i, out v, "--archive-extensions"))    { a.ArchiveExtensions = v; continue; }
+            if (TryGetVal(raw, ref i, out v, "--ocr-engine"))            { a.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(v); continue; }
             if (TryGetVal(raw, ref i, out v, "--admin-protected-paths")) { a.AdminProtectedPathSegments = v; continue; }
             if (TryGetVal(raw, ref i, out v, "--created-after"))         { if (DateTimeOffset.TryParse(v, out var d)) a.CreatedAfter = d; continue; }
             if (TryGetVal(raw, ref i, out v, "--created-before"))        { if (DateTimeOffset.TryParse(v, out var d)) a.CreatedBefore = d; continue; }

@@ -140,6 +140,34 @@ public sealed class AdvancedOptionsTests
         Assert.Contains("MaxSearchDepth = double.NaN;", method);
     }
 
+    // ── Image-text (OCR) option mapping ──
+    // The OCR Advanced Option flows view-model ⇄ settings ⇄ SearchOptions. These three pins lock that
+    // bridge (load, persist, and build) since MainViewModel is WinUI-coupled and not unit-instantiable.
+
+    [Fact]
+    public void Ctor_LoadsImageTextOptionsFromSettings()
+    {
+        Assert.Contains("SearchImageText = _settings.SearchImageText;", MainViewModelSource);
+        Assert.Contains("ImageOcrEngine = _settings.ImageOcrEngine;", MainViewModelSource);
+    }
+
+    [Fact]
+    public void BuildSearchOptions_MapsImageTextEngineAndExtensions()
+    {
+        AssertContainsInOrder(MainViewModelSource,
+            "SearchImageText = SearchImageText,",
+            "ImageOcrExtensions = ParseExtensionSet(AppSettings.DefaultImageOcrExtensions),",
+            "ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(ImageOcrEngine),");
+    }
+
+    [Fact]
+    public void SaveSettings_PersistsImageTextAndNormalizesEngine()
+    {
+        AssertContainsInOrder(MainViewModelSource,
+            "_settings.SearchImageText = d is null ? SearchImageText : d.SearchImageText;",
+            "_settings.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(ImageOcrEngine);");
+    }
+
     [Fact]
     public void ResetClick_UpdatesPlaceholderText()
     {

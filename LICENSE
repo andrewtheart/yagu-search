@@ -92,6 +92,19 @@ TextControlBox-WinUI
 - Source: https://github.com/FrozenAssassine/TextControlBox-WinUI
 - License file: vendor/TextControlBox-WinUI/LICENSE.txt
 
+PaddleSharp
+
+- Path: vendor/PaddleSharp/
+- Author: Zhou Jie (sdcb) and PaddleSharp contributors
+- License: Apache License 2.0 (Apache-2.0)
+- Source: https://github.com/sdcb/PaddleSharp
+- License file: vendor/PaddleSharp/LICENSE
+- Note: PaddleSharp provides .NET bindings for OCR (PaddleOCR) and PaddlePaddle's
+  Paddle Inference. The underlying PaddlePaddle/PaddleOCR projects are also
+  licensed under the Apache License 2.0. The full Apache 2.0 license text is
+  retained at vendor/PaddleSharp/LICENSE and is available from:
+  https://www.apache.org/licenses/LICENSE-2.0
+
 xterm.js assets
 
 - Path: vendor/xterm-js/

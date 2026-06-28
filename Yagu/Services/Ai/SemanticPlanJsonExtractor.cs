@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Yagu.Models;
 
 namespace Yagu.Services.Ai;
@@ -65,6 +66,14 @@ internal static class SemanticPlanJsonExtractor
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
 
+        // Reasoning / chain-of-thought models (e.g. phi-4-reasoning) emit a <think>…</think> trace
+        // before the answer. That trace routinely contains braces (illustrative JSON, set notation),
+        // so the first '{' the scanner finds would otherwise land inside the reasoning prose rather
+        // than the real plan. Strip the reasoning preamble first so brace extraction sees only the
+        // model's final answer. No-op for the chatty instruct models that never emit <think> tags.
+        text = StripReasoningTrace(text);
+        if (string.IsNullOrWhiteSpace(text)) return null;
+
         int start = text.IndexOf('{');
         if (start < 0) return null;
 
@@ -105,6 +114,38 @@ internal static class SemanticPlanJsonExtractor
                 ? "Truncated-object repair failed; no parseable object recovered."
                 : "Truncated-object repair succeeded.");
         return repaired;
+    }
+
+    /// <summary>Compiled matcher for a complete <c>&lt;think&gt;…&lt;/think&gt;</c> reasoning block
+    /// (case-insensitive, spanning newlines, non-greedy so multiple blocks are removed individually).</summary>
+    private static readonly Regex ThinkBlockRegex =
+        new(@"<think\b[^>]*>.*?</think>", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>Removes a reasoning model's chain-of-thought trace so only its final answer remains.
+    /// Handles three shapes: (1) well-formed <c>&lt;think&gt;…&lt;/think&gt;</c> blocks are deleted;
+    /// (2) a leftover lone closing <c>&lt;/think&gt;</c> (model that began thinking implicitly, or whose
+    /// opening tag was suppressed) — everything up to and including the last one is dropped; (3) an
+    /// unclosed <c>&lt;think&gt;</c> with no closing tag means the model was truncated mid-reasoning and
+    /// never reached the answer, so the trace is dropped (no JSON follows anyway). Text with no think
+    /// markers is returned unchanged.</summary>
+    internal static string StripReasoningTrace(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return text ?? string.Empty;
+
+        string result = ThinkBlockRegex.Replace(text, string.Empty);
+
+        // Any remaining closing tag means the opening tag was malformed/absent; keep only what follows
+        // the final close, which is where a reasoning model places its answer.
+        int lastClose = result.LastIndexOf("</think>", StringComparison.OrdinalIgnoreCase);
+        if (lastClose >= 0)
+            result = result[(lastClose + "</think>".Length)..];
+
+        // A dangling opener with no close = truncated mid-thought; drop it (the answer never arrived).
+        int openOnly = result.IndexOf("<think", StringComparison.OrdinalIgnoreCase);
+        if (openOnly >= 0)
+            result = result[..openOnly];
+
+        return result;
     }
 
     /// <summary>Scans from <paramref name="start"/> and returns the first brace-balanced object, or

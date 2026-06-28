@@ -21,6 +21,10 @@ public sealed class EverythingSearchDialogRegressionTests
         // extend content into the title bar (matching MainWindow/SettingsWindow/ResultStoreTempLocationWindow).
         Assert.Contains("if (!options.ShowTitleBar)", dialog);
         Assert.Contains("ExtendsContentIntoTitleBar = true;", dialog);
+        // Startup-time dialogs (the Everything prompts) can have SetBorderAndTitleBar silently fail to
+        // apply before the window is realized; YaguDialog must re-apply the presenter config after
+        // Activate() so the caption is reliably removed regardless of when the dialog is shown.
+        Assert.Contains("DispatcherQueue.TryEnqueue(() => TryConfigurePresenter(_appWindow, _options.IsResizable, _options.ShowTitleBar));", dialog);
         Assert.Contains("WindowForegroundHelper.ConfigureOwnedWindow(hwnd, _ownerHwnd);", dialog);
         Assert.Contains("EnableWindow(_ownerHwnd, false);", dialog);
         Assert.Contains("WindowForegroundHelper.CenterWindowOverOwner(appWindow, _ownerHwnd, options.Width, options.Height);", dialog);
@@ -63,6 +67,41 @@ public sealed class EverythingSearchDialogRegressionTests
         }
 
         Assert.Equal(2, count);
+    }
+
+    [Fact]
+    public void EverythingSearchReadyDialog_IsTitleless()
+    {
+        string root = FindRepoRoot();
+        string startupChecks = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+
+        const string titleMarker = "Title = \"Everything Search Ready\"";
+        int index = startupChecks.IndexOf(titleMarker, StringComparison.Ordinal);
+        Assert.True(index >= 0, "Could not find 'Everything Search Ready' dialog options.");
+        int blockEnd = startupChecks.IndexOf("});", index, StringComparison.Ordinal);
+        Assert.True(blockEnd > index, "Could not find end of 'Everything Search Ready' dialog options block.");
+        string block = startupChecks.Substring(index, blockEnd - index);
+        Assert.Contains("ShowTitleBar = false", block);
+    }
+
+    [Fact]
+    public void EverythingNotRunningPrompt_OffersDontShowAgainBackedByRestorableSetting()
+    {
+        string root = FindRepoRoot();
+        string startupChecks = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+        string settingsService = File.ReadAllText(Path.Combine(root, "Yagu", "Services", "SettingsService.cs"));
+        string settingsWindow = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
+
+        // The not-running prompt body carries a "Don't show this again" checkbox.
+        Assert.Contains("Content = \"Don't show this again\"", startupChecks);
+        // Checking it persists a suppression setting, and that setting short-circuits the prompt.
+        Assert.Contains("ViewModel.SuppressEverythingNotRunningPrompt = true;", startupChecks);
+        Assert.Contains("if (ViewModel.SuppressEverythingNotRunningPrompt)", startupChecks);
+        // The setting is persisted.
+        Assert.Contains("public bool SuppressEverythingNotRunningPrompt", settingsService);
+        // Developer Options exposes a restore (re-enable) button.
+        Assert.Contains("if (_viewModel.SuppressEverythingNotRunningPrompt)", settingsWindow);
+        Assert.Contains("_viewModel.SuppressEverythingNotRunningPrompt = false;", settingsWindow);
     }
 
     private static string FindRepoRoot()

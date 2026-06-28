@@ -55,6 +55,10 @@ public sealed partial class App : Application, IDisposable
         FileLister.Backend = (FileListerBackend)settings.FileListerBackendIndex;
         _ = ResultStore.CleanupOrphanedTempFilesAsync(settings.SearchResultTempDirectory);
 
+        // Purge OCR text left behind by Yagu instances that are no longer running (e.g. a run that
+        // exited mid image-search). Best-effort, off the UI thread so it never delays startup.
+        _ = Task.Run(static () => Yagu.Services.Ocr.OcrTextCache.Cleanup());
+
         // Eagerly load System.IO.Compression on a background thread so the
         // first archive search doesn't pay the ~20 ms assembly-load + JIT cost.
         Task.Run(ZipArchiveSearcher.WarmUp);

@@ -549,6 +549,17 @@ public sealed partial class MainWindow
         expander.IsExpanded = true;
         await MaterializeLazySectionAsync(section);
 
+        // A file-name-only match (LineNumber <= 0) — e.g. a filename hit, or an image
+        // that was OCR'd but produced no text — has no navigable match line. Its section
+        // already renders the full file-name preview, so there is nothing to reveal here.
+        // Falling through would call AppendCheckedMatchContextAsync (no match paragraph is
+        // ever registered for these), appending a duplicate copy of the file's content.
+        if (result.LineNumber <= 0)
+        {
+            TryScrollToPreviewSection(result.FilePath);
+            return;
+        }
+
         if (!TryFindPreviewMatchParagraph(section, result, out var paragraph, out var matchInPara))
         {
             await AppendCheckedMatchContextAsync(section, result);

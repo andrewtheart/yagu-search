@@ -179,6 +179,14 @@ public sealed class FileLister : IFileLister
     /// <summary>Exclude glob patterns to push into the Everything SDK query (SDK path only).</summary>
     public IReadOnlyList<string> EarlyExcludeGlobs { get; set; } = [];
 
+    /// <summary>Include glob patterns to push into the Everything query as a positive file-name
+    /// filter (SDK and es.exe paths). Only filename-only patterns (no path separators) are
+    /// translated; this narrows the backend result set so an exact filename like
+    /// <c>01-after-search.png</c> resolves to the matching files instantly instead of enumerating
+    /// every file with that extension across the drive. The managed <see cref="GlobMatcher"/>
+    /// post-filter remains authoritative, so an over-broad backend term is still corrected.</summary>
+    public IReadOnlyList<string> EarlyIncludeFileNameGlobs { get; set; } = [];
+
     /// <summary>Dynamic gitignore matcher — when set, directories and files are checked against
     /// <c>.gitignore</c> rules loaded lazily during the scan.</summary>
     internal DynamicGitignoreMatcher? GitignoreMatcher { get; set; }
@@ -555,6 +563,12 @@ public sealed class FileLister : IFileLister
         var fileNameFilter = BuildEverythingFileNameFilter(EarlyFileNameLiteralTerms);
         if (fileNameFilter is not null)
             query += $" {fileNameFilter}";
+
+        // Narrow to the requested include globs at the backend (e.g. an exact filename) so Everything
+        // returns only matching files instead of every file with the same extension.
+        var includeNameFilter = BuildEverythingIncludeFileNameFilter(EarlyIncludeFileNameGlobs);
+        if (includeNameFilter is not null)
+            query += $" {includeNameFilter}";
 
         // Translate exclude globs into Everything search syntax.
         // Extension globs ("*.log") → !ext:log   (already handled above for SkipExtensions)
@@ -1171,6 +1185,9 @@ public sealed class FileLister : IFileLister
         var fileNameFilter = BuildEverythingFileNameFilter(EarlyFileNameLiteralTerms);
         if (fileNameFilter is not null)
             args.Add(fileNameFilter);
+        var includeNameFilter = BuildEverythingIncludeFileNameFilter(EarlyIncludeFileNameGlobs);
+        if (includeNameFilter is not null)
+            args.Add(includeNameFilter);
         if (maxFiles > 0) { args.Add("-n"); args.Add(maxFiles.ToString(CultureInfo.InvariantCulture)); }
 
         int resultCount = await TryGetEverythingResultCountAsync(esPath, args, cancellationToken).ConfigureAwait(false);
@@ -1375,6 +1392,57 @@ public sealed class FileLister : IFileLister
         {
             1 => quotedTerms[0],
             _ => $"<{string.Join('|', quotedTerms)}>"
+        };
+    }
+
+    /// <summary>
+    /// Translates filename-only include globs into a single positive Everything query term so the
+    /// backend returns only matching files instead of every file with the same extension. Multiple
+    /// globs are OR-ed with <c>&lt;a|b|c&gt;</c>. Returns <c>null</c> (no pushdown) when any pattern
+    /// can't be safely represented — for example a path-anchored glob (<c>src\**\*.cs</c>) or a token
+    /// containing a quote — because omitting the term only widens the result set, which the managed
+    /// <see cref="GlobMatcher"/> post-filter then narrows. The translation is therefore always a
+    /// superset of the true glob match, so it never drops a valid result.
+    /// </summary>
+    internal static string? BuildEverythingIncludeFileNameFilter(IReadOnlyList<string> includeGlobs)
+    {
+        if (includeGlobs.Count == 0)
+            return null;
+
+        var terms = new List<string>(includeGlobs.Count);
+        foreach (var raw in includeGlobs)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                continue;
+            foreach (var token in raw.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                // Path-anchored globs can't be expressed as a filename term safely — bail entirely
+                // so the result set stays a superset (correctness over speed).
+                if (token.Contains('/') || token.Contains('\\') || token.Contains('"'))
+                    return null;
+
+                bool isWildcard = token.Contains('*') || token.Contains('?');
+                if (isWildcard)
+                {
+                    // Everything matches wildcard tokens against the file name; a space would change
+                    // tokenization, so bail rather than risk an under-match.
+                    if (token.Contains(' '))
+                        return null;
+                    terms.Add(token);
+                }
+                else
+                {
+                    // Literal filename → quoted substring term (matches the path containing it).
+                    terms.Add($"\"{token}\"");
+                }
+            }
+        }
+
+        return terms.Count switch
+        {
+            0 => null,
+            1 => terms[0],
+            _ => $"<{string.Join('|', terms)}>"
         };
     }
 

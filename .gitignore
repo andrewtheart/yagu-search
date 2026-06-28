@@ -48,3 +48,13 @@ build_out.txt
 _SCRATCHPAD
 preview-show-more-verification.txt
 Yagu.Tests/tmp_coverage_rank.py
+
+# Vendored OCR model weights / test data — NOT used by the build, ~365 MB of binaries.
+# Yagu.OcrWorker references Sdcb.PaddleOCR.Models.Online (PaddleOCR models are lazy-downloaded
+# to %LOCALAPPDATA%\Yagu at runtime) and the Tesseract wrapper (tessdata fetched at runtime),
+# so the embedded PaddleOCR/PaddleNLP model weights and the Tesseract.Tests trained data are
+# dead weight cloned from the upstream repos. The native Tesseract runtime DLLs (vendor/Tesseract
+# x64/x86) are kept because they ship in the worker's output.
+*.pdiparams
+*.pdmodel
+*.traineddata

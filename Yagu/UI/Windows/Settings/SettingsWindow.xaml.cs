@@ -2331,6 +2331,27 @@ public sealed partial class SettingsWindow : Window
             pathTypeGroup.Children.Add(searchHidden);
             pathTypeGroup.Children.Add(new TextBlock { Text = "When enabled (default), files and folders carrying the Windows Hidden attribute are included in searches. When disabled, hidden items are excluded — the file walker skips them and the Everything backends filter them with !attrib:h. System files (e.g. pagefile.sys, hiberfil.sys) are always skipped by the file walker regardless of this setting. This is the default for the Advanced Options ▸ Content options toggle.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
+            var searchImageText = new ToggleSwitch { OnContent = NextSearchLabel("Search image text (OCR)"), OffContent = NextSearchLabel("Search image text (OCR)"), IsOn = _viewModel.SearchImageText };
+            searchImageText.Toggled += (_, _) => _viewModel.SearchImageText = searchImageText.IsOn;
+            pathTypeGroup.Children.Add(searchImageText);
+            pathTypeGroup.Children.Add(new TextBlock { Text = "When enabled, raster images (PNG/JPG/BMP/GIF/TIFF/WebP) are OCR'd on a background queue and their recognized text is searched. Off by default. OCR runs on a separate, non-blocking thread so it never slows the file scan — image matches appear as each image finishes processing. This is the default for the Advanced Options ▸ Filters toggle.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            var ocrEngineLabel = NextSearchLabel("OCR engine:");
+            ocrEngineLabel.Margin = new Thickness(0, 4, 0, 0);
+            pathTypeGroup.Children.Add(ocrEngineLabel);
+            var ocrEngineCombo = new ComboBox { MinWidth = 220, HorizontalAlignment = HorizontalAlignment.Left };
+            ocrEngineCombo.Items.Add(new ComboBoxItem { Content = "PaddleSharp (recommended)", Tag = "paddle" });
+            ocrEngineCombo.Items.Add(new ComboBoxItem { Content = "Tesseract", Tag = "tesseract" });
+            ocrEngineCombo.SelectedIndex =
+                string.Equals(AppSettings.NormalizeImageOcrEngine(_viewModel.ImageOcrEngine), "tesseract", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            ocrEngineCombo.SelectionChanged += (_, _) =>
+            {
+                if (ocrEngineCombo.SelectedItem is ComboBoxItem { Tag: string engineId })
+                    _viewModel.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(engineId);
+            };
+            pathTypeGroup.Children.Add(ocrEngineCombo);
+            pathTypeGroup.Children.Add(new TextBlock { Text = "PaddleSharp (the default) generally gives higher accuracy on screenshots and documents and can use GPU/NPU acceleration. Tesseract is a lighter alternative. The selected engine's runtime and models are downloaded on first use.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
             var allDrivesNetwork = new ToggleSwitch { OnContent = NextSearchLabel("All-drives search includes network drives"), OffContent = NextSearchLabel("All-drives search includes network drives"), IsOn = _viewModel.SearchAllDrivesIncludesNetwork };
             allDrivesNetwork.Toggled += (_, _) => _viewModel.SearchAllDrivesIncludesNetwork = allDrivesNetwork.IsOn;
             pathTypeGroup.Children.Add(allDrivesNetwork);
@@ -3346,6 +3367,22 @@ public sealed partial class SettingsWindow : Window
                 RegisterDefaultResetButton(resetAdmin, () => !_viewModel.SuppressAdminWarning);
                 remindersGroup.Children.Add(resetAdmin);
                 remindersGroup.Children.Add(new TextBlock { Text = "The non-administrator warning was previously dismissed. Click to show it again on next launch.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            }
+
+            // Reset Everything-not-running prompt
+            if (_viewModel.SuppressEverythingNotRunningPrompt)
+            {
+                var resetEverythingPrompt = new Button { Content = "Re-enable Everything not-running prompt", FontSize = 12, Padding = new Thickness(8, 4, 8, 4), Margin = new Thickness(0, 4, 0, 0) };
+                resetEverythingPrompt.Click += (_, _) =>
+                {
+                    _viewModel.SuppressEverythingNotRunningPrompt = false;
+                    MarkSettingsDirty(requireValueChanges: false);
+                    resetEverythingPrompt.Content = "Everything prompt re-enabled ✓";
+                    resetEverythingPrompt.IsEnabled = false;
+                };
+                RegisterDefaultResetButton(resetEverythingPrompt, () => !_viewModel.SuppressEverythingNotRunningPrompt);
+                remindersGroup.Children.Add(resetEverythingPrompt);
+                remindersGroup.Children.Add(new TextBlock { Text = "The \u201cEverything Search is not running\u201d prompt was previously dismissed with \u201cDon\u2019t show this again\u201d. Click to show it again on next launch.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
             }
 
             loggingGroup.Children.Add(new TextBlock { Text = "File log level:" });

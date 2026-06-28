@@ -19,11 +19,24 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     private const string PromptResourceName = "Yagu.Services.Ai.Prompts.SemanticSearchSystemPrompt.prompt.md";
     private const string LogSource = "Semantic.Translator";
 
+    /// <summary>Maximum time to wait for a single model inference before treating the translation as
+    /// failed. A healthy response takes a few seconds on GPU/NPU (and is slower but still bounded on
+    /// CPU); this watchdog only fires when the Foundry Local runtime wedges mid-generation and the
+    /// call never returns, so the search can fall back to a literal one instead of hanging forever.</summary>
+    private static readonly TimeSpan InferenceTimeout = TimeSpan.FromSeconds(120);
+
+    /// <summary>Watchdog for reasoning / chain-of-thought models. They legitimately generate a long
+    /// <c>&lt;think&gt;</c> trace before the JSON answer, so a healthy response takes much longer than a
+    /// plain instruct model — especially on CPU. The cap is correspondingly larger so a slow-but-working
+    /// reasoning model isn't aborted before it reaches its answer.</summary>
+    private static readonly TimeSpan ReasoningInferenceTimeout = TimeSpan.FromSeconds(300);
+
     private bool _enabled;
     private string? _preferredAlias;
     private IReadOnlyList<DeviceType> _deviceOrder;
     private bool _hasGpu = true;
     private bool _hasNpu = true;
+    private bool _selectedModelIsReasoning;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private readonly Lazy<string> _systemPromptTemplate = new(LoadSystemPromptTemplate);
 
@@ -195,6 +208,14 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
 
         string raw;
         var inferenceStopwatch = Stopwatch.StartNew();
+
+        // Watchdog: a wedged model inference must not leave the search stuck on "Interpreting your
+        // request…" forever. The Foundry Local runtime occasionally hangs mid-generation (the call
+        // never returns), so cap it with a timeout linked to the user's cancellation token. Reasoning
+        // models get a longer budget because their <think> trace legitimately takes much longer.
+        TimeSpan inferenceTimeout = _selectedModelIsReasoning ? ReasoningInferenceTimeout : InferenceTimeout;
+        using var inferenceCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        inferenceCts.CancelAfter(inferenceTimeout);
         try
         {
             string systemPrompt = BuildSystemPrompt(context);
@@ -204,13 +225,27 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                 ChatMessage.FromUser(trimmedQuery),
             };
             log.Verbose(LogSource,
-                $"Sending chat completion (model={SelectedModelAlias ?? "<unknown>"}, systemPromptChars={systemPrompt.Length}).");
+                $"Sending chat completion (model={SelectedModelAlias ?? "<unknown>"}, systemPromptChars={systemPrompt.Length}, " +
+                $"userQueryChars={trimmedQuery.Length}, watchdogTimeout={inferenceTimeout.TotalSeconds:F0}s).");
 
-            var response = await chat.CompleteChatAsync(messages, cancellationToken).ConfigureAwait(false);
+            var response = await chat.CompleteChatAsync(messages, inferenceCts.Token).ConfigureAwait(false);
             raw = response?.Choices?.FirstOrDefault()?.Message?.Content ?? string.Empty;
             inferenceStopwatch.Stop();
             log.Info(LogSource,
                 $"Model responded in {inferenceStopwatch.ElapsedMilliseconds} ms (model={SelectedModelAlias ?? "<unknown>"}, responseChars={raw.Length}).");
+        }
+        catch (OperationCanceledException) when (inferenceCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            // The watchdog fired (not the user) — the model wedged and never returned. Report a failed
+            // translation so the caller falls back to a literal Traditional search instead of silently
+            // aborting the whole submit (which is what a real user-cancellation does).
+            inferenceStopwatch.Stop();
+            log.Warning(LogSource,
+                $"Inference watchdog fired: the local AI model did not respond within {inferenceTimeout.TotalSeconds:F0}s " +
+                $"(elapsed={inferenceStopwatch.ElapsedMilliseconds} ms, model={SelectedModelAlias ?? "<unknown>"}); " +
+                "treating as a failed translation so the search falls back to a literal one.");
+            return SemanticTranslationResult.Fail(
+                $"The local AI model did not respond within {inferenceTimeout.TotalSeconds:F0} seconds.");
         }
         catch (OperationCanceledException)
         {
@@ -313,15 +348,18 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             log.Info(LogSource, $"Model '{model.Alias}' loaded in {loadStopwatch.ElapsedMilliseconds} ms.");
 
             var chat = await model.GetChatClientAsync(cancellationToken).ConfigureAwait(false);
-            ConfigureForDeterministicJson(chat);
-            log.Verbose(LogSource,
-                "Chat client configured for deterministic JSON (temperature=0, topP=1, maxTokens=512, frequencyPenalty=0.6, presencePenalty=0.3).");
+            bool isReasoning = FoundryModelSelector.IsReasoningAlias(model.Alias);
+            ConfigureChatSettings(chat, isReasoning);
+            log.Verbose(LogSource, isReasoning
+                ? "Chat client configured for a REASONING model (temperature=0.7, topP=0.95, maxTokens=8192, no repetition penalty; <think> trace is stripped before parsing)."
+                : "Chat client configured for deterministic JSON (temperature=0, topP=1, maxTokens=512, frequencyPenalty=0.6, presencePenalty=0.3).");
 
             _model = model;
             _chatClient = chat;
             _initialized = true;
             _preferredAlias = model.Alias;
             SelectedModelAlias = model.Alias;
+            _selectedModelIsReasoning = isReasoning;
             log.Info(LogSource, $"Local model ready: '{model.Alias}'.");
             return chat;
         }
@@ -542,6 +580,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
 
             _preferredAlias = model.Alias;
             SelectedModelAlias = model.Alias;
+            _selectedModelIsReasoning = FoundryModelSelector.IsReasoningAlias(model.Alias);
         }
         finally
         {
@@ -560,9 +599,33 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         _ => null,
     };
 
-    private static void ConfigureForDeterministicJson(OpenAIChatClient chat)
+    private static void ConfigureChatSettings(OpenAIChatClient chat, bool isReasoning)
     {
         var s = chat.Settings;
+
+        if (isReasoning)
+        {
+            // Reasoning / chain-of-thought models (e.g. phi-4-reasoning) think out loud in a <think>
+            // block before emitting the answer, which we strip in SemanticPlanJsonExtractor. Tune for
+            // that workload rather than for a terse instruct model:
+            //  • A generous token budget so the reasoning trace does NOT starve the JSON that follows it
+            //    (a 512-token cap let the <think> block consume the whole budget and the plan never
+            //    appeared). These models have a large context window, so this stays well within bounds.
+            //  • A modest temperature + top-p, not greedy. Microsoft's phi reasoning guidance recommends
+            //    sampling (~0.7); pure greedy decoding (temperature 0) makes these models collapse into
+            //    repetition loops ("The question: The question: …") and never finish the answer.
+            //  • No repetition penalties: a reasoning trace legitimately repeats tokens while it works a
+            //    problem, and penalizing that degrades the reasoning. RandomSeed is still pinned so the
+            //    sampled output is reproducible run-to-run for the same query.
+            s.Temperature = 0.7f;
+            s.TopP = 0.95f;
+            s.MaxTokens = 8192;
+            s.RandomSeed = 0;
+            s.FrequencyPenalty = 0f;
+            s.PresencePenalty = 0f;
+            return;
+        }
+
         s.Temperature = 0f;
         s.TopP = 1f;
         // Keep input + output well under phi-3.5-mini's 4096-token LongRoPE boundary. This model's

@@ -141,7 +141,9 @@ begin
         'prevent Yagu from running after it is installed. Setup will now stop.' + #13#10#13#10 +
         'To install Yagu, turn Smart App Control off in Windows Security > App & browser control > ' +
         'Smart App Control settings, then run this installer again.' + #13#10#13#10 +
-        'Note: turning Smart App Control off is permanent until Windows is reset.',
+        'Yagu is not code-signed because SignPath is not currently accepting applications for ' +
+        'open-source projects. Signing is planned for a future release, which will let Yagu run ' +
+        'with Smart App Control enabled.',
         mbCriticalError, MB_OK);
   end;
 end;

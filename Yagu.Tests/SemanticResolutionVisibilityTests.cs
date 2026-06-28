@@ -56,14 +56,27 @@ public sealed class SemanticResolutionVisibilityTests
 
         // The Search-mode dropdown is part of the snapshot, so it resets to the user's default (e.g.
         // "File names + content") each search instead of keeping a previous plan's mode.
-        string restore = Method("RestoreSearchDefaults", 2000);
+        string restore = Method("RestoreSearchDefaults", 3200);
         Assert.Contains("SearchModeIndex = s.SearchModeIndex;", restore);
+        // The ENTIRE filter surface is captured/restored — including the active skip list, the persisted
+        // Settings* extension mirrors, and the OCR toggle — so a transient "Include & search" un-skip or
+        // any future resolution path can never leave a resolved value behind (or leak it to disk).
+        Assert.Contains("SkipExtensions = s.SkipExtensions;", restore);
+        Assert.Contains("SettingsSkipExtensions = s.SettingsSkipExtensions;", restore);
+        Assert.Contains("SettingsBinaryExtensions = s.SettingsBinaryExtensions;", restore);
+        Assert.Contains("SettingsArchiveExtensions = s.SettingsArchiveExtensions;", restore);
+        Assert.Contains("SearchImageText = s.SearchImageText;", restore);
 
         // Persist guard: while a resolution is visible, the saved defaults (snapshot) reach disk, not
         // the resolved values — for representative leak-prone fields.
-        string persist = Method("PersistSettingsAsync", 1600);
+        string persist = Method("PersistSettingsAsync", 14000);
         Assert.Contains("var d = _semanticResolutionVisible ? _semanticDefaultsSnapshot : null;", persist);
         Assert.Contains("_settings.IncludeGlobs = d is null ? IncludeGlobs : d.IncludeGlobs;", persist);
+        // The extension lists (the historical leak path) are guarded by the same snapshot, not written raw.
+        Assert.Contains("_settings.SkipExtensions = d is null ? SettingsSkipExtensions : d.SettingsSkipExtensions;", persist);
+        Assert.Contains("_settings.BinaryExtensions = d is null ? SettingsBinaryExtensions : d.SettingsBinaryExtensions;", persist);
+        Assert.Contains("_settings.ArchiveExtensions = d is null ? SettingsArchiveExtensions : d.SettingsArchiveExtensions;", persist);
+        Assert.Contains("_settings.SearchImageText = d is null ? SearchImageText : d.SearchImageText;", persist);
         // The resolved directory is the deliberate exception that DOES persist.
         Assert.Contains("_settings.LastDirectory = Directory;", persist);
     }

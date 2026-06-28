@@ -34,18 +34,23 @@
                     <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedPressed" Color="#062535" />
                     <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedDisabled" Color="#665A6A72" />
 
-                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminate" Color="#5BC9F5" />
-                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminatePointerOver" Color="#72D4FA" />
-                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminatePressed" Color="#35A8D3" />
-                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminateDisabled" Color="#3A5BC9F5" />
-                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminate" Color="#5BC9F5" />
-                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminatePointerOver" Color="#72D4FA" />
-                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminatePressed" Color="#35A8D3" />
-                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminateDisabled" Color="#3A5BC9F5" />
-                    <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminate" Color="#0B3141" />
-                    <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminatePointerOver" Color="#0B3141" />
-                    <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminatePressed" Color="#062535" />
-                    <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminateDisabled" Color="#665A6A72" />
+                    <!-- INDETERMINATE is intentionally styled IDENTICALLY to UNCHECKED so a phantom
+                         indeterminate visual state (WinUI can momentarily drop a two-state CheckBox into
+                         it when its style/template is re-applied) can NEVER paint a "dash" glyph. No
+                         CheckBox in this app uses three-state intentionally. Stroke/Fill mirror the
+                         Unchecked brushes above; the glyph foreground is fully transparent. -->
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminate" Color="#805BC9F5" />
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminatePointerOver" Color="#B35BC9F5" />
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminatePressed" Color="#FF5BC9F5" />
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminateDisabled" Color="#336E7880" />
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminate" Color="#00000000" />
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminatePointerOver" Color="#1A5BC9F5" />
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminatePressed" Color="#265BC9F5" />
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminateDisabled" Color="#0FFFFFFF" />
+                    <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminate" Color="#00000000" />
+                    <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminatePointerOver" Color="#00000000" />
+                    <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminatePressed" Color="#00000000" />
+                    <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminateDisabled" Color="#00000000" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Light">
                     <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUnchecked" Color="#80149DCE" />
@@ -70,18 +75,19 @@
                     <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedPressed" Color="#041C28" />
                     <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedDisabled" Color="#66627078" />
 
-                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminate" Color="#1CAFE3" />
-                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminatePointerOver" Color="#32BDEB" />
-                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminatePressed" Color="#118CB8" />
-                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminateDisabled" Color="#3A149DCE" />
-                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminate" Color="#1CAFE3" />
-                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminatePointerOver" Color="#32BDEB" />
-                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminatePressed" Color="#118CB8" />
-                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminateDisabled" Color="#3A149DCE" />
-                    <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminate" Color="#062635" />
-                    <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminatePointerOver" Color="#062635" />
-                    <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminatePressed" Color="#041C28" />
-                    <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminateDisabled" Color="#66627078" />
+                    <!-- INDETERMINATE styled IDENTICALLY to UNCHECKED (see Default theme note). -->
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminate" Color="#80149DCE" />
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminatePointerOver" Color="#B3149DCE" />
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminatePressed" Color="#FF149DCE" />
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeIndeterminateDisabled" Color="#337A8790" />
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminate" Color="#00000000" />
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminatePointerOver" Color="#1A149DCE" />
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminatePressed" Color="#26149DCE" />
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillIndeterminateDisabled" Color="#0F000000" />
+                    <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminate" Color="#00000000" />
+                    <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminatePointerOver" Color="#00000000" />
+                    <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminatePressed" Color="#00000000" />
+                    <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundIndeterminateDisabled" Color="#00000000" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="HighContrast">
                     <StaticResource x:Key="CheckBoxCheckBackgroundStrokeUnchecked" ResourceKey="SystemColorButtonTextColorBrush" />
@@ -106,17 +112,20 @@
                     <StaticResource x:Key="CheckBoxCheckGlyphForegroundCheckedPressed" ResourceKey="SystemColorButtonTextColorBrush" />
                     <StaticResource x:Key="CheckBoxCheckGlyphForegroundCheckedDisabled" ResourceKey="SystemColorWindowColorBrush" />
 
-                    <StaticResource x:Key="CheckBoxCheckBackgroundStrokeIndeterminate" ResourceKey="SystemColorHighlightColorBrush" />
+                    <!-- INDETERMINATE mapped to the UNCHECKED system colors; the glyph foreground is
+                         mapped to the SAME brush as its box fill in every variant so the dash blends
+                         invisibly into the box (see Default theme note). -->
+                    <StaticResource x:Key="CheckBoxCheckBackgroundStrokeIndeterminate" ResourceKey="SystemColorButtonTextColorBrush" />
                     <StaticResource x:Key="CheckBoxCheckBackgroundStrokeIndeterminatePointerOver" ResourceKey="SystemColorHighlightColorBrush" />
                     <StaticResource x:Key="CheckBoxCheckBackgroundStrokeIndeterminatePressed" ResourceKey="SystemColorHighlightColorBrush" />
                     <StaticResource x:Key="CheckBoxCheckBackgroundStrokeIndeterminateDisabled" ResourceKey="SystemColorGrayTextColorBrush" />
-                    <StaticResource x:Key="CheckBoxCheckBackgroundFillIndeterminate" ResourceKey="SystemColorHighlightColorBrush" />
+                    <StaticResource x:Key="CheckBoxCheckBackgroundFillIndeterminate" ResourceKey="SystemColorButtonFaceColorBrush" />
                     <StaticResource x:Key="CheckBoxCheckBackgroundFillIndeterminatePointerOver" ResourceKey="SystemColorHighlightTextColorBrush" />
                     <StaticResource x:Key="CheckBoxCheckBackgroundFillIndeterminatePressed" ResourceKey="SystemColorHighlightColorBrush" />
-                    <StaticResource x:Key="CheckBoxCheckBackgroundFillIndeterminateDisabled" ResourceKey="SystemColorGrayTextColorBrush" />
-                    <StaticResource x:Key="CheckBoxCheckGlyphForegroundIndeterminate" ResourceKey="SystemColorHighlightTextColorBrush" />
-                    <StaticResource x:Key="CheckBoxCheckGlyphForegroundIndeterminatePointerOver" ResourceKey="SystemColorHighlightColorBrush" />
-                    <StaticResource x:Key="CheckBoxCheckGlyphForegroundIndeterminatePressed" ResourceKey="SystemColorHighlightTextColorBrush" />
+                    <StaticResource x:Key="CheckBoxCheckBackgroundFillIndeterminateDisabled" ResourceKey="SystemColorWindowColorBrush" />
+                    <StaticResource x:Key="CheckBoxCheckGlyphForegroundIndeterminate" ResourceKey="SystemColorButtonFaceColorBrush" />
+                    <StaticResource x:Key="CheckBoxCheckGlyphForegroundIndeterminatePointerOver" ResourceKey="SystemColorHighlightTextColorBrush" />
+                    <StaticResource x:Key="CheckBoxCheckGlyphForegroundIndeterminatePressed" ResourceKey="SystemColorHighlightColorBrush" />
                     <StaticResource x:Key="CheckBoxCheckGlyphForegroundIndeterminateDisabled" ResourceKey="SystemColorWindowColorBrush" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>

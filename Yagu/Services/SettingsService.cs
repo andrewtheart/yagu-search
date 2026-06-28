@@ -16,6 +16,10 @@ public sealed class AppSettings
     public const string DefaultSkipExtensions = "png;jpg;jpeg;gif;bmp;ico;tif;tiff;webp;svg;mp3;mp4;avi;mov;wmv;flv;mkv;wav;ogg;flac;m4a;webm;woff;woff2;ttf;eot;otf;pdf;doc;xls;ppt;bin;dat;db;db3;sqlite;sqlite3;edb;mdb;accdb;ldb;sdf;cache;tmp;bak;etl;evtx;dmp;mdmp;hdmp;hprof;vhd;vhdx;vmdk;pak;usm;bundle;assets;heic;heif;avif";
     public const string DefaultBinaryExtensions = "exe;dll;pdb;obj;lib;so;dylib;com;scr;sys;drv;ocx;cpl;mui;winmd;pri;cat;res;resources;o;a;lo;la;ilk;iobj;ipdb;exp;pyc;pyo;class;dex;wasm";
     public const string DefaultArchiveExtensions = "zip;jar;war;ear;nupkg;vsix;apk;aab;aar;appx;msix;appxbundle;msixbundle;docx;xlsx;pptx;odt;ods;odp;epub;whl;gz;tar;7z;rar;bz2;xz;iso;cab;msi;tgz;tbz2;txz;zst;zstd;br;lz4;lzma";
+    /// <summary>Raster image extensions that are OCR'd when "Search image text" is on. These are
+    /// normally in <see cref="DefaultSkipExtensions"/>; image-text mode bypasses the skip list for
+    /// them (mirroring how archive search bypasses skip for archive extensions).</summary>
+    public const string DefaultImageOcrExtensions = "png;jpg;jpeg;bmp;gif;tif;tiff;webp";
     public const string DefaultExcludeGlobs = "node_modules;bin;obj;.git";
     public const string DefaultSelectedPreviewContentBackgroundColor = "#FF000000";
     public const string DefaultUnselectedPreviewContentBackgroundColor = "#FF1E1E1E";
@@ -76,6 +80,18 @@ public sealed class AppSettings
     public static int NormalizeLowDiskSpaceWarningPercent(int value) => value <= 0
         ? DefaultLowDiskSpaceWarningPercent
         : Math.Clamp(value, MinimumLowDiskSpaceWarningPercent, MaximumLowDiskSpaceWarningPercent);
+
+    /// <summary>Normalizes the persisted OCR engine id to a known value, defaulting to PaddleSharp.</summary>
+    public static string NormalizeImageOcrEngine(string? value)
+    {
+        var v = value?.Trim().ToLowerInvariant();
+        return v switch
+        {
+            "tesseract" => "tesseract",
+            "paddle" or "paddleocr" or "paddlesharp" => "paddle",
+            _ => DefaultImageOcrEngine,
+        };
+    }
 
     public string? LastDirectory { get; set; }
     public List<string> RecentDirectories { get; set; } = [];
@@ -213,6 +229,14 @@ public sealed class AppSettings
     public bool SearchOnlineOnlyFiles { get; set; }
     /// <summary>When true (default), files and folders with the Windows Hidden attribute are searched. When false, hidden items are excluded. Persisted; also the default for the per-search Advanced Options toggle.</summary>
     public bool SearchHiddenFiles { get; set; } = true;
+    /// <summary>When true, raster image files (PNG/JPG/etc.) are OCR'd on a background queue and their
+    /// recognized text is searched. Default false. Persisted; also the default for the per-search
+    /// Advanced Options ▸ Filters "Search image text" toggle.</summary>
+    public bool SearchImageText { get; set; }
+    /// <summary>OCR engine used when <see cref="SearchImageText"/> is on. "paddle" (PaddleSharp, the
+    /// recommended default) or "tesseract". Normalized on load.</summary>
+    public string ImageOcrEngine { get; set; } = DefaultImageOcrEngine;
+    public const string DefaultImageOcrEngine = "paddle";
     /// <summary>When the directory is left empty ("search all drives"), include ready network/mapped drives. Default false (can be slow/metered).</summary>
     public bool SearchAllDrivesIncludesNetwork { get; set; }
     /// <summary>When the directory is left empty ("search all drives"), include ready removable/USB drives. Default false.</summary>
@@ -231,6 +255,8 @@ public sealed class AppSettings
     public string BinaryExtensions { get; set; } = DefaultBinaryExtensions;
     /// <summary>When true, do not show the non-admin access warning banner on startup.</summary>
     public bool SuppressAdminWarning { get; set; }
+    /// <summary>When true, do not prompt to start Everything Search on startup when it is installed but not running.</summary>
+    public bool SuppressEverythingNotRunningPrompt { get; set; }
     /// <summary>When true, do not warn before searching when the query names a file whose extension is
     /// currently excluded by Skip/Binary extensions or an Include/Exclude filter.</summary>
     public bool SuppressExcludedExtensionWarnings { get; set; }
@@ -442,6 +468,7 @@ public sealed class SettingsService
             NormalizePreviewEditorFontSettings(settings);
             NormalizeResultListMatchTextSettings(settings);
             NormalizePreviewShowMoreSettings(settings);
+            settings.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(settings.ImageOcrEngine);
             settings.LowDiskSpaceWarningPercent = AppSettings.NormalizeLowDiskSpaceWarningPercent(settings.LowDiskSpaceWarningPercent);
             settings.TerminalDefaultWorkingDirectory ??= string.Empty;
             return settings;
@@ -479,6 +506,7 @@ public sealed class SettingsService
             NormalizePreviewEditorFontSettings(settings);
             NormalizeResultListMatchTextSettings(settings);
             NormalizePreviewShowMoreSettings(settings);
+            settings.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(settings.ImageOcrEngine);
             settings.TerminalDefaultWorkingDirectory ??= string.Empty;
             return settings;
         }

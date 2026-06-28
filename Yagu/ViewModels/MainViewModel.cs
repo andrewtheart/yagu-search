@@ -291,6 +291,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         SkipBinary = _settings.SkipBinary;
         SearchOnlineOnlyFiles = _settings.SearchOnlineOnlyFiles;
         SearchHiddenFiles = _settings.SearchHiddenFiles;
+        SearchImageText = _settings.SearchImageText;
+        ImageOcrEngine = _settings.ImageOcrEngine;
         SearchInsideArchives = _settings.SearchInsideArchives;
         SettingsSkipExtensions = _settings.SkipExtensions;
         SettingsBinaryExtensions = _settings.BinaryExtensions;
@@ -299,6 +301,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         BinaryExtensions = SettingsBinaryExtensions;
         ArchiveExtensions = SettingsArchiveExtensions;
         SuppressAdminWarning = _settings.SuppressAdminWarning;
+        SuppressEverythingNotRunningPrompt = _settings.SuppressEverythingNotRunningPrompt;
         SuppressExcludedExtensionWarnings = _settings.SuppressExcludedExtensionWarnings;
         SuppressFontContrastWarnings = _settings.SuppressFontContrastWarnings;
         FontContrastReminderAfterUtc = _settings.FontContrastReminderAfterUtc;
@@ -1002,6 +1005,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// Options ▸ Content options toggle.</summary>
     [ObservableProperty] public partial bool SearchHiddenFiles { get; set; } = true;
 
+    /// <summary>When true, raster image files (PNG/JPG/etc.) are OCR'd on a background queue and
+    /// their recognized text is searched. Default false. Seeded from the persisted
+    /// <c>SearchImageText</c> setting and surfaced as the Advanced Options ▸ Filters toggle.</summary>
+    [ObservableProperty] public partial bool SearchImageText { get; set; }
+
+    /// <summary>OCR engine used when <see cref="SearchImageText"/> is on: "paddle" (PaddleSharp,
+    /// the recommended default) or "tesseract". Settings-only.</summary>
+    [ObservableProperty] public partial string ImageOcrEngine { get; set; } = AppSettings.DefaultImageOcrEngine;
+
     /// <summary>UI-facing inverse of <see cref="SkipBinary"/> for the "Search binary" toggle.</summary>
     public bool SearchBinary
     {
@@ -1103,6 +1115,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
     [ObservableProperty] public partial bool SuppressFontContrastWarnings { get; set; }
     [ObservableProperty] public partial bool SuppressExcludedExtensionWarnings { get; set; }
+
+    private bool _suppressEverythingNotRunningPrompt;
+    public bool SuppressEverythingNotRunningPrompt
+    {
+        get => _suppressEverythingNotRunningPrompt;
+        set => SetProperty(ref _suppressEverythingNotRunningPrompt, value);
+    }
     [ObservableProperty] public partial DateTimeOffset? FontContrastReminderAfterUtc { get; set; }
 
     [ObservableProperty] public partial bool ExcludeAdminProtectedPaths { get; set; } = true;
@@ -1589,6 +1608,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         string ArchiveExtensions,
         bool SkipBinary,
         string BinaryExtensions,
+        string SkipExtensions,
+        string SettingsSkipExtensions,
+        string SettingsBinaryExtensions,
+        string SettingsArchiveExtensions,
+        bool SearchImageText,
         bool SearchHiddenFiles,
         int SearchModeIndex);
 
@@ -1612,6 +1636,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         ArchiveExtensions,
         SkipBinary,
         BinaryExtensions,
+        SkipExtensions,
+        SettingsSkipExtensions,
+        SettingsBinaryExtensions,
+        SettingsArchiveExtensions,
+        SearchImageText,
         SearchHiddenFiles,
         SearchModeIndex);
 
@@ -1646,6 +1675,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             BinaryExtensions = s.BinaryExtensions;
             SyncBinaryExtensionItems();
         }
+        if (!string.Equals(SkipExtensions, s.SkipExtensions, StringComparison.Ordinal))
+        {
+            SkipExtensions = s.SkipExtensions;
+            SyncSkipExtensionItems();
+        }
+        // The persisted "default" mirrors (Settings* lists) and the OCR toggle are part of the saved
+        // filter surface too: a transient "Include & search" or a future resolution path must never
+        // leave them changed once the run that consumed them is done.
+        SettingsSkipExtensions = s.SettingsSkipExtensions;
+        SettingsBinaryExtensions = s.SettingsBinaryExtensions;
+        SettingsArchiveExtensions = s.SettingsArchiveExtensions;
+        SearchImageText = s.SearchImageText;
         SearchHiddenFiles = s.SearchHiddenFiles;
         SearchModeIndex = s.SearchModeIndex;
     }
@@ -2102,12 +2143,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             {
                 Now = DateTimeOffset.Now,
                 // Do NOT seed the model with the current box value: the directory must reflect ONLY what
-                // the model interprets. A confidently-named path is applied below; anything else clears
-                // the box so the search targets all drives.
+                // the model interprets. A confidently-named path is applied below; anything else leaves
+                // the directory box exactly as the user left it.
                 DefaultDirectory = null,
                 OriginalQuery = text,
                 // A model-hallucinated directory that does not exist is treated as "no confident path"
-                // (dropped to null), which clears the box so the search targets all drives rather than a
+                // (dropped to null), so the directory box is left unchanged rather than pointed at a
                 // bogus location.
                 DirectoryExists = static d => System.IO.Directory.Exists(d),
             };
@@ -2138,10 +2179,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             }
 
             var resolved = SemanticPlanApplier.ApplyToTarget(result.Plan, context, this);
-            // Make the directory box reflect EXACTLY what the model interpreted: the detected path when
-            // it confidently named one, or empty (= search all drives) when it did not. The HDD check
-            // runs against this location next, via the post-translation gate in SubmitSearchAsync.
-            Directory = resolved.Directory ?? string.Empty;
+            // Adopt the directory ONLY when the model confidently named one (ApplyToTarget already set it
+            // above in that case). When the query does not clearly contain a path, leave the directory box
+            // exactly as the user left it instead of clearing it — clearing would silently widen the search
+            // to all drives. The HDD check still runs against whatever location is in the box, via the
+            // post-translation gate in SubmitSearchAsync.
             EnableArchiveSearchForContainerGlobs(resolved.IncludeGlobs);
             EnableBinarySearchForBinaryGlobs(resolved.IncludeGlobs);
             // Render the summary deterministically from the resolved plan rather than the model's
@@ -2440,6 +2482,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 SkipExtensions = effectiveSkipExtensions,
                 SearchInsideArchives = SearchInsideArchives,
                 ArchiveExtensions = ParseDottedExtensionSet(ArchiveExtensions),
+                SearchImageText = SearchImageText,
+                ImageOcrExtensions = ParseExtensionSet(AppSettings.DefaultImageOcrExtensions),
+                ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(ImageOcrEngine),
                 MaxDegreeOfParallelism = parallelism,
                 FileListerBackendOverride = backendOverride,
                 IoOversubscriptionIndex = IoOversubscriptionIndex,
@@ -3873,8 +3918,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         // While a completed semantic search's resolution is shown in Advanced Options, persist the saved
         // filter DEFAULTS (from the snapshot) instead of the resolved values, so a semantic search never
         // changes what a fresh Yagu instance opens with. (Directory is the one exception — a model-
-        // resolved directory is meant to override and persist. The Skip/Binary/Archive extension lists
-        // already persist their Settings* defaults below, so they need no guard.)
+        // resolved directory is meant to override and persist.) The snapshot captures the ENTIRE filter
+        // surface — including the Skip/Binary/Archive extension lists (both the active and the persisted
+        // Settings* mirror) and the OCR toggle — so a transient "Include & search" un-skip or any future
+        // resolution path can never leak a resolved value to disk. Guard every filter field with `d`.
         var d = _semanticResolutionVisible ? _semanticDefaultsSnapshot : null;
 
         _settings.LastDirectory = Directory;
@@ -4027,11 +4074,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.SkipBinary = d is null ? SkipBinary : d.SkipBinary;
         _settings.SearchOnlineOnlyFiles = SearchOnlineOnlyFiles;
         _settings.SearchHiddenFiles = d is null ? SearchHiddenFiles : d.SearchHiddenFiles;
+        _settings.SearchImageText = d is null ? SearchImageText : d.SearchImageText;
+        _settings.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(ImageOcrEngine);
         _settings.SearchInsideArchives = d is null ? SearchInsideArchives : d.SearchInsideArchives;
-        _settings.ArchiveExtensions = SettingsArchiveExtensions;
-        _settings.SkipExtensions = SettingsSkipExtensions;
-        _settings.BinaryExtensions = SettingsBinaryExtensions;
+        _settings.ArchiveExtensions = d is null ? SettingsArchiveExtensions : d.SettingsArchiveExtensions;
+        _settings.SkipExtensions = d is null ? SettingsSkipExtensions : d.SettingsSkipExtensions;
+        _settings.BinaryExtensions = d is null ? SettingsBinaryExtensions : d.SettingsBinaryExtensions;
         _settings.SuppressAdminWarning = SuppressAdminWarning;
+        _settings.SuppressEverythingNotRunningPrompt = SuppressEverythingNotRunningPrompt;
         _settings.SuppressExcludedExtensionWarnings = SuppressExcludedExtensionWarnings;
         _settings.SuppressFontContrastWarnings = SuppressFontContrastWarnings;
         _settings.FontContrastReminderAfterUtc = FontContrastReminderAfterUtc;

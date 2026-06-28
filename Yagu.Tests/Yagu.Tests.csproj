@@ -92,6 +92,20 @@
     <Compile Include="..\Yagu\Services\FontContrastWarningService.cs" Link="Source\Services\FontContrastWarningService.cs" />
     <Compile Include="..\Yagu\Native\NativeSearcher.cs" Link="Source\Native\NativeSearcher.cs" />
     <Compile Include="..\Yagu\Native\EverythingSdk.cs" Link="Source\Native\EverythingSdk.cs" />
+    <!-- OCR (image text search): pure helpers with no native engine deps. The worker-hosted engines
+         (WorkerOcrEngine and its PaddleOcrEngine/TesseractOcrEngine subclasses) are pure-managed
+         out-of-process hosts (Process + stdio JSON) with no native dependencies, so they are safe to
+         link here; all native OCR work lives in Yagu.OcrWorker.exe. -->
+    <Compile Include="..\Yagu\Services\Ocr\IOcrEngine.cs" Link="Source\Services\Ocr\IOcrEngine.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\ImageOcrSupport.cs" Link="Source\Services\Ocr\ImageOcrSupport.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\OcrTextCache.cs" Link="Source\Services\Ocr\OcrTextCache.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\OcrTextMatcher.cs" Link="Source\Services\Ocr\OcrTextMatcher.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\UnavailableOcrEngine.cs" Link="Source\Services\Ocr\UnavailableOcrEngine.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\WorkerOcrEngine.cs" Link="Source\Services\Ocr\WorkerOcrEngine.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\PaddleOcrEngine.cs" Link="Source\Services\Ocr\PaddleOcrEngine.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\TesseractOcrEngine.cs" Link="Source\Services\Ocr\TesseractOcrEngine.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\OcrEngineFactory.cs" Link="Source\Services\Ocr\OcrEngineFactory.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\ImageOcrSearchSession.cs" Link="Source\Services\Ocr\ImageOcrSearchSession.cs" />
     <!-- Semantic search: pure model→SearchOptions mapping (no Foundry/WindowsAppSDK deps). -->
     <Compile Include="..\Yagu\Models\SemanticSearchPlan.cs" Link="Source\Models\SemanticSearchPlan.cs" />
     <Compile Include="..\Yagu\Services\Ai\ISemanticQueryTranslator.cs" Link="Source\Services\Ai\ISemanticQueryTranslator.cs" />

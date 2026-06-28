@@ -55,10 +55,10 @@ public sealed class CliRunnerRegressionTests
         int explanationCount = System.Text.RegularExpressions.Regex.Matches(source, @"(?m)^\s+Does: ").Count;
         int commandCount = System.Text.RegularExpressions.Regex.Matches(source, @"(?m)^\s+Cmd:\s+Yagu\.exe --cli ").Count;
 
-        Assert.Equal(210, exampleCount);
-        Assert.Equal(210, explanationCount);
-        Assert.Equal(210, commandCount);
-        Assert.Contains("EXAMPLES (210):", source);
+        Assert.Equal(212, exampleCount);
+        Assert.Equal(212, explanationCount);
+        Assert.Equal(212, commandCount);
+        Assert.Contains("EXAMPLES (212):", source);
         Assert.Contains("001. Basic search in the current folder", source);
         Assert.Contains("Does: Finds TODO anywhere under the current directory.", source);
         Assert.Contains("Cmd:  Yagu.exe --cli --directory . \"TODO\"", source);
@@ -72,6 +72,8 @@ public sealed class CliRunnerRegressionTests
         Assert.Contains("207. Force-include hidden files", source);
         Assert.Contains("208. Group results by directory", source);
         Assert.Contains("210. Group by modified date, oldest groups first", source);
+        Assert.Contains("211. Search text inside images (OCR)", source);
+        Assert.Contains("212. Search image text with the Tesseract engine", source);
     }
 
     [Fact]
@@ -178,6 +180,26 @@ public sealed class CliRunnerRegressionTests
     }
 
     [Fact]
+    public void CliParser_RecognizesImageTextFlags()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+
+        // Parser recognizes both enable and disable forms (with aliases) plus the engine option.
+        Assert.Contains("Eq(tok, \"--image-text\", \"--search-image-text\", \"--ocr\")", source);
+        Assert.Contains("Eq(tok, \"--no-image-text\", \"--no-search-image-text\", \"--no-ocr\")", source);
+        Assert.Contains("TryGetVal(raw, ref i, out v, \"--ocr-engine\")", source);
+        // Nullable arg properties exist so the settings default applies when the flag is omitted.
+        Assert.Contains("public bool?            SearchImageText { get; private set; }", source);
+        Assert.Contains("public string?          ImageOcrEngine { get; private set; }", source);
+        // Built into SearchOptions with the settings value as the fallback.
+        Assert.Contains("SearchImageText       = searchImageText", source);
+        Assert.Contains("ImageOcrEngine        = imageOcrEngine", source);
+        // Help mentions the flags.
+        Assert.Contains("--image-text", source);
+        Assert.Contains("--ocr-engine <name>", source);
+    }
+
+    [Fact]
     public void SemanticFirstRun_OffersModelPickWithTraditionalFallback()
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
@@ -203,8 +225,7 @@ public sealed class CliRunnerRegressionTests
             "internal void FallBackSemanticToTraditional()",
             "if (string.IsNullOrWhiteSpace(Pattern) && !string.IsNullOrWhiteSpace(SemanticPattern))",
             "Pattern = SemanticPattern;",
-            "if (string.IsNullOrWhiteSpace(Directory))",
-            "Directory = Environment.CurrentDirectory;");
+            "// An empty Directory is intentionally preserved: it means \"search all drives\".");
     }
 
     [Fact]

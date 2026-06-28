@@ -169,6 +169,18 @@ public sealed class SearchOptions
     /// <summary>Set of file extensions (with or without leading dots, case-insensitive) that should be routed to archive-aware scanning.</summary>
     public IReadOnlySet<string> ArchiveExtensions { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>When true, raster image files are OCR'd on a background queue and their recognized
+    /// text is matched against the query. The image extensions in <see cref="ImageOcrExtensions"/>
+    /// are bypassed from the skip-extension prefilter so the scanner surfaces them for OCR.</summary>
+    public bool SearchImageText { get; init; }
+
+    /// <summary>Set of raster image extensions (without dots, case-insensitive) that are OCR'd when
+    /// <see cref="SearchImageText"/> is on.</summary>
+    public IReadOnlySet<string> ImageOcrExtensions { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>OCR engine id used when <see cref="SearchImageText"/> is on ("paddle" or "tesseract").</summary>
+    public string ImageOcrEngine { get; init; } = "paddle";
+
     /// <summary>Bounded channel buffer capacity for the Everything SDK streaming path.</summary>
     public int SdkChannelBufferSize { get; init; } = 4096;
 

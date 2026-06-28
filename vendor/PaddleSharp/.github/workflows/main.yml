@@ -1,0 +1,33 @@
+﻿name: main
+on:
+  push:
+    branches:
+      - master
+      - feature/linux
+    paths:
+      - src/**
+      - tests/**
+      - .github/workflows/main.yml
+  workflow_dispatch:
+  
+jobs:
+  run:
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      matrix:
+        runs-on: [windows-2022, ubuntu-22.04, ubuntu-22.04-arm, macos-13, macos-15]
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup NuGet Source
+      run: |
+        dotnet nuget add source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" --name github --username ${{ github.repository_owner }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text
+        dotnet nuget list source
+
+    - name: Build code
+      run: dotnet build -c Debug -p:Optimize=true
+
+    - name: Test
+      shell: bash
+      run: |
+        dotnet test -c Debug --no-build --verbosity normal -p:Optimize=true --filter 'Category!=WindowsOnly'
+        # dotnet test ./tests/Sdcb.PaddleOCR.Tests/Sdcb.PaddleOCR.Tests.csproj -c Debug --no-build --verbosity normal --filter 'FullyQualifiedName~OnlineModelsTest'

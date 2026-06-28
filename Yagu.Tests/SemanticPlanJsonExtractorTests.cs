@@ -280,4 +280,52 @@ public sealed class SemanticPlanJsonExtractorTests
         const string raw = "{\"x\":1.5*2}";
         Assert.Equal(raw, SemanticPlanJsonExtractor.FoldIntegerMultiplication(raw));
     }
+
+    [Fact]
+    public void ExtractJsonObject_ReasoningModelWithThinkBlock_StripsTraceAndExtractsAnswer()
+    {
+        // phi-4-reasoning emits a <think>…</think> trace before the answer. The trace contains braces
+        // (illustrative JSON), so the extractor must strip the trace before scanning for the plan,
+        // otherwise the first '{' lands inside the reasoning prose.
+        const string raw = "<think>The user wants png files. A plan might look like {\"pattern\":\"*.foo\"} " +
+                           "but that is just my reasoning.</think>\n{\"pattern\":\"*.png\"}";
+        string? json = SemanticPlanJsonExtractor.ExtractJsonObject(raw);
+        Assert.Equal("{\"pattern\":\"*.png\"}", json);
+    }
+
+    [Fact]
+    public void TryParsePlan_ReasoningModelFencedAnswerAfterThink_ParsesPlan()
+    {
+        const string raw = "<think>\nLet me reason about file sizes: 100*1024*1024 bytes.\n</think>\n" +
+                           "```json\n{\"pattern\":\"*.bin\",\"minFileSizeBytes\":104857600}\n```";
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(raw, out SemanticSearchPlan? plan, out string? error));
+        Assert.Null(error);
+        Assert.Equal("*.bin", plan!.Pattern);
+        Assert.Equal(104857600, plan.MinFileSizeBytes);
+    }
+
+    [Fact]
+    public void StripReasoningTrace_LoneClosingTag_KeepsOnlyAnswerAfterIt()
+    {
+        // Some reasoning models start thinking implicitly and only emit the closing </think>.
+        string stripped = SemanticPlanJsonExtractor.StripReasoningTrace(
+            "thinking about this... </think> {\"pattern\":\"*.md\"}");
+        Assert.Equal(" {\"pattern\":\"*.md\"}", stripped);
+    }
+
+    [Fact]
+    public void StripReasoningTrace_UnclosedThink_DropsTruncatedTrace()
+    {
+        // Truncated mid-reasoning: there is no answer, so the dangling trace is dropped entirely.
+        string stripped = SemanticPlanJsonExtractor.StripReasoningTrace(
+            "answer pending <think>still reasoning and never finished");
+        Assert.Equal("answer pending ", stripped);
+    }
+
+    [Fact]
+    public void StripReasoningTrace_NoThinkMarkers_ReturnedUnchanged()
+    {
+        const string raw = "{\"pattern\":\"*.txt\"}";
+        Assert.Equal(raw, SemanticPlanJsonExtractor.StripReasoningTrace(raw));
+    }
 }

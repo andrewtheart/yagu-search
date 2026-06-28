@@ -1,0 +1,65 @@
+﻿name: push-native-nuget
+on:
+  push:
+    branches:
+      - feature/3.0
+    paths:
+      - .github/workflows/push-native-nuget.yml
+  workflow_dispatch:
+  
+jobs:
+  build-all:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        include:
+          - { title: win64.mkl,                  rid: win-x64,     }
+          - { title: win64.openblas,             rid: win-x64,     }
+          - { title: win64.openblas-noavx,       rid: win-x64,     }
+          - { title: win64.cu118_cudnn89_sm61,   rid: win-x64,     }
+          - { title: win64.cu118_cudnn89_sm75,   rid: win-x64,     }
+          - { title: win64.cu118_cudnn89_sm86,   rid: win-x64,     }
+          - { title: win64.cu118_cudnn89_sm89,   rid: win-x64,     }
+          - { title: win64.cu126_cudnn95_sm61,   rid: win-x64,     }
+          - { title: win64.cu126_cudnn95_sm75,   rid: win-x64,     }
+          - { title: win64.cu126_cudnn95_sm86,   rid: win-x64,     }
+          - { title: win64.cu126_cudnn95_sm89,   rid: win-x64,     }
+          - { title: win64.cu129_cudnn910_sm61,  rid: win-x64,     }
+          - { title: win64.cu129_cudnn910_sm75,  rid: win-x64,     }
+          - { title: win64.cu129_cudnn910_sm86,  rid: win-x64,     }
+          - { title: win64.cu129_cudnn910_sm89,  rid: win-x64,     }
+          - { title: win64.cu129_cudnn910_sm120, rid: win-x64,     }
+          - { title: linux-x64.openblas,         rid: linux-x64,   }
+          - { title: linux-x64.mkl,              rid: linux-x64,   }
+          - { title: linux-x64,                  rid: linux-x64,   }
+          - { title: linux-arm64,                rid: linux-arm64, }
+          - { title: osx-x64,                    rid: osx-x64,     }
+          - { title: osx-arm64,                  rid: osx-arm64,   }
+  
+    steps:
+    - name: Download Artifacts
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        echo "arch=$(echo '${{ matrix.rid }}' | awk -F'-' '{print $NF}')" >> $GITHUB_ENV
+        echo "Fetching latest successful run of branch ${{ github.ref_name }}"
+        RUN_ID=$(gh run list -R ${{ github.repository }} \
+                  --workflow=build-native-nuget.yml \
+                  --branch=${{ github.ref_name }} \
+                  --status=success --limit=1 \
+                  --json databaseId | jq -r '.[0].databaseId')
+        echo "Run id = $RUN_ID"
+        
+        echo "Download artifact ${{ matrix.title }}"
+        gh run download -R ${{ github.repository }} $RUN_ID --name nuget-${{ matrix.title }} --dir nupkg-src
+
+        echo "::group::Artifact tree"
+        ls -lR nupkg-src
+        echo "::endgroup::"
+
+    - name: Push nupkg to NuGet
+      run: |
+        for nupkg in nupkg-src/*.nupkg; do
+          echo "Uploading $nupkg"
+          dotnet nuget push "$nupkg" --source "nuget.org" --skip-duplicate --api-key ${{ secrets.NUGET_API_KEY }}
+        done

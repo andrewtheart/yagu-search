@@ -1,0 +1,218 @@
+﻿name: build-native-nuget
+on:
+  push:
+    branches:
+      - feature/linux
+      - master
+    paths:
+      - .github/workflows/build-native-nuget.yml
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+env:
+  PADDLE_VERSION: "3.0.0"
+  
+jobs:
+  build-all:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        include:
+          - { title: win64.mkl,                  rid: win-x64, action: paddle-build.yml, artifact: windows-2022_c_mkldnn }
+          - { title: win64.openblas,             rid: win-x64, action: paddle-build.yml, artifact: windows-2022_c_openblas }
+          - { title: win64.openblas-noavx,       rid: win-x64, action: paddle-build.yml, artifact: windows-2022_c_openblas_noavx }  
+          - { title: win64.cu118_cudnn89_sm61,   rid: win-x64, action: paddle-build.yml, artifact: windows-2022_c_cu118_cudnn89_sm61 }
+          - { title: win64.cu118_cudnn89_sm75,   rid: win-x64, action: paddle-build.yml, artifact: windows-2022_c_cu118_cudnn89_sm75 }
+          - { title: win64.cu118_cudnn89_sm86,   rid: win-x64, action: paddle-build.yml, artifact: windows-2022_c_cu118_cudnn89_sm86 }
+          - { title: win64.cu118_cudnn89_sm89,   rid: win-x64, action: paddle-build.yml, artifact: windows-2022_c_cu118_cudnn89_sm89 }
+          - { title: win64.cu126_cudnn95_sm61,   rid: win-x64, action: paddle-build.yml, artifact: windows-2022_c_cu126_cudnn95_sm61 }
+          - { title: win64.cu126_cudnn95_sm75,   rid: win-x64, action: paddle-build.yml, artifact: windows-2022_c_cu126_cudnn95_sm75 }
+          - { title: win64.cu126_cudnn95_sm86,   rid: win-x64, action: paddle-build.yml, artifact: windows-2022_c_cu126_cudnn95_sm86 }
+          - { title: win64.cu126_cudnn95_sm89,   rid: win-x64, action: paddle-build.yml, artifact: windows-2022_c_cu126_cudnn95_sm89 }
+          - { title: win64.cu129_cudnn910_sm61,  rid: win-x64, action: paddle-build.yml, artifact: windows-2022_c_cu129_cudnn910_sm61 }
+          - { title: win64.cu129_cudnn910_sm75,  rid: win-x64, action: paddle-build.yml, artifact: windows-2022_c_cu129_cudnn910_sm75 }
+          - { title: win64.cu129_cudnn910_sm86,  rid: win-x64, action: paddle-build.yml, artifact: windows-2022_c_cu129_cudnn910_sm86 }
+          - { title: win64.cu129_cudnn910_sm89,  rid: win-x64, action: paddle-build.yml, artifact: windows-2022_c_cu129_cudnn910_sm89 }
+          - { title: win64.cu129_cudnn910_sm120, rid: win-x64, action: paddle-build.yml, artifact: windows-2022_c_cu129_cudnn910_sm120 }
+          - { title: linux-x64.openblas,         rid: linux-x64,   action: paddle-build.yml, artifact: ubuntu-22.04_c_openblas }
+          - { title: linux-x64.mkl,              rid: linux-x64,   action: paddle-build.yml, artifact: ubuntu-22.04_c_mkldnn }
+          - { title: linux-x64,                  rid: linux-x64,   action: paddle-build.yml, artifact: ubuntu-22.04_c_openvino }
+          - { title: linux-arm64,                rid: linux-arm64, action: paddle-build.yml, artifact: ubuntu-22.04-arm_c_openblas }
+          - { title: osx-x64,                    rid: osx-x64,     action: paddle-build.yml, artifact: macos-13_c_openblas }
+          - { title: osx-arm64,                  rid: osx-arm64,   action: paddle-build.yml, artifact: macos-15_c_openblas }
+  
+  
+    steps:
+    - name: Download Artifacts
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        echo "arch=$(echo '${{ matrix.rid }}' | awk -F'-' '{print $NF}')" >> $GITHUB_ENV
+        echo "Fetching latest successful ${{ matrix.action }} run of branch ${{ github.ref_name }}"
+        RUN_ID=$(gh run list -R ${{ github.repository }} \
+                  --workflow=${{ matrix.action }} \
+                  --branch=${{ github.ref_name }} \
+                  --status=success --limit=1 \
+                  --json databaseId | jq -r '.[0].databaseId')
+        echo "Run id = $RUN_ID"
+        
+        echo "Download artifact ${{ matrix.artifact }}"
+        gh run download -R ${{ github.repository }} $RUN_ID --name ${{ matrix.artifact }} --dir paddle_inference_c
+
+        echo "::group::Artifact tree"
+        ls -lR paddle_inference_c
+        echo "::endgroup::"
+
+    - name: Show Downloaded
+      run: |
+        ls -lR paddle_inference_c
+
+    - name: Copy Native Dynamic Libs(.so/.dll/.dylib) to nuget
+      run: |
+        mkdir -p nuget
+        if [[ "${{ matrix.rid }}" == win* ]]; then
+          find paddle_inference_c -type f \( -iname "*.dll" \) -exec cp {} nuget/ \;
+        elif [[ "${{ matrix.rid }}" == linux* ]]; then
+          find paddle_inference_c -type f \( -iname "*.so*" \) -exec cp {} nuget/ \;
+        elif [[ "${{ matrix.rid }}" == osx* ]]; then
+          find paddle_inference_c -type f \( -iname "*.dylib" \) -exec cp {} nuget/ \;
+        fi
+
+        ls -l nuget
+
+    - name: Build NuGet package
+      run: |
+        set -euo pipefail
+
+        # ---------- 基本元数据 ----------
+        PKG_ID="Sdcb.PaddleInference.runtime.${{ matrix.title }}"
+        AUTHOR="sdcb"
+        LICENSE="Apache-2.0"
+        GIT_URL="https://github.com/sdcb/PaddleSharp"
+        TAGS="Sdcb PaddleSharp AI Paddle OCR PaddleOCR linqpad-samples"
+        YEAR=$(date +%Y)
+
+        # ---------- 找到所有动态库 ----------
+        NUGET_LIB_DIR="${{ github.workspace }}/nuget"
+        
+        LIB_PATHS=()
+        mapfile -t LIB_PATHS < <(find "$NUGET_LIB_DIR" -type f -print)
+        
+        if [ ${#LIB_PATHS[@]} -eq 0 ]; then
+          echo "Error: no native libs found in $NUGET_LIB_DIR"
+          exit 1
+        fi
+
+        # ---------- 准备临时工作目录 ----------
+        WORK="$RUNNER_TEMP/pkg"
+        rm -rf "$WORK"
+        mkdir -p \
+          "$WORK/runtimes/${{ matrix.rid }}/native" \
+          "$WORK/lib/netstandard2.0" \
+          "$WORK/lib/net45" \
+          "$WORK/build/net45"
+
+        # ---------- 复制所有动态库 ----------
+        for libpath in "${LIB_PATHS[@]}"; do
+          cp "$libpath" "$WORK/runtimes/${{ matrix.rid }}/native/"
+        done
+
+        # 放两个占位文件
+        touch "$WORK/lib/netstandard2.0/_._"
+        cp "$WORK/lib/netstandard2.0/_._" "$WORK/lib/net45/_._"
+
+        # ---------- 生成 .props ----------
+        NORMALIZED_NAME="$(echo "${PKG_ID}" | tr '.-' '_' )_Dlls"
+        PROPS_FILE="$WORK/build/net45/${PKG_ID}.props"
+        {
+          cat <<EOF
+        <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+          <PropertyGroup>
+            <${NORMALIZED_NAME}>\$(MSBuildThisFileDirectory)..\\..\\runtimes</${NORMALIZED_NAME}>
+          </PropertyGroup>
+        EOF
+          # 每个库都插一段 ItemGroup
+          for libpath in "${LIB_PATHS[@]}"; do
+            libname="$(basename "$libpath")"
+            cat <<EOF
+          <ItemGroup Condition="\$(TargetFrameworkVersion.StartsWith('v4')) Or \$(TargetFramework.StartsWith('net4'))">
+            <Content Include="\$(${NORMALIZED_NAME})\\${{ matrix.rid }}\\native\\${libname}">
+              <Link>dll\\${{ env.arch }}\\${libname}</Link>
+              <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            </Content>
+          </ItemGroup>
+        EOF
+          done
+
+          echo "</Project>"
+        } > "$PROPS_FILE"
+
+        # ---------- 生成 .nuspec ----------
+        NUSPEC_FILE="$WORK/${PKG_ID}.nuspec"
+        {
+          cat <<EOF
+        <?xml version="1.0" encoding="utf-8"?>
+        <package xmlns="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd">
+          <metadata>
+            <id>${PKG_ID}</id>
+            <version>${{ env.PADDLE_VERSION }}.${{ github.run_number }}</version>
+            <title>${PKG_ID} native bindings</title>
+            <authors>${AUTHOR}</authors>
+            <requireLicenseAcceptance>true</requireLicenseAcceptance>
+            <description>${{ matrix.rid }} native libs for PaddleInference.</description>
+            <summary>${{ matrix.rid }} native libs for PaddleInference.</summary>
+            <copyright>Copyright ${YEAR}</copyright>
+            <license type="expression">${LICENSE}</license>
+            <projectUrl>${GIT_URL}</projectUrl>
+            <repository type="git" url="${GIT_URL}.git" />
+            <tags>${TAGS}</tags>
+            <dependencies />
+            <frameworkAssemblies />
+          </metadata>
+          <files>
+            <file src="lib\\netstandard2.0\\_._" target="lib\\netstandard2.0" />
+            <file src="lib\\net45\\_._"          target="lib\\net45" />
+        EOF
+
+          # 每个库都加一行 file
+          for libpath in "${LIB_PATHS[@]}"; do
+            libname="$(basename "$libpath")"
+            cat <<EOF
+            <file src="runtimes\\${{ matrix.rid }}\\native\\${libname}" target="runtimes\\${{ matrix.rid }}\\native" />
+        EOF
+          done
+
+          # 最后再把 props 文件也加进来
+          cat <<EOF
+            <file src="build\\net45\\${PKG_ID}.props" target="build\\net45" />
+          </files>
+        </package>
+        EOF
+        } > "$NUSPEC_FILE"
+
+        # ---------- 打包 ----------
+        pushd "$WORK" >/dev/null
+        nuget pack "${NUSPEC_FILE}" -OutputDirectory "${{ github.workspace }}/nupkgs"
+        popd >/dev/null
+
+        echo "::group::生成的 nupkg"
+        ls -l "${{ github.workspace }}/nupkgs"
+        echo "::endgroup::"
+        echo NUPKG_PATH="${{ github.workspace }}/nupkgs/${PKG_ID}.${{ env.PADDLE_VERSION }}.${{ github.run_number }}.nupkg" >> $GITHUB_ENV
+        
+    - name: Upload nupkg artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: nuget-${{ matrix.title }}
+        path: ${{ env.NUPKG_PATH }}
+        if-no-files-found: error
+
+    - name: Push nupkg to Github Packages
+      run: |
+        dotnet nuget push ${{ env.NUPKG_PATH }} --source "https://nuget.pkg.github.com/${{ github.repository_owner }}" --api-key "${{ secrets.GITHUB_TOKEN }}" --skip-duplicate
+
+    - name: Push nupkg to ProGet
+      run: |
+        dotnet nuget push ${{ env.NUPKG_PATH }} --source "https://proget.starworks.cc:88/nuget/test/v3/index.json" --api-key "${{ secrets.PROGET_API_KEY }}" --skip-duplicate --timeout 21600

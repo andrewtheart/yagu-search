@@ -55,6 +55,7 @@ internal sealed class YaguDialog : Window
     private readonly TaskCompletionSource<YaguDialogResult> _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly IntPtr _ownerHwnd;
     private readonly YaguDialogOptions _options;
+    private readonly AppWindow _appWindow;
     private YaguDialogResult _result = YaguDialogResult.Close;
 
     private YaguDialog(IntPtr ownerHwnd, YaguDialogOptions options)
@@ -79,6 +80,7 @@ internal sealed class YaguDialog : Window
 
         var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
         var appWindow = AppWindow.GetFromWindowId(windowId);
+        _appWindow = appWindow;
         appWindow.Title = Title;
         WindowForegroundHelper.CenterWindowOverOwner(appWindow, _ownerHwnd, options.Width, options.Height);
         TryConfigurePresenter(appWindow, options.IsResizable, options.ShowTitleBar);
@@ -121,6 +123,18 @@ internal sealed class YaguDialog : Window
 
         Activate();
         WindowForegroundHelper.BringOwnedWindowToFront(this, _ownerHwnd);
+
+        // Re-apply the title-bar-less presenter config after activation. When a dialog is shown very
+        // early (e.g. the Everything Search prompts raised during startup), SetBorderAndTitleBar can
+        // silently fail to apply before the window is realized, leaving the OS caption visible. Doing
+        // it again once the window is live — and once more on the next dispatcher tick — makes the
+        // no-title-bar state stick regardless of when the dialog is opened.
+        if (!_options.ShowTitleBar)
+        {
+            TryConfigurePresenter(_appWindow, _options.IsResizable, _options.ShowTitleBar);
+            DispatcherQueue.TryEnqueue(() => TryConfigurePresenter(_appWindow, _options.IsResizable, _options.ShowTitleBar));
+        }
+
         return _completion.Task;
     }
 

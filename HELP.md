@@ -128,6 +128,7 @@ Click the **Advanced Options** expander below the search bar to reveal a tabbed 
 | Archive Extensions | Visible when Search archives is on. Controls which extensions are treated as ZIP containers. |
 | Search online-only cloud files | When enabled, OneDrive/Google Drive online-only placeholder files are downloaded on demand and searched — but only while the sync provider is running to serve them. Off by default: cloud-only files are skipped so the scan can't hang on a download. Can be slow and use network/disk. |
 | Search hidden files | When enabled (default), files and folders carrying the Windows Hidden attribute are searched. When disabled, hidden items are excluded — the managed file walker skips them and the Everything backends filter them with `!attrib:h`. System files (e.g. `pagefile.sys`, `hiberfil.sys`) are always skipped by the file walker regardless of this setting. The default for this per-search toggle comes from **Settings ▸ Path and File Type Filters ▸ Search hidden files**. |
+| Search image text (OCR) | When enabled, image files (PNG, JPG, BMP, GIF, TIFF, WEBP) are run through OCR and the recognized text is searched like any other file's contents. Off by default because OCR is slower than reading text files. OCR runs on a background queue that does not block or slow the normal file scan; matches appear in the results panel as each image is processed. The OCR engine (PaddleSharp by default, or Tesseract) and this toggle's default come from **Settings ▸ Path and File Type Filters ▸ Search image text (OCR)**. |
 
 ### Size Tab
 
@@ -367,6 +368,7 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 | Clear date defaults | Clears all saved created/modified date defaults. |
 | Search binary files | Includes files detected as binary by null bytes or magic bytes. Off by default. |
 | Search hidden files | Default for the Advanced Options ▸ Content options "Search hidden files" toggle. On by default — items with the Windows Hidden attribute are included. System files are always skipped by the file walker. |
+| Search image text (OCR) | Default for the Advanced Options ▸ Content options "Search image text (OCR)" toggle. Off by default. When on, image files are OCR'd on a background queue and the recognized text is searched. The OCR engine is selectable: PaddleSharp (recommended, default) or Tesseract. |
 | Skip admin-protected paths | Excludes system directories that deny access when not elevated. |
 | Admin-protected path segments | Custom path segments to skip (semicolon-separated). |
 | Skip extensions | Extensions skipped before contents are read. Use semicolon-separated names without dots. |
@@ -992,6 +994,9 @@ Semantic requests can also set **sorting** and **grouping** (e.g. *"sort by file
 | --- | --- |
 | `--hidden` (aliases `--search-hidden`) | Include files/folders carrying the Windows Hidden attribute (default; falls back to the **Search hidden files** setting). |
 | `--no-hidden` (aliases `--no-search-hidden`) | Exclude hidden files/folders. System files are always skipped by the file walker regardless of this flag. |
+| `--image-text` (aliases `--search-image-text`, `--ocr`) | OCR image files and search the recognized text. Off by default; falls back to the **Search image text (OCR)** setting. Images are processed on a background queue so the normal file scan is not blocked. |
+| `--no-image-text` (aliases `--no-search-image-text`, `--no-ocr`) | Do not OCR images (default). |
+| `--ocr-engine <name>` | OCR engine for `--image-text`: `paddle` (PaddleSharp, default) or `tesseract`. |
 
 ### Output
 

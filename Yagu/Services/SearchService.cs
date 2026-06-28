@@ -269,20 +269,31 @@ public sealed class SearchService
 
             // When archive search is enabled, don't let the file lister skip
             // zip-like extensions — they need to reach ContentSearcher so it
-            // can open them as archives.
+            // can open them as archives. Likewise, when image-text (OCR) search is
+            // enabled, don't skip image extensions — they need to reach the OCR queue.
             var skipExts = options.SkipExtensions;
-            if (options.SearchInsideArchives && skipExts.Count > 0 && options.ArchiveExtensions.Count > 0)
+            bool bypassArchives = options.SearchInsideArchives && skipExts.Count > 0 && options.ArchiveExtensions.Count > 0;
+            bool bypassImages = options.SearchImageText && skipExts.Count > 0 && options.ImageOcrExtensions.Count > 0;
+            if (bypassArchives || bypassImages)
             {
                 var filtered = new HashSet<string>(skipExts, StringComparer.OrdinalIgnoreCase);
                 // ArchiveExtensions uses ".zip" format; SkipExtensions uses "zip" (no dot).
-                foreach (var ext in options.ArchiveExtensions)
-                    filtered.Remove(ext.TrimStart('.'));
+                if (bypassArchives)
+                    foreach (var ext in options.ArchiveExtensions)
+                        filtered.Remove(ext.TrimStart('.'));
+                // ImageOcrExtensions uses dotless format, matching SkipExtensions.
+                if (bypassImages)
+                    foreach (var ext in options.ImageOcrExtensions)
+                        filtered.Remove(ext.TrimStart('.'));
                 skipExts = filtered;
             }
             concreteLister.EarlySkipExtensions = skipExts;
 
             concreteLister.EarlyExcludeGlobs = options.ExcludeFilterMode == FilterPatternMode.GlobPath
                 ? options.ExcludeGlobs
+                : Array.Empty<string>();
+            concreteLister.EarlyIncludeFileNameGlobs = options.IncludeFilterMode == FilterPatternMode.GlobPath
+                ? options.IncludeGlobs
                 : Array.Empty<string>();
             concreteLister.EarlyFileNameLiteralTerms = options.SearchMode == SearchMode.FileNameThenContent
                 && !options.UseRegex
@@ -385,6 +396,7 @@ public sealed class SearchService
         int skipGlobExcluded = 0;
         int skipSizeFiltered = 0;
         int skipCloudOnly = 0;
+        int skipOcrCache = 0;
         // Fresh provider-liveness decisions per search (a provider may have been
         // installed/uninstalled/signed-out since the last run).
         CloudFileHelper.ResetProviderCache();
@@ -436,7 +448,7 @@ public sealed class SearchService
                 Volatile.Read(ref skipByExtension),
                 nonAccessDeniedDirSkips,
                 CurrentEarlySkips() + Volatile.Read(ref skipSizeFiltered),
-                Volatile.Read(ref skipGlobExcluded),
+                Volatile.Read(ref skipGlobExcluded) + Volatile.Read(ref skipOcrCache),
                 _fileLister.GitignoreSkipped,
                 CurrentCloudOnlySkips());
             int currentTotalMatches;
@@ -486,7 +498,7 @@ public sealed class SearchService
                 skipByExtension,
                 nonAccessDeniedDirectorySkips,
                 earlySkips + discoverySizeSkips,
-                skipGlobExcluded,
+                skipGlobExcluded + Volatile.Read(ref skipOcrCache),
                 _fileLister.GitignoreSkipped,
                 CurrentCloudOnlySkips());
 
@@ -635,10 +647,23 @@ public sealed class SearchService
             {
                 int discoveryLogCounter = 0;
                 var discoveryLogTimer = Stopwatch.StartNew();
+                // Yagu's own OCR text cache (one .txt per OCR'd image) lives under this directory. Those
+                // files are an internal implementation detail — never surface them as their own result
+                // rows. An OCR'd image must only ever appear under its image path (set by OcrTextMatcher),
+                // never under the cache text file's path.
+                string ocrCacheDirPrefix = Ocr.OcrTextCache.DefaultBaseDirectory() + Path.DirectorySeparatorChar;
                 await foreach (var path in _fileLister.ListFilesAsync(options.Directory, includeExts, maxFiles: 0, cancellationToken).WithCancellation(cancellationToken))
                 {
                     if (Volatile.Read(ref truncated) != 0) break;
                     Interlocked.Increment(ref totalDiscovered);
+
+                    if (path.StartsWith(ocrCacheDirPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Interlocked.Increment(ref filesScanned);
+                        Interlocked.Increment(ref filesSkipped);
+                        Interlocked.Increment(ref skipOcrCache);
+                        continue;
+                    }
 
                     if (!globMatcher.Matches(path))
                     {
@@ -744,6 +769,45 @@ public sealed class SearchService
             }
         }, CancellationToken.None);
 
+        // ── Image-text (OCR) search session ──
+        // When enabled, images discovered during the scan are routed to a background OCR
+        // queue that runs decoupled from the (Rust) file scan so it never slows discovery.
+        // Recognized text is searched for the query and any matches stream into the same
+        // content-results channel as ordinary file matches, appearing as results are found.
+        Ocr.ImageOcrSearchSession? imageOcr = null;
+        Ocr.IOcrEngine? ocrEngine = null;
+        if (searchContent && options.SearchImageText)
+        {
+            ocrEngine = Ocr.OcrEngineFactory.Create(options.ImageOcrEngine);
+            // Clear OCR text left over from crashed/older runs before this search starts writing fresh
+            // entries, so a previous run's partial output can never be mistaken for this search's results.
+            Ocr.OcrTextCache.Cleanup();
+            var ocrCache = new Ocr.OcrTextCache();
+            int ocrWorkerCount = Math.Max(1, Math.Min(4, Environment.ProcessorCount / 2));
+            imageOcr = new Ocr.ImageOcrSearchSession(
+                ocrEngine,
+                ocrCache,
+                regex,
+                literal,
+                cmp,
+                options.ContextLines,
+                options.MaxMatchesPerFile,
+                contentResults.Writer,
+                onFileProcessed: () => Interlocked.Increment(ref filesScanned),
+                onFileMatched: matchCount =>
+                {
+                    Interlocked.Increment(ref filesWithMatches);
+                    int newTotal = Interlocked.Add(ref totalMatches, matchCount);
+                    if (options.MaxResults > 0 && newTotal >= options.MaxResults)
+                        Volatile.Write(ref truncated, 1);
+                },
+                workerCount: ocrWorkerCount,
+                cancellationToken: cancellationToken,
+                shouldStop: () => Volatile.Read(ref truncated) != 0);
+            LogService.Instance.Info("SearchService",
+                $"Image-text OCR enabled: engine={ocrEngine.Id}, workers={ocrWorkerCount}, extensions={options.ImageOcrExtensions.Count}");
+        }
+
         // ── Content workers ──
         var workers = Task.CompletedTask;
         if (searchContent)
@@ -752,6 +816,7 @@ public sealed class SearchService
             {
                 try
                 {
+                    imageOcr?.Start();
                     bool nativeAvailable = Native.NativeSearcher.IsAvailable;
                     int parallelism = options.MaxDegreeOfParallelism > 0
                         ? options.MaxDegreeOfParallelism
@@ -955,6 +1020,12 @@ public sealed class SearchService
                                                     {
                                                         zipTasks.Add(ScanZipViaManagedAsync(file));
                                                     }
+                                                    else if (imageOcr != null && Ocr.ImageOcrSupport.IsImageCandidate(file, options.ImageOcrExtensions))
+                                                    {
+                                                        // Route images to the background OCR queue instead of the
+                                                        // native content scanner; matches stream in asynchronously.
+                                                        imageOcr.TryEnqueue(file);
+                                                    }
                                                     else
                                                     {
                                                         pushBatch.Add(file);
@@ -1142,6 +1213,13 @@ public sealed class SearchService
                         }, async (file, ct) =>
                         {
                             if (Volatile.Read(ref truncated) != 0) return;
+                            if (imageOcr != null && Ocr.ImageOcrSupport.IsImageCandidate(file, options.ImageOcrExtensions))
+                            {
+                                // Route images to the background OCR queue; the session counts
+                                // them and emits any matches asynchronously.
+                                imageOcr.TryEnqueue(file);
+                                return;
+                            }
                             var effectiveOptions = Volatile.Read(ref degraded) != 0 ? degradedOptions : patternOptions;
                             FileSearchOutcome outcome;
                             int produced;
@@ -1212,6 +1290,29 @@ public sealed class SearchService
                 catch (Exception ex) { LogService.Instance.Warning("SearchService", "Content workers failed", ex); }
                 finally
                 {
+                    // Finish OCR before closing the content channel so all OCR matches are
+                    // flushed into the results stream. The OCR queue ran alongside the scan;
+                    // signal no-more-images and await the workers draining the backlog.
+                    if (imageOcr != null)
+                    {
+                        imageOcr.Complete();
+                        try { await imageOcr.DrainAsync().ConfigureAwait(false); }
+                        catch (OperationCanceledException) { }
+                        catch (Exception ex) { LogService.Instance.Warning("SearchService", "OCR drain failed", ex); }
+                    }
+
+                    // Release the OCR engine after draining (terminates the out-of-process worker, if any).
+                    if (ocrEngine is IAsyncDisposable ocrEngineAsyncDisposable)
+                    {
+                        try { await ocrEngineAsyncDisposable.DisposeAsync().ConfigureAwait(false); }
+                        catch (Exception ex) { LogService.Instance.Warning("SearchService", "OCR engine dispose failed", ex); }
+                    }
+                    else if (ocrEngine is IDisposable ocrEngineDisposable)
+                    {
+                        try { ocrEngineDisposable.Dispose(); }
+                        catch (Exception ex) { LogService.Instance.Warning("SearchService", "OCR engine dispose failed", ex); }
+                    }
+
                     string finishMemDiag = GetMemoryDiagnostics();
                     LogService.Instance.Info("SearchService",
                         $"Content workers finished: scanned={filesScanned:N0}, withMatches={filesWithMatches:N0}, " +

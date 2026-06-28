@@ -417,7 +417,12 @@ public sealed class FoundryModelSelector
     private static bool IsAutoSelectable(ModelCandidate c)
         => IsTextChatCandidate(c) && !IsReasoningAlias(c.Alias);
 
-    private static bool IsReasoningAlias(string? alias)
+    /// <summary>Whether <paramref name="alias"/> names a reasoning / chain-of-thought model (e.g.
+    /// <c>phi-4-reasoning</c>). Such models are excluded from AUTO selection but can be chosen by an
+    /// explicit user override; the translator then tunes generation (longer token budget, looser
+    /// sampling, <c>&lt;think&gt;</c> stripping) so the model's reasoning trace doesn't crowd out the
+    /// JSON plan. Exposed so the translator can apply that reasoning-specific configuration.</summary>
+    internal static bool IsReasoningAlias(string? alias)
     {
         if (string.IsNullOrWhiteSpace(alias)) return false;
         string a = alias.ToLowerInvariant();

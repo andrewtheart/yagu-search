@@ -331,7 +331,7 @@
         </Border>
 
         <!-- Search controls card -->
-        <Border x:Name="SearchControlsBorder" Grid.Row="2" Margin="16,10,16,4" Padding="16,18,16,10"
+        <Border x:Name="SearchControlsBorder" Grid.Row="2" Margin="16,10,16,4" Padding="16,18,16,6"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1" CornerRadius="8">
@@ -994,6 +994,14 @@
                                                              Foreground="{ThemeResource SystemFillColorCautionBrush}"
                                                              ToolTipService.ToolTip="When on (default), files and folders with the Windows Hidden attribute are searched. When off, hidden items are excluded. System files (e.g. pagefile.sys) are always skipped by the file walker regardless of this setting." />
                                                </StackPanel>
+                                               <StackPanel x:Name="ImageTextRow" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                                   <ToggleSwitch OnContent="Search image text" OffContent="Search image text"
+                                                                 IsOn="{x:Bind ViewModel.SearchImageText, Mode=TwoWay}"
+                                                                 MinWidth="0" />
+                                                   <FontIcon Glyph="&#xE7BA;" FontSize="12" VerticalAlignment="Center"
+                                                             Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                                                             ToolTipService.ToolTip="When on, raster images (PNG/JPG/etc.) are OCR'd on a background queue and their recognized text is searched. Off by default. OCR runs on a separate thread so it never slows the file scan; image matches appear as they finish. Choose the OCR engine (PaddleSharp or Tesseract) in Settings." />
+                                               </StackPanel>
                                             </StackPanel>
                                         </StackPanel>
 
@@ -1040,20 +1048,20 @@
                                                 <TextBlock Text="Created date" FontSize="11" Opacity="0.75" />
                                                 <Grid ColumnSpacing="10">
                                                     <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="*" />
-                                                        <ColumnDefinition Width="*" />
-                                                        <ColumnDefinition Width="2*" />
                                                     </Grid.ColumnDefinitions>
                                                     <StackPanel Spacing="3">
                                                         <TextBlock Text="From" FontSize="11" Opacity="0.65" />
                                                         <CalendarDatePicker Date="{x:Bind ViewModel.CreatedAfterDate, Mode=TwoWay}"
-                                                                            PlaceholderText="Select start date" HorizontalAlignment="Stretch"
+                                                                            PlaceholderText="Select start date" MinWidth="160"
                                                                             ToolTipService.ToolTip="Only include files created on or after this date." />
                                                     </StackPanel>
                                                     <StackPanel Grid.Column="1" Spacing="3">
                                                         <TextBlock Text="To" FontSize="11" Opacity="0.65" />
                                                         <CalendarDatePicker Date="{x:Bind ViewModel.CreatedBeforeDate, Mode=TwoWay}"
-                                                                            PlaceholderText="Select end date" HorizontalAlignment="Stretch"
+                                                                            PlaceholderText="Select end date" MinWidth="160"
                                                                             ToolTipService.ToolTip="Only include files created on or before this date." />
                                                     </StackPanel>
                                                 </Grid>
@@ -1062,20 +1070,20 @@
                                                 <TextBlock Text="Modified date" FontSize="11" Opacity="0.75" />
                                                 <Grid ColumnSpacing="10">
                                                     <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="*" />
-                                                        <ColumnDefinition Width="*" />
-                                                        <ColumnDefinition Width="2*" />
                                                     </Grid.ColumnDefinitions>
                                                     <StackPanel Spacing="3">
                                                         <TextBlock Text="From" FontSize="11" Opacity="0.65" />
                                                         <CalendarDatePicker Date="{x:Bind ViewModel.ModifiedAfterDate, Mode=TwoWay}"
-                                                                            PlaceholderText="Select start date" HorizontalAlignment="Stretch"
+                                                                            PlaceholderText="Select start date" MinWidth="160"
                                                                             ToolTipService.ToolTip="Only include files modified on or after this date." />
                                                     </StackPanel>
                                                     <StackPanel Grid.Column="1" Spacing="3">
                                                         <TextBlock Text="To" FontSize="11" Opacity="0.65" />
                                                         <CalendarDatePicker Date="{x:Bind ViewModel.ModifiedBeforeDate, Mode=TwoWay}"
-                                                                            PlaceholderText="Select end date" HorizontalAlignment="Stretch"
+                                                                            PlaceholderText="Select end date" MinWidth="160"
                                                                             ToolTipService.ToolTip="Only include files modified on or before this date." />
                                                     </StackPanel>
                                                 </Grid>
@@ -1913,7 +1921,22 @@
                                       HorizontalScrollBarVisibility="Visible"
                                       VerticalScrollBarVisibility="Auto">
                             <Grid Margin="16,12">
-                                <StackPanel x:Name="PreviewMessagePanel">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+                                <!-- Image preview thumbnail lives in its own row so it can sit above
+                                     either the single-file block surface or the sections surface. OCR
+                                     image previews show the picture above its recognized text. -->
+                                <Border x:Name="PreviewImageThumbnailBorder" Grid.Row="0" Visibility="Collapsed"
+                                        Margin="0,0,0,12" Padding="4" CornerRadius="4"
+                                        BorderThickness="1" HorizontalAlignment="Left"
+                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                        Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}">
+                                    <Image x:Name="PreviewImageThumbnail" MaxHeight="320" MaxWidth="480"
+                                           Stretch="Uniform" />
+                                </Border>
+                                <StackPanel x:Name="PreviewMessagePanel" Grid.Row="1">
                                     <RichTextBlock x:Name="PreviewBlock" FontFamily="Consolas" TextWrapping="NoWrap" />
                                     <Button x:Name="PreviewBackButton" Visibility="Collapsed"
                                             Click="OnPreviewBackClick" Margin="0,12,0,0">
@@ -1923,8 +1946,8 @@
                                         </StackPanel>
                                     </Button>
                                 </StackPanel>
-                                <StackPanel x:Name="PreviewSectionsPanel" Visibility="Collapsed" Spacing="8" />
-                                <StackPanel x:Name="PreviewLoadingPanel" Visibility="Collapsed"
+                                <StackPanel x:Name="PreviewSectionsPanel" Grid.Row="1" Visibility="Collapsed" Spacing="8" />
+                                <StackPanel x:Name="PreviewLoadingPanel" Grid.Row="1" Visibility="Collapsed"
                                             HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12"
                                             Margin="0,48,0,0">
                                     <ProgressRing x:Name="PreviewLoadingRing" IsActive="False" Width="36" Height="36" />
@@ -1994,7 +2017,7 @@
                                 Height="18"
                                 Background="#22FF6A00"
                                 BorderBrush="#FFFF4500"
-                                BorderThickness="1.5"
+                                BorderThickness="1"
                                 CornerRadius="3" />
                             <Border x:Name="ActiveMatchWordMarker"
                                 Canvas.ZIndex="21"

@@ -650,6 +650,17 @@ skipped by the file walker regardless of this setting. The default for
 this per-search toggle comes from <strong>Settings ▸ Path and File Type
 Filters ▸ Search hidden files</strong>.</td>
 </tr>
+<tr>
+<td>Search image text (OCR)</td>
+<td>When enabled, image files (PNG, JPG, BMP, GIF, TIFF, WEBP) are run
+through OCR and the recognized text is searched like any other file’s
+contents. Off by default because OCR is slower than reading text files.
+OCR runs on a background queue that does not block or slow the normal
+file scan; matches appear in the results panel as each image is
+processed. The OCR engine (PaddleSharp by default, or Tesseract) and
+this toggle’s default come from <strong>Settings ▸ Path and File Type
+Filters ▸ Search image text (OCR)</strong>.</td>
+</tr>
 </tbody>
 </table>
 <h3 id="size-tab">Size Tab</h3>
@@ -1376,6 +1387,13 @@ files” toggle. On by default — items with the Windows Hidden attribute
 are included. System files are always skipped by the file walker.</td>
 </tr>
 <tr>
+<td>Search image text (OCR)</td>
+<td>Default for the Advanced Options ▸ Content options “Search image
+text (OCR)” toggle. Off by default. When on, image files are OCR’d on a
+background queue and the recognized text is searched. The OCR engine is
+selectable: PaddleSharp (recommended, default) or Tesseract.</td>
+</tr>
+<tr>
 <td>Skip admin-protected paths</td>
 <td>Excludes system directories that deny access when not elevated.</td>
 </tr>
@@ -1692,9 +1710,9 @@ size.</td>
 <td>Traditional window launch position</td>
 <td>Where the traditional window appears on screen at launch: Centered
 (default), or any of the eight edge/corner anchors (Top Left, Top
-Middle, Top Right, Middle Left, Middle Right, Bottom Left, Bottom Middle,
-Bottom Right). Ignored when Maximize window on startup is on or while in
-the compact launcher.</td>
+Middle, Top Right, Middle Left, Middle Right, Bottom Left, Bottom
+Middle, Bottom Right). Ignored when Maximize window on startup is on or
+while in the compact launcher.</td>
 </tr>
 <tr>
 <td>Compact launcher launch position</td>
@@ -2917,6 +2935,24 @@ setting).</td>
 <code>--no-search-hidden</code>)</td>
 <td>Exclude hidden files/folders. System files are always skipped by the
 file walker regardless of this flag.</td>
+</tr>
+<tr>
+<td><code>--image-text</code> (aliases <code>--search-image-text</code>,
+<code>--ocr</code>)</td>
+<td>OCR image files and search the recognized text. Off by default;
+falls back to the <strong>Search image text (OCR)</strong> setting.
+Images are processed on a background queue so the normal file scan is
+not blocked.</td>
+</tr>
+<tr>
+<td><code>--no-image-text</code> (aliases
+<code>--no-search-image-text</code>, <code>--no-ocr</code>)</td>
+<td>Do not OCR images (default).</td>
+</tr>
+<tr>
+<td><code>--ocr-engine &lt;name&gt;</code></td>
+<td>OCR engine for <code>--image-text</code>: <code>paddle</code>
+(PaddleSharp, default) or <code>tesseract</code>.</td>
 </tr>
 </tbody>
 </table>

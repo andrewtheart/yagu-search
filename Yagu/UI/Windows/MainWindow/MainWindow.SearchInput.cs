@@ -382,7 +382,20 @@ public sealed partial class MainWindow
     private void OnQueryTextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
     {
         if (args.Reason == AutoSuggestionBoxTextChangeReason.UserInput && !AreQuerySuggestionsSuppressed())
+        {
             ApplyQuerySuggestions(sender, open: sender.IsSuggestionListOpen || _querySuggestionsUserOpened);
+        }
+        else if (args.Reason == AutoSuggestionBoxTextChangeReason.ProgrammaticChange)
+        {
+            // A programmatic query change — e.g. a semantic search whose natural-language query was
+            // translated into a concrete literal pattern and written back into this box — must NOT
+            // pop the history dropdown open. Deliberate opens (Down arrow, pointer focus) set
+            // IsSuggestionListOpen directly without changing Text, so they never reach this branch.
+            // The AutoSuggestBox can re-open its popup just after the change, so close it now and
+            // again on the next tick (mirrors OnDirectoryTextChanged).
+            sender.IsSuggestionListOpen = false;
+            DispatcherQueue.TryEnqueue(() => sender.IsSuggestionListOpen = false);
+        }
     }
 
     /// <summary>

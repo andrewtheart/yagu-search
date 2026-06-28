@@ -223,6 +223,15 @@ public static class SemanticPlanApplier
             mode ??= Models.SearchMode.FileNames;
         }
 
+        // Natural-language queries express SUBSTRING intent ("image files with 'a' in them",
+        // "files containing report") — never whole-word boundaries. The UI's ExactMatch toggle
+        // defaults to whole-word (true), so without forcing a default here a semantic content search
+        // for "a" would compile to the whole-word regex \ba\b and match nothing inside words like
+        // "BANANA". Default a model-translated search to substring matching; the model can still opt
+        // into whole-word by emitting exactMatch=true. (Harmless when UseRegex is set — the regex
+        // path ignores ExactMatch — so this is a safe blanket default.)
+        bool? exactMatch = plan.ExactMatch ?? false;
+
         var resolved = new ResolvedSearchPlan
         {
             Directory = directory,
@@ -230,7 +239,7 @@ public static class SemanticPlanApplier
             SearchMode = mode,
             CaseSensitive = plan.CaseSensitive,
             UseRegex = useRegex,
-            ExactMatch = plan.ExactMatch,
+            ExactMatch = exactMatch,
             IncludeGlobs = include.Count > 0 ? include : null,
             ExcludeGlobs = exclude.Count > 0 ? exclude : null,
             MinFileSizeBytes = minSize,
@@ -910,7 +919,7 @@ public static class SemanticPlanApplier
     // (e.g. searching for the literal word "hidden" in file contents) is left to the model.
     private static readonly Regex HiddenFileMentionRegex = new(
         @"\bhidden\s+(?:files?|folders?|directories|director(?:y|ies)|items?|entries|entry|elements?|ones?|stuff|dot[\s-]?files?)\b"
-        + @"|\b(?:include|including|show|showing|display|displaying|reveal|revealing|with|exclude|excluding|skip|skipping|ignore|ignoring|omit|omitting|without|no|hide|hiding)\s+hidden\b",
+        + @"|\b(?:include|including|show|showing|display|displaying|reveal|revealing|with|exclude|excluding|skip|skipping|ignore|ignoring|omit|omitting|without|no|not|hide|hiding)\s+hidden\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     // Negation/exclusion cues that, in the clause preceding a hidden-file mention, mean the user wants

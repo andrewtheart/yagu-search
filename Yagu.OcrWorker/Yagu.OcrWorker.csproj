@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Yagu.OcrWorker is the OUT-OF-PROCESS OCR host (Option B).
+
+    Why it exists:
+      PaddleSharp's native stack (paddle_inference_c.dll + MKL, OpenCvSharpExtern.dll) is NOT
+      validated for Native AOT. The main Yagu app is published with PublishAot=true, so PaddleSharp
+      cannot run in-process without risking the AOT publish used by the installer. This worker runs
+      PaddleSharp in a separate, NON-AOT process; Yagu talks to it over stdin/stdout. Yagu.exe stays
+      AOT-clean and carries zero native OCR dependencies.
+
+    Runtime/model delivery:
+      The native runtime (paddle + opencv) and OCR models are LAZY-DOWNLOADED to %LOCALAPPDATA%\Yagu
+      on first use (keeps the installer lean). See NativeRuntime.cs.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Yagu.OcrWorker</RootNamespace>
+    <AssemblyName>Yagu.OcrWorker</AssemblyName>
+    <Platforms>AnyCPU;x64</Platforms>
+    <!-- Native OCR binaries are win-x64, so the worker process must be 64-bit. -->
+    <PlatformTarget>x64</PlatformTarget>
+    <!-- This worker intentionally does NOT use Native AOT (that's the whole point of isolating it). -->
+    <PublishAot>false</PublishAot>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Vendored PaddleSharp source is third-party; don't fail our build on its doc/analyzer noise. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      References the vendored PaddleSharp online-models project, which transitively brings in
+      Sdcb.PaddleOCR, Sdcb.PaddleInference and the managed OpenCvSharp4 binding (no native binaries).
+    -->
+    <ProjectReference Include="..\vendor\PaddleSharp\src\Sdcb.PaddleOCR.Models.Online\Sdcb.PaddleOCR.Models.Online.csproj" />
+    <!--
+      Vendored charlesw Tesseract 5.2.0 wrapper. Bundles the native leptonica/tesseract DLLs under
+      x64/ (copied to this worker's output), so no native lazy-download is needed for Tesseract —
+      only the tessdata_best language data is fetched at runtime. Image preprocessing reuses the
+      OpenCvSharp binding already brought in by PaddleSharp.
+    -->
+    <ProjectReference Include="..\vendor\Tesseract\src\Tesseract\Tesseract.csproj" />
+  </ItemGroup>
+
+</Project>

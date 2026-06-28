@@ -6,6 +6,70 @@ namespace Yagu.Tests;
 public class SearchResultTests
 {
     [Fact]
+    public void SetContextTrim_RaisesNumberedBeforeAndAfterChange_WhenWindowChanges()
+    {
+        var r = new SearchResult(@"C:\f.cs", 5, "needle", 0, 6,
+            ContextBefore: new[] { "b3", "b4" }, ContextAfter: new[] { "a6", "a7" });
+        var raised = new List<string?>();
+        r.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        r.SetContextTrim(3, 7);
+
+        Assert.Contains(nameof(SearchResult.NumberedBefore), raised);
+        Assert.Contains(nameof(SearchResult.NumberedAfter), raised);
+    }
+
+    [Fact]
+    public void SetContextTrim_DoesNotRaise_WhenWindowUnchanged()
+    {
+        var r = new SearchResult(@"C:\f.cs", 5, "needle", 0, 6,
+            ContextBefore: new[] { "b3", "b4" }, ContextAfter: new[] { "a6", "a7" });
+        int count = 0;
+        r.PropertyChanged += (_, _) => count++;
+
+        // Defaults are (0, int.MaxValue); re-applying the same window must be a no-op.
+        r.SetContextTrim(0, int.MaxValue);
+
+        Assert.Equal(0, count);
+    }
+
+    [Fact]
+    public void SetContextTrim_TrimsNumberedBeforeAndAfterToOpenInterval()
+    {
+        // Match on line 5, context +/-2: before=lines 3,4; after=lines 6,7.
+        var r = new SearchResult(@"C:\f.cs", 5, "needle", 0, 6,
+            ContextBefore: new[] { "b3", "b4" }, ContextAfter: new[] { "a6", "a7" });
+
+        r.SetContextTrim(floorExclusive: 4, ceilingExclusive: 7);
+
+        // Before lines 3,4 are <= floor (hidden); after line 6 is in (4,7), line 7 is >= ceiling (hidden).
+        Assert.Empty(r.NumberedBefore);
+        Assert.Equal(new[] { 6 }, r.NumberedAfter.Select(c => c.LineNum).ToArray());
+    }
+
+    [Fact]
+    public void SetContextTrim_NoSubscriber_DoesNotThrow()
+    {
+        var r = new SearchResult(@"C:\f.cs", 5, "needle", 0, 6,
+            ContextBefore: new[] { "b3", "b4" }, ContextAfter: new[] { "a6", "a7" });
+        // No PropertyChanged subscriber -> handler-null branch.
+        r.SetContextTrim(3, 7);
+        Assert.Equal(new[] { 6 }, r.NumberedAfter.Select(c => c.LineNum).ToArray());
+    }
+
+    [Fact]
+    public void SetContextTrim_FloorHidesAfterLinesAtOrBelowFloor()
+    {
+        // Match on line 5, after=lines 6,7. A floor of 6 hides line 6 (not > floor) and keeps line 7.
+        var r = new SearchResult(@"C:\f.cs", 5, "needle", 0, 6,
+            ContextBefore: Array.Empty<string>(), ContextAfter: new[] { "a6", "a7" });
+
+        r.SetContextTrim(floorExclusive: 6, ceilingExclusive: int.MaxValue);
+
+        Assert.Equal(new[] { 7 }, r.NumberedAfter.Select(c => c.LineNum).ToArray());
+    }
+
+    [Fact]
     public void ShortPreview_ShortLine_ReturnsFullLine()
     {
         var r = new SearchResult(@"C:\f.cs", 1, "short line", 0, 5, [], []);

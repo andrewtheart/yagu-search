@@ -403,6 +403,9 @@ public sealed partial class MainWindow
         SetPreviewFileLabel(string.Empty);
         ClosePreviewEditor();
         ShowPreviewBlockSurface();
+        // Drop any active custom text selection so its overlay rectangles don't
+        // linger over the empty "Nothing to show" state after the content is cleared.
+        ClearPreviewCustomSelection();
         PreviewBlock.Blocks.Clear();
         PreviewSectionsPanel.Children.Clear();
         FullFileButton.IsEnabled = true;
@@ -444,6 +447,9 @@ public sealed partial class MainWindow
         SetPreviewFileLabel(string.Empty);
         ClosePreviewEditor();
         ShowPreviewBlockSurface();
+        // Drop any active custom text selection so its overlay rectangles don't
+        // linger over the empty "Nothing to show" state after the content is cleared.
+        ClearPreviewCustomSelection();
         PreviewBlock.Blocks.Clear();
         PreviewSectionsPanel.Children.Clear();
         FullFileButton.IsEnabled = true;
@@ -2207,7 +2213,8 @@ public sealed partial class MainWindow
             bool hasSelection = HasPreviewCustomSelection(block) || !string.IsNullOrEmpty(block.SelectedText);
             copyWithLines.IsEnabled = hasSelection;
             copyWithout.IsEnabled = hasSelection;
-            editFileItem.IsEnabled = !string.IsNullOrWhiteSpace(ResolvePreviewBlockFilePath(block));
+            var editFilePath = ResolvePreviewBlockFilePath(block);
+            editFileItem.IsEnabled = !string.IsNullOrWhiteSpace(editFilePath) && !IsImagePreviewPath(editFilePath);
         };
         block.ContextFlyout = flyout;
     }

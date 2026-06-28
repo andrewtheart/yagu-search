@@ -365,4 +365,72 @@
           SkipUnchangedFiles="true" />
   </Target>
 
+  <!--
+    Out-of-process OCR worker (Yagu.OcrWorker) build + bundle.
+
+    Image-text (OCR) search runs PaddleSharp/Tesseract in a SEPARATE process (Yagu.OcrWorker.exe)
+    because that native stack is NOT Native-AOT compatible and Yagu.exe is published with
+    PublishAot=true. Yagu.csproj therefore deliberately does NOT add a <ProjectReference> to the
+    worker — that would drag the worker's non-AOT PaddleSharp/OpenCvSharp dependencies into Yagu's
+    AOT publish graph and break the AOT publish (and bloat Yagu.exe). Instead the worker is built as
+    an ISOLATED sub-build (a child `dotnet build` process, see below) and its output is copied into
+    <app>\ocr-worker\, one of the locations WorkerOcrEngine.ResolveWorkerPath probes at runtime.
+
+    This makes image-text search work from a fresh checkout / after `dotnet clean` — previously the
+    worker had to be deployed by hand and didn't survive a clean. The worker is always net10.0 and
+    builds into its AnyCPU output folder (PlatformTarget=x64; its native OCR binaries are win-x64),
+    independent of Yagu's RuntimeIdentifier.
+
+    The worker is built as a SEPARATE `dotnet build` child PROCESS (not the in-proc <MSBuild> task)
+    on purpose: invoking the MSBuild task from BeforeBuild re-enters this build and corrupts the
+    WinUI XAML markup compiler's MarkupCompilePass2 (it loses its LocalAssembly: "No LocalAssembly
+    parameter given during MarkupCompilePass2"), which fails the main build. A child process is
+    fully isolated — the same reason the Rust core is built via an <Exec> cargo call. `dotnet build`
+    restores by default, so a fresh checkout (the worker is NOT in Yagu's project graph) builds with
+    no separate restore step; the default AnyCPU platform keeps the output in bin\$(Configuration)\.
+
+    Set -p:BuildOcrWorker=false to skip (managed-only iteration when OCR isn't needed).
+  -->
+  <PropertyGroup>
+    <BuildOcrWorker Condition="'$(BuildOcrWorker)' == ''">true</BuildOcrWorker>
+    <OcrWorkerProject>$(MSBuildThisFileDirectory)..\Yagu.OcrWorker\Yagu.OcrWorker.csproj</OcrWorkerProject>
+    <OcrWorkerOutDir>$(MSBuildThisFileDirectory)..\Yagu.OcrWorker\bin\$(Configuration)\net10.0\</OcrWorkerOutDir>
+  </PropertyGroup>
+
+  <Target Name="BuildOcrWorker"
+          BeforeTargets="BeforeBuild"
+          Condition="'$(BuildOcrWorker)' == 'true' And '$(DesignTimeBuild)' != 'true' And Exists('$(OcrWorkerProject)')">
+    <Exec Command="dotnet build &quot;$(OcrWorkerProject)&quot; -c $(Configuration) --nologo -v quiet"
+          ContinueOnError="WarnAndContinue" />
+    <Warning Condition="!Exists('$(OcrWorkerOutDir)Yagu.OcrWorker.exe')"
+             Text="Yagu.OcrWorker did not build to $(OcrWorkerOutDir)Yagu.OcrWorker.exe; image-text (OCR) search will be unavailable. Build Yagu.OcrWorker manually, or pass -p:BuildOcrWorker=false to silence this warning." />
+  </Target>
+
+  <Target Name="CopyOcrWorkerToOutput"
+          AfterTargets="Build"
+          Condition="'$(BuildOcrWorker)' == 'true' And '$(DesignTimeBuild)' != 'true' And Exists('$(OcrWorkerOutDir)Yagu.OcrWorker.exe')">
+    <ItemGroup>
+      <_YaguOcrWorkerFiles Include="$(OcrWorkerOutDir)**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_YaguOcrWorkerFiles)"
+          DestinationFiles="@(_YaguOcrWorkerFiles->'$(OutDir)ocr-worker\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <!--
+    Self-contained publish (the installer source): drop the worker into <publish>\ocr-worker\ too.
+    build-installer.ps1 stages the whole publish dir with recursesubdirs, so the worker is then
+    picked up by the Inno Setup installer automatically with NO .iss change.
+  -->
+  <Target Name="CopyOcrWorkerToPublish"
+          AfterTargets="Publish"
+          Condition="'$(BuildOcrWorker)' == 'true' And '$(DesignTimeBuild)' != 'true' And Exists('$(OcrWorkerOutDir)Yagu.OcrWorker.exe')">
+    <ItemGroup>
+      <_YaguOcrWorkerPublishFiles Include="$(OcrWorkerOutDir)**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_YaguOcrWorkerPublishFiles)"
+          DestinationFiles="@(_YaguOcrWorkerPublishFiles->'$(PublishDir)ocr-worker\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>

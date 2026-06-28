@@ -107,6 +107,49 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     public BatchObservableCollection<SearchResult> VisibleResults { get; } = new();
     private int _visibleSkipped; // filename matches skipped during ShowMore/ShowAll
 
+    // Running state for trimming overlapping context windows in the file list (see
+    // SearchResult.SetContextTrim). Maintained in display (ascending) order as rows are appended so
+    // each row hides context lines already shown by an earlier row or owned by the next match.
+    private int _lastVisibleLine;
+    private SearchResult? _trimPrevResult;
+    private int _trimPrevFloor;
+
+    /// <summary>
+    /// Registers a result being appended to <see cref="VisibleResults"/> (in display order) and trims
+    /// its context window so the file list never repeats a line number already shown by an earlier row
+    /// or owned by the next match's line. Call once per result with <c>LineNumber &gt; 0</c>, in the
+    /// order rows are rendered.
+    /// </summary>
+    private void RegisterVisibleForTrim(SearchResult item)
+    {
+        if (item.LineNumber <= 0)
+            return;
+
+        if (_trimPrevResult is not null)
+        {
+            // The previous row's trailing context must stop before this match's line.
+            int prevCeiling = item.LineNumber;
+            _trimPrevResult.SetContextTrim(_trimPrevFloor, prevCeiling);
+            int prevAfterMax = Math.Min(_trimPrevResult.LineNumber + _trimPrevResult.ContextAfter.Count, prevCeiling - 1);
+            _lastVisibleLine = Math.Max(_lastVisibleLine, Math.Max(_trimPrevResult.LineNumber, prevAfterMax));
+        }
+
+        int floor = _lastVisibleLine;
+        // Ceiling is finalized to the next match's line when the following row registers; until then
+        // the (currently last) row shows its full trailing context.
+        item.SetContextTrim(floor, int.MaxValue);
+        _lastVisibleLine = Math.Max(_lastVisibleLine, item.LineNumber);
+        _trimPrevResult = item;
+        _trimPrevFloor = floor;
+    }
+
+    private void ResetVisibleTrim()
+    {
+        _lastVisibleLine = 0;
+        _trimPrevResult = null;
+        _trimPrevFloor = 0;
+    }
+
     private volatile bool _cleaned;
 
     public FileGroup(string filePath)
@@ -522,6 +565,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
                     if (VisibleResults.Count < PageSize && !item.IsEvicted)
                     {
                         _ = item.ShortPreview;
+                        RegisterVisibleForTrim(item);
                         VisibleResults.Add(item);
                         addedToVisible = true;
                     }
@@ -546,6 +590,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         else if (e.Action == NotifyCollectionChangedAction.Reset)
         {
             VisibleResults.Clear();
+            ResetVisibleTrim();
             NotifyMoreStateChanged();
         }
     }
@@ -562,6 +607,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         if (VisibleResults.Count == 0 && _visibleSkipped == 0) return;
         VisibleResults.Clear();
         _visibleSkipped = 0;
+        ResetVisibleTrim();
         NotifyMoreStateChanged();
     }
 
@@ -592,6 +638,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             _ = this[i].ShortPreview;
             if (this[i].IsEvicted) evictedCount++;
             if (this[i].MatchLine.Length == 0) emptyMatchCount++;
+            RegisterVisibleForTrim(this[i]);
             batch.Add(this[i]);
         }
         if (evictedCount > 0 || emptyMatchCount > 0)
@@ -618,6 +665,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
                 continue;
             }
             _ = this[i].ShortPreview;
+            RegisterVisibleForTrim(this[i]);
             batch.Add(this[i]);
         }
         VisibleResults.AddRange(batch);

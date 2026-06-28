@@ -90,7 +90,14 @@ For contributors building, testing, or packaging Yagu from this repository:
 
 - Windows 10 version 1809 / build 17763 or newer.
 - .NET 10 SDK. The repo pins SDK `10.0.107` with `rollForward: latestFeature` in [global.json](global.json).
-- Visual Studio 2022 or Build Tools with Windows desktop/Windows SDK components is recommended because the main app is an unpackaged WinUI 3 application. The test project avoids WinUI dependencies and can run on a normal Windows .NET SDK installation.
+- Visual Studio 2022 (17.8 or newer) or the standalone Build Tools, with:
+  - The **Desktop development with C++** workload. Native AOT publishing invokes the MSVC compiler and linker, so this is required for normal builds, not just for the installer. Installing this workload also pulls in the Windows SDK.
+  - The Windows SDK and WinUI / Windows App SDK components, because the main app is an unpackaged WinUI 3 application.
+  - The test project avoids WinUI dependencies and can run on a normal Windows .NET SDK installation.
+- C++ build tools for the target CPU architecture you build or publish. The host-architecture tools come with the C++ workload, but cross-architecture targets need their own components:
+  - **arm64:** the **MSVC v143 - VS 2022 C++ ARM64/ARM64EC build tools (Latest)** individual component (Visual Studio Installer → *Individual components*, under the Desktop development with C++ workload). This is required to compile and link both the Native AOT app and the Rust `yagu_core.dll` for `win-arm64`; building the arm64 target or installer without it fails at the link step.
+  - **x86:** the 32-bit C++ build tools, which the Desktop development with C++ workload includes by default.
+  - The matching Rust target (`aarch64-pc-windows-msvc` for arm64, `i686-pc-windows-msvc` for x86) is added automatically by the build via `rustup target add`, so only the C++ side needs manual installation.
 - PowerShell for helper scripts such as install, publish, profiling, cleanup, and Windows App Runtime prerequisite staging.
 - Rust stable toolchain if you want to build and test the native `yagu_core.dll` fast path. The app still builds and runs without Rust if you pass `-p:BuildRustCore=false`; it will use the managed scanner.
 - Inno Setup 6 only when building the installer EXE with [build-installer.ps1](build-installer.ps1).
@@ -232,7 +239,7 @@ Then build the per-architecture installers from the repo root:
 .\build-installer.ps1
 ```
 
-This publishes Yagu as a self-contained Native AOT build for each architecture (x64, x86, arm64), stages each output, and compiles one installer EXE per architecture at `installer\output\YaguSetup-<version>-<arch>.exe`, copying the latest versioned installer for each architecture to `installer\YaguSetup-<version>-<arch>.exe`. Build a single architecture with `-Architecture x64` (or `x86` / `arm64`). Building the x86 and arm64 installers from an x64 machine requires the corresponding C++ build tools and Rust targets (the build adds the Rust target automatically).
+This publishes Yagu as a self-contained Native AOT build for each architecture (x64, x86, arm64), stages each output, and compiles one installer EXE per architecture at `installer\output\YaguSetup-<version>-<arch>.exe`, copying the latest versioned installer for each architecture to `installer\YaguSetup-<version>-<arch>.exe`. Build a single architecture with `-Architecture x64` (or `x86` / `arm64`). Building the x86 and arm64 installers from an x64 machine requires the corresponding C++ build tools and Rust targets (the build adds the Rust target automatically). For arm64 specifically, install the **MSVC v143 - VS 2022 C++ ARM64/ARM64EC build tools** component (see [Building And Developing](#building-and-developing)); without it the Native AOT link step for `win-arm64` fails.
 
 Running `dotnet publish -r win-<arch>` for the Yagu project also builds that architecture's installer after publish completes. A bare `dotnet publish` (no `-r`) builds all three installers (x64, x86, arm64), the same as running `.\build-installer.ps1`. To publish without building any installer, pass `-p:BuildInstallerOnPublish=false`.
 

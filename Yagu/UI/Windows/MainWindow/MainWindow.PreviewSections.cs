@@ -620,6 +620,9 @@ public sealed partial class MainWindow
             StickyFileHeader.Child = BuildPreviewSectionHeader(filePath, detail, section, selectedForFile);
     }
 
+    /// <summary>
+    /// Returns the set of file paths currently shown as preview sections.
+    /// </summary>
     private HashSet<string> GetExistingPreviewFilePaths()
     {
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

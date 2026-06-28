@@ -483,7 +483,7 @@ public sealed partial class MainWindow
     /// Batch-read all file contents off the UI thread so the per-file loop only does
     /// XAML element construction (which must be on the UI thread) without interleaving I/O waits.
     /// </summary>
-    private static async Task<Dictionary<string, string[]?>> ReadAllFileContentsAsync(
+    private async Task<Dictionary<string, string[]?>> ReadAllFileContentsAsync(
         List<KeyValuePair<string, List<SearchResult>>> orderedFiles)
     {
         return await Task.Run(() =>
@@ -846,6 +846,10 @@ public sealed partial class MainWindow
         bool initiallyCapped = results.Count > maxMatches;
         var cappedResults = initiallyCapped ? results.GetRange(0, maxMatches) : results;
         int lastRenderedLine1 = 0;
+        // When we render from stored per-result context (allLines == null) we merge the
+        // overlapping windows into a single ordered set of lines, so this tracks how many
+        // results that merged render actually covered (used for the truncation notice below).
+        int storedContextCoveredResults = -1;
 
         if (allLines != null)
         {
@@ -974,39 +978,73 @@ public sealed partial class MainWindow
         }
         else
         {
-            var matchLineNums = new HashSet<int>(cappedResults.Select(r => r.LineNumber));
+            // Each stored-context result carries its own ±previewLines window. When matches sit
+            // close together those windows overlap, so rendering them independently repeats the
+            // same line numbers (a context line of one match is also a context line — or even the
+            // match line — of the next). Merge all windows into a single ordered, de-duplicated map
+            // of line number -> text, where a match line always wins over a context line for the
+            // same number, then render each line once and insert a gap indicator only where source
+            // lines are actually skipped.
+            var lineText = new Dictionary<int, string>();
+            var matchResultByLine = new Dictionary<int, SearchResult>();
             foreach (var r in cappedResults)
+            {
+                var lines = GetPreviewLines(r, null, previewLines, fullFile: false);
+                foreach (var (line, lineNum) in lines)
+                {
+                    if (lineNum == r.LineNumber)
+                    {
+                        // Match line: authoritative text and the owning result for nav registration.
+                        lineText[lineNum] = line;
+                        matchResultByLine[lineNum] = r;
+                    }
+                    else if (!lineText.ContainsKey(lineNum))
+                    {
+                        lineText[lineNum] = line;
+                    }
+                }
+            }
+
+            _sectionMatchNavs.TryGetValue(section, out var sn);
+            var renderedLineSet = new HashSet<int>();
+            int previousLineNum = 0;
+            bool firstLine = true;
+            foreach (int lineNum in lineText.Keys.OrderBy(n => n))
             {
                 if (section.Blocks.Count - startingBlocks >= maxBlocks)
                     break;
 
-                var lines = GetPreviewLines(r, null, previewLines, fullFile: false);
-                foreach (var (line, lineNum) in lines)
-                {
-                    if (section.Blocks.Count - startingBlocks >= maxBlocks)
-                        break;
+                if (!firstLine && ShouldAddGapBetweenRenderedLines(previousLineNum, lineNum))
+                    AddGapIndicator(section);
+                firstLine = false;
 
-                    bool isMatchLine = matchLineNums.Contains(lineNum);
-                    _sectionMatchNavs.TryGetValue(section, out var sn);
-                    AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, rx, truncate: truncatePreviewLines,
-                        lineNum == r.LineNumber ? _matchParagraphs : null, sn, out int addedParagraphs,
-                        maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks));
-                    parasBuilt += addedParagraphs;
-                    parasSinceYield += addedParagraphs;
-                    if (parasSinceYield >= BuildHighlightYieldEvery)
-                    {
-                        parasSinceYield = 0;
-                        yieldCount++;
-                        await DispatchIdleAsync();
-                    }
+                bool isMatchLine = matchResultByLine.TryGetValue(lineNum, out var matchResult);
+                matchResult ??= cappedResults[0];
+                AddPreviewLineParagraphs(section, lineText[lineNum], lineNum, isMatchLine, matchResult, rx, truncate: truncatePreviewLines,
+                    isMatchLine ? _matchParagraphs : null, sn, out int addedParagraphs,
+                    maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks));
+                renderedLineSet.Add(lineNum);
+                lastRenderedLine1 = lineNum;
+                previousLineNum = lineNum;
+                parasBuilt += addedParagraphs;
+                parasSinceYield += addedParagraphs;
+                if (parasSinceYield >= BuildHighlightYieldEvery)
+                {
+                    parasSinceYield = 0;
+                    yieldCount++;
+                    await DispatchIdleAsync();
                 }
             }
+
+            // A single rendered match line can satisfy several results (dense same-line matches),
+            // so count results by whether their line was rendered rather than by distinct entries.
+            storedContextCoveredResults = cappedResults.Count(r => renderedLineSet.Contains(r.LineNumber));
         }
 
         int actualMatchEntries = _matchParagraphs.Count - sectionMatchStart;
         int renderedCount = allLines != null
             ? CountPrefixResultsThroughLine(results, lastRenderedLine1, allLines.Length)
-            : Math.Min(results.Count, actualMatchEntries);
+            : (storedContextCoveredResults >= 0 ? storedContextCoveredResults : Math.Min(results.Count, actualMatchEntries));
         // When a line is truncated, regex matches beyond the truncation window are
         // invisible. Cap renderedCount so overflow is registered for the hidden matches
         // and the match-nav total reflects reality (e.g. single-line minified JSON).
@@ -1248,8 +1286,15 @@ public sealed partial class MainWindow
         LogService.Instance.Info("Preview", "MaterializeAllLazySectionsAsync: done");
     }
 
-    private static string[] ReadAllLinesWithEncodingSync(string filePath)
+    private string[] ReadAllLinesWithEncodingSync(string filePath)
     {
+        // Image files have no readable text content. Return their recognized OCR text
+        // (split into lines) so the normal preview pipeline — line-number gutter, match
+        // highlighting, and the active-match box — renders the recognized text instead of
+        // the raw binary bytes. An empty array means "image with no cached OCR text yet".
+        if (IsImagePreviewPath(filePath))
+            return GetPreviewOcrLines(filePath) ?? Array.Empty<string>();
+
         using var fs = new FileStream(
             filePath, FileMode.Open, FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete,
@@ -1292,8 +1337,12 @@ public sealed partial class MainWindow
     /// splits on lone <c>\r</c>, which creates phantom extra lines in binary files
     /// and causes the highlighted line to drift from the actual match.
     /// </summary>
-    private static async Task<string[]> ReadAllLinesWithEncodingAsync(string filePath)
+    private async Task<string[]> ReadAllLinesWithEncodingAsync(string filePath)
     {
+        // See ReadAllLinesWithEncodingSync: images render their recognized OCR text, not bytes.
+        if (IsImagePreviewPath(filePath))
+            return GetPreviewOcrLines(filePath) ?? Array.Empty<string>();
+
         await using var fs = new FileStream(
             filePath, FileMode.Open, FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete,
@@ -1479,13 +1528,27 @@ public sealed partial class MainWindow
 
         ViewModel.HydrateResult(r);
 
+        bool isImagePreview = IsImagePreviewPath(r.FilePath);
+        // Image previews are read-only (OCR text) — disable the "full file" editor entry.
+        FullFileButton.IsEnabled = !isImagePreview;
         string[]? allLines = null;
-        // Read the file for context lines so we always show the configured PreviewContextLines
-        // amount, not just whatever the SearchResult stored (which may be fewer or empty after eviction).
-        try { allLines = await ReadAllLinesWithEncodingAsync(r.FilePath); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        if (isImagePreview)
         {
-            LogService.Instance.Verbose("Preview", $"ShowSingleFilePreviewAsync: cannot read file '{r.FilePath}', using stored context: {ex.GetType().Name}");
+            // Images are not text files: show a thumbnail and render the recognized OCR
+            // text (if any) instead of the raw binary bytes.
+            await ShowPreviewImageThumbnailAsync(r.FilePath);
+            allLines = GetPreviewOcrLines(r.FilePath);
+        }
+        else
+        {
+            HidePreviewImageThumbnail();
+            // Read the file for context lines so we always show the configured PreviewContextLines
+            // amount, not just whatever the SearchResult stored (which may be fewer or empty after eviction).
+            try { allLines = await ReadAllLinesWithEncodingAsync(r.FilePath); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                LogService.Instance.Verbose("Preview", $"ShowSingleFilePreviewAsync: cannot read file '{r.FilePath}', using stored context: {ex.GetType().Name}");
+            }
         }
 
         _previewMutating = true;
@@ -1505,6 +1568,15 @@ public sealed partial class MainWindow
             ? null
             : BuildSearchHighlightRegex();
 
+        if (isImagePreview && (allLines is null || allLines.Length == 0))
+        {
+            AddPreviewPlainNote(PreviewBlock,
+                "No recognized text for this image. Turn on \u201CSearch image text\u201D and run a search to extract text.");
+            singleSw.Stop();
+            LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync complete: image with no OCR text, elapsed={singleSw.ElapsedMilliseconds}ms");
+        }
+        else
+        {
         int lineCount = 0;
         bool truncatePreviewLines = !fullFile && ShouldTruncateInitialPreviewLines();
         var lines = GetPreviewLines(r, allLines, ViewModel.PreviewContextLines, fullFile);
@@ -1520,6 +1592,7 @@ public sealed partial class MainWindow
         }
         singleSw.Stop();
         LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync complete: lines={lineCount}, blocks={PreviewBlock.Blocks.Count}, elapsed={singleSw.ElapsedMilliseconds}ms");
+        }
 
         }
         finally
@@ -1533,6 +1606,7 @@ public sealed partial class MainWindow
     {
         PreviewScrollViewer.Padding = new Thickness(16, 12, 16, 12);
         PreviewMessagePanel.Visibility = Visibility.Visible;
+        HidePreviewImageThumbnail();
         PreviewSectionsPanel.Children.Clear();
         PreviewSectionsPanel.Visibility = Visibility.Collapsed;
         PreviewBlock.TextWrapping = ViewModel.PreviewWordWrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
@@ -1554,6 +1628,7 @@ public sealed partial class MainWindow
         PreviewScrollViewer.Padding = new Thickness(0, 0, 0, 0);
         PreviewBlock.Blocks.Clear();
         PreviewBlock.Visibility = Visibility.Collapsed;
+        HidePreviewImageThumbnail();
         ClearPreviewBlockContentBackground();
         PreviewSectionsPanel.Children.Clear();
         PreviewSectionsPanel.Visibility = Visibility.Visible;
@@ -1621,6 +1696,15 @@ public sealed partial class MainWindow
             && !hasSections;
 
         PreviewEmptyState.Visibility = showEmptyState ? Visibility.Visible : Visibility.Collapsed;
+
+        // When the preview empties out ("Nothing to show") there is no selectable
+        // content left, so drop any lingering custom text selection. Its overlay
+        // rectangles live on PreviewSelectionOverlay (ZIndex above the empty state)
+        // and would otherwise stay painted as ghost highlights no matter which path
+        // emptied the preview (clear button, file dismiss, deselect, results clear).
+        // This is the single chokepoint every empty-state transition funnels through.
+        if (showEmptyState)
+            ClearPreviewCustomSelection();
     }
 
     private void BeginPreviewContentUpdate()
@@ -1663,6 +1747,227 @@ public sealed partial class MainWindow
         FullFileButton.Visibility = visibility;
         OpenInDefaultAppButton.Visibility = visibility;
         OpenInEditorButton.Visibility = visibility;
+    }
+
+    // Eagerly constructed (cheap: it only stores a directory path) so it can be read safely
+    // from the background read threads in ReadAllFileContentsAsync / AppendCheckedMatchContextAsync
+    // without a lazy-init race.
+    private readonly Yagu.Services.Ocr.OcrTextCache _previewOcrTextCache = new();
+
+    private Yagu.Services.Ocr.OcrTextCache PreviewOcrTextCache => _previewOcrTextCache;
+
+    /// <summary>
+    /// True when <paramref name="path"/> is an OCR-able image. Image previews show a thumbnail
+    /// plus the recognized OCR text and are intentionally not text-editable.
+    /// </summary>
+    private static bool IsImagePreviewPath(string? path)
+        => !string.IsNullOrEmpty(path) && Yagu.Services.Ocr.ImageOcrSupport.IsImageCandidate(path);
+
+    /// <summary>
+    /// Returns the cached OCR text for an image split into lines (so the normal preview
+    /// match-highlighting pipeline can render it), or <c>null</c> when no recognized text is cached.
+    /// </summary>
+    private string[]? GetPreviewOcrLines(string path)
+    {
+        string engineId = AppSettings.NormalizeImageOcrEngine(ViewModel.ImageOcrEngine);
+        if (!PreviewOcrTextCache.TryGet(path, engineId, out string text) || string.IsNullOrEmpty(text))
+            return null;
+        return text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+    }
+
+    /// <summary>Loads and shows a bounded thumbnail of the image above the preview text.</summary>
+    private async Task ShowPreviewImageThumbnailAsync(string path)
+    {
+        try
+        {
+            var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(path);
+            using var stream = await file.OpenReadAsync();
+            var bitmap = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage
+            {
+                DecodePixelType = Microsoft.UI.Xaml.Media.Imaging.DecodePixelType.Logical,
+                DecodePixelHeight = 480,
+            };
+            await bitmap.SetSourceAsync(stream);
+            PreviewImageThumbnail.Source = bitmap;
+            PreviewImageThumbnailBorder.Visibility = Visibility.Visible;
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Verbose("Preview",
+                $"ShowPreviewImageThumbnailAsync: failed for '{path}': {ex.GetType().Name}: {ex.Message}");
+            HidePreviewImageThumbnail();
+        }
+    }
+
+    private void HidePreviewImageThumbnail()
+    {
+        PreviewImageThumbnailBorder.Visibility = Visibility.Collapsed;
+        PreviewImageThumbnail.Source = null;
+    }
+
+    /// <summary>
+    /// Builds a bounded image thumbnail that lives inside a section drawer, directly above the
+    /// recognized OCR text. Each image section owns its own <see cref="Microsoft.UI.Xaml.Controls.Image"/>
+    /// so multiple image previews each render their own picture (rather than a single shared
+    /// thumbnail floating above every drawer). The thumbnail is centered in the drawer and carries
+    /// an overlaid expand button that opens the original image at full quality/size in a modal.
+    /// </summary>
+    private Border CreateSectionImageThumbnail(string path)
+    {
+        var image = new Microsoft.UI.Xaml.Controls.Image
+        {
+            MaxHeight = 320,
+            MaxWidth = 480,
+            Stretch = Microsoft.UI.Xaml.Media.Stretch.Uniform,
+        };
+
+        // Expand button overlays the thumbnail's top-right corner. Clicking it opens the
+        // full-resolution original in a closable modal.
+        var expandButton = new Button
+        {
+            Content = new FontIcon { Glyph = "\uE740", FontSize = 12 },
+            Width = 32,
+            Height = 32,
+            MinWidth = 0,
+            MinHeight = 0,
+            Padding = new Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 4, 4, 0),
+        };
+        ToolTipService.SetToolTip(expandButton, "View full size");
+        string capturedPath = path;
+        expandButton.Click += (_, _) => _ = ShowFullSizeImageModalAsync(capturedPath);
+
+        var overlay = new Grid();
+        overlay.Children.Add(image);
+        overlay.Children.Add(expandButton);
+
+        var border = new Border
+        {
+            Margin = new Thickness(8, 4, 8, 12),
+            Padding = new Thickness(4),
+            CornerRadius = new CornerRadius(4),
+            BorderThickness = new Thickness(1),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            BorderBrush = TryGetPreviewBrushResource("CardStrokeColorDefaultBrush"),
+            Background = TryGetPreviewBrushResource("CardBackgroundFillColorSecondaryBrush"),
+            Child = overlay,
+        };
+        _ = LoadSectionImageThumbnailAsync(image, path);
+        return border;
+    }
+
+    /// <summary>Loads the bounded bitmap for a section image thumbnail.</summary>
+    private static async Task LoadSectionImageThumbnailAsync(Microsoft.UI.Xaml.Controls.Image image, string path)
+    {
+        try
+        {
+            var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(path);
+            using var stream = await file.OpenReadAsync();
+            var bitmap = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage
+            {
+                DecodePixelType = Microsoft.UI.Xaml.Media.Imaging.DecodePixelType.Logical,
+                DecodePixelHeight = 480,
+            };
+            await bitmap.SetSourceAsync(stream);
+            image.Source = bitmap;
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Verbose("Preview",
+                $"LoadSectionImageThumbnailAsync: failed for '{path}': {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Opens the original image at full quality and native resolution in a closable, resizable
+    /// modal. The image sits in a pan/zoom <see cref="ScrollViewer"/> so pictures larger than the
+    /// modal can be scrolled or zoomed to fit.
+    /// </summary>
+    private async Task ShowFullSizeImageModalAsync(string path)
+    {
+        try
+        {
+            var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(path);
+            var bitmap = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+            using (var stream = await file.OpenReadAsync())
+                await bitmap.SetSourceAsync(stream);
+
+            var image = new Microsoft.UI.Xaml.Controls.Image
+            {
+                Source = bitmap,
+                Stretch = Microsoft.UI.Xaml.Media.Stretch.None,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            var scroller = new ScrollViewer
+            {
+                Content = image,
+                HorizontalScrollMode = ScrollMode.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalScrollMode = ScrollMode.Auto,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                ZoomMode = ZoomMode.Enabled,
+                MinZoomFactor = 0.1f,
+                MaxZoomFactor = 8f,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+            };
+
+            var (width, height) = GetFullSizeImageModalDimensions();
+            await YaguDialog.ShowAsync(
+                _hwnd,
+                new YaguDialogOptions
+                {
+                    Title = System.IO.Path.GetFileName(path),
+                    Content = scroller,
+                    CloseButtonText = "Close",
+                    ShowTopRightCloseButton = true,
+                    DefaultButton = YaguDialogDefaultButton.Close,
+                    IsResizable = true,
+                    Width = width,
+                    Height = height,
+                    MaxContentHeight = height,
+                });
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("Preview",
+                $"ShowFullSizeImageModalAsync: failed for '{path}': {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>Sizes the full-size image modal to ~85% of the owner monitor's work area.</summary>
+    private (int width, int height) GetFullSizeImageModalDimensions()
+    {
+        try
+        {
+            var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(_hwnd);
+            var display = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(
+                windowId, Microsoft.UI.Windowing.DisplayAreaFallback.Nearest);
+            int width = (int)(display.WorkArea.Width * 0.85);
+            int height = (int)(display.WorkArea.Height * 0.85);
+            return (Math.Max(640, width), Math.Max(480, height));
+        }
+        catch
+        {
+            return (1100, 800);
+        }
+    }
+
+    private static Microsoft.UI.Xaml.Media.Brush? TryGetPreviewBrushResource(string key)
+        => Application.Current.Resources.TryGetValue(key, out var value)
+            ? value as Microsoft.UI.Xaml.Media.Brush
+            : null;
+
+
+    private static void AddPreviewPlainNote(RichTextBlock block, string text)
+    {
+        var para = new Paragraph();
+        para.Inlines.Add(new Run { Text = text, FontStyle = Windows.UI.Text.FontStyle.Italic });
+        para.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gray);
+        block.Blocks.Add(para);
     }
 
     private IEnumerable<RichTextBlock> EnumeratePreviewSectionBlocks()
@@ -1762,9 +2067,25 @@ public sealed partial class MainWindow
         content.SizeChanged += OnSectionScrollerSizeChanged;
 
         // Two-column grid: fixed gutter (line numbers) + scrollable content.
+        // Row 0 hosts the image thumbnail for image previews (zero-height for text
+        // files); row 1 holds the gutter + scrollable content.
         var sectionGrid = new Grid();
         sectionGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         sectionGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        sectionGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        sectionGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+        // Image previews render the picture inside this file's own drawer, directly above
+        // its recognized OCR text, so multiple image sections each show their own image
+        // instead of a single shared thumbnail floating above all drawers.
+        if (IsImagePreviewPath(filePath))
+        {
+            var imageBorder = CreateSectionImageThumbnail(filePath);
+            Grid.SetRow(imageBorder, 0);
+            Grid.SetColumn(imageBorder, 0);
+            Grid.SetColumnSpan(imageBorder, 2);
+            sectionGrid.Children.Add(imageBorder);
+        }
 
         var gutterBorder = new Border
         {
@@ -1776,8 +2097,10 @@ public sealed partial class MainWindow
             BorderBrush = s_gutterSepBrush,
             Child = gutterBlock,
         };
+        Grid.SetRow(gutterBorder, 1);
         Grid.SetColumn(gutterBorder, 0);
         sectionGrid.Children.Add(gutterBorder);
+        Grid.SetRow(sectionScroller, 1);
         Grid.SetColumn(sectionScroller, 1);
         sectionGrid.Children.Add(sectionScroller);
 
@@ -3330,8 +3653,16 @@ public sealed partial class MainWindow
         int addedMatchEntries = 0;
         lastRenderedLine = Math.Max(0, previouslyRenderedLine);
 
+        // Line numbers already drawn in this section (from the initial render and any
+        // earlier overflow chunks). We must never emit one of these again, otherwise
+        // overlapping windows around dense same-line matches (common in OCR previews)
+        // repeat the same line numbers down the pane.
+        var sectionRenderedLines = GetRenderedLineNumbers(section);
+
         int anchorLimit = Math.Min(pendingResults.Count, maxResultsToConsume);
-        var ranges = new List<(int start, int end)>();
+        // previouslyRenderedLine is 1-indexed; convert to 0-indexed for array comparisons
+        int previouslyRenderedIndex = previouslyRenderedLine > 0 ? previouslyRenderedLine - 1 : -1;
+        var rawRanges = new List<(int start, int end)>();
         for (int i = 0; i < anchorLimit; i++)
         {
             var result = pendingResults[i];
@@ -3341,16 +3672,23 @@ public sealed partial class MainWindow
 
             int start = Math.Max(0, lineIndex - previewLines);
             int end = Math.Min(allLines.Length - 1, lineIndex + previewLines);
-            // previouslyRenderedLine is 1-indexed; convert to 0-indexed for array comparisons
-            int previouslyRenderedIndex = previouslyRenderedLine > 0 ? previouslyRenderedLine - 1 : -1;
             if (end <= previouslyRenderedIndex)
                 continue;
 
             start = Math.Max(start, previouslyRenderedIndex + 1);
-            if (ranges.Count > 0 && start <= ranges[^1].end + 1)
-                ranges[^1] = (ranges[^1].start, Math.Max(ranges[^1].end, end));
+            rawRanges.Add((start, end));
+        }
+        // Sort by start before merging. The pending results are not guaranteed to be in
+        // ascending line order, so a merge that only looks at the last range can leave
+        // overlapping windows that re-render the same lines. Sorting first makes the
+        // adjacency merge correct regardless of input order.
+        var ranges = new List<(int start, int end)>();
+        foreach (var range in rawRanges.OrderBy(r => r.start))
+        {
+            if (ranges.Count > 0 && range.start <= ranges[^1].end + 1)
+                ranges[^1] = (ranges[^1].start, Math.Max(ranges[^1].end, range.end));
             else
-                ranges.Add((start, end));
+                ranges.Add(range);
         }
 
         if (ranges.Count == 0)
@@ -3376,6 +3714,16 @@ public sealed partial class MainWindow
                 int lineIndex = result.LineNumber - 1;
                 if (lineIndex < 0 || lineIndex >= allLines.Length)
                     continue;
+
+                // The line is already on screen (or we just drew it for an earlier
+                // same-line pending result). Its match-nav entry already exists, so
+                // count it as consumed instead of repeating the numbered row.
+                if (!sectionRenderedLines.Add(result.LineNumber))
+                {
+                    consumedResults++;
+                    lastRenderedLine = Math.Max(lastRenderedLine, result.LineNumber);
+                    continue;
+                }
 
                 if (paragraphsAdded >= maxAdditionalBlocks)
                     break;
@@ -3439,6 +3787,14 @@ public sealed partial class MainWindow
                     break;
 
                 int lineNumber = i + 1;
+                // Never re-draw a line already rendered in this section (gap lines below
+                // the high-water mark, or duplicates within this call); doing so repeats
+                // the line number further down the pane.
+                if (!sectionRenderedLines.Add(lineNumber))
+                {
+                    lastRenderedLine = lineNumber;
+                    continue;
+                }
                 bool isMatchLine = matchByLine.TryGetValue(lineNumber, out var matchResult);
                 matchResult ??= fallbackResult;
 

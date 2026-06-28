@@ -556,6 +556,104 @@ public class SettingsServiceNewFieldTests
     }
 
     [Fact]
+    public void RoundTrip_SuppressEverythingNotRunningPrompt()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-everything-prompt-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var svc = new SettingsService(tmp);
+            Assert.False(new AppSettings().SuppressEverythingNotRunningPrompt);
+            var s = new AppSettings { SuppressEverythingNotRunningPrompt = true };
+            svc.Save(s);
+            var loaded = svc.Load();
+            Assert.True(loaded.SuppressEverythingNotRunningPrompt);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Theory]
+    [InlineData("tesseract", "tesseract")]
+    [InlineData("Tesseract", "tesseract")]
+    [InlineData("  TESSERACT  ", "tesseract")]
+    [InlineData("paddle", "paddle")]
+    [InlineData("paddleocr", "paddle")]
+    [InlineData("paddlesharp", "paddle")]
+    [InlineData("PaddleSharp", "paddle")]
+    [InlineData("", "paddle")]
+    [InlineData("   ", "paddle")]
+    [InlineData(null, "paddle")]
+    [InlineData("totally-unknown", "paddle")]
+    public void NormalizeImageOcrEngine_MapsToKnownIds(string? input, string expected)
+    {
+        Assert.Equal(expected, AppSettings.NormalizeImageOcrEngine(input));
+    }
+
+    [Fact]
+    public void Defaults_ImageOcrSettings()
+    {
+        var s = new AppSettings();
+        Assert.False(s.SearchImageText);
+        Assert.Equal("paddle", s.ImageOcrEngine);
+        Assert.Equal("paddle", AppSettings.DefaultImageOcrEngine);
+    }
+
+    [Fact]
+    public void RoundTrip_SearchImageTextAndImageOcrEngine()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-ocr-roundtrip-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var svc = new SettingsService(tmp);
+            var s = new AppSettings { SearchImageText = true, ImageOcrEngine = "tesseract" };
+            svc.Save(s);
+            var loaded = svc.Load();
+            Assert.True(loaded.SearchImageText);
+            Assert.Equal("tesseract", loaded.ImageOcrEngine);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
+    public void Load_NormalizesPersistedImageOcrEngine()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-ocr-normalize-" + Guid.NewGuid() + ".json");
+        try
+        {
+            File.WriteAllText(tmp, """{"ImageOcrEngine":"PaddleSharp"}""");
+            var svc = new SettingsService(tmp);
+            Assert.Equal("paddle", svc.Load().ImageOcrEngine);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
+    public void Load_UnknownImageOcrEngine_FallsBackToDefault()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-ocr-unknown-" + Guid.NewGuid() + ".json");
+        try
+        {
+            File.WriteAllText(tmp, """{"ImageOcrEngine":"nonsense"}""");
+            var svc = new SettingsService(tmp);
+            Assert.Equal("paddle", svc.Load().ImageOcrEngine);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
+    public async Task LoadAsync_NormalizesPersistedImageOcrEngine()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-ocr-normalize-async-" + Guid.NewGuid() + ".json");
+        try
+        {
+            File.WriteAllText(tmp, """{"ImageOcrEngine":"Tesseract"}""");
+            var svc = new SettingsService(tmp);
+            var loaded = await svc.LoadAsync();
+            Assert.Equal("tesseract", loaded.ImageOcrEngine);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
     public void Defaults_SdkChannelBufferSize_Is4096()
     {
         var s = new AppSettings();

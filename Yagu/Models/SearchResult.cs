@@ -315,14 +315,46 @@ public sealed record SearchResult(
 
     private readonly record struct ShortPreviewInfo(string Text, int MatchStart);
 
+    // Per-row context window trim. Adjacent matches in the same file group have overlapping
+    // ±context windows; rendered independently they repeat the same line numbers in the file list.
+    // FileGroup sets these (in display order) so each row hides context lines already shown by an
+    // earlier row (<= floor) or owned by the next match (>= ceiling). Defaults are a no-op window,
+    // so non-list consumers (CLI, preview) see the full stored context.
+    private int _contextFloorLineExclusive;
+    private int _contextCeilingLineExclusive = int.MaxValue;
+
+    /// <summary>
+    /// Restricts the context lines shown by <see cref="NumberedBefore"/>/<see cref="NumberedAfter"/>
+    /// to the open interval (<paramref name="floorExclusive"/>, <paramref name="ceilingExclusive"/>),
+    /// so adjacent results in a file group do not repeat each other's line numbers. Raises change
+    /// notifications when the window changes.
+    /// </summary>
+    internal void SetContextTrim(int floorExclusive, int ceilingExclusive)
+    {
+        if (_contextFloorLineExclusive == floorExclusive && _contextCeilingLineExclusive == ceilingExclusive)
+            return;
+        _contextFloorLineExclusive = floorExclusive;
+        _contextCeilingLineExclusive = ceilingExclusive;
+        var handler = PropertyChanged;
+        if (handler is null) return;
+        handler(this, BeforeArgs);
+        handler(this, AfterArgs);
+    }
+
     public IReadOnlyList<ContextLine> NumberedBefore
     {
         get
         {
             int startLine = LineNumber - ContextBefore.Count;
-            var list = new ContextLine[ContextBefore.Count];
+            int floor = _contextFloorLineExclusive;
+            int ceiling = _contextCeilingLineExclusive;
+            var list = new List<ContextLine>(ContextBefore.Count);
             for (int i = 0; i < ContextBefore.Count; i++)
-                list[i] = new ContextLine(startLine + i, ContextBefore[i]);
+            {
+                int lineNum = startLine + i;
+                if (lineNum > floor && lineNum < ceiling)
+                    list.Add(new ContextLine(lineNum, ContextBefore[i]));
+            }
             return list;
         }
     }
@@ -332,9 +364,15 @@ public sealed record SearchResult(
         get
         {
             int startLine = LineNumber + 1;
-            var list = new ContextLine[ContextAfter.Count];
+            int floor = _contextFloorLineExclusive;
+            int ceiling = _contextCeilingLineExclusive;
+            var list = new List<ContextLine>(ContextAfter.Count);
             for (int i = 0; i < ContextAfter.Count; i++)
-                list[i] = new ContextLine(startLine + i, ContextAfter[i]);
+            {
+                int lineNum = startLine + i;
+                if (lineNum > floor && lineNum < ceiling)
+                    list.Add(new ContextLine(lineNum, ContextAfter[i]));
+            }
             return list;
         }
     }

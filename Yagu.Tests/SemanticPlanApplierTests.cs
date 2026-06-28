@@ -120,6 +120,44 @@ public sealed class SemanticPlanApplierTests
         Assert.Null(resolved.UseRegex); // not overridden by synthesis
     }
 
+    // ---- exact-match (whole-word) default ----------------------------------
+
+    [Fact]
+    public void Resolve_PatternWithoutExactMatch_DefaultsToSubstring()
+    {
+        // A natural-language query ("image files with 'a' in them") means SUBSTRING, not whole-word.
+        // Without this default the single letter "a" would compile to the whole-word regex \ba\b and
+        // match nothing inside words like "BANANA" — the banana-image-OCR zero-results regression.
+        var plan = new SemanticSearchPlan { Pattern = "a", SearchMode = "content" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.False(resolved.ExactMatch);
+    }
+
+    [Fact]
+    public void Resolve_ModelRequestsWholeWord_IsHonored()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "cat", SearchMode = "content", ExactMatch = true };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.True(resolved.ExactMatch);
+    }
+
+    [Fact]
+    public void ApplyToTarget_PatternWithoutExactMatch_ForcesTargetToSubstring()
+    {
+        // Regression: a target whose ExactMatch toggle is left at the whole-word default (true) must
+        // be flipped to substring by a model-translated content search, or "a" matches nothing.
+        var target = new FakeTarget { ExactMatch = true };
+        var plan = new SemanticSearchPlan { Pattern = "a", SearchMode = "content" };
+
+        SemanticPlanApplier.ApplyToTarget(plan, Context(), target);
+
+        Assert.False(target.ExactMatch);
+    }
+
     [Theory]
     [InlineData("*. json", "*.json")]   // small models inject a space after the dot
     [InlineData("* .log", "*.log")]      // ...or before the extension dot
@@ -439,7 +477,8 @@ public sealed class SemanticPlanApplierTests
         Assert.Equal((int)FilterPatternMode.GlobPath, target.IncludeFilterModeIndex);
         Assert.Equal("*.bin", target.ExcludeGlobs);
         Assert.Equal((int)FilterPatternMode.GlobPath, target.ExcludeFilterModeIndex);
-        Assert.True(target.ExactMatch); // not set by plan -> untouched
+        Assert.False(target.ExactMatch);    // model didn't request whole-word -> defaults to substring
+        Assert.False(target.CaseSensitive); // not set by plan -> untouched
     }
 
     [Fact]

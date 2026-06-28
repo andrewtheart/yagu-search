@@ -388,6 +388,56 @@ public class FileListerStaticHelperTests
     }
 
     [Fact]
+    public void BuildEverythingIncludeFileNameFilter_EmptyGlobs_ReturnsNull()
+    {
+        Assert.Null(FileLister.BuildEverythingIncludeFileNameFilter(Array.Empty<string>()));
+        Assert.Null(FileLister.BuildEverythingIncludeFileNameFilter(new[] { "   " }));
+    }
+
+    [Fact]
+    public void BuildEverythingIncludeFileNameFilter_LiteralFileName_QuotedSubstringTerm()
+    {
+        // The reported case: an exact filename must become a backend term so Everything returns
+        // only the matching files instead of every file with that extension.
+        Assert.Equal("\"01-after-search.png\"",
+            FileLister.BuildEverythingIncludeFileNameFilter(new[] { "01-after-search.png" }));
+    }
+
+    [Fact]
+    public void BuildEverythingIncludeFileNameFilter_WildcardGlob_PassedThroughUnquoted()
+    {
+        Assert.Equal("*.png", FileLister.BuildEverythingIncludeFileNameFilter(new[] { "*.png" }));
+        Assert.Equal("foo*.cs", FileLister.BuildEverythingIncludeFileNameFilter(new[] { "foo*.cs" }));
+    }
+
+    [Fact]
+    public void BuildEverythingIncludeFileNameFilter_MultipleGlobs_OrGrouped()
+    {
+        Assert.Equal("<\"a.txt\"|*.png>",
+            FileLister.BuildEverythingIncludeFileNameFilter(new[] { "a.txt", "*.png" }));
+    }
+
+    [Fact]
+    public void BuildEverythingIncludeFileNameFilter_SplitsCommaAndSemicolonTokens()
+    {
+        Assert.Equal("<\"a.txt\"|\"b.txt\">",
+            FileLister.BuildEverythingIncludeFileNameFilter(new[] { "a.txt; b.txt" }));
+    }
+
+    [Theory]
+    [InlineData("src\\**\\*.cs")]   // path-anchored — can't be a filename term
+    [InlineData("docs/readme.md")]   // forward-slash path
+    [InlineData("bad\"name.txt")]    // embedded quote
+    [InlineData("with space*.txt")]  // wildcard token containing a space
+    public void BuildEverythingIncludeFileNameFilter_UntranslatablePattern_ReturnsNull(string glob)
+    {
+        // Bailing (no pushdown) keeps the backend result a superset, which the GlobMatcher
+        // post-filter then narrows — correctness over speed.
+        Assert.Null(FileLister.BuildEverythingIncludeFileNameFilter(new[] { glob }));
+    }
+
+    [Fact]
+
     public void GetEverythingInstallDirsFromRegistry_UsesOverride()
     {
         var original = FileLister.GetEverythingInstallDirsOverride;

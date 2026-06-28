@@ -291,6 +291,35 @@ public sealed partial class MainWindow
         return $"{mb:0} MB";
     }
 
+    /// <summary>Builds the body of the "Everything not running" prompt: the explanatory text and a
+    /// "Don't show this again" checkbox (returned so the caller can read its state after the dialog).</summary>
+    private static (FrameworkElement Content, CheckBox DontShowAgain) BuildEverythingNotRunningContent()
+    {
+        var panel = new StackPanel { Spacing = 12 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Everything Search is installed but not currently running.\nIt must be running for fast file discovery.\n\nWould you like to start it now?",
+            TextWrapping = TextWrapping.WrapWholeWords,
+            FontSize = 14,
+        });
+
+        var dontShowAgain = new CheckBox
+        {
+            Content = "Don't show this again",
+            Margin = new Thickness(0, 4, 0, 0),
+        };
+        panel.Children.Add(dontShowAgain);
+
+        var scroller = new ScrollViewer
+        {
+            Content = panel,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollMode = ScrollMode.Disabled,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
+        return (scroller, dontShowAgain);
+    }
+
     private async Task CheckEverythingAsync()
     {
         var esPath = FileLister.FindEsExe();
@@ -311,19 +340,31 @@ public sealed partial class MainWindow
             LogService.Instance.Info("MainWindow", $"CheckEverythingAsync: es.exe found at '{esPath}', Everything.exe resolve={everythingExe ?? "(null)"}");
             if (everythingExe != null)
             {
-                if (await YaguDialog.ShowAsync(
+                if (ViewModel.SuppressEverythingNotRunningPrompt)
+                {
+                    LogService.Instance.Info("MainWindow", "CheckEverythingAsync: 'Everything not running' prompt suppressed by user setting \u2014 skipping");
+                    return;
+                }
+
+                var (content, dontShowAgain) = BuildEverythingNotRunningContent();
+                bool startNow = await YaguDialog.ShowAsync(
                     _hwnd,
                     new YaguDialogOptions
                     {
                         Title = "Everything Search Not Running",
-                        Content = "Everything Search is installed but not currently running.\nIt must be running for fast file discovery.\n\nWould you like to start it now?",
+                        Content = content,
                         PrimaryButtonText = "Start Everything",
                         CloseButtonText = "Skip",
                         DefaultButton = YaguDialogDefaultButton.Primary,
                         ShowTitleBar = false,
                         Width = 560,
-                        Height = 300,
-                    }) == YaguDialogResult.Primary)
+                        Height = 340,
+                    }) == YaguDialogResult.Primary;
+
+                if (dontShowAgain.IsChecked == true)
+                    ViewModel.SuppressEverythingNotRunningPrompt = true;
+
+                if (startNow)
                 {
                     try
                     {
@@ -349,19 +390,31 @@ public sealed partial class MainWindow
         if (everythingExeStandalone != null)
         {
             LogService.Instance.Info("MainWindow", $"CheckEverythingAsync: Everything.exe found at '{everythingExeStandalone}' (no es.exe), offering to start");
-            if (await YaguDialog.ShowAsync(
+            if (ViewModel.SuppressEverythingNotRunningPrompt)
+            {
+                LogService.Instance.Info("MainWindow", "CheckEverythingAsync: 'Everything not running' prompt suppressed by user setting \u2014 skipping");
+                return;
+            }
+
+            var (content, dontShowAgain) = BuildEverythingNotRunningContent();
+            bool startNow = await YaguDialog.ShowAsync(
                 _hwnd,
                 new YaguDialogOptions
                 {
                     Title = "Everything Search Not Running",
-                    Content = "Everything Search is installed but not currently running.\nIt must be running for fast file discovery.\n\nWould you like to start it now?",
+                    Content = content,
                     PrimaryButtonText = "Start Everything",
                     CloseButtonText = "Skip",
                     DefaultButton = YaguDialogDefaultButton.Primary,
                     ShowTitleBar = false,
                     Width = 560,
-                    Height = 300,
-                }) == YaguDialogResult.Primary)
+                    Height = 340,
+                }) == YaguDialogResult.Primary;
+
+            if (dontShowAgain.IsChecked == true)
+                ViewModel.SuppressEverythingNotRunningPrompt = true;
+
+            if (startNow)
             {
                 try
                 {
@@ -495,6 +548,7 @@ public sealed partial class MainWindow
                 Content = $"Everything Search returned indexed files and folders through the SDK. Fast file discovery is ready to use.\n\nIndexed items reported: {indexedCount:N0}",
                 CloseButtonText = "OK",
                 DefaultButton = YaguDialogDefaultButton.Close,
+                ShowTitleBar = false,
                 Width = 560,
                 Height = 300,
             });
