@@ -40,6 +40,16 @@ internal sealed class PaddleWorkerEngine : IWorkerOcrEngine
             AllowRotateDetection = true,
             Enable180Classification = false,
         };
+
+        // Optional detection-resolution cap (longest image side). 0 = unlimited (null), absent = the
+        // PaddleSharp default. Higher caps improve small-text accuracy at the cost of speed.
+        string? maxSideRaw = Environment.GetEnvironmentVariable("YAGU_OCR_MAX_SIDE");
+        if (int.TryParse(maxSideRaw, out int maxSide))
+        {
+            ocr.Detector.MaxSize = maxSide <= 0 ? null : maxSide;
+            log($"detectorMaxSize={(ocr.Detector.MaxSize is { } ms ? ms.ToString() : "unlimited")}");
+        }
+
         return new PaddleWorkerEngine(ocr);
     }
 

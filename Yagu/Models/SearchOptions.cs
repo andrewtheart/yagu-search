@@ -181,6 +181,14 @@ public sealed class SearchOptions
     /// <summary>OCR engine id used when <see cref="SearchImageText"/> is on ("paddle" or "tesseract").</summary>
     public string ImageOcrEngine { get; init; } = "paddle";
 
+    /// <summary>PaddleOCR model name used when <see cref="SearchImageText"/> is on and the engine is
+    /// PaddleSharp (e.g. "EnglishV4"). Null/empty = the worker's default model. Ignored by Tesseract.</summary>
+    public string? ImageOcrModel { get; init; }
+
+    /// <summary>PaddleOCR detection resolution cap (longest image side, in pixels) when the engine is
+    /// PaddleSharp. 0 = unlimited. Higher = better small-text accuracy, slower. Ignored by Tesseract.</summary>
+    public int ImageOcrMaxSide { get; init; } = 960;
+
     /// <summary>Bounded channel buffer capacity for the Everything SDK streaming path.</summary>
     public int SdkChannelBufferSize { get; init; } = 4096;
 

@@ -93,7 +93,35 @@ public sealed class AppSettings
         };
     }
 
+    /// <summary>Normalizes the persisted PaddleOCR model name to a known value (canonical casing),
+    /// defaulting to <see cref="DefaultImageOcrModel"/>.</summary>
+    public static string NormalizeImageOcrModel(string? value)
+    {
+        var v = value?.Trim().ToLowerInvariant();
+        return v switch
+        {
+            "englishv3" or "english_v3" or "en_v3" => "EnglishV3",
+            "englishv4" or "english_v4" or "en_v4" => "EnglishV4",
+            "chinesev4" or "chinese_v4" or "zh_v4" => "ChineseV4",
+            "chinesev5" or "chinese_v5" or "zh_v5" => "ChineseV5",
+            _ => DefaultImageOcrModel,
+        };
+    }
+
+    /// <summary>Normalizes the persisted PaddleOCR detection resolution cap. 0 (or negative) means
+    /// "unlimited"; any other value is clamped to [<see cref="MinimumImageOcrMaxSide"/>,
+    /// <see cref="MaximumImageOcrMaxSide"/>].</summary>
+    public static int NormalizeImageOcrMaxSide(int value)
+        => value <= 0 ? 0 : Math.Clamp(value, MinimumImageOcrMaxSide, MaximumImageOcrMaxSide);
+
     public string? LastDirectory { get; set; }
+    /// <summary>When true, Yagu pre-fills the directory box at launch with <see cref="PinnedStartupDirectory"/>
+    /// (the user "pinned" a startup directory via the star toggle). When false (default), the box starts
+    /// empty (search all drives). This only affects the value the box has at startup — it never overrides a
+    /// directory the user types or browses to during a session.</summary>
+    public bool PinStartupDirectory { get; set; }
+    /// <summary>The directory restored into the box at launch when <see cref="PinStartupDirectory"/> is on.</summary>
+    public string? PinnedStartupDirectory { get; set; }
     public List<string> RecentDirectories { get; set; } = [];
     public List<string> SearchHistory { get; set; } = [];
     /// <summary>Separate autocomplete history for the Semantic (natural-language) query mode, kept
@@ -237,6 +265,17 @@ public sealed class AppSettings
     /// recommended default) or "tesseract". Normalized on load.</summary>
     public string ImageOcrEngine { get; set; } = DefaultImageOcrEngine;
     public const string DefaultImageOcrEngine = "paddle";
+    /// <summary>PaddleOCR model used for image-text recognition: "EnglishV3", "EnglishV4" (default),
+    /// "ChineseV4" or "ChineseV5" (newest, multilingual). Higher/newer models trade speed for accuracy.
+    /// Normalized on load. Ignored by the Tesseract engine.</summary>
+    public string ImageOcrModel { get; set; } = DefaultImageOcrModel;
+    public const string DefaultImageOcrModel = "EnglishV4";
+    /// <summary>PaddleOCR detection resolution cap (longest image side, in pixels) for image-text OCR.
+    /// Higher = better accuracy on small text, slower. 0 = unlimited. Default 960. Ignored by Tesseract.</summary>
+    public int ImageOcrMaxSide { get; set; } = DefaultImageOcrMaxSide;
+    public const int DefaultImageOcrMaxSide = 960;
+    public const int MinimumImageOcrMaxSide = 320;
+    public const int MaximumImageOcrMaxSide = 4096;
     /// <summary>When the directory is left empty ("search all drives"), include ready network/mapped drives. Default false (can be slow/metered).</summary>
     public bool SearchAllDrivesIncludesNetwork { get; set; }
     /// <summary>When the directory is left empty ("search all drives"), include ready removable/USB drives. Default false.</summary>
@@ -469,6 +508,8 @@ public sealed class SettingsService
             NormalizeResultListMatchTextSettings(settings);
             NormalizePreviewShowMoreSettings(settings);
             settings.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(settings.ImageOcrEngine);
+            settings.ImageOcrModel = AppSettings.NormalizeImageOcrModel(settings.ImageOcrModel);
+            settings.ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(settings.ImageOcrMaxSide);
             settings.LowDiskSpaceWarningPercent = AppSettings.NormalizeLowDiskSpaceWarningPercent(settings.LowDiskSpaceWarningPercent);
             settings.TerminalDefaultWorkingDirectory ??= string.Empty;
             return settings;
@@ -507,6 +548,8 @@ public sealed class SettingsService
             NormalizeResultListMatchTextSettings(settings);
             NormalizePreviewShowMoreSettings(settings);
             settings.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(settings.ImageOcrEngine);
+            settings.ImageOcrModel = AppSettings.NormalizeImageOcrModel(settings.ImageOcrModel);
+            settings.ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(settings.ImageOcrMaxSide);
             settings.TerminalDefaultWorkingDirectory ??= string.Empty;
             return settings;
         }

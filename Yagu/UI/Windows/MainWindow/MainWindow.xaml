@@ -383,24 +383,38 @@
                                 <Setter Property="TextWrapping" Value="Wrap" />
                                 <Setter Property="VerticalContentAlignment" Value="Center" />
                                 <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
-                                <Setter Property="Padding" Value="10,6,92,6" />
+                                <Setter Property="Padding" Value="10,6,136,6" />
                             </Style>
                         </AutoSuggestBox.TextBoxStyle>
                     </AutoSuggestBox>
-                    <!-- Browse embedded at the trailing edge of the directory box (overlay, like the
-                         query box's clear button). -->
-                    <Button x:Name="BrowseDirectoryButton" Click="OnBrowseDirectory" ToolTipService.ToolTip="Browse for folder"
-                            HorizontalAlignment="Right" VerticalAlignment="Stretch"
-                            Margin="0,1,1,1" Padding="10,0" MinWidth="0"
-                            CornerRadius="0,4,4,0"
-                            Background="Transparent"
-                            BorderThickness="1,0,0,0"
-                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
-                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                            <FontIcon Glyph="&#xED25;" FontSize="14" />
-                            <TextBlock x:Name="BrowseDirectoryLabel" Text="Browse" />
-                        </StackPanel>
-                    </Button>
+                    <!-- Pin + Browse embedded at the trailing edge of the directory box (overlay, like
+                         the query box's clear button). The star pins the current directory as the
+                         startup default; Browse opens the folder picker. -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                                Margin="0,1,1,1">
+                        <ToggleButton x:Name="PinStartupDirectoryButton" Click="OnPinStartupDirectory"
+                                      IsChecked="{x:Bind ViewModel.PinStartupDirectory, Mode=OneWay}"
+                                      ToolTipService.ToolTip="Pin this directory as the startup default"
+                                      VerticalAlignment="Stretch" Padding="10,0" MinWidth="0"
+                                      CornerRadius="0"
+                                      Background="Transparent"
+                                      BorderThickness="1,0,0,0"
+                                      BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                            <FontIcon x:Name="PinStartupDirectoryIcon" Glyph="&#xE734;" FontSize="14" />
+                        </ToggleButton>
+                        <Button x:Name="BrowseDirectoryButton" Click="OnBrowseDirectory" ToolTipService.ToolTip="Browse for folder"
+                                VerticalAlignment="Stretch"
+                                Padding="10,0" MinWidth="0"
+                                CornerRadius="0,4,4,0"
+                                Background="Transparent"
+                                BorderThickness="1,0,0,0"
+                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                <FontIcon Glyph="&#xED25;" FontSize="14" />
+                                <TextBlock x:Name="BrowseDirectoryLabel" Text="Browse" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
                 </Grid>
 
                 <!-- Search bar -->

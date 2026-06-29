@@ -332,6 +332,18 @@ public sealed class SearchService
         bool emitFileNameMatches = options.SearchMode is SearchMode.Both or SearchMode.FileNames;
         bool requireFileNameMatchForContent = options.SearchMode == SearchMode.FileNameThenContent;
 
+        // Name-first pass (Both mode only): before the full content scan, run a quick Everything
+        // name-filtered query so filename matches surface immediately instead of waiting for the
+        // whole tree to be content-scanned. This preserves Both semantics — the full discovery
+        // below still queues every file for content scanning; the pass only front-loads the cheap
+        // filename hits. Skipped for regex/empty queries and when the backend can't push the term.
+        bool nameFirstPass = options.SearchMode == SearchMode.Both
+            && _fileLister is FileLister
+            && FileLister.SdkAvailable
+            && options.FileListerBackendOverride is null or FileListerBackend.Auto or FileListerBackend.EverythingSdk
+            && literalTerms.Count >= 1
+            && FileLister.BuildEverythingFileNameFilter(literalTerms) is not null;
+
         // Push the configurable archive-extension set to the searcher so it
         // can bypass extension-based skip for ZIP-like containers.
         _searcher.ZipLikeExtensions = options.ArchiveExtensions;
@@ -652,6 +664,71 @@ public sealed class SearchService
                 // rows. An OCR'd image must only ever appear under its image path (set by OcrTextMatcher),
                 // never under the cache text file's path.
                 string ocrCacheDirPrefix = Ocr.OcrTextCache.DefaultBaseDirectory() + Path.DirectorySeparatorChar;
+
+                // ── Name-first pass (Both mode) ──
+                // Run a quick name-filtered Everything query first so filename matches appear
+                // immediately, then fall through to the full discovery that content-scans the
+                // whole tree. Paths emitted here are recorded so the full pass below doesn't
+                // re-emit the same filename match (it still queues them for content scanning).
+                HashSet<string>? nameFirstEmitted = null;
+                if (nameFirstPass)
+                {
+                    nameFirstEmitted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    int nameFirstCap = options.MaxResults > 0 ? Math.Min(options.MaxResults, 50_000) : 50_000;
+                    var nameFirstLister = (FileLister)_fileLister;
+                    var nameFirstBackendOverride = nameFirstLister.BackendOverride;
+                    nameFirstLister.EarlyFileNameLiteralTerms = literalTerms;
+                    // Force SDK-only for the name pass. The name-scoped query is a fast-path
+                    // optimization: if it matches nothing we want an instant empty result, NOT a
+                    // multi-minute es.exe/managed full-tree walk (the slow lower tiers that Auto would
+                    // fall through to on a 0-result SDK query). The full discovery pass below still
+                    // runs with the caller's normal tiering, so coverage/correctness is unaffected.
+                    nameFirstLister.BackendOverride = FileListerBackend.EverythingSdk;
+                    try
+                    {
+                        await foreach (var path in _fileLister.ListFilesAsync(options.Directory, includeExts, maxFiles: nameFirstCap, cancellationToken).WithCancellation(cancellationToken))
+                        {
+                            if (Volatile.Read(ref truncated) != 0) break;
+                            if (path.StartsWith(ocrCacheDirPrefix, StringComparison.OrdinalIgnoreCase)) continue;
+                            if (!globMatcher.Matches(path)) continue;
+                            if (ShouldSkipByFileMetadata(path, options, out _,
+                                checkSize: !fileListerAlreadyCheckedMetadata,
+                                checkDates: !fileListerAlreadyCheckedMetadata)) continue;
+
+                            var fileName = Path.GetFileName(path);
+                            int fnStart = -1, fnLen = 0;
+                            if (regex is not null)
+                            {
+                                var m = regex.Match(fileName);
+                                if (m.Success) { fnStart = m.Index; fnLen = m.Length; }
+                            }
+                            else
+                            {
+                                int idx = fileName.IndexOf(literal!, cmp);
+                                if (idx >= 0) { fnStart = idx; fnLen = literal!.Length; }
+                            }
+                            if (fnStart >= 0 && nameFirstEmitted.Add(path))
+                            {
+                                (filenameBatch ??= new List<SearchResult>(FilenameBatchSize)).Add(new SearchResult(
+                                    FilePath: path, LineNumber: 0, MatchLine: fileName,
+                                    MatchStartColumn: fnStart, MatchLength: fnLen,
+                                    ContextBefore: [], ContextAfter: [])
+                                { SourceMatchStartColumn = fnStart });
+                                if (filenameBatch.Count >= FilenameBatchSize)
+                                    await FlushFilenameBatchAsync().ConfigureAwait(false);
+                            }
+                        }
+                        await FlushFilenameBatchAsync().ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        nameFirstLister.EarlyFileNameLiteralTerms = [];
+                        nameFirstLister.BackendOverride = nameFirstBackendOverride;
+                    }
+                    LogService.Instance.Info("Discovery",
+                        $"Name-first pass: emitted {nameFirstEmitted.Count:N0} filename match(es) in {sw.Elapsed.TotalSeconds:F2}s");
+                }
+
                 await foreach (var path in _fileLister.ListFilesAsync(options.Directory, includeExts, maxFiles: 0, cancellationToken).WithCancellation(cancellationToken))
                 {
                     if (Volatile.Read(ref truncated) != 0) break;
@@ -712,7 +789,7 @@ public sealed class SearchService
                         if (fnMatchStart >= 0)
                         {
                             fileNameMatched = true;
-                            if (emitFileNameMatches)
+                            if (emitFileNameMatches && (nameFirstEmitted is null || !nameFirstEmitted.Contains(path)))
                             {
                                 (filenameBatch ??= new List<SearchResult>(FilenameBatchSize)).Add(new SearchResult(
                                     FilePath: path, LineNumber: 0, MatchLine: fileName,
@@ -778,7 +855,7 @@ public sealed class SearchService
         Ocr.IOcrEngine? ocrEngine = null;
         if (searchContent && options.SearchImageText)
         {
-            ocrEngine = Ocr.OcrEngineFactory.Create(options.ImageOcrEngine);
+            ocrEngine = Ocr.OcrEngineFactory.Create(options.ImageOcrEngine, options.ImageOcrModel, options.ImageOcrMaxSide);
             // Clear OCR text left over from crashed/older runs before this search starts writing fresh
             // entries, so a previous run's partial output can never be mistaken for this search's results.
             Ocr.OcrTextCache.Cleanup();

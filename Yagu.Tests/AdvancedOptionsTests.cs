@@ -168,6 +168,65 @@ public sealed class AdvancedOptionsTests
             "_settings.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(ImageOcrEngine);");
     }
 
+    // ── OCR quality (model + detection resolution) option mapping ──
+    // The OCR tab's Recognition model and Detection resolution flow view-model ⇄ settings ⇄
+    // SearchOptions exactly like the engine selection. These pins lock that bridge.
+
+    [Fact]
+    public void Ctor_LoadsImageOcrQualityFromSettings()
+    {
+        Assert.Contains("ImageOcrModel = _settings.ImageOcrModel;", MainViewModelSource);
+        Assert.Contains("ImageOcrMaxSide = _settings.ImageOcrMaxSide;", MainViewModelSource);
+    }
+
+    [Fact]
+    public void BuildSearchOptions_MapsImageOcrQuality()
+    {
+        AssertContainsInOrder(MainViewModelSource,
+            "ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(ImageOcrEngine),",
+            "ImageOcrModel = AppSettings.NormalizeImageOcrModel(ImageOcrModel),",
+            "ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(ImageOcrMaxSide),");
+    }
+
+    [Fact]
+    public void SaveSettings_PersistsImageOcrQuality()
+    {
+        Assert.Contains("_settings.ImageOcrModel", MainViewModelSource);
+        Assert.Contains("_settings.ImageOcrMaxSide", MainViewModelSource);
+    }
+
+    // ── Startup directory pin ──
+    // The pin star persists the current directory and auto-selects it on next launch. These pins
+    // lock the view-model bridge (startup resolution, load, persist, and the pin toggle method).
+
+    [Fact]
+    public void Ctor_ResolvesStartupDirectory()
+    {
+        Assert.Contains("Directory = ResolveStartupDirectory();", MainViewModelSource);
+    }
+
+    [Fact]
+    public void ResolveStartupDirectory_HonorsPinnedDirectory()
+    {
+        string method = ExtractViewModelMethod("private string ResolveStartupDirectory", 600);
+        Assert.Contains("PinStartupDirectory", method);
+        Assert.Contains("PinnedStartupDirectory", method);
+    }
+
+    [Fact]
+    public void Ctor_LoadsPinStartupDirectoryFromSettings()
+    {
+        Assert.Contains("PinStartupDirectory = _settings.PinStartupDirectory;", MainViewModelSource);
+    }
+
+    [Fact]
+    public void SetStartupDirectoryPinned_SnapshotsCurrentDirectory()
+    {
+        string method = ExtractViewModelMethod("public async Task SetStartupDirectoryPinnedAsync", 900);
+        Assert.Contains("_settings.PinStartupDirectory = pinned;", method);
+        Assert.Contains("_settings.PinnedStartupDirectory", method);
+    }
+
     [Fact]
     public void ResetClick_UpdatesPlaceholderText()
     {

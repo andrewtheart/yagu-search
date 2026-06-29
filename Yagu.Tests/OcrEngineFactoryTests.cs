@@ -32,6 +32,41 @@ public sealed class OcrEngineFactoryTests
     }
 
     [Fact]
+    public void Create_WithModelAndMaxSide_ThreadsThemIntoPaddleWorkerEnvironment()
+    {
+        var engine = OcrEngineFactory.Create("paddle", "ChineseV5", maxSide: 1536);
+
+        var paddle = Assert.IsType<PaddleOcrEngine>(engine);
+        var env = new Dictionary<string, string?>();
+        paddle.ConfigureWorkerEnvironmentForTest(env);
+
+        Assert.Equal("ChineseV5", env[PaddleOcrEngine.ModelEnvVar]);
+        Assert.Equal("1536", env[PaddleOcrEngine.MaxSideEnvVar]);
+    }
+
+    [Fact]
+    public void Create_WithNegativeMaxSide_OmitsMaxSideEnvVar()
+    {
+        // The 1-arg Create overload uses maxSide = -1 (unspecified) so the worker default is kept.
+        var engine = OcrEngineFactory.Create("paddle");
+
+        var paddle = Assert.IsType<PaddleOcrEngine>(engine);
+        var env = new Dictionary<string, string?>();
+        paddle.ConfigureWorkerEnvironmentForTest(env);
+
+        Assert.False(env.ContainsKey(PaddleOcrEngine.MaxSideEnvVar));
+    }
+
+    [Fact]
+    public void Create_TesseractIgnoresModelAndMaxSide()
+    {
+        var engine = OcrEngineFactory.Create("tesseract", "ChineseV5", maxSide: 1536);
+
+        Assert.Equal(OcrEngineFactory.TesseractId, engine.Id);
+        Assert.IsType<TesseractOcrEngine>(engine);
+    }
+
+    [Fact]
     public async Task TesseractEngine_DegradesGracefully_WhenWorkerMissing()
     {
         // Authoritative bogus worker path → the engine must report "not installed" instead of

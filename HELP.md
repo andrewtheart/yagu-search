@@ -11,6 +11,7 @@ Yagu is a fast Windows search app for finding text, regex matches, or file names
    - Drag a folder from Windows Explorer onto the window.
    - Launch from a command line: `Yagu.exe --dir "D:\projects\myapp"`.
    - Use the Windows Explorer context menu: right-click a folder → **Search with Yagu**.
+   - Click the **★ pin** to the left of Browse to keep the current folder as the startup default so it is pre-filled the next time Yagu opens. By default the box starts empty (which searches all drives); click the pin again to unpin and clear the saved folder. Pinning snapshots the folder when you click it — changing the box afterward does not change the pin.
 3. Enter the search query in the search box.
 4. Choose search options: **Case sensitive** (Alt+C), **Regex** (Alt+R), **Exact match** (Alt+E).
 5. Click **Search** or press **Enter** in the search box.
@@ -26,7 +27,7 @@ The main screen has six working areas:
 | Area | Purpose |
 | --- | --- |
 | Title bar | App title, Help button (F1), Settings gear, and window mode pin. |
-| Directory bar | The folder to search, with auto-complete, Browse, and recent history. |
+| Directory bar | The folder to search, with auto-complete, a pin (★) to keep the current folder as the startup default, Browse, and recent history. |
 | Search bar | Query entry with history (Down arrow), Search/Cancel (F5), and option toggles. |
 | Options row | Quick toggles for Regex, Case, Exact match, and the Advanced Options expander. |
 | Results pane (left) | Matching files and lines with sorting, grouping, filtering, selection, copy, and export. |
@@ -128,7 +129,7 @@ Click the **Advanced Options** expander below the search bar to reveal a tabbed 
 | Archive Extensions | Visible when Search archives is on. Controls which extensions are treated as ZIP containers. |
 | Search online-only cloud files | When enabled, OneDrive/Google Drive online-only placeholder files are downloaded on demand and searched — but only while the sync provider is running to serve them. Off by default: cloud-only files are skipped so the scan can't hang on a download. Can be slow and use network/disk. |
 | Search hidden files | When enabled (default), files and folders carrying the Windows Hidden attribute are searched. When disabled, hidden items are excluded — the managed file walker skips them and the Everything backends filter them with `!attrib:h`. System files (e.g. `pagefile.sys`, `hiberfil.sys`) are always skipped by the file walker regardless of this setting. The default for this per-search toggle comes from **Settings ▸ Path and File Type Filters ▸ Search hidden files**. |
-| Search image text (OCR) | When enabled, image files (PNG, JPG, BMP, GIF, TIFF, WEBP) are run through OCR and the recognized text is searched like any other file's contents. Off by default because OCR is slower than reading text files. OCR runs on a background queue that does not block or slow the normal file scan; matches appear in the results panel as each image is processed. The OCR engine (PaddleSharp by default, or Tesseract) and this toggle's default come from **Settings ▸ Path and File Type Filters ▸ Search image text (OCR)**. |
+| Search image text (OCR) | When enabled, image files (PNG, JPG, BMP, GIF, TIFF, WEBP) are run through OCR and the recognized text is searched like any other file's contents. Off by default because OCR is slower than reading text files. OCR runs on a background queue that does not block or slow the normal file scan; matches appear in the results panel as each image is processed. The OCR engine, recognition quality, and this toggle's default come from the **Settings ▸ OCR** tab (see below). |
 
 ### Size Tab
 
@@ -368,7 +369,6 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 | Clear date defaults | Clears all saved created/modified date defaults. |
 | Search binary files | Includes files detected as binary by null bytes or magic bytes. Off by default. |
 | Search hidden files | Default for the Advanced Options ▸ Content options "Search hidden files" toggle. On by default — items with the Windows Hidden attribute are included. System files are always skipped by the file walker. |
-| Search image text (OCR) | Default for the Advanced Options ▸ Content options "Search image text (OCR)" toggle. Off by default. When on, image files are OCR'd on a background queue and the recognized text is searched. The OCR engine is selectable: PaddleSharp (recommended, default) or Tesseract. |
 | Skip admin-protected paths | Excludes system directories that deny access when not elevated. |
 | Admin-protected path segments | Custom path segments to skip (semicolon-separated). |
 | Skip extensions | Extensions skipped before contents are read. Use semicolon-separated names without dots. |
@@ -377,6 +377,18 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 | Archive extensions | Extensions treated as ZIP-like containers when archive search is on. Detection still checks file-header magic bytes. |
 | Max archive nesting depth | How deep to recurse into nested archives. 0 = default 5. |
 | Max archive entry size (MB) | Largest individual entry to extract from an archive. 0 = default 64 MB. |
+
+### OCR Tab
+
+Controls image text recognition (OCR). When OCR is on, image files (PNG, JPG, BMP, GIF, TIFF, WEBP) are recognized on a background queue and their text is searched like any other file's contents.
+
+| Setting | What It Controls |
+| --- | --- |
+| Search image text (OCR) | Default for the Advanced Options ▸ Filters "Search image text (OCR)" toggle. Off by default. When on, image files are OCR'd on a background queue and the recognized text is searched. |
+| OCR engine | PaddleSharp (recommended, default) or Tesseract. PaddleSharp is generally more accurate and can use GPU/NPU acceleration; Tesseract is a lighter alternative with a fixed pipeline. The selected engine's runtime and models download on first use. |
+| Quality preset | Quick presets that set the recognition model and detection resolution together: **Fast** (English v3, 640 px), **Balanced** (English v4, 960 px), **Accurate** (Chinese+English v5, 1536 px). Switches to **Custom** when the model/resolution below don't match a preset. Applies to PaddleSharp. |
+| Recognition model | PaddleSharp recognition model: English v3 (fastest), English v4 (recommended), Chinese+English v4, or Chinese+English v5 (most accurate). Models download on first use. Ignored by Tesseract. |
+| Detection resolution | Longest image side (in pixels) the image is downscaled to before detection: 640, 960, 1280, 1536, 2048, or Unlimited (native resolution). Larger finds smaller text but is slower. Ignored by Tesseract. |
 
 ### Performance Tab
 
@@ -997,6 +1009,8 @@ Semantic requests can also set **sorting** and **grouping** (e.g. *"sort by file
 | `--image-text` (aliases `--search-image-text`, `--ocr`) | OCR image files and search the recognized text. Off by default; falls back to the **Search image text (OCR)** setting. Images are processed on a background queue so the normal file scan is not blocked. |
 | `--no-image-text` (aliases `--no-search-image-text`, `--no-ocr`) | Do not OCR images (default). |
 | `--ocr-engine <name>` | OCR engine for `--image-text`: `paddle` (PaddleSharp, default) or `tesseract`. |
+| `--ocr-model <name>` | PaddleSharp recognition model for `--image-text`: `EnglishV3`, `EnglishV4` (default), `ChineseV4`, or `ChineseV5`. Falls back to the **OCR ▸ Recognition model** setting. Ignored by the `tesseract` engine. |
+| `--ocr-max-side <px>` | PaddleSharp detection resolution (longest side in pixels) for `--image-text`: default 960; `0` = unlimited (native resolution). Falls back to the **OCR ▸ Detection resolution** setting. Ignored by the `tesseract` engine. |
 
 ### Output
 

@@ -141,7 +141,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         IsSemanticQueryMode = ResolveLaunchQueryMode();
         _queryModeInitialized = true;
 
-        Directory = _settings.LastDirectory ?? string.Empty;
+        Directory = ResolveStartupDirectory();
         CaseSensitive = _settings.CaseSensitive;
         UseRegex = _settings.UseRegex;
         ExactMatch = _settings.ExactMatch;
@@ -293,6 +293,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         SearchHiddenFiles = _settings.SearchHiddenFiles;
         SearchImageText = _settings.SearchImageText;
         ImageOcrEngine = _settings.ImageOcrEngine;
+        ImageOcrModel = _settings.ImageOcrModel;
+        ImageOcrMaxSide = _settings.ImageOcrMaxSide;
+        PinStartupDirectory = _settings.PinStartupDirectory;
         SearchInsideArchives = _settings.SearchInsideArchives;
         SettingsSkipExtensions = _settings.SkipExtensions;
         SettingsBinaryExtensions = _settings.BinaryExtensions;
@@ -655,12 +658,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         ? @"e.g. (^|/)node_modules/|\.min\.js$…"
         : $"e.g. {AppSettings.DefaultExcludeGlobs}…";
 
-    // An empty exclude box means "use the default excludes" (Glob mode only). The box is left
-    // empty so it shows greyed placeholder example text, matching the include box.
-    private string EffectiveExcludeGlobsText =>
-        string.IsNullOrWhiteSpace(ExcludeGlobs) && ExcludeFilterMode == FilterPatternMode.GlobPath
-            ? AppSettings.DefaultExcludeGlobs
-            : ExcludeGlobs;
+    // The exclude box shows greyed placeholder example text (e.g. "node_modules;bin;obj;.git")
+    // when empty, but that text is ONLY an example — it is NOT applied. An empty box means
+    // "no excludes": folders are excluded only when the user explicitly types them, matching the
+    // include box. (Previously an empty box silently applied the example list as real excludes,
+    // which hid files living in folders like bin/ that the user never chose to exclude.)
+    private string EffectiveExcludeGlobsText => ExcludeGlobs ?? string.Empty;
     public string GroupModeLabel => GroupMode switch
     {
         GroupMode.None => "None",
@@ -1013,6 +1016,21 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// <summary>OCR engine used when <see cref="SearchImageText"/> is on: "paddle" (PaddleSharp,
     /// the recommended default) or "tesseract". Settings-only.</summary>
     [ObservableProperty] public partial string ImageOcrEngine { get; set; } = AppSettings.DefaultImageOcrEngine;
+
+    /// <summary>PaddleSharp recognition model used for image OCR (e.g. "EnglishV4", "ChineseV5").
+    /// Higher quality models trade speed for accuracy. Ignored by the Tesseract engine, which uses a
+    /// fixed pipeline. Settings-only; configured on the OCR settings tab.</summary>
+    [ObservableProperty] public partial string ImageOcrModel { get; set; } = AppSettings.DefaultImageOcrModel;
+
+    /// <summary>Maximum detection resolution (longest image side, in pixels) for PaddleSharp OCR.
+    /// Larger values find smaller text at the cost of speed; 0 means unlimited (use the image's
+    /// native resolution). Settings-only; configured on the OCR settings tab.</summary>
+    [ObservableProperty] public partial int ImageOcrMaxSide { get; set; } = AppSettings.DefaultImageOcrMaxSide;
+
+    /// <summary>When true, the directory box is restored to <see cref="AppSettings.PinnedStartupDirectory"/>
+    /// at launch; when false, the box starts empty (search all drives). Bound to the star toggle next to
+    /// the Browse button.</summary>
+    [ObservableProperty] public partial bool PinStartupDirectory { get; set; }
 
     /// <summary>UI-facing inverse of <see cref="SkipBinary"/> for the "Search binary" toggle.</summary>
     public bool SearchBinary
@@ -2188,7 +2206,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             EnableBinarySearchForBinaryGlobs(resolved.IncludeGlobs);
             // Render the summary deterministically from the resolved plan rather than the model's
             // free-text explanation, which small on-device models often garble (e.g. "yagursd").
-            SemanticStatusText = SemanticPlanApplier.BuildExplanation(resolved);
+            // Pass the live directory box as the effective directory so an unscoped query (the model
+            // resolves no directory) is described as the box's location — not the misleading "all
+            // drives" — since the actual search honors whatever is in the box.
+            SemanticStatusText = SemanticPlanApplier.BuildExplanation(resolved, Directory);
             return SemanticTranslationOutcome.Applied;
         }
         catch (OperationCanceledException)
@@ -2485,6 +2506,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 SearchImageText = SearchImageText,
                 ImageOcrExtensions = ParseExtensionSet(AppSettings.DefaultImageOcrExtensions),
                 ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(ImageOcrEngine),
+                ImageOcrModel = AppSettings.NormalizeImageOcrModel(ImageOcrModel),
+                ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(ImageOcrMaxSide),
                 MaxDegreeOfParallelism = parallelism,
                 FileListerBackendOverride = backendOverride,
                 IoOversubscriptionIndex = IoOversubscriptionIndex,
@@ -3913,6 +3936,34 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         foreach (var q in _settings.SemanticSearchHistory) SemanticSearchHistory.Add(q);
     }
 
+    /// <summary>Resolves the directory the box should show at launch. Honors a pinned startup
+    /// directory when the user has enabled the pin and a path was captured; otherwise starts empty so
+    /// the search defaults to all drives. The legacy LastDirectory value is intentionally not restored
+    /// here — it caused the box to spuriously preselect the last-used drive.</summary>
+    private string ResolveStartupDirectory()
+    {
+        if (_settings.PinStartupDirectory && !string.IsNullOrWhiteSpace(_settings.PinnedStartupDirectory))
+        {
+            return _settings.PinnedStartupDirectory!;
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>Pins or unpins the current directory box for the next launch. Pinning snapshots the
+    /// box value at the moment of the call (so later edits to the box do not change the pin) and
+    /// persists immediately; unpinning clears the saved directory so the box starts empty next launch.
+    /// This only affects what the box shows at startup and never overrides the box during a session.</summary>
+    public async Task SetStartupDirectoryPinnedAsync(bool pinned)
+    {
+        PinStartupDirectory = pinned;
+        _settings.PinStartupDirectory = pinned;
+        _settings.PinnedStartupDirectory = pinned
+            ? (string.IsNullOrWhiteSpace(Directory) ? null : Directory.Trim())
+            : null;
+        await _settingsService.SaveAsync(_settings).ConfigureAwait(false);
+    }
+
     public async Task PersistSettingsAsync()
     {
         // While a completed semantic search's resolution is shown in Advanced Options, persist the saved
@@ -4076,6 +4127,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.SearchHiddenFiles = d is null ? SearchHiddenFiles : d.SearchHiddenFiles;
         _settings.SearchImageText = d is null ? SearchImageText : d.SearchImageText;
         _settings.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(ImageOcrEngine);
+        _settings.ImageOcrModel = AppSettings.NormalizeImageOcrModel(ImageOcrModel);
+        _settings.ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(ImageOcrMaxSide);
+        // The startup-directory pin flag mirrors the star toggle. The captured directory itself
+        // (PinnedStartupDirectory) is a snapshot written by SetStartupDirectoryPinnedAsync at click
+        // time, so it is intentionally NOT recaptured here and never drifts as the box changes.
+        _settings.PinStartupDirectory = PinStartupDirectory;
         _settings.SearchInsideArchives = d is null ? SearchInsideArchives : d.SearchInsideArchives;
         _settings.ArchiveExtensions = d is null ? SettingsArchiveExtensions : d.SettingsArchiveExtensions;
         _settings.SkipExtensions = d is null ? SettingsSkipExtensions : d.SettingsSkipExtensions;
@@ -4461,8 +4518,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     private HashSet<string> BuildEffectiveSkipExtensionSet()
     {
         var effective = ParseExtensionSet(SkipExtensions);
-        foreach (var ext in ParseExtensionSet(BinaryExtensions))
-            effective.Add(ext);
+        // Binary extensions only suppress CONTENT searching (handled by SkipBinary's header sniff in
+        // ContentSearcher). They must NOT be early-skipped from file listing in name-matching modes, or a
+        // search like "dnGrep.exe" finds nothing even though the file is right there in the index. Fold
+        // them into the skip set only for Content-only mode, where file names are never matched anyway.
+        if ((SearchMode)SearchModeIndex == SearchMode.Content)
+            foreach (var ext in ParseExtensionSet(BinaryExtensions))
+                effective.Add(ext);
         return effective;
     }
 

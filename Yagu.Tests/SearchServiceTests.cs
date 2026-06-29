@@ -81,6 +81,65 @@ public class SearchServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task BothMode_NameFirstPass_EmitsFilenameMatchExactlyOnce()
+    {
+        // File whose NAME contains the literal AND whose content also matches.
+        Write("needle-report.txt", "alpha\nhas needle here\nomega");
+        // File with a content match only (no name match) — Both must still scan it.
+        Write("plain.txt", "needle in content");
+        // File with neither.
+        Write("unrelated.txt", "nothing relevant");
+
+        bool originalSdk = FileLister.SdkAvailable;
+        FileLister.SdkAvailable = true; // engage the name-first pass on the managed backend
+        try
+        {
+            var svc = new SearchService();
+            var opts = new SearchOptions
+            {
+                Directory = _root,
+                Query = "needle",
+                SearchMode = SearchMode.Both,
+                CaseSensitive = false,
+                UseRegex = false,
+                MaxFileSizeBytes = 0,
+                MaxResults = 0,
+            };
+
+            var results = new List<SearchResult>();
+            await foreach (var evt in svc.SearchAsync(opts, default))
+            {
+                if (evt is SearchEvent.Match m) results.Add(m.Result);
+                else if (evt is SearchEvent.MatchBatch b) results.AddRange(b.Results);
+            }
+
+            // The name-first pass and the full discovery must not BOTH emit the filename match.
+            int filenameMatchCount = 0;
+            string? filenameMatchPath = null;
+            bool reportContent = false, plainContent = false;
+            foreach (var r in results)
+            {
+                if (r.LineNumber == 0) { filenameMatchCount++; filenameMatchPath = r.FilePath; }
+                else if (r.FilePath.EndsWith("needle-report.txt", StringComparison.Ordinal)) reportContent = true;
+                else if (r.FilePath.EndsWith("plain.txt", StringComparison.Ordinal)) plainContent = true;
+            }
+
+            Assert.Equal(1, filenameMatchCount);
+            Assert.NotNull(filenameMatchPath);
+            Assert.EndsWith("needle-report.txt", filenameMatchPath!);
+
+            // Both semantics preserved: content matches for BOTH the name-matched file and the
+            // content-only file are still present (the full pass scans the whole tree).
+            Assert.True(reportContent, "expected a content match in the name-matched file");
+            Assert.True(plainContent, "expected a content match in the content-only file");
+        }
+        finally
+        {
+            FileLister.SdkAvailable = originalSdk;
+        }
+    }
+
+    [Fact]
     public async Task SearchManyAsync_AggregatesAcrossRoots_IntoSingleCompleted()
     {
         Write("a.txt", "foo\nfoo");          // 2 content matches under _root

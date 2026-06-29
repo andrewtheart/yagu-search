@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Windows.System;
 using Yagu.Services;
@@ -486,6 +487,28 @@ public sealed partial class MainWindow
     private void OnDirectoryQuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
     {
         // User pressed Enter in the directory box — just accept the text (already bound).
+    }
+
+    private async void OnPinStartupDirectory(object sender, RoutedEventArgs e)
+    {
+        // The ToggleButton's IsChecked has already flipped by the time Click fires; snapshot the
+        // current directory box as the startup default (or clear it when unpinning) and persist now,
+        // so the pin survives even if the user never runs a search this session.
+        bool pinned = (sender as ToggleButton)?.IsChecked == true;
+        UpdatePinStartupDirectoryIcon(pinned);
+        await ViewModel.SetStartupDirectoryPinnedAsync(pinned);
+    }
+
+    /// <summary>Swaps the star glyph between outline (unpinned) and filled (pinned) and refreshes the
+    /// tooltip to describe the next action.</summary>
+    private void UpdatePinStartupDirectoryIcon(bool pinned)
+    {
+        PinStartupDirectoryIcon.Glyph = pinned ? "\uE735" : "\uE734";
+        ToolTipService.SetToolTip(
+            PinStartupDirectoryButton,
+            pinned
+                ? "Unpin — start with an empty directory next launch"
+                : "Pin this directory as the startup default");
     }
 
     private void OnDirectoryTextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)

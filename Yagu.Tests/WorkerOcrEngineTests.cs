@@ -55,6 +55,34 @@ public sealed class WorkerOcrEngineTests
     }
 
     [Fact]
+    public void Paddle_ConfigureWorkerEnvironment_OmitsMaxSideWhenUnspecified()
+    {
+        // Default maxSide is -1 (unspecified) so the worker keeps its own default; the env var must
+        // not be emitted in that case.
+        var engine = new PaddleOcrEngine("EnglishV4");
+        var env = new Dictionary<string, string?>();
+
+        engine.ConfigureWorkerEnvironmentForTest(env);
+
+        Assert.False(env.ContainsKey(PaddleOcrEngine.MaxSideEnvVar));
+    }
+
+    [Theory]
+    [InlineData(0, "0")]       // 0 = unlimited (native resolution)
+    [InlineData(640, "640")]
+    [InlineData(960, "960")]
+    [InlineData(1536, "1536")]
+    public void Paddle_ConfigureWorkerEnvironment_SetsMaxSideWhenSpecified(int maxSide, string expected)
+    {
+        var engine = new PaddleOcrEngine("EnglishV4", maxSide);
+        var env = new Dictionary<string, string?>();
+
+        engine.ConfigureWorkerEnvironmentForTest(env);
+
+        Assert.Equal(expected, env[PaddleOcrEngine.MaxSideEnvVar]);
+    }
+
+    [Fact]
     public void Tesseract_ConfigureWorkerEnvironment_SetsEngine()
     {
         var engine = new TesseractOcrEngine();

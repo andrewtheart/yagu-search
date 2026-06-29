@@ -2783,6 +2783,9 @@ public sealed partial class MainWindow
 
     private void HideMatchNavPanel()
     {
+        // Match-nav chrome + the flattened cross-section match list: always
+        // hide/clear. These describe the navigation UI and the global match
+        // index, which are meaningless when there is nothing to navigate.
         UnboxCurrentMatch();
         HideActiveMatchOverlay();
         MatchNavPanel.Visibility = Visibility.Collapsed;
@@ -2790,26 +2793,39 @@ public sealed partial class MainWindow
         _matchParagraphs.Clear();
         InvalidateParagraphIndexCache();
         _currentMatchIndex = -1;
-        _sectionMatchNavs.Clear();
-        _activeSectionNav = null;
-        _lazySections.Clear();
-        _lazyMatchCount = 0;
         ResetPreviewMatchTotals();
-        _sectionOverflow.Clear();
-        _deferredOrderedFiles = null;
-        _deferredAllSelected = null;
-        _deferredButtonPanel = null;
-        _deferredCursor = 0;
-        InvalidateDeferredCountsCache();
-        _autoLoadMoreInFlight = false;
         _initialMatchScrolled = false;
-        _expanderFilePaths.Clear();
-        _expanderHeaderArgs.Clear();
-        _blockExpanderCache.Clear();
         InvalidateScrollPositionCache();
-        _stickyHeaderExpander = null;
-        StickyFileHeader.Child = null;
-        StickyFileHeader.Visibility = Visibility.Collapsed;
+
+        // Section-tracking state (the dedup map, per-section nav, lazy/deferred
+        // queues, expander caches, sticky header) MUST stay in sync with the
+        // expanders actually shown in PreviewSectionsPanel. Tearing it down
+        // while sections are still displayed orphans those sections from the
+        // dedup map (_expanderFilePaths) — which previously let the SAME file be
+        // added to the preview twice. The trigger was a filename-only/binary
+        // match whose zero navigable matches routed UpdateMatchNavPanel here
+        // even though its section was still on screen. Only clear this state
+        // once no section expanders remain in the panel.
+        if (!PreviewSectionsPanel.Children.OfType<Expander>().Any())
+        {
+            _sectionMatchNavs.Clear();
+            _activeSectionNav = null;
+            _lazySections.Clear();
+            _lazyMatchCount = 0;
+            _sectionOverflow.Clear();
+            _deferredOrderedFiles = null;
+            _deferredAllSelected = null;
+            _deferredButtonPanel = null;
+            _deferredCursor = 0;
+            InvalidateDeferredCountsCache();
+            _autoLoadMoreInFlight = false;
+            _expanderFilePaths.Clear();
+            _expanderHeaderArgs.Clear();
+            _blockExpanderCache.Clear();
+            _stickyHeaderExpander = null;
+            StickyFileHeader.Child = null;
+            StickyFileHeader.Visibility = Visibility.Collapsed;
+        }
     }
 
     private void UpdateSectionMatchNavPanels()

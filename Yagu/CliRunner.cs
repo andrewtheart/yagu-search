@@ -837,6 +837,8 @@ internal static class CliRunner
         string archiveExts = args.ArchiveExtensions ?? s.ArchiveExtensions;
         bool searchImageText = args.SearchImageText ?? s.SearchImageText;
         string imageOcrEngine = AppSettings.NormalizeImageOcrEngine(args.ImageOcrEngine ?? s.ImageOcrEngine);
+        string imageOcrModel = AppSettings.NormalizeImageOcrModel(args.ImageOcrModel ?? s.ImageOcrModel);
+        int imageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(args.ImageOcrMaxSide ?? s.ImageOcrMaxSide);
 
         bool obeyGitignore = args.ObeyGitignore ?? s.ObeyGitignore;
         bool gitignorePrecedence = args.GitignoreTakesPrecedence ?? s.GitignoreTakesPrecedence;
@@ -897,6 +899,8 @@ internal static class CliRunner
             SearchImageText       = searchImageText,
             ImageOcrExtensions    = SplitSemi(AppSettings.DefaultImageOcrExtensions).ToHashSet(StringComparer.OrdinalIgnoreCase),
             ImageOcrEngine        = imageOcrEngine,
+            ImageOcrModel         = imageOcrModel,
+            ImageOcrMaxSide       = imageOcrMaxSide,
             ExcludeAdminProtectedPaths = excludeAdminPaths,
             AdminProtectedPathSegments = Yagu.Services.FileLister.ParseAdminProtectedSegments(adminSegments),
         };
@@ -1700,6 +1704,10 @@ internal static class CliRunner
                   --image-text            OCR image files and search the recognized text (off by default).
                   --no-image-text         Do not OCR images (default).
                   --ocr-engine <name>     OCR engine for --image-text: paddle (default) or tesseract.
+                  --ocr-model <name>      PaddleSharp recognition model: EnglishV3, EnglishV4 (default),
+                                          ChineseV4, or ChineseV5. Ignored by the tesseract engine.
+                  --ocr-max-side <px>     PaddleSharp detection resolution (longest side, default 960;
+                                          0 = unlimited/native). Ignored by the tesseract engine.
 
             ADMIN / SECURITY:
                   --no-admin-warning      Suppress the non-administrator privilege warning.
@@ -2853,6 +2861,8 @@ internal sealed class CliArgs
     public bool?            SearchHiddenFiles { get; private set; }
     public bool?            SearchImageText { get; private set; }
     public string?          ImageOcrEngine { get; private set; }
+    public string?          ImageOcrModel { get; private set; }
+    public int?             ImageOcrMaxSide { get; private set; }
     public string?          ArchiveExtensions { get; private set; }
     public bool?            ExcludeAdminProtectedPaths { get; private set; }
     public string?          AdminProtectedPathSegments { get; private set; }
@@ -2994,6 +3004,8 @@ internal sealed class CliArgs
             if (TryGetInt(raw, ref i, out n, "--max-depth"))             { a.MaxSearchDepth = n; continue; }
             if (TryGetVal(raw, ref i, out v, "--archive-extensions"))    { a.ArchiveExtensions = v; continue; }
             if (TryGetVal(raw, ref i, out v, "--ocr-engine"))            { a.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(v); continue; }
+            if (TryGetVal(raw, ref i, out v, "--ocr-model"))             { a.ImageOcrModel = AppSettings.NormalizeImageOcrModel(v); continue; }
+            if (TryGetInt(raw, ref i, out n, "--ocr-max-side"))          { a.ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(n); continue; }
             if (TryGetVal(raw, ref i, out v, "--admin-protected-paths")) { a.AdminProtectedPathSegments = v; continue; }
             if (TryGetVal(raw, ref i, out v, "--created-after"))         { if (DateTimeOffset.TryParse(v, out var d)) a.CreatedAfter = d; continue; }
             if (TryGetVal(raw, ref i, out v, "--created-before"))        { if (DateTimeOffset.TryParse(v, out var d)) a.CreatedBefore = d; continue; }

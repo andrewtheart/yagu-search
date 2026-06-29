@@ -532,8 +532,10 @@ public sealed class FileLister : IFileLister
             ? $"\"{normalizedDir}\""
             : normalizedDir;
 
-        // Always start with "file:" to exclude folder results
-        var query = $"file: {pathPart}";
+        // Always start with "file:" to exclude folder results. The macro MUST be glued to its argument
+        // ("file:C:\") — Everything 1.1.0.37 treats "file: C:\" (with a space) as the empty-argument
+        // macro AND the separate term "C:\", which matches nothing, so every search returned 0 files.
+        var query = $"file:{pathPart}";
 
         if (includeExtensions is { Count: > 0 })
         {
@@ -1379,20 +1381,62 @@ public sealed class FileLister : IFileLister
         if (literalTerms.Count == 0)
             return null;
 
-        var quotedTerms = new List<string>(literalTerms.Count);
+        var terms = new List<string>(literalTerms.Count);
         foreach (var term in literalTerms)
         {
-            if (string.IsNullOrWhiteSpace(term) || term.Contains('"'))
+            // Emit BARE (unquoted) terms. Everything's filename-only matching returns ZERO results
+            // for a double-quoted term ("dnGrep.exe" matches nothing while bare dnGrep.exe matches),
+            // so the previous quoting silently broke this name pushdown. Skip the pushdown (return
+            // null) for any term we can't express as a single safe bare token — i.e. one containing
+            // whitespace or an Everything operator ("|<>!:;*?()/\). Skipping only widens the result
+            // set, which the FileNameMatchesLiteralTerms post-filter then re-narrows, so correctness
+            // is preserved.
+            if (!IsSafeBareEverythingTerm(term))
                 return null;
 
-            quotedTerms.Add($"\"{term}\"");
+            terms.Add(term);
         }
 
-        return quotedTerms.Count switch
+        return terms.Count switch
         {
-            1 => quotedTerms[0],
-            _ => $"<{string.Join('|', quotedTerms)}>"
+            1 => terms[0],
+            _ => $"<{string.Join('|', terms)}>"
         };
+    }
+
+    /// <summary>
+    /// True when <paramref name="term"/> can be embedded as a single bare token in an Everything
+    /// query without changing its meaning. Everything matches an unquoted token as a case-insensitive
+    /// filename substring; quoting it (or letting whitespace / an operator through) either matches
+    /// nothing or alters the query, so such terms are rejected and the caller skips the pushdown.
+    /// </summary>
+    private static bool IsSafeBareEverythingTerm(string term)
+    {
+        if (string.IsNullOrWhiteSpace(term))
+            return false;
+        foreach (char c in term)
+        {
+            if (char.IsWhiteSpace(c))
+                return false;
+            switch (c)
+            {
+                case '"':
+                case '|':
+                case '<':
+                case '>':
+                case '!':
+                case ':':
+                case ';':
+                case '*':
+                case '?':
+                case '(':
+                case ')':
+                case '\\':
+                case '/':
+                    return false;
+            }
+        }
+        return true;
     }
 
     /// <summary>
@@ -1432,8 +1476,13 @@ public sealed class FileLister : IFileLister
                 }
                 else
                 {
-                    // Literal filename → quoted substring term (matches the path containing it).
-                    terms.Add($"\"{token}\"");
+                    // Literal filename → bare substring term (matches the file name containing it).
+                    // Everything returns nothing for a quoted filename-only term, so emit bare and bail
+                    // on anything that isn't a safe single token (omitting only widens the result set,
+                    // which the GlobMatcher post-filter then narrows).
+                    if (!IsSafeBareEverythingTerm(token))
+                        return null;
+                    terms.Add(token);
                 }
             }
         }

@@ -97,11 +97,14 @@ public sealed class FileListerEsExeGateTests : IDisposable
     }
 
     [Fact]
-    public void BuildEverythingFileNameFilter_QuotesLiteralTermsAsOrGroup()
+    public void BuildEverythingFileNameFilter_EmitsBareLiteralTermsAsOrGroup()
     {
-        Assert.Equal("\"target\"", FileLister.BuildEverythingFileNameFilter(["target"]));
-        Assert.Equal("<\"alpha\"|\"beta\">", FileLister.BuildEverythingFileNameFilter(["alpha", "beta"]));
+        // Bare (unquoted): Everything's filename-only matching returns nothing for a quoted term.
+        Assert.Equal("target", FileLister.BuildEverythingFileNameFilter(["target"]));
+        Assert.Equal("<alpha|beta>", FileLister.BuildEverythingFileNameFilter(["alpha", "beta"]));
+        // Unsafe tokens (quote, whitespace, operators) can't be expressed bare → no pushdown.
         Assert.Null(FileLister.BuildEverythingFileNameFilter(["bad\"term"]));
+        Assert.Null(FileLister.BuildEverythingFileNameFilter(["has space"]));
     }
 
     [Fact]

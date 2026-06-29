@@ -653,6 +653,98 @@ public class SettingsServiceNewFieldTests
         finally { try { File.Delete(tmp); } catch { } }
     }
 
+    [Theory]
+    [InlineData("EnglishV4", "EnglishV4")]
+    [InlineData("englishv4", "EnglishV4")]
+    [InlineData("  ENGLISHV3  ", "EnglishV3")]
+    [InlineData("chinesev4", "ChineseV4")]
+    [InlineData("ChineseV5", "ChineseV5")]
+    [InlineData("", "EnglishV4")]
+    [InlineData("   ", "EnglishV4")]
+    [InlineData(null, "EnglishV4")]
+    [InlineData("not-a-model", "EnglishV4")]
+    public void NormalizeImageOcrModel_MapsToCanonicalKnownModels(string? input, string expected)
+    {
+        Assert.Equal(expected, AppSettings.NormalizeImageOcrModel(input));
+    }
+
+    [Theory]
+    [InlineData(0, 0)]            // 0 = unlimited (native resolution) preserved
+    [InlineData(-5, 0)]          // negative collapses to unlimited
+    [InlineData(640, 640)]
+    [InlineData(960, 960)]
+    [InlineData(100, 320)]       // below floor clamps up
+    [InlineData(99999, 4096)]    // above ceiling clamps down
+    public void NormalizeImageOcrMaxSide_ClampsToValidRange(int input, int expected)
+    {
+        Assert.Equal(expected, AppSettings.NormalizeImageOcrMaxSide(input));
+    }
+
+    [Fact]
+    public void Defaults_ImageOcrQualitySettings()
+    {
+        var s = new AppSettings();
+        Assert.Equal("EnglishV4", s.ImageOcrModel);
+        Assert.Equal("EnglishV4", AppSettings.DefaultImageOcrModel);
+        Assert.Equal(960, s.ImageOcrMaxSide);
+        Assert.Equal(960, AppSettings.DefaultImageOcrMaxSide);
+    }
+
+    [Fact]
+    public void RoundTrip_ImageOcrQualitySettings()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-ocr-quality-roundtrip-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var svc = new SettingsService(tmp);
+            var s = new AppSettings { ImageOcrModel = "ChineseV5", ImageOcrMaxSide = 1536 };
+            svc.Save(s);
+            var loaded = svc.Load();
+            Assert.Equal("ChineseV5", loaded.ImageOcrModel);
+            Assert.Equal(1536, loaded.ImageOcrMaxSide);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
+    public void Load_NormalizesPersistedImageOcrModelAndMaxSide()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-ocr-quality-normalize-" + Guid.NewGuid() + ".json");
+        try
+        {
+            File.WriteAllText(tmp, """{"ImageOcrModel":"chinesev4","ImageOcrMaxSide":99999}""");
+            var svc = new SettingsService(tmp);
+            var loaded = svc.Load();
+            Assert.Equal("ChineseV4", loaded.ImageOcrModel);
+            Assert.Equal(4096, loaded.ImageOcrMaxSide);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
+    public void Defaults_PinStartupDirectory_IsOffAndEmpty()
+    {
+        var s = new AppSettings();
+        Assert.False(s.PinStartupDirectory);
+        Assert.True(string.IsNullOrEmpty(s.PinnedStartupDirectory));
+    }
+
+    [Fact]
+    public void RoundTrip_PinStartupDirectory()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-pin-dir-roundtrip-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var svc = new SettingsService(tmp);
+            var s = new AppSettings { PinStartupDirectory = true, PinnedStartupDirectory = @"D:\Projects" };
+            svc.Save(s);
+            var loaded = svc.Load();
+            Assert.True(loaded.PinStartupDirectory);
+            Assert.Equal(@"D:\Projects", loaded.PinnedStartupDirectory);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
     [Fact]
     public void Defaults_SdkChannelBufferSize_Is4096()
     {

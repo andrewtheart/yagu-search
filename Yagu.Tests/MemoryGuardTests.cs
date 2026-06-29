@@ -239,11 +239,14 @@ public sealed class MemoryGuardTests
     // ══════════════════════════════════════════════════════════════════
 
     [Fact]
-    public void MainViewModel_EffectiveExcludeGlobsText_ResolvesEmptyToDefaultGlobs()
+    public void MainViewModel_EffectiveExcludeGlobsText_EmptyMeansNoExcludes()
     {
-        Assert.Contains("string.IsNullOrWhiteSpace(ExcludeGlobs) && ExcludeFilterMode == FilterPatternMode.GlobPath", MainViewModelSource);
-        Assert.Contains("? AppSettings.DefaultExcludeGlobs", MainViewModelSource);
-        Assert.Contains(": ExcludeGlobs;", MainViewModelSource);
+        // The placeholder (e.g. "node_modules;bin;obj;.git") is ONLY an example and must NOT be
+        // applied when the box is empty. An empty exclude box means "no excludes" — excludes apply
+        // only when the user explicitly types them.
+        Assert.Contains("private string EffectiveExcludeGlobsText => ExcludeGlobs ?? string.Empty;", MainViewModelSource);
+        // The old silent-defaulting ternary must be gone.
+        Assert.DoesNotContain("? AppSettings.DefaultExcludeGlobs", MainViewModelSource);
     }
 
     [Fact]

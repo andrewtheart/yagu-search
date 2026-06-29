@@ -173,7 +173,7 @@ public sealed class SearchServiceGateTests
 
         AssertContainsInOrder(source,
             "if (searchContent && options.SearchImageText)",
-            "ocrEngine = Ocr.OcrEngineFactory.Create(options.ImageOcrEngine);",
+            "ocrEngine = Ocr.OcrEngineFactory.Create(options.ImageOcrEngine, options.ImageOcrModel, options.ImageOcrMaxSide);",
             "Ocr.OcrTextCache.Cleanup();",
             "var ocrCache = new Ocr.OcrTextCache();",
             "imageOcr = new Ocr.ImageOcrSearchSession(",

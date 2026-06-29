@@ -20,21 +20,6 @@ public sealed partial class SettingsWindow : Window
 {
     private static IReadOnlyList<string>? _systemFontFamilyNames;
 
-    private static readonly string[] TabHeaders =
-    [
-        "Search Defaults",
-        "Search Limits",
-        "Performance",
-        "Display",
-        "Editor",
-        "Window",
-        "Interaction",
-        "Terminal Emulator",
-        "Developer Options",
-        "Shortcuts & History",
-        "AI",
-    ];
-
     private readonly MainViewModel _viewModel;
     private readonly HotkeyService _hotkeyService;
     private readonly IntPtr _mainHwnd;
@@ -45,6 +30,7 @@ public sealed partial class SettingsWindow : Window
     private readonly Action _openHelp;
     private readonly Action? _suppressOwnerHideToTray;
     private readonly List<UIElement> _tabPages = new();
+    private readonly List<string> _tabHeaders = new();
     private readonly HashSet<UIElement> _dirtyTrackedElements = new();
     private readonly Dictionary<UIElement, object?> _cleanSettingValues = new();
     private readonly List<LazyColorSettingState> _lazyColorSettings = new();
@@ -1016,9 +1002,9 @@ public sealed partial class SettingsWindow : Window
     private void ExtractSearchableEntries()
     {
         _settingEntries.Clear();
-        for (int t = 0; t < _tabPages.Count && t < TabHeaders.Length; t++)
+        for (int t = 0; t < _tabPages.Count && t < _tabHeaders.Count; t++)
         {
-            string tabHeader = TabHeaders[t];
+            string tabHeader = _tabHeaders[t];
             if (_tabPages[t] is not StackPanel page) continue;
 
             var entryElements = new List<UIElement>();
@@ -1250,6 +1236,7 @@ public sealed partial class SettingsWindow : Window
     {
         var page = new StackPanel { Spacing = 8 };
         _tabPages.Add(page);
+        _tabHeaders.Add(header);
 
         var item = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
         item.Children.Add(new FontIcon
@@ -1265,6 +1252,33 @@ public sealed partial class SettingsWindow : Window
         });
         TabList.Items.Add(item);
         return page;
+    }
+
+    /// <summary>
+    /// Reorders the built tab pages, their headers, and the visible tab-rail items into
+    /// case-insensitive alphabetical order by header. Called once after all tabs are added so the
+    /// settings tabs always display A–Z. Keeps <see cref="_tabPages"/>, <see cref="_tabHeaders"/>,
+    /// and TabList.Items in lockstep so positional tab indices (search navigation, deep links)
+    /// stay consistent with what the user sees.
+    /// </summary>
+    private void SortTabsAlphabetically()
+    {
+        var order = Enumerable.Range(0, _tabPages.Count)
+            .OrderBy(i => _tabHeaders[i], StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var sortedPages = order.Select(i => _tabPages[i]).ToList();
+        var sortedHeaders = order.Select(i => _tabHeaders[i]).ToList();
+        var sortedItems = order.Select(i => TabList.Items[i]).ToList();
+
+        _tabPages.Clear();
+        _tabPages.AddRange(sortedPages);
+        _tabHeaders.Clear();
+        _tabHeaders.AddRange(sortedHeaders);
+
+        TabList.Items.Clear();
+        foreach (var item in sortedItems)
+            TabList.Items.Add(item);
     }
 
     private void QueueHotkeyAvailabilityLoad(CheckBox hotkey, ComboBox hotkeyCombo, TextBlock availabilityStatus)
@@ -1878,6 +1892,7 @@ public sealed partial class SettingsWindow : Window
     {
         "Search Defaults" => "\uE721",
         "Search Limits" => "\uE74C",
+        "OCR" => "\uE7C5",
         "Performance" => "\uE9F5",
         "Display" => "\uE7B5",
         "Editor" => "\uE70F",
@@ -2331,27 +2346,6 @@ public sealed partial class SettingsWindow : Window
             pathTypeGroup.Children.Add(searchHidden);
             pathTypeGroup.Children.Add(new TextBlock { Text = "When enabled (default), files and folders carrying the Windows Hidden attribute are included in searches. When disabled, hidden items are excluded — the file walker skips them and the Everything backends filter them with !attrib:h. System files (e.g. pagefile.sys, hiberfil.sys) are always skipped by the file walker regardless of this setting. This is the default for the Advanced Options ▸ Content options toggle.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-            var searchImageText = new ToggleSwitch { OnContent = NextSearchLabel("Search image text (OCR)"), OffContent = NextSearchLabel("Search image text (OCR)"), IsOn = _viewModel.SearchImageText };
-            searchImageText.Toggled += (_, _) => _viewModel.SearchImageText = searchImageText.IsOn;
-            pathTypeGroup.Children.Add(searchImageText);
-            pathTypeGroup.Children.Add(new TextBlock { Text = "When enabled, raster images (PNG/JPG/BMP/GIF/TIFF/WebP) are OCR'd on a background queue and their recognized text is searched. Off by default. OCR runs on a separate, non-blocking thread so it never slows the file scan — image matches appear as each image finishes processing. This is the default for the Advanced Options ▸ Filters toggle.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
-
-            var ocrEngineLabel = NextSearchLabel("OCR engine:");
-            ocrEngineLabel.Margin = new Thickness(0, 4, 0, 0);
-            pathTypeGroup.Children.Add(ocrEngineLabel);
-            var ocrEngineCombo = new ComboBox { MinWidth = 220, HorizontalAlignment = HorizontalAlignment.Left };
-            ocrEngineCombo.Items.Add(new ComboBoxItem { Content = "PaddleSharp (recommended)", Tag = "paddle" });
-            ocrEngineCombo.Items.Add(new ComboBoxItem { Content = "Tesseract", Tag = "tesseract" });
-            ocrEngineCombo.SelectedIndex =
-                string.Equals(AppSettings.NormalizeImageOcrEngine(_viewModel.ImageOcrEngine), "tesseract", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
-            ocrEngineCombo.SelectionChanged += (_, _) =>
-            {
-                if (ocrEngineCombo.SelectedItem is ComboBoxItem { Tag: string engineId })
-                    _viewModel.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(engineId);
-            };
-            pathTypeGroup.Children.Add(ocrEngineCombo);
-            pathTypeGroup.Children.Add(new TextBlock { Text = "PaddleSharp (the default) generally gives higher accuracy on screenshots and documents and can use GPU/NPU acceleration. Tesseract is a lighter alternative. The selected engine's runtime and models are downloaded on first use.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
-
             var allDrivesNetwork = new ToggleSwitch { OnContent = NextSearchLabel("All-drives search includes network drives"), OffContent = NextSearchLabel("All-drives search includes network drives"), IsOn = _viewModel.SearchAllDrivesIncludesNetwork };
             allDrivesNetwork.Toggled += (_, _) => _viewModel.SearchAllDrivesIncludesNetwork = allDrivesNetwork.IsOn;
             pathTypeGroup.Children.Add(allDrivesNetwork);
@@ -2459,6 +2453,160 @@ public sealed partial class SettingsWindow : Window
             archiveEntrySize.ValueChanged += (_, args) => _viewModel.ArchiveMaxEntryMB = (int)args.NewValue;
             archiveGroup.Children.Add(archiveEntrySize);
             archiveGroup.Children.Add(new TextBlock { Text = "Individual files inside archives larger than this are skipped. Higher values search larger archive entries but use more memory. 0 uses the default (64 MB).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+        }
+
+        // ── OCR ──
+        {
+            var g = AddTab("OCR");
+            var ocrEnableGroup = AddSettingsGroupBox(g, "Image Text Search");
+            var ocrQualityGroup = AddSettingsGroupBox(g, "Recognition Quality");
+
+            // Master OCR toggle (migrated from the Search Limits tab).
+            var searchImageText = new ToggleSwitch { OnContent = NextSearchLabel("Search image text (OCR)"), OffContent = NextSearchLabel("Search image text (OCR)"), IsOn = _viewModel.SearchImageText };
+            searchImageText.Toggled += (_, _) => _viewModel.SearchImageText = searchImageText.IsOn;
+            ocrEnableGroup.Children.Add(searchImageText);
+            ocrEnableGroup.Children.Add(new TextBlock { Text = "When enabled, raster images (PNG/JPG/BMP/GIF/TIFF/WebP) are OCR'd on a background queue and their recognized text is searched. Off by default. OCR runs on a separate, non-blocking thread so it never slows the file scan — image matches appear as each image finishes processing. This is the default for the Advanced Options ▸ Filters toggle.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            // OCR engine (migrated from the Search Limits tab).
+            var ocrEngineLabel = NextSearchLabel("OCR engine:");
+            ocrEngineLabel.Margin = new Thickness(0, 4, 0, 0);
+            ocrEnableGroup.Children.Add(ocrEngineLabel);
+            var ocrEngineCombo = new ComboBox { MinWidth = 260, HorizontalAlignment = HorizontalAlignment.Left };
+            ocrEngineCombo.Items.Add(new ComboBoxItem { Content = "PaddleSharp (recommended)", Tag = "paddle" });
+            ocrEngineCombo.Items.Add(new ComboBoxItem { Content = "Tesseract", Tag = "tesseract" });
+            ocrEngineCombo.SelectedIndex =
+                string.Equals(AppSettings.NormalizeImageOcrEngine(_viewModel.ImageOcrEngine), "tesseract", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            ocrEnableGroup.Children.Add(ocrEngineCombo);
+            ocrEnableGroup.Children.Add(new TextBlock { Text = "PaddleSharp (the default) generally gives higher accuracy on screenshots and documents and can use GPU/NPU acceleration. Tesseract is a lighter alternative. The selected engine's runtime and models are downloaded on first use.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            // ── Recognition Quality (applies to PaddleSharp; Tesseract uses a fixed pipeline) ──
+            ocrQualityGroup.Children.Add(new TextBlock { Text = "These settings tune the PaddleSharp engine. The Tesseract engine uses a fixed recognition pipeline and ignores them.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
+
+            var presetLabel = NextSearchLabel("Quality preset:");
+            ocrQualityGroup.Children.Add(presetLabel);
+            var presetCombo = new ComboBox { MinWidth = 260, HorizontalAlignment = HorizontalAlignment.Left };
+            presetCombo.Items.Add(new ComboBoxItem { Content = "Fast (English v3, 640 px)", Tag = "Fast" });
+            presetCombo.Items.Add(new ComboBoxItem { Content = "Balanced (English v4, 960 px)", Tag = "Balanced" });
+            presetCombo.Items.Add(new ComboBoxItem { Content = "Accurate (Chinese+English v5, 1536 px)", Tag = "Accurate" });
+            presetCombo.Items.Add(new ComboBoxItem { Content = "Custom", Tag = "Custom" });
+            ocrQualityGroup.Children.Add(presetCombo);
+            ocrQualityGroup.Children.Add(new TextBlock { Text = "Quick presets that set the recognition model and detection resolution together. Choosing a model or resolution below that does not match a preset switches this to Custom.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            var modelLabel = NextSearchLabel("Recognition model:");
+            modelLabel.Margin = new Thickness(0, 4, 0, 0);
+            ocrQualityGroup.Children.Add(modelLabel);
+            var modelCombo = new ComboBox { MinWidth = 260, HorizontalAlignment = HorizontalAlignment.Left };
+            modelCombo.Items.Add(new ComboBoxItem { Content = "English (v3) — fastest", Tag = "EnglishV3" });
+            modelCombo.Items.Add(new ComboBoxItem { Content = "English (v4) — recommended", Tag = "EnglishV4" });
+            modelCombo.Items.Add(new ComboBoxItem { Content = "Chinese + English (v4)", Tag = "ChineseV4" });
+            modelCombo.Items.Add(new ComboBoxItem { Content = "Chinese + English (v5) — most accurate", Tag = "ChineseV5" });
+            ocrQualityGroup.Children.Add(modelCombo);
+            ocrQualityGroup.Children.Add(new TextBlock { Text = "The PaddleSharp recognition model. English models are fastest for Latin-script text; the Chinese+English models also recognize CJK characters and v5 is the most accurate overall. Models are downloaded on first use.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            var resolutionLabel = NextSearchLabel("Detection resolution (longest side, px):");
+            resolutionLabel.Margin = new Thickness(0, 4, 0, 0);
+            ocrQualityGroup.Children.Add(resolutionLabel);
+            var resolutionCombo = new ComboBox { MinWidth = 260, HorizontalAlignment = HorizontalAlignment.Left };
+            resolutionCombo.Items.Add(new ComboBoxItem { Content = "640 — fastest", Tag = "640" });
+            resolutionCombo.Items.Add(new ComboBoxItem { Content = "960 — balanced", Tag = "960" });
+            resolutionCombo.Items.Add(new ComboBoxItem { Content = "1280", Tag = "1280" });
+            resolutionCombo.Items.Add(new ComboBoxItem { Content = "1536", Tag = "1536" });
+            resolutionCombo.Items.Add(new ComboBoxItem { Content = "2048", Tag = "2048" });
+            resolutionCombo.Items.Add(new ComboBoxItem { Content = "Unlimited (native resolution)", Tag = "0" });
+            ocrQualityGroup.Children.Add(resolutionCombo);
+            ocrQualityGroup.Children.Add(new TextBlock { Text = "The image is downscaled so its longest side is at most this many pixels before text detection. Larger values find smaller text at the cost of speed and memory. Unlimited uses the image's native resolution (slowest).", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
+            // Wiring: a guard flag prevents the preset ⇄ model/resolution selections from feeding back
+            // into one another while one is programmatically updating the others.
+            bool syncing = false;
+
+            static void SelectComboByTag(ComboBox combo, string tag)
+            {
+                foreach (var item in combo.Items)
+                {
+                    if (item is ComboBoxItem ci && string.Equals(ci.Tag?.ToString(), tag, StringComparison.OrdinalIgnoreCase))
+                    {
+                        combo.SelectedItem = item;
+                        return;
+                    }
+                }
+            }
+
+            static string PresetForModelAndResolution(string model, int maxSide) => model switch
+            {
+                "EnglishV3" when maxSide == 640 => "Fast",
+                "EnglishV4" when maxSide == 960 => "Balanced",
+                "ChineseV5" when maxSide == 1536 => "Accurate",
+                _ => "Custom",
+            };
+
+            string CurrentModel() => AppSettings.NormalizeImageOcrModel(_viewModel.ImageOcrModel);
+            int CurrentMaxSide() => AppSettings.NormalizeImageOcrMaxSide(_viewModel.ImageOcrMaxSide);
+
+            void UpdateQualityEnabled()
+            {
+                bool paddle = !string.Equals(AppSettings.NormalizeImageOcrEngine(_viewModel.ImageOcrEngine), "tesseract", StringComparison.OrdinalIgnoreCase);
+                presetCombo.IsEnabled = paddle;
+                modelCombo.IsEnabled = paddle;
+                resolutionCombo.IsEnabled = paddle;
+            }
+
+            // Seed the selections from the view model BEFORE attaching change handlers so the initial
+            // sync never marks settings dirty or recurses.
+            SelectComboByTag(modelCombo, CurrentModel());
+            SelectComboByTag(resolutionCombo, CurrentMaxSide().ToString(System.Globalization.CultureInfo.InvariantCulture));
+            SelectComboByTag(presetCombo, PresetForModelAndResolution(CurrentModel(), CurrentMaxSide()));
+            UpdateQualityEnabled();
+
+            ocrEngineCombo.SelectionChanged += (_, _) =>
+            {
+                if (ocrEngineCombo.SelectedItem is ComboBoxItem { Tag: string engineId })
+                    _viewModel.ImageOcrEngine = AppSettings.NormalizeImageOcrEngine(engineId);
+                UpdateQualityEnabled();
+            };
+
+            presetCombo.SelectionChanged += (_, _) =>
+            {
+                if (syncing) return;
+                if (presetCombo.SelectedItem is not ComboBoxItem { Tag: string preset }) return;
+                (string Model, int MaxSide)? target = preset switch
+                {
+                    "Fast" => ("EnglishV3", 640),
+                    "Balanced" => ("EnglishV4", 960),
+                    "Accurate" => ("ChineseV5", 1536),
+                    _ => null, // Custom: keep the current model/resolution.
+                };
+                if (target is null) return;
+                syncing = true;
+                _viewModel.ImageOcrModel = target.Value.Model;
+                _viewModel.ImageOcrMaxSide = target.Value.MaxSide;
+                SelectComboByTag(modelCombo, target.Value.Model);
+                SelectComboByTag(resolutionCombo, target.Value.MaxSide.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                syncing = false;
+            };
+
+            modelCombo.SelectionChanged += (_, _) =>
+            {
+                if (modelCombo.SelectedItem is ComboBoxItem { Tag: string model })
+                    _viewModel.ImageOcrModel = AppSettings.NormalizeImageOcrModel(model);
+                if (syncing) return;
+                syncing = true;
+                SelectComboByTag(presetCombo, PresetForModelAndResolution(CurrentModel(), CurrentMaxSide()));
+                syncing = false;
+            };
+
+            resolutionCombo.SelectionChanged += (_, _) =>
+            {
+                if (resolutionCombo.SelectedItem is ComboBoxItem { Tag: string raw } &&
+                    int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int maxSide))
+                {
+                    _viewModel.ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(maxSide);
+                }
+                if (syncing) return;
+                syncing = true;
+                SelectComboByTag(presetCombo, PresetForModelAndResolution(CurrentModel(), CurrentMaxSide()));
+                syncing = false;
+            };
         }
 
         // ── Performance ──
@@ -3625,5 +3773,7 @@ public sealed partial class SettingsWindow : Window
 
             foreach (var c in dependentControls) c.IsEnabled = _viewModel.SemanticSearchAvailable;
         }
+
+        SortTabsAlphabetically();
     }
 }

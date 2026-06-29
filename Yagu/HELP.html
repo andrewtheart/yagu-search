@@ -278,6 +278,12 @@ folders as you type).</li>
 <code>Yagu.exe --dir "D:\projects\myapp"</code>.</li>
 <li>Use the Windows Explorer context menu: right-click a folder →
 <strong>Search with Yagu</strong>.</li>
+<li>Click the <strong>★ pin</strong> to the left of Browse to keep the
+current folder as the startup default so it is pre-filled the next time
+Yagu opens. By default the box starts empty (which searches all drives);
+click the pin again to unpin and clear the saved folder. Pinning
+snapshots the folder when you click it — changing the box afterward does
+not change the pin.</li>
 </ul></li>
 <li>Enter the search query in the search box.</li>
 <li>Choose search options: <strong>Case sensitive</strong> (Alt+C),
@@ -315,8 +321,8 @@ pin.</td>
 </tr>
 <tr>
 <td>Directory bar</td>
-<td>The folder to search, with auto-complete, Browse, and recent
-history.</td>
+<td>The folder to search, with auto-complete, a pin (★) to keep the
+current folder as the startup default, Browse, and recent history.</td>
 </tr>
 <tr>
 <td>Search bar</td>
@@ -657,9 +663,9 @@ through OCR and the recognized text is searched like any other file’s
 contents. Off by default because OCR is slower than reading text files.
 OCR runs on a background queue that does not block or slow the normal
 file scan; matches appear in the results panel as each image is
-processed. The OCR engine (PaddleSharp by default, or Tesseract) and
-this toggle’s default come from <strong>Settings ▸ Path and File Type
-Filters ▸ Search image text (OCR)</strong>.</td>
+processed. The OCR engine, recognition quality, and this toggle’s
+default come from the <strong>Settings ▸ OCR</strong> tab (see
+below).</td>
 </tr>
 </tbody>
 </table>
@@ -1387,13 +1393,6 @@ files” toggle. On by default — items with the Windows Hidden attribute
 are included. System files are always skipped by the file walker.</td>
 </tr>
 <tr>
-<td>Search image text (OCR)</td>
-<td>Default for the Advanced Options ▸ Content options “Search image
-text (OCR)” toggle. Off by default. When on, image files are OCR’d on a
-background queue and the recognized text is searched. The OCR engine is
-selectable: PaddleSharp (recommended, default) or Tesseract.</td>
-</tr>
-<tr>
 <td>Skip admin-protected paths</td>
 <td>Excludes system directories that deny access when not elevated.</td>
 </tr>
@@ -1430,6 +1429,58 @@ Detection still checks file-header magic bytes.</td>
 <td>Max archive entry size (MB)</td>
 <td>Largest individual entry to extract from an archive. 0 = default 64
 MB.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ocr-tab">OCR Tab</h3>
+<p>Controls image text recognition (OCR). When OCR is on, image files
+(PNG, JPG, BMP, GIF, TIFF, WEBP) are recognized on a background queue
+and their text is searched like any other file’s contents.</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Setting</th>
+<th>What It Controls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Search image text (OCR)</td>
+<td>Default for the Advanced Options ▸ Filters “Search image text (OCR)”
+toggle. Off by default. When on, image files are OCR’d on a background
+queue and the recognized text is searched.</td>
+</tr>
+<tr>
+<td>OCR engine</td>
+<td>PaddleSharp (recommended, default) or Tesseract. PaddleSharp is
+generally more accurate and can use GPU/NPU acceleration; Tesseract is a
+lighter alternative with a fixed pipeline. The selected engine’s runtime
+and models download on first use.</td>
+</tr>
+<tr>
+<td>Quality preset</td>
+<td>Quick presets that set the recognition model and detection
+resolution together: <strong>Fast</strong> (English v3, 640 px),
+<strong>Balanced</strong> (English v4, 960 px),
+<strong>Accurate</strong> (Chinese+English v5, 1536 px). Switches to
+<strong>Custom</strong> when the model/resolution below don’t match a
+preset. Applies to PaddleSharp.</td>
+</tr>
+<tr>
+<td>Recognition model</td>
+<td>PaddleSharp recognition model: English v3 (fastest), English v4
+(recommended), Chinese+English v4, or Chinese+English v5 (most
+accurate). Models download on first use. Ignored by Tesseract.</td>
+</tr>
+<tr>
+<td>Detection resolution</td>
+<td>Longest image side (in pixels) the image is downscaled to before
+detection: 640, 960, 1280, 1536, 2048, or Unlimited (native resolution).
+Larger finds smaller text but is slower. Ignored by Tesseract.</td>
 </tr>
 </tbody>
 </table>
@@ -2953,6 +3004,22 @@ not blocked.</td>
 <td><code>--ocr-engine &lt;name&gt;</code></td>
 <td>OCR engine for <code>--image-text</code>: <code>paddle</code>
 (PaddleSharp, default) or <code>tesseract</code>.</td>
+</tr>
+<tr>
+<td><code>--ocr-model &lt;name&gt;</code></td>
+<td>PaddleSharp recognition model for <code>--image-text</code>:
+<code>EnglishV3</code>, <code>EnglishV4</code> (default),
+<code>ChineseV4</code>, or <code>ChineseV5</code>. Falls back to the
+<strong>OCR ▸ Recognition model</strong> setting. Ignored by the
+<code>tesseract</code> engine.</td>
+</tr>
+<tr>
+<td><code>--ocr-max-side &lt;px&gt;</code></td>
+<td>PaddleSharp detection resolution (longest side in pixels) for
+<code>--image-text</code>: default 960; <code>0</code> = unlimited
+(native resolution). Falls back to the <strong>OCR ▸ Detection
+resolution</strong> setting. Ignored by the <code>tesseract</code>
+engine.</td>
 </tr>
 </tbody>
 </table>

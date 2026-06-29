@@ -69,7 +69,7 @@ public sealed class SemanticResolutionVisibilityTests
 
         // Persist guard: while a resolution is visible, the saved defaults (snapshot) reach disk, not
         // the resolved values — for representative leak-prone fields.
-        string persist = Method("PersistSettingsAsync", 14000);
+        string persist = Method("PersistSettingsAsync", 16000);
         Assert.Contains("var d = _semanticResolutionVisible ? _semanticDefaultsSnapshot : null;", persist);
         Assert.Contains("_settings.IncludeGlobs = d is null ? IncludeGlobs : d.IncludeGlobs;", persist);
         // The extension lists (the historical leak path) are guarded by the same snapshot, not written raw.

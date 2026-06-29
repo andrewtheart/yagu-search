@@ -377,14 +377,15 @@ public class FileListerStaticHelperTests
     [Fact]
     public void BuildEverythingFileNameFilter_SingleTerm()
     {
-        Assert.Equal("\"hello\"", FileLister.BuildEverythingFileNameFilter(new[] { "hello" }));
+        // Bare, unquoted: Everything's filename-only match returns nothing for a quoted term.
+        Assert.Equal("hello", FileLister.BuildEverythingFileNameFilter(new[] { "hello" }));
     }
 
     [Fact]
     public void BuildEverythingFileNameFilter_MultipleTerms()
     {
         var result = FileLister.BuildEverythingFileNameFilter(new[] { "alpha", "beta" });
-        Assert.Equal("<\"alpha\"|\"beta\">", result);
+        Assert.Equal("<alpha|beta>", result);
     }
 
     [Fact]
@@ -395,11 +396,12 @@ public class FileListerStaticHelperTests
     }
 
     [Fact]
-    public void BuildEverythingIncludeFileNameFilter_LiteralFileName_QuotedSubstringTerm()
+    public void BuildEverythingIncludeFileNameFilter_LiteralFileName_BareSubstringTerm()
     {
         // The reported case: an exact filename must become a backend term so Everything returns
-        // only the matching files instead of every file with that extension.
-        Assert.Equal("\"01-after-search.png\"",
+        // only the matching files instead of every file with that extension. It is emitted bare —
+        // Everything's filename-only matching returns nothing for a quoted term.
+        Assert.Equal("01-after-search.png",
             FileLister.BuildEverythingIncludeFileNameFilter(new[] { "01-after-search.png" }));
     }
 
@@ -413,14 +415,14 @@ public class FileListerStaticHelperTests
     [Fact]
     public void BuildEverythingIncludeFileNameFilter_MultipleGlobs_OrGrouped()
     {
-        Assert.Equal("<\"a.txt\"|*.png>",
+        Assert.Equal("<a.txt|*.png>",
             FileLister.BuildEverythingIncludeFileNameFilter(new[] { "a.txt", "*.png" }));
     }
 
     [Fact]
     public void BuildEverythingIncludeFileNameFilter_SplitsCommaAndSemicolonTokens()
     {
-        Assert.Equal("<\"a.txt\"|\"b.txt\">",
+        Assert.Equal("<a.txt|b.txt>",
             FileLister.BuildEverythingIncludeFileNameFilter(new[] { "a.txt; b.txt" }));
     }
 
@@ -844,7 +846,9 @@ public class FileListerSdkTests : IDisposable
         var lister = CreateSdkLister(sdk);
         lister.EarlyFileNameLiteralTerms = ["target"];
         await foreach (var _ in lister.ListFilesAsync(_root, Array.Empty<string>(), 0, default)) { }
-        Assert.Contains("\"target\"", sdk.CapturedQuery);
+        // Bare term (no quotes): Everything's filename-only match returns nothing for a quoted term.
+        Assert.Contains(" target", sdk.CapturedQuery);
+        Assert.DoesNotContain("\"target\"", sdk.CapturedQuery);
     }
 
     [Fact]
@@ -1986,14 +1990,14 @@ public class FileListerGapTests : IDisposable
     public void FileNameFilter_SingleTerm()
     {
         var result = FileLister.BuildEverythingFileNameFilter(["hello"]);
-        Assert.Equal("\"hello\"", result);
+        Assert.Equal("hello", result);
     }
 
     [Fact]
     public void FileNameFilter_MultipleTerms()
     {
         var result = FileLister.BuildEverythingFileNameFilter(["hello", "world"]);
-        Assert.Equal("<\"hello\"|\"world\">", result);
+        Assert.Equal("<hello|world>", result);
     }
 
     [Fact]
@@ -2028,7 +2032,8 @@ public class FileListerGapTests : IDisposable
         var lister = new FileLister(null, sdk);
         lister.EarlyFileNameLiteralTerms = ["target"];
         var files = await CollectAsync(lister.ListFilesAsync(_root, Array.Empty<string>(), 0, default));
-        Assert.Contains("\"target\"", sdk.CapturedQuery);
+        Assert.Contains(" target", sdk.CapturedQuery);
+        Assert.DoesNotContain("\"target\"", sdk.CapturedQuery);
     }
 
     // ── SDK: size & date filter terms in query ──

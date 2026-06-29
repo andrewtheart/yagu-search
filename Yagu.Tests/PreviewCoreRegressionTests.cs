@@ -1950,6 +1950,42 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void HideMatchNavPanel_PreservesSectionTrackingWhileSectionsRemain()
+    {
+        // Regression: a filename-only / binary match has zero navigable matches,
+        // so the end of PrependPreviewSectionsForFilesAsync routes through
+        // UpdateMatchNavPanel -> HideMatchNavPanel while that file's section is
+        // still on screen. HideMatchNavPanel must NOT tear down the dedup map
+        // (_expanderFilePaths) or the rest of the section-tracking state while
+        // section expanders remain in PreviewSectionsPanel — otherwise the same
+        // file can be added to the preview a second time (duplicate section).
+        string hide = ExtractMethodWindow(MainWindowSource, "HideMatchNavPanel", window: 2600);
+
+        const string guard = "if (!PreviewSectionsPanel.Children.OfType<Expander>().Any())";
+        int guardIndex = hide.IndexOf(guard, StringComparison.Ordinal);
+        Assert.True(guardIndex >= 0, "HideMatchNavPanel must guard section-tracking teardown behind a no-sections-remain check.");
+
+        // The dedup map, expander caches, lazy/deferred queues and sticky header
+        // are cleared only inside the guard.
+        AssertContainsInOrder(hide,
+            guard,
+            "_lazySections.Clear();",
+            "_deferredOrderedFiles = null;",
+            "_expanderFilePaths.Clear();",
+            "_expanderHeaderArgs.Clear();",
+            "_blockExpanderCache.Clear();",
+            "_stickyHeaderExpander = null;");
+
+        // None of the section-tracking clears may run unconditionally (before the guard).
+        string beforeGuard = hide[..guardIndex];
+        Assert.DoesNotContain("_expanderFilePaths.Clear();", beforeGuard);
+        Assert.DoesNotContain("_blockExpanderCache.Clear();", beforeGuard);
+        Assert.DoesNotContain("_expanderHeaderArgs.Clear();", beforeGuard);
+        Assert.DoesNotContain("_lazySections.Clear();", beforeGuard);
+        Assert.DoesNotContain("_deferredOrderedFiles = null;", beforeGuard);
+    }
+
+    [Fact]
     public void LargeMatchPreview_BuildsSectionsOffTreeYieldsAndRegistersOverflow()
     {
         string prepend = ExtractMethodWindow(MainWindowSource, "PrependPreviewSectionsForFilesAsync");

@@ -1625,4 +1625,48 @@ public sealed class SemanticPlanApplierTests
         string text = SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan());
         Assert.Equal("Searching all drives \u2014 file names and contents.", text);
     }
+
+    [Fact]
+    public void BuildExplanation_EffectiveDirectory_UsedWhenPlanHasNoDirectory()
+    {
+        // The "all drives" regression: when the resolved plan does not pin a directory but the UI has
+        // one selected, the explanation must reflect the effective (UI) directory, not "all drives".
+        string text = SemanticPlanApplier.BuildExplanation(
+            new ResolvedSearchPlan { Pattern = "report", SearchMode = SearchMode.Content },
+            effectiveDirectory: "C:/");
+
+        Assert.Contains("C:/", text);
+        Assert.DoesNotContain("all drives", text);
+    }
+
+    [Fact]
+    public void BuildExplanation_ResolvedDirectory_TakesPrecedenceOverEffectiveDirectory()
+    {
+        // A directory explicitly resolved from the plan wins over the UI's effective directory.
+        string text = SemanticPlanApplier.BuildExplanation(
+            new ResolvedSearchPlan { Directory = "D:/", Pattern = "report", SearchMode = SearchMode.Content },
+            effectiveDirectory: "C:/");
+
+        Assert.Contains("D:/", text);
+        Assert.DoesNotContain("C:/", text);
+    }
+
+    [Fact]
+    public void BuildExplanation_NoDirectoryAndNoEffectiveDirectory_SaysAllDrives()
+    {
+        string text = SemanticPlanApplier.BuildExplanation(
+            new ResolvedSearchPlan { Pattern = "report", SearchMode = SearchMode.Content },
+            effectiveDirectory: null);
+
+        Assert.Contains("all drives", text);
+    }
+
+    [Fact]
+    public void BuildExplanation_SingleArgOverload_BehavesLikeNullEffectiveDirectory()
+    {
+        var resolved = new ResolvedSearchPlan { Pattern = "report", SearchMode = SearchMode.Content };
+        Assert.Equal(
+            SemanticPlanApplier.BuildExplanation(resolved, effectiveDirectory: null),
+            SemanticPlanApplier.BuildExplanation(resolved));
+    }
 }

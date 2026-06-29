@@ -371,12 +371,25 @@ public static class SemanticPlanApplier
     /// actually searched.
     /// </summary>
     public static string BuildExplanation(ResolvedSearchPlan resolved)
+        => BuildExplanation(resolved, effectiveDirectory: null);
+
+    /// <summary>
+    /// Same as <see cref="BuildExplanation(ResolvedSearchPlan)"/> but, when the model did not resolve
+    /// an explicit directory, describes the <paramref name="effectiveDirectory"/> the search will
+    /// actually use (the current directory box). This keeps the summary truthful: the GUI deliberately
+    /// does not seed the model with the box value, so <see cref="ResolvedSearchPlan.Directory"/> is
+    /// null for an unscoped query even though the search still honors whatever is in the box. Only a
+    /// genuinely empty effective directory is described as "all drives".
+    /// </summary>
+    public static string BuildExplanation(ResolvedSearchPlan resolved, string? effectiveDirectory)
     {
         ArgumentNullException.ThrowIfNull(resolved);
 
-        string directory = string.IsNullOrWhiteSpace(resolved.Directory)
-            ? "all drives"
-            : resolved.Directory!.Trim();
+        string directory = !string.IsNullOrWhiteSpace(resolved.Directory)
+            ? resolved.Directory!.Trim()
+            : !string.IsNullOrWhiteSpace(effectiveDirectory)
+                ? effectiveDirectory!.Trim()
+                : "all drives";
 
         string scope = resolved.SearchMode switch
         {

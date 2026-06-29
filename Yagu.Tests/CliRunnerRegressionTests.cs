@@ -200,6 +200,27 @@ public sealed class CliRunnerRegressionTests
     }
 
     [Fact]
+    public void CliParser_RecognizesImageOcrQualityFlags()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+
+        // Parser recognizes the model and detection-resolution options.
+        Assert.Contains("TryGetVal(raw, ref i, out v, \"--ocr-model\")", source);
+        Assert.Contains("TryGetInt(raw, ref i, out n, \"--ocr-max-side\")", source);
+        // Nullable arg properties exist so the settings default applies when the flag is omitted.
+        Assert.Contains("public string?          ImageOcrModel { get; private set; }", source);
+        Assert.Contains("public int?             ImageOcrMaxSide { get; private set; }", source);
+        // Built into SearchOptions with the settings value as the fallback.
+        Assert.Contains("ImageOcrModel         = imageOcrModel", source);
+        Assert.Contains("ImageOcrMaxSide       = imageOcrMaxSide", source);
+        Assert.Contains("args.ImageOcrModel ?? s.ImageOcrModel", source);
+        Assert.Contains("args.ImageOcrMaxSide ?? s.ImageOcrMaxSide", source);
+        // Help mentions the flags.
+        Assert.Contains("--ocr-model <name>", source);
+        Assert.Contains("--ocr-max-side <px>", source);
+    }
+
+    [Fact]
     public void SemanticFirstRun_OffersModelPickWithTraditionalFallback()
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));

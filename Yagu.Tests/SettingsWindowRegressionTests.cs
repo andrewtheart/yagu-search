@@ -596,6 +596,7 @@ public sealed class SettingsWindowRegressionTests
     [Theory]
     [InlineData("Search Defaults")]
     [InlineData("Search Limits")]
+    [InlineData("OCR")]
     [InlineData("Performance")]
     [InlineData("Display")]
     [InlineData("Editor")]
@@ -607,6 +608,25 @@ public sealed class SettingsWindowRegressionTests
     public void SettingsWindow_ContainsAllSettingsGroups(string groupName)
     {
         Assert.Contains($"AddTab(\"{groupName}\")", SettingsWindowSource);
+    }
+
+    [Fact]
+    public void SettingsWindow_OcrTab_HostsEngineModelAndResolutionControls()
+    {
+        // The OCR controls were migrated off the Search Limits tab into a dedicated OCR tab.
+        Assert.Contains("AddTab(\"OCR\")", SettingsWindowSource);
+        // Master toggle + engine selector.
+        Assert.Contains("var searchImageText = new ToggleSwitch", SettingsWindowSource);
+        Assert.Contains("var ocrEngineCombo = new ComboBox", SettingsWindowSource);
+        // Quality preset + model + detection-resolution selectors.
+        Assert.Contains("var presetCombo = new ComboBox", SettingsWindowSource);
+        Assert.Contains("var modelCombo = new ComboBox", SettingsWindowSource);
+        Assert.Contains("var resolutionCombo = new ComboBox", SettingsWindowSource);
+        // Model + resolution write through to the view-model.
+        Assert.Contains("_viewModel.ImageOcrModel", SettingsWindowSource);
+        Assert.Contains("_viewModel.ImageOcrMaxSide", SettingsWindowSource);
+        // OCR tab carries its own icon.
+        Assert.Contains("\"OCR\" =>", SettingsWindowSource);
     }
 
     [Fact]
@@ -1162,8 +1182,9 @@ public sealed class SettingsWindowRegressionTests
     [Fact]
     public void MainWindow_SettingsHelperCanOpenPerformanceAndDisplayTabs()
     {
-        Assert.Contains("private const int SettingsPerformanceTabIndex = 2;", MainWindowSource);
-        Assert.Contains("private const int SettingsDisplayTabIndex = 3;", MainWindowSource);
+        // Tabs are sorted alphabetically at build time, so Display=2 and Performance=6.
+        Assert.Contains("private const int SettingsPerformanceTabIndex = 6;", MainWindowSource);
+        Assert.Contains("private const int SettingsDisplayTabIndex = 2;", MainWindowSource);
         Assert.Contains("OpenSettingsTab(SettingsPerformanceTabIndex);", MainWindowSource);
     }
 

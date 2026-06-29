@@ -13,11 +13,17 @@ public sealed class PaddleOcrEngine : WorkerOcrEngine
     /// <summary>Environment variable that selects the PaddleOCR model (e.g. <c>EnglishV4</c>).</summary>
     public const string ModelEnvVar = "YAGU_OCR_MODEL";
 
-    private readonly string? _modelName;
+    /// <summary>Environment variable that caps the PaddleOCR detection resolution (longest image side,
+    /// in pixels). <c>0</c> means unlimited; the variable is omitted to use the worker default.</summary>
+    public const string MaxSideEnvVar = "YAGU_OCR_MAX_SIDE";
 
-    public PaddleOcrEngine(string? modelName = null)
+    private readonly string? _modelName;
+    private readonly int _maxSide;
+
+    public PaddleOcrEngine(string? modelName = null, int maxSide = -1)
     {
         _modelName = string.IsNullOrWhiteSpace(modelName) ? null : modelName.Trim();
+        _maxSide = maxSide;
     }
 
     /// <summary>
@@ -25,10 +31,11 @@ public sealed class PaddleOcrEngine : WorkerOcrEngine
     /// file does not exist, the engine reports the worker as unavailable instead of probing the
     /// standard locations).
     /// </summary>
-    internal PaddleOcrEngine(string? modelName, string? workerPathOverride)
+    internal PaddleOcrEngine(string? modelName, string? workerPathOverride, int maxSide = -1)
         : base(workerPathOverride)
     {
         _modelName = string.IsNullOrWhiteSpace(modelName) ? null : modelName.Trim();
+        _maxSide = maxSide;
     }
 
     public override string Id => OcrEngineFactory.PaddleId;
@@ -43,6 +50,10 @@ public sealed class PaddleOcrEngine : WorkerOcrEngine
         if (_modelName is not null)
         {
             environment[ModelEnvVar] = _modelName;
+        }
+        if (_maxSide >= 0)
+        {
+            environment[MaxSideEnvVar] = _maxSide.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
     }
 }

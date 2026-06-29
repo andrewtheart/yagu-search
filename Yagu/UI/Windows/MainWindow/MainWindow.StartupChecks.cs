@@ -18,6 +18,7 @@ public sealed partial class MainWindow
         SyncWrapModeToggles(ViewModel.PreviewWrapModeIndex);
         ApplyWordWrap(ViewModel.PreviewWordWrap);
         ApplyPreviewColors();
+        UpdatePinStartupDirectoryIcon(ViewModel.PinStartupDirectory);
         if (_launcherMode) PositionLauncherWindow();
 
         // Apply maximize-on-startup setting (only in non-launcher mode)
