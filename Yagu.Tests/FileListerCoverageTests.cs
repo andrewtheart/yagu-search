@@ -601,15 +601,20 @@ public class FileListerSdkTests : IDisposable
     }
 
     [Fact]
-    public async Task Sdk_NoMaxFiles_UsesDefaultPageSize()
+    public async Task Sdk_NoMaxFiles_RequestsAllResultsInSingleQuery()
     {
+        // With no user cap, the SDK tier requests the ENTIRE result set in one
+        // Query (SetMax = uint.MaxValue, the Everything "all results" sentinel)
+        // instead of paging. Paging re-evaluated the whole `file:<root>` search
+        // on every page (the SDK keeps no server-side cursor), which pinned
+        // Everything for ~2 hours on a full-drive sweep.
         var sdk = new MockEverythingSdkOps
         {
             Results = [(@"C:\a.cs", 10)]
         };
         var lister = CreateSdkLister(sdk);
         await foreach (var _ in lister.ListFilesAsync(_root, Array.Empty<string>(), 0, default)) { }
-        Assert.Equal(10_000u, sdk.CapturedMax);
+        Assert.Equal(uint.MaxValue, sdk.CapturedMax);
     }
 
     [Fact]

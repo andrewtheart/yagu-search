@@ -199,6 +199,7 @@ public sealed partial class MainWindow : Window, IDisposable
         };
         TextControlBoxNS.TextControlBoxDiagnostics.VerboseLogger = (source, message) => LogService.Instance.Verbose(source, message);
         TextControlBoxNS.TextControlBoxDiagnostics.IsVerboseEnabledProvider = () => LogService.Instance.IsVerboseEnabled;
+        TextControlBoxNS.TextControlBoxDiagnostics.ErrorLogger = (source, message, ex) => LogService.Instance.Warning(source, message, ex);
         QueryBox.AddHandler(UIElement.PointerPressedEvent,
             new PointerEventHandler(OnQueryBoxPointerPressed),
             handledEventsToo: true);
@@ -209,6 +210,17 @@ public sealed partial class MainWindow : Window, IDisposable
         RootGrid.AddHandler(UIElement.PointerPressedEvent,
             new PointerEventHandler(OnRootPointerPressedDismissDirectorySuggestions),
             handledEventsToo: true);
+        // Close the directory/query history dropdowns whenever one of our owned modal dialogs is
+        // about to be shown, so a suggestion popup can't sit above the dialog or pop open as focus
+        // shifts to it. Unsubscribed in Dispose.
+        YaguDialog.PreparingToShowModal += OnModalDialogPreparingToShow;
+        // Belt-and-suspenders for the above: a modal can stay open far longer than the brief
+        // post-show suppression, and an AutoSuggestBox can re-open its list on its own (focus
+        // changes, deferred ticks). Each suggestion popup is hosted in its own top-level window that
+        // floats above the modal, so watch IsSuggestionListOpen and force it shut for as long as one
+        // of our owned modals is up.
+        QueryBox.RegisterPropertyChangedCallback(AutoSuggestBox.IsSuggestionListOpenProperty, OnInputSuggestionListOpenChanged);
+        DirectoryBox.RegisterPropertyChangedCallback(AutoSuggestBox.IsSuggestionListOpenProperty, OnInputSuggestionListOpenChanged);
         InitializeHelpKeyboardShortcut();
         SyncLayoutToggles(ViewModel.PreviewModeIndex);
         InitializeAdvancedOptionsDrawerStateTracking();
@@ -282,6 +294,16 @@ public sealed partial class MainWindow : Window, IDisposable
             if (e.PropertyName == nameof(ViewModel.ThemeModeIndex))
             {
                 ApplyAppTheme();
+            }
+
+            if (e.PropertyName == nameof(ViewModel.IsCurrentDirectoryPinned))
+            {
+                // Keep the whole star in sync when the box directory changes (typed, cleared, Browse, or a
+                // semantic search restoring the default). IsCurrentDirectoryPinned is recomputed whenever
+                // Directory changes, so this fires on navigation and drives the checked highlight, glyph,
+                // and tooltip. The highlight is set in code-behind on purpose — a OneWay x:Bind to the
+                // toggle's IsChecked self-disables after the first user click and would freeze the star.
+                UpdatePinStartupDirectoryIcon(ViewModel.IsCurrentDirectoryPinned);
             }
 
             if (e.PropertyName == nameof(ViewModel.ShowBuildNumberInTitleBar))
@@ -488,6 +510,7 @@ public sealed partial class MainWindow : Window, IDisposable
         if (_disposed) return;
         _disposed = true;
 
+        YaguDialog.PreparingToShowModal -= OnModalDialogPreparingToShow;
         _autoScrollTimer?.Stop();
         _previewContextDebounceTimer?.Stop();
         _diskSparklineTimer?.Stop();

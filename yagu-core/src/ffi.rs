@@ -78,6 +78,10 @@ pub struct QgOptions {
     pub max_results: c_ulonglong,
     /// Maximum file size to scan; zero means unlimited.
     pub max_file_size: c_ulonglong,
+    /// Non-zero skips files carrying the Windows Hidden attribute. The bit is read
+    /// from the metadata the scanner already fetches per file (free), avoiding the
+    /// pathologically slow Everything `!attrib:h` predicate on unindexed attributes.
+    pub skip_hidden: c_uchar,
 }
 
 #[repr(C)]
@@ -112,6 +116,7 @@ const STATUS_BINARY_SKIPPED: c_int = 3;
 const STATUS_INVALID_REGEX: c_int = 4;
 const STATUS_INVALID_PATH: c_int = 5;
 const STATUS_CANCELLED: c_int = 6;
+const STATUS_HIDDEN_SKIPPED: c_int = 7;
 
 #[inline]
 fn use_ascii_literal_fast_path(pattern: &str, use_regex: bool, case_sensitive: bool) -> bool {
@@ -292,6 +297,7 @@ fn open_file_for_scan_into<'a>(
     path: &str,
     max_file_size: u64,
     skip_binary: bool,
+    skip_hidden: bool,
     scratch: &'a mut Vec<u8>,
 ) -> Result<(FileBytesRef<'a>, u64, u64), c_int> {
     let mut file = open_for_scan(path).map_err(|_| STATUS_OPEN_FAILED)?;
@@ -301,6 +307,13 @@ fn open_file_for_scan_into<'a>(
     let last_modified = meta.last_write_time();
     #[cfg(not(windows))]
     let last_modified = 0u64;
+    // Hidden-attribute skip: the bit is already in `meta` (no extra syscall). Done here
+    // instead of via Everything's `!attrib:h`, which forces a full unindexed attribute
+    // scan of the whole drive (~40 s before the first result on a ~2M-file C:\).
+    #[cfg(windows)]
+    if skip_hidden && (meta.file_attributes() & 0x0000_0002) != 0 {
+        return Err(STATUS_HIDDEN_SKIPPED);
+    }
     if max_file_size != 0 && file_size > max_file_size {
         return Err(STATUS_TOO_LARGE);
     }
@@ -595,7 +608,7 @@ pub unsafe extern "C" fn qg_free_result(result: *mut QgResult) {
 /// ABI/version probe used by the C# loader to confirm the DLL is the one we built.
 #[no_mangle]
 pub extern "C" fn qg_abi_version() -> c_uint {
-    4
+    5
 }
 
 // ---------------------------------------------------------------------------
@@ -841,6 +854,7 @@ pub struct QgSession {
     scan_opts: ScanOptions,
     max_file_size: u64,
     omit_line_bytes: bool,
+    skip_hidden: bool,
 }
 
 // SAFETY: LineMatcher is Send+Sync, ScanOptions is plain data.
@@ -912,6 +926,7 @@ pub unsafe extern "C" fn qg_create_session(
         scan_opts,
         max_file_size: opts_in.max_file_size,
         omit_line_bytes: opts_in.omit_line_bytes != 0,
+        skip_hidden: opts_in.skip_hidden != 0,
     }))
 }
 
@@ -1349,6 +1364,7 @@ unsafe fn qg_session_scan_paths_parallel_impl(
                         &path,
                         sess.max_file_size,
                         sess.scan_opts.skip_binary,
+                        sess.skip_hidden,
                         &mut file_scratch,
                     ) {
                         Ok(b) => b,
@@ -1690,6 +1706,7 @@ pub unsafe extern "C" fn qg_create_streaming_scanner(
                     path,
                     sess.max_file_size,
                     sess.scan_opts.skip_binary,
+                    sess.skip_hidden,
                     &mut file_scratch,
                 ) {
                     Ok(b) => b,
@@ -1975,6 +1992,7 @@ mod tests {
             context_after: 0,
             max_results: 0,
             max_file_size: 0,
+            skip_hidden: 0,
         }
     }
 
@@ -1991,7 +2009,7 @@ mod tests {
     // ---- qg_abi_version ----
     #[test]
     fn abi_version_returns_4() {
-        assert_eq!(qg_abi_version(), 4);
+        assert_eq!(qg_abi_version(), 5);
     }
 
     // ---- pack_lines_borrowed ----
@@ -4176,7 +4194,7 @@ mod tests {
         let path = tmp.path().to_str().unwrap();
         let mut scratch = Vec::with_capacity(MMAP_THRESHOLD_BYTES as usize);
         assert!(matches!(
-            open_file_for_scan_into(path, 0, true, &mut scratch),
+            open_file_for_scan_into(path, 0, true, false, &mut scratch),
             Err(STATUS_BINARY_SKIPPED)
         ));
     }

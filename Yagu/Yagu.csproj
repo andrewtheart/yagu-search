@@ -44,6 +44,38 @@
     <YaguInstallerArch Condition="'$(YaguInstallerArch)' == '' And '$(RuntimeIdentifier)' == 'win-arm64'">arm64</YaguInstallerArch>
   </PropertyGroup>
 
+  <!-- ===== Optional build-time telemetry configuration =========================================
+       Keeps committed source offline-by-default. When a real proxy URL is supplied via a gitignored
+       "telemetry.local.props" (next to this csproj) or the YAGU_PROXY_URL / YAGU_APP_TOKEN env vars,
+       a generated partial (under obj/) supplies the real ProxyBaseUrl + AppToken and the placeholder
+       TelemetryConfig.Defaults.cs is swapped out. The real values are never committed. -->
+  <Import Project="$(MSBuildThisFileDirectory)telemetry.local.props"
+          Condition="Exists('$(MSBuildThisFileDirectory)telemetry.local.props')" />
+
+  <PropertyGroup>
+    <!-- Environment variables (e.g. CI secrets) override the local props file. -->
+    <YaguProxyUrl Condition="'$(YAGU_PROXY_URL)' != ''">$(YAGU_PROXY_URL)</YaguProxyUrl>
+    <YaguAppToken Condition="'$(YAGU_APP_TOKEN)' != ''">$(YAGU_APP_TOKEN)</YaguAppToken>
+    <YaguTelemetryConfigured Condition="'$(YaguProxyUrl)' != ''">true</YaguTelemetryConfigured>
+  </PropertyGroup>
+
+  <!-- Runs just before compile, where IntermediateOutputPath is fully resolved, so the generated
+       file lands under obj/ (gitignored). Generates the real values and swaps the committed offline
+       placeholder (TelemetryConfig.Defaults.cs) out of the compilation. Skipped for design-time /
+       IntelliSense builds, which keep the placeholder so the editor never needs the generated file. -->
+  <Target Name="GenerateYaguTelemetryConfig"
+          BeforeTargets="CoreCompile"
+          Condition="'$(YaguTelemetryConfigured)' == 'true' And '$(DesignTimeBuild)' != 'true'">
+    <PropertyGroup>
+      <YaguGeneratedTelemetryFile>$(IntermediateOutputPath)TelemetryConfig.Configured.g.cs</YaguGeneratedTelemetryFile>
+    </PropertyGroup>
+    <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\scripts\generate-telemetry-config.ps1&quot; -ProxyUrl &quot;$(YaguProxyUrl)&quot; -AppToken &quot;$(YaguAppToken)&quot; -OutputFile &quot;$(YaguGeneratedTelemetryFile)&quot;" />
+    <ItemGroup>
+      <Compile Remove="Services\Telemetry\TelemetryConfig.Defaults.cs" />
+      <Compile Include="$(YaguGeneratedTelemetryFile)" />
+    </ItemGroup>
+  </Target>
+
   <Target Name="GenerateYaguBuildVersion"
           BeforeTargets="BeforeBuild"
           Condition="'$(DesignTimeBuild)' != 'true'">

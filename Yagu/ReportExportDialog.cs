@@ -124,6 +124,7 @@ internal static class ReportExportDialog
             new YaguDialogOptions
             {
                 Title = "Export Report",
+                TitleGlyph = "\uE9F9", // Report
                 Content = root,
                 PrimaryButtonText = "Export",
                 CloseButtonText = "Cancel",
@@ -131,7 +132,6 @@ internal static class ReportExportDialog
                 Width = 520,
                 Height = 560,
                 MaxContentHeight = 440,
-                ShowTitle = false,
                 ShowTitleBar = false,
             });
         if (result != YaguDialogResult.Primary)

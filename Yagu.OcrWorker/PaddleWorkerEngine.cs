@@ -33,6 +33,11 @@ internal sealed class PaddleWorkerEngine : IWorkerOcrEngine
         // Control where PaddleSharp caches its downloaded models.
         Settings.GlobalModelDirectory = modelDir;
         OnlineFullModels online = PaddleModelResolver.Resolve(modelName);
+        if (!ModelsPresent(modelDir))
+        {
+            DownloadGuard.EnsureAllowed("language models");
+        }
+
         FullOcrModel model = await online.DownloadAsync().ConfigureAwait(false);
 
         var ocr = new PaddleOcrAll(model, PaddleDevice.Mkldnn())
@@ -76,6 +81,36 @@ internal sealed class PaddleWorkerEngine : IWorkerOcrEngine
     private static string ResolveModelDir() =>
         Environment.GetEnvironmentVariable("YAGU_OCR_MODEL_DIR")
         ?? Path.Combine(LocalAppData(), "Yagu", "ocr-runtime", "paddle", "models");
+
+    /// <summary>
+    /// True when <paramref name="modelDir"/> already holds a usable PP-OCR set: detection (<c>*_det</c>),
+    /// recognition (<c>*_rec</c>) and classification (<c>*_cls</c>) folders, each with an
+    /// <c>inference.pdiparams</c> weight file. Matches what PaddleSharp writes on download, so the
+    /// download guard only trips when a fetch would actually occur.
+    /// </summary>
+    private static bool ModelsPresent(string modelDir) =>
+        HasModelWithSuffix(modelDir, "_det")
+        && HasModelWithSuffix(modelDir, "_rec")
+        && HasModelWithSuffix(modelDir, "_cls");
+
+    private static bool HasModelWithSuffix(string modelDir, string suffix)
+    {
+        if (!Directory.Exists(modelDir))
+        {
+            return false;
+        }
+
+        foreach (string sub in Directory.EnumerateDirectories(modelDir))
+        {
+            if (Path.GetFileName(sub).EndsWith(suffix, StringComparison.OrdinalIgnoreCase)
+                && File.Exists(Path.Combine(sub, "inference.pdiparams")))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static string LocalAppData() =>
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);

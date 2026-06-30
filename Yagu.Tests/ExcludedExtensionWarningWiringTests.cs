@@ -15,6 +15,7 @@ public sealed class ExcludedExtensionWarningWiringTests
 {
     private static readonly string RepoRoot = FindRepoRoot();
     private static readonly string SearchInputSource = ReadSource("Yagu", "UI", "Windows", "MainWindow", "MainWindow.SearchInput.cs");
+    private static readonly string SlowSemanticModelSource = ReadSource("Yagu", "UI", "Windows", "MainWindow", "MainWindow.SlowSemanticModel.cs");
     private static readonly string AdminSettingsSource = ReadSource("Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdminSettings.cs");
     private static readonly string AdvancedOptionsSource = ReadSource("Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdvancedOptions.cs");
     private static readonly string MainViewModelSource = ReadSource("Yagu", "ViewModels", "MainViewModel.cs");
@@ -23,12 +24,16 @@ public sealed class ExcludedExtensionWarningWiringTests
     [Fact]
     public void SearchEntryPoints_RunHddAndExcludedChecksAsPostTranslationGate()
     {
-        // Both interactive entry points pass the combined warning gate to SubmitSearchAsync, so the
-        // HDD + excluded-extension notices run AFTER any semantic translation — against the directory
-        // the model resolved. A semantic query resolving to an SSD must not show a spurious HDD
-        // warning before the model has run, so neither entry point may call the HDD check directly.
-        int occurrences = CountOccurrences(SearchInputSource, "await ViewModel.SubmitSearchAsync(RunPreSearchWarningGatesAsync);");
+        // Both interactive entry points route through the slow-model watchdog wrapper, which passes the
+        // combined warning gate to SubmitSearchAsync, so the HDD + excluded-extension notices run AFTER
+        // any semantic translation — against the directory the model resolved. A semantic query resolving
+        // to an SSD must not show a spurious HDD warning before the model has run, so neither entry point
+        // may call the HDD check directly.
+        int occurrences = CountOccurrences(SearchInputSource, "await SubmitSearchWithSlowModelWatchAsync();");
         Assert.Equal(2, occurrences);
+
+        // The watchdog wrapper threads the same gate into SubmitSearchAsync.
+        Assert.Contains("await ViewModel.SubmitSearchAsync(RunPreSearchWarningGatesAsync);", SlowSemanticModelSource);
 
         // The gate itself runs the HDD check first, then the excluded-extension check.
         int gateStart = SearchInputSource.IndexOf("private async Task<bool> RunPreSearchWarningGatesAsync(", StringComparison.Ordinal);

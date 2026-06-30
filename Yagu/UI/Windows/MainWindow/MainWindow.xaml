@@ -393,7 +393,6 @@
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Stretch"
                                 Margin="0,1,1,1">
                         <ToggleButton x:Name="PinStartupDirectoryButton" Click="OnPinStartupDirectory"
-                                      IsChecked="{x:Bind ViewModel.PinStartupDirectory, Mode=OneWay}"
                                       ToolTipService.ToolTip="Pin this directory as the startup default"
                                       VerticalAlignment="Stretch" Padding="10,0" MinWidth="0"
                                       CornerRadius="0"

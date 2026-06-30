@@ -106,6 +106,7 @@ internal static class FontContrastWarningDialogView
             new YaguDialogOptions
             {
                 Title = DialogTitle,
+                TitleGlyph = "\uE7BA", // Warning
                 Content = BuildContent(issue, onColorChanged),
                 PrimaryButtonText = "Save",
                 SecondaryButtonText = "Don't remind me again",

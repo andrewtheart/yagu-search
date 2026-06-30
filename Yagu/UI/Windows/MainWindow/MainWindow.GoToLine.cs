@@ -203,6 +203,7 @@ public sealed partial class MainWindow
                 new YaguDialogOptions
                 {
                     Title = "Go to line",
+                    TitleGlyph = "\uE8A5", // Document
                     Content = panel,
                     PrimaryButtonText = "Go",
                     CloseButtonText = "Cancel",

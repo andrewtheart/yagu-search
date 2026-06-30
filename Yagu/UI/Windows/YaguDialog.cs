@@ -52,6 +52,14 @@ internal sealed class YaguDialog : Window
 {
     private static readonly HashSet<YaguDialog> OpenWindows = new();
 
+    /// <summary>
+    /// Raised on the UI thread just before an owned modal dialog is activated. The argument is the
+    /// owner window handle. The owner can use this to dismiss transient popups (e.g. AutoSuggestBox
+    /// history dropdowns), each of which is hosted in its own top-level window and would otherwise
+    /// sit above the dialog or pop itself open as keyboard focus shifts to the dialog.
+    /// </summary>
+    internal static event Action<IntPtr>? PreparingToShowModal;
+
     private readonly TaskCompletionSource<YaguDialogResult> _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly IntPtr _ownerHwnd;
     private readonly YaguDialogOptions _options;
@@ -116,6 +124,12 @@ internal sealed class YaguDialog : Window
 
     private Task<YaguDialogResult> ShowModalAsync()
     {
+        // Let the owner dismiss any transient popups (history dropdowns) before this dialog is
+        // activated, so they can't render above it or pop open as focus moves to the dialog. A
+        // subscriber's failure must never prevent the dialog from showing.
+        try { PreparingToShowModal?.Invoke(_ownerHwnd); }
+        catch { /* ignored */ }
+
         OpenWindows.Add(this);
 
         if (_ownerHwnd != IntPtr.Zero)

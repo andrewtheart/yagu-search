@@ -2,6 +2,7 @@
 using Microsoft.Graphics.Canvas.Text;
 using Microsoft.Graphics.Canvas.UI.Xaml;
 using System;
+using System.Runtime.InteropServices;
 using TextControlBoxNS.Core.Selection;
 using TextControlBoxNS.Core.Text;
 using TextControlBoxNS.Helper;
@@ -219,7 +220,35 @@ namespace TextControlBoxNS.Core.Renderer
                 return;
             }
 
-            CanvasTextLayoutRegion[] regions = textLayout.GetCharacterRegions(renderedSelectionStart, renderedSelectionLength);
+            // Final safety clamp before GetCharacterRegions, which throws (ArgumentException /
+            // E_INVALIDARG) if the range exceeds the actual rendered text-layout length. On very
+            // large single-line files the computed slice indices can momentarily disagree with the
+            // rebuilt layout (e.g. during word-wrap toggles or select-all over a multi-MB line);
+            // an unclamped/throwing call escapes the Win2D draw callback as a 0xc000027b fail-fast.
+            int renderedTextLength = textRenderer.RenderedText?.Length ?? 0;
+            if (textLayout == null || renderedSelectionStart >= renderedTextLength)
+            {
+                selectionManager.currentTextSelection.renderedIndex = 0;
+                selectionManager.currentTextSelection.renderedLength = 0;
+                LogWordWrapSelectionDiagnostics("selection beyond rendered text", startLine, characterPosStart, endLine, characterPosEnd, renderedSelectionStart, renderedSelectionLength, 0, marginLeft, marginTop);
+                return;
+            }
+            if (renderedSelectionStart + renderedSelectionLength > renderedTextLength)
+                renderedSelectionLength = renderedTextLength - renderedSelectionStart;
+
+            CanvasTextLayoutRegion[] regions;
+            try
+            {
+                regions = textLayout.GetCharacterRegions(renderedSelectionStart, renderedSelectionLength);
+            }
+            catch (Exception ex) when (ex is ArgumentException or COMException)
+            {
+                // Selection indices raced with a relayout; skip this frame rather than fail-fast.
+                selectionManager.currentTextSelection.renderedIndex = 0;
+                selectionManager.currentTextSelection.renderedLength = 0;
+                TextControlBoxDiagnostics.Error("TextControlBox.SelectionHighlight", $"GetCharacterRegions({renderedSelectionStart},{renderedSelectionLength}) failed; renderedTextLen={renderedTextLength}", ex);
+                return;
+            }
             LogWordWrapSelectionDiagnostics("render selection", startLine, characterPosStart, endLine, characterPosEnd, renderedSelectionStart, renderedSelectionLength, regions.Length, marginLeft, marginTop, regions.Length > 0 ? regions[0].LayoutBounds : null);
 
             using CanvasCommandList canvasCommandList = new CanvasCommandList(args.DrawingSession);

@@ -7,7 +7,6 @@
 * [PaddleOCR 📖](./docs/ocr.md) support 14 OCR languages model download on-demand, allow rotated text angle detection, 180 degree text detection, also support table recognition 📊.
 * [PaddleDetection 🎯](./docs/detection.md) support PPYolo detection model and PicoDet model 🏹.
 * [RotationDetection 🔄](./docs/rotation-detection.md) use Baidu's official `text_image_orientation_infer` model to detect text picture's rotation angle(`0, 90, 180, 270`).
-* [PaddleNLP ChineseSegmenter 📚](./docs/paddlenlp-lac.md) support `PaddleNLP` Lac Chinese segmenter model, supports tagging/customized words.
 * [Paddle2Onnx 🔄](./docs/paddle2onnx.md) Allow user export `ONNX` model using `C#`.
 
 ## NuGet Packages/Docker Images 📦

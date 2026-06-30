@@ -28,7 +28,7 @@ public sealed partial class MainWindow
     private long PreviewEditorMaxByteLength => (long)ViewModel.PreviewEditorMaxSizeMB * 1024 * 1024;
     private int PreviewEditorMaxTextLength => ViewModel.PreviewEditorMaxTextLength;
     private int PreviewEditorMaxLineLength => ViewModel.PreviewEditorMaxLineLength;
-    private bool _previewEditorForcedWrap;
+    private bool? _previewEditorWrapOverride;
     private bool _previewEditorChunked;
     private bool _previewEditorChunkLoadInFlight;
     private long _previewEditorLoadedByteLength;
@@ -586,12 +586,12 @@ public sealed partial class MainWindow
             bool isArchive = ZipArchiveSearcher.IsArchivePath(result.FilePath);
             PreviewEditor.IsReadOnly = isArchive;
 
-            _previewEditorForcedWrap = wrapDecision.forced;
+            _previewEditorWrapOverride = wrapDecision.wrapOverride;
             ApplyPreviewEditorWordWrap(wrapDecision.wrap);
             if (document.MaxLineLength >= PreviewEditorWrapPromptLineLength)
             {
                 LogService.Instance.Info("Preview",
-                    $"ShowFullFileEditorAsync: long line, wrap={wrapDecision.wrap}, forced={wrapDecision.forced}, maxLen={document.MaxLineLength:N0}");
+                    $"ShowFullFileEditorAsync: long line, wrap={wrapDecision.wrap}, override={wrapDecision.wrapOverride}, maxLen={document.MaxLineLength:N0}");
             }
 
             // Assign while collapsed so the editor does one document load instead of
@@ -698,27 +698,45 @@ public sealed partial class MainWindow
     /// between opening without wrap (recommended), with wrap anyway, or cancelling. Returns whether to
     /// proceed, the effective wrap state, and whether that wrap state is a forced override.
     /// </summary>
-    private async Task<(bool proceed, bool wrap, bool forced)> ResolvePreviewEditorWrapAsync(
+    private async Task<(bool proceed, bool wrap, bool? wrapOverride)> ResolvePreviewEditorWrapAsync(
         string filePath, int maxLineLength, bool singleLine)
     {
         // Single-line files default to wrap for readability; multi-line files honour the user setting.
         bool desiredWrap = ViewModel.PreviewWordWrap || singleLine;
         if (desiredWrap && maxLineLength >= PreviewEditorWrapPromptLineLength)
         {
-            var choice = await PromptPreviewEditorLongLineWrapAsync(filePath, maxLineLength);
+            // Honor a saved "Don't remind me again" preference and skip the prompt entirely.
+            switch (ViewModel.PreviewLongLineWarningIndex)
+            {
+                case 1: return (true, false, (bool?)false); // always open without word wrap
+                case 2: return (true, true, (bool?)true);   // always open with word wrap
+            }
+
+            var (choice, dontRemind) = await PromptPreviewEditorLongLineWrapAsync(filePath, maxLineLength);
+            // Persist the chosen behavior so the warning never appears again (also shown in Settings).
+            if (dontRemind && choice is PreviewEditorWrapChoice.NoWrap or PreviewEditorWrapChoice.Wrap)
+            {
+                ViewModel.PreviewLongLineWarningIndex = choice == PreviewEditorWrapChoice.NoWrap ? 1 : 2;
+                await ViewModel.PersistSettingsAsync();
+            }
+
+            // wrapOverride LOCKS the editor to the explicit choice so a later surface-wide wrap
+            // application (driven by the global PreviewWordWrap setting) can't flip it; a manual
+            // wrap-button toggle clears the override (see OnWrapModeOptionClicked).
             return choice switch
             {
-                PreviewEditorWrapChoice.NoWrap => (true, false, true),    // forced no-wrap (safe)
-                PreviewEditorWrapChoice.Wrap => (true, true, singleLine), // wrap anyway (user override)
-                _ => (false, false, false),                              // cancel
+                PreviewEditorWrapChoice.NoWrap => (true, false, (bool?)false),  // force no-wrap (safe)
+                PreviewEditorWrapChoice.Wrap => (true, true, (bool?)true),      // force wrap (user override)
+                _ => (false, false, (bool?)null),                              // cancel
             };
         }
 
-        // No prompt needed: keep the user setting; single-line files still auto-wrap (short lines).
-        return singleLine ? (true, true, true) : (true, ViewModel.PreviewWordWrap, false);
+        // No prompt: single-line files auto-wrap (force, overriding a global no-wrap); multi-line files
+        // follow the global setting with NO override so the wrap button toggles them normally.
+        return singleLine ? (true, true, (bool?)true) : (true, ViewModel.PreviewWordWrap, (bool?)null);
     }
 
-    private async Task<PreviewEditorWrapChoice> PromptPreviewEditorLongLineWrapAsync(string filePath, int maxLineLength)
+    private async Task<(PreviewEditorWrapChoice choice, bool dontRemind)> PromptPreviewEditorLongLineWrapAsync(string filePath, int maxLineLength)
     {
         var panel = new StackPanel { Spacing = 12, MinWidth = 360 };
         panel.Children.Add(new TextBlock
@@ -734,12 +752,21 @@ public sealed partial class MainWindow
             FontSize = 12,
             Opacity = 0.8,
         });
+        // When checked, the button the user clicks becomes the saved preference (also editable in
+        // Settings ▸ Built-In Editor) and this warning never appears again.
+        var dontRemindCheckBox = new CheckBox
+        {
+            Content = "Don't remind me again (remember my choice)",
+            Margin = new Thickness(0, 4, 0, 0),
+        };
+        panel.Children.Add(dontRemindCheckBox);
 
         var result = await YaguDialog.ShowAsync(
             _hwnd,
             new YaguDialogOptions
             {
                 Title = "This file has a very long line",
+                TitleGlyph = "\uE7BA", // Warning
                 Content = panel,
                 PrimaryButtonText = "Open without word wrap",
                 SecondaryButtonText = "Open with word wrap",
@@ -748,16 +775,17 @@ public sealed partial class MainWindow
                 RequestedTheme = RootGrid.ActualTheme,
                 ShowTitleBar = false,
                 Width = 600,
-                Height = 320,
-                MaxContentHeight = 220,
+                Height = 360,
+                MaxContentHeight = 260,
             });
 
-        return result switch
+        var choice = result switch
         {
             YaguDialogResult.Primary => PreviewEditorWrapChoice.NoWrap,
             YaguDialogResult.Secondary => PreviewEditorWrapChoice.Wrap,
             _ => PreviewEditorWrapChoice.Cancel,
         };
+        return (choice, dontRemindCheckBox.IsChecked == true);
     }
 
     private async Task ShowChunkedPreviewEditorAsync(SearchResult result, FileInfo fileInfo, bool scrollToMatch, CancellationToken cancellationToken)
@@ -792,7 +820,7 @@ public sealed partial class MainWindow
         ApplyPreviewEditorSyntaxHighlighting(result.FilePath);
 
         PreviewEditor.IsReadOnly = false;
-        _previewEditorForcedWrap = wrapDecision.forced;
+        _previewEditorWrapOverride = wrapDecision.wrapOverride;
         ApplyPreviewEditorWordWrap(wrapDecision.wrap);
 
         _suppressPreviewEditorTextChanged = true;
@@ -1229,6 +1257,7 @@ public sealed partial class MainWindow
                     new YaguDialogOptions
                     {
                         Title = "Encoding Warning",
+                        TitleGlyph = "\uE7BA", // Warning
                         Content = $"This file contains characters that cannot be represented in {GetEncodingDisplayName(_previewEditorEncoding)}. Save as UTF-8 instead?",
                         PrimaryButtonText = "Save as UTF-8",
                         CloseButtonText = "Cancel",
@@ -1406,6 +1435,7 @@ public sealed partial class MainWindow
             new YaguDialogOptions
             {
                 Title = "Unsaved changes",
+                TitleGlyph = "\uE74E", // Save
                 Content = "The right-panel editor has unsaved changes.",
                 PrimaryButtonText = "Save",
                 SecondaryButtonText = "Discard",
@@ -1460,7 +1490,7 @@ public sealed partial class MainWindow
         _previewEditorEncoding = null;
         _previewEditorDirty = false;
         _previewEditorOriginalText = null;
-        _previewEditorForcedWrap = false;
+        _previewEditorWrapOverride = null;
         ResetPreviewEditorChunkState();
 
         if (clearText)
@@ -1541,7 +1571,7 @@ public sealed partial class MainWindow
         PreviewEditor.UpdateLayout();
         if (LogService.Instance.IsVerboseEnabled)
         {
-            LogService.Instance.Verbose("PreviewEditor", $"ApplyPreviewEditorWordWrap: before={before}, requested={wrap}, after={PreviewEditor.WordWrap}, forced={_previewEditorForcedWrap}, setting={ViewModel.PreviewWordWrap}, visible={PreviewEditor.Visibility == Visibility.Visible}");
+            LogService.Instance.Verbose("PreviewEditor", $"ApplyPreviewEditorWordWrap: before={before}, requested={wrap}, after={PreviewEditor.WordWrap}, override={_previewEditorWrapOverride}, setting={ViewModel.PreviewWordWrap}, visible={PreviewEditor.Visibility == Visibility.Visible}");
         }
     }
 

@@ -45,6 +45,15 @@ internal sealed class TesseractWorkerEngine : IWorkerOcrEngine
 
         await EnsureTrainedDataAsync(tessdataDir, log).ConfigureAwait(false);
 
+        // Tesseract decodes & preprocesses images with OpenCvSharp (Cv2.ImDecode/Resize/Filter2D/...).
+        // The managed OpenCvSharp4 binding ships with this worker, but its NATIVE companion
+        // (OpenCvSharpExtern.dll) is lazy-downloaded just like Paddle's runtime — it is NOT vendored
+        // beside the worker. Stage it now so the first Cv2 call in Recognize() doesn't throw
+        // "The type initializer for 'OpenCvSharp.Internal.NativeMethods' threw an exception."
+        string openCvDir = ResolveOpenCvDir();
+        log($"openCvDir={openCvDir}");
+        await NativeRuntime.EnsureOpenCvAsync(openCvDir, log).ConfigureAwait(false);
+
         // Make the native loader search beside this worker exe (x64\tesseract50.dll,
         // x64\leptonica-1.82.0.dll) regardless of the working directory Yagu launched us with.
         TesseractEnviornment.CustomSearchPath = AppContext.BaseDirectory;
@@ -52,6 +61,12 @@ internal sealed class TesseractWorkerEngine : IWorkerOcrEngine
         // --oem 1 (pure LSTM), matching the Memory app's engine configuration.
         var engine = new TesseractEngine(tessdataDir, Language, EngineMode.LstmOnly);
         log("tesseract engine ready");
+
+        // Put the OpenCv native directory on the DLL search path AFTER Tesseract's own native DLLs have
+        // loaded, so SetDllDirectory can't disturb Tesseract's native loading. OpenCvSharp is only
+        // exercised later, in Recognize().
+        NativeRuntime.AddNativeSearchDirectory(openCvDir);
+
         return new TesseractWorkerEngine(engine, log);
     }
 
@@ -176,6 +191,7 @@ internal sealed class TesseractWorkerEngine : IWorkerOcrEngine
             return;
         }
 
+        DownloadGuard.EnsureAllowed("English language data");
         log("downloading eng.traineddata (tessdata_best) ...");
         using HttpClient http = new() { Timeout = TimeSpan.FromMinutes(20) };
         string tempPath = Path.Combine(tessdataDir, $"eng.traineddata.{Guid.NewGuid():N}.tmp");
@@ -211,4 +227,13 @@ internal sealed class TesseractWorkerEngine : IWorkerOcrEngine
         ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Yagu", "ocr-runtime", "tesseract", "tessdata");
+
+    // OpenCvSharp's native binding is shared, engine-agnostic, and downloaded on demand (see
+    // NativeRuntime.EnsureOpenCvAsync). Kept in its own folder so it is reused regardless of which
+    // OCR engine staged it first.
+    private static string ResolveOpenCvDir() =>
+        Environment.GetEnvironmentVariable("YAGU_OCR_OPENCV_DIR")
+        ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Yagu", "ocr-runtime", "opencv", "native");
 }

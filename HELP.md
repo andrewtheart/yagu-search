@@ -101,6 +101,7 @@ Notes:
 - **Status while translating.** A progress line appears just below the search card (in the status area above the results) while the runtime/model loads and the query is being translated, so it never pushes the search box down.
 - **Transparent.** After translating, Yagu fills in the Advanced Options so you can see and tweak exactly what it set before or after searching.
 - **Switching back to Traditional** (via the same Search‑button chevron menu) restores the literal/regex query behavior; the inline Case/Regex/Exact toggles apply in Traditional mode only.
+- **Did you mean AI search?** While in **Traditional** mode, if you type something that reads like a natural‑language request — e.g. `files on C: containing the word test` — Yagu offers to run it as a Semantic search instead. Choose **Switch to AI search** to interpret it that way (this turns AI search on for you if you'd disabled it), or **Keep Traditional** to match your text literally. Tick **Don't remind me again** to stop the prompt for good. It only appears once a Semantic model has been downloaded.
 
 Configure availability and the optional preferred model under **Settings → Search Defaults**. The same capability is available from the CLI via `--semantic-pattern` (see [Command-Line Interface](#command-line-interface-cli-mode)).
 
@@ -382,10 +383,12 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 
 Controls image text recognition (OCR). When OCR is on, image files (PNG, JPG, BMP, GIF, TIFF, WEBP) are recognized on a background queue and their text is searched like any other file's contents.
 
+> **Two installer editions.** Yagu ships in two flavors: a **lite** installer that downloads the OCR engine runtime and language models the first time you actually use image-text search, and an **OCR-bundled** installer that ships those components (about 365 MB) so OCR works fully offline with no download. With the lite edition, Yagu **warns you before any external download** and only proceeds once you approve; consent is then remembered.
+
 | Setting | What It Controls |
 | --- | --- |
 | Search image text (OCR) | Default for the Advanced Options ▸ Filters "Search image text (OCR)" toggle. Off by default. When on, image files are OCR'd on a background queue and the recognized text is searched. |
-| OCR engine | PaddleSharp (recommended, default) or Tesseract. PaddleSharp is generally more accurate and can use GPU/NPU acceleration; Tesseract is a lighter alternative with a fixed pipeline. The selected engine's runtime and models download on first use. |
+| OCR engine | PaddleSharp (recommended, default) or Tesseract. PaddleSharp is generally more accurate and can use GPU/NPU acceleration; Tesseract is a lighter alternative with a fixed pipeline. With the lite installer, the selected engine's runtime and models download on first use (after you approve the warning); the OCR-bundled installer ships the PaddleSharp runtime and models so the default engine needs no download. |
 | Quality preset | Quick presets that set the recognition model and detection resolution together: **Fast** (English v3, 640 px), **Balanced** (English v4, 960 px), **Accurate** (Chinese+English v5, 1536 px). Switches to **Custom** when the model/resolution below don't match a preset. Applies to PaddleSharp. |
 | Recognition model | PaddleSharp recognition model: English v3 (fastest), English v4 (recommended), Chinese+English v4, or Chinese+English v5 (most accurate). Models download on first use. Ignored by Tesseract. |
 | Detection resolution | Longest image side (in pixels) the image is downscaled to before detection: 640, 960, 1280, 1536, 2048, or Unlimited (native resolution). Larger finds smaller text but is slower. Ignored by Tesseract. |
@@ -443,6 +446,7 @@ Controls image text recognition (OCR). When OCR is on, image files (PNG, JPG, BM
 | Backup before save | Create `.yagubak` file before overwriting (on by default). |
 | Show saved confirmation after saving | Show a brief confirmation overlay after the built-in editor successfully writes the file. |
 | Syntax coloring based on file type | Color code in the built-in editor based on the file's name or extension (on by default). Applies to files opened after the change. |
+| Long-line warning | What to do when opening a file with a very long line in the built-in editor: **Ask every time** (default, shows the warning dialog), **Always open without word wrap**, or **Always open with word wrap**. The dialog's "Don't remind me again" checkbox sets this automatically. |
 | Preview editor max size (MB) | Maximum file size the built-in editor loads (default: 32 MB). |
 | Preview editor max text length | Character limit for the built-in editor (default: 20 million). |
 | Preview editor max line length | Single-line character limit (default: 1 million). |
@@ -488,6 +492,22 @@ Controls image text recognition (OCR). When OCR is on, image files (PNG, JPG, BM
 | File log level | Controls file logging: None, Critical, Warning, Info, or Verbose. Verbose can degrade performance. |
 | Console log level | Controls console logging with the same levels as file logging. |
 | Log file | Shows the path to the active Yagu log file as a clickable link — click it to open the log in Notepad. |
+
+### Privacy Tab
+
+Controls Yagu's two **optional, off-by-default** diagnostics features. Both are independent — you can enable either, both, or neither. The very first time Yagu starts it shows a one-time consent prompt offering both; if you decline, the prompt never appears again and you can still turn either feature on later from this tab.
+
+> **Your searches never leave your machine.** Yagu never sends file paths, file contents, directory names, search queries, or machine identifiers through the silent telemetry channel — those are scrubbed out before anything is sent (any filesystem path in an error message is redacted to `<path>`). The only data tied to your install is a random GUID generated once, used only to count distinct installs. The bug-report channel can include more (your settings file and a log tail), but **only after you review the exact contents in a dialog and click Submit**.
+
+> **Nothing is sent unless an endpoint is configured.** Telemetry travels to a self-hosted Azure Function proxy, not to any third party. If the build you are running has no endpoint configured, both features are completely inert and Yagu makes no network calls regardless of these toggles. Headless/CLI runs never send anything.
+
+| Setting | What It Controls |
+| --- | --- |
+| Send anonymized error & performance telemetry | When on, Yagu sends a small batch of anonymized, path-scrubbed error summaries and performance measurements (e.g. startup time) to the configured proxy. No file paths, queries, contents, or personal data. Off until you opt in. |
+| Offer to send a bug report on errors | When on, if Yagu hits a critical/unhandled error it opens a **bug-report dialog** that shows you exactly what would be submitted — the error and stack trace, GPU/NPU details, a copy of your `settings.json`, and a tail of your log file — plus an optional comment box. Nothing is sent unless you click **Submit report**. The same error is offered at most once per session. Off until you opt in. |
+| Contact email (optional) | An email address attached to bug reports you submit, so the developer can follow up. Leave blank to stay anonymous. Only sent with reports you explicitly submit. |
+
+The **What's Sent & Where** group on this tab summarizes the destination and shows whether a telemetry endpoint is configured for the current build.
 
 ---
 
@@ -1011,6 +1031,7 @@ Semantic requests can also set **sorting** and **grouping** (e.g. *"sort by file
 | `--ocr-engine <name>` | OCR engine for `--image-text`: `paddle` (PaddleSharp, default) or `tesseract`. |
 | `--ocr-model <name>` | PaddleSharp recognition model for `--image-text`: `EnglishV3`, `EnglishV4` (default), `ChineseV4`, or `ChineseV5`. Falls back to the **OCR ▸ Recognition model** setting. Ignored by the `tesseract` engine. |
 | `--ocr-max-side <px>` | PaddleSharp detection resolution (longest side in pixels) for `--image-text`: default 960; `0` = unlimited (native resolution). Falls back to the **OCR ▸ Detection resolution** setting. Ignored by the `tesseract` engine. |
+| `--allow-ocr-download` | Consent, in advance, to the one-time download of the OCR engine runtime and/or language models that `--image-text` needs on first use (the lite installer ships without them; the OCR-bundled installer ships them so nothing downloads). Without this flag, a non-interactive run that needs the download is refused and an interactive run prompts before downloading. Consent is remembered for future runs. |
 
 ### Output
 

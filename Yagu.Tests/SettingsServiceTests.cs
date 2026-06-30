@@ -593,8 +593,27 @@ public class SettingsServiceNewFieldTests
     {
         var s = new AppSettings();
         Assert.False(s.SearchImageText);
-        Assert.Equal("paddle", s.ImageOcrEngine);
+        Assert.Equal(AppSettings.EffectiveDefaultImageOcrEngine, s.ImageOcrEngine);
         Assert.Equal("paddle", AppSettings.DefaultImageOcrEngine);
+    }
+
+    [Theory]
+    [InlineData("X86", "tesseract")]
+    [InlineData("X64", "paddle")]
+    [InlineData("Arm64", "paddle")]
+    [InlineData("Arm", "paddle")]
+    public void ResolveDefaultImageOcrEngine_OnlyX86DefaultsToTesseract(string architecture, string expected)
+    {
+        var arch = Enum.Parse<System.Runtime.InteropServices.Architecture>(architecture);
+        Assert.Equal(expected, AppSettings.ResolveDefaultImageOcrEngine(arch));
+    }
+
+    [Fact]
+    public void EffectiveDefaultImageOcrEngine_MatchesCurrentProcessArchitecture()
+    {
+        Assert.Equal(
+            AppSettings.ResolveDefaultImageOcrEngine(System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture),
+            AppSettings.EffectiveDefaultImageOcrEngine);
     }
 
     [Fact]

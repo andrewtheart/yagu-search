@@ -128,6 +128,16 @@ internal static class CliRunner
         FileLister.Backend = (FileListerBackend)settings.FileListerBackendIndex;
         LogService.InitFromSettings((LogLevel)settings.LogLevelIndex, LogLevel.Critical);
 
+        // Seed the OCR download consent gate from settings and register a console-based warning so
+        // image-text (OCR) search never downloads the engine/models without explicit consent.
+        Yagu.Services.Ocr.OcrDownloadGate.ConsentGranted = settings.OcrDownloadConsented;
+        Yagu.Services.Ocr.OcrDownloadGate.PromptAsync =
+            requirement => Task.FromResult(ConfirmOcrDownloadOnConsole(requirement, args, vtEnabled));
+
+        // Headless mode: never emit telemetry or surface the bug-report modal from the CLI, regardless
+        // of persisted consent (those are interactive-app features only).
+        Yagu.Services.Telemetry.TelemetryGate.Headless = true;
+
         var perRootOptions = BuildPerRootSearchOptions(args, settings);
         if (perRootOptions.Count == 0)
         {
@@ -405,6 +415,75 @@ internal static class CliRunner
         if (gb >= 1.0) return $"{gb:0.0} GB";
         double mb = b / 1024d / 1024d;
         return $"{mb:0} MB";
+    }
+
+    /// <summary>
+    /// Warns (to stderr, keeping stdout ripgrep-clean) before the first OCR asset download and decides
+    /// whether to proceed. Honors <c>--allow-ocr-download</c> (non-interactive opt-in); otherwise, on an
+    /// interactive console, asks y/N. Declining (or a non-interactive run without the flag) returns
+    /// false, so image-text search reports the components are unavailable rather than downloading them.
+    /// </summary>
+    private static bool ConfirmOcrDownloadOnConsole(
+        Yagu.Services.Ocr.OcrAssetRequirement requirement, CliArgs args, bool interactive)
+    {
+        string components = requirement.MissingComponents.Count > 0
+            ? " (" + string.Join(", ", requirement.MissingComponents) + ")"
+            : string.Empty;
+
+        WriteError("");
+        WriteError($"Image-text (OCR) search needs a one-time download of about {requirement.ApproxMb} MB{components}.");
+        WriteError("The files come from public package feeds (nuget.org and GitHub).");
+
+        if (args.AllowOcrDownload)
+        {
+            WriteError("Proceeding because --allow-ocr-download was specified.");
+            PersistOcrDownloadConsent();
+            return true;
+        }
+
+        if (!interactive)
+        {
+            WriteError("Re-run with --allow-ocr-download to permit the download (skipping image-text search for now).");
+            return false;
+        }
+
+        WriteError("[y] download now   [N] skip image-text search");
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            Console.Error.Write("> ");
+            string? line = Console.ReadLine();
+            if (line is null) return false; // EOF / closed stdin
+            line = line.Trim();
+            if (line.Length == 0) return false;
+            if (line.Equals("y", StringComparison.OrdinalIgnoreCase) || line.Equals("yes", StringComparison.OrdinalIgnoreCase))
+            {
+                PersistOcrDownloadConsent();
+                return true;
+            }
+            if (line.Equals("n", StringComparison.OrdinalIgnoreCase) || line.Equals("no", StringComparison.OrdinalIgnoreCase))
+                return false;
+            WriteError("Please enter 'y' to download or 'n' to skip image-text search.");
+        }
+
+        WriteError("No valid answer — skipping image-text search.");
+        return false;
+    }
+
+    /// <summary>Persists OCR download consent to the shared settings store so later runs never re-ask.</summary>
+    private static void PersistOcrDownloadConsent()
+    {
+        try
+        {
+            var service = new SettingsService();
+            var global = service.Load();
+            global.OcrDownloadConsented = true;
+            service.Save(global);
+        }
+        catch (Exception ex)
+        {
+            // Consent still applies this run even if persistence fails.
+            LogService.Instance.Warning("OcrConsent", $"Unable to persist OCR download consent: {ex.Message}", ex);
+        }
     }
 
     /// <summary>
@@ -1703,6 +1782,9 @@ internal static class CliRunner
                   --no-hidden             Exclude hidden files/folders (system files always skipped).
                   --image-text            OCR image files and search the recognized text (off by default).
                   --no-image-text         Do not OCR images (default).
+                  --allow-ocr-download    Permit the one-time OCR engine/model download (~365 MB) without
+                                          an interactive prompt. Needed only on the very first OCR run of
+                                          an edition that does not bundle the OCR components.
                   --ocr-engine <name>     OCR engine for --image-text: paddle (default) or tesseract.
                   --ocr-model <name>      PaddleSharp recognition model: EnglishV3, EnglishV4 (default),
                                           ChineseV4, or ChineseV5. Ignored by the tesseract engine.
@@ -2863,6 +2945,7 @@ internal sealed class CliArgs
     public string?          ImageOcrEngine { get; private set; }
     public string?          ImageOcrModel { get; private set; }
     public int?             ImageOcrMaxSide { get; private set; }
+    public bool             AllowOcrDownload { get; private set; }
     public string?          ArchiveExtensions { get; private set; }
     public bool?            ExcludeAdminProtectedPaths { get; private set; }
     public string?          AdminProtectedPathSegments { get; private set; }
@@ -2939,6 +3022,7 @@ internal sealed class CliArgs
             if (Eq(tok, "--no-hidden", "--no-search-hidden")) { a.SearchHiddenFiles = false; i++; continue; }
             if (Eq(tok, "--image-text", "--search-image-text", "--ocr")) { a.SearchImageText = true; i++; continue; }
             if (Eq(tok, "--no-image-text", "--no-search-image-text", "--no-ocr")) { a.SearchImageText = false; i++; continue; }
+            if (Eq(tok, "--allow-ocr-download")) { a.AllowOcrDownload = true; i++; continue; }
             if (Eq(tok, "--exclude-admin-paths"))            { a.ExcludeAdminProtectedPaths = true; i++; continue; }
             if (Eq(tok, "--no-exclude-admin-paths"))         { a.ExcludeAdminProtectedPaths = false; i++; continue; }
             if (Eq(tok, "--obey-gitignore", "--gitignore"))  { a.ObeyGitignore = true; i++; continue; }

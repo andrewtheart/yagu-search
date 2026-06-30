@@ -422,6 +422,22 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void PreviewSectionHeader_DisablesTextOnlyActionsForImageMatches()
+    {
+        string header = ExtractMethodWindow(MainWindowSource, "BuildPreviewSectionHeader", 9000);
+
+        // Image content matches (thumbnail + OCR text) are not text-editable, so the text-only
+        // actions must render disabled and non-clickable. The "Show full file" and "Edit file"
+        // buttons gate IsEnabled on the image check; the other actions stay enabled.
+        AssertContainsInOrder(header,
+            "bool isImageMatch = IsImagePreviewPath(filePath);",
+            "Content = new FontIcon { Glyph = \"\\uE81E\", FontSize = 12 },",
+            "IsEnabled = !isImageMatch,",
+            "Content = new FontIcon { Glyph = \"\\uE70F\", FontSize = 12 },",
+            "IsEnabled = !isImageMatch,");
+    }
+
+    [Fact]
     public void PreviewSections_UseConfigurablePreviewTextFontFamilyAndSize()
     {
         string addSection = ExtractMethodWindow(MainWindowSource, "AddPreviewSection", window: 3600);
@@ -488,14 +504,14 @@ public sealed class PreviewCoreRegressionTests
         string buttonSearch = ExtractMethodWindow(MainWindowSource, "OnSearchCancelClick", 1700);
         AssertContainsInOrder(buttonSearch,
             "CollapseAdvancedOptionsForSearch();",
-            "await ViewModel.SubmitSearchAsync(RunPreSearchWarningGatesAsync);");
+            "await SubmitSearchWithSlowModelWatchAsync();");
 
         string querySubmitted = ExtractMethodWindow(MainWindowSource, "OnQuerySubmitted", 1700);
         AssertContainsInOrder(querySubmitted,
             "CollapseAdvancedOptionsForSearch();",
-            "await ViewModel.SubmitSearchAsync(RunPreSearchWarningGatesAsync);");
+            "await SubmitSearchWithSlowModelWatchAsync();");
 
-        string autoSearch = ExtractMethodWindow(MainWindowSource, "OnContentLoaded", 1800);
+        string autoSearch = ExtractMethodWindow(MainWindowSource, "OnContentLoaded", 2400);
         AssertContainsInOrder(autoSearch,
             "if (await CheckHddAndWarnAsync())",
             "CollapseAdvancedOptionsForSearch();",
@@ -786,16 +802,29 @@ public sealed class PreviewCoreRegressionTests
             "UIElement.PointerCaptureLostEvent",
             "OnPreviewSelectionAutoScrollPointerEnded");
 
-        string apply = ExtractMethodWindow(MainWindowSource, "ApplyPreviewSelectionAutoScroll", window: 6500);
+        string apply = ExtractMethodWindow(MainWindowSource, "ApplyPreviewSelectionAutoScroll", window: 8200);
         AssertContainsInOrder(apply,
-            "block.TextWrapping != TextWrapping.NoWrap",
+            "var verticalScroller = _previewSelectionAutoScrollVerticalScroller ?? scroller;",
             "bool canScrollHorizontally = block.TextWrapping == TextWrapping.NoWrap",
             "scroller.HorizontalScrollMode == ScrollMode.Enabled",
+            "bool canScrollVertically = verticalScroller.VerticalScrollMode != ScrollMode.Disabled",
             "TryGetPreviewSelectionAutoScrollVelocity(scroller, _previewSelectionAutoScrollPointerX, out velocity)",
+            "TryGetPreviewSelectionAutoScrollVerticalVelocity(verticalScroller, _previewSelectionAutoScrollPointerYInVertical, out verticalVelocity)",
             "double step = velocity * elapsedSeconds;",
             "double targetX = Math.Clamp(scroller.HorizontalOffset + step, 0, scroller.ScrollableWidth);",
-            "bool accepted = scroller.ChangeView(",
+            "double targetY = Math.Clamp(verticalScroller.VerticalOffset + verticalStep, 0, verticalScroller.ScrollableHeight);",
+            "if (ReferenceEquals(scroller, verticalScroller))",
+            "verticalScroller.ChangeView(null, targetY, null, disableAnimation: true);",
             "UpdatePreviewCustomSelectionFromCurrentPointer();");
+
+        // Regression guard (preview-selection freeze, 2026-06-30): the stuck-scroller stop must fire
+        // whenever the offset stops moving across frames — INCLUDING when ChangeView is repeatedly
+        // REJECTED (accepted == false). The old guard required "&& accepted", so a ScrollViewer that
+        // kept rejecting ChangeView during a wide single-line drag-select spun the 16 ms auto-scroll
+        // timer forever, calling the expensive UpdatePreviewCustomSelectionFromCurrentPointer() on
+        // every no-progress frame until the app hung at ~25 GB. The stop must NOT depend on `accepted`.
+        Assert.Contains("StopPreviewSelectionAutoScrollTimer(\"stuck-scroller\")", apply);
+        Assert.DoesNotContain("&& accepted", apply);
 
         string timer = ExtractMethodWindow(MainWindowSource, "EnsurePreviewSelectionAutoScrollTimer", window: 2200);
         AssertContainsInOrder(timer,
@@ -861,6 +890,56 @@ public sealed class PreviewCoreRegressionTests
 
         string copy = ExtractMethodWindow(MainWindowSource, "CopyPreviewSelection", window: 1200);
         Assert.Contains("TryBuildPreviewCustomSelectionText(block, withLineNumbers, out string customSelectedText)", copy);
+    }
+
+    [Fact]
+    public void PreviewSelectionDrag_AutoScrollsVerticallyViaOuterScroller()
+    {
+        // Sections drawers have their inner scroller's vertical scrolling disabled
+        // (VerticalScrollBarVisibility = Disabled), so the shared outer
+        // PreviewScrollViewer is the real vertical scroller. Vertical drag-select
+        // auto-scroll must drive that outer scroller, not the inner section scroller.
+        string addSection = ExtractMethodWindow(MainWindowSource, "AddPreviewSection", window: 8000);
+        Assert.Contains("VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,", addSection);
+
+        string verticalResolver = ExtractMethodWindow(
+            MainWindowSource, "ResolvePreviewSelectionAutoScrollVerticalScroller", window: 600);
+        Assert.Contains("=> PreviewScrollViewer;", verticalResolver);
+
+        // Pressed handler captures the pointer position relative to the vertical scroller.
+        string press = ExtractMethodWindow(MainWindowSource, "OnPreviewSelectionAutoScrollPointerPressed", window: 3800);
+        AssertContainsInOrder(press,
+            "_previewSelectionAutoScrollVerticalScroller = ResolvePreviewSelectionAutoScrollVerticalScroller(block);",
+            "_previewSelectionAutoScrollPointerPointInVerticalScroller =",
+            "_previewSelectionAutoScrollPointerYInVertical = _previewSelectionAutoScrollPointerPointInVerticalScroller.Y;");
+
+        // Move handler keeps the vertical-scroller pointer position and edge check current.
+        string moved = ExtractMethodWindow(MainWindowSource, "OnPreviewSelectionAutoScrollPointerMoved", window: 3000);
+        AssertContainsInOrder(moved,
+            "var verticalScroller = _previewSelectionAutoScrollVerticalScroller;",
+            "e.GetCurrentPoint(verticalScroller).Position;",
+            "_previewSelectionAutoScrollPointerYInVertical =",
+            "TryGetPreviewSelectionAutoScrollVerticalVelocity(",
+            "verticalScroller,",
+            "_previewSelectionAutoScrollPointerYInVertical,");
+
+        // The separate-scroller branch issues the vertical ChangeView against the outer scroller.
+        string apply = ExtractMethodWindow(MainWindowSource, "ApplyPreviewSelectionAutoScroll", window: 8200);
+        AssertContainsInOrder(apply,
+            "if (horizontalMoved)",
+            "scroller.ChangeView(targetX, null, null, disableAnimation: true);",
+            "if (verticalMoved)",
+            "verticalScroller.ChangeView(null, targetY, null, disableAnimation: true);");
+
+        // Selection index follows the outer scroll offset under a held-still pointer.
+        string resolveIndex = ExtractMethodWindow(
+            MainWindowSource, "TryResolvePreviewSelectionIndexFromCurrentPointer", window: 2600);
+        AssertContainsInOrder(resolveIndex,
+            "var verticalScroller = _previewSelectionAutoScrollVerticalScroller;",
+            "!ReferenceEquals(verticalScroller, scroller)",
+            "verticalScroller.TransformToVisual(block)",
+            "_previewSelectionAutoScrollPointerPointInVerticalScroller",
+            "blockPoint.Y = verticalBlockPoint.Y;");
     }
 
     [Fact]
@@ -1657,17 +1736,20 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
-    public void ReportExportDialog_HidesDialogTitleAndNativeTitleBar()
+    public void ReportExportDialog_ShowsTitleGlyphAndHidesNativeTitleBar()
     {
         string source = File.ReadAllText(Path.Combine(RepoRoot, "Yagu", "ReportExportDialog.cs"));
 
+        // The dialog shows its in-content title (with a glyph) but hides the OS title bar
+        // (modal-no-title-bar rule). ShowTitle is intentionally NOT set to false here.
         AssertContainsInOrder(source,
             "Title = \"Export Report\",",
+            "TitleGlyph =",
             "Content = root,",
             "PrimaryButtonText = \"Export\",",
             "CloseButtonText = \"Cancel\",",
-            "ShowTitle = false,",
             "ShowTitleBar = false,");
+        Assert.DoesNotContain("ShowTitle = false", source);
     }
 
     [Fact]
@@ -1993,7 +2075,9 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("await YieldLowAsync();", prepend);
         Assert.Contains("PreviewSectionsPanel.Children.Insert", prepend);
 
-        string highlight = ExtractMethodWindow(MainWindowSource, "BuildHighlightSectionAsync");
+        // The method grows over time; size the window to comfortably reach its tail
+        // (RegisterSectionOverflow sits ~13.3k chars past the signature).
+        string highlight = ExtractMethodWindow(MainWindowSource, "BuildHighlightSectionAsync", 14000);
         Assert.Contains("MaxMatchesPerSection", highlight);
         Assert.Contains("MaxPreviewBlocksPerSection", highlight);
         Assert.Contains("cappedResults", highlight);
@@ -2678,13 +2762,60 @@ public sealed class PreviewCoreRegressionTests
         // Overflow expansion for highlight previews (e.g. dense same-line OCR matches) must not
         // re-render a line that is already on screen, otherwise the same line numbers repeat down
         // the pane. The window ranges are also sorted before merging so out-of-order pending
-        // results can't produce overlapping windows.
+        // results can't produce overlapping windows. The per-occurrence overflow branch (when every
+        // pending result shares an already-rendered line) dedups by SOURCE-COLUMN window membership
+        // rather than by line number, so each occurrence outside a rendered window still gets a
+        // dedicated nav target; the multi-line ranges path keeps the line-number guard.
         string append = ExtractMethodWindow(MainWindowSource, "AppendHighlightMatchWindows", window: 9000);
         AssertContainsInOrder(append,
             "var sectionRenderedLines = GetRenderedLineNumbers(section);",
             "foreach (var range in rawRanges.OrderBy(r => r.start))",
-            "if (!sectionRenderedLines.Add(result.LineNumber))",
+            "if (IsSourceColumnWithinRenderedWindow(section, result.LineNumber, sourceColumn))",
             "if (!sectionRenderedLines.Add(lineNumber))");
+    }
+
+    [Fact]
+    public void IsSourceColumnWithinRenderedWindow_TreatsOnlyOccurrencesInsideARenderedWindowAsCovered()
+    {
+        // The helper backing the same-line overflow dedup. An occurrence counts as already navigable
+        // only when its source column actually falls inside a rendered window for that line — or the
+        // full untruncated line was drawn (no recorded window). A negative column is never covered.
+        // This is what lets a single very long source line page through every occurrence instead of
+        // stalling at the first window.
+        string helper = ExtractMethodWindow(MainWindowSource, "IsSourceColumnWithinRenderedWindow", window: 1400);
+        AssertContainsInOrder(helper,
+            "if (sourceColumn < 0)",
+            "return false;",
+            "foreach (var block in section.Blocks)",
+            "block is not Paragraph para",
+            "!s_paragraphLineNumbers.TryGetValue(para, out var lineObj)",
+            "lineObj is not int renderedLine",
+            "renderedLine != lineNumber",
+            "if (!TryGetParagraphMatchWindow(para, out int windowStart, out int windowEnd))",
+            "return true;",
+            "if (sourceColumn >= windowStart && sourceColumn < windowEnd)",
+            "return true;",
+            "return false;");
+    }
+
+    [Fact]
+    public void AppendHighlightMatchWindows_SameLineOverflow_GivesEachUncoveredOccurrenceItsOwnNavTarget()
+    {
+        // When every pending result is on an already-rendered (single very long) line, occurrences
+        // whose source column is NOT inside a rendered window must each get a dedicated, sibling-
+        // clipped window with its own match-nav entry — otherwise next/prev stays stuck at the first
+        // occurrence. The branch prefers SourceMatchStartColumn (the column in the ORIGINAL line) and
+        // falls back to MatchStartColumn, then renders a target-only window beside the existing line.
+        string append = ExtractMethodWindow(MainWindowSource, "AppendHighlightMatchWindows", window: 9000);
+        AssertContainsInOrder(append,
+            "int sourceColumn = result.SourceMatchStartColumn >= 0",
+            "? result.SourceMatchStartColumn",
+            ": result.MatchStartColumn;",
+            "if (IsSourceColumnWithinRenderedWindow(section, result.LineNumber, sourceColumn))",
+            "consumedResults++;",
+            "AddPreviewLineParagraphsAroundResult(",
+            "targetOnlyMatchEntry: true,",
+            "MoveAppendedPreviewLineBesideExistingLine(");
     }
 
     [Fact]
@@ -3117,7 +3248,7 @@ public sealed class PreviewCoreRegressionTests
         string showChunked = ExtractMethodWindow(PreviewEditorSource, "ShowChunkedPreviewEditorAsync");
         AssertContainsInOrder(showChunked,
             "var wrapDecision = await ResolvePreviewEditorWrapAsync(result.FilePath, chunk.MaxLineLength, chunkSingleLine);",
-            "_previewEditorForcedWrap = wrapDecision.forced;",
+            "_previewEditorWrapOverride = wrapDecision.wrapOverride;",
             "ApplyPreviewEditorWordWrap(wrapDecision.wrap);");
         Assert.DoesNotContain("wrapSuppressed", showChunked);
 
@@ -3139,7 +3270,7 @@ public sealed class PreviewCoreRegressionTests
         string showFullEditor = ExtractMethodWindow(PreviewEditorSource, "ShowFullFileEditorAsync");
         AssertContainsInOrder(showFullEditor,
             "var wrapDecision = await ResolvePreviewEditorWrapAsync(result.FilePath, document.MaxLineLength, singleLine);",
-            "_previewEditorForcedWrap = wrapDecision.forced;",
+            "_previewEditorWrapOverride = wrapDecision.wrapOverride;",
             "ApplyPreviewEditorWordWrap(wrapDecision.wrap);",
             "ShowFullFileEditorAsync: long line, wrap=");
 
@@ -3148,7 +3279,31 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("PreviewEditor.UpdateLayout();", applyEditorWrap);
 
         string applyWrap = ExtractMethodWindow(MainWindowSource, "ApplyWordWrap");
-        Assert.Contains("ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || wrap);", applyWrap);
+        Assert.Contains("ApplyPreviewEditorWordWrap(_previewEditorWrapOverride ?? wrap);", applyWrap);
+    }
+
+    [Fact]
+    public void LongLineWarning_DontRemindMeAgain_PersistsChoiceAndHonorsSavedPreference()
+    {
+        // The dialog offers the opt-out checkbox and reports whether it was checked.
+        string prompt = ExtractMethodWindow(PreviewEditorSource, "PromptPreviewEditorLongLineWrapAsync");
+        Assert.Contains("Don't remind me again", prompt);
+        Assert.Contains("return (choice, dontRemindCheckBox.IsChecked == true);", prompt);
+
+        // The resolver skips the prompt when a preference is saved, and persists the chosen button
+        // when "Don't remind me again" was checked.
+        string resolve = ExtractMethodWindow(PreviewEditorSource, "ResolvePreviewEditorWrapAsync");
+        AssertContainsInOrder(resolve,
+            "switch (ViewModel.PreviewLongLineWarningIndex)",
+            "case 1: return (true, false, (bool?)false);",
+            "case 2: return (true, true, (bool?)true);",
+            "var (choice, dontRemind) = await PromptPreviewEditorLongLineWrapAsync(filePath, maxLineLength);",
+            "ViewModel.PreviewLongLineWarningIndex = choice == PreviewEditorWrapChoice.NoWrap ? 1 : 2;",
+            "await ViewModel.PersistSettingsAsync();");
+
+        // The preference round-trips through persisted settings.
+        Assert.Contains("PreviewLongLineWarningIndex = Math.Clamp(_settings.PreviewLongLineWarningIndex, 0, 2);", MainViewModelSource);
+        Assert.Contains("_settings.PreviewLongLineWarningIndex = PreviewLongLineWarningIndex;", MainViewModelSource);
     }
 
     [Fact]
@@ -3161,7 +3316,8 @@ public sealed class PreviewCoreRegressionTests
             "bool wrap = mode == (int)Models.PreviewWrapMode.Wrap;",
             "ViewModel.PreviewWordWrap = wrap;",
             "SyncWrapModeToggles(mode);",
-            "ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || wrap);",
+            "_previewEditorWrapOverride = null;",
+            "ApplyPreviewEditorWordWrap(wrap);",
             "RefreshCurrentPreview(preserveScroll: true);");
     }
 

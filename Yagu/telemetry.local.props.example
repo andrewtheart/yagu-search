@@ -1,0 +1,21 @@
+<!--
+  Build-time telemetry configuration (OPTIONAL).
+
+  Copy this file to "telemetry.local.props" in the same folder and fill in your values to enable the
+  optional, consent-gated telemetry/bug-report features for your local and CI builds. The copy is
+  gitignored, so your real proxy endpoint and app token are NEVER committed to source.
+
+  - Leave the file absent (or YaguProxyUrl blank) to keep the build fully offline (the committed
+    default, TelemetryConfig.IsConfigured == false).
+  - YaguAppToken is optional; leave it blank to call a token-free proxy.
+  - Environment variables YAGU_PROXY_URL / YAGU_APP_TOKEN override these values (handy for CI secrets).
+
+  When YaguProxyUrl is set, Yagu.csproj generates a TelemetryConfig partial with these values and
+  compiles it instead of the offline placeholder (TelemetryConfig.Defaults.cs).
+-->
+<Project>
+  <PropertyGroup>
+    <YaguProxyUrl>https://func-yourapp-telemetry.azurewebsites.net</YaguProxyUrl>
+    <YaguAppToken></YaguAppToken>
+  </PropertyGroup>
+</Project>

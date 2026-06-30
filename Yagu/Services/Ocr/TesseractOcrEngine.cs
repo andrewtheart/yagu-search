@@ -13,6 +13,10 @@ namespace Yagu.Services.Ocr;
 /// </summary>
 public sealed class TesseractOcrEngine : WorkerOcrEngine
 {
+    /// <summary>Environment variable pointing the worker at the tessdata directory (bundled payload
+    /// when present, else the per-user download cache that holds <c>eng.traineddata</c>).</summary>
+    public const string TessdataDirEnvVar = "YAGU_OCR_TESSDATA_DIR";
+
     public TesseractOcrEngine()
     {
     }
@@ -36,5 +40,14 @@ public sealed class TesseractOcrEngine : WorkerOcrEngine
     protected override void ConfigureWorkerEnvironment(IDictionary<string, string?> environment)
     {
         environment[EngineEnvVar] = OcrEngineFactory.TesseractId;
+        // Point the worker at the bundled tessdata when present (download-free), else the cache.
+        environment[TessdataDirEnvVar] = OcrAssetPaths.TesseractDataDir();
+    }
+
+    protected override OcrAssetRequirement DescribeAssetRequirement()
+    {
+        // Tesseract's native binaries are vendored beside the worker; only eng.traineddata downloads.
+        bool dataPresent = OcrAssetPaths.TesseractDataPresent(OcrAssetPaths.TesseractDataDir());
+        return OcrAssetPaths.BuildTesseractRequirement(DisplayName, dataPresent);
     }
 }

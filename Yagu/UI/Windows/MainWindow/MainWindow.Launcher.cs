@@ -649,6 +649,7 @@ public sealed partial class MainWindow
             new YaguDialogOptions
             {
                 Title = "Yagu keeps running in the tray",
+                TitleGlyph = "\uE946", // Info
                 Content = panel,
                 PrimaryButtonText = "Got it, keep in tray",
                 SecondaryButtonText = "Exit fully from now on",

@@ -10,6 +10,14 @@ namespace Yagu;
 /// </summary>
 public sealed partial class MainWindow
 {
+    // Standard Windows caption-button strip width (3 buttons) in DIPs. Used as a transient fallback
+    // when the system hasn't reported its real RightInset yet, matching the XAML design-time padding.
+    private const double FallbackCaptionButtonsWidthDip = 148;
+
+    // Bounds the self-correcting re-runs of UpdateTitleBarInsets so a host that keeps native caption
+    // buttons but never reports a RightInset (e.g. Windows Sandbox) can't spin the dispatcher forever.
+    private int _titleBarInsetRetries;
+
     private void UpdateTitleBarInsets()
     {
         try
@@ -39,8 +47,26 @@ public sealed partial class MainWindow
             CloseWindowButton.Visibility = systemCaptionButtons ? Visibility.Collapsed : Visibility.Visible;
 
             // Sit the custom action buttons immediately to the left of whatever the system actually drew
-            // (reservedDip), with a small edge gap when there are no native buttons.
-            double rightDip = reservedDip > 0 ? reservedDip : 8;
+            // (reservedDip), with a small edge gap when there are no native buttons. When native buttons
+            // ARE expected but the system hasn't reported RightInset yet (a transient 0 during startup or
+            // a mode/DPI switch), fall back to the standard caption-button width so the icons never land
+            // under the caption buttons — then re-run once the real inset is available to settle exactly.
+            double rightDip;
+            if (reservedDip > 0)
+            {
+                rightDip = reservedDip;
+                _titleBarInsetRetries = 0;
+            }
+            else if (systemCaptionButtons)
+            {
+                rightDip = FallbackCaptionButtonsWidthDip;
+                ScheduleTitleBarInsetRetry();
+            }
+            else
+            {
+                rightDip = 8;
+                _titleBarInsetRetries = 0;
+            }
 
             TitleBarActions.Margin = new Thickness(0, 0, rightDip, 0);
 
@@ -50,6 +76,19 @@ public sealed partial class MainWindow
             AppTitleBar.Padding = new Thickness(16, 0, rightDip + actionWidth + 16, 0);
         }
         catch { /* AppWindow not always available; ignore */ }
+    }
+
+    // Re-run inset calculation on the next idle tick. RightInset is frequently 0 on the first pass
+    // after construction or a presenter/DPI change and only becomes valid once the system finishes
+    // laying out its caption buttons; this lets the action icons snap to the exact position without a
+    // visible resize or mode switch. Capped so it can't loop indefinitely.
+    private void ScheduleTitleBarInsetRetry()
+    {
+        if (_titleBarInsetRetries >= 10) return;
+        _titleBarInsetRetries++;
+        DispatcherQueue?.TryEnqueue(
+            Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+            UpdateTitleBarInsets);
     }
 
     private void SetNativeCaptionButtonsVisible(bool visible)

@@ -526,28 +526,62 @@ internal sealed partial class CoreTextControlBox : UserControl
     //Canvas event
     private void Canvas_Text_Draw(CanvasControl sender, CanvasDrawEventArgs args)
     {
-        textRenderer.Draw(sender, args);
+        // A draw callback runs inside Win2D, which re-raises any escaping exception as a XAML
+        // stowed exception (0xc000027b) that fail-fasts the whole process — bypassing the managed
+        // UnhandledException handler. Transient out-of-range layout/geometry can occur while
+        // rendering very large single-line files (horizontal/wrapped virtualization slices and the
+        // rebuilt text layout can momentarily disagree). Swallow + log so the worst case is one
+        // skipped frame (the canvas redraws on the next invalidation) instead of a crash.
+        try
+        {
+            textRenderer.Draw(sender, args);
+        }
+        catch (Exception ex)
+        {
+            TextControlBoxDiagnostics.Error("TextControlBox.Draw", "Canvas_Text_Draw failed", ex);
+        }
         initializationManager.CanvasDrawed(0);
     }
     private void Canvas_Selection_Draw(CanvasControl sender, CanvasDrawEventArgs args)
     {
-        selectionRenderer.Draw(sender, args);
+        try
+        {
+            selectionRenderer.Draw(sender, args);
+        }
+        catch (Exception ex)
+        {
+            TextControlBoxDiagnostics.Error("TextControlBox.Draw", "Canvas_Selection_Draw failed", ex);
+        }
         initializationManager.CanvasDrawed(1);
     }
     private void Canvas_Cursor_Draw(CanvasControl sender, CanvasDrawEventArgs args)
     {
-        cursorRenderer.Draw(Canvas_Text, Canvas_Cursor, args);
+        try
+        {
+            cursorRenderer.Draw(Canvas_Text, Canvas_Cursor, args);
+        }
+        catch (Exception ex)
+        {
+            TextControlBoxDiagnostics.Error("TextControlBox.Draw", "Canvas_Cursor_Draw failed", ex);
+        }
         initializationManager.CanvasDrawed(2);
     }
     private void Canvas_LineNumber_Draw(CanvasControl sender, CanvasDrawEventArgs args)
     {
-        if (!lineNumberManager._ShowLineNumbers)
+        try
         {
-            lineNumberRenderer.HideLineNumbers(sender, lineNumberManager._SpaceBetweenLineNumberAndText);
-            return;
-        }
+            if (!lineNumberManager._ShowLineNumbers)
+            {
+                lineNumberRenderer.HideLineNumbers(sender, lineNumberManager._SpaceBetweenLineNumberAndText);
+                return;
+            }
 
-        lineNumberRenderer.Draw(Canvas_LineNumber, args, lineNumberManager._SpaceBetweenLineNumberAndText);
+            lineNumberRenderer.Draw(Canvas_LineNumber, args, lineNumberManager._SpaceBetweenLineNumberAndText);
+        }
+        catch (Exception ex)
+        {
+            TextControlBoxDiagnostics.Error("TextControlBox.Draw", "Canvas_LineNumber_Draw failed", ex);
+        }
     }
 
     //Focus:

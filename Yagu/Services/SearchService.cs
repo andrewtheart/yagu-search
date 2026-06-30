@@ -1728,12 +1728,20 @@ public sealed class SearchService
         if (!hasSizeFilter && !hasDateFilter && !hasCeiling)
             return false;
 
+        // A size/date FILTER requires accurate metadata, so stat on a cache miss. The content-size
+        // CEILING does NOT justify a stat here: every enumeration backend already enforces it
+        // (Everything via a `size:<=ceiling` query predicate; the managed walker pre-caches size
+        // from the directory entry). Statting the entire sweep just to re-check the ceiling was a
+        // major source of latency, so for a ceiling-only check we trust a cache hit and otherwise
+        // leave the file to be scanned (the backend already excluded oversized files).
+        bool needAccurateMetadata = hasSizeFilter || hasDateFilter;
+
         FileMetadata metadata;
         if (FileMetadataCache.TryGet(path, out var cached))
         {
             metadata = cached;
         }
-        else
+        else if (needAccurateMetadata)
         {
             FileInfo fileInfo;
             try { fileInfo = new FileInfo(path); }
@@ -1747,6 +1755,11 @@ public sealed class SearchService
 
             metadata = new FileMetadata(fileInfo.Length, fileInfo.LastWriteTime, fileInfo.CreationTime);
             FileMetadataCache.Set(path, metadata);
+        }
+        else
+        {
+            // Ceiling-only check with no cached size: the backend already excluded oversized files.
+            return false;
         }
 
         if (checkSize && minBytes > 0 && metadata.Length < minBytes)

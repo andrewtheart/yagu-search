@@ -27,6 +27,9 @@ public sealed class WorkerOcrEngineTests
 
         Assert.Equal(OcrEngineFactory.PaddleId, env[WorkerOcrEngine.EngineEnvVar]);
         Assert.Equal("EnglishV4", env[PaddleOcrEngine.ModelEnvVar]);
+        // The worker is always pointed at a runtime + model directory (bundled payload or cache).
+        Assert.False(string.IsNullOrEmpty(env[PaddleOcrEngine.RuntimeDirEnvVar]));
+        Assert.False(string.IsNullOrEmpty(env[PaddleOcrEngine.ModelDirEnvVar]));
     }
 
     [Fact]
@@ -92,6 +95,47 @@ public sealed class WorkerOcrEngineTests
 
         Assert.Equal(OcrEngineFactory.TesseractId, env[WorkerOcrEngine.EngineEnvVar]);
         Assert.False(env.ContainsKey(PaddleOcrEngine.ModelEnvVar));
+        // The worker is always pointed at a tessdata directory (bundled payload or cache).
+        Assert.False(string.IsNullOrEmpty(env[TesseractOcrEngine.TessdataDirEnvVar]));
+    }
+
+    [Fact]
+    public void Paddle_DescribeAssetRequirement_ReportsPaddleEngine()
+    {
+        var engine = new PaddleOcrEngine("EnglishV4");
+
+        OcrAssetRequirement requirement = engine.DescribeAssetRequirementForTest();
+
+        Assert.Equal("PaddleSharp", requirement.EngineDisplayName);
+        // DownloadNeeded depends on what's installed on this machine; the invariant is that any
+        // missing component implies a positive size, and a complete install implies zero.
+        Assert.Equal(requirement.DownloadNeeded, requirement.MissingComponents.Count > 0);
+        Assert.Equal(requirement.DownloadNeeded, requirement.ApproxBytes > 0);
+    }
+
+    [Fact]
+    public void Paddle_OverrideConstructor_TrimsModelName()
+    {
+        // The internal (worker-override) constructor trims a supplied model name before it reaches
+        // the worker environment, just like the public constructor.
+        var engine = new PaddleOcrEngine(modelName: "  EnglishV4  ", workerPathOverride: BogusWorker);
+        var env = new Dictionary<string, string?>();
+
+        engine.ConfigureWorkerEnvironmentForTest(env);
+
+        Assert.Equal("EnglishV4", env[PaddleOcrEngine.ModelEnvVar]);
+    }
+
+    [Fact]
+    public void Tesseract_DescribeAssetRequirement_ReportsTesseractEngine()
+    {
+        var engine = new TesseractOcrEngine();
+
+        OcrAssetRequirement requirement = engine.DescribeAssetRequirementForTest();
+
+        Assert.Equal("Tesseract", requirement.EngineDisplayName);
+        Assert.Equal(requirement.DownloadNeeded, requirement.MissingComponents.Count > 0);
+        Assert.Equal(requirement.DownloadNeeded, requirement.ApproxBytes > 0);
     }
 
     [Fact]
@@ -197,6 +241,207 @@ public sealed class WorkerOcrEngineTests
         finally
         {
             Environment.SetEnvironmentVariable(WorkerOcrEngine.WorkerPathEnvVar, previous);
+        }
+    }
+}
+
+/// <summary>
+/// Init-time consent-gate behaviour for <see cref="WorkerOcrEngine"/>. These cases mutate the
+/// process-global <see cref="OcrDownloadGate"/> statics, so they share the "OcrDownloadGate"
+/// collection with <see cref="OcrDownloadGateTests"/> to serialize access and avoid cross-test races.
+/// </summary>
+[Collection("OcrDownloadGate")]
+public sealed class WorkerOcrEngineDownloadGateTests
+{
+    [Fact]
+    public async Task EnsureReadyAsync_DownloadNeededWithoutConsent_RefusesWithApproxMb()
+    {
+        // A real (but inert) file so ResolveWorkerPath returns non-null and init reaches the gate.
+        using var worker = new TempFile();
+        var requirement = new OcrAssetRequirement
+        {
+            EngineDisplayName = "Fake",
+            DownloadNeeded = true,
+            ApproxBytes = 349L * 1024 * 1024,
+            MissingComponents = new[] { "OCR engine runtime (~349 MB)" },
+        };
+
+        using var gate = new OcrGateReset();
+        OcrDownloadGate.ConsentGranted = false;
+        OcrDownloadGate.PromptAsync = null; // headless: no UI hook → refuse rather than download
+
+        await using var engine = new FakeWorkerOcrEngine(worker.Path, requirement);
+        OcrResult result = await engine.EnsureReadyAsync(CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("349 MB", result.Error);
+        Assert.Contains("not approved", result.Error);
+        Assert.Contains("OCR engine runtime", result.Error);
+    }
+
+    [Fact]
+    public async Task EnsureReadyAsync_DownloadNeededEmptyComponents_RefusesWithoutComponentList()
+    {
+        using var worker = new TempFile();
+        var requirement = new OcrAssetRequirement
+        {
+            EngineDisplayName = "Fake",
+            DownloadNeeded = true,
+            ApproxBytes = 1024 * 1024,
+            MissingComponents = Array.Empty<string>(),
+        };
+
+        using var gate = new OcrGateReset();
+        OcrDownloadGate.ConsentGranted = false;
+        OcrDownloadGate.PromptAsync = null;
+
+        await using var engine = new FakeWorkerOcrEngine(worker.Path, requirement);
+        OcrResult result = await engine.EnsureReadyAsync(CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("not approved", result.Error);
+        // With no named components, the message goes straight from the size to ", which..." with no
+        // parenthetical component list (distinct from the components-present branch).
+        Assert.Contains("1 MB, which was not approved", result.Error);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EnsureReadyAsync_NoDownloadNeeded_StartsWorker(bool consentGranted)
+    {
+        // No download needed → the gate is skipped and the worker is started. Use whoami.exe (a real
+        // process that exits without speaking the protocol) to drive process start, ConfigureWorkerEnvironment,
+        // the AllowDownload env ternary, and graceful not-ready teardown — independent of installed assets.
+        string workerPath = Path.Combine(Environment.SystemDirectory, "whoami.exe");
+        Assert.True(File.Exists(workerPath), "whoami.exe is expected on Windows.");
+
+        var requirement = new OcrAssetRequirement
+        {
+            EngineDisplayName = "Fake",
+            DownloadNeeded = false,
+            ApproxBytes = 0,
+            MissingComponents = Array.Empty<string>(),
+        };
+
+        using var gate = new OcrGateReset();
+        OcrDownloadGate.ConsentGranted = consentGranted;
+
+        await using var engine = new FakeWorkerOcrEngine(workerPath, requirement);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        OcrResult result = await engine.EnsureReadyAsync(cts.Token);
+
+        Assert.False(result.Success); // whoami never emits "ready"
+        Assert.Equal(consentGranted ? "1" : "0", engine.LastAllowDownloadEnvValue);
+    }
+
+    [Fact]
+    public async Task EnsureReadyAsync_DownloadNeededButConsentGranted_ProceedsToWorker()
+    {
+        // Download is needed, but consent was already granted this session → the gate returns true and
+        // init falls through to start the worker (covers the "allowed" arm of the consent branch).
+        string workerPath = Path.Combine(Environment.SystemDirectory, "whoami.exe");
+        Assert.True(File.Exists(workerPath), "whoami.exe is expected on Windows.");
+
+        var requirement = new OcrAssetRequirement
+        {
+            EngineDisplayName = "Fake",
+            DownloadNeeded = true,
+            ApproxBytes = 349L * 1024 * 1024,
+            MissingComponents = new[] { "OCR engine runtime (~349 MB)" },
+        };
+
+        using var gate = new OcrGateReset();
+        OcrDownloadGate.ConsentGranted = true; // pre-granted → EnsureAllowedAsync short-circuits to true
+        OcrDownloadGate.PromptAsync = null;
+
+        await using var engine = new FakeWorkerOcrEngine(workerPath, requirement);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        OcrResult result = await engine.EnsureReadyAsync(cts.Token);
+
+        Assert.False(result.Success); // whoami never emits "ready", but the gate was passed
+        // Worker was actually started, so the allow-download env var was authorized.
+        Assert.Equal("1", engine.LastAllowDownloadEnvValue);
+    }
+
+    [Fact]
+    public async Task Tesseract_EnsureReadyAsync_WithConsent_StartsWorkerAndFailsNotReady()
+    {
+        // Drive a real TesseractOcrEngine to process start (consent pre-granted bypasses the gate even
+        // if tessdata is missing on this machine), exercising its ConfigureWorkerEnvironment and the
+        // init-failure logging path. whoami exits without speaking the protocol → graceful not-ready.
+        string workerPath = Path.Combine(Environment.SystemDirectory, "whoami.exe");
+        Assert.True(File.Exists(workerPath), "whoami.exe is expected on Windows.");
+
+        using var gate = new OcrGateReset();
+        OcrDownloadGate.ConsentGranted = true;
+        OcrDownloadGate.PromptAsync = null;
+
+        await using var engine = new TesseractOcrEngine(workerPathOverride: workerPath);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        OcrResult result = await engine.EnsureReadyAsync(cts.Token);
+
+        Assert.False(result.Success);
+    }
+
+    /// <summary>Minimal concrete <see cref="WorkerOcrEngine"/> for driving init branches with a forced requirement.</summary>
+    private sealed class FakeWorkerOcrEngine : WorkerOcrEngine
+    {
+        private readonly OcrAssetRequirement _requirement;
+        private IDictionary<string, string?>? _capturedEnv;
+
+        public FakeWorkerOcrEngine(string? workerPathOverride, OcrAssetRequirement requirement)
+            : base(workerPathOverride)
+            => _requirement = requirement;
+
+        /// <summary>The value the base class wrote for the allow-download env var, read from the live process env dict.</summary>
+        public string? LastAllowDownloadEnvValue =>
+            _capturedEnv is not null && _capturedEnv.TryGetValue(WorkerOcrEngine.AllowDownloadEnvVar, out string? v) ? v : null;
+
+        public override string Id => "fake";
+
+        public override string DisplayName => "Fake";
+
+        protected override string LogSource => "OcrFake";
+
+        protected override void ConfigureWorkerEnvironment(IDictionary<string, string?> environment)
+        {
+            // Stash the live dictionary; the base class sets AllowDownloadEnvVar on it right after this call.
+            _capturedEnv = environment;
+        }
+
+        protected override OcrAssetRequirement DescribeAssetRequirement() => _requirement;
+    }
+
+    /// <summary>Snapshots and restores the process-global <see cref="OcrDownloadGate"/> statics.</summary>
+    private sealed class OcrGateReset : IDisposable
+    {
+        private readonly bool _consent = OcrDownloadGate.ConsentGranted;
+        private readonly Func<OcrAssetRequirement, Task<bool>>? _prompt = OcrDownloadGate.PromptAsync;
+
+        public void Dispose()
+        {
+            OcrDownloadGate.ConsentGranted = _consent;
+            OcrDownloadGate.PromptAsync = _prompt;
+        }
+    }
+
+    private sealed class TempFile : IDisposable
+    {
+        public string Path { get; }
+
+        public TempFile()
+        {
+            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "yagu-ocr-worker-" + Guid.NewGuid().ToString("N") + ".exe");
+            File.WriteAllText(Path, string.Empty);
+        }
+
+        public void Dispose()
+        {
+            try { File.Delete(Path); } catch { /* best effort */ }
         }
     }
 }

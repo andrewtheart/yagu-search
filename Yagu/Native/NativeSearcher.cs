@@ -27,6 +27,7 @@ internal static partial class NativeSearcher
         public uint ContextAfter;
         public ulong MaxResults;
         public ulong MaxFileSize;
+        public byte SkipHidden;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -47,6 +48,7 @@ internal static partial class NativeSearcher
     internal const int StatusInvalidRegex = 4;
     internal const int StatusInvalidPath = 5;
     internal const int StatusCancelled = 6;
+    internal const int StatusHiddenSkipped = 7;
 
     [LibraryImport(DllName, EntryPoint = "qg_abi_version")]
     private static partial uint QgAbiVersion();
@@ -183,7 +185,7 @@ internal static partial class NativeSearcher
 
         try
         {
-            return QgAbiVersion() == 4;
+            return QgAbiVersion() == 5;
         }
         catch (DllNotFoundException) { LogService.Instance.Info("NativeSearcher", "yagu_core.dll not found"); return false; }
         catch (BadImageFormatException ex) { LogService.Instance.Warning("NativeSearcher", "yagu_core.dll bad image format", ex); return false; }
@@ -221,6 +223,7 @@ internal static partial class NativeSearcher
             ContextAfter = contextLineCount,
             MaxResults = EffectivePerFileCap(options),
             MaxFileSize = options.MaxFileSizeBytes > 0 ? (ulong)options.MaxFileSizeBytes : 0UL,
+            SkipHidden = (byte)(options.SearchHiddenFiles ? 0 : 1),
         };
     }
 
@@ -258,6 +261,7 @@ internal static partial class NativeSearcher
             {
                 StatusOk => NativeSearchOutcome.FromBuffer(filePath, result, options.ContextLines),
                 StatusBinarySkipped => NativeSearchOutcome.Skipped("binary"),
+                StatusHiddenSkipped => NativeSearchOutcome.Skipped("hidden"),
                 StatusTooLarge => NativeSearchOutcome.Skipped("too-large"),
                 StatusOpenFailed => NativeSearchOutcome.Skipped("open-failed"),
                 StatusCancelled => NativeSearchOutcome.Cancelled(),

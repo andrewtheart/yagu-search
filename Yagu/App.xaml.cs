@@ -41,6 +41,9 @@ public sealed partial class App : Application, IDisposable
     private MainWindow? _window;
     private int _isShowingUnhandledExceptionDialog;
 
+    // Dedupes bug-report offers so a repeating Critical error doesn't pop the modal over and over.
+    private readonly Yagu.Services.Telemetry.BugReportThrottle _bugReportThrottle = new();
+
     public App()
     {
         InitializeComponent();
@@ -72,6 +75,12 @@ public sealed partial class App : Application, IDisposable
                 StartupDirectory = ParseDirArg(System.Environment.GetCommandLineArgs());
             _window = new MainWindow(StartupDirectory, StartupQuery, StartupWindowFocusBehavior);
             UIDispatcher = _window.DispatcherQueue;
+
+            // Warn before any external OCR download (engine runtime / models / language data). The gate
+            // is invoked from a background OCR-init thread; the dialog marshals to the UI thread itself.
+            Yagu.Services.Ocr.OcrDownloadGate.PromptAsync =
+                requirement => OcrDownloadConsentDialog.RequestConsentAsync(_window, requirement);
+
             Models.SearchResult.HydrationDispatcher = action =>
             {
                 var dispatcher = UIDispatcher;
@@ -82,6 +91,15 @@ public sealed partial class App : Application, IDisposable
             };
             _window.Activate();
             _window.FocusSearchOnLaunch();
+
+            // Route Critical log entries (including unhandled-exception crash logs) to the optional,
+            // consent-gated telemetry + bug-report subsystems. Both calls self-gate on user consent.
+            LogService.Instance.CriticalLogged += OnCriticalLogged;
+
+            // First-run only: ask once whether the user wants to help improve Yagu. The dialog marshals
+            // to the UI thread itself and always records that the prompt was shown (so it never repeats).
+            if (!_window.ViewModel.TelemetryConsentPromptShown)
+                _ = TelemetryConsentDialog.RequestConsentAsync(_window);
         }
         catch (Exception ex)
         {
@@ -96,10 +114,33 @@ public sealed partial class App : Application, IDisposable
         UnhandledException -= OnUnhandledException;
         System.Threading.Tasks.TaskScheduler.UnobservedTaskException -= OnUnobservedTaskException;
         AppDomain.CurrentDomain.UnhandledException -= OnDomainUnhandledException;
+        LogService.Instance.CriticalLogged -= OnCriticalLogged;
+        Yagu.Services.Telemetry.TelemetryService.Instance.Shutdown();
         Models.SearchResult.HydrationDispatcher = null;
         _window?.Dispose();
         _window = null;
         GC.SuppressFinalize(this);
+    }
+
+    /// <summary>Handles every Critical log entry (crashes included). Records a scrubbed telemetry error
+    /// when telemetry consent is on, and offers the (reviewed) bug-report dialog when bug-reporting
+    /// consent is on — throttled so a repeating fault doesn't spam the user. Never throws.</summary>
+    private void OnCriticalLogged(string source, string message, Exception? ex)
+    {
+        try
+        {
+            Yagu.Services.Telemetry.TelemetryService.Instance.TrackError("Critical:" + source, ex);
+
+            if (!Yagu.Services.Telemetry.TelemetryGate.ShouldOfferBugReport)
+                return;
+
+            string scrubbed = Yagu.Services.Telemetry.TelemetryScrubber.Scrub(ex?.Message ?? message);
+            string signature = Yagu.Services.Telemetry.BugReportThrottle.Signature(
+                source, ex?.GetType().FullName ?? "none", scrubbed);
+            if (_bugReportThrottle.ShouldOffer(signature))
+                BugReportDialog.Offer(_window, source, ex);
+        }
+        catch { /* telemetry/bug-report must never destabilize logging or the app */ }
     }
 
     private void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
@@ -195,6 +236,7 @@ public sealed partial class App : Application, IDisposable
                 new YaguDialogOptions
                 {
                     Title = "Unexpected error",
+                    TitleGlyph = "\uEA39", // Error badge
                     Content = content,
                     CloseButtonText = "Close",
                     DefaultButton = YaguDialogDefaultButton.Close,
@@ -202,6 +244,7 @@ public sealed partial class App : Application, IDisposable
                     Height = 620,
                     MaxContentHeight = 460,
                     IsResizable = true,
+                    ShowTitleBar = false,
                 });
         }
         catch

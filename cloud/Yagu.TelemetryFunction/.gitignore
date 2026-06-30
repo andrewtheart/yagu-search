@@ -1,0 +1,10 @@
+# Build output
+bin/
+obj/
+
+# Local Functions settings — contains the connection string / token for local dev only.
+local.settings.json
+
+# Azure Functions artifacts
+.azurefunctions/
+*.user

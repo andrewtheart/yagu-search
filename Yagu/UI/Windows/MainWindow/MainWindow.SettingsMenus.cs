@@ -33,6 +33,7 @@ public sealed partial class MainWindow
             new YaguDialogOptions
             {
                 Title = "Add Explorer Context Menu?",
+                TitleGlyph = "\uEC50", // File Explorer
                 Content = "Would you like to add a \"Search with Yagu\" option to the Windows Explorer right-click menu?\n\nThis lets you quickly search any folder by right-clicking it.",
                 PrimaryButtonText = "Yes, add it",
                 CloseButtonText = "No thanks",
@@ -51,6 +52,7 @@ public sealed partial class MainWindow
                 new YaguDialogOptions
                 {
                     Title = "Context Menu Installed",
+                    TitleGlyph = "\uE930", // Completed
                     Content = "The \"Search with Yagu\" context menu has been added.\n\nTo use it: right-click any folder in Windows Explorer and select \"Search with Yagu\". Yagu will open with that folder ready to search.",
                     CloseButtonText = "OK",
                     DefaultButton = YaguDialogDefaultButton.Close,
@@ -67,6 +69,7 @@ public sealed partial class MainWindow
                 new YaguDialogOptions
                 {
                     Title = "Context Menu Registration Failed",
+                    TitleGlyph = "\uEA39", // Error badge
                     Content = $"Could not register the context menu entry:\n{ex.Message}",
                     CloseButtonText = "OK",
                     DefaultButton = YaguDialogDefaultButton.Close,

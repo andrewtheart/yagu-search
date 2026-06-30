@@ -546,7 +546,8 @@ public sealed class FileLister : IFileLister
                 query += $" ext:{exts}";
         }
 
-        // Exclude extensions at query level so Everything never returns them.
+        // Exclude extensions at query level so Everything never returns them. Extension is indexed,
+        // so this negated filter is cheap (unlike !attrib:h, which forces a full attribute scan).
         var skipExts = EarlySkipExtensions;
         if (skipExts.Count > 0)
         {
@@ -555,9 +556,14 @@ public sealed class FileLister : IFileLister
         }
         foreach (var sizeTerm in BuildEverythingSizeFilterTerms(EarlyMinFileSizeBytes, EarlyMaxFileSizeBytes))
             query += $" {sizeTerm}";
-        // NOTE: Do NOT add the ContentSearchFileSizeCeiling as a size: predicate here.
-        // Everything's size: filter can make Query() block for 10+ seconds on large drives.
-        // Instead, the ceiling is enforced in the per-result loop via GetResultSize().
+        // Push the content-search file-size ceiling into the query as a size: PREDICATE when the
+        // user has no explicit max-size filter. Measured cost of `size:<=N` is ~100 ms even on a
+        // ~2M-file C:\ index (Everything indexes size for filtering), whereas REQUESTING size as a
+        // returned COLUMN for the whole unnarrowed sweep costs tens of seconds. Excluding oversized
+        // files here also lets the per-result loop skip fetching size metadata entirely (wantSize
+        // below) — that column fetch was the dominant cause of the long delay before content matches.
+        if (EarlyMaxFileSizeBytes <= 0 && ContentSearchFileSizeCeiling > 0)
+            query += $" size:<={ContentSearchFileSizeCeiling}";
         // Everything date predicates (dc:/dm:) can make Everything_Query block for
         // tens of seconds before returning any paths. Request date metadata instead
         // and filter results below, keeping first-result latency low without per-file stat calls.
@@ -615,9 +621,17 @@ public sealed class FileLister : IFileLister
         // Always exclude .git from the SDK query (unconditional).
         query += " !\"\\.git\\\"";
 
-        // When hidden search is disabled, exclude files carrying the Hidden attribute
-        // natively in the Everything query (no per-file attribute syscalls).
-        if (!SearchHiddenFiles)
+        // Hidden-file exclusion. Everything's `!attrib:h` is CHEAP on a narrowed query (a name term
+        // or extension filter limits it to a small candidate set) but pathologically slow on an
+        // UNNARROWED full-drive sweep: it forces a full UNINDEXED attribute scan (~40 s before the
+        // first result on a ~2M-file C:\ to exclude only ~2k hidden files) — the cause of the long
+        // gap before content matches. So keep it only when the query is narrowed; on the unnarrowed
+        // content sweep the native scanner skips hidden files from the metadata it already fetches
+        // (NativeSearcher passes SearchHiddenFiles -> QgOptions.skip_hidden).
+        bool queryIsNarrowed = (includeExtensions is { Count: > 0 })
+            || EarlyFileNameLiteralTerms.Count > 0
+            || EarlyIncludeFileNameGlobs.Count > 0;
+        if (!SearchHiddenFiles && queryIsNarrowed)
             query += " !attrib:h";
 
         LogService.Instance.Warning("FileLister", $"Everything SDK query: {query}");
@@ -653,14 +667,18 @@ public sealed class FileLister : IFileLister
                         _sdkOps.Reset();
                         _sdkOps.SetSearch(query);
                         _sdkOps.SetMatchCase(false);
-                        // Request size alongside paths so we can pre-filter by file size
-                        // and extension without per-file FileInfo calls.
-                        // Always request size: even without user size filters, the 100 MB
-                        // ContentSearchFileSizeCeiling needs it to avoid per-file stat calls.
-                        bool wantSize = true;
+                        // Only request metadata COLUMNS that an active filter actually needs.
+                        // Requesting size/date columns for an entire unnarrowed C:\ sweep makes
+                        // Query() block for tens of seconds (size + modified-date roughly tripled
+                        // enumeration time in measurement) and was the dominant cause of the long
+                        // gap before the first content match. The size ceiling is enforced via the
+                        // size: predicate added to the query above; size and modified-date for the
+                        // small set of displayed groups are back-filled lazily by FileGroup and by
+                        // the scanner's OnFileDone callback, so no eager column fetch is needed.
                         bool wantCreatedDate = EarlyCreatedAfterDate.HasValue || EarlyCreatedBeforeDate.HasValue;
-                        bool wantModifiedDate = true; // Always fetch so FileGroup can display it without a per-file stat
                         bool filterByModifiedDate = EarlyModifiedAfterDate.HasValue || EarlyModifiedBeforeDate.HasValue;
+                        bool wantSize = EarlyMinFileSizeBytes > 0 || EarlyMaxFileSizeBytes > 0;
+                        bool wantModifiedDate = filterByModifiedDate;
                         uint requestFlags = EverythingSdk.EVERYTHING_REQUEST_FULL_PATH_AND_FILE_NAME;
                         if (wantSize)
                             requestFlags |= EverythingSdk.EVERYTHING_REQUEST_SIZE;
@@ -674,13 +692,19 @@ public sealed class FileLister : IFileLister
                         // has enabled fast-sort in Everything. Letting the SDK return
                         // results in its native (unsorted) order is much faster.
 
-                        // Page through results to avoid blocking 20+ seconds on large drives.
-                        // Each page of 10,000 returns in ~1 second, immediately flowing
-                        // paths to the content scanner.
-                        const uint SdkPageSize = 10_000;
+                        // Issue a SINGLE query for the entire result set, then read
+                        // results by index. The classic Everything SDK re-evaluates the
+                        // ENTIRE search on every Everything_Query call — it keeps no
+                        // server-side cursor — so paging with repeated Query(bWait:true)
+                        // calls re-runs the whole `file:<root>` enumeration once per page.
+                        // For a full-drive sweep (no narrowing name term) each evaluation
+                        // scans/filters ~1.8M files and takes tens of seconds; multiplied
+                        // across ~190 pages that pins Everything for ~2 hours. A single
+                        // Query evaluates once (one page's latency) and then
+                        // GetResultFullPathName(i) reads from the already-transferred buffer
+                        // without re-querying. The bounded channel still streams paths to
+                        // the content scanner, so we never build a multi-million-entry List.
                         uint userMax = maxFiles > 0 ? (uint)maxFiles : uint.MaxValue;
-                        uint pageSize = Math.Min(SdkPageSize, userMax);
-                        uint offset = 0;
                         uint totalMatches = 0;
 
                         var buffer = new char[1024];
@@ -697,29 +721,22 @@ public sealed class FileLister : IFileLister
                         int skippedByDate = 0;
                         int excludedByExtension = 0;
 
-                        while (!cancellationToken.IsCancellationRequested)
+                        _sdkOps.SetOffset(0);
+                        _sdkOps.SetMax(userMax);
+
+                        if (!_sdkOps.Query(bWait: true))
                         {
-                            _sdkOps.SetOffset(offset);
-                            _sdkOps.SetMax(pageSize);
+                            var err = _sdkOps.GetLastError();
+                            error = err == EverythingSdk.EVERYTHING_ERROR_IPC
+                                ? "Everything is not running"
+                                : $"Everything SDK query failed: {_sdkOps.ErrorMessage(err)}";
+                            return;
+                        }
 
-                            if (!_sdkOps.Query(bWait: true))
-                            {
-                                var err = _sdkOps.GetLastError();
-                                error = err == EverythingSdk.EVERYTHING_ERROR_IPC
-                                    ? "Everything is not running"
-                                    : $"Everything SDK query failed: {_sdkOps.ErrorMessage(err)}";
-                                return;
-                            }
-
-                            uint count = _sdkOps.GetNumResults();
-                            if (offset == 0)
-                            {
-                                totalMatches = _sdkOps.GetTotResults();
-                                SetKnownTotalFiles(totalMatches);
-                                LogService.Instance.Warning("FileLister", $"Everything SDK: page0={count}, total={totalMatches}, last error={_sdkOps.GetLastError()}");
-                            }
-
-                            if (count == 0) break;
+                        uint count = _sdkOps.GetNumResults();
+                        totalMatches = _sdkOps.GetTotResults();
+                        SetKnownTotalFiles(totalMatches);
+                        LogService.Instance.Warning("FileLister", $"Everything SDK: returned={count}, total={totalMatches}, last error={_sdkOps.GetLastError()}");
 
                         for (uint i = 0; i < count; i++)
                         {
@@ -832,12 +849,6 @@ public sealed class FileLister : IFileLister
                                 ChannelWrite(channel.Writer, path, cancellationToken);
                             }
                         }
-
-                            // Advance to next page
-                            offset += count;
-                            if (count < pageSize || offset >= totalMatches || offset >= userMax)
-                                break;
-                        } // end while (paging loop)
 
                         if (skippedBySize > 0 || skippedByDate > 0 || excludedByExtension > 0)
                         {
@@ -1179,10 +1190,18 @@ public sealed class FileLister : IFileLister
         }
         foreach (var sizeTerm in BuildEverythingSizeFilterTerms(EarlyMinFileSizeBytes, EarlyMaxFileSizeBytes))
             args.Add(sizeTerm);
+        // Enforce the content-search file-size ceiling as a fast size: predicate (parity with the
+        // SDK tier) so oversized files are excluded by Everything instead of statted per-file later.
+        if (EarlyMaxFileSizeBytes <= 0 && ContentSearchFileSizeCeiling > 0)
+            args.Add($"size:<={ContentSearchFileSizeCeiling}");
         foreach (var dateTerm in BuildEverythingDateFilterTerms(EarlyCreatedAfterDate, EarlyCreatedBeforeDate, EarlyModifiedAfterDate, EarlyModifiedBeforeDate))
             args.Add(dateTerm);
-        // When hidden search is disabled, exclude hidden files natively via Everything's attribute filter.
-        if (!SearchHiddenFiles)
+        // Keep the cheap !attrib:h only on a narrowed query; on the unnarrowed full-drive sweep it
+        // is pathologically slow (unindexed attribute scan) so the native scanner handles hidden.
+        bool esQueryIsNarrowed = (includeExtensions is { Count: > 0 })
+            || EarlyFileNameLiteralTerms.Count > 0
+            || EarlyIncludeFileNameGlobs.Count > 0;
+        if (!SearchHiddenFiles && esQueryIsNarrowed)
             args.Add("!attrib:h");
         var fileNameFilter = BuildEverythingFileNameFilter(EarlyFileNameLiteralTerms);
         if (fileNameFilter is not null)

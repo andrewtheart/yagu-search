@@ -551,6 +551,16 @@ after searching.</li>
 <li><strong>Switching back to Traditional</strong> (via the same
 Search‑button chevron menu) restores the literal/regex query behavior;
 the inline Case/Regex/Exact toggles apply in Traditional mode only.</li>
+<li><strong>Did you mean AI search?</strong> While in
+<strong>Traditional</strong> mode, if you type something that reads like
+a natural‑language request — e.g.
+<code>files on C: containing the word test</code> — Yagu offers to run it
+as a Semantic search instead. Choose <strong>Switch to AI search</strong>
+to interpret it that way (this turns AI search on for you if you'd
+disabled it), or <strong>Keep Traditional</strong> to match
+your text literally. Tick <strong>Don't remind me again</strong> to stop
+the prompt for good. It only appears once a Semantic model has been
+downloaded.</li>
 </ul>
 <p>Configure availability and the optional preferred model under
 <strong>Settings → Search Defaults</strong>. The same capability is
@@ -1436,6 +1446,16 @@ MB.</td>
 <p>Controls image text recognition (OCR). When OCR is on, image files
 (PNG, JPG, BMP, GIF, TIFF, WEBP) are recognized on a background queue
 and their text is searched like any other file’s contents.</p>
+<blockquote>
+<p><strong>Two installer editions.</strong> Yagu ships in two flavors: a
+<strong>lite</strong> installer that downloads the OCR engine runtime
+and language models the first time you actually use image-text search,
+and an <strong>OCR-bundled</strong> installer that ships those
+components (about 365 MB) so OCR works fully offline with no download.
+With the lite edition, Yagu <strong>warns you before any external
+download</strong> and only proceeds once you approve; consent is then
+remembered.</p>
+</blockquote>
 <table>
 <colgroup>
 <col style="width: 50%" />
@@ -1458,8 +1478,10 @@ queue and the recognized text is searched.</td>
 <td>OCR engine</td>
 <td>PaddleSharp (recommended, default) or Tesseract. PaddleSharp is
 generally more accurate and can use GPU/NPU acceleration; Tesseract is a
-lighter alternative with a fixed pipeline. The selected engine’s runtime
-and models download on first use.</td>
+lighter alternative with a fixed pipeline. With the lite installer, the
+selected engine’s runtime and models download on first use (after you
+approve the warning); the OCR-bundled installer ships the PaddleSharp
+runtime and models so the default engine needs no download.</td>
 </tr>
 <tr>
 <td>Quality preset</td>
@@ -1710,6 +1732,14 @@ extension (on by default). Applies to files opened after the
 change.</td>
 </tr>
 <tr>
+<td>Long-line warning</td>
+<td>What to do when opening a file with a very long line in the
+built-in editor: <strong>Ask every time</strong> (default, shows the
+warning dialog), <strong>Always open without word wrap</strong>, or
+<strong>Always open with word wrap</strong>. The dialog’s “Don’t remind
+me again” checkbox sets this automatically.</td>
+</tr>
+<tr>
 <td>Preview editor max size (MB)</td>
 <td>Maximum file size the built-in editor loads (default: 32 MB).</td>
 </tr>
@@ -1896,6 +1926,70 @@ click it to open the log in Notepad.</td>
 </tr>
 </tbody>
 </table>
+<h3 id="privacy-tab">Privacy Tab</h3>
+<p>Controls Yagu’s two <strong>optional, off-by-default</strong>
+diagnostics features. Both are independent — you can enable either,
+both, or neither. The very first time Yagu starts it shows a one-time
+consent prompt offering both; if you decline, the prompt never appears
+again and you can still turn either feature on later from this tab.</p>
+<blockquote>
+<p><strong>Your searches never leave your machine.</strong> Yagu never
+sends file paths, file contents, directory names, search queries, or
+machine identifiers through the silent telemetry channel — those are
+scrubbed out before anything is sent (any filesystem path in an error
+message is redacted to <code>&lt;path&gt;</code>). The only data tied to
+your install is a random GUID generated once, used only to count
+distinct installs. The bug-report channel can include more (your
+settings file and a log tail), but <strong>only after you review the
+exact contents in a dialog and click Submit</strong>.</p>
+</blockquote>
+<blockquote>
+<p><strong>Nothing is sent unless an endpoint is configured.</strong>
+Telemetry travels to a self-hosted Azure Function proxy, not to any
+third party. If the build you are running has no endpoint configured,
+both features are completely inert and Yagu makes no network calls
+regardless of these toggles. Headless/CLI runs never send anything.</p>
+</blockquote>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Setting</th>
+<th>What It Controls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Send anonymized error &amp; performance telemetry</td>
+<td>When on, Yagu sends a small batch of anonymized, path-scrubbed error
+summaries and performance measurements (e.g. startup time) to the
+configured proxy. No file paths, queries, contents, or personal data.
+Off until you opt in.</td>
+</tr>
+<tr>
+<td>Offer to send a bug report on errors</td>
+<td>When on, if Yagu hits a critical/unhandled error it opens a
+<strong>bug-report dialog</strong> that shows you exactly what would be
+submitted — the error and stack trace, GPU/NPU details, a copy of your
+<code>settings.json</code>, and a tail of your log file — plus an
+optional comment box. Nothing is sent unless you click <strong>Submit
+report</strong>. The same error is offered at most once per session. Off
+until you opt in.</td>
+</tr>
+<tr>
+<td>Contact email (optional)</td>
+<td>An email address attached to bug reports you submit, so the
+developer can follow up. Leave blank to stay anonymous. Only sent with
+reports you explicitly submit.</td>
+</tr>
+</tbody>
+</table>
+<p>The <strong>What’s Sent &amp; Where</strong> group on this tab
+summarizes the destination and shows whether a telemetry endpoint is
+configured for the current build.</p>
 <hr />
 <h2 id="cli-command-generation">CLI Command Generation</h2>
 <p>Click <strong>Generate CLI command</strong> in Advanced Options to
@@ -3020,6 +3114,16 @@ not blocked.</td>
 (native resolution). Falls back to the <strong>OCR ▸ Detection
 resolution</strong> setting. Ignored by the <code>tesseract</code>
 engine.</td>
+</tr>
+<tr>
+<td><code>--allow-ocr-download</code></td>
+<td>Consent, in advance, to the one-time download of the OCR engine
+runtime and/or language models that <code>--image-text</code> needs on
+first use (the lite installer ships without them; the OCR-bundled
+installer ships them so nothing downloads). Without this flag, a
+non-interactive run that needs the download is refused and an
+interactive run prompts before downloading. Consent is remembered for
+future runs.</td>
 </tr>
 </tbody>
 </table>

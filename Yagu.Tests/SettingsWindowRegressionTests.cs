@@ -56,6 +56,12 @@ public sealed class SettingsWindowRegressionTests
     private static readonly string SelectionRendererSource = File.ReadAllText(
         Path.Combine(RepoRoot, "vendor", "TextControlBox-WinUI", "TextControlBox",
             "Core", "Renderer", "SelectionRenderer.cs"));
+    private static readonly string CoreTextControlBoxSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "vendor", "TextControlBox-WinUI", "TextControlBox",
+            "Core", "CoreTextControlBox.xaml.cs"));
+    private static readonly string TextControlBoxDiagnosticsSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "vendor", "TextControlBox-WinUI", "TextControlBox",
+            "TextControlBoxDiagnostics.cs"));
     private static readonly string LinkHighlightManagerSource = File.ReadAllText(
         Path.Combine(RepoRoot, "vendor", "TextControlBox-WinUI", "TextControlBox",
             "Core", "Text", "LinkHighlightManager.cs"));
@@ -656,8 +662,8 @@ public sealed class SettingsWindowRegressionTests
 
         Assert.Contains("IncludeFilterModeIndex = _settings.IncludeFilterModeIndex", MainViewModelSource);
         Assert.Contains("ExcludeFilterModeIndex = _settings.ExcludeFilterModeIndex", MainViewModelSource);
-        Assert.Contains("_settings.IncludeFilterModeIndex = IncludeFilterModeIndex", MainViewModelSource);
-        Assert.Contains("_settings.ExcludeFilterModeIndex = ExcludeFilterModeIndex", MainViewModelSource);
+        Assert.Contains("_settings.IncludeFilterModeIndex = d is null ? IncludeFilterModeIndex : d.IncludeFilterModeIndex", MainViewModelSource);
+        Assert.Contains("_settings.ExcludeFilterModeIndex = d is null ? ExcludeFilterModeIndex : d.ExcludeFilterModeIndex", MainViewModelSource);
         Assert.Contains("SelectedIndex=\"{x:Bind ViewModel.IncludeFilterModeIndex, Mode=TwoWay}\"", MainWindowXaml);
         Assert.Contains("SelectedIndex=\"{x:Bind ViewModel.ExcludeFilterModeIndex, Mode=TwoWay}\"", MainWindowXaml);
     }
@@ -1091,7 +1097,6 @@ public sealed class SettingsWindowRegressionTests
             "PrimaryButtonText = \"Save and close\"",
             "SecondaryButtonText = \"Discard changes\"",
             "CloseButtonText = \"Keep editing\"",
-            "ShowTitle = false",
             "ShowTitleBar = false",
             "ShowTopRightCloseButton = true");
         AssertContainsInOrder(prompt,
@@ -1219,9 +1224,15 @@ public sealed class SettingsWindowRegressionTests
     }
 
     [Fact]
-    public void MainWindowXaml_FilterFlyoutOpensBelowToolbarButton()
+    public void MainWindowXaml_AdvancedOptionsFlyoutOpensBelowToolbarButton()
     {
-        Assert.Contains("<MenuFlyout Placement=\"BottomEdgeAlignedLeft\" Opening=\"OnFilterFlyoutOpening\">", MainWindowXaml);
+        // The old filter MenuFlyout was replaced by the Advanced Options flyout; it must still
+        // open anchored below the toolbar button (BottomEdgeAlignedLeft), not over it.
+        int idx = MainWindowXaml.IndexOf("<Flyout x:Name=\"AdvancedOptionsFlyout\"", StringComparison.Ordinal);
+        Assert.True(idx >= 0, "AdvancedOptionsFlyout not found in MainWindow.xaml");
+        string flyout = MainWindowXaml.Substring(idx, Math.Min(400, MainWindowXaml.Length - idx));
+        Assert.Contains("Placement=\"BottomEdgeAlignedLeft\"", flyout);
+        Assert.Contains("Opened=\"OnAdvancedOptionsFlyoutOpened\"", flyout);
     }
 
     [Fact]
@@ -1386,6 +1397,62 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("catch (COMException)", method);
         Assert.Contains("if (rects.Length == 0)", method);
         Assert.Contains("Length = length", method);
+    }
+
+    // ── Preview-editor 0xc000027b fail-fast guards (Win2D draw callbacks) ──
+
+    [Fact]
+    public void CoreTextControlBox_AllCanvasDrawHandlers_AreGuardedAgainstFailFast()
+    {
+        // Each Win2D draw callback must swallow + log exceptions so a transient out-of-range
+        // layout/geometry on a huge single-line file can't escalate to a 0xc000027b stowed
+        // exception that fail-fasts the whole process.
+        foreach (string handler in new[]
+        {
+            "Canvas_Text_Draw",
+            "Canvas_Selection_Draw",
+            "Canvas_Cursor_Draw",
+            "Canvas_LineNumber_Draw",
+        })
+        {
+            string method = ExtractMethod(CoreTextControlBoxSource, handler, window: 1400);
+            AssertContainsInOrder(method,
+                "try",
+                "catch (Exception ex)",
+                "TextControlBoxDiagnostics.Error(");
+        }
+    }
+
+    [Fact]
+    public void SelectionRenderer_DrawSelection_GuardsGetCharacterRegionsAgainstFailFast()
+    {
+        string method = ExtractMethod(SelectionRendererSource, "DrawSelection", window: 14000);
+        // Clamp the selection range to the actual rendered text length before the call …
+        Assert.Contains("int renderedTextLength = textRenderer.RenderedText?.Length ?? 0;", method);
+        Assert.Contains("textLayout == null || renderedSelectionStart >= renderedTextLength", method);
+        Assert.Contains("renderedSelectionStart + renderedSelectionLength > renderedTextLength", method);
+        // … and wrap GetCharacterRegions so a relayout race skips the frame instead of crashing.
+        AssertContainsInOrder(method,
+            "try",
+            "textLayout.GetCharacterRegions(renderedSelectionStart, renderedSelectionLength);",
+            "catch (Exception ex) when (ex is ArgumentException or COMException)",
+            "TextControlBoxDiagnostics.Error(");
+    }
+
+    [Fact]
+    public void TextControlBoxDiagnostics_ExposesAlwaysOnErrorLogger()
+    {
+        Assert.Contains("public static Action<string, string, Exception> ErrorLogger", TextControlBoxDiagnosticsSource);
+        string method = ExtractMethod(TextControlBoxDiagnosticsSource, "Error", window: 200);
+        Assert.Contains("ErrorLogger?.Invoke(source, message, ex);", method);
+    }
+
+    [Fact]
+    public void MainWindow_WiresTextControlBoxErrorLogger()
+    {
+        Assert.Contains(
+            "TextControlBoxNS.TextControlBoxDiagnostics.ErrorLogger = (source, message, ex) => LogService.Instance.Warning(source, message, ex);",
+            MainWindowWindowSource);
     }
 
     // ── Helpers ──

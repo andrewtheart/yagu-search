@@ -7,6 +7,7 @@
 - If the user asks to build, rebuild, validate a change, or launch after changes without explicitly saying Release, build **Debug** with the Rust profiling profile: `dotnet build Yagu/Yagu.csproj -c Debug -p:RustProfile=profiling`.
 - Build **Release** only when the user explicitly asks for a Release build. For Release builds, use the normal Release profile without Rust profiling: `dotnet build Yagu/Yagu.csproj -c Release`.
 - When launching the app, always launch the **Debug** build: `Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe`.
+- If a build fails only because `Yagu.exe` (or `yagu_core.dll`) is locked by a running Yagu instance (MSB3027/MSB3021 "being used by another process" / "file is locked by: Yagu (PID)"), you are **authorized to kill that running Yagu session** and rebuild. Kill it targeted — by the PID from the error, or `Get-Process Yagu -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*\Yagu\bin\*' } | Stop-Process -Force` — then re-run the build. Do NOT broadly kill unrelated processes; this exception is for the Yagu app under build only.
 
 ## CLI Documentation Rules
 

@@ -1921,6 +1921,7 @@ public sealed partial class MainWindow
                 new YaguDialogOptions
                 {
                     Title = System.IO.Path.GetFileName(path),
+                    TitleGlyph = "\uEB9F", // Picture
                     Content = scroller,
                     CloseButtonText = "Close",
                     ShowTopRightCloseButton = true,
@@ -2272,14 +2273,20 @@ public sealed partial class MainWindow
 
         var path = filePath; // capture for lambdas
 
+        // Image content matches show a thumbnail + recognized OCR text and are not text-editable,
+        // so the text-only actions ("Show full file", "Edit file") don't apply — render them
+        // disabled and non-clickable, mirroring the single-file toolbar (FullFileButton.IsEnabled).
+        bool isImageMatch = IsImagePreviewPath(filePath);
+
         if (sectionBlock is not null && sectionResults is not null)
         {
             var fullFileBtn = new Button
             {
                 Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
                 Content = new FontIcon { Glyph = "\uE81E", FontSize = 12 },
+                IsEnabled = !isImageMatch,
             };
-            ToolTipService.SetToolTip(fullFileBtn, "Show full file");
+            ToolTipService.SetToolTip(fullFileBtn, isImageMatch ? "Show full file (not available for images)" : "Show full file");
             var capturedBlock = sectionBlock;
             var capturedResults = sectionResults;
             fullFileBtn.Click += async (_, _) =>
@@ -2316,8 +2323,9 @@ public sealed partial class MainWindow
         {
             Width = 28, Height = 28, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0),
             Content = new FontIcon { Glyph = "\uE70F", FontSize = 12 },
+            IsEnabled = !isImageMatch,
         };
-        ToolTipService.SetToolTip(editorBtn, "Edit file");
+        ToolTipService.SetToolTip(editorBtn, isImageMatch ? "Edit file (not available for images)" : "Edit file");
         editorBtn.Click += async (_, _) =>
         {
             var result = ResolvePreviewEditorFallbackResult(path);
@@ -3175,6 +3183,41 @@ public sealed partial class MainWindow
         return false;
     }
 
+    /// <summary>
+    /// Returns true when the occurrence at <paramref name="sourceColumn"/> on
+    /// <paramref name="lineNumber"/> already falls inside a match window rendered in
+    /// <paramref name="section"/> (so a navigable match entry for it already exists). A
+    /// rendered paragraph for the line with no recorded window means the full untruncated
+    /// line was drawn, which contains every occurrence on the line. This is the fine-grained
+    /// replacement for line-number-only dedup: a single very long source line (e.g. a one-line
+    /// minified file) scatters its occurrences far outside the first truncated window, so each
+    /// uncovered occurrence still needs its own dedicated window to be reachable by match nav.
+    /// </summary>
+    private static bool IsSourceColumnWithinRenderedWindow(RichTextBlock section, int lineNumber, int sourceColumn)
+    {
+        if (sourceColumn < 0)
+            return false;
+
+        foreach (var block in section.Blocks)
+        {
+            if (block is not Paragraph para
+                || !s_paragraphLineNumbers.TryGetValue(para, out var lineObj)
+                || lineObj is not int renderedLine
+                || renderedLine != lineNumber)
+            {
+                continue;
+            }
+
+            if (!TryGetParagraphMatchWindow(para, out int windowStart, out int windowEnd))
+                return true; // full untruncated line contains every occurrence
+
+            if (sourceColumn >= windowStart && sourceColumn < windowEnd)
+                return true;
+        }
+
+        return false;
+    }
+
     private PreviewTruncatedLineState? CreatePreviewTruncatedLineState(
         PreviewLineWindow window,
         string sourceLine,
@@ -3715,10 +3758,17 @@ public sealed partial class MainWindow
                 if (lineIndex < 0 || lineIndex >= allLines.Length)
                     continue;
 
-                // The line is already on screen (or we just drew it for an earlier
-                // same-line pending result). Its match-nav entry already exists, so
-                // count it as consumed instead of repeating the numbered row.
-                if (!sectionRenderedLines.Add(result.LineNumber))
+                // Reuse an existing window only when THIS occurrence's source column
+                // actually falls inside one (its match-nav entry already exists). A
+                // coarse line-number check is wrong for a single very long source line:
+                // every occurrence shares line 1, so it would treat them all as already
+                // navigable and silently drop them — leaving match navigation stuck at
+                // occurrence 1. Occurrences outside every rendered window get their own
+                // dedicated, sibling-clipped window below so nav can reach them.
+                int sourceColumn = result.SourceMatchStartColumn >= 0
+                    ? result.SourceMatchStartColumn
+                    : result.MatchStartColumn;
+                if (IsSourceColumnWithinRenderedWindow(section, result.LineNumber, sourceColumn))
                 {
                     consumedResults++;
                     lastRenderedLine = Math.Max(lastRenderedLine, result.LineNumber);

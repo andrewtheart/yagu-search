@@ -18,7 +18,7 @@ public sealed partial class MainWindow
         SyncWrapModeToggles(ViewModel.PreviewWrapModeIndex);
         ApplyWordWrap(ViewModel.PreviewWordWrap);
         ApplyPreviewColors();
-        UpdatePinStartupDirectoryIcon(ViewModel.PinStartupDirectory);
+        UpdatePinStartupDirectoryIcon(ViewModel.IsCurrentDirectoryPinned);
         if (_launcherMode) PositionLauncherWindow();
 
         // Apply maximize-on-startup setting (only in non-launcher mode)
@@ -353,6 +353,7 @@ public sealed partial class MainWindow
                     new YaguDialogOptions
                     {
                         Title = "Everything Search Not Running",
+                        TitleGlyph = "\uE721", // Search
                         Content = content,
                         PrimaryButtonText = "Start Everything",
                         CloseButtonText = "Skip",
@@ -403,6 +404,7 @@ public sealed partial class MainWindow
                 new YaguDialogOptions
                 {
                     Title = "Everything Search Not Running",
+                    TitleGlyph = "\uE721", // Search
                     Content = content,
                     PrimaryButtonText = "Start Everything",
                     CloseButtonText = "Skip",
@@ -442,6 +444,7 @@ public sealed partial class MainWindow
             new YaguDialogOptions
             {
                 Title = "Everything Search Not Found",
+                TitleGlyph = "\uE721", // Search
                 Content = "Everything Search by voidtools provides significantly faster file discovery.\n\nWould you like to download and install it?",
                 PrimaryButtonText = "Install",
                 CloseButtonText = "Skip",
@@ -546,6 +549,7 @@ public sealed partial class MainWindow
             new YaguDialogOptions
             {
                 Title = "Everything Search Ready",
+                TitleGlyph = "\uE930", // Completed
                 Content = $"Everything Search returned indexed files and folders through the SDK. Fast file discovery is ready to use.\n\nIndexed items reported: {indexedCount:N0}",
                 CloseButtonText = "OK",
                 DefaultButton = YaguDialogDefaultButton.Close,

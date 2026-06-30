@@ -83,13 +83,23 @@ internal static class SessionLoadDialog
         {
             Spacing = 6,
         };
-        header.Children.Add(new TextBlock
+        // Glyph + title row, matching the bug report modal's glyph-left-of-title placement.
+        var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+        titleRow.Children.Add(new FontIcon
+        {
+            Glyph = "\uE8E5", // OpenFile
+            FontSize = 22,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        titleRow.Children.Add(new TextBlock
         {
             Text = "Load session",
             FontSize = 22,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
             TextWrapping = TextWrapping.WrapWholeWords,
+            VerticalAlignment = VerticalAlignment.Center,
         });
+        header.Children.Add(titleRow);
         header.Children.Add(new TextBlock
         {
             Text = "Saved sessions reopen previous Yagu results without rerunning the search. Select a .yagu-session file from the list, or choose Browse... to pick one manually.",

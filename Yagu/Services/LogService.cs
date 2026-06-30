@@ -24,6 +24,13 @@ public sealed class LogService : IDisposable
     private LogLevel? _installerFileFloor;
     private bool _disposed;
 
+    /// <summary>Raised (best-effort, synchronously) for every <see cref="LogLevel.Critical"/> entry,
+    /// regardless of whether file/console logging is enabled. Optional subsystems (telemetry, bug
+    /// reporting) subscribe so LogService need not depend on them. Handlers MUST be fast and MUST NOT
+    /// throw — exceptions are swallowed to keep logging crash-safe — and MUST NOT log at Critical level
+    /// themselves (that would re-enter this event).</summary>
+    public event Action<string, string, Exception?>? CriticalLogged;
+
     /// <summary>Log level for file output. The value is clamped UP to the installer override floor
     /// (if any) so a <c>/VERBOSELOG</c> install keeps verbose file logging even when something later
     /// applies the saved (lower) level — e.g. the view-model re-applying <c>LogLevelIndex</c> while the
@@ -173,6 +180,16 @@ public sealed class LogService : IDisposable
 
     private void Write(LogLevel level, string source, string message, Exception? ex)
     {
+        if (level == LogLevel.Critical)
+        {
+            var handler = CriticalLogged;
+            if (handler != null)
+            {
+                try { handler(source, message, ex); }
+                catch { /* never let a telemetry/bug-report handler break logging */ }
+            }
+        }
+
         bool toFile = _fileLevel != LogLevel.None && level <= _fileLevel;
         bool toConsole = _consoleLevel != LogLevel.None && level <= _consoleLevel;
         if (!toFile && !toConsole) return;

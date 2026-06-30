@@ -65,6 +65,12 @@ public interface ISemanticQueryTranslator
     /// model from loading (via DirectML) and then crashing during inference on a CPU-only machine.
     /// Applied to the next selection; drops the loaded model so the change takes effect immediately.</summary>
     void SetAvailableAccelerators(bool hasGpu, bool hasNpu);
+
+    /// <summary>A stable key identifying the model variant currently selected/loaded for translation —
+    /// the catalog variant id when known (alias + accelerator build + quantization + version), otherwise
+    /// the alias. Null when no model has been selected yet. Used to suppress the slow-interpretation
+    /// warning per exact variant.</summary>
+    string? CurrentModelKey { get; }
 }
 
 /// <summary>A locally-runnable model the user can choose for semantic translation.</summary>

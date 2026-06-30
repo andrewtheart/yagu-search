@@ -39,6 +39,7 @@ internal static class NativeRuntime
 
         if (!File.Exists(Path.Combine(runtimeDir, OpenCvProbeFile)))
         {
+            DownloadGuard.EnsureAllowed("engine runtime");
             await DownloadAndExtractNativeAsync(http, OpenCvRuntimeId, OpenCvRuntimeVersion, runtimeDir, log, cancellationToken).ConfigureAwait(false);
         }
         else
@@ -48,6 +49,7 @@ internal static class NativeRuntime
 
         if (!File.Exists(Path.Combine(runtimeDir, PaddleProbeFile)))
         {
+            DownloadGuard.EnsureAllowed("engine runtime");
             string version = await ResolvePaddleRuntimeVersionAsync(http, log, cancellationToken).ConfigureAwait(false);
             await DownloadAndExtractNativeAsync(http, PaddleRuntimeId, version, runtimeDir, log, cancellationToken).ConfigureAwait(false);
         }
@@ -55,6 +57,28 @@ internal static class NativeRuntime
         {
             log($"paddle native already staged ({PaddleProbeFile})");
         }
+    }
+
+    /// <summary>
+    /// Ensures ONLY the OpenCvSharp native binding (<c>OpenCvSharpExtern.dll</c> and its
+    /// dependencies) is staged into <paramref name="openCvDir"/>, downloading it on first use. Used by
+    /// engines that need OpenCvSharp for image decoding/preprocessing but do NOT need the PaddlePaddle
+    /// inference runtime (e.g. the Tesseract engine). Safe to call repeatedly (skips work when already
+    /// staged). Pair with <see cref="AddNativeSearchDirectory"/> before any OpenCvSharp P/Invoke.
+    /// </summary>
+    public static async Task EnsureOpenCvAsync(string openCvDir, Action<string> log, CancellationToken cancellationToken = default)
+    {
+        Directory.CreateDirectory(openCvDir);
+
+        if (File.Exists(Path.Combine(openCvDir, OpenCvProbeFile)))
+        {
+            log($"opencv native already staged ({OpenCvProbeFile})");
+            return;
+        }
+
+        DownloadGuard.EnsureAllowed("engine runtime");
+        using HttpClient http = new() { Timeout = TimeSpan.FromMinutes(20) };
+        await DownloadAndExtractNativeAsync(http, OpenCvRuntimeId, OpenCvRuntimeVersion, openCvDir, log, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

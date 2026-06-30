@@ -104,9 +104,18 @@ internal sealed class ResultStoreTempLocationWindow : Window
             Text = "Search Result Temp Files",
             FontSize = 24,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
         };
-        Grid.SetRow(title, 0);
-        root.Children.Add(title);
+        var titleLine = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+        titleLine.Children.Add(new FontIcon
+        {
+            Glyph = "\uE8B7", // Folder
+            FontSize = 22,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        titleLine.Children.Add(title);
+        Grid.SetRow(titleLine, 0);
+        root.Children.Add(titleLine);
 
         var body = new StackPanel
         {

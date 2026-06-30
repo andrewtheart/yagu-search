@@ -3,9 +3,10 @@
 #
 # Policy:
 #   * Yagu ships one installer per CPU architecture: installer/YaguSetup-<version>-<arch>.exe
-#     where <arch> is x64, x86, or arm64.
-#   * At most ONE installer per architecture may be tracked in git at a time, and it
-#     must be the highest version (the latest build) for that architecture.
+#     where <arch> is x64, x86, or arm64, plus the OCR-bundled x64 edition
+#     installer/YaguSetup-<version>-x64-ocr.exe.
+#   * At most ONE installer per architecture/edition may be tracked in git at a time, and it
+#     must be the highest version (the latest build) for that architecture/edition.
 #   * Each tracked installer must be a Git LFS pointer, never a raw 100MB+ blob.
 #
 # Behaviour:
@@ -27,16 +28,18 @@ pattern='installer/YaguSetup-*.exe'
 exes=$(git ls-files -- "$pattern")
 [ -z "$exes" ] && exit 0
 
-# Highest-version installer to keep for each known architecture.
+# Highest-version installer to keep for each known architecture/edition.
+# Note: -x64.exe intentionally excludes the -x64-ocr.exe edition (its own keep slot below).
 keep_x64=$(printf '%s\n' "$exes" | grep -E '\-x64\.exe$' | sort -V | tail -n 1 || true)
 keep_x86=$(printf '%s\n' "$exes" | grep -E '\-x86\.exe$' | sort -V | tail -n 1 || true)
 keep_arm64=$(printf '%s\n' "$exes" | grep -E '\-arm64\.exe$' | sort -V | tail -n 1 || true)
+keep_x64_ocr=$(printf '%s\n' "$exes" | grep -E '\-x64-ocr\.exe$' | sort -V | tail -n 1 || true)
 
 # Remove every other installer EXE from the index (keep the working-tree file).
 printf '%s\n' "$exes" | while IFS= read -r f; do
   [ -z "$f" ] && continue
   case "$f" in
-    "$keep_x64"|"$keep_x86"|"$keep_arm64") continue ;;
+    "$keep_x64"|"$keep_x86"|"$keep_arm64"|"$keep_x64_ocr") continue ;;
   esac
   git rm --cached --quiet -- "$f"
   printf 'pre-commit: untracked superseded/legacy installer (kept on disk): %s\n' "$f" >&2
@@ -64,7 +67,8 @@ verify_lfs() {
 verify_lfs "$keep_x64"
 verify_lfs "$keep_x86"
 verify_lfs "$keep_arm64"
+verify_lfs "$keep_x64_ocr"
 
-kept=$(printf '%s\n' "$keep_x64" "$keep_x86" "$keep_arm64" | grep -v '^$' | tr '\n' ' ' || true)
+kept=$(printf '%s\n' "$keep_x64" "$keep_x86" "$keep_arm64" "$keep_x64_ocr" | grep -v '^$' | tr '\n' ' ' || true)
 printf 'pre-commit: installer policy OK -> tracked (LFS): %s\n' "$kept" >&2
 exit 0

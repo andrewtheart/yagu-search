@@ -45,6 +45,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     private readonly ISemanticCapabilityDetector _capabilityDetector;
     private readonly bool _semanticHasGpu;
     private readonly bool _semanticHasNpu;
+    // Guards the telemetry/bug-report settings observable properties so seeding them from persisted
+    // settings (in the constructor / consent flow) does not trigger a redundant persist.
+    private bool _telemetryInitialized;
     private CancellationTokenSource? _semanticCts;
     // Natural-language query captured at submit time (before translation overwrites Query) so it can
     // be stored in the separate Semantic autocomplete history once the search actually starts.
@@ -119,6 +122,26 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings = _settingsService.Load();
         _editor.Command = _settings.EditorCommand;
 
+        // Seed the OCR download consent gate from the persisted setting so a user who already approved
+        // (or who installed an OCR-bundled edition) is never re-prompted.
+        Yagu.Services.Ocr.OcrDownloadGate.ConsentGranted = _settings.OcrDownloadConsented;
+
+        // Telemetry / bug-reporting (both opt-in and independent). Seed the gate and the Settings-panel
+        // toggles from persisted consent, and start the senders when either is already enabled so a
+        // returning user's choice keeps working without a restart.
+        Yagu.Services.Telemetry.TelemetryGate.TelemetryEnabled = _settings.TelemetryEnabled;
+        Yagu.Services.Telemetry.TelemetryGate.BugReportingEnabled = _settings.BugReportingEnabled;
+        TelemetryEnabledSetting = _settings.TelemetryEnabled;
+        BugReportingEnabledSetting = _settings.BugReportingEnabled;
+        BugReportContactEmail = _settings.BugReportContactEmail;
+        _telemetryInitialized = true;
+        if (_settings.TelemetryEnabled || _settings.BugReportingEnabled)
+        {
+            string installId = EnsureTelemetryInstallId();
+            Yagu.Services.Telemetry.TelemetryService.Instance.Initialize(installId);
+            Yagu.Services.Telemetry.BugReportService.Instance.Initialize(installId);
+        }
+
         // Semantic search (Foundry Local). The translator is cheap to construct; it only downloads
         // the execution provider/model lazily on first use. A caller may inject a fake for testing.
         _semanticTranslator = semanticTranslator
@@ -175,6 +198,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         AppThemeService.CurrentThemeModeIndex = ThemeModeIndex;
         PreviewWrapModeIndex = NormalizePreviewWrapModeIndex(_settings.PreviewWordWrap, _settings.PreviewWrapModeIndex);
         PreviewWordWrap = PreviewWrapModeIndex == 0;
+        PreviewLongLineWarningIndex = Math.Clamp(_settings.PreviewLongLineWarningIndex, 0, 2);
         PreviewAutoLoadMatches = _settings.PreviewAutoLoadMatches;
         SelectedPreviewContentBackgroundColor = ColorStringHelper.Normalize(
             _settings.SelectedPreviewContentBackgroundColor,
@@ -399,7 +423,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         GC.SuppressFinalize(this);
     }
 
-    [ObservableProperty] public partial string Directory { get; set; } = string.Empty;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsCurrentDirectoryPinned))]
+    public partial string Directory { get; set; } = string.Empty;
     [ObservableProperty] public partial string Query { get; set; } = string.Empty;
     [ObservableProperty] public partial bool CaseSensitive { get; set; }
     [ObservableProperty] public partial bool UseRegex { get; set; }
@@ -475,6 +501,25 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// tab toggle and the alert modal's "Don't alert me again" option.</summary>
     [ObservableProperty]
     public partial bool FoundryModelUpdateAlertsEnabled { get; set; } = true;
+
+    /// <summary>Settings-panel toggle for the silent, anonymized telemetry channel. Two-way bound;
+    /// applied live to <see cref="Yagu.Services.Telemetry.TelemetryGate"/> and persisted.</summary>
+    [ObservableProperty]
+    public partial bool TelemetryEnabledSetting { get; set; }
+
+    /// <summary>Settings-panel toggle for the (reviewed) bug-report flow. Two-way bound; applied live
+    /// and persisted. Independent of <see cref="TelemetryEnabledSetting"/>.</summary>
+    [ObservableProperty]
+    public partial bool BugReportingEnabledSetting { get; set; }
+
+    /// <summary>Optional contact email used to pre-fill the bug-report dialog. Two-way bound in the
+    /// Settings panel and updated when the user types an email in a report.</summary>
+    [ObservableProperty]
+    public partial string BugReportContactEmail { get; set; } = string.Empty;
+
+    /// <summary>True once the first-run telemetry/bug-report consent dialog has been shown, so the app
+    /// never asks again.</summary>
+    public bool TelemetryConsentPromptShown => _settings.TelemetryConsentPromptShown;
 
     /// <summary>True when a real GPU was detected (read-only info for the AI settings tab).</summary>
     public bool SemanticHasGpu => _semanticHasGpu;
@@ -569,6 +614,33 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     {
         if (!_queryModeInitialized) return;
         _settings.FoundryModelUpdateAlertsEnabled = value;
+        _ = PersistSettingsAsync();
+    }
+
+    partial void OnTelemetryEnabledSettingChanged(bool value)
+    {
+        if (!_telemetryInitialized) return;
+        Yagu.Services.Telemetry.TelemetryGate.TelemetryEnabled = value;
+        _settings.TelemetryEnabled = value;
+        if (value)
+            Yagu.Services.Telemetry.TelemetryService.Instance.Initialize(EnsureTelemetryInstallId());
+        _ = PersistSettingsAsync();
+    }
+
+    partial void OnBugReportingEnabledSettingChanged(bool value)
+    {
+        if (!_telemetryInitialized) return;
+        Yagu.Services.Telemetry.TelemetryGate.BugReportingEnabled = value;
+        _settings.BugReportingEnabled = value;
+        if (value)
+            Yagu.Services.Telemetry.BugReportService.Instance.Initialize(EnsureTelemetryInstallId());
+        _ = PersistSettingsAsync();
+    }
+
+    partial void OnBugReportContactEmailChanged(string value)
+    {
+        if (!_telemetryInitialized) return;
+        _settings.BugReportContactEmail = value ?? string.Empty;
         _ = PersistSettingsAsync();
     }
 
@@ -820,6 +892,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty] public partial int PreviewTextFontSize { get; set; } = AppSettings.DefaultPreviewTextFontSize;
     [ObservableProperty] public partial string PreviewEditorFontFamily { get; set; } = AppSettings.DefaultPreviewEditorFontFamily;
     [ObservableProperty] public partial int PreviewEditorFontSize { get; set; } = AppSettings.DefaultPreviewEditorFontSize;
+    // Long-line warning preference: 0 = Ask every time, 1 = Always open without word wrap, 2 = Always open with word wrap.
+    [ObservableProperty] public partial int PreviewLongLineWarningIndex { get; set; }
     [ObservableProperty] public partial string ResultListMatchTextFontFamily { get; set; } = AppSettings.DefaultResultListMatchTextFontFamily;
     [ObservableProperty] public partial int ResultListMatchTextFontSize { get; set; } = AppSettings.DefaultResultListMatchTextFontSize;
     [ObservableProperty] public partial string ResultListMatchHighlightColor { get; set; } = AppSettings.DefaultResultListMatchHighlightColor;
@@ -1013,9 +1087,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// <c>SearchImageText</c> setting and surfaced as the Advanced Options ▸ Filters toggle.</summary>
     [ObservableProperty] public partial bool SearchImageText { get; set; }
 
-    /// <summary>OCR engine used when <see cref="SearchImageText"/> is on: "paddle" (PaddleSharp,
-    /// the recommended default) or "tesseract". Settings-only.</summary>
-    [ObservableProperty] public partial string ImageOcrEngine { get; set; } = AppSettings.DefaultImageOcrEngine;
+    /// <summary>OCR engine used when <see cref="SearchImageText"/> is on: "paddle" (PaddleSharp) or
+    /// "tesseract". Defaults to <see cref="AppSettings.EffectiveDefaultImageOcrEngine"/> (Tesseract on
+    /// the x86 build, PaddleSharp elsewhere). Settings-only.</summary>
+    [ObservableProperty] public partial string ImageOcrEngine { get; set; } = AppSettings.EffectiveDefaultImageOcrEngine;
 
     /// <summary>PaddleSharp recognition model used for image OCR (e.g. "EnglishV4", "ChineseV5").
     /// Higher quality models trade speed for accuracy. Ignored by the Tesseract engine, which uses a
@@ -1030,7 +1105,23 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// <summary>When true, the directory box is restored to <see cref="AppSettings.PinnedStartupDirectory"/>
     /// at launch; when false, the box starts empty (search all drives). Bound to the star toggle next to
     /// the Browse button.</summary>
-    [ObservableProperty] public partial bool PinStartupDirectory { get; set; }
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsCurrentDirectoryPinned))]
+    public partial bool PinStartupDirectory { get; set; }
+
+    /// <summary>True only when the directory currently shown in the box IS the pinned startup directory.
+    /// The star toggle's highlighted state binds to this (not to <see cref="PinStartupDirectory"/> alone),
+    /// so switching the box to any other folder clears the highlight even though the pin remains saved;
+    /// restoring the pinned folder lights it back up. Comparison is case-insensitive and ignores trailing
+    /// path separators so <c>C:\foo</c> and <c>C:\foo\</c> are treated as the same folder.</summary>
+    public bool IsCurrentDirectoryPinned =>
+        PinStartupDirectory
+        && !string.IsNullOrWhiteSpace(_settings.PinnedStartupDirectory)
+        && string.Equals(
+            (Directory ?? string.Empty).Trim().TrimEnd('\\', '/'),
+            _settings.PinnedStartupDirectory!.Trim().TrimEnd('\\', '/'),
+            StringComparison.OrdinalIgnoreCase);
+
 
     /// <summary>UI-facing inverse of <see cref="SkipBinary"/> for the "Search binary" toggle.</summary>
     public bool SearchBinary
@@ -2264,6 +2355,59 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         await PersistSettingsAsync().ConfigureAwait(true);
     }
 
+    /// <summary>Records that the user approved the one-time OCR component download. Sets the in-process
+    /// gate (so concurrent OCR inits proceed) and persists the consent so the warning is shown at most
+    /// once across sessions.</summary>
+    public async Task MarkOcrDownloadConsentedAsync()
+    {
+        Yagu.Services.Ocr.OcrDownloadGate.ConsentGranted = true;
+        _settings.OcrDownloadConsented = true;
+        await PersistSettingsAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>Ensures a stable, non-PII install identifier exists (generating one on first need) and
+    /// returns it. Used to tag telemetry and bug reports without identifying the user or machine.</summary>
+    private string EnsureTelemetryInstallId()
+    {
+        if (string.IsNullOrEmpty(_settings.TelemetryInstallId))
+            _settings.TelemetryInstallId = Guid.NewGuid().ToString("N");
+        return _settings.TelemetryInstallId;
+    }
+
+    /// <summary>Records the user's first-run telemetry/bug-report choices (independently), applies them
+    /// live to the gate and senders, reflects them in the Settings toggles, and persists. Marks the
+    /// consent prompt as shown so it is never displayed again, regardless of the choices.</summary>
+    public async Task MarkTelemetryConsentAsync(bool telemetryEnabled, bool bugReportingEnabled)
+    {
+        _settings.TelemetryConsentPromptShown = true;
+        _settings.TelemetryEnabled = telemetryEnabled;
+        _settings.BugReportingEnabled = bugReportingEnabled;
+        OnPropertyChanged(nameof(TelemetryConsentPromptShown));
+
+        string installId = EnsureTelemetryInstallId();
+        Yagu.Services.Telemetry.TelemetryGate.TelemetryEnabled = telemetryEnabled;
+        Yagu.Services.Telemetry.TelemetryGate.BugReportingEnabled = bugReportingEnabled;
+        if (telemetryEnabled)
+            Yagu.Services.Telemetry.TelemetryService.Instance.Initialize(installId);
+        if (bugReportingEnabled)
+            Yagu.Services.Telemetry.BugReportService.Instance.Initialize(installId);
+
+        // Reflect into the Settings-panel toggles without re-triggering a persist per toggle.
+        _telemetryInitialized = false;
+        TelemetryEnabledSetting = telemetryEnabled;
+        BugReportingEnabledSetting = bugReportingEnabled;
+        _telemetryInitialized = true;
+
+        await PersistSettingsAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>Persists the contact email the user supplied in a bug report so it pre-fills next time.</summary>
+    public Task SetBugReportContactEmailAsync(string email)
+    {
+        BugReportContactEmail = (email ?? string.Empty).Trim();
+        return Task.CompletedTask;
+    }
+
     /// <summary>
     /// Checks the Foundry Local catalog for newly-available, updated, or variant text-chat models and
     /// returns the ones the user has not seen, so the caller can show a one-time alert. Self-gating: it
@@ -2352,6 +2496,42 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             // (HasChosenQueryMode = true) so flipping the default below does not re-resolve it away.
             IsSemanticQueryMode = true;            // immediate switch to Semantic + persists the explicit choice
             DefaultToTraditionalSearchMode = false; // persisted default = AI/Semantic, reflected in settings
+        }
+        await PersistSettingsAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// True when an interactive Traditional-mode submit should first offer to switch to AI (Semantic)
+    /// search because <paramref name="query"/> reads like a natural-language request. Gated on a
+    /// downloaded model (so the switch is one click away), the user not having ticked "Don't remind me
+    /// again", and the conservative heuristic. The AI-search toggle does NOT need to be on — if the user
+    /// has it disabled, accepting the prompt turns it on. (<see cref="IsTraditionalQueryMode"/> is true
+    /// whenever AI search is off, since Semantic mode is forced off in that state.)
+    /// </summary>
+    public bool ShouldOfferSemanticSuggestion(string? query) =>
+        IsTraditionalQueryMode
+        && IsSemanticModelDownloaded
+        && !_settings.SemanticSuggestionDismissed
+        && Yagu.Helpers.SemanticQueryHeuristicDetector.LooksLikeSemanticQuery(query);
+
+    /// <summary>
+    /// Records the outcome of the "this looks like an AI search" suggestion. When
+    /// <paramref name="switchToSemantic"/> is true the search bar switches to Semantic mode for this run
+    /// (enabling AI search first if the user had it turned off); when <paramref name="dontRemind"/> is
+    /// true the suggestion is suppressed permanently. Either way the settings are persisted so the choice
+    /// survives a restart.
+    /// </summary>
+    public async Task ApplySemanticSuggestionAsync(bool switchToSemantic, bool dontRemind)
+    {
+        if (dontRemind)
+            _settings.SemanticSuggestionDismissed = true;
+        if (switchToSemantic)
+        {
+            // The user opted into AI search. If it was turned off, enable it now (this flips the
+            // translator on live and persists), then switch the search bar to Semantic for this run.
+            if (!SemanticSearchAvailable)
+                SemanticSearchAvailable = true;
+            IsSemanticQueryMode = true;
         }
         await PersistSettingsAsync().ConfigureAwait(true);
     }
@@ -3961,6 +4141,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.PinnedStartupDirectory = pinned
             ? (string.IsNullOrWhiteSpace(Directory) ? null : Directory.Trim())
             : null;
+        // The pinned-path snapshot lives on _settings (not an observable property), so re-pinning to a
+        // DIFFERENT folder while PinStartupDirectory stays true wouldn't otherwise re-evaluate the star
+        // highlight. Nudge the derived state explicitly so the toggle reflects the new snapshot now.
+        OnPropertyChanged(nameof(IsCurrentDirectoryPinned));
         await _settingsService.SaveAsync(_settings).ConfigureAwait(false);
     }
 
@@ -4010,6 +4194,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.ThemeModeIndex = AppThemeService.NormalizeThemeModeIndex(ThemeModeIndex);
         _settings.PreviewWordWrap = PreviewWordWrap;
         _settings.PreviewWrapModeIndex = PreviewWrapModeIndex;
+        _settings.PreviewLongLineWarningIndex = PreviewLongLineWarningIndex;
         _settings.PreviewAutoLoadMatches = PreviewAutoLoadMatches;
         _settings.SelectedPreviewContentBackgroundColor = ColorStringHelper.Normalize(
             SelectedPreviewContentBackgroundColor,

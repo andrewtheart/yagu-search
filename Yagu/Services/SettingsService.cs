@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Yagu.Models;
@@ -81,7 +82,9 @@ public sealed class AppSettings
         ? DefaultLowDiskSpaceWarningPercent
         : Math.Clamp(value, MinimumLowDiskSpaceWarningPercent, MaximumLowDiskSpaceWarningPercent);
 
-    /// <summary>Normalizes the persisted OCR engine id to a known value, defaulting to PaddleSharp.</summary>
+    /// <summary>Normalizes the persisted OCR engine id to a known value, defaulting to the
+    /// per-architecture default (Tesseract on the x86 build, PaddleSharp elsewhere — see
+    /// <see cref="EffectiveDefaultImageOcrEngine"/>).</summary>
     public static string NormalizeImageOcrEngine(string? value)
     {
         var v = value?.Trim().ToLowerInvariant();
@@ -89,7 +92,7 @@ public sealed class AppSettings
         {
             "tesseract" => "tesseract",
             "paddle" or "paddleocr" or "paddlesharp" => "paddle",
-            _ => DefaultImageOcrEngine,
+            _ => EffectiveDefaultImageOcrEngine,
         };
     }
 
@@ -170,6 +173,7 @@ public sealed class AppSettings
     public int ThemeModeIndex { get; set; } // 0 = Auto (system theme), 1 = Dark, 2 = Light
     public bool PreviewWordWrap { get; set; }
     public int PreviewWrapModeIndex { get; set; } = 2; // 0 = Wrap, 1 = legacy PartialWrap, 2 = NoWrap
+    public int PreviewLongLineWarningIndex { get; set; } // 0 = Ask every time, 1 = Always open without word wrap, 2 = Always open with word wrap
     public string SelectedPreviewContentBackgroundColor { get; set; } = DefaultSelectedPreviewContentBackgroundColor;
     public string UnselectedPreviewContentBackgroundColor { get; set; } = DefaultUnselectedPreviewContentBackgroundColor;
     public string PreviewGutterContextColor { get; set; } = DefaultPreviewGutterContextColor;
@@ -261,10 +265,25 @@ public sealed class AppSettings
     /// recognized text is searched. Default false. Persisted; also the default for the per-search
     /// Advanced Options ▸ Filters "Search image text" toggle.</summary>
     public bool SearchImageText { get; set; }
-    /// <summary>OCR engine used when <see cref="SearchImageText"/> is on. "paddle" (PaddleSharp, the
-    /// recommended default) or "tesseract". Normalized on load.</summary>
-    public string ImageOcrEngine { get; set; } = DefaultImageOcrEngine;
+    /// <summary>OCR engine used when <see cref="SearchImageText"/> is on: "paddle" (PaddleSharp) or
+    /// "tesseract". Defaults to <see cref="EffectiveDefaultImageOcrEngine"/> (Tesseract on the x86
+    /// build, PaddleSharp elsewhere). Normalized on load.</summary>
+    public string ImageOcrEngine { get; set; } = EffectiveDefaultImageOcrEngine;
+    /// <summary>Platform-neutral default OCR engine (PaddleSharp). The actual per-build default is
+    /// <see cref="EffectiveDefaultImageOcrEngine"/>, which overrides this to Tesseract on the x86 build.</summary>
     public const string DefaultImageOcrEngine = "paddle";
+
+    /// <summary>Resolves the default OCR engine for a given process architecture. The x86 edition
+    /// defaults to Tesseract; every other architecture defaults to <see cref="DefaultImageOcrEngine"/>
+    /// (PaddleSharp). Pure and testable.</summary>
+    public static string ResolveDefaultImageOcrEngine(Architecture processArchitecture) =>
+        processArchitecture == Architecture.X86 ? "tesseract" : DefaultImageOcrEngine;
+
+    /// <summary>The effective default OCR engine for this build, resolved once from the current
+    /// process architecture via <see cref="ResolveDefaultImageOcrEngine"/>. The x86 build defaults to
+    /// Tesseract; all other builds default to PaddleSharp.</summary>
+    public static readonly string EffectiveDefaultImageOcrEngine =
+        ResolveDefaultImageOcrEngine(RuntimeInformation.ProcessArchitecture);
     /// <summary>PaddleOCR model used for image-text recognition: "EnglishV3", "EnglishV4" (default),
     /// "ChineseV4" or "ChineseV5" (newest, multilingual). Higher/newer models trade speed for accuracy.
     /// Normalized on load. Ignored by the Tesseract engine.</summary>
@@ -276,6 +295,31 @@ public sealed class AppSettings
     public const int DefaultImageOcrMaxSide = 960;
     public const int MinimumImageOcrMaxSide = 320;
     public const int MaximumImageOcrMaxSide = 4096;
+    /// <summary>True once the user has approved the one-time download of the OCR engine + language
+    /// models (the native PaddleOCR runtime and models, ~365 MB). Default false: image-text (OCR)
+    /// search warns and asks for consent before initiating any external download. Set to true when
+    /// the user approves the prompt, or implicitly when an OCR-bundled installer pre-stages the
+    /// assets (no download is ever needed). Persisted so the warning is shown at most once.</summary>
+    public bool OcrDownloadConsented { get; set; }
+    /// <summary>True once the first-run telemetry/bug-reporting consent dialog has been shown. The
+    /// dialog records the user's choices below and is then never shown again (regardless of what they
+    /// chose). Default false.</summary>
+    public bool TelemetryConsentPromptShown { get; set; }
+    /// <summary>User consent for the SILENT, anonymized performance + error telemetry channel. Default
+    /// false (opt-in). When true and an endpoint is configured, Yagu sends scrubbed crash/error
+    /// summaries and timings (never paths, queries, or file contents).</summary>
+    public bool TelemetryEnabled { get; set; }
+    /// <summary>User consent for the bug-report flow: when a critical error occurs, Yagu offers a
+    /// dialog showing exactly what would be submitted (stack trace, GPU/NPU, settings file, log) and
+    /// only sends it if the user clicks Submit. Independent of <see cref="TelemetryEnabled"/>. Default
+    /// false (opt-in).</summary>
+    public bool BugReportingEnabled { get; set; }
+    /// <summary>Optional contact email the user supplies so we can follow up on a bug report.
+    /// Remembered to pre-fill the bug-report dialog. Empty by default.</summary>
+    public string BugReportContactEmail { get; set; } = string.Empty;
+    /// <summary>Random, non-PII identifier generated once per install (GUID "N" form). Lets telemetry
+    /// count distinct installs without identifying the user or machine. Empty until first generated.</summary>
+    public string TelemetryInstallId { get; set; } = string.Empty;
     /// <summary>When the directory is left empty ("search all drives"), include ready network/mapped drives. Default false (can be slow/metered).</summary>
     public bool SearchAllDrivesIncludesNetwork { get; set; }
     /// <summary>When the directory is left empty ("search all drives"), include ready removable/USB drives. Default false.</summary>
@@ -462,6 +506,18 @@ public sealed class AppSettings
     /// GPU/NPU detected). Set when the warning modal is displayed — regardless of the user's choice —
     /// so it appears at most once.</summary>
     public bool CpuSemanticWarningShown { get; set; }
+
+    /// <summary>True once the user ticked "Don't remind me again" on the prompt that offers to switch a
+    /// natural-language Traditional query to AI (Semantic) search. When set, that suggestion modal is
+    /// never shown again, regardless of whether the user accepted or declined the switch that time.</summary>
+    public bool SemanticSuggestionDismissed { get; set; }
+
+    /// <summary>Catalog variant ids (or aliases, as a fallback when no variant id is known) for which
+    /// the user ticked "Don't show this warning again for this model" on the slow-AI-interpretation
+    /// prompt. The warning that offers a smaller/faster model after a long interpretation is suppressed
+    /// permanently for exactly these variants. Keyed per variant so a faster build of the same family
+    /// is unaffected.</summary>
+    public List<string> SuppressedSlowSemanticModelKeys { get; set; } = [];
 }
 
 public sealed class SettingsService
@@ -512,6 +568,8 @@ public sealed class SettingsService
             settings.ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(settings.ImageOcrMaxSide);
             settings.LowDiskSpaceWarningPercent = AppSettings.NormalizeLowDiskSpaceWarningPercent(settings.LowDiskSpaceWarningPercent);
             settings.TerminalDefaultWorkingDirectory ??= string.Empty;
+            settings.BugReportContactEmail ??= string.Empty;
+            settings.TelemetryInstallId ??= string.Empty;
             return settings;
         }
         catch (Exception ex) { LogService.Instance.Warning("Settings", $"Failed to load settings from {_path}", ex); return new AppSettings(); }
@@ -551,6 +609,8 @@ public sealed class SettingsService
             settings.ImageOcrModel = AppSettings.NormalizeImageOcrModel(settings.ImageOcrModel);
             settings.ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(settings.ImageOcrMaxSide);
             settings.TerminalDefaultWorkingDirectory ??= string.Empty;
+            settings.BugReportContactEmail ??= string.Empty;
+            settings.TelemetryInstallId ??= string.Empty;
             return settings;
         }
         catch (Exception ex) { LogService.Instance.Warning("Settings", $"Failed to load settings from {_path}", ex); return new AppSettings(); }
@@ -753,8 +813,19 @@ public sealed class SettingsService
         {
             var dir = Path.GetDirectoryName(_path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            using var fs = File.Create(_path);
-            JsonSerializer.Serialize(fs, settings, AppSettingsJsonContext.Default.AppSettings);
+            // Write to a temp file then atomically replace, so a concurrent reader (e.g. the bug
+            // report) never sees a half-written file and a crash mid-save can't corrupt settings.json.
+            string tmp = _path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+                    JsonSerializer.Serialize(fs, settings, AppSettingsJsonContext.Default.AppSettings);
+                File.Move(tmp, _path, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(tmp)) { try { File.Delete(tmp); } catch { /* best-effort cleanup */ } }
+            }
         }
         catch (Exception ex) { LogService.Instance.Warning("Settings", $"Failed to save settings to {_path}", ex); }
     }
@@ -765,8 +836,19 @@ public sealed class SettingsService
         {
             var dir = Path.GetDirectoryName(_path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            await using var fs = new FileStream(_path, FileMode.Create, FileAccess.Write, FileShare.Read, 4096, FileOptions.Asynchronous);
-            await JsonSerializer.SerializeAsync(fs, settings, AppSettingsJsonContext.Default.AppSettings, cancellationToken).ConfigureAwait(false);
+            // Write to a temp file then atomically replace, so a concurrent reader (e.g. the bug
+            // report) never sees a half-written file and a crash mid-save can't corrupt settings.json.
+            string tmp = _path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                await using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous))
+                    await JsonSerializer.SerializeAsync(fs, settings, AppSettingsJsonContext.Default.AppSettings, cancellationToken).ConfigureAwait(false);
+                File.Move(tmp, _path, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(tmp)) { try { File.Delete(tmp); } catch { /* best-effort cleanup */ } }
+            }
         }
         catch (Exception ex) { LogService.Instance.Warning("Settings", $"Failed to save settings to {_path}", ex); }
     }

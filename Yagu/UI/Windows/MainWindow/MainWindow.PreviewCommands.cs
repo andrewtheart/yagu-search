@@ -48,7 +48,10 @@ public sealed partial class MainWindow
         bool wrap = mode == (int)Models.PreviewWrapMode.Wrap;
         ViewModel.PreviewWordWrap = wrap;
         SyncWrapModeToggles(mode);
-        ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || wrap);
+        // A manual wrap-button toggle is an explicit user choice: clear any load-time wrap override
+        // (single-line auto-wrap / long-line dialog) so the editor follows the toggle.
+        _previewEditorWrapOverride = null;
+        ApplyPreviewEditorWordWrap(wrap);
 
         // Switching to/from NoWrap requires a full preview rebuild because the
         // paragraph segmentation (4096-char chunks) is baked into the content.
@@ -134,7 +137,7 @@ public sealed partial class MainWindow
         if (PreviewBlock.TextWrapping != wrapping)
             PreviewBlock.TextWrapping = wrapping;
         ConfigurePreviewSelectionMode(PreviewBlock);
-        ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || wrap);
+        ApplyPreviewEditorWordWrap(_previewEditorWrapOverride ?? wrap);
         foreach (var block in EnumeratePreviewSectionBlocks())
         {
             if (block.TextWrapping != wrapping)
@@ -174,7 +177,7 @@ public sealed partial class MainWindow
             if (PreviewBlock.TextWrapping != wrapping)
                 PreviewBlock.TextWrapping = wrapping;
             ConfigurePreviewSelectionMode(PreviewBlock);
-            ApplyPreviewEditorWordWrap(_previewEditorForcedWrap || wrap);
+            ApplyPreviewEditorWordWrap(_previewEditorWrapOverride ?? wrap);
             if (PreviewSectionsPanel.Visibility != Visibility.Visible)
                 ApplyPreviewHorizontalScrollForWrap(PreviewScrollViewer, wrap);
 

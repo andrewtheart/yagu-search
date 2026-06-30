@@ -882,6 +882,7 @@ public sealed partial class MainWindow
             new YaguDialogOptions
             {
                 Title = "Replace in All Files",
+                TitleGlyph = "\uE721", // Find/Replace
                 Content = $"Replace {totalReplacements:N0} occurrence{(totalReplacements == 1 ? "" : "s")} across {changes.Count:N0} file{(changes.Count == 1 ? "" : "s")}?",
                 PrimaryButtonText = "Replace",
                 CloseButtonText = "Cancel",

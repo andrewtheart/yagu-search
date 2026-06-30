@@ -17,6 +17,13 @@ public static class TextControlBoxDiagnostics
     /// </summary>
     public static Func<bool> IsVerboseEnabledProvider { get; set; }
 
+    /// <summary>
+    /// Gets or sets a callback that receives non-fatal error diagnostics (e.g. a rendering
+    /// exception that was caught and swallowed to avoid a process-killing fail-fast). Unlike
+    /// <see cref="VerboseLogger"/>, this is always invoked regardless of the verbose flag.
+    /// </summary>
+    public static Action<string, string, Exception> ErrorLogger { get; set; }
+
     internal static bool IsVerboseEnabled => VerboseLogger is not null
         && (IsVerboseEnabledProvider?.Invoke() ?? true);
 
@@ -24,6 +31,12 @@ public static class TextControlBoxDiagnostics
     {
         if (!IsVerboseEnabled) return;
         try { VerboseLogger?.Invoke(source, message); }
+        catch { }
+    }
+
+    internal static void Error(string source, string message, Exception ex)
+    {
+        try { ErrorLogger?.Invoke(source, message, ex); }
         catch { }
     }
 

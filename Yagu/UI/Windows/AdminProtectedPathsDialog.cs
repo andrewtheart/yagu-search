@@ -74,12 +74,21 @@ internal sealed class AdminProtectedPathsDialog : Window
             Spacing = 10,
             Margin = new Thickness(0, 0, 0, 16),
         };
-        header.Children.Add(new TextBlock
+        var titleLine = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+        titleLine.Children.Add(new FontIcon
+        {
+            Glyph = "\uE7EF", // Admin
+            FontSize = 20,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        titleLine.Children.Add(new TextBlock
         {
             Text = "Admin-protected paths",
             FontSize = 22,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
         });
+        header.Children.Add(titleLine);
         header.Children.Add(new TextBlock
         {
             Text = "Some paths are not accessible by non-administrative processes. Yagu is configured to skip these administrator-only paths while running in non-administrator mode:",

@@ -28,6 +28,15 @@
   #define StagingDir "..\installer\staging"
 #endif
 
+; When IncludeOcr is defined to "1", build-installer.ps1 has staged the offline OCR
+; payload under {#StagingDir}\ocr-payload (native PaddleOCR runtime + PP-OCR models,
+; and optionally the Tesseract English data). That folder is shipped automatically by
+; the recursesubdirs [Files] entry; this define only changes the output filename so the
+; OCR-bundled edition does not collide with the lite edition.
+#ifndef IncludeOcr
+  #define IncludeOcr "0"
+#endif
+
 [Setup]
 AppId={{8F4E2B5A-3C7D-4A1E-B9F6-2D8E5A7C3F1B}
 AppName={#MyAppName}
@@ -38,7 +47,11 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\installer\output
+#if IncludeOcr == "1"
+OutputBaseFilename=YaguSetup-{#MyAppVersion}-{#YaguArch}-ocr
+#else
 OutputBaseFilename=YaguSetup-{#MyAppVersion}-{#YaguArch}
+#endif
 SetupIconFile=..\Yagu\Assets\yagu.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/ultra64

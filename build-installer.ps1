@@ -20,13 +20,27 @@
 .PARAMETER SkipBuild
   Skip the dotnet publish step (package existing publish output). Used by the
   csproj AfterPublish hook, which already published a single architecture.
+
+.PARAMETER IncludeOcr
+  Build the OCR-bundled ("full" / offline) edition: stages the native PaddleOCR
+  runtime + PP-OCR models (and, when available, the Tesseract English data) into
+  <app>\ocr-payload so image-text search needs no download on first use. The
+  native runtime is win-x64 only, so this edition is forced to x64 and the
+  installer is named YaguSetup-<version>-x64-ocr.exe.
+
+.PARAMETER OcrPayloadCacheDir
+  Local OCR cache to source the bundled payload from. Defaults to
+  %LOCALAPPDATA%\Yagu\ocr-runtime. Missing assets are downloaded by running the
+  staged worker.
 #>
 [CmdletBinding()]
 param(
   [ValidateSet('x64', 'x86', 'arm64', 'all')]
   [string]$Architecture = 'all',
   [string]$InnoSetupPath,
-  [switch]$SkipBuild
+  [switch]$SkipBuild,
+  [switch]$IncludeOcr,
+  [string]$OcrPayloadCacheDir = (Join-Path $env:LOCALAPPDATA 'Yagu\ocr-runtime')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -93,7 +107,24 @@ if ($Architecture -eq 'all') {
 } else {
   $architectures = @($Architecture)
 }
+
+# The OCR-bundled edition ships the win-x64-only native runtime, so it is x64-only.
+if ($IncludeOcr) {
+  $nonX64 = @($architectures | Where-Object { $_ -ne 'x64' })
+  if ($nonX64.Count -gt 0) {
+    Write-Warning "-IncludeOcr bundles the win-x64-only OCR runtime; ignoring requested architecture(s): $($nonX64 -join ', '). Building x64 only."
+  }
+  $architectures = @('x64')
+}
+
 Write-Host "Architectures: $($architectures -join ', ')"
+if ($IncludeOcr) {
+  Write-Host "Edition: OCR-bundled (offline)"
+  $stageOcrHelper = Join-Path $repoRoot 'scripts\stage-ocr-payload.ps1'
+  if (-not (Test-Path -LiteralPath $stageOcrHelper)) {
+    throw "OCR payload staging helper not found: $stageOcrHelper"
+  }
+}
 
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 
@@ -135,22 +166,35 @@ foreach ($arch in $architectures) {
     Copy-YaguWebView2Prerequisite -RepoRoot $repoRoot -DestinationRoot $stagingDir
   }
 
+  # Step 2b: For the OCR-bundled edition, assemble the offline OCR payload into
+  # <staging>\ocr-payload (the existing [Files] recursesubdirs entry ships it as <app>\ocr-payload).
+  if ($IncludeOcr) {
+    $ocrPayloadDir = Join-Path $stagingDir 'ocr-payload'
+    $stagedWorker = Join-Path $stagingDir 'ocr-worker\Yagu.OcrWorker.exe'
+    Write-Host "Staging OCR payload..."
+    & $stageOcrHelper -OutputDir $ocrPayloadDir -WorkerExe $stagedWorker -CacheDir $OcrPayloadCacheDir
+    if ($LASTEXITCODE -ne 0) { throw "OCR payload staging failed." }
+  }
+
   $version = Get-YaguBuildVersion
   Write-Host "Installer app version: $version"
   Write-Host "Staged $(( Get-ChildItem -LiteralPath $stagingDir -File -Recurse ).Count) files."
 
   # Step 3: Compile installer for this architecture
   Write-Host "Compiling installer ($arch)..."
-  & $InnoSetupPath /DMyAppVersion=$version /DYaguArch=$arch "/DStagingDir=$stagingDir" $issFile
+  $isccArgs = @("/DMyAppVersion=$version", "/DYaguArch=$arch", "/DStagingDir=$stagingDir")
+  if ($IncludeOcr) { $isccArgs += '/DIncludeOcr=1' }
+  & $InnoSetupPath @isccArgs $issFile
   if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup compilation ($arch) failed with exit code $LASTEXITCODE."
   }
 
-  $installerExe = Join-Path $outputDir "YaguSetup-$version-$arch.exe"
+  $ocrSuffix = if ($IncludeOcr) { '-ocr' } else { '' }
+  $installerExe = Join-Path $outputDir "YaguSetup-$version-$arch$ocrSuffix.exe"
   if (Test-Path -LiteralPath $installerExe) {
     $rootInstallerExe = Join-Path $installerDir (Split-Path -Leaf $installerExe)
-    # Keep only the newest installer for THIS architecture in the repo installer\ folder.
-    Get-ChildItem -LiteralPath $installerDir -Filter "YaguSetup-*-$arch.exe" -File |
+    # Keep only the newest installer for THIS architecture + edition in the repo installer\ folder.
+    Get-ChildItem -LiteralPath $installerDir -Filter "YaguSetup-*-$arch$ocrSuffix.exe" -File |
       Where-Object { $_.FullName -ne $rootInstallerExe } |
       Remove-Item -Force
 

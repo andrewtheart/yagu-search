@@ -31,6 +31,10 @@ PLAN.md
 scripts/publish-to-azure.ps1
 # Local-only Azure publish/deploy regression tests (publish script is local-only, never in CI)
 Yagu.Tests/AzurePublishRegressionTests.local.cs
+# Local-only telemetry config (real proxy URL + app token injected at build time; never committed)
+Yagu/telemetry.local.props
+# Generated telemetry config (carries the real endpoint + token; emitted under obj/ at build time)
+**/TelemetryConfig.Configured.g.cs
 
 # Installer staging (built by build-installer.ps1)
 installer/staging/

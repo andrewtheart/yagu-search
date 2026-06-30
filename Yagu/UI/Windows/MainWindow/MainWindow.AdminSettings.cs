@@ -55,6 +55,7 @@ public sealed partial class MainWindow
             new YaguDialogOptions
             {
                 Title = ".gitignore vs Include filter",
+                TitleGlyph = "\uE71C", // Filter
                 Content = contentPanel,
                 PrimaryButtonText = "Yes, .gitignore wins",
                 SecondaryButtonText = "No, Include filter wins",
@@ -317,6 +318,7 @@ public sealed partial class MainWindow
                 new YaguDialogOptions
                 {
                     Title = "Search canceled - low disk space",
+                    TitleGlyph = "\uE7BA", // Warning
                     Content = contentPanel,
                     PrimaryButtonText = "OK",
                     CloseButtonText = null,
@@ -374,6 +376,7 @@ public sealed partial class MainWindow
             new YaguDialogOptions
             {
                 Title = "Excluded file type",
+                TitleGlyph = "\uE71C", // Filter
                 Content = contentPanel,
                 PrimaryButtonText = $"Include .{ext} & search",
                 SecondaryButtonText = "Search anyway",

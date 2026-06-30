@@ -17,6 +17,14 @@ public sealed class PaddleOcrEngine : WorkerOcrEngine
     /// in pixels). <c>0</c> means unlimited; the variable is omitted to use the worker default.</summary>
     public const string MaxSideEnvVar = "YAGU_OCR_MAX_SIDE";
 
+    /// <summary>Environment variable pointing the worker at the native runtime directory (bundled payload
+    /// when present, else the per-user download cache). Read by the worker's <c>NativeRuntime</c>.</summary>
+    public const string RuntimeDirEnvVar = "YAGU_OCR_RUNTIME_DIR";
+
+    /// <summary>Environment variable pointing the worker at the PP-OCR model directory (bundled payload
+    /// when present, else the per-user download cache).</summary>
+    public const string ModelDirEnvVar = "YAGU_OCR_MODEL_DIR";
+
     private readonly string? _modelName;
     private readonly int _maxSide;
 
@@ -47,6 +55,9 @@ public sealed class PaddleOcrEngine : WorkerOcrEngine
     protected override void ConfigureWorkerEnvironment(IDictionary<string, string?> environment)
     {
         environment[EngineEnvVar] = OcrEngineFactory.PaddleId;
+        // Point the worker at the bundled payload when present (download-free), else the writable cache.
+        environment[RuntimeDirEnvVar] = OcrAssetPaths.PaddleRuntimeDir();
+        environment[ModelDirEnvVar] = OcrAssetPaths.PaddleModelDir();
         if (_modelName is not null)
         {
             environment[ModelEnvVar] = _modelName;
@@ -55,5 +66,12 @@ public sealed class PaddleOcrEngine : WorkerOcrEngine
         {
             environment[MaxSideEnvVar] = _maxSide.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
+    }
+
+    protected override OcrAssetRequirement DescribeAssetRequirement()
+    {
+        bool nativePresent = OcrAssetPaths.PaddleNativePresent(OcrAssetPaths.PaddleRuntimeDir());
+        bool modelsPresent = OcrAssetPaths.PaddleModelsPresent(OcrAssetPaths.PaddleModelDir());
+        return OcrAssetPaths.BuildPaddleRequirement(DisplayName, nativePresent, modelsPresent);
     }
 }

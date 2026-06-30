@@ -91,10 +91,13 @@ public sealed class InstallerPackagingRegressionTests
         Assert.Contains("--self-contained", buildInstaller);
         Assert.Contains("-p:BuildInstallerOnPublish=false", buildInstaller);
 
-        // Compiles one installer per architecture and keeps the latest per arch.
+        // Compiles one installer per architecture and keeps the latest per arch. The optional
+        // OCR-bundled edition appends an "-ocr" suffix to the output name (and its retention filter),
+        // so both names are built from the shared $ocrSuffix token.
         Assert.Contains("/DYaguArch=$arch", buildInstaller);
-        Assert.Contains("YaguSetup-$version-$arch.exe", buildInstaller);
-        Assert.Contains("-Filter \"YaguSetup-*-$arch.exe\"", buildInstaller);
+        Assert.Contains("$ocrSuffix = if ($IncludeOcr) { '-ocr' } else { '' }", buildInstaller);
+        Assert.Contains("YaguSetup-$version-$arch$ocrSuffix.exe", buildInstaller);
+        Assert.Contains("-Filter \"YaguSetup-*-$arch$ocrSuffix.exe\"", buildInstaller);
     }
 
     [Fact]
@@ -147,6 +150,23 @@ public sealed class InstallerPackagingRegressionTests
         Assert.Contains("if ([string]::IsNullOrWhiteSpace($RuntimeDir))", installScript);
         Assert.Contains("Get-AppxPackage -Name $Name -PackageTypeFilter Main,Framework", installScript);
         Assert.Contains("Add-AppxPackage -Path $msixPath -ErrorAction Stop", installScript);
+    }
+
+    [Fact]
+    public void BuildAllInstallers_SelectsVariantsAndDelegatesToBuildInstaller()
+    {
+        string root = FindRepoRoot();
+        string buildAll = File.ReadAllText(Path.Combine(root, "build-all-installers.ps1"));
+
+        // Selectable variants (one or more, plus 'all') via a validated -Variant list.
+        Assert.Contains("[ValidateSet('x64', 'x86', 'arm64', 'x64-ocr', 'all')]", buildAll);
+        Assert.Contains("[string[]]$Variant = @('all')", buildAll);
+
+        // Only x64-ocr bundles OCR (the native PaddleOCR runtime is win-x64 only, so there is no
+        // x86-ocr / arm64-ocr); every variant delegates to build-installer.ps1 instead of duplicating it.
+        Assert.Contains("'x64-ocr' = @{ Architecture = 'x64'", buildAll);
+        Assert.Contains("if ($spec.IncludeOcr) { $params['IncludeOcr'] = $true }", buildAll);
+        Assert.Contains("& $buildInstaller @params", buildAll);
     }
 
     private static string FindRepoRoot()

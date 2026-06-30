@@ -13,6 +13,12 @@ public sealed class AdvancedOptionsTests
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
     private static readonly string MainViewModelSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
+    private static readonly string SearchInputSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SearchInput.cs"));
+    private static readonly string StartupChecksSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+    private static readonly string MainWindowCodeBehindSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml.cs"));
 
     // ══════════════════════════════════════════════════════════════════
     // Tab switching logic
@@ -227,6 +233,80 @@ public sealed class AdvancedOptionsTests
         Assert.Contains("_settings.PinnedStartupDirectory", method);
     }
 
+    // ── Star highlight tracks the CURRENTLY shown directory, not just "a pin exists" ──
+    // The star is only highlighted while the box shows the saved directory; switching to a different
+    // folder clears the highlight even though the pin stays saved. These pins lock the derived
+    // IsCurrentDirectoryPinned bridge across the view-model, XAML binding, and code-behind glue.
+
+    [Fact]
+    public void IsCurrentDirectoryPinned_ComparesBoxToPinnedSnapshot()
+    {
+        // The highlight is true ONLY when the pin is on AND the box currently equals the saved
+        // pinned directory (case-insensitive, trailing-separator-insensitive). Without all three
+        // conditions, switching the box away from the pinned folder would leave the star lit.
+        string property = ExtractViewModelMethod("public bool IsCurrentDirectoryPinned", 600);
+        AssertContainsInOrder(property,
+            "PinStartupDirectory",
+            "!string.IsNullOrWhiteSpace(_settings.PinnedStartupDirectory)",
+            "string.Equals(",
+            "(Directory ?? string.Empty).Trim().TrimEnd('\\\\', '/')",
+            "_settings.PinnedStartupDirectory!.Trim().TrimEnd('\\\\', '/')",
+            "StringComparison.OrdinalIgnoreCase);");
+    }
+
+    [Fact]
+    public void DirectoryAndPin_NotifyIsCurrentDirectoryPinned()
+    {
+        // The highlight must re-evaluate whenever the box directory OR the pin flag changes, so both
+        // observable properties are decorated with [NotifyPropertyChangedFor(nameof(IsCurrentDirectoryPinned))].
+        AssertNotifiesHighlight("public partial string Directory { get; set; }");
+        AssertNotifiesHighlight("public partial bool PinStartupDirectory { get; set; }");
+    }
+
+    [Fact]
+    public void SetStartupDirectoryPinned_RaisesHighlightForRepinToDifferentFolder()
+    {
+        // Re-pinning to a different folder leaves PinStartupDirectory true, so NotifyPropertyChangedFor
+        // won't fire; the snapshot lives on _settings (not observable). The method must nudge the
+        // derived highlight explicitly so the star reflects the new snapshot immediately.
+        string method = ExtractViewModelMethod("public async Task SetStartupDirectoryPinnedAsync", 900);
+        Assert.Contains("OnPropertyChanged(nameof(IsCurrentDirectoryPinned));", method);
+    }
+
+    [Fact]
+    public void PinStar_DrivesCheckedStateFromCodeBehindNotOneWayBind()
+    {
+        // REGRESSION: the star toggle's IsChecked must NOT be a OneWay x:Bind. The framework permanently
+        // disables a OneWay x:Bind to a user-toggleable control the first time the user clicks it (a
+        // OneWay binding can't write back, so it stops fighting user input). Once disabled the star froze
+        // on its last value and never un-highlighted when the box moved off the pinned folder. The checked
+        // state is instead driven from code-behind (UpdatePinStartupDirectoryIcon).
+        string toggle = ExtractXamlElement("x:Name=\"PinStartupDirectoryButton\"", 600);
+        Assert.DoesNotContain("IsChecked=\"{x:Bind", toggle);
+
+        // The highlight is set in code-behind, keyed off the derived IsCurrentDirectoryPinned value.
+        string updater = ExtractFrom(SearchInputSource, "private void UpdatePinStartupDirectoryIcon", 700);
+        Assert.Contains("PinStartupDirectoryButton.IsChecked = pinned;", updater);
+    }
+
+    [Fact]
+    public void PinStarHandlers_DriveCheckedAndGlyphFromDerivedHighlight()
+    {
+        // Startup seeds the full star (checked + glyph) from the derived highlight; the click handler
+        // re-syncs to it (a raw toggle can differ, e.g. trying to pin an empty box pins nothing); and the
+        // PropertyChanged subscription refreshes it whenever the box directory changes. All three route
+        // through UpdatePinStartupDirectoryIcon, which now also owns PinStartupDirectoryButton.IsChecked.
+        Assert.Contains("UpdatePinStartupDirectoryIcon(ViewModel.IsCurrentDirectoryPinned);", StartupChecksSource);
+
+        string handler = ExtractFrom(SearchInputSource, "private async void OnPinStartupDirectory", 1300);
+        AssertContainsInOrder(handler,
+            "await ViewModel.SetStartupDirectoryPinnedAsync(pinned);",
+            "UpdatePinStartupDirectoryIcon(ViewModel.IsCurrentDirectoryPinned);");
+
+        string subscription = ExtractFrom(MainWindowCodeBehindSource, "nameof(ViewModel.IsCurrentDirectoryPinned)", 900);
+        Assert.Contains("UpdatePinStartupDirectoryIcon(ViewModel.IsCurrentDirectoryPinned);", subscription);
+    }
+
     [Fact]
     public void ResetClick_UpdatesPlaceholderText()
     {
@@ -308,6 +388,25 @@ public sealed class AdvancedOptionsTests
         Assert.True(start >= 0, $"Could not find '{anchor}' in MainViewModel.cs.");
         int end = Math.Min(start + windowSize, MainViewModelSource.Length);
         return MainViewModelSource[start..end];
+    }
+
+    private static string ExtractFrom(string source, string anchor, int windowSize)
+    {
+        int start = source.IndexOf(anchor, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Could not find '{anchor}' in source.");
+        int end = Math.Min(start + windowSize, source.Length);
+        return source[start..end];
+    }
+
+    private static void AssertNotifiesHighlight(string propertyDeclaration)
+    {
+        int idx = MainViewModelSource.IndexOf(propertyDeclaration, StringComparison.Ordinal);
+        Assert.True(idx >= 0, $"Could not find '{propertyDeclaration}' in MainViewModel.cs.");
+        // The [NotifyPropertyChangedFor(...)] attribute sits on the lines immediately preceding the
+        // property declaration, so scan the short run of text just above it.
+        int windowStart = Math.Max(0, idx - 200);
+        string preceding = MainViewModelSource[windowStart..idx];
+        Assert.Contains("[NotifyPropertyChangedFor(nameof(IsCurrentDirectoryPinned))]", preceding);
     }
 
     private static string ExtractXamlElement(string anchor, int windowSize)

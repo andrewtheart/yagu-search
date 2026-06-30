@@ -744,6 +744,7 @@ public sealed partial class SettingsWindow : Window
                 new YaguDialogOptions
                 {
                     Title = "Unsaved settings",
+                    TitleGlyph = "\uE74E", // Save
                     Content = "You have unsaved settings changes. Save them before closing Settings?",
                     PrimaryButtonText = "Save and close",
                     SecondaryButtonText = "Discard changes",
@@ -751,8 +752,7 @@ public sealed partial class SettingsWindow : Window
                     DefaultButton = YaguDialogDefaultButton.Primary,
                     RequestedTheme = RootGrid.ActualTheme,
                     Width = 500,
-                    Height = 230,
-                    ShowTitle = false,
+                    Height = 260,
                     ShowTitleBar = false,
                     ShowTopRightCloseButton = true,
                 });
@@ -3201,6 +3201,20 @@ public sealed partial class SettingsWindow : Window
             editorAppearanceGroup.Children.Add(syntaxHighlight);
             editorAppearanceGroup.Children.Add(new TextBlock { Text = "When enabled, the built-in editor colors code (keywords, strings, comments, etc.) based on the file's name or extension. Applies to files opened after the change. Supported types include C#, C/C++, Java, JavaScript/TypeScript, Python, JSON, XML/XAML, HTML, CSS, SQL, Markdown, Lua, PHP, and more.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
+            editorAppearanceGroup.Children.Add(new TextBlock { Text = "Long-line warning:", Margin = new Thickness(0, 8, 0, 0) });
+            var longLineWarning = new ComboBox { MinWidth = 280, HorizontalAlignment = HorizontalAlignment.Left };
+            longLineWarning.Items.Add(new ComboBoxItem { Content = "Ask every time" });
+            longLineWarning.Items.Add(new ComboBoxItem { Content = "Always open without word wrap" });
+            longLineWarning.Items.Add(new ComboBoxItem { Content = "Always open with word wrap" });
+            longLineWarning.SelectedIndex = Math.Clamp(_viewModel.PreviewLongLineWarningIndex, 0, 2);
+            longLineWarning.SelectionChanged += (_, _) =>
+            {
+                if (longLineWarning.SelectedIndex >= 0)
+                    _viewModel.PreviewLongLineWarningIndex = longLineWarning.SelectedIndex;
+            };
+            editorAppearanceGroup.Children.Add(longLineWarning);
+            editorAppearanceGroup.Children.Add(new TextBlock { Text = "Controls the warning shown when opening a file with a very long line in the built-in editor. \u201cAsk every time\u201d shows the warning dialog; the other options skip it and always use that wrap mode. Choosing \u201cDon't remind me again\u201d in the dialog sets this automatically.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
             fileLimitGroup.Children.Add(new TextBlock { Text = "Files exceeding any of these limits will not open in the built-in editor. Use the external editor or Show in Explorer for very large files.", FontSize = 11, Opacity = 0.7, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
 
             fileLimitGroup.Children.Add(new TextBlock { Text = "Max file size (MB):" });
@@ -3772,6 +3786,86 @@ public sealed partial class SettingsWindow : Window
             hardwareGroup.Children.Add(new TextBlock { Text = "Detected via the Windows device registry. The available model builds and accelerators ultimately depend on what Foundry Local can run on this machine.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             foreach (var c in dependentControls) c.IsEnabled = _viewModel.SemanticSearchAvailable;
+        }
+
+        // ── Privacy ──
+        {
+            var g = AddTab("Privacy");
+            var helpGroup = AddSettingsGroupBox(g, "Help Improve Yagu");
+            var statusGroup = AddSettingsGroupBox(g, "What's Sent & Where");
+
+            var telemetryToggle = new ToggleSwitch
+            {
+                IsOn = _viewModel.TelemetryEnabledSetting,
+                OnContent = "Send anonymous performance & error reports",
+                OffContent = "Send anonymous performance & error reports",
+            };
+            telemetryToggle.Toggled += (_, _) =>
+            {
+                _viewModel.TelemetryEnabledSetting = telemetryToggle.IsOn;
+                MarkSettingsDirty(requireValueChanges: false);
+            };
+            helpGroup.Children.Add(telemetryToggle);
+            helpGroup.Children.Add(new TextBlock
+            {
+                Text = "Silently shares anonymized, aggregate diagnostics \u2014 app version, OS, error types and timing \u2014 so problems can be spotted and fixed. File paths and search text are stripped out before anything is sent, and nothing is sent in command-line mode.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var bugReportToggle = new ToggleSwitch
+            {
+                IsOn = _viewModel.BugReportingEnabledSetting,
+                OnContent = "Offer to send a bug report when an error occurs",
+                OffContent = "Offer to send a bug report when an error occurs",
+                Margin = new Thickness(0, 8, 0, 0),
+            };
+            bugReportToggle.Toggled += (_, _) =>
+            {
+                _viewModel.BugReportingEnabledSetting = bugReportToggle.IsOn;
+                MarkSettingsDirty(requireValueChanges: false);
+            };
+            helpGroup.Children.Add(bugReportToggle);
+            helpGroup.Children.Add(new TextBlock
+            {
+                Text = "When a serious error happens, Yagu offers a dialog that shows you exactly what would be sent \u2014 including your settings file and a tail of the log \u2014 and only submits if you choose to. Independent of the anonymous reports above.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            helpGroup.Children.Add(NextSearchLabel("Contact email for bug reports (optional):"));
+            var emailBox = new TextBox
+            {
+                Text = _viewModel.BugReportContactEmail,
+                PlaceholderText = "you@example.com",
+                Width = 320,
+                HorizontalAlignment = HorizontalAlignment.Left,
+            };
+            emailBox.LostFocus += (_, _) =>
+            {
+                _viewModel.BugReportContactEmail = emailBox.Text?.Trim() ?? string.Empty;
+                MarkSettingsDirty(requireValueChanges: false);
+            };
+            helpGroup.Children.Add(emailBox);
+            helpGroup.Children.Add(new TextBlock
+            {
+                Text = "Pre-fills the bug-report dialog so a developer can follow up. Leave blank to report anonymously.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            statusGroup.Children.Add(new TextBlock
+            {
+                Text = Yagu.Services.Telemetry.TelemetryConfig.IsConfigured
+                    ? "Reports are sent to a private endpoint maintained by this build. No third-party analytics or advertising services are used."
+                    : "This build has no reporting endpoint configured yet, so nothing is sent regardless of the toggles above \u2014 your choices are remembered for when one is added.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
         }
 
         SortTabsAlphabetically();

@@ -108,8 +108,31 @@ public sealed class FileListerEsExeGateTests : IDisposable
     }
 
     [Fact]
-    public async Task RunEverythingAsync_SearchHiddenFalse_AddsAttribHExclusion()
+    public async Task RunEverythingAsync_SearchHiddenFalse_NarrowedQuery_AddsAttribHExclusion()
     {
+        // On a NARROWED query (e.g. an extension filter) `!attrib:h` is cheap, so it is still
+        // pushed to Everything to hidden-filter results (including filename matches).
+        FileLister.Backend = FileListerBackend.EsExe;
+        var dir = Path.GetTempPath().TrimEnd('\\');
+
+        var capturedArgs = new List<IReadOnlyList<string>>();
+        var lister = new FileLister((path, psi) =>
+        {
+            capturedArgs.Add(psi.ArgumentList.ToList());
+            return new FakeProcess(lines: new[] { dir + @"\file1.txt", "" }, exitCode: 0);
+        })
+        { SearchHiddenFiles = false };
+
+        await foreach (var _ in lister.ListFilesAsync(dir, new[] { "txt" }, 0, CancellationToken.None)) { }
+
+        Assert.Contains(capturedArgs, a => a.Contains("!attrib:h"));
+    }
+
+    [Fact]
+    public async Task RunEverythingAsync_SearchHiddenFalse_UnnarrowedSweep_OmitsAttribHExclusion()
+    {
+        // On an UNNARROWED full-drive sweep `!attrib:h` forces a slow unindexed attribute scan,
+        // so it is NOT pushed; the native scanner skips hidden files (skip_hidden) instead.
         FileLister.Backend = FileListerBackend.EsExe;
         var dir = Path.GetTempPath().TrimEnd('\\');
 
@@ -123,7 +146,7 @@ public sealed class FileListerEsExeGateTests : IDisposable
 
         await foreach (var _ in lister.ListFilesAsync(dir, Array.Empty<string>(), 0, CancellationToken.None)) { }
 
-        Assert.Contains(capturedArgs, a => a.Contains("!attrib:h"));
+        Assert.DoesNotContain(capturedArgs, a => a.Contains("!attrib:h"));
     }
 
     [Fact]

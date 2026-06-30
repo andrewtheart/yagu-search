@@ -31,6 +31,11 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
     /// <summary>Environment variable that selects the worker's OCR backend (<c>paddle</c>/<c>tesseract</c>).</summary>
     public const string EngineEnvVar = "YAGU_OCR_ENGINE";
 
+    /// <summary>Environment variable that authorizes the worker to download missing OCR assets
+    /// (<c>"1"</c> = allowed). Absent / any other value forbids downloads: the worker fails fast
+    /// instead of fetching anything. Set by the engine only after the consent gate approves.</summary>
+    public const string AllowDownloadEnvVar = "YAGU_OCR_ALLOW_DOWNLOAD";
+
     // Wire-protocol property names (PascalCase). These MUST match the worker's serialized output
     // exactly because JsonElement.TryGetProperty is case-sensitive.
     private const string PropType = "Type";
@@ -91,6 +96,16 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
     /// backend selector and any model name). Called once just before the worker is started.
     /// </summary>
     protected abstract void ConfigureWorkerEnvironment(IDictionary<string, string?> environment);
+
+    /// <summary>
+    /// Reports which native runtime / model assets this engine still needs to download before it can
+    /// run. Used by <see cref="InitializeAsync"/> to warn (and require consent) before any external
+    /// download. Must agree with the directories set in <see cref="ConfigureWorkerEnvironment"/>.
+    /// </summary>
+    protected abstract OcrAssetRequirement DescribeAssetRequirement();
+
+    /// <summary>Test/diagnostics hook: exposes <see cref="DescribeAssetRequirement"/> without starting the worker.</summary>
+    internal OcrAssetRequirement DescribeAssetRequirementForTest() => DescribeAssetRequirement();
 
     /// <summary>
     /// Test/diagnostics hook: invokes <see cref="ConfigureWorkerEnvironment"/> against the supplied
@@ -190,6 +205,25 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
             return OcrResult.Fail("OCR worker (Yagu.OcrWorker.exe) is not installed.");
         }
 
+        // Warn (and require consent) before initiating any external download. When the assets are
+        // already present — bundled by the OCR-bundled installer or downloaded on a previous run —
+        // no prompt is shown and the worker runs offline.
+        OcrAssetRequirement requirement = DescribeAssetRequirement();
+        bool downloadAllowed = true;
+        if (requirement.DownloadNeeded)
+        {
+            downloadAllowed = await OcrDownloadGate.EnsureAllowedAsync(requirement).ConfigureAwait(false);
+            if (!downloadAllowed)
+            {
+                string components = requirement.MissingComponents.Count > 0
+                    ? " (" + string.Join(", ", requirement.MissingComponents) + ")"
+                    : string.Empty;
+                LogService.Instance.Verbose(LogSource, "OCR download not approved; image-text search is unavailable until the assets are downloaded.");
+                return OcrResult.Fail(
+                    $"Image-text (OCR) search needs a one-time download of about {requirement.ApproxMb} MB{components}, which was not approved.");
+            }
+        }
+
         try
         {
             ProcessStartInfo startInfo = new()
@@ -205,6 +239,11 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
             };
             startInfo.StandardInputEncoding = Utf8NoBom;
             ConfigureWorkerEnvironment(startInfo.Environment);
+            // Authorize the worker to download only when the user has consented this session.
+            // When we believe the assets are already present (no prompt was shown) this stays "0",
+            // so the worker fails fast rather than silently downloading if our presence check was
+            // wrong — "no external download without consent" is enforced at the actual download site.
+            startInfo.Environment[AllowDownloadEnvVar] = OcrDownloadGate.ConsentGranted ? "1" : "0";
 
             Process process = new() { StartInfo = startInfo, EnableRaisingEvents = true };
             process.Exited += OnProcessExited;

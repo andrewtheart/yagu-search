@@ -116,6 +116,39 @@ public sealed class GpuNpuCapabilityDetector : ISemanticCapabilityDetector
         }
     }
 
+    /// <summary>Best-effort human-readable descriptions of the real (non-software) GPUs present, e.g.
+    /// "NVIDIA GeForce RTX 4070". Empty when none are detected or the registry is unreadable. Used to
+    /// enrich user-reviewed bug reports; never sent on the silent telemetry channel.</summary>
+    public IReadOnlyList<string> GetGpuDescriptions() => GetHardwareDescriptions(DisplayClassKey);
+
+    /// <summary>Best-effort human-readable descriptions of the NPUs / compute accelerators present,
+    /// e.g. "Intel(R) AI Boost". Empty when none are detected.</summary>
+    public IReadOnlyList<string> GetNpuDescriptions() => GetHardwareDescriptions(ComputeAcceleratorClassKey);
+
+    private IReadOnlyList<string> GetHardwareDescriptions(string classKeyPath)
+    {
+        try
+        {
+            var names = new List<string>();
+            foreach (DeviceClassEntry entry in _readDeviceClass(classKeyPath))
+            {
+                if (string.IsNullOrEmpty(entry.DriverDesc))
+                    continue;
+                if (!IsHardwareAccelerator(entry.DriverDesc, entry.MatchingDeviceId))
+                    continue;
+                string desc = entry.DriverDesc.Trim();
+                if (desc.Length > 0 && !names.Contains(desc, StringComparer.OrdinalIgnoreCase))
+                    names.Add(desc);
+            }
+            return names;
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Verbose("Semantic.Capability", "Hardware description enumeration failed.", ex);
+            return Array.Empty<string>();
+        }
+    }
+
     /// <summary>Thin registry adapter: walks a device class's 4-digit instance subkeys and yields
     /// each instance's <c>DriverDesc</c>/<c>MatchingDeviceId</c>. Excluded from coverage because it
     /// only exercises against the live OS registry, which cannot be driven deterministically.</summary>

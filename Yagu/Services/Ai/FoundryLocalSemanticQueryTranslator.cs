@@ -49,6 +49,18 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     /// successful <see cref="TranslateAsync"/> call. Useful for diagnostics (which model ran).</summary>
     public string? SelectedModelAlias { get; private set; }
 
+    /// <summary>The catalog variant id of the model that was actually selected/loaded, when the catalog
+    /// exposes one. More specific than <see cref="SelectedModelAlias"/> (it pins the accelerator build
+    /// and quantization), so it is the preferred key for per-variant warning suppression.</summary>
+    public string? SelectedModelId { get; private set; }
+
+    /// <inheritdoc />
+    public string? CurrentModelKey =>
+        !string.IsNullOrWhiteSpace(SelectedModelId) ? SelectedModelId
+        : !string.IsNullOrWhiteSpace(SelectedModelAlias) ? SelectedModelAlias
+        : !string.IsNullOrWhiteSpace(_preferredAlias) ? _preferredAlias
+        : null;
+
     public FoundryLocalSemanticQueryTranslator(bool enabled, string? modelOverrideAlias = null, string? devicePreferenceOrder = null)
     {
         _enabled = enabled;
@@ -158,6 +170,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         _chatClient = null;
         _model = null;
         _initialized = false;
+        SelectedModelId = null;
     }
 
     public async Task<SemanticTranslationResult> TranslateAsync(
@@ -359,6 +372,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             _initialized = true;
             _preferredAlias = model.Alias;
             SelectedModelAlias = model.Alias;
+            SelectedModelId = model.Id;
             _selectedModelIsReasoning = isReasoning;
             log.Info(LogSource, $"Local model ready: '{model.Alias}'.");
             return chat;
@@ -580,6 +594,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
 
             _preferredAlias = model.Alias;
             SelectedModelAlias = model.Alias;
+            SelectedModelId = model.Id;
             _selectedModelIsReasoning = FoundryModelSelector.IsReasoningAlias(model.Alias);
         }
         finally

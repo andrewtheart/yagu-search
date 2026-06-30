@@ -425,16 +425,10 @@ public sealed class SettingsEffectTests : IDisposable
         Assert.Equal(3, summaryAll.TotalMatches);
 
         var (results, summaryFiltered) = await RunSearch(Opts(skipExtensions: Exts("log", "png")));
-        if (Native.NativeSearcher.IsAvailable)
-        {
-            // Native Rust scanner does not apply SkipExtensions; all files match.
-            Assert.Equal(3, summaryFiltered.TotalMatches);
-        }
-        else
-        {
-            Assert.Equal(1, summaryFiltered.TotalMatches);
-            Assert.EndsWith("code.cs", results[0].FilePath);
-        }
+        // SkipExtensions is honored on every backend: the file lister drops .log/.png entirely
+        // (no content read) before scanning, so only code.cs matches.
+        Assert.Equal(1, summaryFiltered.TotalMatches);
+        Assert.EndsWith("code.cs", results[0].FilePath);
     }
 
     // ════════════════════════════════════════════════
@@ -567,16 +561,9 @@ public sealed class SettingsEffectTests : IDisposable
         var (_, summary) = await RunSearch(Opts(
             includeGlobs: ["*.cs"],
             skipExtensions: Exts("cs")));
-        if (Native.NativeSearcher.IsAvailable)
-        {
-            // Native Rust scanner does not apply SkipExtensions; .cs files still match.
-            Assert.Equal(2, summary.TotalMatches);
-        }
-        else
-        {
-            // Managed path: .cs included by glob but excluded by SkipExtensions → 0 matches.
-            Assert.Equal(0, summary.TotalMatches);
-        }
+        // .cs files are included by the glob but then dropped entirely by SkipExtensions at the
+        // enumeration layer (honored on every backend) → 0 matches.
+        Assert.Equal(0, summary.TotalMatches);
     }
 
     // ════════════════════════════════════════════════
@@ -635,18 +622,10 @@ public sealed class SettingsEffectTests : IDisposable
         var (results, summary) = await RunSearch(Opts(
             skipBinary: true,
             skipExtensions: Exts("log")));
-        if (Native.NativeSearcher.IsAvailable)
-        {
-            // Native scanner applies SkipBinary but not SkipExtensions.
-            // binary.cs and binary.log are skipped (binary), text.cs and text.log match.
-            Assert.Equal(2, summary.TotalMatches);
-        }
-        else
-        {
-            // Managed path applies both: only text.cs remains.
-            Assert.Equal(1, summary.TotalMatches);
-            Assert.EndsWith("text.cs", results[0].FilePath);
-        }
+        // SkipExtensions drops the .log files entirely at enumeration (every backend) and
+        // SkipBinary drops binary.cs during the content scan → only text.cs remains.
+        Assert.Equal(1, summary.TotalMatches);
+        Assert.EndsWith("text.cs", results[0].FilePath);
     }
 
     // ════════════════════════════════════════════════
@@ -988,18 +967,10 @@ public sealed class SettingsEffectTests : IDisposable
             skipExtensions: Exts("log"),
             excludeGlobs: ["lib/**"],
             skipBinary: true));
-        if (Native.NativeSearcher.IsAvailable)
-        {
-            // Native scanner applies SkipBinary + ExcludeGlobs but not SkipExtensions.
-            // lib/dep.cs excluded by glob, src/bin.cs skipped (binary),
-            // src/code.cs and src/code.log match (SkipExtensions not applied).
-            Assert.Equal(2, summary.TotalMatches);
-        }
-        else
-        {
-            // Managed path: all three filters compose → only src/code.cs.
-            Assert.Equal(1, summary.TotalMatches);
-            Assert.EndsWith("code.cs", results[0].FilePath);
-        }
+        // All three filters compose on every backend: lib/dep.cs excluded by glob,
+        // src/code.log dropped entirely by SkipExtensions at enumeration, and src/bin.cs
+        // skipped as binary during the content scan → only src/code.cs.
+        Assert.Equal(1, summary.TotalMatches);
+        Assert.EndsWith("code.cs", results[0].FilePath);
     }
 }

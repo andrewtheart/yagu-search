@@ -122,7 +122,16 @@ internal sealed class SemanticModelDownloadDialog : Window
             FontSize = 22,
             FontWeight = FontWeights.SemiBold,
             TextWrapping = TextWrapping.WrapWholeWords,
+            VerticalAlignment = VerticalAlignment.Center,
         };
+        var titleLine = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+        titleLine.Children.Add(new FontIcon
+        {
+            Glyph = "\uE99A", // AI model
+            FontSize = 20,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        titleLine.Children.Add(_titleText);
         _subtitleText = new TextBlock
         {
             Text = "Setting up the on-device AI model…",
@@ -130,7 +139,7 @@ internal sealed class SemanticModelDownloadDialog : Window
             LineHeight = 20,
             Opacity = 0.82,
         };
-        header.Children.Add(_titleText);
+        header.Children.Add(titleLine);
         header.Children.Add(_subtitleText);
         Grid.SetRow(header, 0);
         _root.Children.Add(header);
