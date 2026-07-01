@@ -1832,6 +1832,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SearchModeSplitButtonVisibility))]
     [NotifyPropertyChangedFor(nameof(SearchActionButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(ProgressTooltip))]
     public partial bool IsSearching { get; set; }
     [ObservableProperty] public partial string StatusText { get; set; } = string.Empty;
     [ObservableProperty] public partial string? ErrorText { get; set; }
@@ -1851,9 +1852,25 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     {
         get
         {
-            if (TotalFiles <= 0) return "Waiting for file list…";
-            double pct = (double)FilesScanned / TotalFiles * 100;
-            return $"{pct:F1}% complete ({FilesScanned:N0} files out of {TotalFiles:N0} total files)";
+            if (TotalFiles > 0)
+            {
+                // FilesScanned can momentarily exceed a slightly stale TotalFiles between 100 ms
+                // snapshots; clamp so the tooltip never reads over 100%.
+                double pct = Math.Min(100.0, (double)FilesScanned / TotalFiles * 100);
+                return $"{pct:F1}% complete ({FilesScanned:N0} files out of {TotalFiles:N0} total files)";
+            }
+            // Total not yet known. A recursive enumeration of a large tree, or a search whose filters
+            // exclude every file during discovery, can churn for minutes before a total is available —
+            // show an active "discovering" state (with the running processed count when present) so a
+            // long discovery never looks frozen on a static "Waiting for file list…".
+            if (IsSearching)
+            {
+                int processed = Math.Max(FilesScanned, FilesSkipped);
+                return processed > 0
+                    ? $"Discovering files… ({processed:N0} found so far)"
+                    : "Discovering files…";
+            }
+            return "Waiting for file list…";
         }
     }
 
@@ -2039,7 +2056,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     partial void OnShowStatsForNerdsChanged(bool value) => OnPropertyChanged(nameof(StatsForNerdsVisibility));
     partial void OnShowAutoScrollResultsCheckboxChanged(bool value) => OnPropertyChanged(nameof(AutoScrollResultsCheckboxVisibility));
     partial void OnHasPerformedSearchChanged(bool value) => OnPropertyChanged(nameof(SkippedCountVisibility));
-    partial void OnFilesSkippedChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); }
+    partial void OnFilesSkippedChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); OnPropertyChanged(nameof(ProgressTooltip)); }
     partial void OnAccessDeniedCountChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); }
     partial void OnSortModeIndexChanged(int value)
     {
@@ -4906,6 +4923,100 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         SyncSkipExtensionItems();
         SyncBinaryExtensionItems();
         SyncArchiveExtensionItems();
+    }
+
+    /// <summary>
+    /// Persists the Advanced Options exactly as they are shown right now as the saved defaults, writing
+    /// them straight to the settings file. The inverse of <see cref="ResetAdvancedOptionsToSavedDefaults"/>:
+    /// afterward, "Reset" and a fresh launch restore these values. Any transient ("Include &amp; search")
+    /// or semantic-resolution markers are cleared, because the visible values ARE the defaults now.
+    /// </summary>
+    public async Task SaveAdvancedOptionsAsDefaultsAsync()
+    {
+        // The visible Advanced Options are becoming the real defaults, so drop the transient/semantic
+        // guards that would otherwise make PersistSettingsAsync write a snapshot, or let a later Reset
+        // undo the change.
+        _semanticResolutionVisible = false;
+        _semanticDefaultsSnapshot = null;
+        _advancedOptionsTransientlyChanged = false;
+
+        // Promote the active filter values into the persisted-default mirrors that Reset and a fresh
+        // launch read from, so the saved default equals exactly what is shown now.
+        SettingsSkipExtensions = SkipExtensions;
+        SettingsBinaryExtensions = BinaryExtensions;
+        SettingsArchiveExtensions = ArchiveExtensions;
+        DefaultMinFileSizeBytes = MinFileSizeBytes;
+        DefaultMaxFileSizeBytes = MaxFileSizeBytes;
+        DefaultCreatedAfterDate = CreatedAfterDate;
+        DefaultCreatedBeforeDate = CreatedBeforeDate;
+        DefaultModifiedAfterDate = ModifiedAfterDate;
+        DefaultModifiedBeforeDate = ModifiedBeforeDate;
+
+        await PersistSettingsAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Human-readable summary of the Advanced Options that <see cref="SaveAdvancedOptionsAsDefaultsAsync"/>
+    /// would persist, shown in the confirmation dialog. Each entry is one "Label: value" line.
+    /// </summary>
+    internal IReadOnlyList<string> DescribeAdvancedOptionDefaults()
+    {
+        static string OnOff(bool value) => value ? "On" : "Off";
+
+        var lines = new List<string>
+        {
+            $"Match case: {OnOff(CaseSensitive)}",
+            $"Regular expression: {OnOff(UseRegex)}",
+            $"Exact match: {OnOff(ExactMatch)}",
+            $"Respect .gitignore: {OnOff(ObeyGitignore)}",
+            $"Search hidden files: {OnOff(SearchHiddenFiles)}",
+            $"Search binary files: {OnOff(SearchBinary)}",
+            $"Search inside archives: {OnOff(SearchInsideArchives)}",
+            $"Search image text (OCR): {(SearchImageText ? $"On ({AppSettings.NormalizeImageOcrEngine(ImageOcrEngine)})" : "Off")}",
+        };
+
+        string include = (IncludeGlobs ?? string.Empty).Trim();
+        lines.Add($"Include filter: {(include.Length == 0 ? "(none)" : include)}");
+        string exclude = EffectiveExcludeGlobsText.Trim();
+        lines.Add($"Exclude filter: {(exclude.Length == 0 ? "(none)" : exclude)}");
+
+        string size = DescribeSizeRange(MinFileSizeBytes, MaxFileSizeBytes);
+        if (size.Length > 0) lines.Add($"File size: {size}");
+
+        string created = DescribeDateRange(CreatedAfterDate, CreatedBeforeDate);
+        if (created.Length > 0) lines.Add($"Created date: {created}");
+        string modified = DescribeDateRange(ModifiedAfterDate, ModifiedBeforeDate);
+        if (modified.Length > 0) lines.Add($"Modified date: {modified}");
+
+        return lines;
+    }
+
+    private static string DescribeSizeRange(long minBytes, long maxBytes)
+    {
+        bool hasMin = minBytes > 0;
+        bool hasMax = maxBytes > 0;
+        if (hasMin && hasMax) return $"between {FormatBytes(minBytes)} and {FormatBytes(maxBytes)}";
+        if (hasMin) return $"at least {FormatBytes(minBytes)}";
+        if (hasMax) return $"at most {FormatBytes(maxBytes)}";
+        return string.Empty;
+    }
+
+    private static string DescribeDateRange(DateTimeOffset? after, DateTimeOffset? before)
+    {
+        static string D(DateTimeOffset d) => d.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        if (after.HasValue && before.HasValue) return $"between {D(after.Value)} and {D(before.Value)}";
+        if (after.HasValue) return $"after {D(after.Value)}";
+        if (before.HasValue) return $"before {D(before.Value)}";
+        return string.Empty;
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        const long kb = 1024, mb = kb * 1024, gb = mb * 1024;
+        if (bytes >= gb) return $"{bytes / (double)gb:0.##} GB";
+        if (bytes >= mb) return $"{bytes / (double)mb:0.##} MB";
+        if (bytes >= kb) return $"{bytes / (double)kb:0.##} KB";
+        return $"{bytes} bytes";
     }
 
     /// <summary>Parse a semicolon-separated extension string into a set WITH leading dots (e.g. ".zip", ".docx").</summary>

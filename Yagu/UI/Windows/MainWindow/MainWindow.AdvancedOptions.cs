@@ -53,6 +53,55 @@ public sealed partial class MainWindow
         ExcludeFilterBox.PlaceholderText = ViewModel.ExcludeFilterPlaceholder;
     }
 
+    private async void OnAdvancedOptionsSaveDefaultsClick(object sender, RoutedEventArgs e)
+    {
+        // Confirm first, showing a summary of exactly what is about to be written to the settings file.
+        var panel = new StackPanel { Spacing = 12, MinWidth = 380 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "These Advanced Options will be written to your settings file as the new defaults. "
+                 + "They become what a fresh search \u2014 and the \u201cReset\u201d button \u2014 start from.",
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        var list = new StackPanel { Spacing = 3 };
+        foreach (var line in ViewModel.DescribeAdvancedOptionDefaults())
+            list.Children.Add(new TextBlock { Text = line, FontSize = 12.5, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new ScrollViewer
+        {
+            Content = list,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            MaxHeight = 240,
+        });
+
+        var result = await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "Save Advanced Options as defaults",
+                TitleGlyph = "\uE74E", // Save
+                Content = panel,
+                PrimaryButtonText = "Save as defaults",
+                CloseButtonText = "Cancel",
+                DefaultButton = YaguDialogDefaultButton.Primary,
+                RequestedTheme = RootGrid.ActualTheme,
+                ShowTitleBar = false,
+                Width = 600,
+                Height = 440,
+                MaxContentHeight = 340,
+            });
+
+        if (result != YaguDialogResult.Primary)
+            return;
+
+        await ViewModel.SaveAdvancedOptionsAsDefaultsAsync();
+
+        // The Reset target just changed; refresh the filter placeholders to match the new defaults.
+        IncludeFilterBox.PlaceholderText = ViewModel.IncludeFilterPlaceholder;
+        ExcludeFilterBox.PlaceholderText = ViewModel.ExcludeFilterPlaceholder;
+    }
+
     private void OnAdvancedOptionsApplyClick(object sender, RoutedEventArgs e)
         => CollapseAdvancedOptionsForSearch();
 }

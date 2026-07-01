@@ -678,10 +678,10 @@ public class SettingsServiceNewFieldTests
     [InlineData("  ENGLISHV3  ", "EnglishV3")]
     [InlineData("chinesev4", "ChineseV4")]
     [InlineData("ChineseV5", "ChineseV5")]
-    [InlineData("", "EnglishV4")]
-    [InlineData("   ", "EnglishV4")]
-    [InlineData(null, "EnglishV4")]
-    [InlineData("not-a-model", "EnglishV4")]
+    [InlineData("", "ChineseV5")]
+    [InlineData("   ", "ChineseV5")]
+    [InlineData(null, "ChineseV5")]
+    [InlineData("not-a-model", "ChineseV5")]
     public void NormalizeImageOcrModel_MapsToCanonicalKnownModels(string? input, string expected)
     {
         Assert.Equal(expected, AppSettings.NormalizeImageOcrModel(input));
@@ -703,8 +703,8 @@ public class SettingsServiceNewFieldTests
     public void Defaults_ImageOcrQualitySettings()
     {
         var s = new AppSettings();
-        Assert.Equal("EnglishV4", s.ImageOcrModel);
-        Assert.Equal("EnglishV4", AppSettings.DefaultImageOcrModel);
+        Assert.Equal("ChineseV5", s.ImageOcrModel);
+        Assert.Equal("ChineseV5", AppSettings.DefaultImageOcrModel);
         Assert.Equal(960, s.ImageOcrMaxSide);
         Assert.Equal(960, AppSettings.DefaultImageOcrMaxSide);
     }

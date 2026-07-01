@@ -26,6 +26,37 @@ public sealed class MainViewModelSearchStatusRegressionTests
     }
 
     [Fact]
+    public void ProgressTooltip_ShowsActiveDiscoveryWhenTotalUnknown()
+    {
+        int start = MainViewModelSource.IndexOf("public string ProgressTooltip", StringComparison.Ordinal);
+        Assert.True(start >= 0, "Expected ProgressTooltip in MainViewModel.cs");
+        string body = MainViewModelSource.Substring(start, Math.Min(1400, MainViewModelSource.Length - start));
+
+        // Known total -> percentage, clamped so it never reads over 100% on a stale snapshot.
+        Assert.Contains("if (TotalFiles > 0)", body);
+        Assert.Contains("Math.Min(100.0", body);
+        // Unknown total while a search is running -> an active "Discovering files" state with the running
+        // processed count, NOT a static "Waiting for file list" that looks frozen during a long full-tree
+        // enumeration (the reported "stuck waiting for file list" symptom).
+        Assert.Contains("if (IsSearching)", body);
+        Assert.Contains("Discovering files", body);
+        Assert.Contains("found so far", body);
+        // The static idle text is only the fallback when NOT searching (after the IsSearching branch).
+        // Match the actual `return "Waiting for file list…"` statement, not the same phrase quoted in the
+        // explanatory comment that precedes the IsSearching branch.
+        int searching = body.IndexOf("if (IsSearching)", StringComparison.Ordinal);
+        int waiting = body.IndexOf("return \"Waiting for file list", StringComparison.Ordinal);
+        Assert.True(waiting > searching,
+            "\"Waiting for file list\" must be the idle fallback after the IsSearching branch.");
+
+        // The tooltip recomputes when any of its inputs change.
+        Assert.Contains("OnFilesScannedChanged(int value) => OnPropertyChanged(nameof(ProgressTooltip));", MainViewModelSource);
+        Assert.Contains("OnTotalFilesChanged(int value) => OnPropertyChanged(nameof(ProgressTooltip));", MainViewModelSource);
+        Assert.Contains("OnFilesSkippedChanged(int value) { OnPropertyChanged(nameof(OtherSkippedCount)); OnPropertyChanged(nameof(ProgressTooltip)); }", MainViewModelSource);
+        Assert.Contains("[NotifyPropertyChangedFor(nameof(ProgressTooltip))]", MainViewModelSource);
+    }
+
+    [Fact]
     public void SearchLoop_DoesNotLetStaleProgressOrCompletionLowerVisibleMatchCount()
     {
         string progressCase = ExtractWindow(MainViewModelSource, "case SearchEvent.Progress p:", "case SearchEvent.SearchError e:");

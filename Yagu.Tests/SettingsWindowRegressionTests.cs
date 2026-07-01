@@ -636,6 +636,20 @@ public sealed class SettingsWindowRegressionTests
     }
 
     [Fact]
+    public void SettingsWindow_BalancedPreset_MapsToChineseV5AtStandardResolution()
+    {
+        // The default recognition model is ChineseV5 (PP-OCRv5), so the "Balanced" preset — what a fresh
+        // install lands on — must select ChineseV5 at 960 px, not the former EnglishV4. Pin both the
+        // apply direction (preset -> model/resolution) and the reverse (model/resolution -> preset) so
+        // the default combo stays aligned with a named preset instead of showing "Custom".
+        Assert.Contains("\"Balanced\" => (\"ChineseV5\", 960)", SettingsWindowSource);
+        Assert.Contains("\"ChineseV5\" when maxSide == 960 => \"Balanced\"", SettingsWindowSource);
+        Assert.Contains("\"ChineseV5\" when maxSide == 1536 => \"Accurate\"", SettingsWindowSource);
+        // The old EnglishV4/960 Balanced mapping must not linger.
+        Assert.DoesNotContain("\"EnglishV4\" when maxSide == 960 => \"Balanced\"", SettingsWindowSource);
+    }
+
+    [Fact]
     public void SettingsWindow_TabSelectionSwapsContent()
     {
         string method = ExtractMethod(SettingsWindowSource, "OnTabSelectionChanged");

@@ -1237,6 +1237,8 @@
                                             </StackPanel>
                                         </Button>
                                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                                            <Button Content="Save as Defaults" Click="OnAdvancedOptionsSaveDefaultsClick"
+                                                    ToolTipService.ToolTip="Save the current Advanced Options to your settings file as the default options" />
                                             <Button Content="Reset" Click="OnAdvancedOptionsResetClick"
                                                     ToolTipService.ToolTip="Restore Advanced Options to the current settings defaults" />
                                             <Button Content="Apply" Style="{ThemeResource AccentButtonStyle}"

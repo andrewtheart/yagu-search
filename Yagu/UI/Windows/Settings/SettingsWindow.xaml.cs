@@ -751,7 +751,7 @@ public sealed partial class SettingsWindow : Window
                     CloseButtonText = "Keep editing",
                     DefaultButton = YaguDialogDefaultButton.Primary,
                     RequestedTheme = RootGrid.ActualTheme,
-                    Width = 500,
+                    Width = 600,
                     Height = 260,
                     ShowTitleBar = false,
                     ShowTopRightCloseButton = true,
@@ -2477,7 +2477,7 @@ public sealed partial class SettingsWindow : Window
             ocrEngineCombo.SelectedIndex =
                 string.Equals(AppSettings.NormalizeImageOcrEngine(_viewModel.ImageOcrEngine), "tesseract", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
             ocrEnableGroup.Children.Add(ocrEngineCombo);
-            ocrEnableGroup.Children.Add(new TextBlock { Text = "PaddleSharp (the default) generally gives higher accuracy on screenshots and documents and can use GPU/NPU acceleration. Tesseract is a lighter alternative. The selected engine's runtime and models are downloaded on first use.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            ocrEnableGroup.Children.Add(new TextBlock { Text = "PaddleSharp (the default) generally gives higher accuracy on screenshots and documents. It runs on the CPU (MKL-accelerated) — no GPU or NPU is required or used. Tesseract is a lighter alternative that can be faster on low-end CPUs. The selected engine's runtime and models are downloaded on first use.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             // ── Recognition Quality (applies to PaddleSharp; Tesseract uses a fixed pipeline) ──
             ocrQualityGroup.Children.Add(new TextBlock { Text = "These settings tune the PaddleSharp engine. The Tesseract engine uses a fixed recognition pipeline and ignores them.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) });
@@ -2486,7 +2486,7 @@ public sealed partial class SettingsWindow : Window
             ocrQualityGroup.Children.Add(presetLabel);
             var presetCombo = new ComboBox { MinWidth = 260, HorizontalAlignment = HorizontalAlignment.Left };
             presetCombo.Items.Add(new ComboBoxItem { Content = "Fast (English v3, 640 px)", Tag = "Fast" });
-            presetCombo.Items.Add(new ComboBoxItem { Content = "Balanced (English v4, 960 px)", Tag = "Balanced" });
+            presetCombo.Items.Add(new ComboBoxItem { Content = "Balanced (Chinese+English v5, 960 px)", Tag = "Balanced" });
             presetCombo.Items.Add(new ComboBoxItem { Content = "Accurate (Chinese+English v5, 1536 px)", Tag = "Accurate" });
             presetCombo.Items.Add(new ComboBoxItem { Content = "Custom", Tag = "Custom" });
             ocrQualityGroup.Children.Add(presetCombo);
@@ -2497,9 +2497,9 @@ public sealed partial class SettingsWindow : Window
             ocrQualityGroup.Children.Add(modelLabel);
             var modelCombo = new ComboBox { MinWidth = 260, HorizontalAlignment = HorizontalAlignment.Left };
             modelCombo.Items.Add(new ComboBoxItem { Content = "English (v3) — fastest", Tag = "EnglishV3" });
-            modelCombo.Items.Add(new ComboBoxItem { Content = "English (v4) — recommended", Tag = "EnglishV4" });
+            modelCombo.Items.Add(new ComboBoxItem { Content = "English (v4)", Tag = "EnglishV4" });
             modelCombo.Items.Add(new ComboBoxItem { Content = "Chinese + English (v4)", Tag = "ChineseV4" });
-            modelCombo.Items.Add(new ComboBoxItem { Content = "Chinese + English (v5) — most accurate", Tag = "ChineseV5" });
+            modelCombo.Items.Add(new ComboBoxItem { Content = "Chinese + English (v5) — recommended, most accurate", Tag = "ChineseV5" });
             ocrQualityGroup.Children.Add(modelCombo);
             ocrQualityGroup.Children.Add(new TextBlock { Text = "The PaddleSharp recognition model. English models are fastest for Latin-script text; the Chinese+English models also recognize CJK characters and v5 is the most accurate overall. Models are downloaded on first use.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
@@ -2535,7 +2535,7 @@ public sealed partial class SettingsWindow : Window
             static string PresetForModelAndResolution(string model, int maxSide) => model switch
             {
                 "EnglishV3" when maxSide == 640 => "Fast",
-                "EnglishV4" when maxSide == 960 => "Balanced",
+                "ChineseV5" when maxSide == 960 => "Balanced",
                 "ChineseV5" when maxSide == 1536 => "Accurate",
                 _ => "Custom",
             };
@@ -2572,7 +2572,7 @@ public sealed partial class SettingsWindow : Window
                 (string Model, int MaxSide)? target = preset switch
                 {
                     "Fast" => ("EnglishV3", 640),
-                    "Balanced" => ("EnglishV4", 960),
+                    "Balanced" => ("ChineseV5", 960),
                     "Accurate" => ("ChineseV5", 1536),
                     _ => null, // Custom: keep the current model/resolution.
                 };

@@ -530,3 +530,50 @@ public sealed class WorkerOcrEngineProtocolSourceTests
         return dir?.FullName ?? throw new InvalidOperationException("Cannot find repo root (Yagu.sln)");
     }
 }
+
+/// <summary>
+/// Source-level pin for the worker's model resolver. <c>PaddleModelResolver</c> references
+/// PaddleSharp's online-models package, which is deliberately NOT linked into the test assembly, so
+/// its default/fallback lines cannot be line-covered by a unit test. This pins that the default
+/// recognition model is <c>ChineseV5</c> (PP-OCRv5) and that both a blank/whitespace name and an
+/// unknown name fall back to it — matching <c>AppSettings.DefaultImageOcrModel</c>.
+/// </summary>
+public sealed class PaddleModelResolverSourceTests
+{
+    private static readonly string Source = File.ReadAllText(
+        Path.Combine(FindRepoRoot(), "Yagu.OcrWorker", "PaddleModelResolver.cs"));
+
+    [Fact]
+    public void DefaultModelName_IsChineseV5()
+    {
+        Assert.Contains("public const string DefaultModelName = \"ChineseV5\";", Source);
+    }
+
+    [Fact]
+    public void BlankAndUnknownNames_FallBackToChineseV5NotEnglishV4()
+    {
+        // Two return sites use the ChineseV5 default: the blank/whitespace guard at the top of Resolve
+        // and the reflection-miss path at the bottom. Neither may regress to the former EnglishV4 default.
+        Assert.Equal(2, CountOccurrences(Source, "return OnlineFullModels.ChineseV5;"));
+        Assert.DoesNotContain("OnlineFullModels.EnglishV4", Source);
+    }
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        int count = 0, index = 0;
+        while ((index = haystack.IndexOf(needle, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += needle.Length;
+        }
+        return count;
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Yagu.sln")))
+            dir = dir.Parent;
+        return dir?.FullName ?? throw new InvalidOperationException("Cannot find repo root (Yagu.sln)");
+    }
+}

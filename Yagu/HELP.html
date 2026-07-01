@@ -1477,8 +1477,9 @@ queue and the recognized text is searched.</td>
 <tr>
 <td>OCR engine</td>
 <td>PaddleSharp (recommended, default) or Tesseract. PaddleSharp is
-generally more accurate and can use GPU/NPU acceleration; Tesseract is a
-lighter alternative with a fixed pipeline. With the lite installer, the
+generally more accurate and runs on the CPU (MKL-accelerated) — no GPU or
+NPU is required or used; Tesseract is a lighter alternative with a fixed
+pipeline that can be faster on low-end CPUs. With the lite installer, the
 selected engine’s runtime and models download on first use (after you
 approve the warning); the OCR-bundled installer ships the PaddleSharp
 runtime and models so the default engine needs no download.</td>
@@ -1487,15 +1488,15 @@ runtime and models so the default engine needs no download.</td>
 <td>Quality preset</td>
 <td>Quick presets that set the recognition model and detection
 resolution together: <strong>Fast</strong> (English v3, 640 px),
-<strong>Balanced</strong> (English v4, 960 px),
+<strong>Balanced</strong> (Chinese+English v5, 960 px),
 <strong>Accurate</strong> (Chinese+English v5, 1536 px). Switches to
 <strong>Custom</strong> when the model/resolution below don’t match a
 preset. Applies to PaddleSharp.</td>
 </tr>
 <tr>
 <td>Recognition model</td>
-<td>PaddleSharp recognition model: English v3 (fastest), English v4
-(recommended), Chinese+English v4, or Chinese+English v5 (most
+<td>PaddleSharp recognition model: English v3 (fastest), English v4,
+Chinese+English v4, or Chinese+English v5 (default, recommended, most
 accurate). Models download on first use. Ignored by Tesseract.</td>
 </tr>
 <tr>
@@ -3102,8 +3103,8 @@ not blocked.</td>
 <tr>
 <td><code>--ocr-model &lt;name&gt;</code></td>
 <td>PaddleSharp recognition model for <code>--image-text</code>:
-<code>EnglishV3</code>, <code>EnglishV4</code> (default),
-<code>ChineseV4</code>, or <code>ChineseV5</code>. Falls back to the
+<code>EnglishV3</code>, <code>EnglishV4</code>,
+<code>ChineseV4</code>, or <code>ChineseV5</code> (default). Falls back to the
 <strong>OCR ▸ Recognition model</strong> setting. Ignored by the
 <code>tesseract</code> engine.</td>
 </tr>

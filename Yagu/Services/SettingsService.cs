@@ -284,11 +284,11 @@ public sealed class AppSettings
     /// Tesseract; all other builds default to PaddleSharp.</summary>
     public static readonly string EffectiveDefaultImageOcrEngine =
         ResolveDefaultImageOcrEngine(RuntimeInformation.ProcessArchitecture);
-    /// <summary>PaddleOCR model used for image-text recognition: "EnglishV3", "EnglishV4" (default),
-    /// "ChineseV4" or "ChineseV5" (newest, multilingual). Higher/newer models trade speed for accuracy.
-    /// Normalized on load. Ignored by the Tesseract engine.</summary>
+    /// <summary>PaddleOCR model used for image-text recognition: "EnglishV3", "EnglishV4",
+    /// "ChineseV4" or "ChineseV5" (default; PP-OCRv5, multilingual). Higher/newer models trade speed for
+    /// accuracy. Normalized on load. Ignored by the Tesseract engine.</summary>
     public string ImageOcrModel { get; set; } = DefaultImageOcrModel;
-    public const string DefaultImageOcrModel = "EnglishV4";
+    public const string DefaultImageOcrModel = "ChineseV5";
     /// <summary>PaddleOCR detection resolution cap (longest image side, in pixels) for image-text OCR.
     /// Higher = better accuracy on small text, slower. 0 = unlimited. Default 960. Ignored by Tesseract.</summary>
     public int ImageOcrMaxSide { get; set; } = DefaultImageOcrMaxSide;

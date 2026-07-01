@@ -1786,8 +1786,8 @@ internal static class CliRunner
                                           an interactive prompt. Needed only on the very first OCR run of
                                           an edition that does not bundle the OCR components.
                   --ocr-engine <name>     OCR engine for --image-text: paddle (default) or tesseract.
-                  --ocr-model <name>      PaddleSharp recognition model: EnglishV3, EnglishV4 (default),
-                                          ChineseV4, or ChineseV5. Ignored by the tesseract engine.
+                  --ocr-model <name>      PaddleSharp recognition model: EnglishV3, EnglishV4,
+                                          ChineseV4, or ChineseV5 (default). Ignored by the tesseract engine.
                   --ocr-max-side <px>     PaddleSharp detection resolution (longest side, default 960;
                                           0 = unlimited/native). Ignored by the tesseract engine.
 

@@ -281,6 +281,53 @@ public sealed class ExcludedExtensionPredictorTests
         Assert.Empty(set);
     }
 
+    [Fact]
+    public void ExtractFilterExtensions_FullFilenameToken_ExtractsTrailingExtension()
+    {
+        // Pasting a full filename into the file filter targets its extension. The reported bug: a
+        // "01-after-search.png" file filter while png is skip-listed silently found nothing AND never
+        // warned, because only "*.png"/bare "png" tokens were recognized as extension targets before.
+        var set = ExcludedExtensionPredictor.ExtractFilterExtensions("01-after-search.png");
+        Assert.Contains("png", set);
+    }
+
+    [Theory]
+    [InlineData("report.final.docx", "docx")]
+    [InlineData("foo*.png", "png")]
+    [InlineData("**/build/*.log", "log")]
+    [InlineData("My Document.PDF", "pdf")]
+    public void ExtractFilterExtensions_FilenameLikeTokens_YieldTrailingExtension(string token, string expected)
+    {
+        Assert.Contains(expected, ExcludedExtensionPredictor.ExtractFilterExtensions(token));
+    }
+
+    [Theory]
+    [InlineData("src/components")]   // path segments, no extension
+    [InlineData(".gitignore")]       // dotfile: no name before the dot
+    [InlineData("archive.tar.g-z")]  // non-alphanumeric trailing token
+    [InlineData("node_modules")]     // long bare path segment
+    [InlineData("backup.")]          // trailing dot: nothing after the final dot (dot == last index)
+    [InlineData("data.superlongextensionname")] // trailing token > 16 chars is not treated as an extension
+    public void ExtractFilterExtensions_NonExtensionTokens_YieldNothing(string token)
+    {
+        Assert.Empty(ExcludedExtensionPredictor.ExtractFilterExtensions(token));
+    }
+
+    [Fact]
+    public void Predict_FullFilenameIncludeFilter_WhileExtensionSkipped_Warns()
+    {
+        // The exact reported scenario: query "a", file filter limited to "01-after-search.png", and png
+        // is in Skip Extensions. The .png target comes from the include filter, not the query.
+        var result = Predict(
+            "a",
+            mode: SearchMode.Both,
+            includeGlobs: "01-after-search.png",
+            skip: Set("png", "jpg"));
+        Assert.NotNull(result);
+        Assert.Equal("png", result!.Extension);
+        Assert.True(result.Reasons.HasFlag(ExtensionExclusionReason.SkipExtensions));
+    }
+
     [Theory]
     [InlineData(null, "exe", "")]
     [InlineData("   ", "exe", "   ")]

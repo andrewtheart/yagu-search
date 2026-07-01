@@ -388,9 +388,9 @@ Controls image text recognition (OCR). When OCR is on, image files (PNG, JPG, BM
 | Setting | What It Controls |
 | --- | --- |
 | Search image text (OCR) | Default for the Advanced Options ▸ Filters "Search image text (OCR)" toggle. Off by default. When on, image files are OCR'd on a background queue and the recognized text is searched. |
-| OCR engine | PaddleSharp (recommended, default) or Tesseract. PaddleSharp is generally more accurate and can use GPU/NPU acceleration; Tesseract is a lighter alternative with a fixed pipeline. With the lite installer, the selected engine's runtime and models download on first use (after you approve the warning); the OCR-bundled installer ships the PaddleSharp runtime and models so the default engine needs no download. |
-| Quality preset | Quick presets that set the recognition model and detection resolution together: **Fast** (English v3, 640 px), **Balanced** (English v4, 960 px), **Accurate** (Chinese+English v5, 1536 px). Switches to **Custom** when the model/resolution below don't match a preset. Applies to PaddleSharp. |
-| Recognition model | PaddleSharp recognition model: English v3 (fastest), English v4 (recommended), Chinese+English v4, or Chinese+English v5 (most accurate). Models download on first use. Ignored by Tesseract. |
+| OCR engine | PaddleSharp (recommended, default) or Tesseract. PaddleSharp is generally more accurate and runs on the CPU (MKL-accelerated) — no GPU or NPU is required or used; Tesseract is a lighter alternative with a fixed pipeline that can be faster on low-end CPUs. With the lite installer, the selected engine's runtime and models download on first use (after you approve the warning); the OCR-bundled installer ships the PaddleSharp runtime and models so the default engine needs no download. |
+| Quality preset | Quick presets that set the recognition model and detection resolution together: **Fast** (English v3, 640 px), **Balanced** (Chinese+English v5, 960 px), **Accurate** (Chinese+English v5, 1536 px). Switches to **Custom** when the model/resolution below don't match a preset. Applies to PaddleSharp. |
+| Recognition model | PaddleSharp recognition model: English v3 (fastest), English v4, Chinese+English v4, or Chinese+English v5 (default, recommended, most accurate). Models download on first use. Ignored by Tesseract. |
 | Detection resolution | Longest image side (in pixels) the image is downscaled to before detection: 640, 960, 1280, 1536, 2048, or Unlimited (native resolution). Larger finds smaller text but is slower. Ignored by Tesseract. |
 
 ### Performance Tab
@@ -1029,7 +1029,7 @@ Semantic requests can also set **sorting** and **grouping** (e.g. *"sort by file
 | `--image-text` (aliases `--search-image-text`, `--ocr`) | OCR image files and search the recognized text. Off by default; falls back to the **Search image text (OCR)** setting. Images are processed on a background queue so the normal file scan is not blocked. |
 | `--no-image-text` (aliases `--no-search-image-text`, `--no-ocr`) | Do not OCR images (default). |
 | `--ocr-engine <name>` | OCR engine for `--image-text`: `paddle` (PaddleSharp, default) or `tesseract`. |
-| `--ocr-model <name>` | PaddleSharp recognition model for `--image-text`: `EnglishV3`, `EnglishV4` (default), `ChineseV4`, or `ChineseV5`. Falls back to the **OCR ▸ Recognition model** setting. Ignored by the `tesseract` engine. |
+| `--ocr-model <name>` | PaddleSharp recognition model for `--image-text`: `EnglishV3`, `EnglishV4`, `ChineseV4`, or `ChineseV5` (default). Falls back to the **OCR ▸ Recognition model** setting. Ignored by the `tesseract` engine. |
 | `--ocr-max-side <px>` | PaddleSharp detection resolution (longest side in pixels) for `--image-text`: default 960; `0` = unlimited (native resolution). Falls back to the **OCR ▸ Detection resolution** setting. Ignored by the `tesseract` engine. |
 | `--allow-ocr-download` | Consent, in advance, to the one-time download of the OCR engine runtime and/or language models that `--image-text` needs on first use (the lite installer ships without them; the OCR-bundled installer ships them so nothing downloads). Without this flag, a non-interactive run that needs the download is refused and an interactive run prompts before downloading. Consent is remembered for future runs. |
 

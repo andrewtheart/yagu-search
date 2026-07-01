@@ -53,7 +53,11 @@ public sealed partial class MainWindow
         if (_autoSearchOnLoad)
         {
             _autoSearchOnLoad = false;
-            if (await CheckHddAndWarnAsync())
+            // Run the full pre-search warning gate (HDD + excluded-extension), the same notices an
+            // interactive search shows, so an auto-search launched with a directory (a pinned startup
+            // folder, --dir, or the Explorer context menu) also warns before a doomed full-tree scan
+            // for a file whose extension is currently excluded.
+            if (await RunPreSearchWarningGatesAsync())
             {
                 CollapseAdvancedOptionsForSearch();
                 await ViewModel.StartSearchAsync();

@@ -18,6 +18,7 @@ public sealed class ExcludedExtensionWarningWiringTests
     private static readonly string SlowSemanticModelSource = ReadSource("Yagu", "UI", "Windows", "MainWindow", "MainWindow.SlowSemanticModel.cs");
     private static readonly string AdminSettingsSource = ReadSource("Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdminSettings.cs");
     private static readonly string AdvancedOptionsSource = ReadSource("Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdvancedOptions.cs");
+    private static readonly string StartupChecksSource = ReadSource("Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs");
     private static readonly string MainViewModelSource = ReadSource("Yagu", "ViewModels", "MainViewModel.cs");
     private static readonly string SettingsWindowSource = ReadSource("Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs");
 
@@ -220,6 +221,21 @@ public sealed class ExcludedExtensionWarningWiringTests
         // The Reset button must reuse the single ResetAdvancedOptionsToSavedDefaults implementation
         // (the same code path as the post-search auto-reset) instead of duplicating reset logic.
         Assert.Contains("ViewModel.ResetAdvancedOptionsToSavedDefaults();", AdvancedOptionsSource);
+    }
+
+    [Fact]
+    public void AutoSearchOnLoad_RunsFullPreSearchWarningGate()
+    {
+        // An auto-search launched on startup (a pinned directory, --dir, or the Explorer context menu)
+        // must run the SAME pre-search warning gate as an interactive search — not just the HDD check —
+        // so it also warns before a doomed full-tree scan for a file whose extension is excluded.
+        int idx = StartupChecksSource.IndexOf("_autoSearchOnLoad = false;", StringComparison.Ordinal);
+        Assert.True(idx >= 0, "Expected the auto-search-on-load block in MainWindow.StartupChecks.cs");
+        string block = Slice(StartupChecksSource, idx, 800);
+        Assert.Contains("await RunPreSearchWarningGatesAsync()", block);
+        Assert.Contains("await ViewModel.StartSearchAsync();", block);
+        // It must NOT gate only on the HDD check (the prior gap that skipped the excluded-extension notice).
+        Assert.DoesNotContain("if (await CheckHddAndWarnAsync())", block);
     }
 
     private static int CountOccurrences(string haystack, string needle)

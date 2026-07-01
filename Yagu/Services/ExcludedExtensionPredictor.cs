@@ -145,8 +145,10 @@ internal static class ExcludedExtensionPredictor
     /// <summary>
     /// Extracts the dot-less, lower-cased extensions named by a glob filter string, mirroring
     /// <c>GlobMatcher</c>'s extension-pattern detection: a bare alphanumeric token of 1–5 chars
-    /// (e.g. "ts", "json") and the <c>*.ext</c> form both denote an extension. Path-segment, wildcard,
-    /// and regex tokens contribute nothing, so a folder include like "src" never triggers a warning.
+    /// (e.g. "ts", "json"), the <c>*.ext</c> form, and a token that ends in a recognizable file
+    /// extension (e.g. a full filename pasted into the filter like "01-after-search.png", or
+    /// "**/build/*.log") all denote an extension. Path-segment, wildcard, and regex tokens contribute
+    /// nothing, so a folder include like "src" never triggers a warning.
     /// </summary>
     internal static HashSet<string> ExtractFilterExtensions(string? globText)
     {
@@ -166,10 +168,34 @@ internal static class ExcludedExtensionPredictor
 
             // bare alphanumeric token ≤5 chars → extension (matches GlobMatcher.BuildGlob)
             if (token.Length <= 5 && token.All(char.IsLetterOrDigit))
+            {
                 set.Add(token.ToLowerInvariant());
+                continue;
+            }
+
+            // A token that names a file with a trailing extension (e.g. "01-after-search.png",
+            // "report.final.docx", "foo*.png", "**/build/*.log"). Filtering results TO such a
+            // file/pattern targets that extension just as much as "*.png" does — this is the common
+            // case of pasting a full filename into the file filter. Mirrors the query-term rule in
+            // ExtractCandidateExtensions so a ".png file filter while png is skipped" is detected.
+            string ext = TrailingExtensionToken(token);
+            if (ext.Length > 0)
+                set.Add(ext);
         }
 
         return set;
+    }
+
+    /// <summary>Returns the dot-less, lower-cased trailing extension of a glob/filename token (1–16
+    /// alphanumeric chars after the final dot), or an empty string when the token does not end in a
+    /// recognizable extension (no name before the dot, a trailing dot, or non-alphanumeric chars).</summary>
+    private static string TrailingExtensionToken(string token)
+    {
+        int dot = token.LastIndexOf('.');
+        if (dot <= 0 || dot == token.Length - 1) return string.Empty;
+        string ext = token[(dot + 1)..];
+        if (ext.Length > 16 || !ext.All(char.IsLetterOrDigit)) return string.Empty;
+        return ext.ToLowerInvariant();
     }
     /// <summary>Removes any token denoting <paramref name="ext"/> (e.g. "exe", ".exe", "*.exe") from a
     /// semicolon/comma-separated extension or glob string, preserving the remaining tokens' order.</summary>

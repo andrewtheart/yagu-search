@@ -146,6 +146,92 @@ public sealed class AdvancedOptionsTests
         Assert.Contains("MaxSearchDepth = double.NaN;", method);
     }
 
+    // ══════════════════════════════════════════════════════════════════
+    // Save as Defaults
+    // ══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void SaveAsDefaultsButton_ExistsAndIsWiredInTheActionBar()
+    {
+        Assert.Contains("Content=\"Save as Defaults\"", MainWindowXaml);
+        Assert.Contains("Click=\"OnAdvancedOptionsSaveDefaultsClick\"", MainWindowXaml);
+    }
+
+    [Fact]
+    public void SaveDefaultsClick_ShowsTitlelessConfirmThenDelegatesToViewModelOnlyOnConfirm()
+    {
+        string method = ExtractMethodWindow("OnAdvancedOptionsSaveDefaultsClick", 2400);
+        // Summary of exactly what will be saved.
+        Assert.Contains("ViewModel.DescribeAdvancedOptionDefaults()", method);
+        // Title-bar-less confirm/cancel modal (per the modal-no-title-bar rule).
+        Assert.Contains("ShowTitleBar = false", method);
+        Assert.Contains("PrimaryButtonText = \"Save as defaults\"", method);
+        Assert.Contains("CloseButtonText = \"Cancel\"", method);
+        // Persists ONLY when the user confirms.
+        AssertContainsInOrder(method,
+            "if (result != YaguDialogResult.Primary)",
+            "return;",
+            "await ViewModel.SaveAdvancedOptionsAsDefaultsAsync();");
+    }
+
+    [Fact]
+    public void SaveAdvancedOptionsAsDefaults_ClearsTransientGuardsPromotesMirrorsAndPersists()
+    {
+        string method = ExtractViewModelMethod("public async Task SaveAdvancedOptionsAsDefaultsAsync()");
+        // The visible values become the real defaults: drop the snapshot/transient guards so the
+        // persisted value is what's shown and a later Reset won't undo it.
+        Assert.Contains("_semanticResolutionVisible = false;", method);
+        Assert.Contains("_advancedOptionsTransientlyChanged = false;", method);
+        // Promote the active filter values into the persisted-default mirrors Reset/launch read from.
+        Assert.Contains("SettingsSkipExtensions = SkipExtensions;", method);
+        Assert.Contains("SettingsBinaryExtensions = BinaryExtensions;", method);
+        Assert.Contains("SettingsArchiveExtensions = ArchiveExtensions;", method);
+        Assert.Contains("DefaultMinFileSizeBytes = MinFileSizeBytes;", method);
+        Assert.Contains("DefaultModifiedBeforeDate = ModifiedBeforeDate;", method);
+        // Writes straight to disk via the canonical persist path.
+        Assert.Contains("await PersistSettingsAsync()", method);
+    }
+
+    [Fact]
+    public void DescribeAdvancedOptionDefaults_SummarizesKeyOptions()
+    {
+        string method = ExtractViewModelMethod("internal IReadOnlyList<string> DescribeAdvancedOptionDefaults()");
+        Assert.Contains("Match case:", method);
+        Assert.Contains("Respect .gitignore:", method);
+        Assert.Contains("Search hidden files:", method);
+        Assert.Contains("Search image text (OCR):", method);
+        Assert.Contains("Include filter:", method);
+        Assert.Contains("Exclude filter:", method);
+    }
+
+    [Fact]
+    public void DescribeAdvancedOptionDefaults_SizeDateAndByteHelpers_CoverEveryRangeShapeAndUnit()
+    {
+        // The size/date/byte formatting helpers back the confirmation summary lines. They live in the
+        // WinUI-coupled MainViewModel (not unit-instantiable), so pin each helper's branch structure so
+        // every range shape (two-sided, min-only, max-only, none) and byte unit (GB/MB/KB/bytes) stays.
+        string size = ExtractViewModelMethod("private static string DescribeSizeRange(long minBytes, long maxBytes)", 600);
+        AssertContainsInOrder(size,
+            "if (hasMin && hasMax) return $\"between {FormatBytes(minBytes)} and {FormatBytes(maxBytes)}\";",
+            "if (hasMin) return $\"at least {FormatBytes(minBytes)}\";",
+            "if (hasMax) return $\"at most {FormatBytes(maxBytes)}\";",
+            "return string.Empty;");
+
+        string date = ExtractViewModelMethod("private static string DescribeDateRange(DateTimeOffset? after, DateTimeOffset? before)", 700);
+        AssertContainsInOrder(date,
+            "if (after.HasValue && before.HasValue) return $\"between {D(after.Value)} and {D(before.Value)}\";",
+            "if (after.HasValue) return $\"after {D(after.Value)}\";",
+            "if (before.HasValue) return $\"before {D(before.Value)}\";",
+            "return string.Empty;");
+
+        string bytes = ExtractViewModelMethod("private static string FormatBytes(long bytes)", 500);
+        AssertContainsInOrder(bytes,
+            "if (bytes >= gb) return $\"{bytes / (double)gb:0.##} GB\";",
+            "if (bytes >= mb) return $\"{bytes / (double)mb:0.##} MB\";",
+            "if (bytes >= kb) return $\"{bytes / (double)kb:0.##} KB\";",
+            "return $\"{bytes} bytes\";");
+    }
+
     // ── Image-text (OCR) option mapping ──
     // The OCR Advanced Option flows view-model ⇄ settings ⇄ SearchOptions. These three pins lock that
     // bridge (load, persist, and build) since MainViewModel is WinUI-coupled and not unit-instantiable.
