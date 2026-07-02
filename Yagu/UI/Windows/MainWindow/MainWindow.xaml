@@ -281,7 +281,7 @@
                     ToolTipService.ToolTip="Help">
                 <FontIcon Glyph="&#xE897;" FontSize="14" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
             </Button>
-            <Button Click="OnOpenSettings" VerticalAlignment="Center"
+            <Button x:Name="SettingsButton" Click="OnOpenSettings" VerticalAlignment="Center"
                     Width="36" Height="32" MinWidth="0" Padding="0"
                     Background="Transparent" BorderThickness="0" Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                     ToolTipService.ToolTip="Settings">

@@ -6,6 +6,36 @@ The name means "Yet Another Grep Utility". The goal is the speed of command-line
 
 For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
 
+## Screenshots
+
+**Traditional search** — literal, exact, or .NET-regex matching with streaming, grouped results and per-file match counts.
+
+![Traditional search results grouped by file](docs/images/traditional-search.png)
+
+**Semantic search (local, on-device AI)** — describe what you want in plain English; a small model running locally through Microsoft Foundry Local translates it into concrete Yagu options. No query ever leaves your PC.
+
+![Natural-language semantic search](docs/images/semantic-search.png)
+
+**Match navigation** — step through every occurrence in the context preview, with highlighted matches, line numbers, and an occurrence counter.
+
+![Match navigation in the context preview](docs/images/match-navigation.png)
+
+**Built-in editor** — open a matched file in-app with syntax highlighting, line numbers, find/replace, save, and `.yagubak` backups.
+
+![Built-in C# editor with syntax highlighting](docs/images/builtin-editor.png)
+
+**Multi-file preview** — review several selected files together in one scrollable panel, collapsing the section drawers you don't need.
+
+![Multiple files previewed together with a collapsed drawer](docs/images/multi-file-preview.png)
+
+**AI settings** — enable on-device semantic search, pick the local model, and set the GPU → NPU → CPU accelerator order.
+
+![AI (semantic) search settings](docs/images/settings-ai.png)
+
+**OCR settings** — turn on image-text search, choose the OCR engine (PaddleSharp or Tesseract), and tune recognition quality.
+
+![Image-text (OCR) search settings](docs/images/settings-ocr.png)
+
 ## Download Installer
 
 To install Yagu without building from source, download the installer that matches your PC and run it. Yagu ships as a self-contained Native AOT build, so no separate .NET runtime is required; every installer also bundles the Windows App Runtime payloads the desktop app needs.
