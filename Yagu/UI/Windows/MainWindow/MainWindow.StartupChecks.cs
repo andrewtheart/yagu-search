@@ -467,16 +467,16 @@ public sealed partial class MainWindow
         string fileName = is64Bit ? "Everything-1.4.1.1032.x64-Setup.exe" : "Everything-1.4.1.1032.x86-Setup.exe";
         string tempPath = Path.Combine(Path.GetTempPath(), fileName);
 
-        ViewModel.StatusText = "Downloading Everything Search installer\u2026";
+        // Download the installer behind a modal progress dialog. On cancel or failure (e.g. no
+        // internet) a clear message is shown and we fall back to built-in enumeration rather than
+        // failing silently with only a status-bar string.
+        if (!await DownloadEverythingInstallerAsync(url, tempPath))
+            return;
+
+        ViewModel.StatusText = "Running Everything Search installer \u2014 please complete the setup wizard\u2026";
 
         try
         {
-            using var http = new HttpClient();
-            var data = await http.GetByteArrayAsync(new Uri(url));
-            await File.WriteAllBytesAsync(tempPath, data);
-
-            ViewModel.StatusText = "Running Everything Search installer \u2014 please complete the setup wizard\u2026";
-
             var psi = new ProcessStartInfo
             {
                 FileName = tempPath,
@@ -528,6 +528,191 @@ public sealed partial class MainWindow
         {
             ViewModel.StatusText = $"Failed to install Everything: {ex.Message}. Using built-in file enumeration.";
             LogService.Instance.Warning("MainWindow", "Everything install failed", ex);
+        }
+    }
+
+    /// <summary>
+    /// Downloads the Everything Search installer to <paramref name="tempPath"/> behind a modal
+    /// progress dialog. Returns true when the file is ready to run; false when the user cancelled or
+    /// the download failed (a clear failure modal is shown for real errors, e.g. no internet). Never
+    /// throws — a failed download degrades gracefully to built-in file enumeration.
+    /// </summary>
+    private async Task<bool> DownloadEverythingInstallerAsync(string url, string tempPath)
+    {
+        using var cts = new CancellationTokenSource();
+
+        var progressBar = new ProgressBar { Minimum = 0, Maximum = 100, IsIndeterminate = true };
+        var statusText = new TextBlock { Text = "Connecting\u2026", Opacity = 0.85, TextWrapping = TextWrapping.Wrap };
+        var body = new StackPanel { Spacing = 14 };
+        body.Children.Add(new TextBlock
+        {
+            Text = "Downloading the Everything Search installer from voidtools.com\u2026",
+            TextWrapping = TextWrapping.Wrap,
+        });
+        body.Children.Add(progressBar);
+        body.Children.Add(statusText);
+
+        YaguDialog? dialog = null;
+        var dialogTask = YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "Getting Everything Search",
+                TitleGlyph = "\uE896", // Download
+                Content = body,
+                CloseButtonText = "Cancel",
+                DefaultButton = YaguDialogDefaultButton.Close,
+                ShowTitleBar = false,
+                Width = 480,
+                Height = 240,
+            },
+            dlg => dialog = dlg);
+
+        // Closing/cancelling the progress modal cancels the in-flight download.
+        _ = dialogTask.ContinueWith(
+            _ => cts.Cancel(),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+
+        ViewModel.StatusText = "Downloading Everything Search installer\u2026";
+
+        bool cancelled = false;
+        Exception? error = null;
+        try
+        {
+            await DownloadFileWithProgressAsync(
+                url,
+                tempPath,
+                (received, total) => DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (total > 0)
+                    {
+                        int pct = (int)Math.Clamp(received * 100 / total, 0, 100);
+                        progressBar.IsIndeterminate = false;
+                        progressBar.Value = pct;
+                        statusText.Text = $"{pct}%  \u00b7  {FormatDownloadBytes(received)} of {FormatDownloadBytes(total)}";
+                    }
+                    else
+                    {
+                        statusText.Text = $"{FormatDownloadBytes(received)} downloaded";
+                    }
+                }),
+                cts.Token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            cancelled = true;
+        }
+        catch (Exception ex)
+        {
+            error = ex;
+        }
+
+        // Close the progress modal (no-op if the user already closed it) and wait for teardown so the
+        // owner window is re-enabled before any follow-up modal is shown.
+        if (!dialogTask.IsCompleted)
+            dialog?.AcceptClose();
+        await dialogTask.ConfigureAwait(true);
+
+        if (cancelled)
+        {
+            TryDeleteFile(tempPath);
+            ViewModel.StatusText = "Everything Search download cancelled. Using built-in file enumeration.";
+            LogService.Instance.Info("MainWindow", "Everything installer download cancelled by user");
+            return false;
+        }
+
+        if (error is not null)
+        {
+            TryDeleteFile(tempPath);
+            LogService.Instance.Warning("MainWindow", "Everything installer download failed", error);
+            ViewModel.StatusText = "Could not download Everything Search. Using built-in file enumeration.";
+            await ShowEverythingDownloadFailedAsync(error).ConfigureAwait(true);
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>Streams <paramref name="url"/> to <paramref name="destinationPath"/>, reporting
+    /// (bytesReceived, totalBytes) as it goes (totalBytes is 0 when the server omits Content-Length).</summary>
+    private static async Task DownloadFileWithProgressAsync(
+        string url, string destinationPath, Action<long, long> onProgress, CancellationToken cancellationToken)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+        using var response = await http
+            .GetAsync(new Uri(url), HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+
+        long total = response.Content.Headers.ContentLength ?? 0;
+        onProgress(0, total);
+
+        await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using var destination = new FileStream(
+            destinationPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+
+        var buffer = new byte[81920];
+        long received = 0;
+        int read;
+        while ((read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+        {
+            await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+            received += read;
+            onProgress(received, total);
+        }
+    }
+
+    /// <summary>Shows a modal explaining that the Everything Search installer could not be downloaded
+    /// (typically no internet), so the user understands why fast discovery is unavailable instead of
+    /// only seeing a status-bar line.</summary>
+    private async Task ShowEverythingDownloadFailedAsync(Exception error)
+    {
+        string reason = error switch
+        {
+            HttpRequestException => "Yagu couldn't reach voidtools.com. Please check your internet connection and try again.",
+            TaskCanceledException => "The download timed out. Please check your internet connection and try again.",
+            _ => "The download did not complete.",
+        };
+
+        await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "Couldn't download Everything Search",
+                TitleGlyph = "\uE7BA", // Warning
+                TitleGlyphColor = Microsoft.UI.Colors.Gold,
+                Content = reason
+                        + "\n\nYou can also install Everything Search manually from voidtools.com. In the "
+                        + "meantime, Yagu will keep working using built-in file enumeration.",
+                CloseButtonText = "OK",
+                DefaultButton = YaguDialogDefaultButton.Close,
+                ShowTitleBar = false,
+                Width = 520,
+                Height = 280,
+            }).ConfigureAwait(true);
+    }
+
+    private static string FormatDownloadBytes(long bytes)
+    {
+        if (bytes >= 1024L * 1024L)
+            return string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{bytes / (1024.0 * 1024.0):0.0} MB");
+        if (bytes >= 1024L)
+            return string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{bytes / 1024.0:0} KB");
+        return $"{bytes} B";
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Verbose("MainWindow", $"Could not delete temp file '{path}': {ex.Message}", ex);
         }
     }
 

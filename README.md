@@ -12,9 +12,13 @@ For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
 
 ![Traditional search results grouped by file](docs/images/traditional-search.png)
 
-**Semantic search (local, on-device AI)** — describe what you want in plain English; a small model running locally through Microsoft Foundry Local translates it into concrete Yagu options. No query ever leaves your PC.
+**Semantic search (local, on-device AI)** — describe what you want in plain English; a small model running locally through Microsoft Foundry Local translates it into concrete Yagu options and runs the search. No query ever leaves your PC.
 
-![Natural-language semantic search](docs/images/semantic-search.png)
+![Natural-language semantic search with results](docs/images/semantic-search.png)
+
+**Advanced Options** — a tabbed drawer for refining any search: search mode, include/exclude path filters, size and date ranges, and more — with a one-click **Generate CLI command**.
+
+![Advanced Options drawer](docs/images/advanced-options.png)
 
 **Match navigation** — step through every occurrence in the context preview, with highlighted matches, line numbers, and an occurrence counter.
 

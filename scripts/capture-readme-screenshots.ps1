@@ -8,10 +8,11 @@
 #   pwsh -File scripts/capture-readme-screenshots.ps1 -Scenario all
 #   pwsh -File scripts/capture-readme-screenshots.ps1 -Scenario semantic
 #
-# Scenarios: all, match-nav, editor, multi-preview, semantic, traditional, settings-ai, settings-ocr
+# Scenarios: all, match-nav, editor, multi-preview, semantic, traditional, settings-ai,
+#            settings-ocr, advanced-options
 
 param(
-    [ValidateSet('all','match-nav','editor','multi-preview','semantic','traditional','settings-ai','settings-ocr')]
+    [ValidateSet('all','match-nav','editor','multi-preview','semantic','traditional','settings-ai','settings-ocr','advanced-options')]
     [string]$Scenario = 'all',
     [string]$Directory = 'C:\src\Yagu\Yagu',
     [string]$OutDir = 'C:\src\Yagu\docs\images',
@@ -39,6 +40,10 @@ public static class Native {
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, IntPtr dwExtraInfo);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
 
     public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
@@ -88,6 +93,25 @@ public static class Native {
             bmp.Save(outPath, ImageFormat.Png);
             return "OK " + w + "x" + h;
         }
+    }
+
+    // Find the process's largest visible top-level window other than 'exclude' (the main window).
+    // A windowed Flyout (ShouldConstrainToRootBounds=False) is a separate top-level popup window,
+    // so this reliably returns the Advanced Options drawer HWND for a direct PrintWindow capture.
+    public static IntPtr FindPopup(uint pid, IntPtr exclude) {
+        IntPtr best = IntPtr.Zero;
+        long bestArea = 0;
+        EnumWindows((h, l) => {
+            uint wpid; GetWindowThreadProcessId(h, out wpid);
+            if (wpid != pid || h == exclude || !IsWindowVisible(h)) return true;
+            RECT r; if (!GetWindowRect(h, out r)) return true;
+            long w = r.Right - r.Left, hh = r.Bottom - r.Top;
+            if (w <= 0 || hh <= 0) return true;
+            long area = w * hh;
+            if (area > bestArea) { bestArea = area; best = h; }
+            return true;
+        }, IntPtr.Zero);
+        return best;
     }
 }
 "@ -ReferencedAssemblies System.Drawing
@@ -228,6 +252,31 @@ function Capture-Window {
     $path = Join-Path $OutDir $FileName
     $res = [Native]::Capture($hwnd, $path)
     Write-Step "Captured $FileName -> $res"
+}
+
+# Capture a bare window handle (used for windowed popups like the Advanced Options flyout, which
+# render in their own top-level HWND and are NOT part of the main window's PrintWindow output).
+function Capture-Hwnd([IntPtr]$Hwnd, [string]$FileName) {
+    if ($Hwnd -eq [IntPtr]::Zero) { Write-Step "No HWND for capture $FileName"; return }
+    $path = Join-Path $OutDir $FileName
+    $res = [Native]::Capture($Hwnd, $path)
+    Write-Step "Captured $FileName -> $res"
+}
+
+# Walk up the UIA control tree from an element to the nearest ancestor that owns a real HWND.
+# For a windowed popup (Flyout with ShouldConstrainToRootBounds=False) this is the popup's own
+# top-level window, which we can then PrintWindow independently of the main window.
+function Get-TopWindowForElement($el) {
+    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    $cur = $el
+    while ($cur) {
+        try {
+            $h = $cur.Current.NativeWindowHandle
+            if ($h -ne 0) { return [IntPtr]$h }
+        } catch {}
+        try { $cur = $walker.GetParent($cur) } catch { break }
+    }
+    return [IntPtr]::Zero
 }
 
 function Wait-Settle([int]$Seconds) { Start-Sleep -Seconds $Seconds }
@@ -416,11 +465,36 @@ function Scenario-Semantic {
         else { Write-Step 'Semantic menu item not found' }
     }
     Wait-Settle 1
-    # Type a natural-language query to showcase Semantic mode (do NOT run it — the
-    # readable NL query and the "Semantic" mode indicator are what we want to show).
+    # A natural-language request. Quoting the term ("async") biases the local model toward a
+    # clean literal pattern (avoids the degenerate word-boundary regex a vaguer phrasing yields),
+    # so the on-device translation reliably produces a populated result list.
+    $nlQuery = 'find files that contain the word "async"'
     $query = Find-ById $win 'QueryBox' 5
-    if ($query) { [void](Set-EditText $query 'C# files with async methods modified this year') }
-    Wait-Settle 3
+    if (-not $query) { Write-Host 'FAILED: QueryBox not found'; return }
+    [void](Set-EditText $query $nlQuery)
+    Wait-Settle 1
+    # Run it: the local model translates the NL request into concrete options and searches.
+    $split = Find-ById $win 'SearchSplitButton' 5
+    if ($split) { [void](Invoke-El $split); Write-Step 'Submitted semantic search' }
+    else { Write-Step 'SearchSplitButton not found to submit' }
+    # Wait for the translation (model load + inference) then the search to produce rows.
+    $deadline = (Get-Date).AddSeconds(60)
+    $rows = 0
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 2
+        $rows = (Get-FileCheckboxes $win).Count
+        if ($rows -gt 0) { break }
+    }
+    Write-Step "Semantic results: $rows file rows"
+    Wait-Settle 4
+    Cancel-Search $win           # freeze the result set (leaves found rows intact)
+    Wait-Settle 2
+    # The app writes the RESOLVED literal pattern back into the box when it runs. Restore the
+    # original natural-language request for the screenshot so both the NL query AND the results
+    # it produced are visible together. SetValue is a programmatic change, so it neither reopens
+    # the history dropdown nor clears the results.
+    [void](Set-EditText $query $nlQuery)
+    Wait-Settle 2
     Capture-Window $win 'semantic-search.png' -Activate
 }
 
@@ -498,16 +572,59 @@ function Scenario-SettingsOcr {
     if ($sw) { Capture-Window $sw 'settings-ocr.png' -Activate }
 }
 
+function Scenario-AdvancedOptions {
+    Write-Host "[advanced-options] launching..."
+    Stop-AllYagu
+    # Run a real search first so the window shows populated context behind/around the drawer.
+    Start-Yagu "--dir `"$Directory`" --query `"async Task`" --window-mode traditional" | Out-Null
+    $win = Get-YaguWindow 25
+    if (-not $win) { Write-Host 'FAILED: no Yagu window'; return }
+    [Native]::Activate([IntPtr]$win.Current.NativeWindowHandle)
+    Wait-Settle 12
+    Cancel-Search $win
+    Wait-Settle 2
+    # Open the Advanced Options drawer (a flat toggle button whose Flyout drops the tabbed drawer).
+    $toggle = Find-ById $win 'AdvancedOptionsToggle' 6
+    if (-not $toggle) { Write-Host 'FAILED: AdvancedOptionsToggle not found'; return }
+    [void](Invoke-El $toggle)
+    Wait-Settle 2
+    # The drawer is a windowed popup (ShouldConstrainToRootBounds=False) with its own HWND, so
+    # locate it via a known descendant (the tab list) and walk up to the owning popup window.
+    $root = $AE::RootElement
+    $tabList = Find-ById $root 'AdvancedOptionsTabList' 6
+    if (-not $tabList) {
+        Write-Step 'AdvancedOptionsTabList not found — retrying open via physical click'
+        [Native]::Raise([IntPtr]$win.Current.NativeWindowHandle)
+        Wait-Settle 1
+        $tr = $toggle.Current.BoundingRectangle
+        [Native]::LeftClickAt([int]($tr.X + $tr.Width/2), [int]($tr.Y + $tr.Height/2))
+        Wait-Settle 2
+        $tabList = Find-ById $root 'AdvancedOptionsTabList' 6
+    }
+    if (-not $tabList) { Write-Host 'FAILED: Advanced Options drawer did not open'; return }
+    # The drawer is a separate top-level popup window (class Microsoft.UI.Content.PopupWindowSiteBridge);
+    # capture it directly. Enumerate the window's OWN process (single-instance handoff means the launched
+    # PID may differ from the live window's PID), picking the largest visible window that isn't the main one.
+    $mainHwnd = [IntPtr]$win.Current.NativeWindowHandle
+    $winPid = [uint32]$win.Current.ProcessId
+    $popup = [Native]::FindPopup($winPid, $mainHwnd)
+    if ($popup -eq [IntPtr]::Zero) { $popup = Get-TopWindowForElement $tabList }
+    if ($popup -eq [IntPtr]::Zero) { Write-Host 'FAILED: no popup HWND for drawer'; return }
+    Wait-Settle 1
+    Capture-Hwnd $popup 'advanced-options.png'
+}
+
 # --- Dispatch ----------------------------------------------------------------
 
 switch ($Scenario) {
-    'match-nav'     { Scenario-MatchNav }
-    'traditional'   { Scenario-Traditional }
-    'editor'        { Scenario-Editor }
-    'multi-preview' { Scenario-MultiPreview }
-    'semantic'      { Scenario-Semantic }
-    'settings-ai'   { Scenario-SettingsAi }
-    'settings-ocr'  { Scenario-SettingsOcr }
+    'match-nav'        { Scenario-MatchNav }
+    'traditional'      { Scenario-Traditional }
+    'editor'           { Scenario-Editor }
+    'multi-preview'    { Scenario-MultiPreview }
+    'semantic'         { Scenario-Semantic }
+    'settings-ai'      { Scenario-SettingsAi }
+    'settings-ocr'     { Scenario-SettingsOcr }
+    'advanced-options' { Scenario-AdvancedOptions }
     'all' {
         Scenario-Traditional
         Scenario-MatchNav
@@ -516,6 +633,7 @@ switch ($Scenario) {
         Scenario-Semantic
         Scenario-SettingsAi
         Scenario-SettingsOcr
+        Scenario-AdvancedOptions
     }
 }
 

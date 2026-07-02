@@ -104,6 +104,45 @@ public sealed class EverythingSearchDialogRegressionTests
         Assert.Contains("_viewModel.SuppressEverythingNotRunningPrompt = false;", settingsWindow);
     }
 
+    [Fact]
+    public void EverythingInstallerDownload_ShowsProgressModalAndOfflineFailureModal()
+    {
+        string root = FindRepoRoot();
+        string startupChecks = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+
+        // The installer download is gated by a helper that shows a modal instead of the old silent
+        // one-shot GetByteArrayAsync download that only updated the status bar.
+        Assert.Contains("if (!await DownloadEverythingInstallerAsync(url, tempPath))", startupChecks);
+        Assert.DoesNotContain("GetByteArrayAsync", startupChecks);
+
+        // A modal progress dialog with a real progress bar is shown while downloading, and it is
+        // cancellable and titleless.
+        const string progressTitle = "Title = \"Getting Everything Search\"";
+        int progressIndex = startupChecks.IndexOf(progressTitle, StringComparison.Ordinal);
+        Assert.True(progressIndex >= 0, "Could not find the Everything download progress dialog.");
+        int progressEnd = startupChecks.IndexOf("Width = 480", progressIndex, StringComparison.Ordinal);
+        Assert.True(progressEnd > progressIndex, "Could not find end of the progress dialog options block.");
+        string progressBlock = startupChecks.Substring(progressIndex, progressEnd - progressIndex);
+        Assert.Contains("ShowTitleBar = false", progressBlock);
+        Assert.Contains("CloseButtonText = \"Cancel\"", progressBlock);
+        Assert.Contains("new ProgressBar", startupChecks);
+
+        // The download streams so it can report progress (rather than buffering the whole file).
+        Assert.Contains("HttpCompletionOption.ResponseHeadersRead", startupChecks);
+
+        // A clear failure modal is shown when the download fails (e.g. no internet), and it is titleless.
+        const string failTitle = "Title = \"Couldn't download Everything Search\"";
+        int failIndex = startupChecks.IndexOf(failTitle, StringComparison.Ordinal);
+        Assert.True(failIndex >= 0, "Could not find the Everything download failure modal.");
+        int failEnd = startupChecks.IndexOf("Width = 520", failIndex, StringComparison.Ordinal);
+        Assert.True(failEnd > failIndex, "Could not find end of the failure modal options block.");
+        string failBlock = startupChecks.Substring(failIndex, failEnd - failIndex);
+        Assert.Contains("ShowTitleBar = false", failBlock);
+        // The failure message distinguishes an unreachable host (offline) from a timeout.
+        Assert.Contains("check your internet connection", startupChecks);
+        Assert.Contains("HttpRequestException", startupChecks);
+    }
+
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
