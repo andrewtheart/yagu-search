@@ -130,8 +130,8 @@ internal static class ReportExportDialog
                 CloseButtonText = "Cancel",
                 DefaultButton = YaguDialogDefaultButton.Primary,
                 Width = 520,
-                Height = 560,
-                MaxContentHeight = 440,
+                Height = 672,
+                MaxContentHeight = 528,
                 ShowTitleBar = false,
             });
         if (result != YaguDialogResult.Primary)

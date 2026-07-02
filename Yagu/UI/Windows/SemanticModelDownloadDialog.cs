@@ -178,7 +178,8 @@ internal sealed class SemanticModelDownloadDialog : Window
     private void ShowLoadingState(string message)
     {
         _titleText.Text = "Semantic Search";
-        _subtitleText.Text = "Semantic search uses a small AI model that runs entirely on your PC.";
+        _subtitleText.Text = "Semantic search runs entirely on your PC. The first time you set it up, Yagu " +
+            "downloads a one-time AI runtime for your hardware (usually a few hundred MB), plus the model you choose.";
 
         var panel = new StackPanel { Spacing = 14, VerticalAlignment = VerticalAlignment.Center };
         _progressBar = new ProgressBar { IsIndeterminate = true, Minimum = 0, Maximum = 100 };

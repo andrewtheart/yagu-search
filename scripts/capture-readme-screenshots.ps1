@@ -9,10 +9,10 @@
 #   pwsh -File scripts/capture-readme-screenshots.ps1 -Scenario semantic
 #
 # Scenarios: all, match-nav, editor, multi-preview, semantic, traditional, settings-ai,
-#            settings-ocr, advanced-options
+#            settings-ocr, ocr-preview, advanced-options
 
 param(
-    [ValidateSet('all','match-nav','editor','multi-preview','semantic','traditional','settings-ai','settings-ocr','advanced-options')]
+    [ValidateSet('all','match-nav','editor','multi-preview','semantic','traditional','settings-ai','settings-ocr','ocr-preview','advanced-options')]
     [string]$Scenario = 'all',
     [string]$Directory = 'C:\src\Yagu\Yagu',
     [string]$OutDir = 'C:\src\Yagu\docs\images',
@@ -316,6 +316,108 @@ function Open-FilePreview($win, [int]$RowIndex = 0) {
     return $true
 }
 
+# --- OCR fixture + settings helpers ------------------------------------------
+
+# Draw a clean receipt-style image with crisp text so image-text (OCR) search has a realistic,
+# self-contained target. Generated at capture time (not committed) so the scenario is reproducible.
+function New-OcrFixtureImage {
+    param([string]$Path)
+    $W = 820; $H = 780
+    $bmp = New-Object System.Drawing.Bitmap $W, $H
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    try {
+        $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
+        $g.Clear([System.Drawing.Color]::FromArgb(250, 250, 248))
+
+        $edge = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(214, 214, 208)), 2
+        $g.DrawRectangle($edge, 18, 18, ($W - 38), ($H - 38))
+
+        $ink    = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(28, 28, 30))
+        $muted  = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(96, 96, 102))
+        $rule   = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(205, 205, 200)), 1
+
+        $titleF = New-Object System.Drawing.Font 'Segoe UI', 30, ([System.Drawing.FontStyle]::Bold)
+        $subF   = New-Object System.Drawing.Font 'Segoe UI', 15
+        $rowF   = New-Object System.Drawing.Font 'Consolas', 20
+        $rowB   = New-Object System.Drawing.Font 'Consolas', 20, ([System.Drawing.FontStyle]::Bold)
+
+        function Draw-Centered($text, $font, $brush, $y) {
+            $sz = $g.MeasureString($text, $font)
+            $g.DrawString($text, $font, $brush, [single](($W - $sz.Width) / 2), [single]$y)
+        }
+
+        Draw-Centered 'GREEN VALLEY MARKET' $titleF $ink 52
+        Draw-Centered '123 Orchard Lane  ·  Portland, OR' $subF $muted 108
+        $g.DrawLine($rule, 120, 158, ($W - 120), 158)
+
+        $xL = 150
+        $g.DrawString('Order #2287',  $rowF, $muted, [single]$xL, [single]178)
+        $g.DrawString('2026-07-01',   $rowF, $muted, [single]($W - 300), [single]178)
+        $g.DrawLine($rule, 120, 222, ($W - 120), 222)
+
+        $items = @(
+            @{ n = 'Organic Apples';   p = '$4.50' },
+            @{ n = 'Sourdough Bread';  p = '$6.25' },
+            @{ n = 'Cold Brew Coffee'; p = '$5.75' },
+            @{ n = 'Free-Range Eggs';  p = '$7.20' }
+        )
+        $y = 250
+        foreach ($it in $items) {
+            $line = $it.n.PadRight(18) + $it.p.PadLeft(8)
+            $g.DrawString($line, $rowF, $ink, [single]$xL, [single]$y)
+            $y += 46
+        }
+        $g.DrawLine($rule, 120, ($y + 6), ($W - 120), ($y + 6))
+        $y += 22
+
+        $g.DrawString(('Subtotal'.PadRight(18) + '$23.70'.PadLeft(8)), $rowF, $ink, [single]$xL, [single]$y); $y += 46
+        $g.DrawString(('Tax (8%)'.PadRight(18) + '$1.90'.PadLeft(8)),  $rowF, $ink, [single]$xL, [single]$y); $y += 46
+        $g.DrawString(('TOTAL'.PadRight(18)    + '$25.60'.PadLeft(8)), $rowB, $ink, [single]$xL, [single]$y); $y += 66
+
+        Draw-Centered 'Thank you for shopping!' $subF $muted $y
+
+        $bmp.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
+    }
+    finally {
+        $g.Dispose(); $bmp.Dispose()
+    }
+}
+
+function Backup-YaguSettings {
+    $sp = Join-Path $env:APPDATA 'Yagu\settings.json'
+    if (Test-Path $sp) {
+        $bak = "$sp.shotbak"
+        Copy-Item $sp $bak -Force
+        return $bak
+    }
+    return $null
+}
+
+function Restore-YaguSettings($bak) {
+    $sp = Join-Path $env:APPDATA 'Yagu\settings.json'
+    if ($bak -and (Test-Path $bak)) {
+        Copy-Item $bak $sp -Force
+        Remove-Item $bak -Force -ErrorAction SilentlyContinue
+        Write-Step 'Restored settings.json'
+    }
+}
+
+# Turn image-text (OCR) search ON for the duration of the capture. The OCR runtime/models are
+# already present on disk, so the download gate short-circuits (no consent modal); OcrDownloadConsented
+# is set defensively so no path can prompt mid-capture.
+function Enable-OcrInSettings {
+    $sp = Join-Path $env:APPDATA 'Yagu\settings.json'
+    if (-not (Test-Path $sp)) { Write-Step 'settings.json not found; skipping OCR enable'; return }
+    $j = Get-Content $sp -Raw | ConvertFrom-Json
+    $j.SearchImageText = $true
+    $j.OcrDownloadConsented = $true
+    $j.ImageOcrEngine = 'paddle'
+    $json = $j | ConvertTo-Json -Depth 50
+    [System.IO.File]::WriteAllText($sp, $json, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Step 'Enabled image-text (OCR) in settings.json'
+}
+
 # --- Scenarios ---------------------------------------------------------------
 
 function Scenario-MatchNav {
@@ -572,6 +674,48 @@ function Scenario-SettingsOcr {
     if ($sw) { Capture-Window $sw 'settings-ocr.png' -Activate }
 }
 
+function Scenario-OcrPreview {
+    Write-Host "[ocr-preview] launching..."
+    Stop-AllYagu
+    # Self-contained target: a receipt-style image with clear text, in its own folder.
+    $fixDir = Join-Path $env:TEMP 'yagu-ocr-shot'
+    if (Test-Path $fixDir) { Remove-Item $fixDir -Recurse -Force -ErrorAction SilentlyContinue }
+    New-Item -ItemType Directory -Path $fixDir -Force | Out-Null
+    $img = Join-Path $fixDir 'green-valley-receipt.png'
+    New-OcrFixtureImage $img
+    Write-Step "Fixture image: $img"
+
+    $bak = Backup-YaguSettings
+    try {
+        Enable-OcrInSettings
+        # OCR is read from persisted settings by the GUI (the --image-text flag is CLI-only), so we
+        # launch a normal auto-search; with OCR on, the image is recognized and matched.
+        Start-Yagu "--dir `"$fixDir`" --query `"Sourdough`" --window-mode traditional" | Out-Null
+        $win = Get-YaguWindow 25
+        if (-not $win) { Write-Host 'FAILED: no Yagu window'; return }
+        [Native]::Activate([IntPtr]$win.Current.NativeWindowHandle)
+        # OCR of the image + the search take a few seconds to yield the match row.
+        $deadline = (Get-Date).AddSeconds(45)
+        $rows = 0
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 2
+            $rows = (Get-FileCheckboxes $win).Count
+            if ($rows -gt 0) { break }
+        }
+        Write-Step "OCR results: $rows file rows"
+        Cancel-Search $win           # freeze the found row
+        Wait-Settle 2
+        if (Open-FilePreview $win 0) {
+            # Let the image thumbnail decode and the recognized OCR text (with the highlighted match) render.
+            Wait-Settle 4
+        }
+        Capture-Window $win 'ocr-preview.png' -Activate
+    }
+    finally {
+        Restore-YaguSettings $bak
+    }
+}
+
 function Scenario-AdvancedOptions {
     Write-Host "[advanced-options] launching..."
     Stop-AllYagu
@@ -624,6 +768,7 @@ switch ($Scenario) {
     'semantic'         { Scenario-Semantic }
     'settings-ai'      { Scenario-SettingsAi }
     'settings-ocr'     { Scenario-SettingsOcr }
+    'ocr-preview'      { Scenario-OcrPreview }
     'advanced-options' { Scenario-AdvancedOptions }
     'all' {
         Scenario-Traditional
@@ -633,6 +778,7 @@ switch ($Scenario) {
         Scenario-Semantic
         Scenario-SettingsAi
         Scenario-SettingsOcr
+        Scenario-OcrPreview
         Scenario-AdvancedOptions
     }
 }

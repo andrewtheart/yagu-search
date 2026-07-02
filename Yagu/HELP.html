@@ -553,12 +553,12 @@ Search‑button chevron menu) restores the literal/regex query behavior;
 the inline Case/Regex/Exact toggles apply in Traditional mode only.</li>
 <li><strong>Did you mean AI search?</strong> While in
 <strong>Traditional</strong> mode, if you type something that reads like
-a natural‑language request — e.g.
-<code>files on C: containing the word test</code> — Yagu offers to run it
-as a Semantic search instead. Choose <strong>Switch to AI search</strong>
-to interpret it that way (this turns AI search on for you if you'd
-disabled it), or <strong>Keep Traditional</strong> to match
-your text literally. Tick <strong>Don't remind me again</strong> to stop
+a natural‑language request —
+e.g. <code>files on C: containing the word test</code> — Yagu offers to
+run it as a Semantic search instead. Choose <strong>Switch to AI
+search</strong> to interpret it that way (this turns AI search on for
+you if you’d disabled it), or <strong>Keep Traditional</strong> to match
+your text literally. Tick <strong>Don’t remind me again</strong> to stop
 the prompt for good. It only appears once a Semantic model has been
 downloaded.</li>
 </ul>
@@ -1477,12 +1477,13 @@ queue and the recognized text is searched.</td>
 <tr>
 <td>OCR engine</td>
 <td>PaddleSharp (recommended, default) or Tesseract. PaddleSharp is
-generally more accurate and runs on the CPU (MKL-accelerated) — no GPU or
-NPU is required or used; Tesseract is a lighter alternative with a fixed
-pipeline that can be faster on low-end CPUs. With the lite installer, the
-selected engine’s runtime and models download on first use (after you
-approve the warning); the OCR-bundled installer ships the PaddleSharp
-runtime and models so the default engine needs no download.</td>
+generally more accurate and runs on the CPU (MKL-accelerated) — no GPU
+or NPU is required or used; Tesseract is a lighter alternative with a
+fixed pipeline that can be faster on low-end CPUs. With the lite
+installer, the selected engine’s runtime and models download on first
+use (after you approve the warning); the OCR-bundled installer ships the
+PaddleSharp runtime and models so the default engine needs no
+download.</td>
 </tr>
 <tr>
 <td>Quality preset</td>
@@ -1734,9 +1735,9 @@ change.</td>
 </tr>
 <tr>
 <td>Long-line warning</td>
-<td>What to do when opening a file with a very long line in the
-built-in editor: <strong>Ask every time</strong> (default, shows the
-warning dialog), <strong>Always open without word wrap</strong>, or
+<td>What to do when opening a file with a very long line in the built-in
+editor: <strong>Ask every time</strong> (default, shows the warning
+dialog), <strong>Always open without word wrap</strong>, or
 <strong>Always open with word wrap</strong>. The dialog’s “Don’t remind
 me again” checkbox sets this automatically.</td>
 </tr>
@@ -3103,9 +3104,9 @@ not blocked.</td>
 <tr>
 <td><code>--ocr-model &lt;name&gt;</code></td>
 <td>PaddleSharp recognition model for <code>--image-text</code>:
-<code>EnglishV3</code>, <code>EnglishV4</code>,
-<code>ChineseV4</code>, or <code>ChineseV5</code> (default). Falls back to the
-<strong>OCR ▸ Recognition model</strong> setting. Ignored by the
+<code>EnglishV3</code>, <code>EnglishV4</code>, <code>ChineseV4</code>,
+or <code>ChineseV5</code> (default). Falls back to the <strong>OCR ▸
+Recognition model</strong> setting. Ignored by the
 <code>tesseract</code> engine.</td>
 </tr>
 <tr>
