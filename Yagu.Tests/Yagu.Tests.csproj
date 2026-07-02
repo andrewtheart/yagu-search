@@ -85,6 +85,7 @@
     <Compile Include="..\Yagu\Services\Telemetry\BugReportThrottle.cs" Link="Source\Services\Telemetry\BugReportThrottle.cs" />
     <Compile Include="..\Yagu\Services\LowDiskSpaceMonitor.cs" Link="Source\Services\LowDiskSpaceMonitor.cs" />
     <Compile Include="..\Yagu\Services\ConPtyTerminalService.cs" Link="Source\Services\ConPtyTerminalService.cs" />
+    <Compile Include="..\Yagu\Services\TerminalShellKind.cs" Link="Source\Services\TerminalShellKind.cs" />
     <Compile Include="..\Yagu\Services\TerminalDirectoryGuard.cs" Link="Source\Services\TerminalDirectoryGuard.cs" />
     <Compile Include="..\Yagu\Services\TerminalCompletionService.cs" Link="Source\Services\TerminalCompletionService.cs" />
     <Compile Include="..\Yagu\Services\DirectoryAutoCompleteService.cs" Link="Source\Services\DirectoryAutoCompleteService.cs" />

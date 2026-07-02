@@ -788,6 +788,20 @@ size, and admin-protected path handling.</p>
 main content. Use the chevron in the status area, or the inline chevron
 beside Advanced Options when the status bar is hidden, to expand or
 collapse it.</p>
+<p>A <strong>Shell</strong> dropdown in the terminal’s toolbar lets you
+switch between <strong>Command Prompt (cmd.exe)</strong> and
+<strong>PowerShell</strong>. The choice is saved and reused the next
+time the terminal opens. Switching shells starts a fresh session in the
+selected shell — pick PowerShell if you want PowerShell cmdlets and
+aliases such as <code>cat</code>, <code>ls</code>, and
+<code>Get-ChildItem</code>.</p>
+<p>The PowerShell session is fully interactive: running a cmdlet that
+needs a mandatory parameter (for example, a bare <code>Get-Item</code>)
+prompts you with <strong>Supply values for the following
+parameters</strong> instead of hanging, and <code>Read-Host</code>
+prompts work too. Variables and the current directory persist across
+commands, and errors (such as a missing file or a failed download)
+appear as readable text.</p>
 <p>Right-click inside the terminal pane for <strong>Copy</strong>,
 <strong>Paste</strong>, <strong>Cut</strong>, <strong>Select
 all</strong>, <strong>Clear</strong>, and <strong>Reset terminal
@@ -2047,6 +2061,18 @@ WebView2 panel. Use the terminal chevron to expand or collapse it. The
 terminal starts on first use and uses the <strong>Terminal Emulator
 -&gt; Default working directory</strong> setting, or the directory Yagu
 was launched from when that setting is blank.</p>
+<p>Use the <strong>Shell</strong> dropdown in the terminal toolbar to
+choose between <strong>Command Prompt (cmd.exe)</strong> and
+<strong>PowerShell</strong>. Your selection is persisted and reused on
+the next launch. Changing the shell restarts the terminal session in the
+chosen shell — for example, select <strong>PowerShell</strong> to use
+PowerShell cmdlets and aliases (<code>cat</code>, <code>ls</code>,
+<code>Get-ChildItem</code>, <code>Select-String</code>, and so on). Tab
+completion offers the built-in commands for whichever shell is active.
+The PowerShell session is interactive: cmdlets that require a mandatory
+parameter prompt for it (rather than hanging), <code>Read-Host</code>
+works, and variables and the working directory persist between
+commands.</p>
 <p>The terminal supports normal typing, command history navigation,
 paste, and Ctrl+C cancellation. Right-click inside the terminal for:</p>
 <table>

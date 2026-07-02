@@ -7,8 +7,14 @@ internal static class TerminalDirectoryGuard
     public static string CreateMarker()
         => MarkerPrefix + Guid.NewGuid().ToString("N") + "__";
 
-    public static string BuildChangeDirectoryProbeCommand(string directory, string marker)
+    public static string BuildChangeDirectoryProbeCommand(string directory, string marker, TerminalShellKind shellKind = TerminalShellKind.Cmd)
     {
+        if (shellKind == TerminalShellKind.PowerShell)
+        {
+            string psDirectory = directory.Replace("'", "''", StringComparison.Ordinal);
+            return $"Set-Location -LiteralPath '{psDirectory}'; Write-Output '{marker}'";
+        }
+
         string escapedDirectory = directory.Replace("\"", "\"\"", StringComparison.Ordinal);
         return $"cd /d \"{escapedDirectory}\" && echo {marker}";
     }
@@ -31,7 +37,7 @@ internal static class TerminalDirectoryGuard
         if (promptEnd <= cursor)
             return false;
 
-        directory = output[cursor..promptEnd].Trim();
+        directory = StripPowerShellPromptPrefix(output[cursor..promptEnd].Trim());
         return !string.IsNullOrWhiteSpace(directory);
     }
 
@@ -66,11 +72,15 @@ internal static class TerminalDirectoryGuard
         return before + after;
     }
 
+    /// <summary>Strips the leading "PS " that Windows PowerShell prepends to its prompt. A valid
+    /// Windows working directory never begins with "PS ", so this is safe for the cmd path too.</summary>
+    private static string StripPowerShellPromptPrefix(string directory)
+        => directory.StartsWith("PS ", StringComparison.Ordinal) ? directory[3..].Trim() : directory;
+
     private static string NormalizeDirectoryForComparison(string directory)
     {
         if (string.IsNullOrWhiteSpace(directory))
             return string.Empty;
-
         try
         {
             string fullPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(directory.Trim().Trim('"')));

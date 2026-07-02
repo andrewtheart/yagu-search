@@ -24,6 +24,8 @@ public sealed partial class MainWindow
     private readonly TaskCompletionSource<bool> _terminalReadyCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private TaskCompletionSource<bool> _terminalShellReadyCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private TerminalDirectoryProbe? _terminalDirectoryProbe;
+    private TerminalShellKind _terminalActiveShellKind = TerminalShellKind.Cmd;
+    private bool _suppressTerminalShellSelectionChanged;
 
     private void OnToggleTerminalPane(object sender, RoutedEventArgs e)
     {
@@ -143,7 +145,7 @@ public sealed partial class MainWindow
 
         var probe = new TerminalDirectoryProbe(directory, TerminalDirectoryGuard.CreateMarker());
         _terminalDirectoryProbe = probe;
-        string commandText = TerminalDirectoryGuard.BuildChangeDirectoryProbeCommand(directory, probe.Marker).TrimEnd('\r', '\n');
+        string commandText = TerminalDirectoryGuard.BuildChangeDirectoryProbeCommand(directory, probe.Marker, _terminalActiveShellKind).TrimEnd('\r', '\n');
         _terminalService.WriteInput(commandText + "\r", echoInput: false);
 
         TerminalDirectoryProbeResult result;
@@ -176,6 +178,7 @@ public sealed partial class MainWindow
         try
         {
             LogService.Instance.Info("Terminal", "Initializing terminal WebView");
+            SyncTerminalShellSelectorFromSettings();
             EnsureWebView2LoaderLoaded();
 
             // Point WebView2 at a per-user, writable user-data folder. The default is next to the exe
@@ -354,7 +357,8 @@ public sealed partial class MainWindow
             input,
             cursor,
             promptText,
-            ResolveTerminalWorkingDirectory());
+            ResolveTerminalWorkingDirectory(),
+            _terminalActiveShellKind);
 
         PostTerminalCompletionResultToWebView(result);
     }
@@ -409,8 +413,9 @@ public sealed partial class MainWindow
         try
         {
             string workingDirectory = ResolveTerminalWorkingDirectory();
-            LogService.Instance.Info("Terminal", $"Starting terminal shell session: cols={_terminalColumns}, rows={_terminalRows}, cwd='{workingDirectory}'");
-            terminalService.Start(cols: _terminalColumns, rows: _terminalRows, workingDirectory: workingDirectory);
+            _terminalActiveShellKind = ResolveTerminalShellKind();
+            LogService.Instance.Info("Terminal", $"Starting terminal shell session: shell={_terminalActiveShellKind}, cols={_terminalColumns}, rows={_terminalRows}, cwd='{workingDirectory}'");
+            terminalService.Start(cols: _terminalColumns, rows: _terminalRows, workingDirectory: workingDirectory, shellKind: _terminalActiveShellKind);
             LogService.Instance.Info("Terminal", $"Terminal shell session started: shellPid={terminalService.ProcessId}");
         }
         catch (Exception ex)
@@ -467,6 +472,66 @@ public sealed partial class MainWindow
         {
             LogService.Instance.Warning("Terminal", "Failed to paste clipboard text into terminal", ex);
         }
+    }
+
+    private TerminalShellKind ResolveTerminalShellKind()
+        => TerminalShell.FromSettingsIndex(ViewModel.TerminalShellKindIndex);
+
+    /// <summary>Reflects the persisted shell choice in the terminal-pane dropdown without triggering a
+    /// shell restart (used during terminal initialization).</summary>
+    private void SyncTerminalShellSelectorFromSettings()
+    {
+        if (TerminalShellSelector is null)
+            return;
+
+        _suppressTerminalShellSelectionChanged = true;
+        try
+        {
+            TerminalShellSelector.SelectedIndex = TerminalShell.NormalizeSettingsIndex(ViewModel.TerminalShellKindIndex);
+        }
+        finally
+        {
+            _suppressTerminalShellSelectionChanged = false;
+        }
+    }
+
+    private void OnTerminalShellSelectionChanged(object sender, Microsoft.UI.Xaml.Controls.SelectionChangedEventArgs e)
+    {
+        if (_suppressTerminalShellSelectionChanged)
+            return;
+
+        int index = TerminalShellSelector.SelectedIndex;
+        if (index < 0)
+            return;
+
+        _ = OnTerminalShellChangedAsync(index);
+    }
+
+    /// <summary>Persists the newly selected shell, clears the xterm surface, and restarts the ConPTY
+    /// session so the terminal switches between Command Prompt and PowerShell live.</summary>
+    private async Task OnTerminalShellChangedAsync(int index)
+    {
+        TerminalShellKind newKind = TerminalShell.FromSettingsIndex(index);
+        if (newKind == _terminalActiveShellKind && _terminalService is not null)
+            return;
+
+        try
+        {
+            await ViewModel.SetTerminalShellKindIndexAsync(index);
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("Terminal", "Failed to persist terminal shell selection", ex);
+        }
+
+        // Clear the xterm.js surface so the freshly launched shell starts from a clean screen.
+        TerminalWebView.CoreWebView2?.PostWebMessageAsJson("{\"type\":\"resetSurface\"}");
+
+        DisposeTerminal();
+        StartConPtySession();
+
+        if (_terminalPaneExpanded)
+            FocusTerminal();
     }
 
     private string ResolveTerminalWorkingDirectory()

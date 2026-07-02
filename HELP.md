@@ -164,6 +164,10 @@ The generated command includes supported CLI flags for directory, pattern, regex
 
 The embedded terminal is a command shell hosted inside Yagu below the main content. Use the chevron in the status area, or the inline chevron beside Advanced Options when the status bar is hidden, to expand or collapse it.
 
+A **Shell** dropdown in the terminal's toolbar lets you switch between **Command Prompt (cmd.exe)** and **PowerShell**. The choice is saved and reused the next time the terminal opens. Switching shells starts a fresh session in the selected shell — pick PowerShell if you want PowerShell cmdlets and aliases such as `cat`, `ls`, and `Get-ChildItem`.
+
+The PowerShell session is fully interactive: running a cmdlet that needs a mandatory parameter (for example, a bare `Get-Item`) prompts you with **Supply values for the following parameters** instead of hanging, and `Read-Host` prompts work too. Variables and the current directory persist across commands, and errors (such as a missing file or a failed download) appear as readable text.
+
 Right-click inside the terminal pane for **Copy**, **Paste**, **Cut**, **Select all**, **Clear**, and **Reset terminal session**. **Clear** runs `cls` and clears the xterm surface; typing `cls` at the prompt clears the surface and erases the typed command line too. **Reset terminal session** disposes the current shell session and starts a fresh one; use it if the terminal appears disconnected, stuck, or out of sync. The generated CLI command overlay can send commands into this terminal without executing them, which gives you a chance to review or edit before pressing Enter.
 
 ---
@@ -530,6 +534,8 @@ Generated commands cover supported CLI equivalents for search behavior, filters,
 ## Embedded Terminal
 
 Yagu includes an embedded command shell rendered with xterm.js in a WebView2 panel. Use the terminal chevron to expand or collapse it. The terminal starts on first use and uses the **Terminal Emulator -> Default working directory** setting, or the directory Yagu was launched from when that setting is blank.
+
+Use the **Shell** dropdown in the terminal toolbar to choose between **Command Prompt (cmd.exe)** and **PowerShell**. Your selection is persisted and reused on the next launch. Changing the shell restarts the terminal session in the chosen shell — for example, select **PowerShell** to use PowerShell cmdlets and aliases (`cat`, `ls`, `Get-ChildItem`, `Select-String`, and so on). Tab completion offers the built-in commands for whichever shell is active. The PowerShell session is interactive: cmdlets that require a mandatory parameter prompt for it (rather than hanging), `Read-Host` works, and variables and the working directory persist between commands.
 
 The terminal supports normal typing, command history navigation, paste, and Ctrl+C cancellation. Right-click inside the terminal for:
 

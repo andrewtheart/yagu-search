@@ -2907,26 +2907,30 @@ public class SearchResultCollectionBranchTests
     [Fact]
     public void ClassifyDateBucket_ThisMonth_ReturnsThisMonth()
     {
-        // First day of this month should return "This month" (if not this week)
+        // A date classifies as "This month" only when it is in the current calendar month
+        // AND strictly before the start of this week — otherwise the more specific
+        // Today/Yesterday/This week buckets take precedence. Pick the most recent such date.
         var now = DateTime.Now;
-        var firstOfMonth = new DateTime(now.Year, now.Month, 1);
-        // This will be "This month" if it's before the start of this week
-        int dow = (int)now.DayOfWeek;
-        var startOfWeek = now.Date.AddDays(-(dow == 0 ? 6 : dow - 1));
-        if (firstOfMonth.Date >= startOfWeek)
+        var today = now.Date;
+        int dow = (int)today.DayOfWeek;
+        var startOfWeek = today.AddDays(-(dow == 0 ? 6 : dow - 1));
+
+        var candidate = startOfWeek.AddDays(-1);
+        if (candidate >= today.AddDays(-1))
         {
-            // First of month is in this week — use a date slightly earlier
-            firstOfMonth = startOfWeek.AddDays(-1);
-            if (firstOfMonth.Month != now.Month)
-            {
-                // Can't test "This month" if week start is before this month
-                Assert.Equal("This month", SearchResultCollection.ClassifyDateBucket(
-                    new DateTime(now.Year, now.Month, 1), GroupMode.DateThisYear));
-                return;
-            }
+            // startOfWeek == today (Monday): the day before it is Yesterday. Step back further.
+            candidate = today.AddDays(-2);
         }
+
+        if (candidate.Year != now.Year || candidate.Month != now.Month)
+        {
+            // First week of the month: every in-month date so far is Today/Yesterday/This week,
+            // so there is no "This month" representative today — scenario not reachable, skip.
+            return;
+        }
+
         Assert.Equal("This month", SearchResultCollection.ClassifyDateBucket(
-            firstOfMonth, GroupMode.DateThisYear));
+            candidate, GroupMode.DateThisYear));
     }
 
     [Fact]

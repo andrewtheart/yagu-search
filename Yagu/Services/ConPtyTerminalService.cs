@@ -23,15 +23,21 @@ internal sealed class ConPtyTerminalService : IDisposable
 
     public int ProcessId { get; private set; }
 
+    /// <summary>The shell backing the current session. Set by <see cref="Start"/>.</summary>
+    public TerminalShellKind ShellKind { get; private set; } = TerminalShellKind.Cmd;
+
     public event Action<string>? OutputReceived;
 
     public event Action<int>? ProcessExited;
 
-    public void Start(int cols = 120, int rows = 30, string? workingDirectory = null)
+    public void Start(int cols = 120, int rows = 30, string? workingDirectory = null, TerminalShellKind shellKind = TerminalShellKind.Cmd)
     {
         if (_process is not null) return;
 
-        string shellPath = ResolveCommandShellExecutable();
+        ShellKind = shellKind;
+        string shellPath = shellKind == TerminalShellKind.PowerShell
+            ? ResolvePowerShellExecutable()
+            : ResolveCommandShellExecutable();
         string resolvedWorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory) ? AppContext.BaseDirectory : workingDirectory;
         var startInfo = new ProcessStartInfo
         {
@@ -43,12 +49,13 @@ internal sealed class ConPtyTerminalService : IDisposable
             CreateNoWindow = true,
             WorkingDirectory = resolvedWorkingDirectory,
         };
-        // Render the cmd.exe prompt with one extra space after the '>' (default is "$P$G").
-        startInfo.EnvironmentVariables["PROMPT"] = "$P$G ";
-        startInfo.ArgumentList.Add("/Q");
-        startInfo.ArgumentList.Add("/K");
 
-        LogService.Instance.Info("Terminal", $"Launching redirected shell '{shellPath}' with cwd='{resolvedWorkingDirectory}'");
+        if (shellKind == TerminalShellKind.PowerShell)
+            ConfigurePowerShellStartInfo(startInfo);
+        else
+            ConfigureCommandShellStartInfo(startInfo);
+
+        LogService.Instance.Info("Terminal", $"Launching redirected shell '{shellPath}' ({shellKind}) with cwd='{resolvedWorkingDirectory}'");
 
         try
         {
@@ -319,6 +326,30 @@ internal sealed class ConPtyTerminalService : IDisposable
         return echo.ToString();
     }
 
+    private static void ConfigureCommandShellStartInfo(ProcessStartInfo startInfo)
+    {
+        // Render the cmd.exe prompt with one extra space after the '>' (default is "$P$G").
+        startInfo.EnvironmentVariables["PROMPT"] = "$P$G ";
+        startInfo.ArgumentList.Add("/Q");
+        startInfo.ArgumentList.Add("/K");
+    }
+
+    private static void ConfigurePowerShellStartInfo(ProcessStartInfo startInfo)
+    {
+        // Windows PowerShell serializes non-output streams to stderr as CLIXML when its output is
+        // redirected. The embedded REPL avoids that by rendering errors as text itself; UTF-8 std
+        // encodings keep Unicode file contents and error messages readable in xterm.js.
+        startInfo.StandardOutputEncoding = new UTF8Encoding(false);
+        startInfo.StandardErrorEncoding = new UTF8Encoding(false);
+        startInfo.StandardInputEncoding = new UTF8Encoding(false);
+        startInfo.ArgumentList.Add("-NoLogo");
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-EncodedCommand");
+        startInfo.ArgumentList.Add(TerminalShell.EncodePowerShellCommand(TerminalShell.PowerShellReplScript));
+    }
+
     private static string ResolveCommandShellExecutable()
     {
         string system = Environment.GetFolderPath(Environment.SpecialFolder.System);
@@ -335,6 +366,26 @@ internal sealed class ConPtyTerminalService : IDisposable
         }
 
         return "cmd.exe";
+    }
+
+    private static string ResolvePowerShellExecutable()
+    {
+        // Prefer Windows PowerShell 5.1, which ships with Windows (no download, aligning with the
+        // "no surprise dependencies" goal), then fall back to whatever powershell.exe is on PATH.
+        string system = Environment.GetFolderPath(Environment.SpecialFolder.System);
+        string[] candidates =
+        [
+            Path.Combine(system, "WindowsPowerShell", "v1.0", "powershell.exe"),
+            FindExecutableOnPath("powershell.exe"),
+        ];
+
+        foreach (string candidate in candidates)
+        {
+            if (!string.IsNullOrWhiteSpace(candidate) && File.Exists(candidate))
+                return candidate;
+        }
+
+        return "powershell.exe";
     }
 
     private static string FindExecutableOnPath(string executableName)

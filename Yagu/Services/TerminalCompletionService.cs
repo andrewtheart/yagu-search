@@ -11,6 +11,22 @@ internal static class TerminalCompletionService
         "type", "ver", "verify", "vol",
     ];
 
+    // Common Windows PowerShell cmdlets and aliases so tab-completion in command position offers
+    // PowerShell-native names (e.g. Get-ChildItem, cat, ls) in addition to PATH executables.
+    private static readonly string[] PowerShellCommands =
+    [
+        "cat", "cd", "chdir", "clc", "clear", "cls", "copy", "cp", "cpi", "del", "dir", "echo",
+        "erase", "exit", "foreach", "gc", "gci", "gcm", "gm", "gp", "gps", "group", "gsv",
+        "Get-ChildItem", "Get-Command", "Get-Content", "Get-Help", "Get-Item", "Get-ItemProperty",
+        "Get-Location", "Get-Member", "Get-Process", "Get-Service", "gl", "history", "iex", "ii",
+        "Invoke-Expression", "Invoke-WebRequest", "iwr", "kill", "ls", "man", "md", "measure",
+        "mkdir", "move", "mv", "New-Item", "ni", "Out-File", "Out-String", "popd", "pushd", "pwd",
+        "rd", "rderase", "Remove-Item", "ren", "Rename-Item", "ri", "rm", "rmdir", "rni", "rvpa",
+        "sajb", "sc", "Select-Object", "select", "Select-String", "Set-Content", "Set-Item",
+        "Set-Location", "sl", "sls", "sort", "Sort-Object", "sp", "start", "sv", "tee", "type",
+        "where", "Where-Object", "Write-Host", "Write-Output",
+    ];
+
     private static readonly string[] ExecutableExtensions = [".exe", ".cmd", ".bat", ".com", ".ps1"];
 
     public sealed record Result(
@@ -25,14 +41,14 @@ internal static class TerminalCompletionService
 
     private sealed record Candidate(string InsertText, string DisplayText, bool IsDirectory);
 
-    public static Result Complete(int requestId, string input, int cursor, string promptText, string fallbackWorkingDirectory)
+    public static Result Complete(int requestId, string input, int cursor, string promptText, string fallbackWorkingDirectory, TerminalShellKind shellKind = TerminalShellKind.Cmd)
     {
         input ??= string.Empty;
         cursor = Math.Clamp(cursor, 0, input.Length);
         var token = FindToken(input, cursor);
         string workingDirectory = ResolvePromptWorkingDirectory(promptText, fallbackWorkingDirectory);
         var candidates = token.IsCommandPosition && !LooksLikePathToken(token.Text)
-            ? CompleteCommandToken(token, workingDirectory)
+            ? CompleteCommandToken(token, workingDirectory, shellKind)
             : CompletePathToken(token, workingDirectory);
 
         if (candidates.Count == 0)
@@ -79,10 +95,10 @@ internal static class TerminalCompletionService
         return new TokenInfo(start, cursor - start, input[start..cursor], quote, commandPosition);
     }
 
-    private static List<Candidate> CompleteCommandToken(TokenInfo token, string workingDirectory)
+    private static List<Candidate> CompleteCommandToken(TokenInfo token, string workingDirectory, TerminalShellKind shellKind)
     {
         var candidates = new Dictionary<string, Candidate>(StringComparer.OrdinalIgnoreCase);
-        AddCommandCandidates(candidates, token.Text);
+        AddCommandCandidates(candidates, token.Text, shellKind);
         AddExecutableCandidatesFromDirectory(candidates, workingDirectory, token.Text);
 
         string? pathValue = Environment.GetEnvironmentVariable("PATH");
@@ -98,9 +114,10 @@ internal static class TerminalCompletionService
             .ToList();
     }
 
-    private static void AddCommandCandidates(Dictionary<string, Candidate> candidates, string prefix)
+    private static void AddCommandCandidates(Dictionary<string, Candidate> candidates, string prefix, TerminalShellKind shellKind)
     {
-        foreach (string command in BuiltInCommands)
+        string[] commands = shellKind == TerminalShellKind.PowerShell ? PowerShellCommands : BuiltInCommands;
+        foreach (string command in commands)
         {
             if (!command.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 continue;
@@ -267,6 +284,10 @@ internal static class TerminalCompletionService
             return null;
 
         string directory = line[..^1].Trim();
+        // Windows PowerShell prefixes its prompt with "PS "; a valid working directory never
+        // starts with "PS ", so stripping it is safe for the cmd path too.
+        if (directory.StartsWith("PS ", StringComparison.Ordinal))
+            directory = directory[3..].Trim();
         return directory.Length == 0 ? null : directory;
     }
 

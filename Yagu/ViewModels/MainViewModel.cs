@@ -358,6 +358,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         LauncherWindowPosition = _settings.LauncherWindowPosition is >= 0 and <= 8 ? _settings.LauncherWindowPosition : 2;
         AdvancedOptionsCollapsedWidthModeIndex = NormalizeAdvancedOptionsCollapsedWidthModeIndex(_settings.AdvancedOptionsCollapsedWidthModeIndex);
         TerminalDefaultWorkingDirectory = _settings.TerminalDefaultWorkingDirectory ?? string.Empty;
+        TerminalShellKindIndex = TerminalShell.NormalizeSettingsIndex(_settings.TerminalShellKindIndex);
         FileHeaderCheckAddsToPreview = _settings.FileHeaderCheckAddsToPreview;
         MatchLineCheckAddsToPreview = _settings.MatchLineCheckAddsToPreview;
         PreviewEditorMaxSizeMB = _settings.PreviewEditorMaxSizeMB;
@@ -1290,6 +1291,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         await _settingsService.SaveAsync(_settings).ConfigureAwait(false);
     }
 
+    /// <summary>Persists the embedded terminal's shell choice (0 = cmd, 1 = PowerShell) immediately,
+    /// so switching shells via the terminal-pane dropdown survives a restart.</summary>
+    public async Task SetTerminalShellKindIndexAsync(int index)
+    {
+        int normalized = TerminalShell.NormalizeSettingsIndex(index);
+        TerminalShellKindIndex = normalized;
+        _settings.TerminalShellKindIndex = normalized;
+        await _settingsService.SaveAsync(_settings).ConfigureAwait(false);
+    }
+
     [ObservableProperty] public partial string SearchResultTempDirectory { get; set; } = string.Empty;
     [ObservableProperty] public partial bool HasChosenSearchResultTempDirectory { get; set; }
     [ObservableProperty] public partial bool LimitParallelismOnHdd { get; set; } = true;
@@ -1313,6 +1324,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty] public partial int LauncherWindowPosition { get; set; } = 2;
     [ObservableProperty] public partial int AdvancedOptionsCollapsedWidthModeIndex { get; set; }
     [ObservableProperty] public partial string TerminalDefaultWorkingDirectory { get; set; } = string.Empty;
+    // 0 = Command Prompt (cmd.exe, default), 1 = PowerShell. Mirrors the terminal-pane shell dropdown.
+    [ObservableProperty] public partial int TerminalShellKindIndex { get; set; }
     [ObservableProperty] public partial bool FileHeaderCheckAddsToPreview { get; set; } = true;
     [ObservableProperty] public partial bool MatchLineCheckAddsToPreview { get; set; } = true;
 
@@ -4370,6 +4383,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.TerminalDefaultWorkingDirectory = string.IsNullOrWhiteSpace(TerminalDefaultWorkingDirectory)
             ? string.Empty
             : TerminalDefaultWorkingDirectory.Trim();
+        _settings.TerminalShellKindIndex = TerminalShell.NormalizeSettingsIndex(TerminalShellKindIndex);
         _settings.FileHeaderCheckAddsToPreview = FileHeaderCheckAddsToPreview;
         _settings.MatchLineCheckAddsToPreview = MatchLineCheckAddsToPreview;
         _settings.PreviewEditorMaxSizeMB = PreviewEditorMaxSizeMB;

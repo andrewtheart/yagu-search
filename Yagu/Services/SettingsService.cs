@@ -425,6 +425,8 @@ public sealed class AppSettings
     public int AdvancedOptionsCollapsedWidthModeIndex { get; set; }
     /// <summary>Optional default working directory for the embedded terminal. Empty uses the Yagu launch directory.</summary>
     public string TerminalDefaultWorkingDirectory { get; set; } = string.Empty;
+    /// <summary>Which shell backs the embedded terminal: 0 = Command Prompt (cmd.exe, default), 1 = PowerShell.</summary>
+    public int TerminalShellKindIndex { get; set; }
     /// <summary>When true (default), checking a file header checkbox immediately adds it to the preview pane.</summary>
     public bool FileHeaderCheckAddsToPreview { get; set; } = true;
     /// <summary>When true (default), checking a match line checkbox immediately adds it to the preview pane.</summary>
@@ -568,6 +570,7 @@ public sealed class SettingsService
             settings.ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(settings.ImageOcrMaxSide);
             settings.LowDiskSpaceWarningPercent = AppSettings.NormalizeLowDiskSpaceWarningPercent(settings.LowDiskSpaceWarningPercent);
             settings.TerminalDefaultWorkingDirectory ??= string.Empty;
+            settings.TerminalShellKindIndex = TerminalShell.NormalizeSettingsIndex(settings.TerminalShellKindIndex);
             settings.BugReportContactEmail ??= string.Empty;
             settings.TelemetryInstallId ??= string.Empty;
             return settings;
@@ -609,6 +612,7 @@ public sealed class SettingsService
             settings.ImageOcrModel = AppSettings.NormalizeImageOcrModel(settings.ImageOcrModel);
             settings.ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(settings.ImageOcrMaxSide);
             settings.TerminalDefaultWorkingDirectory ??= string.Empty;
+            settings.TerminalShellKindIndex = TerminalShell.NormalizeSettingsIndex(settings.TerminalShellKindIndex);
             settings.BugReportContactEmail ??= string.Empty;
             settings.TelemetryInstallId ??= string.Empty;
             return settings;

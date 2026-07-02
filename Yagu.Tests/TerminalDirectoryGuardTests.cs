@@ -13,6 +13,34 @@ public sealed class TerminalDirectoryGuardTests
     }
 
     [Fact]
+    public void BuildChangeDirectoryProbeCommand_PowerShell_UsesSetLocationAndWriteOutput()
+    {
+        string command = TerminalDirectoryGuard.BuildChangeDirectoryProbeCommand(
+            @"C:\Program Files\Yagu", "__MARKER__", TerminalShellKind.PowerShell);
+
+        Assert.Equal("Set-Location -LiteralPath 'C:\\Program Files\\Yagu'; Write-Output '__MARKER__'", command);
+    }
+
+    [Fact]
+    public void BuildChangeDirectoryProbeCommand_PowerShell_EscapesSingleQuotes()
+    {
+        string command = TerminalDirectoryGuard.BuildChangeDirectoryProbeCommand(
+            @"C:\O'Brien", "M", TerminalShellKind.PowerShell);
+
+        Assert.Contains("Set-Location -LiteralPath 'C:\\O''Brien'", command);
+        Assert.Contains("Write-Output 'M'", command);
+    }
+
+    [Fact]
+    public void TryExtractPromptDirectory_StripsPowerShellPromptPrefix()
+    {
+        string output = "__MARKER__\r\nPS C:\\src\\Yagu> ";
+
+        Assert.True(TerminalDirectoryGuard.TryExtractPromptDirectory(output, "__MARKER__", out string directory));
+        Assert.Equal(@"C:\src\Yagu", directory);
+    }
+
+    [Fact]
     public void TryExtractPromptDirectory_ReadsDirectoryFromPromptAfterMarker()
     {
         string output = "__MARKER__\r\nC:\\src\\Yagu\\Yagu\\bin\\Debug\\net10.0-windows10.0.19041.0> ";

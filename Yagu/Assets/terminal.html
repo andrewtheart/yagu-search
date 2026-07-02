@@ -776,6 +776,13 @@
       }
     } else if (msg && msg.type === 'clear') {
       term.clear();
+    } else if (msg && msg.type === 'resetSurface') {
+      // Host is restarting the shell (e.g. cmd <-> PowerShell switch); wipe the surface and
+      // input state so the new shell starts from a clean screen. Unlike the reset button,
+      // this does NOT post 'resetTerminal' back (the host already restarted the session).
+      term.reset();
+      clearInputState();
+      shellCommandActive = false;
     } else if (msg && msg.type === 'focus') {
       focusTerminal();
     } else if (msg && msg.type === 'pasteText') {

@@ -49,6 +49,62 @@ public sealed class TerminalCompletionServiceTests : IDisposable
         Assert.Contains("echo", result.Suggestions);
     }
 
+    [Fact]
+    public void Complete_PowerShell_CompletesCmdletAtCommandPosition()
+    {
+        var result = TerminalCompletionService.Complete(
+            requestId: 11,
+            input: "Get-Child",
+            cursor: "Get-Child".Length,
+            promptText: "PS " + _tempDir + ">",
+            fallbackWorkingDirectory: _tempDir,
+            shellKind: TerminalShellKind.PowerShell);
+
+        Assert.True(result.HasMatches);
+        Assert.Contains("Get-ChildItem", result.Suggestions);
+    }
+
+    [Fact]
+    public void Complete_PowerShell_CompletesAliasNotOfferedForCmd()
+    {
+        var powershell = TerminalCompletionService.Complete(
+            requestId: 12,
+            input: "gci",
+            cursor: 3,
+            promptText: "PS " + _tempDir + ">",
+            fallbackWorkingDirectory: _tempDir,
+            shellKind: TerminalShellKind.PowerShell);
+
+        Assert.Contains("gci", powershell.Suggestions);
+
+        var cmd = TerminalCompletionService.Complete(
+            requestId: 13,
+            input: "gci",
+            cursor: 3,
+            promptText: _tempDir + ">",
+            fallbackWorkingDirectory: _tempDir,
+            shellKind: TerminalShellKind.Cmd);
+
+        Assert.DoesNotContain("gci", cmd.Suggestions);
+    }
+
+    [Fact]
+    public void Complete_PowerShell_ResolvesPathFromPsPromptWorkingDirectory()
+    {
+        Directory.CreateDirectory(Path.Combine(_tempDir, "Reports"));
+
+        var result = TerminalCompletionService.Complete(
+            requestId: 14,
+            input: "Get-ChildItem Rep",
+            cursor: "Get-ChildItem Rep".Length,
+            promptText: "PS " + _tempDir + ">",
+            fallbackWorkingDirectory: Directory.GetCurrentDirectory(),
+            shellKind: TerminalShellKind.PowerShell);
+
+        Assert.True(result.HasMatches);
+        Assert.Contains("Reports" + Path.DirectorySeparatorChar, result.Suggestions);
+    }
+
     public void Dispose()
     {
         try

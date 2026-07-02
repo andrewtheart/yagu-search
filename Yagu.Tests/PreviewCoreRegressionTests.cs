@@ -513,7 +513,7 @@ public sealed class PreviewCoreRegressionTests
 
         string autoSearch = ExtractMethodWindow(MainWindowSource, "OnContentLoaded", 2400);
         AssertContainsInOrder(autoSearch,
-            "if (await CheckHddAndWarnAsync())",
+            "if (await RunPreSearchWarningGatesAsync())",
             "CollapseAdvancedOptionsForSearch();",
             "await ViewModel.StartSearchAsync();");
 
@@ -630,8 +630,10 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("x:Name=\"PreSearchTerminalChevronIcon\"", preSearchChevron);
         Assert.Contains("ToolTipService.ToolTip=\"Toggle embedded terminal\"", preSearchChevron);
 
-        string terminalHost = ExtractXamlWindow("x:Name=\"TerminalHost\"", 2800);
+        string terminalHost = ExtractXamlWindow("x:Name=\"TerminalHost\"", 4000);
         AssertContainsInOrder(terminalHost,
+            "<ComboBox x:Name=\"TerminalShellSelector\"",
+            "SelectionChanged=\"OnTerminalShellSelectionChanged\"",
             "<WebView2 x:Name=\"TerminalWebView\"",
             "<Button x:Name=\"TerminalChevron\"",
             "HorizontalAlignment=\"Right\"",

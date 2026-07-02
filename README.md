@@ -60,10 +60,10 @@ To install Yagu without building from source, download the installer that matche
 
 | Installer | What it's for | Image-text (OCR) search |
 | --- | --- | --- |
-| [**x64** — YaguSetup-1.0.0.2287-x64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2287-x64.exe) (~89 MB) | Most modern PCs: 64-bit Intel/AMD Windows. Start here if unsure. | Works. Defaults to the PaddleOCR engine; the OCR runtime and English models download once on first use. |
-| [**x64 · OCR bundled** — YaguSetup-1.0.0.2290-x64-ocr.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2290-x64-ocr.exe) (~177 MB) | Same as x64, but for machines that must run OCR fully **offline** — air-gapped PCs, or to skip the first-run download. | Bundled in the installer: the PaddleOCR engine and English models are installed up front, so no download is needed. |
-| [**Arm64** — YaguSetup-1.0.0.2289-arm64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2289-arm64.exe) (~88 MB) | Windows on ARM: Snapdragon-based laptops, Surface Pro X, Windows Dev Kit. | Works. Defaults to PaddleOCR; the OCR runtime and models download once on first use. |
-| [**x86** — YaguSetup-1.0.0.2288-x86.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2288-x86.exe) (~70 MB) | 32-bit Windows. | Works. Defaults to the Tesseract engine (PaddleOCR's runtime is x64-only); language data downloads once on first use. |
+| [**x64** — YaguSetup-1.0.0.2291-x64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2291-x64.exe) (~89 MB) | Most modern PCs: 64-bit Intel/AMD Windows. Start here if unsure. | Works. Defaults to the PaddleOCR engine; the OCR runtime and English models download once on first use. |
+| [**x64 · OCR bundled** — YaguSetup-1.0.0.2294-x64-ocr.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2294-x64-ocr.exe) (~268 MB) | Same as x64, but for machines that must run OCR fully **offline** — air-gapped PCs, or to skip the first-run download. | Bundled in the installer: the PaddleOCR engine and English models are installed up front, so no download is needed. |
+| [**Arm64** — YaguSetup-1.0.0.2293-arm64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2293-arm64.exe) (~88 MB) | Windows on ARM: Snapdragon-based laptops, Surface Pro X, Windows Dev Kit. | Works. Defaults to PaddleOCR; the OCR runtime and models download once on first use. |
+| [**x86** — YaguSetup-1.0.0.2292-x86.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2292-x86.exe) (~70 MB) | 32-bit Windows. | Works. Defaults to the Tesseract engine (PaddleOCR's runtime is x64-only); language data downloads once on first use. |
 
 > There is no Arm64 or x86 "OCR bundled" edition: the bundled PaddleOCR runtime is win-x64 only, so it can only be packaged offline for x64. On Arm64 and x86, image-text search still works — it downloads what it needs on first use.
 
@@ -440,6 +440,19 @@ Yagu's search hot path has been **profiled and fine-tuned to be competitive with
 
 This is measured, not assumed. The [`Yagu.Benchmarks`](Yagu.Benchmarks/) project (BenchmarkDotNet) tracks literal and regex search throughput against recorded baselines in [`Yagu.Benchmarks/results/perf-baselines.jsonl`](Yagu.Benchmarks/results/perf-baselines.jsonl), and the native binary can be built with a symbol-rich profiling profile (`-p:RustProfile=profiling`) for deeper flame-graph analysis. Real-world results still depend on hardware, storage (SSD vs. HDD), corpus shape, and pattern complexity — but Yagu is engineered to keep pace with the fastest searchers available.
 
+### Scaling To Large Files And Thousands Of Results
+
+Yagu is fine-tuned and deliberately designed to **load very large files and thousands of file results and matches at once** while staying responsive — the window does not freeze while realizing a huge result set or rendering a long document. That scale is made possible by several performance optimizations working together:
+
+- **Virtualized result groups.** Each `FileGroup` realizes only the first `PageSize = 200` matches as live UI items and loads the rest on demand through incremental "Show more" pages, so a single file with tens of thousands of hits never materializes them all at once ([FileGroup.cs](Yagu/Models/FileGroup.cs)).
+- **Single-notification batch collections.** The result and group lists use `BatchObservableCollection`, which raises one `Reset` notification per batch instead of one `CollectionChanged` event per item, avoiding a per-item layout pass on high-cardinality searches ([BatchObservableCollection.cs](Yagu/Models/BatchObservableCollection.cs)).
+- **Bounded-channel result batching.** Content and filename matches are coalesced into 256-item batches and handed to the UI thread through bounded channels with back-pressure, so a fast native scanner cannot flood the dispatcher ([SearchService.cs](Yagu/Services/SearchService.cs)).
+- **Disk-backed result eviction under memory pressure.** When the working set approaches the process memory cap (auto-sized between **512 MB and 768 MB**, recovery triggered at 90%), match payloads are evicted to `ResultStore` temp files and kept only as compact varint-encoded stubs (sized below the Large Object Heap threshold), then rehydrated on demand when a group is expanded or a result is previewed ([ResultStore.cs](Yagu/Services/ResultStore.cs), [FileGroup.cs](Yagu/Models/FileGroup.cs)). A background `LowDiskSpaceMonitor` guards the temp drive during large runs ([LowDiskSpaceMonitor.cs](Yagu/Services/LowDiskSpaceMonitor.cs)).
+- **Off-UI-thread metadata.** File size and timestamps are loaded on background threads and cached, so populating thousands of rows never blocks the UI on file-system I/O ([FileMetadataCache.cs](Yagu/Services/FileMetadataCache.cs)).
+- **Large-file preview windowing.** The preview renders file sections incrementally (50 per page, "Show more" for the rest), folds extremely long physical lines into 4 KB paragraph chunks to avoid DirectWrite layout failures, and bounds a single "Show all" reveal to 20,000 characters — so even a minified multi-hundred-KB single-line file previews without hanging ([MainWindow.PreviewBuilder.cs](Yagu/UI/Windows/MainWindow/MainWindow.PreviewBuilder.cs)). You can also **add just the matched lines you care about** to the preview instead of loading the whole file (see *Add individual lines to preview* near the top of this README).
+- **Zero-copy native streaming.** The Rust scanner compiles the matcher once per search, streams matches back without buffering whole files, borrows line bytes instead of allocating per match, and early-skips binary, oversized, and ignored files before ever reading their contents ([yagu-core/src/scan.rs](yagu-core/src/scan.rs)).
+- **Throttled progress and auto-scroll.** Statistics and auto-scroll update on fixed 100 ms / 500 ms timers rather than per file or per match (see [UI Update Throttling](#ui-update-throttling) below).
+
 ### UI Update Throttling
 
 Search statistics (files scanned, files skipped, matches found, files/second) are **not** updated per-file. A dedicated `PeriodicTimer` in `SearchService` emits a `SearchEvent.Progress` snapshot every **100 ms**. The view model handles each snapshot by setting approximately six properties that cascade into roughly ten `PropertyChanged` notifications per tick. At 10 Hz this is lightweight and does not compete with the search pipeline for dispatcher time.
@@ -518,7 +531,6 @@ The GitHub Actions workflow in [.github/workflows/ci.yml](.github/workflows/ci.y
 
 ## Development Notes
 
-- Prefer [Yagu.sln](Yagu.sln); [QuickGrep.sln](QuickGrep.sln) is stale.
 - The app build attempts `cargo build --release --quiet` for [yagu-core](yagu-core/) before C# compilation unless `BuildRustCore=false` is set.
 - After changing Rust FFI exports or ABI-sensitive code, rebuild [yagu-core](yagu-core/) before running .NET native parity tests.
 - The native DLL must match the process architecture.

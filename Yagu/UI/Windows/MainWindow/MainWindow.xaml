@@ -2307,12 +2307,33 @@
 
         <!-- Embedded terminal panel (ConPTY + xterm.js in WebView2) -->
         <Grid x:Name="TerminalHost" Grid.Row="5" Visibility="Collapsed" Background="#1E1E1E">
-            <WebView2 x:Name="TerminalWebView" DefaultBackgroundColor="#1E1E1E" IsTabStop="True" />
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <!-- Thin toolbar: pick the shell (Command Prompt vs PowerShell) for the embedded terminal. -->
+            <Grid Grid.Row="0" Background="#252526" Padding="8,3,8,3">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Spacing="6">
+                    <TextBlock Text="Shell:" Foreground="#B8B8B8" FontSize="12" VerticalAlignment="Center" />
+                    <ComboBox x:Name="TerminalShellSelector"
+                              MinWidth="180"
+                              FontSize="12"
+                              SelectionChanged="OnTerminalShellSelectionChanged"
+                              ToolTipService.ToolTip="Choose the shell used by the embedded terminal">
+                        <ComboBoxItem Content="Command Prompt (cmd.exe)" />
+                        <ComboBoxItem Content="PowerShell" />
+                    </ComboBox>
+                </StackPanel>
+            </Grid>
+
+            <WebView2 x:Name="TerminalWebView" Grid.Row="1" DefaultBackgroundColor="#1E1E1E" IsTabStop="True" />
             <!-- Shown instead of a black WebView when the Microsoft Edge WebView2 Runtime is missing
                  (e.g. a clean Windows install/Sandbox). The embedded terminal is the only feature that
                  needs WebView2; the rest of Yagu works without it. The installer normally installs the
                  runtime, so this is a fallback for offline installs or machines that still lack it. -->
             <StackPanel x:Name="TerminalWebView2MissingPanel"
+                        Grid.Row="1"
                         Visibility="Collapsed"
                         HorizontalAlignment="Center" VerticalAlignment="Center"
                         MaxWidth="440" Spacing="10" Padding="24">
@@ -2327,6 +2348,7 @@
                            TextWrapping="Wrap" TextAlignment="Center" Foreground="#9A9A9A" FontSize="12" />
             </StackPanel>
             <Button x:Name="TerminalChevron"
+                    Grid.Row="1"
                     Click="OnToggleTerminalPane"
                     HorizontalAlignment="Right"
                     VerticalAlignment="Bottom"

@@ -171,6 +171,199 @@ public sealed class ConPtyTerminalServiceTests
     }
 }
 
+public sealed class ConPtyTerminalServicePowerShellTests
+{
+    [Fact]
+    public void PowerShell_ProducesPsPromptOnStartup()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        using var terminal = new ConPtyTerminalService();
+        var output = new StringBuilder();
+        using var sawPrompt = new ManualResetEventSlim(false);
+
+        terminal.OutputReceived += text =>
+        {
+            lock (output)
+            {
+                output.Append(text);
+                if (output.ToString().Contains("PS ", StringComparison.Ordinal))
+                    sawPrompt.Set();
+            }
+        };
+
+        terminal.Start(cols: 120, rows: 24, workingDirectory: Directory.GetCurrentDirectory(), shellKind: TerminalShellKind.PowerShell);
+
+        Assert.Equal(TerminalShellKind.PowerShell, terminal.ShellKind);
+        Assert.True(sawPrompt.Wait(TimeSpan.FromSeconds(15)),
+            "The PowerShell REPL did not render a 'PS ' prompt. Output: " + output);
+    }
+
+    [Fact]
+    public void PowerShell_ExecutesCatAlias()
+    {
+        // Regression: the embedded terminal used to launch cmd.exe, so PowerShell aliases like
+        // `cat` failed with "command not found". The PowerShell backend must resolve `cat`.
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        string tempFile = Path.Combine(Path.GetTempPath(), "yagu-ps-cat-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(tempFile, "YAGU_CAT_SENTINEL");
+        try
+        {
+            using var terminal = new ConPtyTerminalService();
+            var output = new StringBuilder();
+            using var started = new ManualResetEventSlim(false);
+            using var sawContent = new ManualResetEventSlim(false);
+
+            terminal.OutputReceived += text =>
+            {
+                lock (output)
+                {
+                    output.Append(text);
+                    if (output.ToString().Contains("PS ", StringComparison.Ordinal))
+                        started.Set();
+                    if (output.ToString().Contains("YAGU_CAT_SENTINEL", StringComparison.Ordinal))
+                        sawContent.Set();
+                }
+            };
+
+            terminal.Start(cols: 120, rows: 24, workingDirectory: Directory.GetCurrentDirectory(), shellKind: TerminalShellKind.PowerShell);
+            Assert.True(started.Wait(TimeSpan.FromSeconds(15)), "PowerShell did not start. Output: " + output);
+
+            terminal.WriteInput($"cat '{tempFile}'\r", echoInput: false);
+
+            Assert.True(sawContent.Wait(TimeSpan.FromSeconds(15)),
+                "The `cat` alias did not produce file content in PowerShell. Output: " + output);
+        }
+        finally
+        {
+            try { File.Delete(tempFile); } catch { }
+        }
+    }
+
+    [Fact]
+    public void PowerShell_NonTerminatingErrorRendersAsPlainTextNotClixml()
+    {
+        // A missing-file error (which is how a failed/offline download surfaces) must render as
+        // readable text in the terminal instead of leaking CLIXML to stderr.
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        using var terminal = new ConPtyTerminalService();
+        var output = new StringBuilder();
+        using var started = new ManualResetEventSlim(false);
+        using var sawError = new ManualResetEventSlim(false);
+
+        terminal.OutputReceived += text =>
+        {
+            lock (output)
+            {
+                output.Append(text);
+                if (output.ToString().Contains("PS ", StringComparison.Ordinal))
+                    started.Set();
+                string current = output.ToString();
+                if (current.Contains("does not exist", StringComparison.OrdinalIgnoreCase)
+                    || current.Contains("Cannot find path", StringComparison.OrdinalIgnoreCase))
+                {
+                    sawError.Set();
+                }
+            }
+        };
+
+        terminal.Start(cols: 120, rows: 24, workingDirectory: Directory.GetCurrentDirectory(), shellKind: TerminalShellKind.PowerShell);
+        Assert.True(started.Wait(TimeSpan.FromSeconds(15)), "PowerShell did not start. Output: " + output);
+
+        terminal.WriteInput(@"cat 'C:\yagu-nonexistent\definitely-missing.txt'" + "\r", echoInput: false);
+
+        Assert.True(sawError.Wait(TimeSpan.FromSeconds(15)),
+            "PowerShell did not render a readable file-not-found error. Output: " + output);
+        Assert.DoesNotContain("CLIXML", output.ToString());
+    }
+
+    [Fact]
+    public void PowerShell_MandatoryParameterPromptIsVisibleAndInteractive()
+    {
+        // Regression: typing a cmdlet with a mandatory parameter (e.g. bare `Get-Item`) used to
+        // hang with a blinking cursor because PowerShell wrote the "Supply values for the following
+        // parameters" prompt to the raw Win32 console, which is discarded under pipe redirection.
+        // The custom PSHost routes that prompt to stdout so the user can see it and answer it.
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        using var terminal = new ConPtyTerminalService();
+        var output = new StringBuilder();
+        using var started = new ManualResetEventSlim(false);
+        using var sawPrompt = new ManualResetEventSlim(false);
+        using var sawAnswerAccepted = new ManualResetEventSlim(false);
+
+        terminal.OutputReceived += text =>
+        {
+            lock (output)
+            {
+                output.Append(text);
+                string current = output.ToString();
+                if (current.Contains("PS ", StringComparison.Ordinal))
+                    started.Set();
+                if (current.Contains("Supply values for the following parameters", StringComparison.OrdinalIgnoreCase))
+                    sawPrompt.Set();
+                if (current.Contains("YAGU_MANDATORY_DONE", StringComparison.Ordinal))
+                    sawAnswerAccepted.Set();
+            }
+        };
+
+        terminal.Start(cols: 120, rows: 24, workingDirectory: Directory.GetCurrentDirectory(), shellKind: TerminalShellKind.PowerShell);
+        Assert.True(started.Wait(TimeSpan.FromSeconds(15)), "PowerShell did not start. Output: " + output);
+
+        terminal.WriteInput("Get-Item\r", echoInput: false);
+        Assert.True(sawPrompt.Wait(TimeSpan.FromSeconds(15)),
+            "PowerShell did not surface the mandatory-parameter prompt. Output: " + output);
+
+        // The prompt must be interactive: answering it lets the command complete without hanging,
+        // so the next command echoes the sentinel back.
+        terminal.WriteInput("C:\\Windows\r", echoInput: false);
+        terminal.WriteInput("'YAGU_MANDATORY_DONE'\r", echoInput: false);
+        Assert.True(sawAnswerAccepted.Wait(TimeSpan.FromSeconds(15)),
+            "PowerShell did not accept the answer to the mandatory-parameter prompt (interactive prompt hung). Output: " + output);
+    }
+
+    [Fact]
+    public void PowerShell_PersistsVariablesAcrossCommands()
+    {
+        // The custom-host REPL dot-sources each line so assignments persist across submissions.
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        using var terminal = new ConPtyTerminalService();
+        var output = new StringBuilder();
+        using var started = new ManualResetEventSlim(false);
+        using var sawValue = new ManualResetEventSlim(false);
+
+        terminal.OutputReceived += text =>
+        {
+            lock (output)
+            {
+                output.Append(text);
+                string current = output.ToString();
+                if (current.Contains("PS ", StringComparison.Ordinal))
+                    started.Set();
+                if (current.Contains("YAGU_VALUE=1234", StringComparison.Ordinal))
+                    sawValue.Set();
+            }
+        };
+
+        terminal.Start(cols: 120, rows: 24, workingDirectory: Directory.GetCurrentDirectory(), shellKind: TerminalShellKind.PowerShell);
+        Assert.True(started.Wait(TimeSpan.FromSeconds(15)), "PowerShell did not start. Output: " + output);
+
+        terminal.WriteInput("$yaguVar = 1234\r", echoInput: false);
+        terminal.WriteInput("\"YAGU_VALUE=$yaguVar\"\r", echoInput: false);
+
+        Assert.True(sawValue.Wait(TimeSpan.FromSeconds(15)),
+            "PowerShell did not persist a variable across commands. Output: " + output);
+    }
+}
+
 public sealed class ConPtyTerminalServiceEdgeTests
 {
     [Fact]

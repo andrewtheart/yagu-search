@@ -851,7 +851,7 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("workingDirectory: workingDirectory", MainWindowTerminalSource);
         Assert.Contains("TryResolveExistingDirectory(ViewModel.TerminalDefaultWorkingDirectory", MainWindowTerminalSource);
         Assert.Contains("TryResolveExistingDirectory(App.LaunchWorkingDirectory", MainWindowTerminalSource);
-        Assert.Contains("Start(int cols = 120, int rows = 30, string? workingDirectory = null)", ConPtyTerminalServiceSource);
+        Assert.Contains("Start(int cols = 120, int rows = 30, string? workingDirectory = null, TerminalShellKind shellKind = TerminalShellKind.Cmd)", ConPtyTerminalServiceSource);
         Assert.Contains("ResolveCommandShellExecutable()", ConPtyTerminalServiceSource);
         Assert.Contains("Path.Combine(system, \"cmd.exe\")", ConPtyTerminalServiceSource);
         Assert.Contains("FindExecutableOnPath(\"cmd.exe\")", ConPtyTerminalServiceSource);
@@ -872,8 +872,8 @@ public sealed class SettingsWindowRegressionTests
             "_terminalService = terminalService;",
             "try",
             "string workingDirectory = ResolveTerminalWorkingDirectory();",
-            "terminalService.Start(cols: _terminalColumns, rows: _terminalRows, workingDirectory: workingDirectory);");
-        Assert.Contains("terminalService.Start(cols: _terminalColumns, rows: _terminalRows, workingDirectory: workingDirectory);", MainWindowTerminalSource);
+            "terminalService.Start(cols: _terminalColumns, rows: _terminalRows, workingDirectory: workingDirectory, shellKind: _terminalActiveShellKind);");
+        Assert.Contains("terminalService.Start(cols: _terminalColumns, rows: _terminalRows, workingDirectory: workingDirectory, shellKind: _terminalActiveShellKind);", MainWindowTerminalSource);
         Assert.Contains("_terminalService = terminalService;", MainWindowTerminalSource);
         Assert.Contains("if (ReferenceEquals(_terminalService, terminalService))", MainWindowTerminalSource);
         Assert.Contains("_terminalService = null;", MainWindowTerminalSource);
