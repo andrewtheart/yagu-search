@@ -40,6 +40,10 @@ For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
 
 ![Image-text (OCR) search settings](docs/images/settings-ocr.png)
 
+**Image-text (OCR) preview** — open a matched image to see it alongside the recognized text, with your query highlighted and line-numbered.
+
+![OCR image preview showing a receipt image and its recognized text with the query highlighted](docs/images/ocr-preview.png)
+
 ## Download Installer
 
 To install Yagu without building from source, download the installer that matches your PC and run it. Yagu ships as a self-contained Native AOT build, so no separate .NET runtime is required; every installer also bundles the Windows App Runtime payloads the desktop app needs.
