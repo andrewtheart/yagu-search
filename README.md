@@ -24,6 +24,10 @@ For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
 
 ![Match navigation in the context preview](docs/images/match-navigation.png)
 
+**Add individual lines to preview** — pull just the matched lines you care about into the preview instead of loading the entire file. This is a performance technique: for very large files, Yagu renders only the lines you select rather than the whole document.
+
+![Individual matched lines added to the preview instead of loading the whole file](docs/images/add-lines-to-preview.png)
+
 **Built-in editor** — open a matched file in-app with syntax highlighting, line numbers, find/replace, save, and `.yagubak` backups.
 
 ![Built-in C# editor with syntax highlighting](docs/images/builtin-editor.png)
