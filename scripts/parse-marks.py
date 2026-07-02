@@ -1,6 +1,8 @@
 import json, sys, struct
 
-path = r'C:\Users\andre\OneDrive\Desktop\Report20260504-2235\1a16641b-a40d-4c3a-8f41-66f7e7a1f524\650ce8e5-7f93-4049-8166-d55fa3f6fe02.counters'
+if len(sys.argv) < 2:
+    sys.exit('Usage: python parse-marks.py <path-to-.counters-file>')
+path = sys.argv[1]
 data = open(path, 'rb').read()
 text = data.decode('utf-16-le', errors='replace')
 if text.startswith('\ufeff'):

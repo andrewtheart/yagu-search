@@ -14,9 +14,9 @@
 # unlocked interactive desktop. Modelled on scripts/drive-cache-showmore-overlay.ps1.
 
 param(
-    [string]$Directory = "C:\Users\andre\AppData\Local\npm-cache\_cacache\content-v2\sha512\bf\20",
+    [string]$Directory = "$env:USERPROFILE\AppData\Local\npm-cache\_cacache\content-v2\sha512\bf\20",
     [string]$Query = "test",
-    [string]$FileFilter = "C:\Users\andre\AppData\Local\npm-cache\_cacache\content-v2\sha512\bf\20\036d75a0cc71b9c888a5bb3b68d681e0498e1f40657a77de6668619dd395fd99bde768ec1c2df9de5c93148e1fe5d0848635f4b628685d05df21b39b244d",
+    [string]$FileFilter = "$env:USERPROFILE\AppData\Local\npm-cache\_cacache\content-v2\sha512\bf\20\036d75a0cc71b9c888a5bb3b68d681e0498e1f40657a77de6668619dd395fd99bde768ec1c2df9de5c93148e1fe5d0848635f4b628685d05df21b39b244d",
     [string]$OutDir = "C:\src\Yagu\TestResults\ShowMoreDismiss",
     [string]$YaguLog = "$env:APPDATA\Yagu\yagu.log",
     [int]$FindFileTimeoutSec = 300,

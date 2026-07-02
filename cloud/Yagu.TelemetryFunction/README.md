@@ -33,12 +33,12 @@ You need: an Application Insights resource, a **dedicated** storage account, and
 
 ```powershell
 # Variables — adjust names/region.
-$rg       = "rg-yagu-telemetry"
+$rg       = "rg-yourapp-telemetry"
 $loc      = "eastus"
-$ai       = "appi-yagu"
-$stg      = "yagubugreports"          # 3-24 lowercase alphanumerics, globally unique
-$plan     = "plan-yagu-telemetry"
-$func     = "func-yagu-telemetry"     # globally unique → https://func-yagu-telemetry.azurewebsites.net
+$ai       = "appi-yourapp"
+$stg      = "yourappbugreports"       # 3-24 lowercase alphanumerics, globally unique
+$plan     = "plan-yourapp-telemetry"
+$func     = "func-yourapp-telemetry"  # globally unique → https://func-yourapp-telemetry.azurewebsites.net
 $container= "bugreports"
 
 az group create -n $rg -l $loc
@@ -78,7 +78,7 @@ Write-Host "App token (paste into the client config): $token"
 
 ```powershell
 cd cloud/Yagu.TelemetryFunction
-func azure functionapp publish func-yagu-telemetry --dotnet-isolated
+func azure functionapp publish func-yourapp-telemetry --dotnet-isolated
 ```
 
 (Requires the Azure Functions Core Tools and the .NET 8 SDK.)
@@ -87,7 +87,7 @@ func azure functionapp publish func-yagu-telemetry --dotnet-isolated
 
 Edit `Yagu/Services/Telemetry/TelemetryConfig.cs`:
 
-- Set `ProxyBaseUrl` to your Function base URL (e.g. `https://func-yagu-telemetry.azurewebsites.net`).
+- Set `ProxyBaseUrl` to your Function base URL (e.g. `https://func-yourapp-telemetry.azurewebsites.net`).
 - Set `AppToken` to the `YAGU_APP_TOKEN` value above (or leave empty to run the proxy token-free).
 
 Until `ProxyBaseUrl` is a real `https://` URL, the client stays fully offline (`IsConfigured == false`)

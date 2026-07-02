@@ -7,7 +7,7 @@
     "// APPLICATIONINSIGHTS_CONNECTION_STRING": "Your Application Insights connection string (server-side only).",
     "APPLICATIONINSIGHTS_CONNECTION_STRING": "",
 
-    "// STORAGE_ACCOUNT_BLOB_URI": "Blob endpoint of the dedicated storage account, e.g. https://yagubugreports.blob.core.windows.net. Leave blank to disable bug-report attachment uploads.",
+    "// STORAGE_ACCOUNT_BLOB_URI": "Blob endpoint of the dedicated storage account, e.g. https://yourappbugreports.blob.core.windows.net. Leave blank to disable bug-report attachment uploads.",
     "STORAGE_ACCOUNT_BLOB_URI": "",
 
     "// BUGREPORT_CONTAINER": "Private container name for bug-report attachments (default: bugreports).",

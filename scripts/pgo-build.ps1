@@ -42,7 +42,7 @@
 
 .EXAMPLE
     .\scripts\pgo-build.ps1
-    .\scripts\pgo-build.ps1 -TrainingDir 'C:\Users\andre\source'
+    .\scripts\pgo-build.ps1 -TrainingDir 'C:\src\myapp'
 #>
 [CmdletBinding()]
 param(

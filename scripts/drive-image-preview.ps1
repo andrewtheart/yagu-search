@@ -6,7 +6,7 @@
 # Modelled on drive-google-matches.ps1 (UIAutomation + raw mouse input).
 
 param(
-    [string]$Directory = "C:\Users\andre\YaguOcrTest",
+    [string]$Directory = "$env:USERPROFILE\YaguOcrTest",
     [string]$Query = "BANANA",
     [string]$ImageFile = "banana-smoothie.png",
     [string]$ScreenshotDir = "C:\src\Yagu\TestResults\ImagePreview",
