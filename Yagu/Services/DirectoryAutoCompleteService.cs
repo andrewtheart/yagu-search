@@ -156,17 +156,21 @@ internal sealed class DirectoryAutoCompleteService
 
     internal async Task<List<string>> QueryEverythingAsync(string parentDir, string prefix, CancellationToken ct)
     {
-        // es.exe query: search for folders directly under parentDir
+        // es.exe query: search for folders directly under parentDir. The query embeds the user-typed
+        // prefix and parent path, so the production process is built with ArgumentList (see
+        // CreateDefaultProcess) which passes the query as a single, self-contained argument. That way
+        // a prefix containing a double-quote cannot break out of the query string and inject extra
+        // es.exe switches (argument injection), and paths containing spaces stay grouped — matching
+        // the single-string query handed to the Everything SDK.
         var query = BuildEverythingDirectoryQuery(parentDir, prefix);
 
-        var arguments = $"-max-results 30 {query}";
         var results = new List<string>();
 
         try
         {
             using var proc = _processFactory != null
-                ? _processFactory(_esExePath!, arguments)
-                : CreateDefaultProcess(_esExePath!, arguments);
+                ? _processFactory(_esExePath!, $"-max-results 30 {query}")
+                : CreateDefaultProcess(_esExePath!, query);
 
             proc.Start();
 
@@ -217,18 +221,22 @@ internal sealed class DirectoryAutoCompleteService
         return new string(buffer, 0, charCount);
     }
 
-    private static Process CreateDefaultProcess(string esExePath, string arguments)
+    private static Process CreateDefaultProcess(string esExePath, string query)
     {
         var proc = new Process();
         proc.StartInfo = new ProcessStartInfo
         {
             FileName = esExePath,
-            Arguments = arguments,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             CreateNoWindow = true,
             StandardOutputEncoding = System.Text.Encoding.UTF8,
         };
+        // Each argument is added individually so the runtime escapes it: the caller-influenced query
+        // is passed as ONE argument and can never be split into additional es.exe switches.
+        proc.StartInfo.ArgumentList.Add("-max-results");
+        proc.StartInfo.ArgumentList.Add("30");
+        proc.StartInfo.ArgumentList.Add(query);
         return proc;
     }
 

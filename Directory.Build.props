@@ -4,4 +4,17 @@
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
   </PropertyGroup>
+
+  <!--
+    Vendored third-party projects (under vendor/) are multi-targeting class libraries, not deployable
+    apps. Mark them non-publishable so a bare 'dotnet publish' at the solution root skips them instead
+    of failing with NETSDK1129 ("Publish not supported without specifying a target framework") on their
+    <TargetFrameworks>. They are still built and copied as dependencies of the Yagu app, so
+    'dotnet publish Yagu/Yagu.csproj' is unaffected. (Note: vendor/PaddleSharp has its own gitignored
+    Directory.Build.props that shadows this file and sets the same property; this covers fresh clones
+    and any vendored project without a local shadow props.)
+  -->
+  <PropertyGroup Condition="$(MSBuildProjectDirectory.Contains('vendor'))">
+    <IsPublishable>false</IsPublishable>
+  </PropertyGroup>
 </Project>

@@ -105,6 +105,32 @@ PaddleSharp
   retained at vendor/PaddleSharp/LICENSE and is available from:
   https://www.apache.org/licenses/LICENSE-2.0
 
+Tesseract (.NET wrapper for the Tesseract OCR engine)
+
+- Path: vendor/Tesseract/
+- Author: Charles Weld and Tesseract .NET wrapper contributors
+- License: Apache License 2.0 (Apache-2.0)
+- Source: https://github.com/charlesw/tesseract
+- License file: vendor/Tesseract/LICENSE.txt
+- Note: This is the managed .NET wrapper. Yagu's OCR worker uses it as an
+  alternative OCR engine (notably on x86/arm64, where the PaddleOCR native
+  runtime is unavailable). The full Apache 2.0 license text is retained at
+  vendor/Tesseract/LICENSE.txt and is available from:
+  https://www.apache.org/licenses/LICENSE-2.0
+
+Tesseract and Leptonica native binaries bundled through the Tesseract wrapper
+
+- Paths:
+  - vendor/Tesseract/src/Tesseract/x64/tesseract50.dll
+  - vendor/Tesseract/src/Tesseract/x86/tesseract50.dll
+  - vendor/Tesseract/src/Tesseract/x64/leptonica-1.82.0.dll
+  - vendor/Tesseract/src/Tesseract/x86/leptonica-1.82.0.dll
+- Tesseract OCR engine: Copyright (C) the Tesseract contributors, licensed under
+  the Apache License 2.0. Source: https://github.com/tesseract-ocr/tesseract
+- Leptonica image-processing library: Copyright (C) Dan S. Bloomberg and
+  Leptonica contributors, licensed under the Leptonica license (a BSD 2-Clause
+  style license). Source: https://github.com/DanBloomberg/leptonica
+
 xterm.js assets
 
 - Path: vendor/xterm-js/

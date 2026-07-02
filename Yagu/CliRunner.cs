@@ -710,6 +710,16 @@ internal static class CliRunner
                 var data = await http.GetByteArrayAsync(new Uri(url));
                 await File.WriteAllBytesAsync(tempPath, data);
 
+                // Refuse to run a downloaded installer elevated unless it carries a valid Authenticode
+                // signature from voidtools. HTTPS alone does not guarantee the payload is untampered
+                // (compromised mirror / MITM with a trusted cert) — OWASP A08 software integrity.
+                if (!AuthenticodeVerifier.IsTrustedPublisher(tempPath, "voidtools", out string signatureFailure))
+                {
+                    try { File.Delete(tempPath); } catch { /* best effort */ }
+                    Console.Error.WriteLine($"Everything installer failed signature verification ({signatureFailure}); not running it. Continuing with built-in file enumeration.");
+                    return;
+                }
+
                 Console.Error.WriteLine("Running installer \u2014 please complete the setup wizard...");
 
                 var proc = Process.Start(new ProcessStartInfo

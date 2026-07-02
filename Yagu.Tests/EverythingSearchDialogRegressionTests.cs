@@ -34,6 +34,33 @@ public sealed class EverythingSearchDialogRegressionTests
     }
 
     [Fact]
+    public void TitleGlyph_UsesWidthConstrainedGridSoTitleWraps()
+    {
+        // Regression: the title glyph was originally placed in a horizontal StackPanel next to the
+        // title TextBlock. A horizontal StackPanel measures its children with unbounded width, which
+        // disables the title's TextWrapping and lets long titles overflow the dialog horizontally.
+        // The glyph + title must live in a two-column Grid (Auto glyph + star title) so the title
+        // column is width-constrained and the text wraps to fit the dialog.
+        string dialog = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "YaguDialog.cs"));
+
+        int glyphIndex = dialog.IndexOf("options.TitleGlyph is { Length: > 0 } glyph", StringComparison.Ordinal);
+        Assert.True(glyphIndex >= 0, "Expected the title-glyph branch in YaguDialog.");
+
+        // Within the glyph branch, the container must be a Grid with a star-sized title column, not a
+        // horizontal StackPanel.
+        int branchEnd = dialog.IndexOf("root.Children.Add(titleRow);", glyphIndex, StringComparison.Ordinal);
+        Assert.True(branchEnd > glyphIndex, "Expected the title-glyph branch to add a titleRow.");
+        string branch = dialog[glyphIndex..branchEnd];
+
+        Assert.Contains("new Grid", branch);
+        Assert.Contains("new GridLength(1, GridUnitType.Star)", branch);
+        Assert.DoesNotContain("StackPanel { Orientation = Orientation.Horizontal", branch);
+
+        // The title itself must keep wrapping enabled.
+        Assert.Contains("TextWrapping = TextWrapping.WrapWholeWords", dialog);
+    }
+
+    [Fact]
     public void AppCode_DoesNotUseWinUiContentDialog()
     {
         string root = FindRepoRoot();

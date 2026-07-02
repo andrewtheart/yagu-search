@@ -32,6 +32,10 @@
     <Compile Include="..\Yagu\Services\FileMetadataCache.cs" Link="Source\Services\FileMetadataCache.cs" />
     <Compile Include="..\Yagu\Services\SearchService.cs" Link="Source\Services\SearchService.cs" />
     <Compile Include="..\Yagu\Services\SettingsService.cs" Link="Source\Services\SettingsService.cs" />
+    <Compile Include="..\Yagu\Services\CloudFileHelper.cs" Link="Source\Services\CloudFileHelper.cs" />
+    <Compile Include="..\Yagu\Services\TerminalShellKind.cs" Link="Source\Services\TerminalShellKind.cs" />
+    <Compile Include="..\Yagu\Helpers\DiskTypeDetector.cs" Link="Source\Helpers\DiskTypeDetector.cs" />
+    <Compile Include="..\Yagu\Services\Ocr\*.cs" Link="Source\Services\Ocr\%(Filename)%(Extension)" />
     <Compile Include="..\Yagu\Services\HotkeyService.cs" Link="Source\Services\HotkeyService.cs" />
     <Compile Include="..\Yagu\Services\EditorLauncher.cs" Link="Source\Services\EditorLauncher.cs" />
     <Compile Include="..\Yagu\Services\ZipArchiveSearcher.cs" Link="Source\Services\ZipArchiveSearcher.cs" />

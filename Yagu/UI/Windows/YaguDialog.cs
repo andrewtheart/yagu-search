@@ -165,6 +165,10 @@ internal sealed class YaguDialog : Window
 
         if (options.ShowTitle)
         {
+            // Leave room on the right for the floating close button (row 0) so a wrapped title never
+            // slides underneath it.
+            double titleRightInset = options.ShowTopRightCloseButton ? 40 : 0;
+
             var title = new TextBlock
             {
                 Text = options.Title,
@@ -175,17 +179,29 @@ internal sealed class YaguDialog : Window
 
             if (options.TitleGlyph is { Length: > 0 } glyph)
             {
-                // Render the glyph (e.g. a warning icon) to the left of the title text.
-                var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+                // Render the glyph (e.g. a warning icon) to the left of the title text. Use a two-column
+                // Grid (Auto glyph + star title) rather than a horizontal StackPanel: a horizontal
+                // StackPanel measures its children with unbounded width, which disables the title's
+                // TextWrapping and lets long titles overflow the dialog horizontally. A star-sized
+                // title column keeps the text constrained so it wraps and the dialog fits its text.
+                var titleRow = new Grid
+                {
+                    ColumnSpacing = 10,
+                    Margin = new Thickness(0, 0, titleRightInset, 0),
+                };
+                titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
                 var titleIcon = new FontIcon
                 {
                     Glyph = glyph,
                     FontSize = 22,
-                    VerticalAlignment = VerticalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Top,
                 };
                 if (options.TitleGlyphColor is { } glyphColor)
                     titleIcon.Foreground = new SolidColorBrush(glyphColor);
-                title.VerticalAlignment = VerticalAlignment.Center;
+                Grid.SetColumn(titleIcon, 0);
+                Grid.SetColumn(title, 1);
                 titleRow.Children.Add(titleIcon);
                 titleRow.Children.Add(title);
                 Grid.SetRow(titleRow, 0);
@@ -193,6 +209,7 @@ internal sealed class YaguDialog : Window
             }
             else
             {
+                title.Margin = new Thickness(0, 0, titleRightInset, 0);
                 Grid.SetRow(title, 0);
                 root.Children.Add(title);
             }

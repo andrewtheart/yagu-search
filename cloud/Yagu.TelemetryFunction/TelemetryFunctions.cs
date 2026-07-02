@@ -93,9 +93,11 @@ public sealed class TelemetryFunctions
         if (payload is null)
             return new BadRequestResult();
 
-        string correlationId = string.IsNullOrWhiteSpace(payload.CorrelationId)
-            ? Guid.NewGuid().ToString("N")
-            : payload.CorrelationId;
+        // The correlation id is attacker-controlled and is used to build blob paths, so it must never
+        // be trusted verbatim. Accept only a safe, bounded token; otherwise mint a fresh server id.
+        // This prevents blob-path injection / cross-report overwrite (e.g. "../", separators, control
+        // characters, or reusing another report's id).
+        string correlationId = SanitizeCorrelationId(payload.CorrelationId);
 
         bool stored = await TryUploadAttachmentsAsync(correlationId, payload);
         TrackBugReport(correlationId, payload, stored);
@@ -208,6 +210,30 @@ public sealed class TelemetryFunctions
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
+
+    // A correlation id is used to build blob paths and is echoed back to the caller, so it is
+    // restricted to a short, unambiguous, path-safe token. Anything outside this shape is rejected
+    // and replaced with a freshly minted server-side id.
+    private const int MaxCorrelationIdChars = 64;
+
+    private static string SanitizeCorrelationId(string? candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+            return Guid.NewGuid().ToString("N");
+
+        string trimmed = candidate.Trim();
+        if (trimmed.Length is 0 or > MaxCorrelationIdChars)
+            return Guid.NewGuid().ToString("N");
+
+        foreach (char c in trimmed)
+        {
+            bool ok = c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or (>= '0' and <= '9') or '-';
+            if (!ok)
+                return Guid.NewGuid().ToString("N");
+        }
+
+        return trimmed;
+    }
 
     /// <summary>True when no server token is configured (open proxy) or the request carries a matching
     /// token. Comparison is fixed-time to avoid leaking the token via timing.</summary>

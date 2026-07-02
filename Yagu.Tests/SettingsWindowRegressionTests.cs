@@ -794,10 +794,16 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("Checking available shortcuts...", shortcutsBlock);
 
         string queueMethod = ExtractMethod(SettingsWindowSource, "QueueHotkeyAvailabilityLoad", window: 1600);
+        // The Ctrl+Shift+letter probe registers/unregisters hotkeys on the MAIN window handle, so it
+        // MUST run on the UI thread that owns that window. Win32 RegisterHotKey cannot associate a hot
+        // key with a window created by another thread, so a Task.Run background probe fails for every
+        // letter and falsely reports "no combinations available". Pin the UI-thread dispatch and forbid
+        // Task.Run so we can't regress back to background-thread probing.
+        Assert.DoesNotContain("Task.Run", queueMethod);
         AssertContainsInOrder(queueMethod,
-            "Task.Run(() => _hotkeyService.GetAvailableCtrlShiftLetterKeys(hwnd))",
-            "DispatcherQueue.TryEnqueue",
-            "ApplyHotkeyAvailability(task.Result, hotkey, hotkeyCombo, availabilityStatus);");
+            "DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low",
+            "_hotkeyService.GetAvailableCtrlShiftLetterKeys(hwnd)",
+            "ApplyHotkeyAvailability(availableKeys, hotkey, hotkeyCombo, availabilityStatus);");
 
         string applyMethod = ExtractMethod(SettingsWindowSource, "ApplyHotkeyAvailability", window: 3600);
         AssertContainsInOrder(applyMethod,

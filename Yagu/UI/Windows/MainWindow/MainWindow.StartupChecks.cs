@@ -473,6 +473,17 @@ public sealed partial class MainWindow
         if (!await DownloadEverythingInstallerAsync(url, tempPath))
             return;
 
+        // Never run a downloaded installer elevated without confirming it is a genuine, untampered
+        // voidtools binary. HTTPS protects the transport, but a compromised mirror or MITM able to
+        // present a trusted certificate could still deliver a malicious payload (OWASP A08).
+        if (!AuthenticodeVerifier.IsTrustedPublisher(tempPath, "voidtools", out string signatureFailure))
+        {
+            TryDeleteFile(tempPath);
+            LogService.Instance.Warning("MainWindow", $"Refusing to run Everything installer: {signatureFailure}");
+            ViewModel.StatusText = "Everything Search installer failed signature verification and was not run. Using built-in file enumeration.";
+            return;
+        }
+
         ViewModel.StatusText = "Running Everything Search installer \u2014 please complete the setup wizard\u2026";
 
         try

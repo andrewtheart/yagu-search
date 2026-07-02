@@ -717,6 +717,8 @@ public sealed partial class MainWindow
             var msg = "Yagu is still running in the system tray. Right-click the tray icon to reopen or close it.";
             if (ViewModel.GlobalHotkeyEnabled && _hotkeyService.IsRegistered)
                 msg += $" You can also press {HotkeyService.FormatCtrlShift(ViewModel.GlobalHotkeyKey[0])} to restore it.";
+            else
+                msg += " You can also enable a global hotkey in Settings to restore it instantly.";
             _trayIcon!.ShowBalloon("Yagu minimized to tray", msg);
             MarkTrayNotificationShown();
         }
@@ -793,7 +795,10 @@ public sealed partial class MainWindow
 
         Activate();
         PositionLauncherWindow();
-        FocusSearchBox();
+        // Suppress the query history dropdown: focusing the (now empty) search box while restoring
+        // the window via the global hotkey or tray "Open" must not pop the autocomplete list, matching
+        // RestoreWindowFromTray. The user didn't click into the box, so no dropdown should appear.
+        FocusSearchBox(suppressSuggestions: true);
     }
 
     private void RemoveGlobalHotkeyHook()

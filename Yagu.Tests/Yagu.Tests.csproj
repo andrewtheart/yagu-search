@@ -73,6 +73,7 @@
     <Compile Include="..\Yagu\Services\DriveEnumerator.cs" Link="Source\Services\DriveEnumerator.cs" />
     <Compile Include="..\Yagu\Services\HotkeyService.cs" Link="Source\Services\HotkeyService.cs" />
     <Compile Include="..\Yagu\Services\EditorLauncher.cs" Link="Source\Services\EditorLauncher.cs" />
+    <Compile Include="..\Yagu\Services\AuthenticodeVerifier.cs" Link="Source\Services\AuthenticodeVerifier.cs" />
     <Compile Include="..\Yagu\Services\ZipArchiveSearcher.cs" Link="Source\Services\ZipArchiveSearcher.cs" />
     <Compile Include="..\Yagu\Services\SelectedFileExportService.cs" Link="Source\Services\SelectedFileExportService.cs" />
     <Compile Include="..\Yagu\Services\HtmlReportExportService.cs" Link="Source\Services\HtmlReportExportService.cs" />

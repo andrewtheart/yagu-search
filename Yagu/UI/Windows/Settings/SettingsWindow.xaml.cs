@@ -119,7 +119,11 @@ public sealed partial class SettingsWindow : Window
         var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
         var appWindow = AppWindow.GetFromWindowId(windowId);
         _appWindow = appWindow;
-        const int w = 903, h = 820;
+        // Sized so the widest tab content (620px fixed-width filter rows plus the 200px tab
+        // rail, pane padding and vertical scrollbar) fits without horizontal scrolling — which
+        // stays disabled — and so most tabs need little or no vertical scrolling. The helper
+        // clamps to the monitor work area, so this is safe on smaller displays.
+        const int w = 1040, h = 920;
         WindowForegroundHelper.CenterWindowOverOwner(appWindow, mainHwnd, w, h);
 
         ApplySettingsTheme();
@@ -1284,21 +1288,30 @@ public sealed partial class SettingsWindow : Window
     private void QueueHotkeyAvailabilityLoad(CheckBox hotkey, ComboBox hotkeyCombo, TextBlock availabilityStatus)
     {
         var hwnd = _mainHwnd;
-        _ = Task.Run(() => _hotkeyService.GetAvailableCtrlShiftLetterKeys(hwnd))
-            .ContinueWith(task =>
-            {
-                DispatcherQueue.TryEnqueue(() =>
-                {
-                    if (!task.IsCompletedSuccessfully)
-                    {
-                        availabilityStatus.Text = "Unable to check available shortcuts right now.";
-                        availabilityStatus.Visibility = Visibility.Visible;
-                        return;
-                    }
 
-                    ApplyHotkeyAvailability(task.Result, hotkey, hotkeyCombo, availabilityStatus);
-                });
-            });
+        // The probe (RegisterHotKey/UnregisterHotKey for each Ctrl+Shift+letter) MUST run on the UI
+        // thread that owns the main window. Win32 RegisterHotKey "cannot associate a hot key with a
+        // window created by another thread", so probing from a background thread pool thread fails for
+        // EVERY letter and makes it look like no combinations are available at all. The settings
+        // window lives on the same UI thread as the main window, so its DispatcherQueue owns _mainHwnd.
+        // The 26 register/unregister calls are fast; enqueue at low priority so building the tab
+        // stays responsive while still running on the correct thread.
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            IReadOnlyList<char> availableKeys;
+            try
+            {
+                availableKeys = _hotkeyService.GetAvailableCtrlShiftLetterKeys(hwnd);
+            }
+            catch
+            {
+                availabilityStatus.Text = "Unable to check available shortcuts right now.";
+                availabilityStatus.Visibility = Visibility.Visible;
+                return;
+            }
+
+            ApplyHotkeyAvailability(availableKeys, hotkey, hotkeyCombo, availabilityStatus);
+        });
     }
 
     private void ApplyHotkeyAvailability(IReadOnlyList<char> availableHotkeyKeys, CheckBox hotkey, ComboBox hotkeyCombo, TextBlock availabilityStatus)
@@ -2430,6 +2443,17 @@ public sealed partial class SettingsWindow : Window
             pathTypeGroup.Children.Add(resetBinaryExt);
             pathTypeGroup.Children.Add(new TextBlock { Text = "These populate the Binary ext dropdown shown beside Skip Extensions when Search binary is enabled. Use this for compiled binary and build artifact extensions that should remain skipped even during binary search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
+            var excludedExtToggle = new ToggleSwitch
+            {
+                IsOn = !_viewModel.SuppressExcludedExtensionWarnings,
+                OnContent = "Warn when a search targets an excluded file type",
+                OffContent = "Warn when a search targets an excluded file type",
+                Margin = new Thickness(0, 8, 0, 0),
+            };
+            excludedExtToggle.Toggled += (_, _) => _viewModel.SuppressExcludedExtensionWarnings = !excludedExtToggle.IsOn;
+            pathTypeGroup.Children.Add(excludedExtToggle);
+            pathTypeGroup.Children.Add(new TextBlock { Text = "When enabled, Yagu warns before searching if your query names a file whose extension is currently excluded by the Skip or Binary extension lists or an Include/Exclude filter, so those files would not appear in results.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+
             var archiveExtLabel = NextSearchLabel("Archive extensions (semicolon-separated, no dots):");
             archiveExtLabel.Margin = new Thickness(0, 4, 0, 0);
             archiveGroup.Children.Add(archiveExtLabel);
@@ -2671,17 +2695,6 @@ public sealed partial class SettingsWindow : Window
             hddWarnToggle.Toggled += (_, _) => _viewModel.SuppressHddParallelismWarnings = !hddWarnToggle.IsOn;
             searchEngineGroup.Children.Add(hddWarnToggle);
             searchEngineGroup.Children.Add(new TextBlock { Text = "When enabled, Yagu shows a one-time-per-disk notice before searching a rotational hard disk. This only controls the notice; it does not change whether parallelism is limited (above). Only applies while parallelism limiting on HDD is enabled.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
-
-            var excludedExtToggle = new ToggleSwitch
-            {
-                IsOn = !_viewModel.SuppressExcludedExtensionWarnings,
-                OnContent = "Warn when a search targets an excluded file type",
-                OffContent = "Warn when a search targets an excluded file type",
-                Margin = new Thickness(0, 4, 0, 0),
-            };
-            excludedExtToggle.Toggled += (_, _) => _viewModel.SuppressExcludedExtensionWarnings = !excludedExtToggle.IsOn;
-            searchEngineGroup.Children.Add(excludedExtToggle);
-            searchEngineGroup.Children.Add(new TextBlock { Text = "When enabled, Yagu warns before searching if your query names a file whose extension is currently excluded by the Skip or Binary extension lists or an Include/Exclude filter, so those files would not appear in results.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             searchEngineGroup.Children.Add(NextSearchLabel("SDK channel buffer size:"));
             var sdkBuf = new NumberBox { Value = _viewModel.SdkChannelBufferSize, Minimum = 16, Maximum = 1000000 };
