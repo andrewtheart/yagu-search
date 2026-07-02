@@ -245,19 +245,21 @@
     so we can't distinguish "build all" from a single-arch publish by RuntimeIdentifier
     alone. UseCurrentRuntimeIdentifier == 'true' is set ONLY when the SDK picked the RID
     itself (the user did not pass -r), which is exactly the bare-publish case. In that
-    case we build all three installers (x64, x86, arm64) via build-installer.ps1.
+    case we build all four installers (x64, x86, arm64, and the OCR-bundled x64-ocr) via
+    build-all-installers.ps1, which also refreshes the README download-table links.
 
-    This does NOT recurse and does NOT double-build: build-installer.ps1 performs its own
-    per-architecture publishes with an explicit -r win-<arch> -p:BuildInstallerOnPublish=false,
-    so those inner publishes have UseCurrentRuntimeIdentifier == '' AND the installer hooks
-    disabled. The per-RID BuildInstallerAfterPublish target above never fires for a bare
-    publish because YaguInstallerArch is evaluated before SDK RID inference and stays empty,
-    keeping the two paths mutually exclusive. Opt out with -p:BuildInstallerOnPublish=false.
+    This does NOT recurse and does NOT double-build: build-all-installers.ps1 delegates to
+    build-installer.ps1, which performs its own per-architecture publishes with an explicit
+    -r win-<arch> -p:BuildInstallerOnPublish=false, so those inner publishes have
+    UseCurrentRuntimeIdentifier == '' AND the installer hooks disabled. The per-RID
+    BuildInstallerAfterPublish target above never fires for a bare publish because
+    YaguInstallerArch is evaluated before SDK RID inference and stays empty, keeping the
+    two paths mutually exclusive. Opt out with -p:BuildInstallerOnPublish=false.
   -->
   <Target Name="BuildAllInstallersAfterPublish"
           AfterTargets="Publish"
           Condition="'$(BuildInstallerOnPublish)' != 'false' And '$(DesignTimeBuild)' != 'true' And '$(UseCurrentRuntimeIdentifier)' == 'true'">
-    <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\build-installer.ps1&quot; -Architecture all" />
+    <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\build-all-installers.ps1&quot;" />
   </Target>
 
   <!--

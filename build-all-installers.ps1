@@ -30,6 +30,11 @@
   Optional local OCR cache used to source the bundled payload for the x64-ocr
   variant. Passed through to build-installer.ps1.
 
+.PARAMETER SkipReadmeUpdate
+  Skip rewriting the README "Download Installer" table. By default, after a
+  successful build the four table rows are updated so their filename, GitHub raw
+  URL, and (~N MB) size match the newest installer of each suffix on disk.
+
 .EXAMPLE
   .\build-all-installers.ps1
   Builds all four variants (x64, x86, arm64, x64-ocr).
@@ -52,7 +57,8 @@ param(
   [ValidateSet('x64', 'x86', 'arm64', 'x64-ocr', 'all')]
   [string[]]$Variant = @('all'),
   [string]$InnoSetupPath,
-  [string]$OcrPayloadCacheDir
+  [string]$OcrPayloadCacheDir,
+  [switch]$SkipReadmeUpdate
 )
 
 $ErrorActionPreference = 'Stop'
@@ -63,6 +69,81 @@ if (-not (Test-Path -LiteralPath $buildInstaller)) {
   throw "build-installer.ps1 not found next to this script at: $buildInstaller"
 }
 $installerDir = Join-Path $repoRoot 'installer'
+
+# Rewrites the four rows of the README "Download Installer" table so each row's
+# filename, GitHub raw URL, and (~N MB) size match the newest installer of that
+# suffix on disk. Only the link + size token is replaced; the bold label and the
+# rest of every row (including its em-dash / middle-dot glyphs) are preserved via
+# a capture group, so this script stays ASCII-only. Rows whose suffix has no
+# installer on disk are left untouched.
+function Update-ReadmeDownloadTable {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$ReadmePath,
+    [Parameter(Mandatory)][string]$InstallerDir
+  )
+
+  if (-not (Test-Path -LiteralPath $ReadmePath)) {
+    Write-Warning "README not found at '$ReadmePath' - skipping download-table update."
+    return
+  }
+
+  $rawBase = 'https://github.com/andrewtheart/yagu-search/raw/main/installer'
+  # End-anchored suffixes; 'x64-ocr' is checked before 'x64' so the two never
+  # collide. Each pattern ends with the exact '-<suffix>.exe', so the 'x64' row
+  # can never match the 'x64-ocr' installer.
+  $suffixes = @('x64-ocr', 'x64', 'arm64', 'x86')
+
+  # Read as UTF-8 explicitly. Get-Content -Raw under Windows PowerShell 5.1 decodes
+  # a BOM-less UTF-8 file as ANSI, which would corrupt the table's em-dash / middle-dot
+  # glyphs on write. File.ReadAllText defaults to UTF-8 (BOM-aware) under 5.1 and pwsh 7.
+  $content = [System.IO.File]::ReadAllText($ReadmePath)
+  $original = $content
+  $updated = New-Object System.Collections.Generic.List[string]
+
+  foreach ($suffix in $suffixes) {
+    $suffixEsc = [regex]::Escape($suffix)
+    $exe = Get-ChildItem -LiteralPath $InstallerDir -Filter "YaguSetup-*-$suffix.exe" -File -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -match "-$suffixEsc\.exe$" } |
+      Sort-Object LastWriteTime | Select-Object -Last 1
+    if (-not $exe) {
+      Write-Warning "No installer for suffix '$suffix' in '$InstallerDir' - leaving its README row unchanged."
+      continue
+    }
+
+    $fileName = $exe.Name
+    $sizeMb = [math]::Round($exe.Length / 1MB)
+
+    # Group 1 captures the '[**Label** - ' display prefix generically (any chars
+    # up to the filename), so the non-ASCII glyphs never appear in this file.
+    $pattern = "(\[[^\]]*?)YaguSetup-[0-9.]+-$suffixEsc\.exe\]\(" +
+               [regex]::Escape($rawBase) + "/YaguSetup-[0-9.]+-$suffixEsc\.exe\)\s*\(~[\d.]+\s*MB\)"
+    $replacement = "`${1}$fileName]($rawBase/$fileName) (~$sizeMb MB)"
+
+    $rx = [regex]$pattern
+    if (-not $rx.IsMatch($content)) {
+      Write-Warning "Could not find the '$suffix' row in the README download table - it was left unchanged."
+      continue
+    }
+
+    $new = $rx.Replace($content, $replacement)
+    if ($new -ne $content) {
+      $content = $new
+      $updated.Add("$suffix -> $fileName (~$sizeMb MB)")
+    }
+  }
+
+  if ($content -ne $original) {
+    # Preserve UTF-8 (no BOM) and the existing line endings; works under both
+    # Windows PowerShell 5.1 and pwsh 7 (Set-Content -Encoding utf8 differs).
+    [System.IO.File]::WriteAllText($ReadmePath, $content, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host "README download table updated:" -ForegroundColor Green
+    foreach ($u in $updated) { Write-Host "  $u" -ForegroundColor Green }
+  }
+  else {
+    Write-Host "README download table already up to date." -ForegroundColor DarkGray
+  }
+}
 
 # Canonical variant -> (architecture, bundle-OCR) and the installer filename suffix
 # that build-installer.ps1 produces (YaguSetup-<version>-<suffix>.exe).
@@ -144,6 +225,19 @@ foreach ($r in $results) {
   }
 }
 Write-Host "=======================================================" -ForegroundColor Cyan
+
+# Point the README download table at the newest installers on disk (unless opted out).
+if ($SkipReadmeUpdate) {
+  Write-Host "Skipping README download-table update (-SkipReadmeUpdate)." -ForegroundColor DarkGray
+}
+else {
+  try {
+    Update-ReadmeDownloadTable -ReadmePath (Join-Path $repoRoot 'README.md') -InstallerDir $installerDir
+  }
+  catch {
+    Write-Warning "README download-table update failed: $($_.Exception.Message)"
+  }
+}
 
 $failed = @($results | Where-Object { -not $_.Success })
 if ($failed.Count -gt 0) {
