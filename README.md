@@ -20,6 +20,10 @@ For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
 
 ![Advanced Options drawer](docs/images/advanced-options.png)
 
+**Filtering options** — the Filters tab narrows what gets searched: obey `.gitignore`, skip file extensions, and toggle whether to search binaries, archives, online-only cloud files, hidden files, and image text (OCR).
+
+![Filters tab showing file-type and content-search filtering options](docs/images/filter-options.png)
+
 **Match navigation** — step through every occurrence in the context preview, with highlighted matches, line numbers, and an occurrence counter.
 
 ![Match navigation in the context preview](docs/images/match-navigation.png)
@@ -431,6 +435,10 @@ The Rust crate exposes a C ABI and supports:
 By default, the Rust crate uses the in-tree scanner in [yagu-core/src/scan.rs](yagu-core/src/scan.rs). Experimental ripgrep-library spike code exists behind the `grep_crates` Cargo feature and is off by default.
 
 ## Performance
+
+Yagu's search hot path has been **profiled and fine-tuned to be competitive with [ripgrep](https://github.com/BurntSushi/ripgrep)** — the current benchmark for fast command-line search. In many workloads it **exceeds ripgrep's throughput**, and in the remaining cases it **matches** it. The gains come from the native Rust scanner ([yagu-core/src/scan.rs](yagu-core/src/scan.rs)), which compiles the matcher once per search and reuses it across files, streams matches back without buffering, and skips work early (binary detection, size caps, extension/`.gitignore` filters) before touching file contents.
+
+This is measured, not assumed. The [`Yagu.Benchmarks`](Yagu.Benchmarks/) project (BenchmarkDotNet) tracks literal and regex search throughput against recorded baselines in [`Yagu.Benchmarks/results/perf-baselines.jsonl`](Yagu.Benchmarks/results/perf-baselines.jsonl), and the native binary can be built with a symbol-rich profiling profile (`-p:RustProfile=profiling`) for deeper flame-graph analysis. Real-world results still depend on hardware, storage (SSD vs. HDD), corpus shape, and pattern complexity — but Yagu is engineered to keep pace with the fastest searchers available.
 
 ### UI Update Throttling
 
