@@ -309,4 +309,94 @@ public sealed class SearchResultCollectionExtendedCoverageTests
         Assert.Single(collection.VisibleGroups);
         Assert.Equal(@"C:\src\file.cs", collection.VisibleGroups[0].FilePath);
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  GetDateRangeBucketOrder (parameterless overload)
+    // ═══════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void GetDateRangeBucketOrder_Parameterless_OrdersModifiedCreatedBucketsFromZero()
+    {
+        var order = SearchResultCollection.GetDateRangeBucketOrder();
+        Assert.Equal(0, order["Modified/Created past day"]);
+        Assert.Equal(1, order["Modified/Created past week"]);
+        // "a long time ago" and "Unknown date" are the last two buckets.
+        Assert.True(order["a long time ago"] < order["Unknown date"]);
+        Assert.Equal(order.Count - 1, order["Unknown date"]);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Sort matrix — exercises every OrderByCriterion / ThenByCriterion arm
+    //  (SortMode 1=match count, 2=modified, 3=size, 4=name, 5=directory) in
+    //  both directions, both as primary sort and as a secondary (ThenBy) sort.
+    // ═══════════════════════════════════════════════════════════════
+
+    private static SearchResultCollection MakeMultiGroupCollection()
+    {
+        var collection = new SearchResultCollection();
+        // Distinct directories, names, and extensions so grouping has >1 bucket
+        // and every ordering key produces a non-trivial arrangement.
+        collection.Add(MakeResult(@"C:\beta\zeta.cs", 1, "match"));
+        collection.Add(MakeResult(@"C:\beta\zeta.cs", 2, "match2"));
+        collection.Add(MakeResult(@"C:\alpha\yankee.txt", 1, "match"));
+        collection.Add(MakeResult(@"C:\gamma\xray.md", 1, "match"));
+        collection.Add(MakeResult(@"C:\gamma\whiskey.cs", 1, "match"));
+        return collection;
+    }
+
+    [Theory]
+    [InlineData(1, 0)] [InlineData(1, 1)]
+    [InlineData(2, 0)] [InlineData(2, 1)]
+    [InlineData(3, 0)] [InlineData(3, 1)]
+    [InlineData(4, 0)] [InlineData(4, 1)]
+    [InlineData(5, 0)] [InlineData(5, 1)]
+    public void SortMatrix_ExtensionGrouping_AppliesOrderByAndThenByForEveryMode(int mode, int direction)
+    {
+        var collection = MakeMultiGroupCollection();
+        collection.GroupMode = GroupMode.Extension;
+        // Same mode twice so both OrderByCriterion (primary) and the
+        // IOrderedEnumerable<FileGroup> ThenByCriterion (secondary) arms run.
+        collection.SetSortCriteria([
+            new SortCriterion(mode, direction),
+            new SortCriterion(mode, direction == 0 ? 1 : 0),
+        ]);
+        collection.ApplySortAndFilter();
+        Assert.NotEmpty(collection.VisibleGroups);
+    }
+
+    [Theory]
+    [InlineData(1, 0)] [InlineData(1, 1)]
+    [InlineData(2, 0)] [InlineData(2, 1)]
+    [InlineData(3, 0)] [InlineData(3, 1)]
+    [InlineData(4, 0)] [InlineData(4, 1)]
+    [InlineData(5, 0)] [InlineData(5, 1)]
+    public void SortMatrix_FileSizeGrouping_AppliesTupleThenByForEveryMode(int mode, int direction)
+    {
+        var collection = MakeMultiGroupCollection();
+        // File-size (bucket) grouping routes every criterion through the
+        // (FileGroup, string Bucket) tuple ThenByCriterion overload.
+        collection.GroupMode = GroupMode.FileSize;
+        collection.SetSortCriteria([
+            new SortCriterion(mode, direction),
+            new SortCriterion(mode, direction == 0 ? 1 : 0),
+        ]);
+        collection.ApplySortAndFilter();
+        Assert.NotEmpty(collection.VisibleGroups);
+    }
+
+    [Theory]
+    [InlineData(GroupMode.DateRangeModifiedCreated)]
+    [InlineData(GroupMode.DateRangeModified)]
+    [InlineData(GroupMode.DateRangeCreated)]
+    public void SortMatrix_DateRangeGrouping_AppliesTupleThenBy(GroupMode groupMode)
+    {
+        var collection = MakeMultiGroupCollection();
+        collection.GroupMode = groupMode;
+        collection.SetSortCriteria([
+            new SortCriterion(4, 1),
+            new SortCriterion(3, 0),
+        ]);
+        collection.ApplySortAndFilter();
+        Assert.NotEmpty(collection.VisibleGroups);
+    }
 }

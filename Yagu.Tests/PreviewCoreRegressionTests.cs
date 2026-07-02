@@ -13,6 +13,8 @@ public sealed class PreviewCoreRegressionTests
     private static readonly string MainWindowSource = ReadMainWindowSources();
     private static readonly string PreviewEditorSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewEditor.cs"));
+    private static readonly string EditorPointerActionsSource = File.ReadAllText(
+        Path.Combine(RepoRoot, "vendor", "TextControlBox-WinUI", "TextControlBox", "Core", "PointerActionsManager.cs"));
     private static readonly string SettingsWindowSource = File.ReadAllText(
         Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
     private static readonly string HelpWindowSource = File.ReadAllText(
@@ -467,6 +469,58 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void PreviewAndEditor_SupportPinchAndCtrlWheelZoom()
+    {
+        // Preview: a Ctrl-modified wheel (mouse Ctrl+wheel or a precision-touchpad
+        // pinch, which Windows delivers as a Ctrl-modified wheel) zooms the text
+        // instead of scrolling.
+        string wheel = ExtractMethodWindow(MainWindowSource, "OnPreviewPointerWheelChanged", 2600);
+        AssertContainsInOrder(wheel,
+            "!zoomProps.IsHorizontalMouseWheel",
+            "IsPreviewZoomModifierActive(e)",
+            "AdjustPreviewTextZoom(zoomProps.MouseWheelDelta);",
+            "e.Handled = true;");
+
+        // The pinch's synthesized Ctrl rides on the wheel message (e.KeyModifiers),
+        // not the physical keyboard state, so both must be checked.
+        string modifier = ExtractMethodWindow(MainWindowSource, "IsPreviewZoomModifierActive", 700);
+        AssertContainsInOrder(modifier,
+            "e.KeyModifiers.HasFlag(Windows.System.VirtualKeyModifiers.Control)",
+            "GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control)",
+            "CoreVirtualKeyStates.Down");
+
+        // Wheel deltas accumulate into whole-point font-size steps and are clamped
+        // by the pure, unit-tested PreviewZoomMath helper (see PreviewZoomMathTests).
+        string adjust = ExtractMethodWindow(MainWindowSource, "AdjustPreviewTextZoom", 900);
+        AssertContainsInOrder(adjust,
+            "int current = ResolvePreviewTextFontSize();",
+            "PreviewZoomMath.ApplyWheelZoom(current, wheelDelta, ref _previewZoomWheelAccumulator)",
+            "ViewModel.PreviewTextFontSize = updated;");
+
+        // Zoom reflows the single-file block surface too (it has no separate gutter block).
+        string applyFont = ExtractMethodWindow(MainWindowSource, "ApplyPreviewTextFontSettings", window: 2600);
+        AssertContainsInOrder(applyFont,
+            "if (PreviewBlock is not null)",
+            "ApplyPreviewTextFontSettings(PreviewBlock, family, size, lineHeight);",
+            "InvalidateParagraphIndexCache(PreviewBlock);");
+
+        string blockSurface = ExtractMethodWindow(MainWindowSource, "ShowPreviewBlockSurface", 1200);
+        AssertContainsInOrder(blockSurface,
+            "int previewTextFontSize = ResolvePreviewTextFontSize();",
+            "ApplyPreviewTextFontSettings(",
+            "PreviewBlock,",
+            "ResolvePreviewTextFontFamily(),");
+
+        // Editor: the vendored control's wheel-zoom now also accepts the pinch
+        // modifier from the wheel message (e.KeyModifiers), not just a held Ctrl key.
+        string editorWheel = ExtractMethodWindow(EditorPointerActionsSource, "PointerWheelAction", 900);
+        AssertContainsInOrder(editorWheel,
+            "Utils.IsKeyPressed(VirtualKey.Control) || e.KeyModifiers.HasFlag(VirtualKeyModifiers.Control)",
+            "zoomManager._ZoomFactor += delta / 20;",
+            "zoomManager.UpdateZoom();");
+    }
+
+    [Fact]
     public void PreviewContextMenu_EditFileOpensEditorAtRightClickedLine()
     {
         string previewFlyout = ExtractMethodWindow(MainWindowSource, "AttachPreviewBlockContextFlyout", 4200);
@@ -766,8 +820,11 @@ public sealed class PreviewCoreRegressionTests
             "new PointerEventHandler(OnPreviewPointerWheelChanged)",
             "handledEventsToo: true);");
 
-        string wheel = ExtractMethodWindow(MainWindowSource, "OnPreviewPointerWheelChanged", 1700);
+        string wheel = ExtractMethodWindow(MainWindowSource, "OnPreviewPointerWheelChanged", 2600);
         AssertContainsInOrder(wheel,
+            "IsPreviewZoomModifierActive(e)",
+            "AdjustPreviewTextZoom(zoomProps.MouseWheelDelta);",
+            "e.Handled = true;",
             "NotePreviewManualScrollInput(\"wheel\");",
             "double horizontalOffsetBefore = PreviewScrollViewer.HorizontalOffset;",
             "double verticalOffsetBefore = PreviewScrollViewer.VerticalOffset;",
@@ -1720,7 +1777,7 @@ public sealed class PreviewCoreRegressionTests
             "BuildConcatenatedSection(section, results, allLines, ViewModel.PreviewContextLines, rx: null);",
             "continue;");
 
-        string blockSurface = ExtractMethodWindow(MainWindowSource, "ShowPreviewBlockSurface", window: 900);
+        string blockSurface = ExtractMethodWindow(MainWindowSource, "ShowPreviewBlockSurface", window: 1200);
         Assert.Contains("ApplyPreviewBlockContentBackground();", blockSurface);
         Assert.Contains("HideMatchNavPanel();", blockSurface);
 

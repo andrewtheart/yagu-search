@@ -52,6 +52,8 @@ build_out.txt
 _SCRATCHPAD
 preview-show-more-verification.txt
 Yagu.Tests/tmp_coverage_rank.py
+# Profiling scratch dumps emitted by scripts/parse-marks.py / etw-profile.ps1
+scripts/marks-output*.txt
 
 # Vendored OCR model weights / test data — NOT used by the build, ~365 MB of binaries.
 # Yagu.OcrWorker references Sdcb.PaddleOCR.Models.Online (PaddleOCR models are lazy-downloaded

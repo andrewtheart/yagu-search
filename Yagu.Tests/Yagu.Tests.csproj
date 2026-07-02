@@ -60,6 +60,7 @@
     <Compile Include="..\Yagu\Helpers\EditorSyntaxHighlightingResolver.cs" Link="Source\Helpers\EditorSyntaxHighlightingResolver.cs" />
     <Compile Include="..\Yagu\Helpers\EncodingDetector.cs" Link="Source\Helpers\EncodingDetector.cs" />
     <Compile Include="..\Yagu\Helpers\LineTruncator.cs" Link="Source\Helpers\LineTruncator.cs" />
+    <Compile Include="..\Yagu\Helpers\PreviewZoomMath.cs" Link="Source\Helpers\PreviewZoomMath.cs" />
     <Compile Include="..\Yagu\Helpers\SyntaxHighlighter.cs" Link="Source\Helpers\SyntaxHighlighter.cs" />
     <Compile Include="..\Yagu\Services\FileLister.cs" Link="Source\Services\FileLister.cs" />
     <Compile Include="..\Yagu\Services\ContentSearcher.cs" Link="Source\Services\ContentSearcher.cs" />

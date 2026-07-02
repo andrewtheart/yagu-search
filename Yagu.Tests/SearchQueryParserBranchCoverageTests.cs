@@ -114,6 +114,39 @@ public sealed class SearchQueryParserBranchCoverageTests
     {
         Assert.Empty(SearchQueryParser.ParseLiteralTerms("\t \n \r", exactMatch: false));
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  BuildWholeWordPattern
+    // ═══════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void BuildWholeWordPattern_EmptyTerm_ReturnsEmptyWithoutBoundaries()
+    {
+        // Exercises the term.Length == 0 early-return branch.
+        Assert.Equal(string.Empty, SearchQueryParser.BuildWholeWordPattern(string.Empty));
+    }
+
+    [Fact]
+    public void BuildWholeWordPattern_WordEdgedTerm_AddsBoundariesOnBothSides()
+    {
+        Assert.Equal(@"\bcat\b", SearchQueryParser.BuildWholeWordPattern("cat"));
+    }
+
+    [Fact]
+    public void BuildWholeWordPattern_PunctuationTerm_OmitsBoundaries()
+    {
+        // Non-word edges must not get \b (so "+=" still matches as a substring).
+        Assert.Equal(Regex.Escape("+="), SearchQueryParser.BuildWholeWordPattern("+="));
+    }
+
+    [Fact]
+    public void BuildWholeWordPattern_MixedEdges_AddsBoundaryOnlyOnWordSide()
+    {
+        // Leading word char, trailing punctuation: boundary only on the left.
+        Assert.Equal(@"\b" + Regex.Escape("a+"), SearchQueryParser.BuildWholeWordPattern("a+"));
+        // Leading punctuation, trailing word char: boundary only on the right.
+        Assert.Equal(Regex.Escape("+a") + @"\b", SearchQueryParser.BuildWholeWordPattern("+a"));
+    }
 }
 
 /// <summary>

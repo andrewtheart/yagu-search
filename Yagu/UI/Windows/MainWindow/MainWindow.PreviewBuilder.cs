@@ -1611,6 +1611,13 @@ public sealed partial class MainWindow
         PreviewSectionsPanel.Visibility = Visibility.Collapsed;
         PreviewBlock.TextWrapping = ViewModel.PreviewWordWrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
         ConfigurePreviewSelectionMode(PreviewBlock);
+        // Keep the single-file block in sync with the configured/zoomed preview font.
+        int previewTextFontSize = ResolvePreviewTextFontSize();
+        ApplyPreviewTextFontSettings(
+            PreviewBlock,
+            ResolvePreviewTextFontFamily(),
+            previewTextFontSize,
+            ResolvePreviewTextLineHeight(previewTextFontSize));
         PreviewBlock.Visibility = Visibility.Visible;
         ApplyPreviewBlockContentBackground();
         HidePreviewLoading();
@@ -3052,6 +3059,15 @@ public sealed partial class MainWindow
 
             InvalidateParagraphIndexCache(block);
             ScheduleGutterSync(block);
+        }
+
+        // The single-file block surface (PreviewBlock) uses an inline gutter, so it has
+        // no separate gutter block — it still needs the same font/size to honor the
+        // setting and to reflow live when the preview is pinch/Ctrl-wheel zoomed.
+        if (PreviewBlock is not null)
+        {
+            ApplyPreviewTextFontSettings(PreviewBlock, family, size, lineHeight);
+            InvalidateParagraphIndexCache(PreviewBlock);
         }
 
         QueueActiveMatchOverlayRefresh();

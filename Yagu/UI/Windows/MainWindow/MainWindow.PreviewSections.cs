@@ -745,6 +745,23 @@ public sealed partial class MainWindow
 
     private void OnPreviewPointerWheelChanged(object sender, PointerRoutedEventArgs e)
     {
+        // Ctrl+wheel — and a precision-touchpad pinch, which Windows delivers as a
+        // Ctrl-modified wheel — zooms the preview text instead of scrolling. The
+        // synthesized Ctrl from a pinch rides on the wheel message (e.KeyModifiers),
+        // not the physical keyboard state, so IsPreviewZoomModifierActive checks both.
+        if (PreviewScrollViewer.Visibility == Visibility.Visible)
+        {
+            var zoomProps = e.GetCurrentPoint(PreviewScrollViewer).Properties;
+            if (zoomProps.MouseWheelDelta != 0
+                && !zoomProps.IsHorizontalMouseWheel
+                && IsPreviewZoomModifierActive(e))
+            {
+                AdjustPreviewTextZoom(zoomProps.MouseWheelDelta);
+                e.Handled = true;
+                return;
+            }
+        }
+
         NotePreviewManualScrollInput("wheel");
 
         if (PreviewScrollViewer.Visibility != Visibility.Visible)
@@ -797,6 +814,33 @@ public sealed partial class MainWindow
             return;
 
         PreviewScrollViewer.ChangeView(null, targetY, null, disableAnimation: true);
+    }
+
+    /// <summary>
+    /// True when the Control modifier is active for a preview wheel event —
+    /// either a physically held Ctrl key or the synthesized Ctrl that a
+    /// precision-touchpad pinch-to-zoom rides in on the wheel message.
+    /// </summary>
+    private static bool IsPreviewZoomModifierActive(PointerRoutedEventArgs e)
+        => e.KeyModifiers.HasFlag(Windows.System.VirtualKeyModifiers.Control)
+            || Microsoft.UI.Input.InputKeyboardSource
+                .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control)
+                .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+
+    /// <summary>
+    /// Zooms the preview text by nudging <see cref="MainViewModel.PreviewTextFontSize"/>.
+    /// Wheel deltas are accumulated so both a mouse notch (120 units) and the many
+    /// small deltas of a touchpad pinch translate to smooth one-point font steps.
+    /// The property change reflows every preview surface via ApplyPreviewTextFontSettings.
+    /// </summary>
+    private int _previewZoomWheelAccumulator;
+
+    private void AdjustPreviewTextZoom(int wheelDelta)
+    {
+        int current = ResolvePreviewTextFontSize();
+        int updated = Yagu.Helpers.PreviewZoomMath.ApplyWheelZoom(current, wheelDelta, ref _previewZoomWheelAccumulator);
+        if (updated != ViewModel.PreviewTextFontSize)
+            ViewModel.PreviewTextFontSize = updated;
     }
 
     private void NotePreviewManualScrollInput(string source)

@@ -221,4 +221,24 @@ public sealed class GlobMatcherBranchCoverageTests
         var m = new GlobMatcher(["src/**/*.cs"], []);
         Assert.True(m.Matches(@"C:\project\src\nested\file.cs"));
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Regex timeout — catastrophic backtracking is caught and treated
+    //  as "no match" instead of throwing (IsRegexMatch catch branch).
+    // ═══════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void RegexMode_CatastrophicBacktracking_TimesOutAndReturnsNoMatch()
+    {
+        // (a+)+$ over a long run of 'a' followed by a non-'a' char is the
+        // classic exponential-backtracking pattern; it exceeds the 250ms
+        // internal RegexTimeout, so IsMatch swallows the timeout and the
+        // pattern reports no match (the file is therefore not excluded).
+        var evilPattern = "(a+)+$";
+        var m = new GlobMatcher([], [evilPattern], FilterPatternMode.GlobPath, FilterPatternMode.Regex);
+        string longPath = @"C:\" + new string('a', 50) + "!.txt";
+
+        // Exclude pattern times out → treated as no-match → path is NOT excluded → Matches true.
+        Assert.True(m.Matches(longPath));
+    }
 }

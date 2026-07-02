@@ -69,32 +69,32 @@ public sealed class GlobMatcher
         public string Value = string.Empty;
         public System.Text.RegularExpressions.Regex? Regex;
 
-        public bool IsMatch(string normalizedPath)
+        public bool IsMatch(string normalizedPath) => PatternKind switch
         {
-            switch (PatternKind)
+            Kind.Extension => normalizedPath.EndsWith(Value, StringComparison.OrdinalIgnoreCase),
+            Kind.Segment => IsSegmentMatch(normalizedPath),
+            Kind.Regex => IsRegexMatch(normalizedPath),
+            // Kind.Invalid (and any future value) never matches.
+            _ => false,
+        };
+
+        private bool IsSegmentMatch(string normalizedPath)
+        {
+            if (normalizedPath.Contains('/' + Value + '/', StringComparison.OrdinalIgnoreCase)) return true;
+            if (normalizedPath.EndsWith('/' + Value, StringComparison.OrdinalIgnoreCase)) return true;
+            if (normalizedPath.StartsWith(Value + '/', StringComparison.OrdinalIgnoreCase)) return true;
+            return string.Equals(normalizedPath, Value, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool IsRegexMatch(string normalizedPath)
+        {
+            try
             {
-                case Kind.Extension:
-                    return normalizedPath.EndsWith(Value, StringComparison.OrdinalIgnoreCase);
-                case Kind.Segment:
-                {
-                    if (normalizedPath.Contains('/' + Value + '/', StringComparison.OrdinalIgnoreCase)) return true;
-                    if (normalizedPath.EndsWith('/' + Value, StringComparison.OrdinalIgnoreCase)) return true;
-                    if (normalizedPath.StartsWith(Value + '/', StringComparison.OrdinalIgnoreCase)) return true;
-                    return string.Equals(normalizedPath, Value, StringComparison.OrdinalIgnoreCase);
-                }
-                case Kind.Regex:
-                    try
-                    {
-                        return Regex!.IsMatch(normalizedPath);
-                    }
-                    catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
-                    {
-                        return false;
-                    }
-                case Kind.Invalid:
-                    return false;
-                default:
-                    return false;
+                return Regex!.IsMatch(normalizedPath);
+            }
+            catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
+            {
+                return false;
             }
         }
 
@@ -125,9 +125,9 @@ public sealed class GlobMatcher
 
         public static Pattern BuildRegex(string raw)
         {
+            // Callers (Compile) only pass items that already passed
+            // string.IsNullOrWhiteSpace, so a trimmed pattern is always non-empty.
             var pattern = raw.Trim();
-            if (pattern.Length == 0)
-                return new Pattern { PatternKind = Kind.Invalid };
 
             try
             {

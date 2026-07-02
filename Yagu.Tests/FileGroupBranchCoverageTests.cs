@@ -404,6 +404,71 @@ public sealed class BatchObservableCollectionTests
         Assert.Equal(99, c[0]);
         Assert.Equal(3, c.Count);
     }
+
+    /// <summary>An IReadOnlyList that is NOT an IList, forcing the
+    /// <c>items.ToList()</c> branch in AddRangeWithAddNotification's Add notification.</summary>
+    private sealed class ReadOnlyOnlyList<T>(IReadOnlyList<T> inner) : IReadOnlyList<T>
+    {
+        public T this[int index] => inner[index];
+        public int Count => inner.Count;
+        public IEnumerator<T> GetEnumerator() => inner.GetEnumerator();
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    [Fact]
+    public void AddRangeWithAddNotification_NonIListSource_UsesToListForNewItems()
+    {
+        var c = new BatchObservableCollection<int>();
+        NotifyCollectionChangedEventArgs? args = null;
+        c.CollectionChanged += (_, e) => args = e;
+
+        c.AddRangeWithAddNotification(new ReadOnlyOnlyList<int>([7, 8, 9]));
+
+        Assert.Equal(new[] { 7, 8, 9 }, c);
+        Assert.NotNull(args);
+        Assert.Equal(NotifyCollectionChangedAction.Add, args!.Action);
+        Assert.Equal(3, args.NewItems!.Count);
+        Assert.Equal(0, args.NewStartingIndex);
+    }
+
+    [Fact]
+    public void AppendRange_AddsPerItem_WithSingleChangingForBatch()
+    {
+        var c = new BatchObservableCollection<int>();
+        c.AddRange([1, 2]);
+
+        int changing = 0, adds = 0;
+        c.CollectionChanging += (_, _) => changing++;
+        c.CollectionChanged += (_, e) => { if (e.Action == NotifyCollectionChangedAction.Add) adds++; };
+
+        // AppendRange sets _suppressChangingNotification and calls Add per item,
+        // exercising the suppressed InsertItem branch (no per-item Changing events).
+        c.AppendRange([3, 4, 5]);
+
+        Assert.Equal(new[] { 1, 2, 3, 4, 5 }, c);
+        Assert.Equal(3, adds);      // one Add notification per appended item
+        Assert.Equal(1, changing);  // a single Changing for the whole batch
+    }
+
+    [Fact]
+    public void AppendRange_EmptyList_IsNoOp()
+    {
+        var c = new BatchObservableCollection<int>();
+        c.AppendRange([]);
+        Assert.Empty(c);
+    }
+
+    [Fact]
+    public void RemoveAndClear_RaiseCollectionChanging()
+    {
+        var c = new BatchObservableCollection<int> { 1, 2, 3 };
+        int changing = 0;
+        c.CollectionChanging += (_, _) => changing++;
+        c.Remove(2);   // RemoveItem
+        c.Clear();     // ClearItems
+        Assert.Equal(2, changing);
+        Assert.Empty(c);
+    }
 }
 
 public sealed class FileGroupShowMoreBranchTests
