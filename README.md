@@ -81,12 +81,12 @@ A quick taste of the range of queries Yagu handles — literal, regex, whole‑w
 
 To install Yagu without building from source, download the installer that matches your PC and run it. Yagu ships as a self-contained Native AOT build, so no separate .NET runtime is required; every installer also bundles the Windows App Runtime payloads the desktop app needs.
 
-**Which one do I need?** Pick by CPU architecture — most people want **x64**. The separate **x64 · Offline** edition is only for offline/air-gapped machines that need image-text (OCR) search without a first-run download.
+**Which one do I need?** Pick by CPU architecture — most people want **x64**. The separate **x64 · Offline** edition is only for offline/air-gapped machines that need image-text (OCR) search — and, when you consent, the bundled voidtools Everything installer — without any first-run download.
 
 | Installer | What it's for | Image-text (OCR) search |
 | --- | --- | --- |
 | [**x64** — YaguSetup-1.0.0.2305-x64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2305-x64.exe) (~89 MB) | Most modern PCs: 64-bit Intel/AMD Windows. Start here if unsure. | Works. Defaults to the PaddleOCR engine; the OCR runtime and English models download once on first use. |
-| [**x64 · Offline** — YaguSetup-1.0.0.2310-x64-offline.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2310-x64-offline.exe) (~268 MB) | Same as x64, but for machines that must run OCR fully **offline** — air-gapped PCs, or to skip the first-run download. | Bundled in the installer: the **Tesseract** engine (the default for this edition) plus the PaddleOCR engine and English models are installed up front, so image-text search works with no download. |
+| [**x64 · Offline** — YaguSetup-1.0.0.2310-x64-offline.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2310-x64-offline.exe) (~268 MB) | Same as x64, but for machines that must run fully **offline** — air-gapped PCs, or to skip first-run downloads. Also bundles the voidtools **Everything** installer, which Yagu can install with your consent (no download). | Bundled in the installer: the **Tesseract** engine (the default for this edition) plus the PaddleOCR engine and English models are installed up front, so image-text search works with no download. |
 | [**Arm64** — YaguSetup-1.0.0.2307-arm64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2307-arm64.exe) (~89 MB) | Windows on ARM: Snapdragon-based laptops, Surface Pro X, Windows Dev Kit. | Works. Defaults to PaddleOCR; the OCR runtime and models download once on first use. |
 | [**x86** — YaguSetup-1.0.0.2306-x86.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2306-x86.exe) (~70 MB) | 32-bit Windows. | Works. Defaults to the Tesseract engine (PaddleOCR's runtime is x64-only); language data downloads once on first use. |
 

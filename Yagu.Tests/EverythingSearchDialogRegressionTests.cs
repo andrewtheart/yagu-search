@@ -170,6 +170,37 @@ public sealed class EverythingSearchDialogRegressionTests
         Assert.Contains("HttpRequestException", startupChecks);
     }
 
+    [Fact]
+    public void EverythingInstall_PrefersBundledInstaller_ButAlwaysBehindConsent()
+    {
+        string root = FindRepoRoot();
+        string startup = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+        string cli = File.ReadAllText(Path.Combine(root, "Yagu", "CliRunner.cs"));
+
+        // Installing Everything ALWAYS requires consent — the bundled path never bypasses the prompt.
+        // GUI: the "Install" dialog result; CLI: the [Y/n] answer.
+        Assert.Contains("if (!installEverything) return;", startup);
+        Assert.Contains("if (!IsYes(installAnswer)) return;", cli);
+
+        // After consent, both flows prefer the pre-bundled offline installer over downloading.
+        Assert.Contains("EverythingAssetPaths.BundledInstallerPath(", startup);
+        Assert.Contains("EverythingAssetPaths.BundledInstallerPath(", cli);
+
+        // The download branch is only taken when there is no bundle (the modal download helper and the
+        // centralized voidtools URL are still used for the lite editions).
+        Assert.Contains("if (!await DownloadEverythingInstallerAsync(url, tempPath))", startup);
+        Assert.Contains("EverythingAssetPaths.DownloadUrl(", startup);
+        Assert.Contains("EverythingAssetPaths.DownloadUrl(", cli);
+
+        // Either source (bundle or download) is run only after passing the voidtools Authenticode check.
+        Assert.Contains("AuthenticodeVerifier.IsTrustedPublisher(installerPath, EverythingAssetPaths.TrustedPublisher", startup);
+        Assert.Contains("AuthenticodeVerifier.IsTrustedPublisher(installerPath, EverythingAssetPaths.TrustedPublisher", cli);
+
+        // A signature failure deletes only a downloaded temp copy, never the bundled installer.
+        Assert.Contains("if (!installerFromBundle) TryDeleteFile(installerPath);", startup);
+        Assert.Contains("if (!installerFromBundle) { try { File.Delete(installerPath); } catch", cli);
+    }
+
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

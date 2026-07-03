@@ -64,6 +64,11 @@ if (Test-Path -LiteralPath $webView2PrereqHelper) {
   . $webView2PrereqHelper
 }
 
+$everythingPrereqHelper = Join-Path $repoRoot 'scripts\everything-prereq.ps1'
+if (Test-Path -LiteralPath $everythingPrereqHelper) {
+  . $everythingPrereqHelper
+}
+
 # Read version from build-version.txt
 $versionFile = Join-Path $projectDir 'Properties\build-version.txt'
 function Get-YaguBuildVersion {
@@ -125,6 +130,10 @@ if ($IncludeOcr) {
   if (-not (Test-Path -LiteralPath $stageOcrHelper)) {
     throw "OCR payload staging helper not found: $stageOcrHelper"
   }
+  # The offline edition also bundles the voidtools Everything setup (run after in-app consent).
+  if (-not (Get-Command -Name Copy-YaguEverythingPrerequisite -ErrorAction SilentlyContinue)) {
+    throw "Everything prerequisite helper not found or not loaded: $everythingPrereqHelper"
+  }
 }
 
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
@@ -175,6 +184,12 @@ foreach ($arch in $architectures) {
     Write-Host "Staging OCR payload..."
     & $stageOcrHelper -OutputDir $ocrPayloadDir -WorkerExe $stagedWorker -CacheDir $OcrPayloadCacheDir -RequireTesseract
     if ($LASTEXITCODE -ne 0) { throw "OCR payload staging failed." }
+
+    # Bundle the voidtools Everything setup so the offline edition can install Everything (after the
+    # in-app consent prompt) with no download. Required for this edition — throws on failure. The
+    # <staging>\* [Files] entry in the ISS ships <staging>\everything-setup as <app>\everything-setup.
+    Write-Host "Staging bundled Everything setup..."
+    Copy-YaguEverythingPrerequisite -RepoRoot $repoRoot -DestinationRoot $stagingDir
   }
 
   $version = Get-YaguBuildVersion

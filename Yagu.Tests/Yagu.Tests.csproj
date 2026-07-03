@@ -63,6 +63,7 @@
     <Compile Include="..\Yagu\Helpers\PreviewZoomMath.cs" Link="Source\Helpers\PreviewZoomMath.cs" />
     <Compile Include="..\Yagu\Helpers\SyntaxHighlighter.cs" Link="Source\Helpers\SyntaxHighlighter.cs" />
     <Compile Include="..\Yagu\Services\FileLister.cs" Link="Source\Services\FileLister.cs" />
+    <Compile Include="..\Yagu\Services\EverythingAssetPaths.cs" Link="Source\Services\EverythingAssetPaths.cs" />
     <Compile Include="..\Yagu\Services\ContentSearcher.cs" Link="Source\Services\ContentSearcher.cs" />
     <Compile Include="..\Yagu\Services\CloudFileHelper.cs" Link="Source\Services\CloudFileHelper.cs" />
     <Compile Include="..\Yagu\Services\FileMetadataCache.cs" Link="Source\Services\FileMetadataCache.cs" />

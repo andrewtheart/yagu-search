@@ -101,6 +101,36 @@ public sealed class InstallerPackagingRegressionTests
     }
 
     [Fact]
+    public void OfflineEdition_BundlesVoidtoolsEverythingSetupAndLicense()
+    {
+        string root = FindRepoRoot();
+        string buildInstaller = File.ReadAllText(Path.Combine(root, "build-installer.ps1"));
+        string prereq = File.ReadAllText(Path.Combine(root, "scripts", "everything-prereq.ps1"));
+        string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+        string license = File.ReadAllText(Path.Combine(root, "installer", "Everything-License.txt"));
+
+        // build-installer.ps1 loads the helper and stages the bundle only for the offline (-IncludeOcr) edition.
+        Assert.Contains("scripts\\everything-prereq.ps1", buildInstaller);
+        Assert.Contains("Copy-YaguEverythingPrerequisite -RepoRoot $repoRoot -DestinationRoot $stagingDir", buildInstaller);
+
+        // The helper downloads the voidtools setup, stages it under everything-setup, and copies the notice.
+        Assert.Contains("function Copy-YaguEverythingPrerequisite", prereq);
+        Assert.Contains("https://www.voidtools.com/", prereq);
+        Assert.Contains("everything-setup", prereq);
+        Assert.Contains("Everything-License.txt", prereq);
+
+        // The bundled setup version must match the version the app resolves and downloads (no drift).
+        Assert.Contains($"$script:EverythingVersion = '{Yagu.Services.EverythingAssetPaths.Version}'", prereq);
+
+        // The recursesubdirs [Files] entry ships <staging>\everything-setup; the ISS documents it.
+        Assert.Contains("everything-setup", inno);
+
+        // The redistribution notice carries the voidtools copyright + the MIT-style permission notice.
+        Assert.Contains("Copyright (C) 2018 David Carpenter", license);
+        Assert.Contains("Permission is hereby granted", license);
+    }
+
+    [Fact]
     public void Csproj_CrossCompilesRustCoreAndPackagesPerArchitecture()
     {
         string root = FindRepoRoot();

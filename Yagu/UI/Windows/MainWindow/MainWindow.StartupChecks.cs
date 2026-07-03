@@ -480,24 +480,42 @@ public sealed partial class MainWindow
         if (!installEverything) return;
 
         bool is64Bit = Environment.Is64BitOperatingSystem;
-        string url = is64Bit
-            ? "https://www.voidtools.com/Everything-1.4.1.1032.x64-Setup.exe"
-            : "https://www.voidtools.com/Everything-1.4.1.1032.x86-Setup.exe";
-        string fileName = is64Bit ? "Everything-1.4.1.1032.x64-Setup.exe" : "Everything-1.4.1.1032.x86-Setup.exe";
-        string tempPath = Path.Combine(Path.GetTempPath(), fileName);
 
-        // Download the installer behind a modal progress dialog. On cancel or failure (e.g. no
-        // internet) a clear message is shown and we fall back to built-in enumeration rather than
-        // failing silently with only a status-bar string.
-        if (!await DownloadEverythingInstallerAsync(url, tempPath))
-            return;
+        // Offline edition: the voidtools Everything setup is pre-bundled beside the app, so run it
+        // directly instead of downloading. Consent was already given by the "Install" dialog above;
+        // the Authenticode publisher check and elevation below apply to the bundled installer exactly
+        // as they do to a downloaded one, so a tampered bundle is still refused.
+        string? bundledInstaller = EverythingAssetPaths.BundledInstallerPath(is64Bit);
+        bool installerFromBundle = bundledInstaller is not null;
+        string installerPath;
 
-        // Never run a downloaded installer elevated without confirming it is a genuine, untampered
-        // voidtools binary. HTTPS protects the transport, but a compromised mirror or MITM able to
-        // present a trusted certificate could still deliver a malicious payload (OWASP A08).
-        if (!AuthenticodeVerifier.IsTrustedPublisher(tempPath, "voidtools", out string signatureFailure))
+        if (installerFromBundle)
         {
-            TryDeleteFile(tempPath);
+            installerPath = bundledInstaller!;
+            LogService.Instance.Info("MainWindow", $"CheckEverythingAsync: using bundled Everything installer at '{installerPath}' (offline edition) \u2014 no download");
+        }
+        else
+        {
+            string url = EverythingAssetPaths.DownloadUrl(is64Bit);
+            string fileName = EverythingAssetPaths.SetupFileName(is64Bit);
+            string tempPath = Path.Combine(Path.GetTempPath(), fileName);
+
+            // Download the installer behind a modal progress dialog. On cancel or failure (e.g. no
+            // internet) a clear message is shown and we fall back to built-in enumeration rather than
+            // failing silently with only a status-bar string.
+            if (!await DownloadEverythingInstallerAsync(url, tempPath))
+                return;
+
+            installerPath = tempPath;
+        }
+
+        // Never run the installer elevated without confirming it is a genuine, untampered voidtools
+        // binary. HTTPS protects the transport, but a compromised mirror or MITM able to present a
+        // trusted certificate could still deliver a malicious payload (OWASP A08); the bundled copy
+        // is verified the same way in case it was swapped on disk.
+        if (!AuthenticodeVerifier.IsTrustedPublisher(installerPath, EverythingAssetPaths.TrustedPublisher, out string signatureFailure))
+        {
+            if (!installerFromBundle) TryDeleteFile(installerPath);
             LogService.Instance.Warning("MainWindow", $"Refusing to run Everything installer: {signatureFailure}");
             ViewModel.StatusText = "Everything Search installer failed signature verification and was not run. Using built-in file enumeration.";
             return;
@@ -509,7 +527,7 @@ public sealed partial class MainWindow
         {
             var psi = new ProcessStartInfo
             {
-                FileName = tempPath,
+                FileName = installerPath,
                 Verb = "runas",
                 UseShellExecute = true,
             };

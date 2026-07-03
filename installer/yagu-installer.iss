@@ -30,9 +30,11 @@
 
 ; When IncludeOcr is defined to "1", build-installer.ps1 has staged the offline OCR
 ; payload under {#StagingDir}\ocr-payload (native PaddleOCR runtime + PP-OCR models,
-; plus the Tesseract English data, which is the default engine for this edition). That
-; folder is shipped automatically by the recursesubdirs [Files] entry; this define only
-; changes the output filename so the offline edition does not collide with the lite edition.
+; plus the Tesseract English data, which is the default engine for this edition) AND the
+; voidtools Everything setup under {#StagingDir}\everything-setup (bundled so the app can
+; install Everything after in-app consent, with no download). Both folders are shipped
+; automatically by the recursesubdirs [Files] entry; this define only changes the output
+; filename so the offline edition does not collide with the lite edition.
 #ifndef IncludeOcr
   #define IncludeOcr "0"
 #endif

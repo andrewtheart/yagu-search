@@ -833,26 +833,38 @@ internal static class CliRunner
             if (!IsYes(installAnswer)) return;
 
             bool is64 = Environment.Is64BitOperatingSystem;
-            string url      = is64
-                ? "https://www.voidtools.com/Everything-1.4.1.1032.x64-Setup.exe"
-                : "https://www.voidtools.com/Everything-1.4.1.1032.x86-Setup.exe";
-            string tempPath = Path.Combine(Path.GetTempPath(),
-                is64 ? "Everything-1.4.1.1032.x64-Setup.exe" : "Everything-1.4.1.1032.x86-Setup.exe");
 
-            Console.Error.WriteLine("Downloading Everything Search installer...");
+            // Offline edition: run the pre-bundled voidtools Everything setup instead of downloading
+            // it. Consent was already given above; signature verification and elevation still apply
+            // (a tampered bundle is refused just like a tampered download).
+            string? bundledInstaller = EverythingAssetPaths.BundledInstallerPath(is64);
+            bool installerFromBundle = bundledInstaller is not null;
+            string installerPath;
 
             try
             {
-                using var http = new HttpClient();
-                var data = await http.GetByteArrayAsync(new Uri(url));
-                await File.WriteAllBytesAsync(tempPath, data);
+                if (installerFromBundle)
+                {
+                    installerPath = bundledInstaller!;
+                    Console.Error.WriteLine("Using the bundled Everything Search installer (offline edition)...");
+                }
+                else
+                {
+                    string url = EverythingAssetPaths.DownloadUrl(is64);
+                    installerPath = Path.Combine(Path.GetTempPath(), EverythingAssetPaths.SetupFileName(is64));
 
-                // Refuse to run a downloaded installer elevated unless it carries a valid Authenticode
+                    Console.Error.WriteLine("Downloading Everything Search installer...");
+                    using var http = new HttpClient();
+                    var data = await http.GetByteArrayAsync(new Uri(url));
+                    await File.WriteAllBytesAsync(installerPath, data);
+                }
+
+                // Refuse to run the installer elevated unless it carries a valid Authenticode
                 // signature from voidtools. HTTPS alone does not guarantee the payload is untampered
                 // (compromised mirror / MITM with a trusted cert) — OWASP A08 software integrity.
-                if (!AuthenticodeVerifier.IsTrustedPublisher(tempPath, "voidtools", out string signatureFailure))
+                if (!AuthenticodeVerifier.IsTrustedPublisher(installerPath, EverythingAssetPaths.TrustedPublisher, out string signatureFailure))
                 {
-                    try { File.Delete(tempPath); } catch { /* best effort */ }
+                    if (!installerFromBundle) { try { File.Delete(installerPath); } catch { /* best effort */ } }
                     Console.Error.WriteLine($"Everything installer failed signature verification ({signatureFailure}); not running it. Continuing with built-in file enumeration.");
                     return;
                 }
@@ -861,7 +873,7 @@ internal static class CliRunner
 
                 var proc = Process.Start(new ProcessStartInfo
                 {
-                    FileName       = tempPath,
+                    FileName       = installerPath,
                     Verb           = "runas",
                     UseShellExecute = true,
                 });
