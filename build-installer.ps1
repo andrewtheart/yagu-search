@@ -134,6 +134,10 @@ if ($IncludeOcr) {
   if (-not (Get-Command -Name Copy-YaguEverythingPrerequisite -ErrorAction SilentlyContinue)) {
     throw "Everything prerequisite helper not found or not loaded: $everythingPrereqHelper"
   }
+  # ...and the FULL WebView2 standalone installer so the terminal's runtime installs with no internet.
+  if (-not (Get-Command -Name Copy-YaguWebView2StandalonePrerequisite -ErrorAction SilentlyContinue)) {
+    throw "WebView2 standalone prerequisite helper not found or not loaded: $webView2PrereqHelper"
+  }
 }
 
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
@@ -190,6 +194,12 @@ foreach ($arch in $architectures) {
     # <staging>\* [Files] entry in the ISS ships <staging>\everything-setup as <app>\everything-setup.
     Write-Host "Staging bundled Everything setup..."
     Copy-YaguEverythingPrerequisite -RepoRoot $repoRoot -DestinationRoot $stagingDir
+
+    # Bundle the FULL WebView2 Evergreen Standalone Installer (~194 MB) so the embedded terminal's
+    # runtime installs with NO internet. The lite bootstrapper staged above only downloads it online;
+    # the Inno [Code] prefers this standalone when present. Required for this edition — throws on failure.
+    Write-Host "Staging WebView2 offline standalone installer..."
+    Copy-YaguWebView2StandalonePrerequisite -RepoRoot $repoRoot -DestinationRoot $stagingDir
   }
 
   $version = Get-YaguBuildVersion

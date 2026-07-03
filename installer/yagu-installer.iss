@@ -229,23 +229,28 @@ begin
     (RegQueryStringValue(HKCU, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', pv) and (pv <> '') and (pv <> '0.0.0.0'));
 end;
 
-{ Installs the WebView2 Evergreen Runtime (needed only by the embedded terminal) from the bundled
-  bootstrapper, unless it is already present. BEST-EFFORT: the terminal is optional, so a failure
-  (e.g. no internet) never aborts Yagu's install -- the app shows an in-terminal install prompt. }
+{ Installs the WebView2 Evergreen Runtime (needed only by the embedded terminal) unless it is already
+  present. Prefers the FULL offline Standalone Installer (bundled by the offline edition -- installs
+  with no internet), falling back to the online bootstrapper (lite editions). BEST-EFFORT: the terminal
+  is optional, so a failure never aborts Yagu's install -- the app shows an in-terminal install prompt. }
 procedure InstallWebView2Runtime();
 var
   ResultCode: Integer;
-  Bootstrapper: String;
+  Installer: String;
 begin
   if WebView2RuntimeInstalled() then
     exit;
 
-  Bootstrapper := ExpandConstant('{app}\Prerequisites\WebView2\MicrosoftEdgeWebView2Setup.exe');
-  if not FileExists(Bootstrapper) then
+  { Prefer the offline Standalone Installer; fall back to the online bootstrapper. Both accept
+    /silent /install. }
+  Installer := ExpandConstant('{app}\Prerequisites\WebView2\MicrosoftEdgeWebView2RuntimeInstallerX64.exe');
+  if not FileExists(Installer) then
+    Installer := ExpandConstant('{app}\Prerequisites\WebView2\MicrosoftEdgeWebView2Setup.exe');
+  if not FileExists(Installer) then
     exit;
 
   WizardForm.StatusLabel.Caption := 'Installing Microsoft Edge WebView2 Runtime (for the embedded terminal)...';
-  Exec(Bootstrapper, '/silent /install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(Installer, '/silent /install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

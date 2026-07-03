@@ -10,6 +10,13 @@
 $script:WebView2BootstrapperUrl = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703'
 $script:WebView2BootstrapperName = 'MicrosoftEdgeWebView2Setup.exe'
 
+# The x64 Evergreen *Standalone* Installer (~150 MB) installs the WebView2 Runtime with NO internet
+# (unlike the bootstrapper above, which only downloads it online). The OFFLINE edition bundles this so
+# the embedded terminal works on air-gapped machines. URL is Microsoft's stable "Accept and Download"
+# fwlink for the x64 standalone from https://developer.microsoft.com/microsoft-edge/webview2/.
+$script:WebView2StandaloneUrl = 'https://go.microsoft.com/fwlink/?linkid=2124701'
+$script:WebView2StandaloneName = 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
+
 function Copy-YaguWebView2Prerequisite {
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
@@ -47,4 +54,41 @@ function Copy-YaguWebView2Prerequisite {
     catch {
         Write-Warning "Failed to stage WebView2 bootstrapper prerequisite: $($_.Exception.Message). Continuing without it."
     }
+}
+
+function Copy-YaguWebView2StandalonePrerequisite {
+    # OFFLINE edition only: stage the FULL x64 Evergreen Standalone Installer (~150 MB), which installs
+    # the WebView2 Runtime with NO internet. REQUIRED for this edition -- throws on failure so a broken
+    # offline build is caught rather than silently shipping an installer whose terminal can't work
+    # offline. The Inno [Code] prefers this standalone over the bootstrapper when present.
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$DestinationRoot
+    )
+
+    $cacheDir = Join-Path $RepoRoot 'installer\prerequisites'
+    $cachedStandalone = Join-Path $cacheDir $script:WebView2StandaloneName
+
+    if (-not (Test-Path -LiteralPath $cachedStandalone)) {
+        New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
+        Write-Host "  Downloading WebView2 Evergreen Standalone Installer (x64, ~150 MB)..."
+        $previousProgress = $ProgressPreference
+        $ProgressPreference = 'SilentlyContinue'
+        try {
+            Invoke-WebRequest -Uri $script:WebView2StandaloneUrl -OutFile $cachedStandalone -UseBasicParsing
+        }
+        finally {
+            $ProgressPreference = $previousProgress
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $cachedStandalone) -or (Get-Item -LiteralPath $cachedStandalone).Length -lt 50000000) {
+        throw "WebView2 standalone installer unavailable or too small at $cachedStandalone. The offline edition requires the full offline WebView2 runtime installer."
+    }
+
+    $destDir = Join-Path $DestinationRoot 'Prerequisites\WebView2'
+    New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+    Copy-Item -LiteralPath $cachedStandalone -Destination (Join-Path $destDir $script:WebView2StandaloneName) -Force
+
+    Write-Host "  Bundled WebView2 Evergreen Standalone Installer for the offline edition (installs with no internet)"
 }

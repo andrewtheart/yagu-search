@@ -67,3 +67,6 @@ scripts/marks-output*.txt
 
 # Local-only ETW profiling script (purged from history)
 scripts/etw-profile.ps1
+System.Xml.XmlDocument
+# Playwright MCP browser session artifacts (snapshots / console logs)
+.playwright-mcp/
