@@ -1,6 +1,6 @@
 # Yagu
 
-Yagu is a fast Windows directory search tool for finding, previewing, and editing text or regex matches across large folder trees. It is a native hybrid WinUI 3 desktop and CLI app built on .NET 10, with a Rust search engine DLL for the hot content-scanning path and optional voidtools Everything integration for very fast file discovery.
+Yagu is a rediculously fast Windows directory search tool for finding, previewing and bulk editing text or regex matches across large folder trees. It is a native hybrid WinUI 3 desktop and CLI app built on .NET 10, with a Rust search engine DLL for the hot content-scanning path and optional voidtools Everything integration for very fast file discovery.
 
 The name means "Yet Another Grep Utility". The goal is the speed of command-line search with a GUI built for repeated code and log investigation: streaming results, context preview, filtering, sorting, exporting, and quick opening in your editor.
 
