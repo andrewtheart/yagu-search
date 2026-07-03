@@ -89,6 +89,15 @@ internal static class CliRunner
         if (!string.IsNullOrWhiteSpace(args.LoadSessionPath))
             return RunLoadSession(args.LoadSessionPath!, vtEnabled);
 
+        // --semantic-batch: translate a file of natural-language queries through a single loaded model
+        // and print one delimited --explain block per query (evaluation/benchmark harness). This is a
+        // dry-run — it never executes a search — so it short-circuits the pipeline like --load-session.
+        if (!string.IsNullOrWhiteSpace(args.SemanticBatch))
+        {
+            var batchSettings = LoadEffectiveSettings(args);
+            return RunSemanticBatchAsync(args, batchSettings).GetAwaiter().GetResult();
+        }
+
         // --semantic-pattern: translate the natural-language request into search flags via the
         // local model, folding the result into `args` before the usual validation runs.
         if (!string.IsNullOrWhiteSpace(args.SemanticPattern))
@@ -263,6 +272,132 @@ internal static class CliRunner
             WriteError($"interpreted: {SemanticPlanApplier.BuildExplanation(resolved)}");
 
         return (0, false);
+    }
+
+    // -----------------------------------------------------------------------
+    // Semantic batch evaluation (--semantic-batch)
+    // -----------------------------------------------------------------------
+
+    private const string BatchQueryMarker = "===QUERY===";
+    private const string BatchEndMarker   = "===END===";
+
+    /// <summary>
+    /// Translates a file of natural-language queries (one per line; blank lines and lines starting with
+    /// '#' are ignored) through a SINGLE loaded model, emitting one delimited <c>--explain</c> block per
+    /// query to stdout. The model is loaded once and reused for every query, so a whole query set — or a
+    /// sweep across many models — can be evaluated without paying the cold-load cost on every call.
+    /// Always a dry-run: no search is executed. Progress and per-query errors go to stderr; the plan
+    /// blocks (which the benchmark harness parses) go to stdout.
+    /// </summary>
+    private static async Task<int> RunSemanticBatchAsync(CliArgs args, AppSettings settings)
+    {
+        if (!settings.SemanticSearchEnabled)
+        {
+            WriteError("error: semantic search is disabled (SemanticSearchEnabled = false in settings).");
+            return 2;
+        }
+
+        string batchPath = args.SemanticBatch!;
+        if (!File.Exists(batchPath))
+        {
+            WriteError($"error: batch query file does not exist: {batchPath}");
+            return 2;
+        }
+
+        var queries = File.ReadAllLines(batchPath)
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0 && !line.StartsWith('#'))
+            .ToList();
+        if (queries.Count == 0)
+        {
+            WriteError($"error: batch query file contains no queries: {batchPath}");
+            return 2;
+        }
+
+        string? modelAlias = string.IsNullOrWhiteSpace(args.SemanticModel)
+            ? (string.IsNullOrWhiteSpace(settings.SemanticModelAlias) ? null : settings.SemanticModelAlias)
+            : args.SemanticModel;
+
+        await using var translator = new FoundryLocalSemanticQueryTranslator(enabled: true, modelOverrideAlias: modelAlias);
+
+        // Match the GUI/CLI: never pick a GPU/NPU build on hardware that lacks one.
+        bool cliHasGpu = false, cliHasNpu = false;
+        try { var capability = new GpuNpuCapabilityDetector(); cliHasGpu = capability.HasGpu(); cliHasNpu = capability.HasNpu(); } catch { /* CPU-only fallback */ }
+        translator.SetAvailableAccelerators(cliHasGpu, cliHasNpu);
+
+        string? lastProgress = null;
+        var progress = new Progress<SemanticTranslationProgress>(p =>
+        {
+            if (!string.Equals(p.Message, lastProgress, StringComparison.Ordinal)) { WriteError(p.Message); lastProgress = p.Message; }
+        });
+
+        string directory = !string.IsNullOrWhiteSpace(args.Directory) ? args.Directory! : Environment.CurrentDirectory;
+        var o = Console.Out;
+        int failures = 0;
+
+        for (int q = 0; q < queries.Count; q++)
+        {
+            string query = queries[q];
+            WriteError($"[{q + 1}/{queries.Count}] {query}");
+
+            var context = new SemanticTranslationContext
+            {
+                Now = DateTimeOffset.Now,
+                DefaultDirectory = directory,
+                OriginalQuery = query,
+                DirectoryExists = static d => Directory.Exists(d),
+            };
+
+            o.WriteLine($"{BatchQueryMarker} {query}");
+            o.WriteLine($"  model          : {translator.SelectedModelAlias ?? modelAlias ?? "(auto)"}");
+            try
+            {
+                var result = await translator.TranslateAsync(query, context, progress, CancellationToken.None).ConfigureAwait(false);
+                if (!result.Success || result.Plan is null)
+                {
+                    o.WriteLine($"  error          : {result.Error ?? "could not interpret the request."}");
+                }
+                else
+                {
+                    var resolved = SemanticPlanApplier.Resolve(result.Plan, context);
+                    PrintSemanticBatchPlan(o, directory, resolved);
+                }
+            }
+            catch (Exception ex)
+            {
+                o.WriteLine($"  error          : {ex.GetType().Name}: {ex.Message}");
+                failures++;
+            }
+            o.WriteLine(BatchEndMarker);
+            o.Flush();
+        }
+
+        WriteError($"batch complete: {queries.Count} queries, {failures} hard failures, model='{translator.SelectedModelAlias ?? modelAlias ?? "(auto)"}'.");
+        return 0;
+    }
+
+    /// <summary>
+    /// Prints the resolved plan fields for one batch query in the same key layout as
+    /// <see cref="PrintSemanticExplanation"/> (so the benchmark harness can parse either), reading
+    /// straight from the <see cref="ResolvedSearchPlan"/> rather than mutating a shared args instance.
+    /// </summary>
+    private static void PrintSemanticBatchPlan(TextWriter o, string directory, ResolvedSearchPlan resolved)
+    {
+        o.WriteLine($"  summary        : {SemanticPlanApplier.BuildExplanation(resolved, directory)}");
+        o.WriteLine($"  directory      : {resolved.Directory ?? directory}");
+        o.WriteLine($"  pattern        : {(string.IsNullOrEmpty(resolved.Pattern) ? "(none)" : resolved.Pattern)}");
+        if (resolved.SearchMode is { } sm)        o.WriteLine($"  search-mode    : {sm}");
+        if (resolved.UseRegex is { } rx)          o.WriteLine($"  regex          : {rx}");
+        if (resolved.CaseSensitive is { } cs)     o.WriteLine($"  case-sensitive : {cs}");
+        if (resolved.ExactMatch is { } em)        o.WriteLine($"  exact-match    : {em}");
+        if (resolved.IncludeGlobs is { } inc)     o.WriteLine($"  include        : {string.Join(", ", inc)}");
+        if (resolved.ExcludeGlobs is { } exc)     o.WriteLine($"  exclude        : {string.Join(", ", exc)}");
+        if (resolved.MinFileSizeBytes is { } mn)  o.WriteLine($"  min-size       : {mn:N0} bytes");
+        if (resolved.MaxFileSizeBytes is { } mx)  o.WriteLine($"  max-size       : {mx:N0} bytes");
+        if (resolved.CreatedAfterDate is { } ca)  o.WriteLine($"  created-after  : {ca:yyyy-MM-dd}");
+        if (resolved.CreatedBeforeDate is { } cb) o.WriteLine($"  created-before : {cb:yyyy-MM-dd}");
+        if (resolved.ModifiedAfterDate is { } ma) o.WriteLine($"  modified-after : {ma:yyyy-MM-dd}");
+        if (resolved.ModifiedBeforeDate is { } mb)o.WriteLine($"  modified-before: {mb:yyyy-MM-dd}");
     }
 
     /// <summary>Result of the first-run model-selection step.</summary>
@@ -1751,6 +1886,12 @@ internal static class CliRunner
                                           console falls back to Traditional search.
                   --explain               With --semantic-pattern, print the interpreted search
                                           parameters and exit WITHOUT searching (a dry-run).
+                  --semantic-batch <file> Translate a file of natural-language queries (one per line;
+                                          blank lines and '#' comments ignored) through a SINGLE
+                                          loaded model, printing one delimited --explain block per
+                                          query. The model loads once and is reused for every query,
+                                          so a query set (or a sweep across models) can be evaluated
+                                          without the cold-load cost per call. Always a dry-run.
 
             FILE FILTERING:
               -g, --glob <glob>           Include files matching GLOB (repeatable).
@@ -2981,6 +3122,12 @@ internal sealed class CliArgs
     public bool             AcceptModelDownload { get; private set; }
     public bool             Explain { get; private set; }
 
+    // Semantic batch evaluation (--semantic-batch <file>): translate many natural-language queries
+    // (one per line) through a SINGLE loaded model, emitting one delimited --explain block per query.
+    // Keeping the model resident across queries avoids the ~20 s cold-load cost on every call, which is
+    // what makes benchmarking a model across a query set (or many models) practical.
+    public string?          SemanticBatch { get; private set; }
+
     // Export options
     public string?          ExportPath { get; private set; }
     public string?          ExportFormat { get; private set; } // html, json, csv
@@ -3059,6 +3206,8 @@ internal sealed class CliArgs
                 { a.SemanticPattern = v; continue; }
             if (TryGetVal(raw, ref i, out v, "--semantic-model"))
                 { a.SemanticModel = v.Trim(); continue; }
+            if (TryGetVal(raw, ref i, out v, "--semantic-batch"))
+                { a.SemanticBatch = v.Trim('"'); continue; }
             if (TryGetVal(raw, ref i, out v, "--glob", "-g"))
                 { a.IncludeGlobs.Add(v); continue; }
             if (TryGetVal(raw, ref i, out v, "--exclude-glob", "--exclude"))

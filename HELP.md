@@ -961,6 +961,7 @@ for accuracy, falling back to NPU then CPU).
 | `--semantic-model <alias>` | Force a specific Foundry Local model, by family alias (e.g. `phi-4-mini`) or by exact variant id (e.g. `Phi-4-mini-instruct-cuda-gpu:5`). Default: auto-pick the best small model for this machine's hardware, preferring the less-quantized GPU build for accuracy. Skips the first-run model-download prompt. |
 | `--accept-model-download` | Auto-download the recommended model without prompting — for scripts and non-interactive consoles. Without it, a redirected console falls back to Traditional search instead of downloading. |
 | `--explain` | With `--semantic-pattern`, print the interpreted search parameters and exit **without** searching (a dry-run). Also reports the selected model and the model's raw JSON output (to stderr) to help diagnose interpretation. |
+| `--semantic-batch <file>` | Translate a file of natural-language queries (one per line; blank lines and `#` comments ignored) through a **single loaded model**, printing one delimited `--explain` block per query. The model loads once and is reused for every query, so a whole query set — or a sweep across many models — can be evaluated without paying the cold-load cost per call. Always a dry-run (no search executed). |
 
 **First-run model prompt.** The first time you run a semantic query (and no model has been
 downloaded yet), Yagu lists the local models suited to your hardware — the recommended pick

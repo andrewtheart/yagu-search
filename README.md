@@ -84,8 +84,9 @@ This README is the entry point for new contributors.
 - Literal, exact-match, and .NET regex search, with optional case-sensitive matching.
 - Search modes for content plus file names, content only, file names only, or file-name-gated content search.
 - Semantic search (local, on-device AI): describe a search in plain English and a small instruct model running locally through Microsoft Foundry Local translates it into concrete Yagu options — directory, include/exclude filters, dates, sizes, search mode, and result sorting/grouping — with no query ever leaving the machine.
-- Advanced include/exclude filters with glob/path or regex modes, `.gitignore` support, skip-extension lists, optional binary-file inclusion, size/date filters, and maximum search depth.
+- Advanced include/exclude filters with glob/path or regex modes, `.gitignore` support (with a configurable `.gitignore`-vs-include-filter precedence preference), skip-extension lists, a hidden-files search toggle, optional binary-file inclusion, size/date filters, maximum search depth, and a warning when a query targets a file extension your current filters would exclude.
 - ZIP-format archive search for ZIP, DOCX, XLSX, JAR, NUPKG, and other configured archive-like containers, including nesting and entry-size safeguards.
+- Image-text (OCR) search that finds your query inside images (PNG, JPG, BMP, TIFF, and similar) using a selectable engine — PaddleSharp (PP-OCR) or Tesseract — with configurable recognition models and quality, consent-gated first-run engine/model download, and an image preview that shows the recognized text with matches highlighted.
 - voidtools Everything support for file discovery through the in-process SDK or `es.exe`, with automatic fallback to built-in .NET enumeration.
 - Optional Rust native scanner for fast per-file matching, with managed C# fallback when the DLL is unavailable or a file needs the managed path.
 - Configurable result cap, hard result ceiling, per-file match cap, content-search parallelism, SDK buffer size, content file-size ceiling, and native/MMF concurrency limits.
@@ -95,14 +96,15 @@ This README is the entry point for new contributors.
 - Grouped result list with no-sort arrival order plus sorting/grouping by folder, date, extension, file size, match count, modified date, or file name.
 - Result filtering by file name/path, match text, and date range without rerunning the search.
 - Selectable file groups and match lines with right-click actions for preview, open, copy, export, and Explorer navigation.
-- Context preview with match highlighting, line numbers, match navigation, optional word wrap, lazy loading, and lightweight syntax coloring for common source files.
+- Context preview with match highlighting, line numbers, match navigation, optional word wrap, lazy loading, `Ctrl`+wheel and pinch-to-zoom text scaling, and lightweight syntax coloring for common source files.
 - Multi-file preview layouts for reviewing selected files or checked match lines together.
 - Highlighted full-file previews for selected result groups, checked match lines, or entire files, with configurable full-file preview limits.
-- Built-in editor with find/replace, save, `.yagubak` backups, large-file chunk loading, and double-click navigation from highlighted matches.
+- Built-in editor with find/replace, save, `.yagubak` backups, large-file chunk loading, file-type-aware syntax highlighting, customizable editor fonts and colors, and double-click navigation from highlighted matches.
 - External editor integration with configurable commands such as `code -g {file}:{line}`.
 - Export selected match lines, selected file paths, selected files with content, or styled HTML preview reports; CLI export supports HTML, JSON, and CSV.
+- Save and reopen searches as `.yagu-session` files that restore previous results without rerunning the scan, with a sortable saved-session picker.
 - GUI command generation that builds reproducible `Yagu.exe --cli` commands from the current search state, with an option to omit settings already saved in `%APPDATA%\Yagu\settings.json`.
-- Embedded xterm.js terminal with configurable working directory, context menu actions, clear/reset support, and a "Send command to terminal" path from generated CLI commands.
+- Embedded xterm.js terminal with switchable PowerShell or Command Prompt shells, configurable working directory, context menu actions, clear/reset support, and a "Send command to terminal" path from generated CLI commands.
 - CLI mode for scripted search/export, startup arguments such as `--dir` and `--query`, and local `.yagu.json` settings discovery with CLI flags taking precedence.
 - Explorer context menu registration for "Search with Yagu" and single-instance forwarding when Yagu is already running.
 - Compact launcher, traditional window, stay-open, always-on-top, close-to-tray, system tray, and taskbar-progress behavior.

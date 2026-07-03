@@ -2915,6 +2915,16 @@ parameters and exit <strong>without</strong> searching (a dry-run). Also
 reports the selected model and the model’s raw JSON output (to stderr)
 to help diagnose interpretation.</td>
 </tr>
+<tr>
+<td><code>--semantic-batch &lt;file&gt;</code></td>
+<td>Translate a file of natural-language queries (one per line; blank
+lines and <code>#</code> comments ignored) through a <strong>single
+loaded model</strong>, printing one delimited <code>--explain</code>
+block per query. The model loads once and is reused for every query, so
+a whole query set — or a sweep across many models — can be evaluated
+without paying the cold-load cost per call. Always a dry-run (no search
+executed).</td>
+</tr>
 </tbody>
 </table>
 <p><strong>First-run model prompt.</strong> The first time you run a
