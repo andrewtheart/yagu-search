@@ -245,7 +245,6 @@ public sealed partial class MainWindow
                 ShowTitleBar = false,
                 Width = 560,
                 Height = 340,
-                MaxContentHeight = 220,
             });
 
         await ViewModel.ApplySemanticSuggestionAsync(
