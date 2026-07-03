@@ -1,0 +1,150 @@
+Yagu — Third-Party Notices
+==========================
+
+Yagu itself is licensed under the GNU General Public License, version 3 or
+later (GPL-3.0-or-later). The full text of that license is in the LICENSE file
+at the root of this repository.
+
+SPDX-License-Identifier: GPL-3.0-or-later
+
+Copyright (C) 2026 Yagu contributors
+
+This file lists the third-party code and assets bundled with Yagu under
+vendor/. Some components have been modified from their original versions for
+usage in this application. Those components remain under their own licenses and
+are not relicensed by Yagu's GPL-3.0-or-later notice above. Upstream license
+files are retained where included by the upstream projects.
+
+
+SharpSevenZip
+
+- Path: vendor/SharpSevenZip/
+- Authors: Joel Ahlgren, Markovtsev Vadim, Jérémy Ansel
+- Copyright: Copyright (C) Markovtsev Vadim 2009, 2010, Jérémy Ansel 2024
+- License: GNU Lesser General Public License v3.0 or later (LGPL-3.0-or-later)
+- Source: https://github.com/JeremyAnsel/SharpSevenZip
+- License file: vendor/SharpSevenZip/LICENSE
+
+SharpSevenZip is a fork from Squid-Box.SevenZipSharp, which is a fork from
+tomap's SevenZipSharp fork of the original CodePlex SevenZipSharp project.
+Its README also notes that SharpSevenZipSfx uses an embedded SFX module by
+Oleg Scherbakov.
+
+7-Zip native binaries bundled through SharpSevenZip
+
+- Paths:
+  - vendor/SharpSevenZip/SharpSevenZip/SharpSevenZip/x64/7z.dll
+  - vendor/SharpSevenZip/SharpSevenZip/SharpSevenZip/x86/7z.dll
+- Product: 7-Zip 26.00
+- Company: Igor Pavlov
+- Copyright: Copyright (c) 1999-2026 Igor Pavlov
+- Upstream project and license information: https://www.7-zip.org/license.txt
+
+For 7z.dll, the upstream 7-Zip license information states that the licenses are:
+
+- GNU LGPL as the main license for most of the code.
+- GNU LGPL with the unRAR license restriction for some code.
+- BSD 3-clause License for some code.
+- BSD 2-clause License for some code.
+
+Additional copyright and attribution notices from the upstream 7-Zip license
+information include:
+
+- LZFSE data decompression code derived from Apple's LZFSE compression library:
+  Copyright (c) 2015-2016, Apple Inc. All rights reserved.
+- ZSTD data decompression code developed using Facebook's original zstd decoder
+  code as reference code: Copyright (c) Facebook, Inc. All rights reserved.
+- BSD-licensed 7-Zip code portions: Copyright (c) 2023-2025 Igor Pavlov.
+- XXH64 code derived from original XXH64 code developed by Yann Collet:
+  Copyright (c) 2012-2021 Yann Collet; Copyright (c) 2023-2025 Igor Pavlov.
+- RAR decompression support uses source code from the unRAR program. All
+  copyrights to original unRAR code are owned by Alexander Roshal.
+
+The unRAR source license restriction reproduced by 7-Zip is:
+
+The unRAR sources cannot be used to re-create the RAR compression algorithm,
+which is proprietary. Distribution of modified unRAR sources in separate form
+or as a part of other software is permitted, provided that it is clearly stated
+in the documentation and source comments that the code may not be used to
+develop a RAR (WinRAR) compatible archiver.
+
+TextControlBox-WinUI
+
+- Path: vendor/TextControlBox-WinUI/
+- Author: Julius Kirsch
+- Copyright: 2024-2026 Julius Kirsch
+- License: MIT
+- Source: https://github.com/FrozenAssassine/TextControlBox-WinUI
+- License file: vendor/TextControlBox-WinUI/LICENSE.txt
+
+PaddleSharp
+
+- Path: vendor/PaddleSharp/
+- Author: Zhou Jie (sdcb) and PaddleSharp contributors
+- License: Apache License 2.0 (Apache-2.0)
+- Source: https://github.com/sdcb/PaddleSharp
+- License file: vendor/PaddleSharp/LICENSE
+- Note: PaddleSharp provides .NET bindings for OCR (PaddleOCR) and PaddlePaddle's
+  Paddle Inference. The underlying PaddlePaddle/PaddleOCR projects are also
+  licensed under the Apache License 2.0. The full Apache 2.0 license text is
+  retained at vendor/PaddleSharp/LICENSE and is available from:
+  https://www.apache.org/licenses/LICENSE-2.0
+
+Tesseract (.NET wrapper for the Tesseract OCR engine)
+
+- Path: vendor/Tesseract/
+- Author: Charles Weld and Tesseract .NET wrapper contributors
+- License: Apache License 2.0 (Apache-2.0)
+- Source: https://github.com/charlesw/tesseract
+- License file: vendor/Tesseract/LICENSE.txt
+- Note: This is the managed .NET wrapper. Yagu's OCR worker uses it as an
+  alternative OCR engine (notably on x86/arm64, where the PaddleOCR native
+  runtime is unavailable). The full Apache 2.0 license text is retained at
+  vendor/Tesseract/LICENSE.txt and is available from:
+  https://www.apache.org/licenses/LICENSE-2.0
+
+Tesseract and Leptonica native binaries bundled through the Tesseract wrapper
+
+- Paths:
+  - vendor/Tesseract/src/Tesseract/x64/tesseract50.dll
+  - vendor/Tesseract/src/Tesseract/x86/tesseract50.dll
+  - vendor/Tesseract/src/Tesseract/x64/leptonica-1.82.0.dll
+  - vendor/Tesseract/src/Tesseract/x86/leptonica-1.82.0.dll
+- Tesseract OCR engine: Copyright (C) the Tesseract contributors, licensed under
+  the Apache License 2.0. Source: https://github.com/tesseract-ocr/tesseract
+- Leptonica image-processing library: Copyright (C) Dan S. Bloomberg and
+  Leptonica contributors, licensed under the Leptonica license (a BSD 2-Clause
+  style license). Source: https://github.com/DanBloomberg/leptonica
+
+xterm.js assets
+
+- Path: vendor/xterm-js/
+- Files: xterm.js, xterm.css, addon-fit.js
+- License: MIT
+- Source: https://github.com/xtermjs/xterm.js
+- Copyright: Copyright (c) 2014 The xterm.js authors. All rights reserved.
+- Additional upstream notices preserved in xterm.css:
+  - Copyright (c) 2012-2013, Christopher Jeffrey (MIT License)
+  - Originally forked, with the author's permission, from Fabrice Bellard's
+    javascript vt100 for jslinux, Copyright (c) 2011 Fabrice Bellard
+
+
+MIT License Text for MIT-Licensed Vendored Assets
+-------------------------------------------------
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the
+Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
