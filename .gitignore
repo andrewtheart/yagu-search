@@ -64,3 +64,6 @@ scripts/marks-output*.txt
 *.pdiparams
 *.pdmodel
 *.traineddata
+
+# Local-only ETW profiling script (purged from history)
+scripts/etw-profile.ps1
