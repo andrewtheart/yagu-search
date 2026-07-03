@@ -468,13 +468,13 @@ public sealed partial class MainWindow
             {
                 Title = "Everything Search Not Found",
                 TitleGlyph = "\uE721", // Search
-                Content = "Everything Search by voidtools provides significantly faster file discovery.\n\nWould you like to download and install it?",
+                Content = "Everything Search by voidtools provides significantly faster file discovery.\n\nDownloading and installing it significantly improves your Yagu experience — searches feel near-instant and file listing is dramatically faster. We strongly recommend installing it.\n\nWould you like to download and install it now?",
                 PrimaryButtonText = "Install",
                 CloseButtonText = "Skip",
                 DefaultButton = YaguDialogDefaultButton.Primary,
                 ShowTitleBar = false,
                 Width = 560,
-                Height = 280,
+                Height = 340,
             }) == YaguDialogResult.Primary;
 
         if (!installEverything) return;

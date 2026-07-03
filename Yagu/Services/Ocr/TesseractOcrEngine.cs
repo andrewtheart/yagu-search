@@ -17,6 +17,11 @@ public sealed class TesseractOcrEngine : WorkerOcrEngine
     /// when present, else the per-user download cache that holds <c>eng.traineddata</c>).</summary>
     public const string TessdataDirEnvVar = "YAGU_OCR_TESSDATA_DIR";
 
+    /// <summary>Environment variable pointing the worker at the directory holding
+    /// <c>OpenCvSharpExtern.dll</c> (the native companion Tesseract uses to decode/preprocess images).
+    /// Set to the bundled Paddle native payload when present so the offline edition needs no download.</summary>
+    public const string OpenCvDirEnvVar = "YAGU_OCR_OPENCV_DIR";
+
     public TesseractOcrEngine()
     {
     }
@@ -42,6 +47,9 @@ public sealed class TesseractOcrEngine : WorkerOcrEngine
         environment[EngineEnvVar] = OcrEngineFactory.TesseractId;
         // Point the worker at the bundled tessdata when present (download-free), else the cache.
         environment[TessdataDirEnvVar] = OcrAssetPaths.TesseractDataDir();
+        // Point the worker at OpenCvSharpExtern.dll — the bundled Paddle native payload when present so
+        // the offline edition never downloads it, else the writable per-user OpenCv cache.
+        environment[OpenCvDirEnvVar] = OcrAssetPaths.OpenCvNativeDir();
     }
 
     protected override OcrAssetRequirement DescribeAssetRequirement()

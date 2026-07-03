@@ -22,11 +22,12 @@
   csproj AfterPublish hook, which already published a single architecture.
 
 .PARAMETER IncludeOcr
-  Build the OCR-bundled ("full" / offline) edition: stages the native PaddleOCR
-  runtime + PP-OCR models (and, when available, the Tesseract English data) into
-  <app>\ocr-payload so image-text search needs no download on first use. The
-  native runtime is win-x64 only, so this edition is forced to x64 and the
-  installer is named YaguSetup-<version>-x64-ocr.exe.
+  Build the OCR-bundled ("offline") edition: stages the native PaddleOCR runtime +
+  PP-OCR models AND the Tesseract English data into <app>\ocr-payload so image-text
+  search needs no download on first use. This edition defaults to the Tesseract OCR
+  engine (which runs entirely from the bundled payload). The native runtime is win-x64
+  only, so this edition is forced to x64 and the installer is named
+  YaguSetup-<version>-x64-offline.exe.
 
 .PARAMETER OcrPayloadCacheDir
   Local OCR cache to source the bundled payload from. Defaults to
@@ -119,7 +120,7 @@ if ($IncludeOcr) {
 
 Write-Host "Architectures: $($architectures -join ', ')"
 if ($IncludeOcr) {
-  Write-Host "Edition: OCR-bundled (offline)"
+  Write-Host "Edition: offline (OCR runtime + models bundled; Tesseract is the default engine)"
   $stageOcrHelper = Join-Path $repoRoot 'scripts\stage-ocr-payload.ps1'
   if (-not (Test-Path -LiteralPath $stageOcrHelper)) {
     throw "OCR payload staging helper not found: $stageOcrHelper"
@@ -172,7 +173,7 @@ foreach ($arch in $architectures) {
     $ocrPayloadDir = Join-Path $stagingDir 'ocr-payload'
     $stagedWorker = Join-Path $stagingDir 'ocr-worker\Yagu.OcrWorker.exe'
     Write-Host "Staging OCR payload..."
-    & $stageOcrHelper -OutputDir $ocrPayloadDir -WorkerExe $stagedWorker -CacheDir $OcrPayloadCacheDir
+    & $stageOcrHelper -OutputDir $ocrPayloadDir -WorkerExe $stagedWorker -CacheDir $OcrPayloadCacheDir -RequireTesseract
     if ($LASTEXITCODE -ne 0) { throw "OCR payload staging failed." }
   }
 
@@ -189,7 +190,7 @@ foreach ($arch in $architectures) {
     throw "Inno Setup compilation ($arch) failed with exit code $LASTEXITCODE."
   }
 
-  $ocrSuffix = if ($IncludeOcr) { '-ocr' } else { '' }
+  $ocrSuffix = if ($IncludeOcr) { '-offline' } else { '' }
   $installerExe = Join-Path $outputDir "YaguSetup-$version-$arch$ocrSuffix.exe"
   if (Test-Path -LiteralPath $installerExe) {
     $rootInstallerExe = Join-Path $installerDir (Split-Path -Leaf $installerExe)

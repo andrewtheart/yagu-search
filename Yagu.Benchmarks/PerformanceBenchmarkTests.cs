@@ -3,9 +3,10 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using Yagu.Models;
 using Yagu.Services;
+using Xunit;
 using Xunit.Abstractions;
 
-namespace Yagu.Tests;
+namespace Yagu.Benchmarks;
 
 /// <summary>
 /// Real-world throughput benchmarks that exercise the full SearchService pipeline

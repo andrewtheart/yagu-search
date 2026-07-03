@@ -90,6 +90,16 @@ public sealed class OcrAssetPathsTests
     }
 
     [Fact]
+    public void OpenCvNativePresent_ChecksOpenCvSharpExtern()
+    {
+        using var dir = new TempDir();
+        Assert.False(OcrAssetPaths.OpenCvNativePresent(dir.Path));
+
+        File.WriteAllText(Path.Combine(dir.Path, "OpenCvSharpExtern.dll"), "x");
+        Assert.True(OcrAssetPaths.OpenCvNativePresent(dir.Path));
+    }
+
+    [Fact]
     public void BuildPaddleRequirement_AllPresent_NoDownload()
     {
         var req = OcrAssetPaths.BuildPaddleRequirement("PaddleSharp", nativePresent: true, modelsPresent: true);
@@ -167,6 +177,10 @@ public sealed class OcrAssetPathsTests
         Assert.True(OcrAssetPaths.PaddleRuntimeDir().StartsWith(OcrAssetPaths.BundledRoot, StringComparison.OrdinalIgnoreCase));
         Assert.True(OcrAssetPaths.PaddleModelDir().StartsWith(OcrAssetPaths.BundledRoot, StringComparison.OrdinalIgnoreCase));
         Assert.True(OcrAssetPaths.TesseractDataDir().StartsWith(OcrAssetPaths.BundledRoot, StringComparison.OrdinalIgnoreCase));
+        // The Tesseract worker reuses the bundled OpenCv native from the Paddle payload (offline), and
+        // the bundled Tesseract data identifies the Offline edition (Tesseract becomes the default).
+        Assert.True(OcrAssetPaths.OpenCvNativeDir().StartsWith(OcrAssetPaths.BundledRoot, StringComparison.OrdinalIgnoreCase));
+        Assert.True(OcrAssetPaths.BundledTesseractDataPresent());
     }
 
     [Fact]
@@ -180,6 +194,8 @@ public sealed class OcrAssetPathsTests
         Assert.StartsWith(cacheRoot, OcrAssetPaths.PaddleRuntimeDir(), StringComparison.OrdinalIgnoreCase);
         Assert.StartsWith(cacheRoot, OcrAssetPaths.PaddleModelDir(), StringComparison.OrdinalIgnoreCase);
         Assert.StartsWith(cacheRoot, OcrAssetPaths.TesseractDataDir(), StringComparison.OrdinalIgnoreCase);
+        Assert.StartsWith(cacheRoot, OcrAssetPaths.OpenCvNativeDir(), StringComparison.OrdinalIgnoreCase);
+        Assert.False(OcrAssetPaths.BundledTesseractDataPresent());
     }
 
     private static void WriteModel(string modelsDir, string folderName)

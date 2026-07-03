@@ -279,11 +279,21 @@ public sealed class AppSettings
     public static string ResolveDefaultImageOcrEngine(Architecture processArchitecture) =>
         processArchitecture == Architecture.X86 ? "tesseract" : DefaultImageOcrEngine;
 
-    /// <summary>The effective default OCR engine for this build, resolved once from the current
-    /// process architecture via <see cref="ResolveDefaultImageOcrEngine"/>. The x86 build defaults to
-    /// Tesseract; all other builds default to PaddleSharp.</summary>
+    /// <summary>Resolves the default OCR engine, layering the OCR-bundled (offline) edition on top of the
+    /// per-architecture rule: when the offline installer has bundled the Tesseract English data beside
+    /// the app (<paramref name="bundledTesseractPresent"/>), Tesseract is the default because it runs
+    /// fully offline; otherwise the architecture rule applies. Pure and testable.</summary>
+    public static string ResolveDefaultImageOcrEngine(Architecture processArchitecture, bool bundledTesseractPresent) =>
+        bundledTesseractPresent ? "tesseract" : ResolveDefaultImageOcrEngine(processArchitecture);
+
+    /// <summary>The effective default OCR engine for this build. Resolved once from the current process
+    /// architecture and whether the OCR-bundled (offline) installer pre-staged the Tesseract data: the
+    /// offline edition defaults to Tesseract, the x86 build defaults to Tesseract, and all other builds
+    /// default to PaddleSharp.</summary>
     public static readonly string EffectiveDefaultImageOcrEngine =
-        ResolveDefaultImageOcrEngine(RuntimeInformation.ProcessArchitecture);
+        ResolveDefaultImageOcrEngine(
+            RuntimeInformation.ProcessArchitecture,
+            Yagu.Services.Ocr.OcrAssetPaths.BundledTesseractDataPresent());
     /// <summary>PaddleOCR model used for image-text recognition: "EnglishV3", "EnglishV4",
     /// "ChineseV4" or "ChineseV5" (default; PP-OCRv5, multilingual). Higher/newer models trade speed for
     /// accuracy. Normalized on load. Ignored by the Tesseract engine.</summary>

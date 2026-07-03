@@ -566,6 +566,9 @@ downloaded.</li>
 <strong>Settings → Search Defaults</strong>. The same capability is
 available from the CLI via <code>--semantic-pattern</code> (see <a
 href="#command-line-interface-cli-mode">Command-Line Interface</a>).</p>
+<p>For a comprehensive, categorized list of example queries and how the
+options combine, see <a href="#semantic-search-query-examples">Semantic
+Search Query Examples</a> (all 300 scenarios from the test suite).</p>
 <hr />
 <h2 id="advanced-options">Advanced Options</h2>
 <p>Click the <strong>Advanced Options</strong> expander below the search
@@ -1295,6 +1298,69 @@ across multiple files. A confirmation dialog shows the count of
 occurrences and files that will be affected.</p>
 </blockquote>
 <hr />
+<h2 id="sessions">Sessions</h2>
+<p>A <strong>session</strong> is a snapshot of a completed search — the
+query, the search location, the options, and the full result set — saved
+to a <code>.yagu-session</code> file. Reopening a session restores those
+results <strong>instantly, without rerunning the scan</strong>. That
+makes sessions ideal for long searches over large folder trees, for
+handing an investigation to a colleague, or for picking up exactly where
+you left off days later.</p>
+<h3 id="saving-a-session">Saving a session</h3>
+<p>After a search finishes, open the results <strong>⋯ (more)</strong>
+menu at the top of the results pane and choose <strong>Save
+session</strong>. Pick a location and name; Yagu writes a
+<code>.yagu-session</code> file containing the query, options, and
+matched results. From the CLI, add
+<code>--save-session &lt;path&gt;</code> to any search.</p>
+<h3 id="loading-a-session">Loading a session</h3>
+<p>Click the <strong>Load session</strong> button — the folder icon in
+the search card, beside the Search/Cancel button — to open the
+<strong>Load session</strong> picker. Yagu uses Everything to find every
+<code>.yagu-session</code> file on your PC and lists them in a sortable
+table:</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Column</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Name</td>
+<td>The session file name.</td>
+</tr>
+<tr>
+<td>Directory</td>
+<td>The folder the session file is stored in.</td>
+</tr>
+<tr>
+<td>Size</td>
+<td>The session file size.</td>
+</tr>
+<tr>
+<td>Created</td>
+<td>When the session was saved — the default sort, newest first.</td>
+</tr>
+</tbody>
+</table>
+<p>Click any column header to sort by it (click again to reverse the
+order). Select a session with a click, double‑click, or
+<strong>Enter</strong> to load it, or choose <strong>Browse…</strong> to
+pick a file manually with the standard Windows dialog. If Everything is
+not available, Yagu skips the picker and opens the Browse dialog
+directly.</p>
+<p>Loading a session repopulates the results list and preview from the
+saved data — no files are re‑read and no scan runs, so even a session
+from a search that originally took minutes reopens at once. From the
+CLI, use <code>--load-session &lt;path&gt;</code> to re‑emit a saved
+session’s results.</p>
+<hr />
 <h2 id="settings">Settings</h2>
 <p>Open Settings from the <strong>gear</strong> button in the title bar.
 Settings are saved to <code>%APPDATA%\Yagu\settings.json</code>. Reset
@@ -1464,11 +1530,14 @@ and their text is searched like any other file’s contents.</p>
 <p><strong>Two installer editions.</strong> Yagu ships in two flavors: a
 <strong>lite</strong> installer that downloads the OCR engine runtime
 and language models the first time you actually use image-text search,
-and an <strong>OCR-bundled</strong> installer that ships those
-components (about 365 MB) so OCR works fully offline with no download.
-With the lite edition, Yagu <strong>warns you before any external
-download</strong> and only proceeds once you approve; consent is then
-remembered.</p>
+and an <strong>Offline</strong> installer (the <code>x64-offline</code>
+download) that bundles those components so OCR works fully offline with
+no download. The Offline edition ships the <strong>Tesseract</strong>
+engine (and its English data) plus the PaddleOCR runtime and models, and
+it <strong>defaults to Tesseract</strong> so image-text search works out
+of the box with nothing to fetch. With the lite edition, Yagu
+<strong>warns you before any external download</strong> and only
+proceeds once you approve; consent is then remembered.</p>
 </blockquote>
 <table>
 <colgroup>
@@ -1490,14 +1559,15 @@ queue and the recognized text is searched.</td>
 </tr>
 <tr>
 <td>OCR engine</td>
-<td>PaddleSharp (recommended, default) or Tesseract. PaddleSharp is
-generally more accurate and runs on the CPU (MKL-accelerated) — no GPU
-or NPU is required or used; Tesseract is a lighter alternative with a
-fixed pipeline that can be faster on low-end CPUs. With the lite
-installer, the selected engine’s runtime and models download on first
-use (after you approve the warning); the OCR-bundled installer ships the
-PaddleSharp runtime and models so the default engine needs no
-download.</td>
+<td>PaddleSharp or Tesseract. PaddleSharp is generally more accurate and
+runs on the CPU (MKL-accelerated) — no GPU or NPU is required or used;
+Tesseract is a lighter alternative with a fixed pipeline that runs
+entirely from bundled data. The default is PaddleSharp on most builds,
+<strong>Tesseract on the x86 build and on the Offline
+(<code>x64-offline</code>) edition</strong>. With the lite installer,
+the selected engine’s runtime and models download on first use (after
+you approve the warning); the Offline installer ships both engines’
+runtimes and data so no download is needed.</td>
 </tr>
 <tr>
 <td>Quality preset</td>
@@ -3509,6 +3579,1962 @@ trees)</td>
 </tr>
 </tbody>
 </table>
-<p>Then tune filters and query until the result set is manageable.</p>
+<h2
+id="then-tune-filters-and-query-until-the-result-set-is-manageable.">Then
+tune filters and query until the result set is manageable.</h2>
+<h2 id="semantic-search-query-examples">Semantic Search Query
+Examples</h2>
+<p>Yagu’s query engine is verified by a catalog of <strong>300
+scenarios</strong> in the test project
+(<code>SemanticSearchQueryCatalog</code>), each pairing a query with
+specific search options and asserting an exact result. They double as a
+comprehensive reference of <em>what</em> you can search for and
+<em>how</em> the options combine — literal / substring / whole‑word /
+regex matching, case sensitivity, search modes, include and exclude
+filters, size and date ranges, result and depth limits, binary / hidden
+/ archive handling, and multi‑term queries. Every row below is a real,
+passing test case; the <strong>Scenario</strong> column is its name in
+the test catalog.</p>
+<h3 id="literal-substring-whole-word-case-sensitivity-59">Literal,
+substring, whole-word &amp; case sensitivity (59)</h3>
+<table style="width:100%;">
+<colgroup>
+<col style="width: 30%" />
+<col style="width: 23%" />
+<col style="width: 23%" />
+<col style="width: 23%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: right;">#</th>
+<th>Query</th>
+<th>Search settings</th>
+<th>Scenario</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">1</td>
+<td><code>hello</code></td>
+<td>substring</td>
+<td><code>literal-substring-finds-two-files</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td><code>brown</code></td>
+<td>substring</td>
+<td><code>literal-substring-single-file</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td><code>token</code></td>
+<td>substring</td>
+<td><code>literal-substring-all-three</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td><code>ell</code></td>
+<td>substring</td>
+<td><code>literal-substring-partial-word</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">5</td>
+<td><code>config</code></td>
+<td>substring</td>
+<td><code>literal-substring-prefix</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">6</td>
+<td><code>ing</code></td>
+<td>substring</td>
+<td><code>literal-substring-suffix</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">7</td>
+<td><code>gamma</code></td>
+<td>substring</td>
+<td><code>literal-substring-none-present</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">8</td>
+<td><code>NEEDLE</code></td>
+<td>substring</td>
+<td><code>literal-substring-embedded</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">9</td>
+<td><code>hello</code></td>
+<td>substring</td>
+<td><code>literal-case-insensitive-three</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">10</td>
+<td><code>hello</code></td>
+<td>substring, case-sensitive</td>
+<td><code>literal-case-sensitive-lower</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">11</td>
+<td><code>HELLO</code></td>
+<td>substring, case-sensitive</td>
+<td><code>literal-case-sensitive-upper</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">12</td>
+<td><code>Error</code></td>
+<td>substring, case-sensitive</td>
+<td><code>literal-case-sensitive-titlecase</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">13</td>
+<td><code>MyClassName</code></td>
+<td>substring, case-sensitive</td>
+<td><code>literal-case-sensitive-mixed-token</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">14</td>
+<td><code>myclassname</code></td>
+<td>substring</td>
+<td><code>literal-case-insensitive-mixed-token</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">15</td>
+<td><code>async</code></td>
+<td>whole word</td>
+<td><code>wholeword-excludes-partial</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">16</td>
+<td><code>cat</code></td>
+<td>whole word</td>
+<td><code>wholeword-matches-boundaries</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">17</td>
+<td><code>cat</code></td>
+<td>substring</td>
+<td><code>substring-matches-inside-words</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">18</td>
+<td><code>value</code></td>
+<td>whole word</td>
+<td><code>wholeword-punctuation-adjacent</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">19</td>
+<td><code>max_count</code></td>
+<td>whole word</td>
+<td><code>wholeword-token-with-underscore</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">20</td>
+<td><code>8080</code></td>
+<td>whole word</td>
+<td><code>wholeword-digits-boundary</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">21</td>
+<td><code>foo bar</code></td>
+<td>substring</td>
+<td><code>multiterm-or-two</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">22</td>
+<td><code>red green blue</code></td>
+<td>substring</td>
+<td><code>multiterm-or-three</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">23</td>
+<td><code>cat dog</code></td>
+<td>substring</td>
+<td><code>multiterm-or-overlap-counts</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">24</td>
+<td><code>Cat Dog</code></td>
+<td>substring, case-sensitive</td>
+<td><code>multiterm-or-case-sensitive</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">25</td>
+<td><code>test 123</code></td>
+<td>whole word</td>
+<td><code>phrase-wholeword-exact</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">26</td>
+<td><code>hello world</code></td>
+<td>whole word</td>
+<td><code>phrase-wholeword-not-split</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">27</td>
+<td><code>+=</code></td>
+<td>substring</td>
+<td><code>symbol-plus-equals</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">28</td>
+<td><code>=&gt;</code></td>
+<td>substring</td>
+<td><code>symbol-arrow</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">29</td>
+<td><code>::</code></td>
+<td>substring</td>
+<td><code>symbol-namespace-colons</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">30</td>
+<td><code>$100</code></td>
+<td>substring</td>
+<td><code>symbol-currency</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">31</td>
+<td><code>#TODO</code></td>
+<td>substring</td>
+<td><code>symbol-hashtag</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">32</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>count-three-matching-lines</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">33</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>count-one-of-many-lines</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">34</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>count-two-files-total</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">35</td>
+<td><code>omega</code></td>
+<td>substring</td>
+<td><code>count-zero-when-absent</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">36</td>
+<td><code>2024</code></td>
+<td>substring</td>
+<td><code>numeric-token-substring</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">37</td>
+<td><code>42</code></td>
+<td>whole word</td>
+<td><code>numeric-token-whole-word</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">38</td>
+<td><code>3.14</code></td>
+<td>substring</td>
+<td><code>numeric-decimal</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">39</td>
+<td><code>café</code></td>
+<td>substring</td>
+<td><code>unicode-accented</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">40</td>
+<td><code>検索</code></td>
+<td>substring</td>
+<td><code>unicode-cjk</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">41</td>
+<td><code>привет</code></td>
+<td>substring</td>
+<td><code>unicode-cyrillic</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">42</td>
+<td><code>value</code></td>
+<td>substring</td>
+<td><code>tab-separated-token</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">43</td>
+<td><code>term</code></td>
+<td>whole word</td>
+<td><code>leading-trailing-query-trimmed-wholeword</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">44</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>nested-dirs-found</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">45</td>
+<td><code>compile</code></td>
+<td>substring</td>
+<td><code>nested-dirs-distinct-tokens</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">46</td>
+<td><em>(filter only)</em></td>
+<td>substring</td>
+<td><code>empty-query-no-results</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">47</td>
+<td><code></code></td>
+<td>substring</td>
+<td><code>whitespace-only-query-no-results</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">48</td>
+<td><code>MIDDLE</code></td>
+<td>substring</td>
+<td><code>matched-text-substring-token</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">49</td>
+<td><code>wholeword</code></td>
+<td>whole word</td>
+<td><code>matched-text-wholeword-token</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">50</td>
+<td><code>function</code></td>
+<td>substring</td>
+<td><code>matched-text-case-preserved</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">51</td>
+<td><code>log</code></td>
+<td>substring</td>
+<td><code>repeated-token-distinct-lines</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">52</td>
+<td><code>edge</code></td>
+<td>substring</td>
+<td><code>token-at-line-edges</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">53</td>
+<td><code>international nation</code></td>
+<td>substring</td>
+<td><code>longer-of-two-overlapping-terms</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">54</td>
+<td><code>treasure</code></td>
+<td>substring</td>
+<td><code>token-only-in-deep-file</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">55</td>
+<td><code>marker</code></td>
+<td>substring</td>
+<td><code>mixed-extensions-content-token</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">56</td>
+<td><code>file.name</code></td>
+<td>substring</td>
+<td><code>literal-dot-is-literal-not-regex</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">57</td>
+<td><code>a*b</code></td>
+<td>substring</td>
+<td><code>literal-star-is-literal-not-regex</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">58</td>
+<td><code>func()</code></td>
+<td>substring</td>
+<td><code>literal-parens-are-literal</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">59</td>
+<td><code>arr[0]</code></td>
+<td>substring</td>
+<td><code>literal-bracket-is-literal</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="regular-expressions-60">Regular expressions (60)</h3>
+<table style="width:100%;">
+<colgroup>
+<col style="width: 30%" />
+<col style="width: 23%" />
+<col style="width: 23%" />
+<col style="width: 23%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: right;">#</th>
+<th>Query</th>
+<th>Search settings</th>
+<th>Scenario</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">60</td>
+<td><code>foo\d+</code></td>
+<td>regex</td>
+<td><code>regex-digits-quantifier</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">61</td>
+<td><code>ab*c</code></td>
+<td>regex</td>
+<td><code>regex-star-zero-or-more</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">62</td>
+<td><code>colou?r</code></td>
+<td>regex</td>
+<td><code>regex-optional</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">63</td>
+<td><code>\d{3}</code></td>
+<td>regex</td>
+<td><code>regex-exact-repeat</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">64</td>
+<td><code>\d{2,4}</code></td>
+<td>regex</td>
+<td><code>regex-range-repeat</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">65</td>
+<td><code>[a-z]+</code></td>
+<td>regex, case-sensitive</td>
+<td><code>regex-plus-letters-cs</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">66</td>
+<td><code>^start</code></td>
+<td>regex</td>
+<td><code>regex-line-anchor-start</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">67</td>
+<td><code>END$</code></td>
+<td>regex</td>
+<td><code>regex-line-anchor-end</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">68</td>
+<td><code>^exact$</code></td>
+<td>regex</td>
+<td><code>regex-anchored-full-line</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">69</td>
+<td><code>^\d</code></td>
+<td>regex</td>
+<td><code>regex-start-digit</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">70</td>
+<td><code>\.$</code></td>
+<td>regex</td>
+<td><code>regex-line-ends-with-period</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">71</td>
+<td><code>^\d+$</code></td>
+<td>regex</td>
+<td><code>regex-whole-line-digits</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">72</td>
+<td><code>\d$</code></td>
+<td>regex</td>
+<td><code>regex-anchor-end-digit</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">73</td>
+<td><code>#[0-9a-f]{6}</code></td>
+<td>regex</td>
+<td><code>regex-char-class-hex</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">74</td>
+<td><code>[^0-9]+</code></td>
+<td>regex</td>
+<td><code>regex-negated-digit-class</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">75</td>
+<td><code>\d</code></td>
+<td>regex</td>
+<td><code>regex-digit-class</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">76</td>
+<td><code>\w+</code></td>
+<td>regex</td>
+<td><code>regex-word-class</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">77</td>
+<td><code>\s</code></td>
+<td>regex</td>
+<td><code>regex-whitespace-class</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">78</td>
+<td><code>\W</code></td>
+<td>regex</td>
+<td><code>regex-non-word</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">79</td>
+<td><code>\D</code></td>
+<td>regex</td>
+<td><code>regex-non-digit</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">80</td>
+<td><code>a.c</code></td>
+<td>regex</td>
+<td><code>regex-dot-any</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">81</td>
+<td><code>[A-Z]{2,}</code></td>
+<td>regex, case-sensitive</td>
+<td><code>regex-case-sensitive-uppercase-class</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">82</td>
+<td><code>[aeiou]+</code></td>
+<td>regex</td>
+<td><code>regex-class-vowels</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">83</td>
+<td><code>[a-z0-9]+</code></td>
+<td>regex, case-sensitive</td>
+<td><code>regex-class-alnum-cs</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">84</td>
+<td><code>cat\|dog</code></td>
+<td>regex</td>
+<td><code>regex-alternation</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">85</td>
+<td><code>x\|y\|z</code></td>
+<td>regex</td>
+<td><code>regex-alternation-three</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">86</td>
+<td><code>(ab)+</code></td>
+<td>regex</td>
+<td><code>regex-group-quantifier</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">87</td>
+<td><code>^(foo\|bar)</code></td>
+<td>regex</td>
+<td><code>regex-alternation-anchored</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">88</td>
+<td><code>gr(a\|e)y</code></td>
+<td>regex</td>
+<td><code>regex-group-alternation</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">89</td>
+<td><code>(un)?lock</code></td>
+<td>regex</td>
+<td><code>regex-optional-group</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">90</td>
+<td><code>(cat\|dog)s?</code></td>
+<td>regex</td>
+<td><code>regex-nested-group-optional-s</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">91</td>
+<td><code>(ab\|cd)+</code></td>
+<td>regex</td>
+<td><code>regex-alternation-with-quantifier</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">92</td>
+<td><code>(foo)?bar</code></td>
+<td>regex</td>
+<td><code>regex-grouped-optional-prefix</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">93</td>
+<td><code>\bcat\b</code></td>
+<td>regex</td>
+<td><code>regex-word-boundary</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">94</td>
+<td><code>\bpre</code></td>
+<td>regex</td>
+<td><code>regex-word-boundary-prefix</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">95</td>
+<td><code>foo\.bar</code></td>
+<td>regex</td>
+<td><code>regex-escaped-dot</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">96</td>
+<td><code>\(\)</code></td>
+<td>regex</td>
+<td><code>regex-escaped-paren</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">97</td>
+<td><code>a\+b</code></td>
+<td>regex</td>
+<td><code>regex-escaped-plus</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">98</td>
+<td><code>\[x\]</code></td>
+<td>regex</td>
+<td><code>regex-escaped-bracket</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">99</td>
+<td><code>error</code></td>
+<td>regex</td>
+<td><code>regex-case-insensitive-default</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">100</td>
+<td><code>error</code></td>
+<td>regex, case-sensitive</td>
+<td><code>regex-case-sensitive-flag</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">101</td>
+<td><code>^The</code></td>
+<td>regex</td>
+<td><code>regex-anchored-start-word</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">102</td>
+<td><code>\w+@\w+</code></td>
+<td>regex</td>
+<td><code>regex-email-like</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">103</td>
+<td><code>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}</code></td>
+<td>regex</td>
+<td><code>regex-ip-like</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">104</td>
+<td><code>\d{3}-\d{4}</code></td>
+<td>regex</td>
+<td><code>regex-phone</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">105</td>
+<td><code>\d{2}:\d{2}</code></td>
+<td>regex</td>
+<td><code>regex-time</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">106</td>
+<td><code>v\d+\.\d+</code></td>
+<td>regex</td>
+<td><code>regex-version</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">107</td>
+<td><code>[0-9a-f]{8}</code></td>
+<td>regex</td>
+<td><code>regex-hex8</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">108</td>
+<td><code>\$\d+</code></td>
+<td>regex</td>
+<td><code>regex-currency</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">109</td>
+<td><code>\d+%</code></td>
+<td>regex</td>
+<td><code>regex-percentage</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">110</td>
+<td><code>#\w+</code></td>
+<td>regex</td>
+<td><code>regex-hashtag</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">111</td>
+<td><code>@\w+</code></td>
+<td>regex</td>
+<td><code>regex-mention</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">112</td>
+<td><code>https?://\w+</code></td>
+<td>regex</td>
+<td><code>regex-url-like</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">113</td>
+<td><code>\w+\d</code></td>
+<td>regex</td>
+<td><code>regex-word-then-digit</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">114</td>
+<td><code>aa+</code></td>
+<td>regex</td>
+<td><code>regex-double-letter</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">115</td>
+<td><code>a+?</code></td>
+<td>regex</td>
+<td><code>regex-lazy-quantifier</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">116</td>
+<td><code>^item</code></td>
+<td>regex</td>
+<td><code>regex-multiline-anchor-count</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">117</td>
+<td><code>\d+</code></td>
+<td>regex</td>
+<td><code>regex-count-digit-lines</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">118</td>
+<td><code>foo.*bar</code></td>
+<td>regex</td>
+<td><code>regex-dotstar-between</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">119</td>
+<td><code>xyz\d{5}</code></td>
+<td>regex</td>
+<td><code>regex-no-match</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="include-exclude-path-type-filters-50">Include / exclude path
+&amp; type filters (50)</h3>
+<table style="width:100%;">
+<colgroup>
+<col style="width: 30%" />
+<col style="width: 23%" />
+<col style="width: 23%" />
+<col style="width: 23%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: right;">#</th>
+<th>Query</th>
+<th>Search settings</th>
+<th>Scenario</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">120</td>
+<td><code>needle</code></td>
+<td>substring, include *.cs</td>
+<td><code>include-ext-star-cs</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">121</td>
+<td><code>needle</code></td>
+<td>substring, include cs</td>
+<td><code>include-ext-bare-cs</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">122</td>
+<td><code>needle</code></td>
+<td>substring, include txt</td>
+<td><code>include-ext-txt-bare</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">123</td>
+<td><code>needle</code></td>
+<td>substring, include <em>.cs,</em>.js</td>
+<td><code>include-ext-comma-two</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">124</td>
+<td><code>needle</code></td>
+<td>substring, include <em>.cs </em>.js</td>
+<td><code>include-ext-two-args</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">125</td>
+<td><code>needle</code></td>
+<td>substring, include *.CS</td>
+<td><code>include-ext-uppercase</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">126</td>
+<td><code>needle</code></td>
+<td>substring, include json</td>
+<td><code>include-ext-json</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">127</td>
+<td><code>needle</code></td>
+<td>substring, include *.md</td>
+<td><code>include-ext-no-match</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">128</td>
+<td><code>needle</code></td>
+<td>substring, include <em>.a,</em>.b,*.c</td>
+<td><code>include-ext-three</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">129</td>
+<td><code>needle</code></td>
+<td>substring, include *.tsx</td>
+<td><code>include-ext-tsx-not-ts</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">130</td>
+<td><code>needle</code></td>
+<td>substring, include md</td>
+<td><code>include-ext-bare-md</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">131</td>
+<td><code>needle</code></td>
+<td>substring, include *.env</td>
+<td><code>include-ext-env</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">132</td>
+<td><code>needle</code></td>
+<td>substring, include *.cs js</td>
+<td><code>include-ext-and-bare-mixed</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">133</td>
+<td><code>needle</code></td>
+<td>substring, include src/**/*.cs</td>
+<td><code>include-glob-src-cs</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">134</td>
+<td><code>needle</code></td>
+<td>substring, include **/*.cs</td>
+<td><code>include-glob-double-star-cs</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">135</td>
+<td><code>needle</code></td>
+<td>substring, include file?.txt</td>
+<td><code>include-glob-question</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">136</td>
+<td><code>needle</code></td>
+<td>substring, include logs/*.txt</td>
+<td><code>include-glob-folder-file</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">137</td>
+<td><code>needle</code></td>
+<td>substring, include app*</td>
+<td><code>include-glob-prefix-star</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">138</td>
+<td><code>needle</code></td>
+<td>substring, include data?.json</td>
+<td><code>include-glob-data-question-json</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">139</td>
+<td><code>needle</code></td>
+<td>substring, include regex .ts$</td>
+<td><code>include-regex-ts</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">140</td>
+<td><code>needle</code></td>
+<td>substring, include regex .(cs|js)$</td>
+<td><code>include-regex-ext-alternation</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">141</td>
+<td><code>needle</code></td>
+<td>substring, include regex .txt$</td>
+<td><code>include-regex-digit-name</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">142</td>
+<td><code>needle</code></td>
+<td>substring, include regex /src/</td>
+<td><code>include-regex-folder</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">143</td>
+<td><code>needle</code></td>
+<td>substring, include regex /SRC/</td>
+<td><code>include-regex-folder-case-insensitive</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">144</td>
+<td><code>needle</code></td>
+<td>substring, include regex /main.[a-z]+$</td>
+<td><code>include-regex-anchored-leaf</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">145</td>
+<td><code>needle</code></td>
+<td>substring, exclude log</td>
+<td><code>exclude-ext-bare-log</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">146</td>
+<td><code>needle</code></td>
+<td>substring, exclude *.tmp</td>
+<td><code>exclude-ext-glob-tmp</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">147</td>
+<td><code>needle</code></td>
+<td>substring, exclude <em>.log,</em>.tmp</td>
+<td><code>exclude-ext-comma-two</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">148</td>
+<td><code>needle</code></td>
+<td>substring, exclude bak</td>
+<td><code>exclude-ext-keeps-multiple</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">149</td>
+<td><code>needle</code></td>
+<td>substring, exclude *.min.txt</td>
+<td><code>exclude-ext-min-txt</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">150</td>
+<td><code>needle</code></td>
+<td>substring, exclude node_modules</td>
+<td><code>exclude-segment-node-modules</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">151</td>
+<td><code>needle</code></td>
+<td>substring, exclude vendor</td>
+<td><code>exclude-segment-vendor</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">152</td>
+<td><code>needle</code></td>
+<td>substring, exclude coverage</td>
+<td><code>exclude-segment-coverage</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">153</td>
+<td><code>needle</code></td>
+<td>substring, exclude node_modules,coverage</td>
+<td><code>exclude-two-segments</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">154</td>
+<td><code>needle</code></td>
+<td>substring, exclude packages</td>
+<td><code>exclude-segment-packages</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">155</td>
+<td><code>needle</code></td>
+<td>substring, exclude build_out</td>
+<td><code>exclude-segment-build-out</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">156</td>
+<td><code>needle</code></td>
+<td>substring, exclude <strong>/bin/</strong></td>
+<td><code>exclude-glob-bin-double-star</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">157</td>
+<td><code>needle</code></td>
+<td>substring, exclude regex [\/]tmp[\/]</td>
+<td><code>exclude-regex-tmp-folder</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">158</td>
+<td><code>needle</code></td>
+<td>substring, exclude regex .bak$</td>
+<td><code>exclude-regex-bak</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">159</td>
+<td><code>needle</code></td>
+<td>substring, exclude regex .test.txt$</td>
+<td><code>exclude-regex-test-files</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">160</td>
+<td><code>needle</code></td>
+<td>substring, exclude regex .(log|tmp)$</td>
+<td><code>exclude-regex-ext-alternation</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">161</td>
+<td><code>needle</code></td>
+<td>substring, exclude regex /v/</td>
+<td><code>exclude-regex-numeric-dir</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">162</td>
+<td><code>needle</code></td>
+<td>substring, exclude regex /dist/</td>
+<td><code>exclude-regex-dist-dir</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">163</td>
+<td><code>needle</code></td>
+<td>substring, include *.cs, exclude node_modules</td>
+<td><code>include-ext-exclude-segment</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">164</td>
+<td><code>needle</code></td>
+<td>substring, include txt, exclude *.min.txt</td>
+<td><code>include-ext-exclude-ext</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">165</td>
+<td><code>needle</code></td>
+<td>substring, include src/**/<em>.txt, exclude </em>.skip.txt</td>
+<td><code>include-glob-exclude-ext</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">166</td>
+<td><code>needle</code></td>
+<td>substring, include <em>.cs, exclude </em>.cs</td>
+<td><code>exclude-wins-over-include</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">167</td>
+<td><code>needle</code></td>
+<td>substring, include *.cs</td>
+<td><code>include-filters-before-content</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">168</td>
+<td><code>needle</code></td>
+<td>substring, exclude *.log</td>
+<td><code>exclude-filters-before-content</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">169</td>
+<td><code>needle</code></td>
+<td>substring, include <em>.cs </em>.js</td>
+<td><code>include-multiple-content-subset</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="search-modes-file-names-vs-contents-35">Search modes (file names
+vs contents) (35)</h3>
+<table style="width:100%;">
+<colgroup>
+<col style="width: 30%" />
+<col style="width: 23%" />
+<col style="width: 23%" />
+<col style="width: 23%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: right;">#</th>
+<th>Query</th>
+<th>Search settings</th>
+<th>Scenario</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">170</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>mode-content-only-ignores-filename</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">171</td>
+<td><code>report</code></td>
+<td>substring</td>
+<td><code>mode-content-default-ignores-filename</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">172</td>
+<td><code>hit</code></td>
+<td>substring</td>
+<td><code>mode-content-multiple-files</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">173</td>
+<td><code>hit</code></td>
+<td>substring</td>
+<td><code>mode-content-counts-lines</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">174</td>
+<td><code>needle</code></td>
+<td>substring, file names only</td>
+<td><code>mode-filenames-only</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">175</td>
+<td><code>config</code></td>
+<td>substring, file names only</td>
+<td><code>mode-filenames-substring-leaf</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">176</td>
+<td><code>data</code></td>
+<td>substring, file names only</td>
+<td><code>mode-filenames-token-in-name</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">177</td>
+<td><code>match</code></td>
+<td>substring, file names only</td>
+<td><code>mode-filenames-empty-content-name-match</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">178</td>
+<td><code>readme</code></td>
+<td>substring, file names only</td>
+<td><code>mode-filenames-case-insensitive</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">179</td>
+<td><code>readme</code></td>
+<td>substring, case-sensitive, file names only</td>
+<td><code>mode-filenames-case-sensitive</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">180</td>
+<td><code>log</code></td>
+<td>whole word, file names only</td>
+<td><code>mode-filenames-whole-word</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">181</td>
+<td><code>v\d</code></td>
+<td>regex, file names only</td>
+<td><code>mode-filenames-regex</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">182</td>
+<td><code>needle</code></td>
+<td>substring, file names only</td>
+<td><code>mode-filenames-count-one-per-file</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">183</td>
+<td><code>foo bar</code></td>
+<td>substring, file names only</td>
+<td><code>mode-filenames-multiterm</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">184</td>
+<td><code>zzz</code></td>
+<td>substring, file names only</td>
+<td><code>mode-filenames-no-match</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">185</td>
+<td><code>needle</code></td>
+<td>substring, file names only</td>
+<td><code>mode-filenames-dir-token-ignored</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">186</td>
+<td><code>rep</code></td>
+<td>substring, file names only</td>
+<td><code>mode-filenames-total-equals-files</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">187</td>
+<td><code>config</code></td>
+<td>substring, file names only</td>
+<td><code>mode-filenames-substring-version</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">188</td>
+<td><code>needle</code></td>
+<td>substring, file names + contents</td>
+<td><code>mode-both-name-and-content</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">189</td>
+<td><code>tag</code></td>
+<td>substring, file names + contents</td>
+<td><code>mode-both-name-only</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">190</td>
+<td><code>tag</code></td>
+<td>substring, file names + contents</td>
+<td><code>mode-both-content-only</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">191</td>
+<td><code>tag</code></td>
+<td>substring, file names + contents</td>
+<td><code>mode-both-name-plus-content-rows</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">192</td>
+<td><code>find</code></td>
+<td>substring, file names + contents</td>
+<td><code>mode-both-distinct-files</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">193</td>
+<td><code>err\d</code></td>
+<td>regex, file names + contents</td>
+<td><code>mode-both-regex</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">194</td>
+<td><code>err</code></td>
+<td>substring, case-sensitive, file names + contents</td>
+<td><code>mode-both-case-sensitive</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">195</td>
+<td><code>alpha beta</code></td>
+<td>substring, file names + contents</td>
+<td><code>mode-both-multiterm</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">196</td>
+<td><code>target</code></td>
+<td>substring, names, then contents</td>
+<td><code>mode-filename-then-content</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">197</td>
+<td><code>keep</code></td>
+<td>substring, names, then contents</td>
+<td><code>mode-ftc-requires-name</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">198</td>
+<td><code>name</code></td>
+<td>substring, names, then contents</td>
+<td><code>mode-ftc-name-match-no-content</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">199</td>
+<td><code>data</code></td>
+<td>substring, names, then contents</td>
+<td><code>mode-ftc-content-rows-only</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">200</td>
+<td><code>log\d</code></td>
+<td>regex, names, then contents</td>
+<td><code>mode-ftc-regex</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">201</td>
+<td><code>alpha beta</code></td>
+<td>substring, names, then contents</td>
+<td><code>mode-ftc-multiterm</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">202</td>
+<td><code>needle</code></td>
+<td>substring, names, then contents</td>
+<td><code>mode-ftc-no-name-match</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">203</td>
+<td><code>data</code></td>
+<td>substring, case-sensitive, names, then contents</td>
+<td><code>mode-ftc-case-sensitive</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">204</td>
+<td><code>hit</code></td>
+<td>substring, file names + contents</td>
+<td><code>mode-both-content-counts</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="size-date-ranges-35">Size &amp; date ranges (35)</h3>
+<table style="width:100%;">
+<colgroup>
+<col style="width: 30%" />
+<col style="width: 23%" />
+<col style="width: 23%" />
+<col style="width: 23%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: right;">#</th>
+<th>Query</th>
+<th>Search settings</th>
+<th>Scenario</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">205</td>
+<td><code>needle</code></td>
+<td>substring, ≥ 10 B, ≤ 40 B</td>
+<td><code>size-range-min-and-max</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">206</td>
+<td><code>needle</code></td>
+<td>substring, ≥ 20 B</td>
+<td><code>size-min-only</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">207</td>
+<td><code>needle</code></td>
+<td>substring, ≤ 20 B</td>
+<td><code>size-max-only</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">208</td>
+<td><code>needle</code></td>
+<td>substring, ≥ 25 B, ≤ 35 B</td>
+<td><code>size-exact-band</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">209</td>
+<td><code>needle</code></td>
+<td>substring, ≥ 100 B</td>
+<td><code>size-min-excludes-all</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">210</td>
+<td><code>needle</code></td>
+<td>substring, ≤ 10 B</td>
+<td><code>size-max-excludes-all</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">211</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>size-min-zero-includes-all</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">212</td>
+<td><code>needle</code></td>
+<td>substring, ≥ 500 B</td>
+<td><code>size-large-threshold</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">213</td>
+<td><code>needle</code></td>
+<td>substring, ≥ 20 B, ≤ 60 B</td>
+<td><code>size-band-two-pass</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">214</td>
+<td><code>needle</code></td>
+<td>substring, ≤ 50 B</td>
+<td><code>size-tiny-vs-big</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">215</td>
+<td><code>needle</code></td>
+<td>substring, ≥ 200 B</td>
+<td><code>size-min-boundary-margin</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">216</td>
+<td><code>needle</code></td>
+<td>substring, ≤ 200 B</td>
+<td><code>size-max-boundary-margin</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">217</td>
+<td><code>needle</code></td>
+<td>substring, ≥ 100 B, ≤ 200 B</td>
+<td><code>size-range-single-pass</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">218</td>
+<td><code>needle</code></td>
+<td>substring, ≤ 1000 B</td>
+<td><code>size-all-below-max</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">219</td>
+<td><code>needle</code></td>
+<td>substring, ≥ 10 B</td>
+<td><code>size-all-above-min</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">220</td>
+<td><code>needle</code></td>
+<td>substring, ≥ 50 B</td>
+<td><code>size-content-and-size</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">221</td>
+<td><code>needle</code></td>
+<td>substring, include *.cs, ≥ 50 B</td>
+<td><code>size-with-include-ext</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">222</td>
+<td><code>needle</code></td>
+<td>substring, ≥ 30 B, ≤ 70 B</td>
+<td><code>size-range-excludes-both-ends</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">223</td>
+<td><code>needle</code></td>
+<td>substring, modified after 2023-01-01, modified before
+2025-01-01</td>
+<td><code>modified-date-range</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">224</td>
+<td><code>needle</code></td>
+<td>substring, created after 2020-01-01</td>
+<td><code>created-date-after</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">225</td>
+<td><code>needle</code></td>
+<td>substring, modified after 2020-01-01</td>
+<td><code>modified-after-only</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">226</td>
+<td><code>needle</code></td>
+<td>substring, modified before 2020-01-01</td>
+<td><code>modified-before-only</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">227</td>
+<td><code>needle</code></td>
+<td>substring, created before 2020-01-01</td>
+<td><code>created-before-only</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">228</td>
+<td><code>needle</code></td>
+<td>substring, created after 2020-01-01, created before 2025-01-01</td>
+<td><code>created-date-range</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">229</td>
+<td><code>needle</code></td>
+<td>substring, modified after 2020-01-01</td>
+<td><code>modified-after-excludes-all</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">230</td>
+<td><code>needle</code></td>
+<td>substring, modified before 2020-01-01</td>
+<td><code>modified-before-excludes-all</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">231</td>
+<td><code>needle</code></td>
+<td>substring, modified after 2020-01-01, modified before
+2025-01-01</td>
+<td><code>modified-range-two-pass</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">232</td>
+<td><code>needle</code></td>
+<td>substring, created after 2000-01-01</td>
+<td><code>created-after-includes-all</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">233</td>
+<td><code>needle</code></td>
+<td>substring, modified after 2030-01-01</td>
+<td><code>modified-recent-vs-old</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">234</td>
+<td><code>needle</code></td>
+<td>substring, modified after 2023-01-01</td>
+<td><code>date-and-content</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">235</td>
+<td><code>needle</code></td>
+<td>substring, modified after 2020-01-01, modified before
+2024-01-01</td>
+<td><code>modified-range-single</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">236</td>
+<td><code>needle</code></td>
+<td>substring, created after 2020-01-01, created before 2024-01-01</td>
+<td><code>created-range-excludes-ends</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">237</td>
+<td><code>needle</code></td>
+<td>substring, ≥ 50 B, modified after 2023-01-01</td>
+<td><code>modified-and-size</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">238</td>
+<td><code>needle</code></td>
+<td>substring, modified after 2100-01-01</td>
+<td><code>modified-after-future-excludes-all</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">239</td>
+<td><code>needle</code></td>
+<td>substring, created after 2020-01-01, modified before 2030-01-01</td>
+<td><code>created-after-and-modified-before</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="result-count-matches-per-file-depth-limits-20">Result count,
+matches-per-file &amp; depth limits (20)</h3>
+<table style="width:100%;">
+<colgroup>
+<col style="width: 30%" />
+<col style="width: 23%" />
+<col style="width: 23%" />
+<col style="width: 23%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: right;">#</th>
+<th>Query</th>
+<th>Search settings</th>
+<th>Scenario</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">240</td>
+<td><code>needle</code></td>
+<td>substring, max 2 match(es)/file</td>
+<td><code>max-matches-per-file-caps-rows</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">241</td>
+<td><code>needle</code></td>
+<td>substring, max 1 match(es)/file</td>
+<td><code>max-matches-per-file-one</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">242</td>
+<td><code>needle</code></td>
+<td>substring, max 3 match(es)/file</td>
+<td><code>max-matches-per-file-three</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">243</td>
+<td><code>needle</code></td>
+<td>substring, max 10 match(es)/file</td>
+<td><code>max-matches-per-file-above-count</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">244</td>
+<td><code>needle</code></td>
+<td>substring, max 2 match(es)/file</td>
+<td><code>max-matches-per-file-two-files</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">245</td>
+<td><code>needle</code></td>
+<td>substring, max 3 match(es)/file</td>
+<td><code>max-matches-per-file-exact-equal</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">246</td>
+<td><code>\d</code></td>
+<td>regex, max 2 match(es)/file</td>
+<td><code>max-matches-per-file-with-regex</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">247</td>
+<td><code>cat dog</code></td>
+<td>substring, max 2 match(es)/file</td>
+<td><code>max-matches-per-file-multiterm</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">248</td>
+<td><code>needle</code></td>
+<td>substring, max 2 match(es)/file</td>
+<td><code>max-matches-among-mixed-lines</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">249</td>
+<td><code>needle</code></td>
+<td>substring, max 100 result(s), max 2 match(es)/file</td>
+<td><code>max-results-and-maxmatches-combo</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">250</td>
+<td><code>needle</code></td>
+<td>substring, max 100 result(s)</td>
+<td><code>max-results-above-count-returns-all</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">251</td>
+<td><code>needle</code></td>
+<td>substring, max 1000 result(s)</td>
+<td><code>max-results-large-returns-all</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">252</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>max-results-unlimited-zero</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">253</td>
+<td><code>needle</code></td>
+<td>substring, max 100 result(s)</td>
+<td><code>max-results-high-with-many-lines</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">254</td>
+<td><code>needle</code></td>
+<td>substring, max 50 result(s)</td>
+<td><code>max-results-above-total-multi-file</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">255</td>
+<td><code>needle</code></td>
+<td>substring, depth 1</td>
+<td><code>max-depth-1-includes-first-level</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">256</td>
+<td><code>needle</code></td>
+<td>substring, depth 2</td>
+<td><code>max-depth-2-includes-second-level</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">257</td>
+<td><code>needle</code></td>
+<td>substring, depth 1</td>
+<td><code>max-depth-1-excludes-deeper-contains</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">258</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>max-depth-unlimited-finds-all</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">259</td>
+<td><code>needle</code></td>
+<td>substring, depth 2</td>
+<td><code>max-depth-2-flat-tree-all</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="binary-hidden-files-archives-multi-term-41">Binary, hidden
+files, archives &amp; multi-term (41)</h3>
+<table style="width:100%;">
+<colgroup>
+<col style="width: 30%" />
+<col style="width: 23%" />
+<col style="width: 23%" />
+<col style="width: 23%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: right;">#</th>
+<th>Query</th>
+<th>Search settings</th>
+<th>Scenario</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">260</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>binary-nul-skipped-by-default</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">261</td>
+<td><code>needle</code></td>
+<td>substring, search binaries</td>
+<td><code>binary-nul-searched-with-search-binary</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">262</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>binary-png-skipped-by-default</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">263</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>binary-nul-only-skipped-empty</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">264</td>
+<td><code>needle</code></td>
+<td>substring, search binaries</td>
+<td><code>binary-two-nul-searched-with-search-binary</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">265</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>binary-png-and-nul-default-skips-both</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">266</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>hidden-included-by-default</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">267</td>
+<td><code>needle</code></td>
+<td>substring, exclude hidden files</td>
+<td><code>hidden-excluded-when-no-hidden</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">268</td>
+<td><code>needle</code></td>
+<td>substring, exclude hidden files</td>
+<td><code>hidden-only-no-hidden-empty</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">269</td>
+<td><code>needle</code></td>
+<td>substring, exclude hidden files</td>
+<td><code>hidden-nested-excluded-when-no-hidden</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">270</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>hidden-mixed-counts-default</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">271</td>
+<td><code>needle</code></td>
+<td>substring, skip .log</td>
+<td><code>skip-extension-excludes-files</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">272</td>
+<td><code>needle</code></td>
+<td>substring, skip .log, .tmp</td>
+<td><code>skip-extension-multiple</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">273</td>
+<td><code>needle</code></td>
+<td>substring, skip .log</td>
+<td><code>skip-extension-keeps-others</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">274</td>
+<td><code>needle</code></td>
+<td>substring, skip .log</td>
+<td><code>skip-extension-case-insensitive</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">275</td>
+<td><code>needle</code></td>
+<td>substring, skip .log, .tmp</td>
+<td><code>skip-extension-only-one-left</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">276</td>
+<td><code>cat dog</code></td>
+<td>substring</td>
+<td><code>multiterm-substring-is-or</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">277</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>no-matches-returns-empty</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">278</td>
+<td><code>red green blue</code></td>
+<td>substring</td>
+<td><code>multiterm-three-or</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">279</td>
+<td><code>nation international</code></td>
+<td>substring</td>
+<td><code>multiterm-overlapping-terms</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">280</td>
+<td><code>foo\d+</code></td>
+<td>regex, include *.cs</td>
+<td><code>regex-with-include-ext</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">281</td>
+<td><code>async</code></td>
+<td>whole word, exclude node_modules</td>
+<td><code>wholeword-with-exclude-segment</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">282</td>
+<td><code>Error</code></td>
+<td>substring, case-sensitive, include *.cs</td>
+<td><code>case-sensitive-with-include</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">283</td>
+<td><code>err</code></td>
+<td>regex, case-sensitive, depth 1</td>
+<td><code>regex-case-sensitive-with-depth</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">284</td>
+<td><code>needle</code></td>
+<td>substring, include *.cs, ≥ 80 B</td>
+<td><code>substring-with-size-and-ext</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">285</td>
+<td><code>match</code></td>
+<td>substring, file names only, include *.cs</td>
+<td><code>mode-filenames-with-include-ext</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">286</td>
+<td><code>v\d</code></td>
+<td>regex, exclude regex /skipdir/</td>
+<td><code>regex-with-exclude-regex</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">287</td>
+<td><code>cat dog</code></td>
+<td>substring, max 2 match(es)/file</td>
+<td><code>multiterm-with-maxmatches</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">288</td>
+<td><code>needle</code></td>
+<td>substring, include *.cs</td>
+<td><code>hidden-with-include-ext</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">289</td>
+<td><code>foo\d</code></td>
+<td>regex, skip .log</td>
+<td><code>skipext-with-regex</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">290</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>crlf-line-endings</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">291</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>very-long-line</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">292</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>token-at-eof-no-newline</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">293</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>blank-lines-between-matches</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">294</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>many-files-same-token</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">295</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>deeply-nested-single-match</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">296</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>mixed-case-corpus-insensitive</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">297</td>
+<td><code>a+b</code></td>
+<td>substring</td>
+<td><code>special-chars-literal-substring</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">298</td>
+<td><code>test</code></td>
+<td>substring</td>
+<td><code>unicode-content-ascii-query</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">299</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>empty-file-no-match</code></td>
+</tr>
+<tr>
+<td style="text-align: right;">300</td>
+<td><code>needle</code></td>
+<td>substring</td>
+<td><code>whitespace-content-no-token</code></td>
+</tr>
+</tbody>
+</table>
 </body>
 </html>

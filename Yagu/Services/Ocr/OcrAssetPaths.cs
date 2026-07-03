@@ -49,6 +49,11 @@ public static class OcrAssetPaths
     private static string CachePaddleModelDir => Path.Combine(CacheRoot, "paddle", "models");
     private static string CacheTesseractDir => Path.Combine(CacheRoot, "tesseract", "tessdata");
 
+    // OpenCvSharpExtern.dll (the native companion the Tesseract worker needs to decode/preprocess
+    // images) is engine-agnostic. The OCR-bundled installer already ships it inside the Paddle native
+    // payload, so the Tesseract path can reuse that copy offline instead of downloading its own.
+    private static string CacheOpenCvNativeDir => Path.Combine(CacheRoot, "opencv", "native");
+
     /// <summary>
     /// Directory the Paddle worker should use for native DLLs: the bundled payload when it contains
     /// the runtime, otherwise the writable per-user cache (the worker's own default location).
@@ -63,6 +68,26 @@ public static class OcrAssetPaths
     /// <summary>Directory the Tesseract worker should use for language data (bundled when present, else cache).</summary>
     public static string TesseractDataDir()
         => TesseractDataPresent(BundledTesseractDir) ? BundledTesseractDir : CacheTesseractDir;
+
+    /// <summary>
+    /// Directory the Tesseract worker should use for its native OpenCv companion
+    /// (<c>OpenCvSharpExtern.dll</c>): the bundled Paddle native payload when it is present (so the
+    /// OCR-bundled/offline edition needs no download), otherwise the writable per-user OpenCv cache the
+    /// worker downloads into on the lite editions.
+    /// </summary>
+    public static string OpenCvNativeDir()
+        => OpenCvNativePresent(BundledPaddleNativeDir) ? BundledPaddleNativeDir : CacheOpenCvNativeDir;
+
+    /// <summary>
+    /// True when the OCR-bundled (offline) installer pre-staged the Tesseract English data beside the
+    /// app. This is the signal that identifies the offline edition — it makes Tesseract the default OCR
+    /// engine (see <see cref="AppSettings.EffectiveDefaultImageOcrEngine"/>).
+    /// </summary>
+    public static bool BundledTesseractDataPresent() => TesseractDataPresent(BundledTesseractDir);
+
+    /// <summary>True when <c>OpenCvSharpExtern.dll</c> is present in <paramref name="dir"/>.</summary>
+    public static bool OpenCvNativePresent(string dir)
+        => File.Exists(Path.Combine(dir, PaddleNativeProbeB));
 
     /// <summary>True when both Paddle native runtime probe DLLs exist in <paramref name="dir"/>.</summary>
     public static bool PaddleNativePresent(string dir)

@@ -51,7 +51,7 @@ internal static class SessionLoadDialog
                 CloseButtonText = "Cancel",
                 DefaultButton = YaguDialogDefaultButton.Close,
                 RequestedTheme = requestedTheme,
-                Width = 860,
+                Width = 980,
                 Height = 620,
                 MinContentHeight = 360,
                 MaxContentHeight = 480,

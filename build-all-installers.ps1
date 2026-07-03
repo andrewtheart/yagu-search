@@ -8,18 +8,20 @@
     x64       64-bit (win-x64).   OCR works; models download on first use.
     x86       32-bit (win-x86).   OCR works; models download on first use.
     arm64     ARM64  (win-arm64). OCR works; models download on first use.
-    x64-ocr   64-bit with the OCR models bundled OFFLINE (no first-use download).
+    x64-offline  64-bit OFFLINE edition: the OCR runtime + models AND the Tesseract
+                 English data are bundled (no first-use download), and Tesseract is
+                 the default OCR engine.
 
-  There is intentionally no x86-ocr / arm64-ocr variant: the bundled OCR engine
-  (the native PaddleOCR runtime) is win-x64 only, so OCR can only be bundled for
-  x64. On x86/arm64 OCR still works at runtime by downloading the models.
+  There is intentionally no x86-offline / arm64-offline variant: the bundled OCR
+  runtime (native PaddleOCR + OpenCv) is win-x64 only, so OCR can only be bundled for
+  x64. On x86/arm64 OCR still works at runtime by downloading its assets.
 
   Each variant is a full self-contained Native AOT Release build plus its Inno
   Setup installer. Builds run to installer\ (and installer\output\), and the
   per-architecture/edition "keep newest" rule in build-installer.ps1 applies.
 
 .PARAMETER Variant
-  Which variant(s) to build. One or more of: x64, x86, arm64, x64-ocr, or all
+  Which variant(s) to build. One or more of: x64, x86, arm64, x64-offline, or all
   (the default). Accepts a comma-separated list. Order/duplicates are normalized.
 
 .PARAMETER InnoSetupPath
@@ -27,7 +29,7 @@
   otherwise auto-detects the standard Inno Setup 6 location).
 
 .PARAMETER OcrPayloadCacheDir
-  Optional local OCR cache used to source the bundled payload for the x64-ocr
+  Optional local OCR cache used to source the bundled payload for the x64-offline
   variant. Passed through to build-installer.ps1.
 
 .PARAMETER SkipReadmeUpdate
@@ -37,15 +39,15 @@
 
 .EXAMPLE
   .\build-all-installers.ps1
-  Builds all four variants (x64, x86, arm64, x64-ocr).
+  Builds all four variants (x64, x86, arm64, x64-offline).
 
 .EXAMPLE
   .\build-all-installers.ps1 -Variant x64,arm64
   Builds only the x64 and arm64 (no-bundled-OCR) installers.
 
 .EXAMPLE
-  .\build-all-installers.ps1 -Variant x64-ocr
-  Builds only the OCR-bundled x64 installer.
+  .\build-all-installers.ps1 -Variant x64-offline
+  Builds only the OFFLINE x64 installer (OCR bundled, Tesseract default).
 
 .EXAMPLE
   .\build-all-installers.ps1 -WhatIf
@@ -54,7 +56,7 @@
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-  [ValidateSet('x64', 'x86', 'arm64', 'x64-ocr', 'all')]
+  [ValidateSet('x64', 'x86', 'arm64', 'x64-offline', 'all')]
   [string[]]$Variant = @('all'),
   [string]$InnoSetupPath,
   [string]$OcrPayloadCacheDir,
@@ -89,10 +91,10 @@ function Update-ReadmeDownloadTable {
   }
 
   $rawBase = 'https://github.com/andrewtheart/yagu-search/raw/main/installer'
-  # End-anchored suffixes; 'x64-ocr' is checked before 'x64' so the two never
+  # End-anchored suffixes; 'x64-offline' is checked before 'x64' so the two never
   # collide. Each pattern ends with the exact '-<suffix>.exe', so the 'x64' row
-  # can never match the 'x64-ocr' installer.
-  $suffixes = @('x64-ocr', 'x64', 'arm64', 'x86')
+  # can never match the 'x64-offline' installer.
+  $suffixes = @('x64-offline', 'x64', 'arm64', 'x86')
 
   # Read as UTF-8 explicitly. Get-Content -Raw under Windows PowerShell 5.1 decodes
   # a BOM-less UTF-8 file as ANSI, which would corrupt the table's em-dash / middle-dot
@@ -148,10 +150,10 @@ function Update-ReadmeDownloadTable {
 # Canonical variant -> (architecture, bundle-OCR) and the installer filename suffix
 # that build-installer.ps1 produces (YaguSetup-<version>-<suffix>.exe).
 $variantSpecs = [ordered]@{
-  'x64'     = @{ Architecture = 'x64';   IncludeOcr = $false; Suffix = 'x64' }
-  'x86'     = @{ Architecture = 'x86';   IncludeOcr = $false; Suffix = 'x86' }
-  'arm64'   = @{ Architecture = 'arm64'; IncludeOcr = $false; Suffix = 'arm64' }
-  'x64-ocr' = @{ Architecture = 'x64';   IncludeOcr = $true;  Suffix = 'x64-ocr' }
+  'x64'         = @{ Architecture = 'x64';   IncludeOcr = $false; Suffix = 'x64' }
+  'x86'         = @{ Architecture = 'x86';   IncludeOcr = $false; Suffix = 'x86' }
+  'arm64'       = @{ Architecture = 'arm64'; IncludeOcr = $false; Suffix = 'arm64' }
+  'x64-offline' = @{ Architecture = 'x64';   IncludeOcr = $true;  Suffix = 'x64-offline' }
 }
 
 # Resolve requested variants: expand 'all', de-duplicate, keep canonical order.

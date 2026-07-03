@@ -12,7 +12,7 @@
 #            settings-ocr, ocr-preview, advanced-options
 
 param(
-    [ValidateSet('all','match-nav','editor','multi-preview','semantic','traditional','settings-ai','settings-ocr','ocr-preview','advanced-options')]
+    [ValidateSet('all','match-nav','editor','multi-preview','semantic','traditional','settings-ai','settings-ocr','ocr-preview','advanced-options','terminal','session-load')]
     [string]$Scenario = 'all',
     [string]$Directory = 'C:\src\Yagu\Yagu',
     [string]$OutDir = 'C:\src\Yagu\docs\images',
@@ -39,6 +39,7 @@ public static class Native {
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, IntPtr dwExtraInfo);
+    [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, IntPtr dwExtraInfo);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
@@ -78,6 +79,13 @@ public static class Native {
         Spin(80);
         mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, IntPtr.Zero);
         mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, IntPtr.Zero);
+    }
+
+    // Press Enter via hardware-level key events (best effort; WebView2 keyboard delivery can be flaky).
+    public static void SendEnter() {
+        const byte VK_RETURN = 0x0D; const uint KEYEVENTF_KEYUP = 0x0002;
+        keybd_event(VK_RETURN, 0, 0, IntPtr.Zero); Spin(40);
+        keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, IntPtr.Zero);
     }
 
     public static string Capture(IntPtr hwnd, string outPath) {
@@ -758,6 +766,75 @@ function Scenario-AdvancedOptions {
     Capture-Hwnd $popup 'advanced-options.png'
 }
 
+function Scenario-Terminal {
+    Write-Host "[terminal] launching..."
+    Stop-AllYagu
+    # Launch with a real directory + query so the generated CLI command is meaningful. A query is
+    # REQUIRED — OnSendGeneratedCliCommandToTerminalClick refuses an empty pattern.
+    $termDir = 'C:\src\Yagu\Yagu\Services\Ai'
+    Start-Yagu "--dir `"$termDir`" --query `"public`" --window-mode traditional" | Out-Null
+    $win = Get-YaguWindow 25
+    if (-not $win) { Write-Host 'FAILED: no Yagu window'; return }
+    $mainHwnd = [IntPtr]$win.Current.NativeWindowHandle
+    [Native]::Activate($mainHwnd)
+    Wait-Settle 8
+
+    # Open the Advanced Options drawer (the Generate CLI command button lives inside it).
+    $toggle = Find-ById $win 'AdvancedOptionsToggle' 8
+    if (-not $toggle) { Write-Host 'FAILED: AdvancedOptionsToggle not found'; return }
+    [void](Invoke-El $toggle)
+    Wait-Settle 2
+
+    $root = $AE::RootElement
+    # Generate the CLI command — opens an attached flyout with the command text + actions.
+    $gen = Find-ById $root 'GenerateCliCommandButton' 10
+    if (-not $gen) { Write-Host 'FAILED: GenerateCliCommandButton not found'; return }
+    [void](Invoke-El $gen)
+    Wait-Settle 2
+
+    # Send the generated command to the embedded terminal (expands the terminal pane + inserts it).
+    $send = Find-ById $root 'SendGeneratedCliCommandToTerminalButton' 10
+    if (-not $send) { Write-Host 'FAILED: SendGeneratedCliCommandToTerminalButton not found'; return }
+    [void](Invoke-El $send)
+    # WebView2 terminal init + shell handshake + directory verify + paste can take several seconds.
+    Wait-Settle 10
+
+    # Best-effort: run the command so the screenshot shows real output. WebView2 keyboard delivery is
+    # unreliable, so if Enter is dropped the command still shows typed at the prompt (a valid capture).
+    [Native]::Activate($mainHwnd)
+    Wait-Settle 1
+    [Native]::SendEnter()
+    Wait-Settle 6
+
+    Capture-Window $win 'embedded-terminal.png' -Activate
+}
+
+function Scenario-SessionLoad {
+    Write-Host "[session-load] launching..."
+    Stop-AllYagu
+    Start-Yagu "--dir `"$Directory`" --window-mode traditional" | Out-Null
+    $win = Get-YaguWindow 25
+    if (-not $win) { Write-Host 'FAILED: no Yagu window'; return }
+    $mainHwnd = [IntPtr]$win.Current.NativeWindowHandle
+    [Native]::Activate($mainHwnd)
+    Wait-Settle 8
+
+    # Click the Load session button in the search card. This runs fast session discovery (Everything)
+    # and then opens the "Load session" picker dialog (a separate, owned top-level window).
+    $load = Find-ById $win 'SearchCardLoadSessionButton' 8
+    if (-not $load) { Write-Host 'FAILED: SearchCardLoadSessionButton not found'; return }
+    [void](Invoke-El $load)
+    Wait-Settle 8   # discovery + dialog render
+
+    # The dialog is a YaguDialog (its own HWND, centered over the owner), so capture it directly as the
+    # largest visible process window that isn't the main window.
+    $winPid = [uint32]$win.Current.ProcessId
+    $popup = [Native]::FindPopup($winPid, $mainHwnd)
+    if ($popup -eq [IntPtr]::Zero) { Write-Host 'FAILED: no Load session dialog popup found'; return }
+    Wait-Settle 1
+    Capture-Hwnd $popup 'session-load.png'
+}
+
 # --- Dispatch ----------------------------------------------------------------
 
 switch ($Scenario) {
@@ -770,6 +847,8 @@ switch ($Scenario) {
     'settings-ocr'     { Scenario-SettingsOcr }
     'ocr-preview'      { Scenario-OcrPreview }
     'advanced-options' { Scenario-AdvancedOptions }
+    'terminal'         { Scenario-Terminal }
+    'session-load'     { Scenario-SessionLoad }
     'all' {
         Scenario-Traditional
         Scenario-MatchNav
@@ -780,6 +859,8 @@ switch ($Scenario) {
         Scenario-SettingsOcr
         Scenario-OcrPreview
         Scenario-AdvancedOptions
+        Scenario-Terminal
+        Scenario-SessionLoad
     }
 }
 

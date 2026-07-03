@@ -92,10 +92,10 @@ public sealed class InstallerPackagingRegressionTests
         Assert.Contains("-p:BuildInstallerOnPublish=false", buildInstaller);
 
         // Compiles one installer per architecture and keeps the latest per arch. The optional
-        // OCR-bundled edition appends an "-ocr" suffix to the output name (and its retention filter),
-        // so both names are built from the shared $ocrSuffix token.
+        // offline (OCR-bundled) edition appends an "-offline" suffix to the output name (and its
+        // retention filter), so both names are built from the shared $ocrSuffix token.
         Assert.Contains("/DYaguArch=$arch", buildInstaller);
-        Assert.Contains("$ocrSuffix = if ($IncludeOcr) { '-ocr' } else { '' }", buildInstaller);
+        Assert.Contains("$ocrSuffix = if ($IncludeOcr) { '-offline' } else { '' }", buildInstaller);
         Assert.Contains("YaguSetup-$version-$arch$ocrSuffix.exe", buildInstaller);
         Assert.Contains("-Filter \"YaguSetup-*-$arch$ocrSuffix.exe\"", buildInstaller);
     }
@@ -128,10 +128,11 @@ public sealed class InstallerPackagingRegressionTests
 
         // A bare `dotnet publish` (no -r) lets the SDK auto-infer the host RID, which it
         // signals via UseCurrentRuntimeIdentifier == 'true'. That case fans out to build
-        // all three installers rather than packaging a single architecture.
+        // all installer variants (x64/x86/arm64 + the x64-offline edition) rather than
+        // packaging a single architecture.
         Assert.Contains("<Target Name=\"BuildAllInstallersAfterPublish\"", csproj);
         Assert.Contains("'$(UseCurrentRuntimeIdentifier)' == 'true'", csproj);
-        Assert.Contains("build-installer.ps1&quot; -Architecture all", csproj);
+        Assert.Contains("build-all-installers.ps1&quot;", csproj);
 
         // The fan-out still honors the opt-out flag used by build-installer.ps1 and
         // the local install/publish scripts so it never recurses.
@@ -159,12 +160,12 @@ public sealed class InstallerPackagingRegressionTests
         string buildAll = File.ReadAllText(Path.Combine(root, "build-all-installers.ps1"));
 
         // Selectable variants (one or more, plus 'all') via a validated -Variant list.
-        Assert.Contains("[ValidateSet('x64', 'x86', 'arm64', 'x64-ocr', 'all')]", buildAll);
+        Assert.Contains("[ValidateSet('x64', 'x86', 'arm64', 'x64-offline', 'all')]", buildAll);
         Assert.Contains("[string[]]$Variant = @('all')", buildAll);
 
-        // Only x64-ocr bundles OCR (the native PaddleOCR runtime is win-x64 only, so there is no
-        // x86-ocr / arm64-ocr); every variant delegates to build-installer.ps1 instead of duplicating it.
-        Assert.Contains("'x64-ocr' = @{ Architecture = 'x64'", buildAll);
+        // Only x64-offline bundles OCR (the native PaddleOCR runtime is win-x64 only, so there is no
+        // x86-offline / arm64-offline); every variant delegates to build-installer.ps1 instead of duplicating it.
+        Assert.Contains("'x64-offline' = @{ Architecture = 'x64'", buildAll);
         Assert.Contains("if ($spec.IncludeOcr) { $params['IncludeOcr'] = $true }", buildAll);
         Assert.Contains("& $buildInstaller @params", buildAll);
     }

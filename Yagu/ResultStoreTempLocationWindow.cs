@@ -133,7 +133,7 @@ internal sealed class ResultStoreTempLocationWindow : Window
             return root;
         }
 
-        body.Children.Add(CreateBodyText($"Yagu writes search result temp files while memory-saving mode is active. Yagu was launched from {launchDrive ?? "an unknown drive"}. To minimize disk contention, choosing a different drive can help."));
+        body.Children.Add(CreateBodyText($"Yagu writes search result temp files while memory-saving mode is active. Yagu was launched from {launchDrive ?? "an unknown drive"}. Changing to a different drive would likely only help if Yagu is installed on a mechanical hard drive (HDD) — on an SSD or NVMe drive the default location is already fast."));
         body.Children.Add(CreateMutedText("Choose any available and writable drive with at least 50 GB free:"));
 
         var drivePicker = new ComboBox

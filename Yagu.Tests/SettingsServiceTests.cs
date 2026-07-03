@@ -608,6 +608,21 @@ public class SettingsServiceNewFieldTests
         Assert.Equal(expected, AppSettings.ResolveDefaultImageOcrEngine(arch));
     }
 
+    [Theory]
+    // Bundled Tesseract data (the Offline / x64-offline edition) forces Tesseract on EVERY arch.
+    [InlineData("X64", true, "tesseract")]
+    [InlineData("Arm64", true, "tesseract")]
+    [InlineData("X86", true, "tesseract")]
+    // Without it, the per-architecture rule applies (x86 -> tesseract, else paddle).
+    [InlineData("X64", false, "paddle")]
+    [InlineData("Arm64", false, "paddle")]
+    [InlineData("X86", false, "tesseract")]
+    public void ResolveDefaultImageOcrEngine_BundledTesseractOverridesArchitecture(string architecture, bool bundledTesseract, string expected)
+    {
+        var arch = Enum.Parse<System.Runtime.InteropServices.Architecture>(architecture);
+        Assert.Equal(expected, AppSettings.ResolveDefaultImageOcrEngine(arch, bundledTesseract));
+    }
+
     [Fact]
     public void EffectiveDefaultImageOcrEngine_MatchesCurrentProcessArchitecture()
     {

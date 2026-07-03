@@ -97,6 +97,9 @@ public sealed class WorkerOcrEngineTests
         Assert.False(env.ContainsKey(PaddleOcrEngine.ModelEnvVar));
         // The worker is always pointed at a tessdata directory (bundled payload or cache).
         Assert.False(string.IsNullOrEmpty(env[TesseractOcrEngine.TessdataDirEnvVar]));
+        // ...and at an OpenCv native directory so the offline edition reuses the bundled
+        // OpenCvSharpExtern.dll instead of downloading it.
+        Assert.False(string.IsNullOrEmpty(env[TesseractOcrEngine.OpenCvDirEnvVar]));
     }
 
     [Fact]

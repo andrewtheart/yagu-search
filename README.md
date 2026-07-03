@@ -20,6 +20,10 @@ For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
 
 ![Advanced Options drawer](docs/images/advanced-options.png)
 
+**Embedded terminal** — a built-in terminal runs Yagu's CLI (or any shell command) without leaving the app. The one-click **Generate CLI command** drops the exact `Yagu.exe --cli` equivalent of your current search straight into the terminal, ready to run — with the same streaming, ripgrep-style output.
+
+![Embedded terminal running a generated Yagu CLI search command](docs/images/embedded-terminal.png)
+
 **Filtering options** — the Filters tab narrows what gets searched: obey `.gitignore`, skip file extensions, and toggle whether to search binaries, archives, online-only cloud files, hidden files, and image text (OCR).
 
 ![Filters tab showing file-type and content-search filtering options](docs/images/filter-options.png)
@@ -52,20 +56,41 @@ For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
 
 ![OCR image preview showing a receipt image and its recognized text with the query highlighted](docs/images/ocr-preview.png)
 
+**Saved sessions** — save any search, results and all, as a `.yagu-session` file, then reopen it **instantly — no rescanning**. The **Load session** picker finds every saved session on your PC through Everything and lists them in a sortable table (name, folder, size, date), so you can pick up right where you left off, even weeks later.
+
+![Load session picker listing saved .yagu-session files with name, directory, size, and created columns](docs/images/session-load.png)
+
+## Example Queries
+
+A quick taste of the range of queries Yagu handles — literal, regex, whole‑word, filtered, sized, and dated. Each of these is a real, passing scenario in the test suite; the HELP guide lists **[all 300 examples](HELP.md#semantic-search-query-examples)**.
+
+| Query | What it finds |
+| --- | --- |
+| `TODO` | Every file that mentions `TODO` (substring, names + contents). |
+| `async\s+Task<` *(regex)* | `async` methods across a C# codebase. |
+| `id` *(whole word)* | The identifier `id` exactly — not `width`, `video`, or `guid`. |
+| `password` — include `*.env`, `*.config`, `*.json` | Hard‑coded secrets, in config files only. |
+| `error` — include `*.log`, modified in the last 7 days | Recent errors in log files. |
+| `import` — exclude `**/bin/**`, `**/obj/**`, `**/node_modules/**` | Search a repo while skipping build output. |
+| `\b(TODO\|FIXME\|HACK)\b` *(regex)* | Every task/marker comment in one pass. |
+| any file ≥ 25 MB | Space hogs, tracked down by size. |
+| `(?i)api[_-]?key` *(regex)* | API keys — `apikey`, `API_KEY`, or `api-key`. |
+| `copyright` — `*.cs`, case‑sensitive, file contents only | Audit license headers. |
+
 ## Download Installer
 
 To install Yagu without building from source, download the installer that matches your PC and run it. Yagu ships as a self-contained Native AOT build, so no separate .NET runtime is required; every installer also bundles the Windows App Runtime payloads the desktop app needs.
 
-**Which one do I need?** Pick by CPU architecture — most people want **x64**. The separate **x64 · OCR bundled** edition is only for offline/air-gapped machines that need image-text (OCR) search without a first-run download.
+**Which one do I need?** Pick by CPU architecture — most people want **x64**. The separate **x64 · Offline** edition is only for offline/air-gapped machines that need image-text (OCR) search without a first-run download.
 
 | Installer | What it's for | Image-text (OCR) search |
 | --- | --- | --- |
 | [**x64** — YaguSetup-1.0.0.2305-x64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2305-x64.exe) (~89 MB) | Most modern PCs: 64-bit Intel/AMD Windows. Start here if unsure. | Works. Defaults to the PaddleOCR engine; the OCR runtime and English models download once on first use. |
-| [**x64 · OCR bundled** — YaguSetup-1.0.0.2308-x64-ocr.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2308-x64-ocr.exe) (~268 MB) | Same as x64, but for machines that must run OCR fully **offline** — air-gapped PCs, or to skip the first-run download. | Bundled in the installer: the PaddleOCR engine and English models are installed up front, so no download is needed. |
+| [**x64 · Offline** — YaguSetup-1.0.0.2310-x64-offline.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2310-x64-offline.exe) (~268 MB) | Same as x64, but for machines that must run OCR fully **offline** — air-gapped PCs, or to skip the first-run download. | Bundled in the installer: the **Tesseract** engine (the default for this edition) plus the PaddleOCR engine and English models are installed up front, so image-text search works with no download. |
 | [**Arm64** — YaguSetup-1.0.0.2307-arm64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2307-arm64.exe) (~89 MB) | Windows on ARM: Snapdragon-based laptops, Surface Pro X, Windows Dev Kit. | Works. Defaults to PaddleOCR; the OCR runtime and models download once on first use. |
 | [**x86** — YaguSetup-1.0.0.2306-x86.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2306-x86.exe) (~70 MB) | 32-bit Windows. | Works. Defaults to the Tesseract engine (PaddleOCR's runtime is x64-only); language data downloads once on first use. |
 
-> There is no Arm64 or x86 "OCR bundled" edition: the bundled PaddleOCR runtime is win-x64 only, so it can only be packaged offline for x64. On Arm64 and x86, image-text search still works — it downloads what it needs on first use.
+> There is no Arm64 or x86 "Offline" edition: the bundled OCR runtime is win-x64 only, so it can only be packaged offline for x64. On Arm64 and x86, image-text search still works — it downloads what it needs on first use.
 
 > **Note: Yagu is currently unsigned and is not supported on machines with Smart App Control enabled.**
 >
@@ -102,7 +127,7 @@ This README is the entry point for new contributors.
 - Built-in editor with find/replace, save, `.yagubak` backups, large-file chunk loading, file-type-aware syntax highlighting, customizable editor fonts and colors, and double-click navigation from highlighted matches.
 - External editor integration with configurable commands such as `code -g {file}:{line}`.
 - Export selected match lines, selected file paths, selected files with content, or styled HTML preview reports; CLI export supports HTML, JSON, and CSV.
-- Save and reopen searches as `.yagu-session` files that restore previous results without rerunning the scan, with a sortable saved-session picker.
+- **Saved sessions** — save any search and its full result set as a `.yagu-session` file and reopen it **instantly, without rerunning the scan**, from a sortable, machine-wide **Load session** picker that finds every saved session on your PC through Everything.
 - GUI command generation that builds reproducible `Yagu.exe --cli` commands from the current search state, with an option to omit settings already saved in `%APPDATA%\Yagu\settings.json`.
 - Embedded xterm.js terminal with switchable PowerShell or Command Prompt shells, configurable working directory, context menu actions, clear/reset support, and a "Send command to terminal" path from generated CLI commands.
 - CLI mode for scripted search/export, startup arguments such as `--dir` and `--query`, and local `.yagu.json` settings discovery with CLI flags taking precedence.
@@ -262,6 +287,24 @@ For a short BenchmarkDotNet smoke run similar to CI:
 dotnet run -c Release --project Yagu.Benchmarks -- --filter "*LiteralSearch*" --job short --launchCount 1 --warmupCount 1 --iterationCount 1
 ```
 
+### Run Throughput Regression Tests
+
+The [`Yagu.Benchmarks`](Yagu.Benchmarks/) project also hosts the real-world throughput regression tests (`PerformanceBenchmarkTests`), which drive the full `SearchService` pipeline for a fixed wall-clock duration and append metrics to [`Yagu.Benchmarks/results/perf-baselines.jsonl`](Yagu.Benchmarks/results/perf-baselines.jsonl). They are tagged `Category=Slow`, so the fast test filter skips them.
+
+```powershell
+dotnet test Yagu.Benchmarks/Yagu.Benchmarks.csproj -c Release
+```
+
+They search a synthetic temp tree by default. Point them at a real path or tune the run with environment variables:
+
+```powershell
+$env:YAGU_PERF_DIRECTORY = 'C:\'          # benchmark a real file system (default: synthetic temp tree)
+$env:YAGU_PERF_DURATION_SECONDS = '120'   # run duration per scenario in seconds (default: 30)
+$env:YAGU_PERF_FILE_COUNT = '50000'       # synthetic file count (default: 50000)
+$env:YAGU_PERF_LINES_PER_FILE = '200'     # lines per synthetic file (default: 200)
+dotnet test Yagu.Benchmarks/Yagu.Benchmarks.csproj -c Release
+```
+
 ### Register Explorer Context Menu
 
 The script writes per-user registry entries under `HKCU`, so it does not require machine-wide installation.
@@ -332,7 +375,7 @@ The installer creates a Start Menu shortcut, optional desktop icon, optional Exp
 | [Yagu/Native](Yagu/Native/) | P/Invoke wrappers for `yagu_core.dll` and the Everything SDK. |
 | [yagu-core](yagu-core/) | Rust native search engine built as `yagu_core.dll`. |
 | [Yagu.Tests](Yagu.Tests/) | xUnit tests for the engine-facing C# code and helpers. |
-| [Yagu.Benchmarks](Yagu.Benchmarks/) | BenchmarkDotNet benchmark harness. |
+| [Yagu.Benchmarks](Yagu.Benchmarks/) | BenchmarkDotNet benchmark harness plus the real-world `SearchService` throughput regression tests (run via `dotnet test`). |
 | [scripts/register-context-menu.ps1](scripts/register-context-menu.ps1) | Explorer context menu registration script. |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | Windows CI: Rust build/test, .NET restore/build/test, benchmark smoke test. |
 | [PLANS](PLANS/) | Design notes, performance reports, and future work. |
@@ -440,7 +483,7 @@ By default, the Rust crate uses the in-tree scanner in [yagu-core/src/scan.rs](y
 
 Yagu's search hot path has been **profiled and fine-tuned to be competitive with [ripgrep](https://github.com/BurntSushi/ripgrep)** — the current benchmark for fast command-line search. In many workloads it **exceeds ripgrep's throughput**, and in the remaining cases it **matches** it. The gains come from the native Rust scanner ([yagu-core/src/scan.rs](yagu-core/src/scan.rs)), which compiles the matcher once per search and reuses it across files, streams matches back without buffering, and skips work early (binary detection, size caps, extension/`.gitignore` filters) before touching file contents.
 
-This is measured, not assumed. The [`Yagu.Benchmarks`](Yagu.Benchmarks/) project (BenchmarkDotNet) tracks literal and regex search throughput against recorded baselines in [`Yagu.Benchmarks/results/perf-baselines.jsonl`](Yagu.Benchmarks/results/perf-baselines.jsonl), and the native binary can be built with a symbol-rich profiling profile (`-p:RustProfile=profiling`) for deeper flame-graph analysis. Real-world results still depend on hardware, storage (SSD vs. HDD), corpus shape, and pattern complexity — but Yagu is engineered to keep pace with the fastest searchers available.
+This is measured, not assumed. The [`Yagu.Benchmarks`](Yagu.Benchmarks/) project tracks literal and regex search throughput — through a BenchmarkDotNet harness and a suite of real-world throughput regression tests that append recorded baselines to [`Yagu.Benchmarks/results/perf-baselines.jsonl`](Yagu.Benchmarks/results/perf-baselines.jsonl) — and the native binary can be built with a symbol-rich profiling profile (`-p:RustProfile=profiling`) for deeper flame-graph analysis. Real-world results still depend on hardware, storage (SSD vs. HDD), corpus shape, and pattern complexity — but Yagu is engineered to keep pace with the fastest searchers available.
 
 ### Scaling To Large Files And Thousands Of Results
 

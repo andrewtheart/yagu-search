@@ -9,11 +9,27 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>Yagu.Benchmarks</RootNamespace>
     <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <IsPackable>false</IsPackable>
+    <!-- This project is both a BenchmarkDotNet console (run via `dotnet run`) and an
+         xUnit test host for the throughput benchmarks (run via `dotnet test`).
+         GenerateProgramFile=false keeps Program.Main as the sole entry point so the
+         test SDK's auto-generated Main does not conflict with it. -->
+    <GenerateProgramFile>false</GenerateProgramFile>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" Version="0.14.*" />
     <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.*" />
+  </ItemGroup>
+
+  <!-- xUnit test support for the throughput benchmarks (PerformanceBenchmarkTests). -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.*" />
+    <PackageReference Include="xunit" Version="2.*" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.*">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
   </ItemGroup>
 
   <ItemGroup>

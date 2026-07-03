@@ -105,6 +105,8 @@ Notes:
 
 Configure availability and the optional preferred model under **Settings → Search Defaults**. The same capability is available from the CLI via `--semantic-pattern` (see [Command-Line Interface](#command-line-interface-cli-mode)).
 
+For a comprehensive, categorized list of example queries and how the options combine, see [Semantic Search Query Examples](#semantic-search-query-examples) (all 300 scenarios from the test suite).
+
 ---
 
 ## Advanced Options
@@ -343,6 +345,31 @@ visible so you can always dismiss it).
 
 ---
 
+## Sessions
+
+A **session** is a snapshot of a completed search — the query, the search location, the options, and the full result set — saved to a `.yagu-session` file. Reopening a session restores those results **instantly, without rerunning the scan**. That makes sessions ideal for long searches over large folder trees, for handing an investigation to a colleague, or for picking up exactly where you left off days later.
+
+### Saving a session
+
+After a search finishes, open the results **⋯ (more)** menu at the top of the results pane and choose **Save session**. Pick a location and name; Yagu writes a `.yagu-session` file containing the query, options, and matched results. From the CLI, add `--save-session <path>` to any search.
+
+### Loading a session
+
+Click the **Load session** button — the folder icon in the search card, beside the Search/Cancel button — to open the **Load session** picker. Yagu uses Everything to find every `.yagu-session` file on your PC and lists them in a sortable table:
+
+| Column | Description |
+| --- | --- |
+| Name | The session file name. |
+| Directory | The folder the session file is stored in. |
+| Size | The session file size. |
+| Created | When the session was saved — the default sort, newest first. |
+
+Click any column header to sort by it (click again to reverse the order). Select a session with a click, double‑click, or **Enter** to load it, or choose **Browse…** to pick a file manually with the standard Windows dialog. If Everything is not available, Yagu skips the picker and opens the Browse dialog directly.
+
+Loading a session repopulates the results list and preview from the saved data — no files are re‑read and no scan runs, so even a session from a search that originally took minutes reopens at once. From the CLI, use `--load-session <path>` to re‑emit a saved session's results.
+
+---
+
 ## Settings
 
 Open Settings from the **gear** button in the title bar. Settings are saved to `%APPDATA%\Yagu\settings.json`. Reset and Use default buttons are disabled when the current value already matches the default. If you close Settings with unsaved changes, Yagu asks whether to save, discard, or keep editing.
@@ -387,12 +414,12 @@ Use the search box at the top of Settings to filter settings by tab name, settin
 
 Controls image text recognition (OCR). When OCR is on, image files (PNG, JPG, BMP, GIF, TIFF, WEBP) are recognized on a background queue and their text is searched like any other file's contents.
 
-> **Two installer editions.** Yagu ships in two flavors: a **lite** installer that downloads the OCR engine runtime and language models the first time you actually use image-text search, and an **OCR-bundled** installer that ships those components (about 365 MB) so OCR works fully offline with no download. With the lite edition, Yagu **warns you before any external download** and only proceeds once you approve; consent is then remembered.
+> **Two installer editions.** Yagu ships in two flavors: a **lite** installer that downloads the OCR engine runtime and language models the first time you actually use image-text search, and an **Offline** installer (the `x64-offline` download) that bundles those components so OCR works fully offline with no download. The Offline edition ships the **Tesseract** engine (and its English data) plus the PaddleOCR runtime and models, and it **defaults to Tesseract** so image-text search works out of the box with nothing to fetch. With the lite edition, Yagu **warns you before any external download** and only proceeds once you approve; consent is then remembered.
 
 | Setting | What It Controls |
 | --- | --- |
 | Search image text (OCR) | Default for the Advanced Options ▸ Filters "Search image text (OCR)" toggle. Off by default. When on, image files are OCR'd on a background queue and the recognized text is searched. |
-| OCR engine | PaddleSharp (recommended, default) or Tesseract. PaddleSharp is generally more accurate and runs on the CPU (MKL-accelerated) — no GPU or NPU is required or used; Tesseract is a lighter alternative with a fixed pipeline that can be faster on low-end CPUs. With the lite installer, the selected engine's runtime and models download on first use (after you approve the warning); the OCR-bundled installer ships the PaddleSharp runtime and models so the default engine needs no download. |
+| OCR engine | PaddleSharp or Tesseract. PaddleSharp is generally more accurate and runs on the CPU (MKL-accelerated) — no GPU or NPU is required or used; Tesseract is a lighter alternative with a fixed pipeline that runs entirely from bundled data. The default is PaddleSharp on most builds, **Tesseract on the x86 build and on the Offline (`x64-offline`) edition**. With the lite installer, the selected engine's runtime and models download on first use (after you approve the warning); the Offline installer ships both engines' runtimes and data so no download is needed. |
 | Quality preset | Quick presets that set the recognition model and detection resolution together: **Fast** (English v3, 640 px), **Balanced** (Chinese+English v5, 960 px), **Accurate** (Chinese+English v5, 1536 px). Switches to **Custom** when the model/resolution below don't match a preset. Applies to PaddleSharp. |
 | Recognition model | PaddleSharp recognition model: English v3 (fastest), English v4, Chinese+English v4, or Chinese+English v5 (default, recommended, most accurate). Models download on first use. Ignored by Tesseract. |
 | Detection resolution | Longest image side (in pixels) the image is downscaled to before detection: 640, 960, 1280, 1536, 2048, or Unlimited (native resolution). Larger finds smaller text but is slower. Ignored by Tesseract. |
@@ -1197,3 +1224,349 @@ For most users:
 | Close to tray | On (keeps Yagu available) |
 
 Then tune filters and query until the result set is manageable.
+---
+
+## Semantic Search Query Examples
+
+Yagu's query engine is verified by a catalog of **300 scenarios** in the test project
+(`SemanticSearchQueryCatalog`), each pairing a query with specific search options and asserting an
+exact result. They double as a comprehensive reference of *what* you can search for and *how* the
+options combine — literal / substring / whole‑word / regex matching, case sensitivity, search modes,
+include and exclude filters, size and date ranges, result and depth limits, binary / hidden / archive
+handling, and multi‑term queries. Every row below is a real, passing test case; the **Scenario** column
+is its name in the test catalog.
+
+### Literal, substring, whole-word & case sensitivity (59)
+
+| # | Query | Search settings | Scenario |
+| ---: | --- | --- | --- |
+| 1 | `hello` | substring | `literal-substring-finds-two-files` |
+| 2 | `brown` | substring | `literal-substring-single-file` |
+| 3 | `token` | substring | `literal-substring-all-three` |
+| 4 | `ell` | substring | `literal-substring-partial-word` |
+| 5 | `config` | substring | `literal-substring-prefix` |
+| 6 | `ing` | substring | `literal-substring-suffix` |
+| 7 | `gamma` | substring | `literal-substring-none-present` |
+| 8 | `NEEDLE` | substring | `literal-substring-embedded` |
+| 9 | `hello` | substring | `literal-case-insensitive-three` |
+| 10 | `hello` | substring, case-sensitive | `literal-case-sensitive-lower` |
+| 11 | `HELLO` | substring, case-sensitive | `literal-case-sensitive-upper` |
+| 12 | `Error` | substring, case-sensitive | `literal-case-sensitive-titlecase` |
+| 13 | `MyClassName` | substring, case-sensitive | `literal-case-sensitive-mixed-token` |
+| 14 | `myclassname` | substring | `literal-case-insensitive-mixed-token` |
+| 15 | `async` | whole word | `wholeword-excludes-partial` |
+| 16 | `cat` | whole word | `wholeword-matches-boundaries` |
+| 17 | `cat` | substring | `substring-matches-inside-words` |
+| 18 | `value` | whole word | `wholeword-punctuation-adjacent` |
+| 19 | `max_count` | whole word | `wholeword-token-with-underscore` |
+| 20 | `8080` | whole word | `wholeword-digits-boundary` |
+| 21 | `foo bar` | substring | `multiterm-or-two` |
+| 22 | `red green blue` | substring | `multiterm-or-three` |
+| 23 | `cat dog` | substring | `multiterm-or-overlap-counts` |
+| 24 | `Cat Dog` | substring, case-sensitive | `multiterm-or-case-sensitive` |
+| 25 | `test 123` | whole word | `phrase-wholeword-exact` |
+| 26 | `hello world` | whole word | `phrase-wholeword-not-split` |
+| 27 | `+=` | substring | `symbol-plus-equals` |
+| 28 | `=>` | substring | `symbol-arrow` |
+| 29 | `::` | substring | `symbol-namespace-colons` |
+| 30 | `$100` | substring | `symbol-currency` |
+| 31 | `#TODO` | substring | `symbol-hashtag` |
+| 32 | `needle` | substring | `count-three-matching-lines` |
+| 33 | `needle` | substring | `count-one-of-many-lines` |
+| 34 | `needle` | substring | `count-two-files-total` |
+| 35 | `omega` | substring | `count-zero-when-absent` |
+| 36 | `2024` | substring | `numeric-token-substring` |
+| 37 | `42` | whole word | `numeric-token-whole-word` |
+| 38 | `3.14` | substring | `numeric-decimal` |
+| 39 | `café` | substring | `unicode-accented` |
+| 40 | `検索` | substring | `unicode-cjk` |
+| 41 | `привет` | substring | `unicode-cyrillic` |
+| 42 | `value` | substring | `tab-separated-token` |
+| 43 | `  term  ` | whole word | `leading-trailing-query-trimmed-wholeword` |
+| 44 | `needle` | substring | `nested-dirs-found` |
+| 45 | `compile` | substring | `nested-dirs-distinct-tokens` |
+| 46 | *(filter only)* | substring | `empty-query-no-results` |
+| 47 | `   ` | substring | `whitespace-only-query-no-results` |
+| 48 | `MIDDLE` | substring | `matched-text-substring-token` |
+| 49 | `wholeword` | whole word | `matched-text-wholeword-token` |
+| 50 | `function` | substring | `matched-text-case-preserved` |
+| 51 | `log` | substring | `repeated-token-distinct-lines` |
+| 52 | `edge` | substring | `token-at-line-edges` |
+| 53 | `international nation` | substring | `longer-of-two-overlapping-terms` |
+| 54 | `treasure` | substring | `token-only-in-deep-file` |
+| 55 | `marker` | substring | `mixed-extensions-content-token` |
+| 56 | `file.name` | substring | `literal-dot-is-literal-not-regex` |
+| 57 | `a*b` | substring | `literal-star-is-literal-not-regex` |
+| 58 | `func()` | substring | `literal-parens-are-literal` |
+| 59 | `arr[0]` | substring | `literal-bracket-is-literal` |
+
+### Regular expressions (60)
+
+| # | Query | Search settings | Scenario |
+| ---: | --- | --- | --- |
+| 60 | `foo\d+` | regex | `regex-digits-quantifier` |
+| 61 | `ab*c` | regex | `regex-star-zero-or-more` |
+| 62 | `colou?r` | regex | `regex-optional` |
+| 63 | `\d{3}` | regex | `regex-exact-repeat` |
+| 64 | `\d{2,4}` | regex | `regex-range-repeat` |
+| 65 | `[a-z]+` | regex, case-sensitive | `regex-plus-letters-cs` |
+| 66 | `^start` | regex | `regex-line-anchor-start` |
+| 67 | `END$` | regex | `regex-line-anchor-end` |
+| 68 | `^exact$` | regex | `regex-anchored-full-line` |
+| 69 | `^\d` | regex | `regex-start-digit` |
+| 70 | `\.$` | regex | `regex-line-ends-with-period` |
+| 71 | `^\d+$` | regex | `regex-whole-line-digits` |
+| 72 | `\d$` | regex | `regex-anchor-end-digit` |
+| 73 | `#[0-9a-f]{6}` | regex | `regex-char-class-hex` |
+| 74 | `[^0-9]+` | regex | `regex-negated-digit-class` |
+| 75 | `\d` | regex | `regex-digit-class` |
+| 76 | `\w+` | regex | `regex-word-class` |
+| 77 | `\s` | regex | `regex-whitespace-class` |
+| 78 | `\W` | regex | `regex-non-word` |
+| 79 | `\D` | regex | `regex-non-digit` |
+| 80 | `a.c` | regex | `regex-dot-any` |
+| 81 | `[A-Z]{2,}` | regex, case-sensitive | `regex-case-sensitive-uppercase-class` |
+| 82 | `[aeiou]+` | regex | `regex-class-vowels` |
+| 83 | `[a-z0-9]+` | regex, case-sensitive | `regex-class-alnum-cs` |
+| 84 | `cat\|dog` | regex | `regex-alternation` |
+| 85 | `x\|y\|z` | regex | `regex-alternation-three` |
+| 86 | `(ab)+` | regex | `regex-group-quantifier` |
+| 87 | `^(foo\|bar)` | regex | `regex-alternation-anchored` |
+| 88 | `gr(a\|e)y` | regex | `regex-group-alternation` |
+| 89 | `(un)?lock` | regex | `regex-optional-group` |
+| 90 | `(cat\|dog)s?` | regex | `regex-nested-group-optional-s` |
+| 91 | `(ab\|cd)+` | regex | `regex-alternation-with-quantifier` |
+| 92 | `(foo)?bar` | regex | `regex-grouped-optional-prefix` |
+| 93 | `\bcat\b` | regex | `regex-word-boundary` |
+| 94 | `\bpre` | regex | `regex-word-boundary-prefix` |
+| 95 | `foo\.bar` | regex | `regex-escaped-dot` |
+| 96 | `\(\)` | regex | `regex-escaped-paren` |
+| 97 | `a\+b` | regex | `regex-escaped-plus` |
+| 98 | `\[x\]` | regex | `regex-escaped-bracket` |
+| 99 | `error` | regex | `regex-case-insensitive-default` |
+| 100 | `error` | regex, case-sensitive | `regex-case-sensitive-flag` |
+| 101 | `^The` | regex | `regex-anchored-start-word` |
+| 102 | `\w+@\w+` | regex | `regex-email-like` |
+| 103 | `\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}` | regex | `regex-ip-like` |
+| 104 | `\d{3}-\d{4}` | regex | `regex-phone` |
+| 105 | `\d{2}:\d{2}` | regex | `regex-time` |
+| 106 | `v\d+\.\d+` | regex | `regex-version` |
+| 107 | `[0-9a-f]{8}` | regex | `regex-hex8` |
+| 108 | `\$\d+` | regex | `regex-currency` |
+| 109 | `\d+%` | regex | `regex-percentage` |
+| 110 | `#\w+` | regex | `regex-hashtag` |
+| 111 | `@\w+` | regex | `regex-mention` |
+| 112 | `https?://\w+` | regex | `regex-url-like` |
+| 113 | `\w+\d` | regex | `regex-word-then-digit` |
+| 114 | `aa+` | regex | `regex-double-letter` |
+| 115 | `a+?` | regex | `regex-lazy-quantifier` |
+| 116 | `^item` | regex | `regex-multiline-anchor-count` |
+| 117 | `\d+` | regex | `regex-count-digit-lines` |
+| 118 | `foo.*bar` | regex | `regex-dotstar-between` |
+| 119 | `xyz\d{5}` | regex | `regex-no-match` |
+
+### Include / exclude path & type filters (50)
+
+| # | Query | Search settings | Scenario |
+| ---: | --- | --- | --- |
+| 120 | `needle` | substring, include *.cs | `include-ext-star-cs` |
+| 121 | `needle` | substring, include cs | `include-ext-bare-cs` |
+| 122 | `needle` | substring, include txt | `include-ext-txt-bare` |
+| 123 | `needle` | substring, include *.cs,*.js | `include-ext-comma-two` |
+| 124 | `needle` | substring, include *.cs *.js | `include-ext-two-args` |
+| 125 | `needle` | substring, include *.CS | `include-ext-uppercase` |
+| 126 | `needle` | substring, include json | `include-ext-json` |
+| 127 | `needle` | substring, include *.md | `include-ext-no-match` |
+| 128 | `needle` | substring, include *.a,*.b,*.c | `include-ext-three` |
+| 129 | `needle` | substring, include *.tsx | `include-ext-tsx-not-ts` |
+| 130 | `needle` | substring, include md | `include-ext-bare-md` |
+| 131 | `needle` | substring, include *.env | `include-ext-env` |
+| 132 | `needle` | substring, include *.cs js | `include-ext-and-bare-mixed` |
+| 133 | `needle` | substring, include src/**/*.cs | `include-glob-src-cs` |
+| 134 | `needle` | substring, include **/*.cs | `include-glob-double-star-cs` |
+| 135 | `needle` | substring, include file?.txt | `include-glob-question` |
+| 136 | `needle` | substring, include logs/*.txt | `include-glob-folder-file` |
+| 137 | `needle` | substring, include app* | `include-glob-prefix-star` |
+| 138 | `needle` | substring, include data?.json | `include-glob-data-question-json` |
+| 139 | `needle` | substring, include regex \.ts$ | `include-regex-ts` |
+| 140 | `needle` | substring, include regex \.(cs\|js)$ | `include-regex-ext-alternation` |
+| 141 | `needle` | substring, include regex \d+\.txt$ | `include-regex-digit-name` |
+| 142 | `needle` | substring, include regex /src/ | `include-regex-folder` |
+| 143 | `needle` | substring, include regex /SRC/ | `include-regex-folder-case-insensitive` |
+| 144 | `needle` | substring, include regex /main\.[a-z]+$ | `include-regex-anchored-leaf` |
+| 145 | `needle` | substring, exclude log | `exclude-ext-bare-log` |
+| 146 | `needle` | substring, exclude *.tmp | `exclude-ext-glob-tmp` |
+| 147 | `needle` | substring, exclude *.log,*.tmp | `exclude-ext-comma-two` |
+| 148 | `needle` | substring, exclude bak | `exclude-ext-keeps-multiple` |
+| 149 | `needle` | substring, exclude *.min.txt | `exclude-ext-min-txt` |
+| 150 | `needle` | substring, exclude node_modules | `exclude-segment-node-modules` |
+| 151 | `needle` | substring, exclude vendor | `exclude-segment-vendor` |
+| 152 | `needle` | substring, exclude coverage | `exclude-segment-coverage` |
+| 153 | `needle` | substring, exclude node_modules,coverage | `exclude-two-segments` |
+| 154 | `needle` | substring, exclude packages | `exclude-segment-packages` |
+| 155 | `needle` | substring, exclude build_out | `exclude-segment-build-out` |
+| 156 | `needle` | substring, exclude **/bin/** | `exclude-glob-bin-double-star` |
+| 157 | `needle` | substring, exclude regex [\\/]tmp[\\/] | `exclude-regex-tmp-folder` |
+| 158 | `needle` | substring, exclude regex \.bak$ | `exclude-regex-bak` |
+| 159 | `needle` | substring, exclude regex \.test\.txt$ | `exclude-regex-test-files` |
+| 160 | `needle` | substring, exclude regex \.(log\|tmp)$ | `exclude-regex-ext-alternation` |
+| 161 | `needle` | substring, exclude regex /v\d+/ | `exclude-regex-numeric-dir` |
+| 162 | `needle` | substring, exclude regex /dist/ | `exclude-regex-dist-dir` |
+| 163 | `needle` | substring, include *.cs, exclude node_modules | `include-ext-exclude-segment` |
+| 164 | `needle` | substring, include txt, exclude *.min.txt | `include-ext-exclude-ext` |
+| 165 | `needle` | substring, include src/**/*.txt, exclude *.skip.txt | `include-glob-exclude-ext` |
+| 166 | `needle` | substring, include *.cs, exclude *.cs | `exclude-wins-over-include` |
+| 167 | `needle` | substring, include *.cs | `include-filters-before-content` |
+| 168 | `needle` | substring, exclude *.log | `exclude-filters-before-content` |
+| 169 | `needle` | substring, include *.cs *.js | `include-multiple-content-subset` |
+
+### Search modes (file names vs contents) (35)
+
+| # | Query | Search settings | Scenario |
+| ---: | --- | --- | --- |
+| 170 | `needle` | substring | `mode-content-only-ignores-filename` |
+| 171 | `report` | substring | `mode-content-default-ignores-filename` |
+| 172 | `hit` | substring | `mode-content-multiple-files` |
+| 173 | `hit` | substring | `mode-content-counts-lines` |
+| 174 | `needle` | substring, file names only | `mode-filenames-only` |
+| 175 | `config` | substring, file names only | `mode-filenames-substring-leaf` |
+| 176 | `data` | substring, file names only | `mode-filenames-token-in-name` |
+| 177 | `match` | substring, file names only | `mode-filenames-empty-content-name-match` |
+| 178 | `readme` | substring, file names only | `mode-filenames-case-insensitive` |
+| 179 | `readme` | substring, case-sensitive, file names only | `mode-filenames-case-sensitive` |
+| 180 | `log` | whole word, file names only | `mode-filenames-whole-word` |
+| 181 | `v\d` | regex, file names only | `mode-filenames-regex` |
+| 182 | `needle` | substring, file names only | `mode-filenames-count-one-per-file` |
+| 183 | `foo bar` | substring, file names only | `mode-filenames-multiterm` |
+| 184 | `zzz` | substring, file names only | `mode-filenames-no-match` |
+| 185 | `needle` | substring, file names only | `mode-filenames-dir-token-ignored` |
+| 186 | `rep` | substring, file names only | `mode-filenames-total-equals-files` |
+| 187 | `config` | substring, file names only | `mode-filenames-substring-version` |
+| 188 | `needle` | substring, file names + contents | `mode-both-name-and-content` |
+| 189 | `tag` | substring, file names + contents | `mode-both-name-only` |
+| 190 | `tag` | substring, file names + contents | `mode-both-content-only` |
+| 191 | `tag` | substring, file names + contents | `mode-both-name-plus-content-rows` |
+| 192 | `find` | substring, file names + contents | `mode-both-distinct-files` |
+| 193 | `err\d` | regex, file names + contents | `mode-both-regex` |
+| 194 | `err` | substring, case-sensitive, file names + contents | `mode-both-case-sensitive` |
+| 195 | `alpha beta` | substring, file names + contents | `mode-both-multiterm` |
+| 196 | `target` | substring, names, then contents | `mode-filename-then-content` |
+| 197 | `keep` | substring, names, then contents | `mode-ftc-requires-name` |
+| 198 | `name` | substring, names, then contents | `mode-ftc-name-match-no-content` |
+| 199 | `data` | substring, names, then contents | `mode-ftc-content-rows-only` |
+| 200 | `log\d` | regex, names, then contents | `mode-ftc-regex` |
+| 201 | `alpha beta` | substring, names, then contents | `mode-ftc-multiterm` |
+| 202 | `needle` | substring, names, then contents | `mode-ftc-no-name-match` |
+| 203 | `data` | substring, case-sensitive, names, then contents | `mode-ftc-case-sensitive` |
+| 204 | `hit` | substring, file names + contents | `mode-both-content-counts` |
+
+### Size & date ranges (35)
+
+| # | Query | Search settings | Scenario |
+| ---: | --- | --- | --- |
+| 205 | `needle` | substring, ≥ 10 B, ≤ 40 B | `size-range-min-and-max` |
+| 206 | `needle` | substring, ≥ 20 B | `size-min-only` |
+| 207 | `needle` | substring, ≤ 20 B | `size-max-only` |
+| 208 | `needle` | substring, ≥ 25 B, ≤ 35 B | `size-exact-band` |
+| 209 | `needle` | substring, ≥ 100 B | `size-min-excludes-all` |
+| 210 | `needle` | substring, ≤ 10 B | `size-max-excludes-all` |
+| 211 | `needle` | substring | `size-min-zero-includes-all` |
+| 212 | `needle` | substring, ≥ 500 B | `size-large-threshold` |
+| 213 | `needle` | substring, ≥ 20 B, ≤ 60 B | `size-band-two-pass` |
+| 214 | `needle` | substring, ≤ 50 B | `size-tiny-vs-big` |
+| 215 | `needle` | substring, ≥ 200 B | `size-min-boundary-margin` |
+| 216 | `needle` | substring, ≤ 200 B | `size-max-boundary-margin` |
+| 217 | `needle` | substring, ≥ 100 B, ≤ 200 B | `size-range-single-pass` |
+| 218 | `needle` | substring, ≤ 1000 B | `size-all-below-max` |
+| 219 | `needle` | substring, ≥ 10 B | `size-all-above-min` |
+| 220 | `needle` | substring, ≥ 50 B | `size-content-and-size` |
+| 221 | `needle` | substring, include *.cs, ≥ 50 B | `size-with-include-ext` |
+| 222 | `needle` | substring, ≥ 30 B, ≤ 70 B | `size-range-excludes-both-ends` |
+| 223 | `needle` | substring, modified after 2023-01-01, modified before 2025-01-01 | `modified-date-range` |
+| 224 | `needle` | substring, created after 2020-01-01 | `created-date-after` |
+| 225 | `needle` | substring, modified after 2020-01-01 | `modified-after-only` |
+| 226 | `needle` | substring, modified before 2020-01-01 | `modified-before-only` |
+| 227 | `needle` | substring, created before 2020-01-01 | `created-before-only` |
+| 228 | `needle` | substring, created after 2020-01-01, created before 2025-01-01 | `created-date-range` |
+| 229 | `needle` | substring, modified after 2020-01-01 | `modified-after-excludes-all` |
+| 230 | `needle` | substring, modified before 2020-01-01 | `modified-before-excludes-all` |
+| 231 | `needle` | substring, modified after 2020-01-01, modified before 2025-01-01 | `modified-range-two-pass` |
+| 232 | `needle` | substring, created after 2000-01-01 | `created-after-includes-all` |
+| 233 | `needle` | substring, modified after 2030-01-01 | `modified-recent-vs-old` |
+| 234 | `needle` | substring, modified after 2023-01-01 | `date-and-content` |
+| 235 | `needle` | substring, modified after 2020-01-01, modified before 2024-01-01 | `modified-range-single` |
+| 236 | `needle` | substring, created after 2020-01-01, created before 2024-01-01 | `created-range-excludes-ends` |
+| 237 | `needle` | substring, ≥ 50 B, modified after 2023-01-01 | `modified-and-size` |
+| 238 | `needle` | substring, modified after 2100-01-01 | `modified-after-future-excludes-all` |
+| 239 | `needle` | substring, created after 2020-01-01, modified before 2030-01-01 | `created-after-and-modified-before` |
+
+### Result count, matches-per-file & depth limits (20)
+
+| # | Query | Search settings | Scenario |
+| ---: | --- | --- | --- |
+| 240 | `needle` | substring, max 2 match(es)/file | `max-matches-per-file-caps-rows` |
+| 241 | `needle` | substring, max 1 match(es)/file | `max-matches-per-file-one` |
+| 242 | `needle` | substring, max 3 match(es)/file | `max-matches-per-file-three` |
+| 243 | `needle` | substring, max 10 match(es)/file | `max-matches-per-file-above-count` |
+| 244 | `needle` | substring, max 2 match(es)/file | `max-matches-per-file-two-files` |
+| 245 | `needle` | substring, max 3 match(es)/file | `max-matches-per-file-exact-equal` |
+| 246 | `\d` | regex, max 2 match(es)/file | `max-matches-per-file-with-regex` |
+| 247 | `cat dog` | substring, max 2 match(es)/file | `max-matches-per-file-multiterm` |
+| 248 | `needle` | substring, max 2 match(es)/file | `max-matches-among-mixed-lines` |
+| 249 | `needle` | substring, max 100 result(s), max 2 match(es)/file | `max-results-and-maxmatches-combo` |
+| 250 | `needle` | substring, max 100 result(s) | `max-results-above-count-returns-all` |
+| 251 | `needle` | substring, max 1000 result(s) | `max-results-large-returns-all` |
+| 252 | `needle` | substring | `max-results-unlimited-zero` |
+| 253 | `needle` | substring, max 100 result(s) | `max-results-high-with-many-lines` |
+| 254 | `needle` | substring, max 50 result(s) | `max-results-above-total-multi-file` |
+| 255 | `needle` | substring, depth 1 | `max-depth-1-includes-first-level` |
+| 256 | `needle` | substring, depth 2 | `max-depth-2-includes-second-level` |
+| 257 | `needle` | substring, depth 1 | `max-depth-1-excludes-deeper-contains` |
+| 258 | `needle` | substring | `max-depth-unlimited-finds-all` |
+| 259 | `needle` | substring, depth 2 | `max-depth-2-flat-tree-all` |
+
+### Binary, hidden files, archives & multi-term (41)
+
+| # | Query | Search settings | Scenario |
+| ---: | --- | --- | --- |
+| 260 | `needle` | substring | `binary-nul-skipped-by-default` |
+| 261 | `needle` | substring, search binaries | `binary-nul-searched-with-search-binary` |
+| 262 | `needle` | substring | `binary-png-skipped-by-default` |
+| 263 | `needle` | substring | `binary-nul-only-skipped-empty` |
+| 264 | `needle` | substring, search binaries | `binary-two-nul-searched-with-search-binary` |
+| 265 | `needle` | substring | `binary-png-and-nul-default-skips-both` |
+| 266 | `needle` | substring | `hidden-included-by-default` |
+| 267 | `needle` | substring, exclude hidden files | `hidden-excluded-when-no-hidden` |
+| 268 | `needle` | substring, exclude hidden files | `hidden-only-no-hidden-empty` |
+| 269 | `needle` | substring, exclude hidden files | `hidden-nested-excluded-when-no-hidden` |
+| 270 | `needle` | substring | `hidden-mixed-counts-default` |
+| 271 | `needle` | substring, skip .log | `skip-extension-excludes-files` |
+| 272 | `needle` | substring, skip .log, .tmp | `skip-extension-multiple` |
+| 273 | `needle` | substring, skip .log | `skip-extension-keeps-others` |
+| 274 | `needle` | substring, skip .log | `skip-extension-case-insensitive` |
+| 275 | `needle` | substring, skip .log, .tmp | `skip-extension-only-one-left` |
+| 276 | `cat dog` | substring | `multiterm-substring-is-or` |
+| 277 | `needle` | substring | `no-matches-returns-empty` |
+| 278 | `red green blue` | substring | `multiterm-three-or` |
+| 279 | `nation international` | substring | `multiterm-overlapping-terms` |
+| 280 | `foo\d+` | regex, include *.cs | `regex-with-include-ext` |
+| 281 | `async` | whole word, exclude node_modules | `wholeword-with-exclude-segment` |
+| 282 | `Error` | substring, case-sensitive, include *.cs | `case-sensitive-with-include` |
+| 283 | `err` | regex, case-sensitive, depth 1 | `regex-case-sensitive-with-depth` |
+| 284 | `needle` | substring, include *.cs, ≥ 80 B | `substring-with-size-and-ext` |
+| 285 | `match` | substring, file names only, include *.cs | `mode-filenames-with-include-ext` |
+| 286 | `v\d` | regex, exclude regex /skipdir/ | `regex-with-exclude-regex` |
+| 287 | `cat dog` | substring, max 2 match(es)/file | `multiterm-with-maxmatches` |
+| 288 | `needle` | substring, include *.cs | `hidden-with-include-ext` |
+| 289 | `foo\d` | regex, skip .log | `skipext-with-regex` |
+| 290 | `needle` | substring | `crlf-line-endings` |
+| 291 | `needle` | substring | `very-long-line` |
+| 292 | `needle` | substring | `token-at-eof-no-newline` |
+| 293 | `needle` | substring | `blank-lines-between-matches` |
+| 294 | `needle` | substring | `many-files-same-token` |
+| 295 | `needle` | substring | `deeply-nested-single-match` |
+| 296 | `needle` | substring | `mixed-case-corpus-insensitive` |
+| 297 | `a+b` | substring | `special-chars-literal-substring` |
+| 298 | `test` | substring | `unicode-content-ascii-query` |
+| 299 | `needle` | substring | `empty-file-no-match` |
+| 300 | `needle` | substring | `whitespace-content-no-token` |

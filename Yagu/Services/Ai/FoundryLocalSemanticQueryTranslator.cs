@@ -37,6 +37,10 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     /// reasoning model isn't aborted before it reaches its answer.</summary>
     private static readonly TimeSpan ReasoningInferenceTimeout = TimeSpan.FromSeconds(300);
 
+    /// <summary>Foundry Local <c>AppName</c> for this app; also determines the on-disk model cache root
+    /// (<c>%USERPROFILE%\.&lt;AppName&gt;\cache\models</c>).</summary>
+    private const string FoundryAppName = "Yagu";
+
     private bool _enabled;
     private string? _preferredAlias;
     private IReadOnlyList<DeviceType> _deviceOrder;
@@ -50,6 +54,12 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     private OpenAIChatClient? _chatClient;
     private IModel? _model;
     private bool _initialized;
+
+    /// <summary>Foundry's on-disk model cache root, resolved once during catalog init. Used to read a
+    /// downloaded variant's <c>genai_config.json</c> so its context window can be checked against
+    /// <see cref="ModelContextBudget"/> (the SDK does not expose context length through catalog metadata,
+    /// and the value differs per variant).</summary>
+    private string? _cacheLocation;
 
     /// <summary>The alias of the model that was actually selected/loaded, available after the first
     /// successful <see cref="TranslateAsync"/> call. Useful for diagnostics (which model ran).</summary>
@@ -148,6 +158,69 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         }
         catch { /* P/Invoke unavailable; disable the memory guard */ }
         return null;
+    }
+
+    /// <summary>
+    /// Reads a downloaded variant's context window (tokens) from its <c>genai_config.json</c> under the
+    /// Foundry cache root, or null when it cannot be measured (cache root unknown, model not downloaded,
+    /// or config missing/unparseable). The SDK exposes no context length, and it differs per variant.
+    /// </summary>
+    private int? VariantContextLength(IModel? model)
+    {
+        string? id = model?.Id;
+        if (string.IsNullOrWhiteSpace(_cacheLocation) || string.IsNullOrWhiteSpace(id)) return null;
+        return GenAiConfigReader.TryResolveContextLength(_cacheLocation, id, out int ctx) ? ctx : null;
+    }
+
+    /// <summary>
+    /// Best-effort resolution of the on-disk Foundry model cache root, used to read a downloaded variant's
+    /// <c>genai_config.json</c> (the referenced SDK version exposes no cache-location API). Foundry Local
+    /// caches an app's models under <c>%USERPROFILE%\.&lt;AppName&gt;\cache\models</c>; a
+    /// <c>FOUNDRY_CACHE_DIR</c> override is honored first when set. Returns the first existing candidate,
+    /// or null (which disables the context check, so models are then assumed to fit).
+    /// </summary>
+    private static string? ResolveFoundryCacheRoot()
+    {
+        foreach (string candidate in CacheRootCandidates())
+        {
+            try { if (Directory.Exists(candidate)) return candidate; }
+            catch { /* invalid path — skip */ }
+        }
+        return null;
+    }
+
+    private static IEnumerable<string> CacheRootCandidates()
+    {
+        string? env = Environment.GetEnvironmentVariable("FOUNDRY_CACHE_DIR");
+        if (!string.IsNullOrWhiteSpace(env))
+        {
+            yield return Path.Combine(env, "models");
+            yield return env;
+        }
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(profile))
+            yield return Path.Combine(profile, "." + FoundryAppName, "cache", "models");
+    }
+
+    /// <summary>
+    /// Guards against loading a model whose context window is too small to hold the system prompt plus
+    /// the input and output (e.g. the 4224-token OpenVINO-NPU builds, or Phi-3-mini-4k's 1536-token NPU
+    /// build). Called after the model is on disk (so its genai_config.json is readable) and before it is
+    /// loaded. Throws a clear, actionable error instead of letting the first inference fail with an opaque
+    /// "exceeds the model's maximum context length". No-op when the context cannot be measured.
+    /// </summary>
+    private void EnsureModelContextFits(IModel model)
+    {
+        int? ctx = VariantContextLength(model);
+        if (ctx is not int contextLength || ModelContextBudget.Fits(contextLength)) return;
+
+        string alias = model.Alias ?? model.Id ?? "<unknown>";
+        LogService.Instance.Warning(LogSource,
+            $"Model '{alias}' has a context window of {contextLength} tokens, below the ~{ModelContextBudget.RequiredContextTokens} " +
+            "needed for the system prompt + query + plan; refusing to use it.");
+        throw new InvalidOperationException(
+            $"The selected model's context window ({contextLength} tokens) is too small to run AI search " +
+            $"(it needs about {ModelContextBudget.RequiredContextTokens}). Choose a different model.");
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -355,6 +428,11 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             if (!cached)
                 log.Info(LogSource, $"Model '{model.Alias}' downloaded in {downloadStopwatch.ElapsedMilliseconds} ms.");
 
+            // Now that the model is on disk, verify its context window can hold the system prompt + input
+            // + output before loading it — some variants (e.g. 4224-token OpenVINO-NPU builds) load fine
+            // yet fail the first inference with an opaque context-length error.
+            EnsureModelContextFits(model);
+
             progress?.Report(new SemanticTranslationProgress
             {
                 Stage = SemanticTranslationStage.LoadingModel,
@@ -403,8 +481,8 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
 
         if (!FoundryLocalManager.IsInitialized)
         {
-            log.Info(LogSource, "Initializing Foundry Local manager (AppName=Yagu).");
-            var config = new Configuration { AppName = "Yagu" };
+            log.Info(LogSource, $"Initializing Foundry Local manager (AppName={FoundryAppName}).");
+            var config = new Configuration { AppName = FoundryAppName };
             await FoundryLocalManager.CreateAsync(config, FoundryLoggerAdapter.Instance, cancellationToken).ConfigureAwait(false);
         }
         else
@@ -438,6 +516,12 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         log.Verbose(LogSource, "Resolving Foundry Local model catalog.");
         _catalog = await manager.GetCatalogAsync(cancellationToken).ConfigureAwait(false);
         log.Verbose(LogSource, "Model catalog resolved.");
+
+        // Resolve the on-disk model cache root so downloaded variants' context windows can be read from
+        // their genai_config.json (the referenced SDK exposes no context length OR cache-location API).
+        // Best-effort — a null root just disables the context check (models are then assumed to fit).
+        _cacheLocation = ResolveFoundryCacheRoot();
+        log.Verbose(LogSource, $"Foundry model cache root: {_cacheLocation ?? "<unknown>"}.");
         return _catalog;
     }
 
@@ -482,7 +566,20 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             {
                 IModel family = await catalog.GetModelAsync(AliasOf(m), cancellationToken).ConfigureAwait(false) ?? m;
                 IModel? variant = FoundryModelSelector.BestRunnableVariant(family, _deviceOrder, availableDevices);
-                if (variant is not null) resolved.Add((family, variant));
+                if (variant is null) continue;
+
+                // Exclude a downloaded variant whose context window is too small to hold the system prompt
+                // + query + plan (e.g. a 4224-token OpenVINO-NPU build): it would load but fail every
+                // request. Not-yet-downloaded variants can't be measured (context unknown -> assumed to
+                // fit) and are caught by the post-download guard if picked.
+                int? ctx = VariantContextLength(variant);
+                if (!ModelContextBudget.Fits(ctx))
+                {
+                    log.Info(LogSource,
+                        $"Excluding '{AliasOf(family)}' [{variant.Id}] from options: context window {ctx} < {ModelContextBudget.RequiredContextTokens}.");
+                    continue;
+                }
+                resolved.Add((family, variant));
             }
             if (resolved.Count == 0)
             {
@@ -590,6 +687,10 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             downloadStopwatch.Stop();
             log.Info(LogSource,
                 $"Model '{model.Alias}' ready in {downloadStopwatch.ElapsedMilliseconds} ms ({(cached ? "cache hit" : "downloaded")}).");
+
+            // Reject a model whose context window is too small to run semantic search, so an explicit
+            // pick of an unusable variant fails clearly here rather than at the next translate.
+            EnsureModelContextFits(model);
 
             // If a different model was previously loaded, drop it so the next translate uses the new pick.
             if (_model is not null &&
