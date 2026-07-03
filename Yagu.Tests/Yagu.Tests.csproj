@@ -153,6 +153,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\vendor\SharpSevenZip\SharpSevenZip\SharpSevenZip\SharpSevenZip.csproj" />
+    <!-- SemanticPlanApplier (compiled into the test assembly) now uses vendored nChronic for
+         natural-language date parsing, so the tests need the same reference. -->
+    <ProjectReference Include="..\vendor\nChronic\Chronic\Chronic.csproj" />
   </ItemGroup>
 
 </Project>

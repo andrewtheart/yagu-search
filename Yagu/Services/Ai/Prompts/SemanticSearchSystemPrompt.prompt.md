@@ -173,8 +173,18 @@ The JSON object uses these fields (OMIT any field the user did not ask for — d
 
 ### PATTERN GENERATION (regex)
 
-- PATTERN GENERATION (regex): when the user asks to find a STRUCTURED pattern rather than a literal
-  word — e.g. emails, phone numbers, IPv4/IPv6 addresses, URLs, dates, times, hex colors, GUIDs/UUIDs,
+- LITERAL WORDS AND PHRASES ARE NOT REGEX: a request to find a specific word or phrase is a LITERAL
+  text search — never a regex. "search for the phrase connection refused", "the phrase X", "the word
+  X", "files mentioning X", "containing X", "that say X" -> set "pattern" to the literal words
+  themselves (e.g. "connection refused"), set "searchMode":"content", and do NOT set "useRegex". If
+  the user says "exact phrase" / "the exact phrase X" / "exactly X" / "the whole phrase", ALSO set
+  "exactMatch":true (still literal, still no regex). NEVER build a regex such as "(?:\s+\w+\s+){1,}"
+  or ".*\b\w+\b.*" to match "a phrase" or an arbitrary run of words — matching free words with a regex
+  is ALWAYS wrong here; emit the literal text instead. Regex is ONLY for the machine-format patterns
+  listed next, never for ordinary language.
+- PATTERN GENERATION (regex): when the user asks to find a STRUCTURED, machine-format pattern (NOT an
+  ordinary word or phrase — see the rule above) — e.g. emails, phone numbers, IPv4/IPv6 addresses,
+  URLs, dates, times, hex colors, GUIDs/UUIDs,
   credit-card-like numbers, MAC addresses, "words ending in ing", "lines starting with ERROR",
   "numbers with 3 or more digits", "anything in ALL CAPS", "hashtags", "function definitions",
   a term repeated N times ("the word X at least twice", "X two or more times", "duplicate X") — set
@@ -195,8 +205,10 @@ The JSON object uses these fields (OMIT any field the user did not ask for — d
     pattern:"async", searchMode:"content"; "TODO comments" -> pattern:"TODO". Never try to match a
     whole method/function SIGNATURE with a regex.
   * HARD LIMIT: a generated regex must be SHORT (well under 80 characters) and must never repeat the
-    same sub-expression more than twice. If you catch yourself repeating a token like
-    "(?:\s+\w+\s+)", STOP — you are over-generating; fall back to a simple literal keyword.
+    same sub-expression more than twice. If a query cannot be matched by a short, concrete regex, it
+    is NOT a pattern-generation case — emit a literal keyword instead. Sequences like
+    "(?:\s+\w+\s+){1,}", "(?:\s+\b...\b){1,}", or ".*\b\w+\b.*\b\w+\b.*" that try to match "some
+    words" are NEVER correct: fall back to a simple literal keyword or phrase.
   * REPETITION / COUNT ("X at least N times", "X two or more times", "repeated/duplicate X"): emit a
     regex that matches the term X repeated N times with anything allowed between occurrences —
     "X at least twice" -> X.*X ; "X 3+ times" -> X.*X.*X (or equivalently (?:X.*){N}). Set

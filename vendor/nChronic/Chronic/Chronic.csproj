@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Vendored copy of nChronic (https://github.com/robertwilczynski/nChronic), a C# port of Ruby's
+    Chronic natural-language date parser. MIT licensed (see ../LICENSE). Vendored — not a NuGet
+    dependency — so Yagu controls the source and can keep it Native-AOT-safe.
+
+    AOT hardening: the upstream source used `dynamic` tables (Numerizer, *Scanner) and
+    Activator.CreateInstance (HandlerBuilder, RepeaterScanner), neither of which works under
+    Native AOT. Those files were rewritten to use concrete types + explicit factories. Keep this
+    project AOT-compatible (IsAotCompatible=true surfaces the analyzers) — Yagu ships PublishAot.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Chronic</RootNamespace>
+    <AssemblyName>Chronic</AssemblyName>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- Vendored third-party source: keep the AOT/trim analyzers (from IsAotCompatible) but silence
+         the general CAxxxx style analyzers so the upstream code doesn't spam our build. -->
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <!-- Vendored third-party source: don't fail our build on its style/nullable warnings. -->
+    <NoWarn>$(NoWarn);CS0168;CS0219;CS0414;CS0649;CS1591</NoWarn>
+  </PropertyGroup>
+
+</Project>

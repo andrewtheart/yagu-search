@@ -137,6 +137,12 @@ public static class SemanticPlanApplier
         var warnings = new List<string>();
 
         string? modelDirectory = ResolveDirectory(plan.Directory);
+        // Deterministically resolve a CLEAR known-folder reference in the query ("files on my desktop",
+        // "in my documents", "downloads folder") to its real OS path. A small model can't produce the
+        // actual path — for "files on my desktop" it emitted the literal placeholder
+        // "C:\User\<your-username>\Desktop" — so read the folder from the query and override the guess.
+        if (TryResolveKnownFolder(context.OriginalQuery, out string knownFolder))
+            modelDirectory = knownFolder;
         // Reject a hallucinated directory: a small model can echo a nonsense query into the plan's
         // "directory" field. Applying it would overwrite the search location with a non-existent path
         // and fail with "Directory does not exist". When a probe is supplied, drop a model directory
@@ -171,6 +177,20 @@ public static class SemanticPlanApplier
         if (searchHidden is not null)
             exclude.RemoveAll(IsLikelyHiddenExclusionToken);
         searchHidden ??= plan.SearchHidden;
+
+        // Content-negation guard: a small model turns "log files with error but WITHOUT warning" (a
+        // CONTENT exclusion the engine can't express) into a FILENAME exclude glob — often the SAME
+        // extension it just included (exclude *.log while include *.log) or a match-everything token
+        // (*, *.*). Applying that removes every candidate, so the search returns nothing. Drop excludes
+        // that would nuke the include set; genuine narrowing filename excludes (*Legacy*, *.test.*) stay.
+        if (RemoveIncludeNullifyingExcludes(include, exclude))
+            warnings.Add("Ignored an exclusion that would have removed all matching files.");
+
+        // Yagu cannot express CONTENT exclusion ("files that do NOT contain X"). When the query asks
+        // for it ("... but not 'Legacy'", "... but without warning", "doesn't contain X"), warn so the
+        // user knows only name/type filters were applied and the negated term was not honored.
+        if (context.OriginalQuery is { } negQuery && ContentNegationCue.IsMatch(negQuery))
+            warnings.Add("Content exclusion (e.g. \u201Cnot containing X\u201D) isn't supported; only name and type filters were applied.");
 
         long? minSize = ClampSize(plan.MinFileSizeBytes);
         long? maxSize = ClampSize(plan.MaxFileSizeBytes);
@@ -294,7 +314,17 @@ public static class SemanticPlanApplier
             minSize.HasValue || maxSize.HasValue ||
             createdAfter.HasValue || createdBefore.HasValue ||
             modifiedAfter.HasValue || modifiedBefore.HasValue;
-        if (pattern is null && (hasFileFilter || mode == Models.SearchMode.FileNames))
+        // A "directive-only" query ("documents sorted by name", "files grouped by folder", "search
+        // hidden files") carries no text term — the model emits an empty pattern and relies purely on
+        // the sort/group/scope switches. Treat those the same as a file filter so we synthesize a
+        // match-all (".") the directives act on, instead of literal-searching the whole sentence in the
+        // empty-plan fallback below (the eval showed 35 queries turned into a literal search of their
+        // own text this way).
+        bool hasDirective = hasFileFilter
+            || sortModeIndex is not null || groupMode is not null
+            || searchHidden == true || searchInsideArchives == true
+            || searchBinary == true || searchImageText == true;
+        if (pattern is null && (hasDirective || mode == Models.SearchMode.FileNames))
         {
             pattern = ".";
             useRegex = true;
@@ -920,6 +950,10 @@ public static class SemanticPlanApplier
         if (token.Length == 0) return token;
         // Collapse whitespace that hugs a dot or wildcard, the only places a glob never has spaces.
         token = Regex.Replace(token, @"\s*([.*?])\s*", "$1");
+        // Repair the malformed leading ".*"/".*." extension forms small models emit (".*.py" or
+        // ".*png" instead of "*.py"/"*.png") — the leading dot makes them match nothing. A bare ".*"
+        // (a dotfile glob) has no extension after it, so the anchored pattern leaves it untouched.
+        token = Regex.Replace(token, @"^\.\*\.?([A-Za-z0-9]+)$", "*.$1");
         return token;
     }
 
@@ -966,14 +1000,21 @@ public static class SemanticPlanApplier
     /// </summary>
     internal static void ApplyLanguageExtensionGlobs(List<string> include, string? originalQuery)
     {
-        foreach (var (canonical, stripped) in LanguageExtensionGlobs.FromQuery(originalQuery))
+        foreach (var (canonical, substituted, alwaysStrip) in LanguageExtensionGlobs.FromQuery(originalQuery))
         {
-            // Model already emitted the right extension -> trust it and whatever siblings it kept.
+            // 1. Remove forms that are NEVER real file extensions (*.c#, *.c++, *.f#, *.objective-c,
+            //    *.javascript, ...), even when the model ALSO emitted the correct glob.
+            foreach (var bogus in alwaysStrip)
+                include.RemoveAll(g => GlobHasBareExtension(g, bogus));
+
+            // 2. Model already emitted the canonical extension -> trust it and whatever real siblings
+            //    it kept (so "C and C# files" keeps a deliberate *.c).
             if (include.Any(g => GlobHasBareExtension(g, canonical))) continue;
 
-            // Model substituted the wrong, symbol-stripped extension (or emitted none) -> replace it.
-            if (stripped is not null)
-                include.RemoveAll(g => GlobHasBareExtension(g, stripped));
+            // 3. Canonical missing -> the model substituted a real-but-wrong extension (or emitted
+            //    none); drop the substitute and add the canonical one.
+            if (substituted is not null)
+                include.RemoveAll(g => GlobHasBareExtension(g, substituted));
             include.Add("*." + canonical);
         }
     }
@@ -1028,6 +1069,15 @@ public static class SemanticPlanApplier
     /// runaway repetition does.</summary>
     private const int DegenerateNonCapturingGroupCount = 5;
 
+    /// <summary>A real regex almost never stacks this many bare <c>\w</c> quantifiers outside a
+    /// character class; a letter-spelling runaway (password -&gt; <c>p\w*?a\w*?s\w*?…</c>) does.</summary>
+    private const int DegenerateWordQuantifierCount = 4;
+
+    /// <summary>A real regex rarely uses more than a couple of <c>\b</c> word boundaries; a runaway
+    /// stacks many (observed: "the word secret" -&gt; <c>*\b\w*\b\w*\b\b\b\b\b…</c>). Six is well
+    /// above any legitimate NL-translated regex (<c>\bTODO\b|\bFIXME\b</c> has 4) yet far below a runaway.</summary>
+    private const int DegenerateWordBoundaryCount = 6;
+
     /// <summary>
     /// True when <paramref name="pattern"/> is a pathological / runaway search term rather than a real
     /// one — chiefly a model that ran away generating a huge repeated regex (observed: phi-4 emitting a
@@ -1043,6 +1093,26 @@ public static class SemanticPlanApplier
         int groups = 0;
         for (int i = pattern.IndexOf("(?:", StringComparison.Ordinal); i >= 0; i = pattern.IndexOf("(?:", i + 3, StringComparison.Ordinal))
             if (++groups >= DegenerateNonCapturingGroupCount) return true;
+
+        // Letter-spelling runaway: some models spell a word out with a "\w*?" gap between every letter
+        // (observed: password -> ".*?\b(?:p\w*?a\w*?s\w*?s\w*?w\w*?\w*?\b)"). A genuine regex almost never
+        // stacks this many bare \w quantifiers (a real one keeps \w inside a character class like
+        // [\w.-]+, where \w is not immediately followed by * or +).
+        int wordQuantifiers = 0;
+        for (int i = pattern.IndexOf(@"\w", StringComparison.Ordinal); i >= 0; i = pattern.IndexOf(@"\w", i + 2, StringComparison.Ordinal))
+        {
+            char next = i + 2 < pattern.Length ? pattern[i + 2] : '\0';
+            if ((next == '*' || next == '+') && ++wordQuantifiers >= DegenerateWordQuantifierCount)
+                return true;
+        }
+
+        // Word-boundary runaway: a model can spew a long run of \b tokens (observed: "the word secret"
+        // -> "*\b\w*\b\w*\b\b\b\b\b…"). This slips past the \w-quantifier and (?: checks, so count \b
+        // directly; a legitimate regex never needs this many word boundaries.
+        int wordBoundaries = 0;
+        for (int i = pattern.IndexOf(@"\b", StringComparison.Ordinal); i >= 0; i = pattern.IndexOf(@"\b", i + 2, StringComparison.Ordinal))
+            if (++wordBoundaries >= DegenerateWordBoundaryCount) return true;
+
         return false;
     }
 
@@ -1055,6 +1125,68 @@ public static class SemanticPlanApplier
     {
         int dot = glob.LastIndexOf('.');
         return dot >= 0 && string.Equals(glob[(dot + 1)..].Trim(), bareExt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Detects a request for CONTENT exclusion the engine can't honor ("... but not X",
+    /// "... but without Y", "doesn't contain Z"). Deliberately narrow ("but not/without/no", "don't/
+    /// doesn't contain") so it doesn't fire on folder/hidden negations like "not in hidden folders".</summary>
+    private static readonly Regex ContentNegationCue = new(
+        @"\bbut\s+(?:not|without|no)\b|\b(?:don'?t|doesn'?t|does\s+not)\s+contain",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex DesktopFolderRef = new(
+        @"\bon\s+(?:my\s+|the\s+)?desktop\b|\b(?:my|the)\s+desktop\b|\bdesktop\s+folder\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DocumentsFolderRef = new(
+        @"\bmy\s+documents\b|\bdocuments\s+folder\b|\bin\s+(?:my\s+)?documents\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DownloadsFolderRef = new(
+        @"\bmy\s+downloads\b|\bdownloads\s+folder\b|\bin\s+(?:my\s+)?downloads\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>Resolves a CLEAR known-folder reference in the query to its real OS path (Desktop,
+    /// Documents, Downloads). Conservative on purpose: bare "documents" is NOT matched (it usually
+    /// means document FILES, e.g. "documents mentioning budget") — only phrasings that clearly name the
+    /// folder ("my documents", "documents folder", "in documents"). Returns false when no clear
+    /// reference is present or the resolved folder does not exist.</summary>
+    internal static bool TryResolveKnownFolder(string? originalQuery, out string path)
+    {
+        path = string.Empty;
+        if (string.IsNullOrWhiteSpace(originalQuery)) return false;
+
+        string? candidate = null;
+        if (DesktopFolderRef.IsMatch(originalQuery))
+            candidate = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        else if (DocumentsFolderRef.IsMatch(originalQuery))
+            candidate = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        else if (DownloadsFolderRef.IsMatch(originalQuery))
+        {
+            string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            candidate = string.IsNullOrEmpty(profile) ? null : System.IO.Path.Combine(profile, "Downloads");
+        }
+
+        if (string.IsNullOrEmpty(candidate) || !System.IO.Directory.Exists(candidate))
+            return false;
+        path = candidate;
+        return true;
+    }
+
+    /// <summary>Removes exclude globs that would eliminate the entire include set — a match-everything
+    /// token (<c>*</c>/<c>*.*</c>) or one that exactly matches an include glob (the small-model
+    /// content-negation artifact, e.g. include <c>*.log</c> + exclude <c>*.log</c>). Returns true when
+    /// any were removed. Genuine narrowing filename excludes (<c>*Legacy*</c>, <c>*.test.*</c>) are
+    /// left intact.</summary>
+    private static bool RemoveIncludeNullifyingExcludes(List<string> include, List<string> exclude)
+    {
+        if (exclude.Count == 0) return false;
+        int before = exclude.Count;
+        exclude.RemoveAll(x =>
+        {
+            string t = x.Trim();
+            if (t is "*" or "*.*") return true;
+            return include.Exists(g => string.Equals(g.Trim(), t, StringComparison.OrdinalIgnoreCase));
+        });
+        return exclude.Count < before;
     }
 
     /// <summary>
@@ -1165,9 +1297,9 @@ public static class SemanticPlanApplier
     }
 
     private static readonly Regex RelativeAgo =
-        new(@"^\s*(\d+)\s*(day|week|month|year)s?\s*ago\s*$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        new(@"^\s*(\d+)\s*(hour|day|week|month|year)s?\s*ago\s*$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex LastN =
-        new(@"^\s*(?:in\s+the\s+)?(?:last|past)\s+(\d+)?\s*(day|week|month|year)s?\s*$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        new(@"^\s*(?:in\s+the\s+)?(?:last|past)\s+(\d+)?\s*(hour|day|week|month|year)s?\s*$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     /// <summary>Parses an ISO date or a small set of relative phrases into a concrete instant. For
     /// "before" bounds, dates without a time component are pushed to end-of-day so the named day is
@@ -1204,16 +1336,25 @@ public static class SemanticPlanApplier
         if (DateTimeOffset.TryParse(v, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var dt))
             return dt;
 
+        // Natural-language phrases the fast paths above don't cover ("this week", "last month",
+        // "past 24 hours", "last December", "since last Monday", "next friday", ...) are handled by the
+        // vendored Chronic parser (nChronic). It resolves relative to a supplied clock, so results stay
+        // deterministic and testable. It runs LAST so the explicit fast paths keep their exact behavior
+        // and Chronic only rescues phrases we would otherwise have dropped.
+        if (TryResolveWithChronic(v, now, endOfDay, out var chronicResult))
+            return chronicResult;
+
         warnings.Add($"Could not interpret {field} value '{raw}'; ignored.");
         return null;
 
         static DateTimeOffset Shift(DateTimeOffset from, string unit, int amount) => unit.ToLowerInvariant() switch
         {
+            "hour" => from.AddHours(amount),
             "day" => from.AddDays(amount),
             "week" => from.AddDays(amount * 7),
             "month" => from.AddMonths(amount),
-            // The calling regexes only ever capture day|week|month|year, so the remaining unit here
-            // is always "year"; folding it into the default arm keeps every branch reachable.
+            // The calling regexes only ever capture hour|day|week|month|year, so the remaining unit
+            // here is always "year"; folding it into the default arm keeps every branch reachable.
             _ => from.AddYears(amount),
         };
     }
@@ -1225,6 +1366,33 @@ public static class SemanticPlanApplier
     {
         var d = new DateTimeOffset(value.Year, value.Month, value.Day, 0, 0, 0, value.Offset);
         return endOfDay ? d.AddDays(1).AddTicks(-1) : d;
+    }
+
+    // Cached: the Chronic parser builds its handler registry once in the ctor; Parse(phrase, options)
+    // takes the per-call clock. Constructed with default options (Middle endian / US date order),
+    // matching the ISO/explicit paths that run before Chronic.
+    private static readonly global::Chronic.Parser ChronicParser = new();
+
+    /// <summary>Last-resort natural-language date resolution via the vendored Chronic parser. Returns
+    /// the START of the matched span for "after" bounds and the END for "before" bounds, so a named
+    /// period ("this week", "last month") is inclusive. Chronic can throw on unparseable input, which
+    /// is treated as "not interpretable" (returns false).</summary>
+    private static bool TryResolveWithChronic(string phrase, DateTimeOffset now, bool endOfDay, out DateTimeOffset result)
+    {
+        result = default;
+        try
+        {
+            var options = new global::Chronic.Options { Clock = () => now.DateTime };
+            var span = ChronicParser.Parse(phrase, options);
+            DateTime? picked = endOfDay ? (span?.End ?? span?.Start) : (span?.Start ?? span?.End);
+            if (picked is not { } dtp) return false;
+            result = new DateTimeOffset(DateTime.SpecifyKind(dtp, DateTimeKind.Unspecified), now.Offset);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
 
@@ -1288,34 +1456,46 @@ internal static class LanguageExtensionGlobs
     // languages whose name carries a glyph a glob can't hold are listed — plain-word languages
     // (python, java, typescript) the model maps correctly on its own, so forcing them risks
     // clobbering a legitimate content search.
-    private static readonly (Regex Matcher, string Canonical, string? Stripped)[] Languages =
+    // Canonical extension + optional "substituted" ext (a REAL extension the model uses instead of
+    // canonical — stripped only when canonical is absent, so "C and C# files" keeps a deliberate *.c)
+    // + "always-strip" forms that are never real file extensions (the glyph/word forms a model emits:
+    // *.c#, *.c++, *.f#, *.objective-c, *.javascript, ...), removed unconditionally.
+    private static readonly (Regex Matcher, string Canonical, string? Substituted, string[] AlwaysStrip)[] Languages =
     [
-        (Alias(@"c\s*#|c\s*sharp|csharp"), "cs", "c"),
-        (Alias(@"c\s*\+\+|c\s*plus\s*plus|cpp"), "cpp", "c"),
-        (Alias(@"f\s*#|f\s*sharp|fsharp"), "fs", "f"),
-        (Alias(@"objective[\s-]*c|objc"), "m", null),
+        (Alias(@"c\s*#|c\s*sharp|csharp"), "cs", "c", ["c#"]),
+        (Alias(@"c\s*\+\+|c\s*plus\s*plus|cpp"), "cpp", "c", ["c++"]),
+        (Alias(@"f\s*#|f\s*sharp|fsharp"), "fs", "f", ["f#"]),
+        (Alias(@"objective[\s-]*c|objc"), "m", null, ["objective-c", "objc"]),
+        // Plain-word languages the model still mis-globs (observed: *.javascript, *.typescript,
+        // ruby -> *.rs). The Alias regex requires "<lang> files/scripts/...", so a content search like
+        // "files containing javascript" is never rewritten into a filter.
+        (Alias(@"javascript"), "js", null, ["javascript"]),
+        (Alias(@"typescript"), "ts", null, ["typescript"]),
+        (Alias(@"ruby"), "rb", "rs", []),
     ];
 
     // The language name must be FOLLOWED by a file-type noun to count as a file filter (so "files
     // about c#" or a bare mention isn't treated as one). The leading lookbehind keeps the name from
     // matching inside a larger token (e.g. "abc# ..."). '#'/'+' are not word chars, so a normal
-    // trailing \b can't be used after the symbol — the explicit noun list is the right anchor.
+    // trailing \b can't be used after the symbol — the explicit noun list is the right anchor. The
+    // optional "or/and/, <word>" bridge lets a COORDINATED list share one trailing noun, so both
+    // languages in "typescript or javascript files" / "c and c# files" are detected.
     private static Regex Alias(string core) => new(
-        @"(?<![\w#+])(?:" + core + @")\s+(?:source\s+|src\s+)?(?:files?|scripts?|sources?|code|programs?|projects?)\b",
+        @"(?<![\w#+])(?:" + core + @")\s+(?:(?:or|and|,|/)\s+\w+\s+)*(?:source\s+|src\s+)?(?:files?|scripts?|sources?|code|programs?|projects?)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     /// <summary>The (canonicalExt, strippedExt) pairs implied by "&lt;language&gt; files" mentions in
     /// <paramref name="query"/>, in first-seen order and de-duplicated by canonical extension. Quoted
     /// spans are ignored so a content term like containing "c#" is never read as a file-type filter.</summary>
-    public static IReadOnlyList<(string Canonical, string? Stripped)> FromQuery(string? query)
+    public static IReadOnlyList<(string Canonical, string? Substituted, string[] AlwaysStrip)> FromQuery(string? query)
     {
         if (string.IsNullOrWhiteSpace(query)) return [];
         string scan = Regex.Replace(query, "\"[^\"]*\"|'[^']*'", " ");
-        var hits = new List<(string, string?)>();
+        var hits = new List<(string, string?, string[])>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (matcher, canonical, stripped) in Languages)
+        foreach (var (matcher, canonical, substituted, alwaysStrip) in Languages)
             if (matcher.IsMatch(scan) && seen.Add(canonical))
-                hits.Add((canonical, stripped));
+                hits.Add((canonical, substituted, alwaysStrip));
         return hits;
     }
 }

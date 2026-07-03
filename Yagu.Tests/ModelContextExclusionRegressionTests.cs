@@ -26,6 +26,36 @@ public sealed class ModelContextExclusionRegressionTests
         File.ReadAllText(Path.Combine(RepoRoot(), "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
 
     [Fact]
+    public void Translator_BoundsRunawayGenerationWithTokenCapTimeoutAndJsonMode()
+    {
+        string src = Translator();
+
+        // (1) Hard output-token cap (192) is the primary bound on runaway/degenerate generation, which
+        // at the old 512 budget ran ~120s on a VRAM-saturated GPU and tripped the watchdog.
+        Assert.Contains("private const int MaxOutputTokens = 192;", src);
+        Assert.Contains("s.MaxTokens = MaxOutputTokens;", src);
+
+        // (2) JSON-object response mode. The Foundry ChatSettings API exposes NO stop-sequence field, so
+        // this is the structural equivalent: the runtime stops when the top-level object closes.
+        Assert.Contains("Type = \"json_object\"", src);
+
+        // (3) Non-reasoning watchdog lowered 120s -> 45s so a wedged generation aborts quickly; reasoning
+        // models keep the longer budget for their <think> trace.
+        Assert.Contains("InferenceTimeout = TimeSpan.FromSeconds(45)", src);
+        Assert.Contains("ReasoningInferenceTimeout = TimeSpan.FromSeconds(300)", src);
+    }
+
+    [Fact]
+    public void Prompt_RoutesPhrasesAndWordsToLiteralNotRegex()
+    {
+        string prompt = File.ReadAllText(Path.Combine(
+            RepoRoot(), "Yagu", "Services", "Ai", "Prompts", "SemanticSearchSystemPrompt.prompt.md"));
+        // A word/phrase must be a literal content search, never a generated regex (the runaway trigger).
+        Assert.Contains("LITERAL WORDS AND PHRASES ARE NOT REGEX", prompt);
+        Assert.Contains("Regex is ONLY for the machine-format patterns", prompt);
+    }
+
+    [Fact]
     public void Translator_ResolvesCacheLocationForContextChecks()
     {
         string src = Translator();

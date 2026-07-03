@@ -21,6 +21,10 @@ internal static class SemanticPlanJsonExtractor
 {
     private const string LogSource = "Semantic.JsonExtractor";
 
+    /// <summary>Matches a backslash together with the single character that follows it, so runs of
+    /// backslashes are consumed as pairs and a valid <c>\\</c> escape is never mis-split.</summary>
+    private static readonly Regex BackslashEscapePair = new(@"\\(.)", RegexOptions.Compiled | RegexOptions.Singleline);
+
     /// <summary>
     /// Extracts the first usable JSON object from <paramref name="raw"/> (tolerating code fences or
     /// surrounding prose) and deserializes it into a <see cref="SemanticSearchPlan"/>.
@@ -55,6 +59,23 @@ internal static class SemanticPlanJsonExtractor
         }
     }
 
+    /// <summary>Doubles any backslash that does not begin a valid JSON escape sequence
+    /// (<c>" \ / b f n r t u</c>), so a model-emitted regex metacharacter like <c>\w</c>/<c>\d</c>/
+    /// <c>\.</c> becomes a literal backslash in the parsed string instead of failing the whole parse.
+    /// Valid escapes (<c>\n</c>, <c>\"</c>, <c>\\</c>, <c>\uXXXX</c>) are left untouched; matching a
+    /// backslash together with its following char keeps runs of backslashes correct.</summary>
+    private static string FixInvalidJsonEscapes(string objectBody)
+    {
+        if (objectBody.IndexOf('\\') < 0) return objectBody;
+        return BackslashEscapePair.Replace(objectBody, m =>
+        {
+            char c = m.Groups[1].Value[0];
+            return c is '"' or '\\' or '/' or 'b' or 'f' or 'n' or 'r' or 't' or 'u'
+                ? m.Value            // valid escape -> keep as-is
+                : "\\\\" + c;        // invalid -> double the backslash so it parses to a literal '\'
+        });
+    }
+
     /// <summary>Returns the first usable top-level <c>{...}</c> block in <paramref name="text"/>,
     /// honoring braces inside strings. If the first object is complete it is returned as-is (so a
     /// leading well-formed object always wins over any trailing repeats or prose a chatty model
@@ -83,6 +104,13 @@ internal static class SemanticPlanJsonExtractor
         // the last field. Fold any integer multiplication chains in value positions into a single
         // literal up front so the object parses. Only the object body is touched; start is unchanged.
         text = string.Concat(text.AsSpan(0, start), FoldIntegerMultiplication(text.Substring(start)));
+
+        // Small models routinely emit regex patterns with single-backslash metacharacters ("\w",
+        // "\d", "\s", "\.", "\+") inside JSON string values. Those are INVALID JSON escapes and make
+        // the ENTIRE object fail to parse (System.Text.Json: "'w' is an invalid escapable character").
+        // Double any backslash that doesn't begin a valid JSON escape so the metacharacter survives as
+        // a literal (\w -> \\w, which JSON reads back as "\w"), rescuing an otherwise-lost plan.
+        text = string.Concat(text.AsSpan(0, start), FixInvalidJsonEscapes(text.Substring(start)));
 
         string? balanced = FindBalancedObject(text, start);
         if (balanced is not null)

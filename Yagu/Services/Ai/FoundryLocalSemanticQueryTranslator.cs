@@ -27,15 +27,25 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
 
     /// <summary>Maximum time to wait for a single model inference before treating the translation as
     /// failed. A healthy response takes a few seconds on GPU/NPU (and is slower but still bounded on
-    /// CPU); this watchdog only fires when the Foundry Local runtime wedges mid-generation and the
-    /// call never returns, so the search can fall back to a literal one instead of hanging forever.</summary>
-    private static readonly TimeSpan InferenceTimeout = TimeSpan.FromSeconds(120);
+    /// CPU); this watchdog fires when the Foundry Local runtime wedges mid-generation, so the search
+    /// can fall back to a literal one instead of hanging. Kept modest (45s, was 120s): the output is
+    /// now hard-capped at <see cref="MaxOutputTokens"/> tokens, so even the slow spilling-VRAM path
+    /// finishes a full generation well inside this window; a query that still exceeds it is genuinely
+    /// wedged (e.g. a runaway that the token cap somehow didn't bound) and should be aborted quickly
+    /// rather than making a whole query set crawl.</summary>
+    private static readonly TimeSpan InferenceTimeout = TimeSpan.FromSeconds(45);
 
     /// <summary>Watchdog for reasoning / chain-of-thought models. They legitimately generate a long
     /// <c>&lt;think&gt;</c> trace before the JSON answer, so a healthy response takes much longer than a
     /// plain instruct model — especially on CPU. The cap is correspondingly larger so a slow-but-working
     /// reasoning model isn't aborted before it reaches its answer.</summary>
     private static readonly TimeSpan ReasoningInferenceTimeout = TimeSpan.FromSeconds(300);
+
+    /// <summary>Hard cap on generated tokens for a (non-reasoning) translation. A valid JSON plan is
+    /// &lt;150 tokens; 192 fits the largest realistic plan with margin while bounding runaway/degenerate
+    /// generations to a few seconds instead of the full 512-token budget. See the rationale in
+    /// <see cref="ConfigureChatSettings"/>.</summary>
+    private const int MaxOutputTokens = 192;
 
     /// <summary>Foundry Local <c>AppName</c> for this app; also determines the on-disk model cache root
     /// (<c>%USERPROFILE%\.&lt;AppName&gt;\cache\models</c>).</summary>
@@ -755,14 +765,18 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
 
         s.Temperature = 0f;
         s.TopP = 1f;
-        // Keep input + output well under phi-3.5-mini's 4096-token LongRoPE boundary. This model's
-        // ONNX export produces garbage ("token salad") once the TOTAL sequence length passes 4096
-        // (the long-factor RoPE branch is broken in the export), so an over-long generation would
-        // first emit the valid JSON object and then degenerate into junk. The trimmed system prompt
-        // is ~2.8K tokens and the JSON object we need is <150 tokens, so a 512-token cap leaves a
-        // wide safety margin (~2.8K + 512 ≈ 3.3K < 4096) while still fitting the largest realistic
-        // plan, and it makes translation noticeably faster by stopping the model from rambling.
-        s.MaxTokens = 512;
+        // Hard output-token cap. The JSON plan we need is <150 tokens, so 192 fits the largest
+        // realistic plan (directory + several globs + dates + a short explanation) with margin while
+        // TIGHTLY bounding the worst case. This is the primary defence against runaway generation:
+        // some queries ("the phrase X", "MAC addresses", "phone numbers") push the model to BUILD a
+        // regex, and under greedy decoding it can fall into a repetition loop, emitting a degenerate
+        // pattern like "(?:\s+\w+\s+){1,}" over and over until it exhausts the budget. At the old 512
+        // cap that runaway ran for ~120s on a VRAM-saturated GPU (~4 tok/s) and tripped the watchdog;
+        // capping at 192 bounds it to a few seconds. It also keeps input+output under phi-3.5-mini's
+        // 4096-token LongRoPE boundary (past which its ONNX export emits token salad). A rare legit
+        // plan that would exceed 192 tokens is truncated in its (optional) explanation field, which
+        // SemanticPlanJsonExtractor repairs, so the search-affecting fields still parse.
+        s.MaxTokens = MaxOutputTokens;
         s.RandomSeed = 0;
 
         // Repetition penalties are load-bearing for phi-3.5-mini in the Foundry Local runtime: with
@@ -776,6 +790,13 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         // penalty, so we keep non-empty output AND every requested extension.
         s.FrequencyPenalty = 0.6f;
         s.PresencePenalty = 0.3f;
+
+        // Constrain the reply to a JSON object. The Foundry ChatSettings API exposes no stop-sequence
+        // field, so this is the structural equivalent: with json_object mode the runtime stops as soon
+        // as the top-level object closes, which both bounds rambling (a backstop to the MaxTokens cap)
+        // and reinforces valid-JSON output that SemanticPlanJsonExtractor then parses. If a model/EP
+        // ignores or rejects the format, the existing translate/parse fallback still applies.
+        s.ResponseFormat = new global::Microsoft.AI.Foundry.Local.OpenAI.ResponseFormatExtended { Type = "json_object" };
     }
 
     private string BuildSystemPrompt(SemanticTranslationContext context)

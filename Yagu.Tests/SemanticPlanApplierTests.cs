@@ -388,6 +388,296 @@ public sealed class SemanticPlanApplierTests
         Assert.NotEmpty(resolved.Warnings);
     }
 
+    // ---- natural-language dates (hour fast-path + vendored Chronic parser) ------
+    // Now is fixed at 2025-06-15 12:00Z (a Sunday). The semantic-eval run showed 21 queries whose
+    // relative date was DROPPED because ResolveDate couldn't parse it; these pin the fix.
+
+    [Fact]
+    public void Resolve_ModifiedPast24Hours_ShiftsByHours()
+    {
+        // "past 24 hours" — the hour unit added to the LastN fast path (no Chronic needed).
+        var plan = new SemanticSearchPlan { Pattern = "x", ModifiedAfter = "past 24 hours" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.Equal(Now.AddHours(-24), resolved.ModifiedAfterDate);
+        Assert.DoesNotContain(resolved.Warnings, w => w.Contains("Could not interpret"));
+    }
+
+    [Fact]
+    public void Resolve_ModifiedLastHour_ShiftsByOneHour()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "x", ModifiedAfter = "last hour" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.Equal(Now.AddHours(-1), resolved.ModifiedAfterDate);
+    }
+
+    [Fact]
+    public void Resolve_ModifiedThisWeek_ResolvedByChronic()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "x", ModifiedAfter = "this week" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.NotNull(resolved.ModifiedAfterDate);
+        Assert.DoesNotContain(resolved.Warnings, w => w.Contains("Could not interpret"));
+        // Start of the current week must land within the last 8 days and not in the future.
+        Assert.InRange(resolved.ModifiedAfterDate!.Value, Now.AddDays(-8), Now);
+    }
+
+    [Fact]
+    public void Resolve_ModifiedThisMonth_ResolvedIntoCurrentMonth()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "x", ModifiedAfter = "this month" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.NotNull(resolved.ModifiedAfterDate);
+        Assert.DoesNotContain(resolved.Warnings, w => w.Contains("Could not interpret"));
+        Assert.Equal(2025, resolved.ModifiedAfterDate!.Value.Year);
+        Assert.Equal(6, resolved.ModifiedAfterDate!.Value.Month);
+    }
+
+    [Fact]
+    public void Resolve_ModifiedThisYear_ResolvedIntoCurrentYear()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "x", ModifiedAfter = "this year" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.NotNull(resolved.ModifiedAfterDate);
+        Assert.DoesNotContain(resolved.Warnings, w => w.Contains("Could not interpret"));
+        Assert.Equal(2025, resolved.ModifiedAfterDate!.Value.Year);
+    }
+
+    [Fact]
+    public void Resolve_ModifiedLastDecember_ResolvedIntoPreviousDecember()
+    {
+        // "last december" is beyond the fast paths; Chronic resolves it to the previous December.
+        var plan = new SemanticSearchPlan { Pattern = "x", ModifiedAfter = "last december" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.NotNull(resolved.ModifiedAfterDate);
+        Assert.DoesNotContain(resolved.Warnings, w => w.Contains("Could not interpret"));
+        Assert.Equal(2024, resolved.ModifiedAfterDate!.Value.Year);
+        Assert.Equal(12, resolved.ModifiedAfterDate!.Value.Month);
+    }
+
+    // ---- Tier-1 B: content-negation exclude globs that would nuke the include set ----
+
+    [Fact]
+    public void Resolve_ExcludeSameExtensionAsInclude_IsDroppedWithWarning()
+    {
+        // "log files with error but without warning" -> the model excludes *.log while including *.log,
+        // which removes every candidate. The self-nullifying exclude must be dropped.
+        var plan = new SemanticSearchPlan
+        {
+            Pattern = "error",
+            IncludeGlobs = new() { "*.log" },
+            ExcludeGlobs = new() { "*.log" },
+        };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.NotNull(resolved.IncludeGlobs);
+        Assert.Contains("*.log", resolved.IncludeGlobs!);
+        Assert.Null(resolved.ExcludeGlobs);
+        Assert.Contains(resolved.Warnings, w => w.Contains("removed all matching files"));
+    }
+
+    [Fact]
+    public void Resolve_ExcludeMatchAll_IsDropped()
+    {
+        // "files that mention invoice but not refund" -> model excludes *.*
+        var plan = new SemanticSearchPlan { Pattern = "invoice", ExcludeGlobs = new() { "*.*" } };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.Null(resolved.ExcludeGlobs);
+    }
+
+    [Fact]
+    public void Resolve_GenuineFilenameExclude_IsKept()
+    {
+        // A narrowing filename exclude that does NOT match the include extension must survive.
+        var plan = new SemanticSearchPlan
+        {
+            Pattern = "async",
+            IncludeGlobs = new() { "*.cs" },
+            ExcludeGlobs = new() { "*Legacy*" },
+        };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.NotNull(resolved.ExcludeGlobs);
+        Assert.Contains("*Legacy*", resolved.ExcludeGlobs!);
+    }
+
+    // ---- Tier-1 C: directive-only queries become match-all, not a literal sentence search ----
+
+    [Fact]
+    public void Resolve_SortOnlyQuery_SynthesizesMatchAllNotLiteral()
+    {
+        var plan = new SemanticSearchPlan { Pattern = null, SortBy = "name" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "documents sorted by name" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal(".", resolved.Pattern);
+        Assert.NotNull(resolved.SortModeIndex);
+    }
+
+    [Fact]
+    public void Resolve_GroupOnlyQuery_SynthesizesMatchAllNotLiteral()
+    {
+        var plan = new SemanticSearchPlan { Pattern = null, GroupBy = "folder" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "all files grouped by folder" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal(".", resolved.Pattern);
+        Assert.NotNull(resolved.GroupMode);
+    }
+
+    // ---- Tier-1 D: language -> extension glob repair ----
+
+    [Fact]
+    public void Resolve_CSharpFiles_StripsGlyphGlobKeepsCanonical()
+    {
+        var plan = new SemanticSearchPlan { Pattern = null, IncludeGlobs = new() { "*.c#", "*.cs" } };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "c# files" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.NotNull(resolved.IncludeGlobs);
+        Assert.Contains("*.cs", resolved.IncludeGlobs!);
+        Assert.DoesNotContain("*.c#", resolved.IncludeGlobs!);
+    }
+
+    [Fact]
+    public void Resolve_JavascriptFiles_MapsToJs()
+    {
+        var plan = new SemanticSearchPlan { Pattern = null, IncludeGlobs = new() { "*.javascript" } };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "javascript files" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.NotNull(resolved.IncludeGlobs);
+        Assert.Contains("*.js", resolved.IncludeGlobs!);
+        Assert.DoesNotContain("*.javascript", resolved.IncludeGlobs!);
+    }
+
+    [Fact]
+    public void Resolve_RubyFiles_RemapsRustExtensionToRuby()
+    {
+        var plan = new SemanticSearchPlan { Pattern = null, IncludeGlobs = new() { "*.rs" } };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "ruby files" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.NotNull(resolved.IncludeGlobs);
+        Assert.Contains("*.rb", resolved.IncludeGlobs!);
+        Assert.DoesNotContain("*.rs", resolved.IncludeGlobs!);
+    }
+
+    [Fact]
+    public void Resolve_TypescriptOrJavascript_MapsBoth()
+    {
+        var plan = new SemanticSearchPlan { Pattern = null, IncludeGlobs = new() { "*.typescript" } };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "typescript or javascript files" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.NotNull(resolved.IncludeGlobs);
+        Assert.Contains("*.ts", resolved.IncludeGlobs!);
+        Assert.Contains("*.js", resolved.IncludeGlobs!);
+        Assert.DoesNotContain("*.typescript", resolved.IncludeGlobs!);
+    }
+
+    // ---- Tier-2 F: known-folder resolution ----
+
+    [Fact]
+    public void TryResolveKnownFolder_MyDesktop_ResolvesToDesktopPath()
+    {
+        Assert.True(SemanticPlanApplier.TryResolveKnownFolder("files on my desktop", out var path));
+        Assert.Equal(System.Environment.GetFolderPath(System.Environment.SpecialFolder.DesktopDirectory), path);
+    }
+
+    [Fact]
+    public void TryResolveKnownFolder_WordDocuments_IsNotMistakenForDocumentsFolder()
+    {
+        // "word documents" / "documents mentioning X" refers to document FILES, not the folder.
+        Assert.False(SemanticPlanApplier.TryResolveKnownFolder("word documents containing invoice", out _));
+        Assert.False(SemanticPlanApplier.TryResolveKnownFolder("documents mentioning budget", out _));
+    }
+
+    [Fact]
+    public void Resolve_FilesOnMyDesktop_OverridesHallucinatedModelDirectory()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "x", Directory = @"C:\User\<your-username>\Desktop" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "files on my desktop" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal(System.Environment.GetFolderPath(System.Environment.SpecialFolder.DesktopDirectory), resolved.Directory);
+    }
+
+    // ---- Tier-2 G: malformed .*ext glob normalization ----
+
+    [Fact]
+    public void Resolve_MalformedDotStarGlobs_AreNormalizedToStarDotExt()
+    {
+        var plan = new SemanticSearchPlan { Pattern = null, IncludeGlobs = new() { ".*.py", ".*png", "*.md" } };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.NotNull(resolved.IncludeGlobs);
+        Assert.Contains("*.py", resolved.IncludeGlobs!);
+        Assert.Contains("*.png", resolved.IncludeGlobs!);
+        Assert.DoesNotContain(".*.py", resolved.IncludeGlobs!);
+        Assert.DoesNotContain(".*png", resolved.IncludeGlobs!);
+    }
+
+    [Fact]
+    public void Resolve_BareDotStarDotfileGlob_IsPreserved()
+    {
+        // ".*" (a dotfiles glob) has no extension after it and must NOT be rewritten to "*.".
+        var plan = new SemanticSearchPlan { Pattern = null, IncludeGlobs = new() { ".*" } };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.NotNull(resolved.IncludeGlobs);
+        Assert.Contains(".*", resolved.IncludeGlobs!);
+    }
+
+    // ---- Tier-3 J: warn on unsupported content exclusion ----
+
+    [Fact]
+    public void Resolve_ContentNegationQuery_WarnsUnsupported()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "async", SearchMode = "content", IncludeGlobs = new() { "*.cs" } };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "c# files that contain 'async' but not 'Legacy'" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Contains(resolved.Warnings, w => w.Contains("Content exclusion"));
+    }
+
+    [Fact]
+    public void Resolve_NotHiddenQuery_DoesNotWarnContentExclusion()
+    {
+        // "not hidden" toggles the hidden-file option — it is NOT content exclusion, so no warning.
+        var plan = new SemanticSearchPlan { Pattern = null, IncludeGlobs = new() { "*.txt" } };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "text files that are not hidden" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.DoesNotContain(resolved.Warnings, w => w.Contains("Content exclusion"));
+    }
+
     [Fact]
     public void Resolve_IdenticalModifiedBounds_AreDroppedAsPadding()
     {
@@ -671,6 +961,7 @@ public sealed class SemanticPlanApplierTests
     [InlineData(@"async\s+Task<")]
     [InlineData(@"\b(TODO|FIXME|HACK)\b")]
     [InlineData(@"(?:GET|POST)\s+/api/(?:v1|v2)")] // a legit 2-group regex is NOT degenerate
+    [InlineData(@"[\w.+-]+@[\w-]+\.[\w.-]+")]      // email: \w lives in char classes, not bare quantifiers
     public void IsDegenerateSearchPattern_KeepsRealTerms(string pattern)
         => Assert.False(SemanticPlanApplier.IsDegenerateSearchPattern(pattern));
 
@@ -679,6 +970,11 @@ public sealed class SemanticPlanApplierTests
     {
         Assert.True(SemanticPlanApplier.IsDegenerateSearchPattern(new string('a', 201)));        // overlong
         Assert.True(SemanticPlanApplier.IsDegenerateSearchPattern("(?:a)(?:b)(?:c)(?:d)(?:e)"));  // >= 5 groups
+        // Letter-spelling runaway (password spelled out with a \w*? gap between letters) — the case
+        // that slipped past the old group/length guard (1 group, ~40 chars).
+        Assert.True(SemanticPlanApplier.IsDegenerateSearchPattern(@".*?\b(?:p\w*?a\w*?s\w*?s\w*?w\w*?\w*?\b)"));
+        // Word-boundary runaway ("the word secret" -> "*\b\w*\b\w*\b\b\b\b\b…") — many \b, few \w*.
+        Assert.True(SemanticPlanApplier.IsDegenerateSearchPattern(@"*\b\w*\b\w*\b\b\b\b\b\b"));
         Assert.False(SemanticPlanApplier.IsDegenerateSearchPattern(null));
         Assert.False(SemanticPlanApplier.IsDegenerateSearchPattern(""));
     }
@@ -1431,13 +1727,16 @@ public sealed class SemanticPlanApplierTests
     [InlineData("f# files", "fs", "f")]
     [InlineData("fsharp programs", "fs", "f")]
     [InlineData("objective-c files", "m", null)]
-    public void LanguageExtensionGlobs_FromQuery_DetectsLanguageFileTypes(string query, string canonical, string? stripped)
+    [InlineData("javascript files", "js", null)]
+    [InlineData("typescript files", "ts", null)]
+    [InlineData("ruby files", "rb", "rs")]
+    public void LanguageExtensionGlobs_FromQuery_DetectsLanguageFileTypes(string query, string canonical, string? substituted)
     {
         var hits = LanguageExtensionGlobs.FromQuery(query);
 
         var hit = Assert.Single(hits);
         Assert.Equal(canonical, hit.Canonical);
-        Assert.Equal(stripped, hit.Stripped);
+        Assert.Equal(substituted, hit.Substituted);
     }
 
     [Theory]

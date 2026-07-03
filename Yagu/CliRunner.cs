@@ -398,6 +398,17 @@ internal static class CliRunner
         if (resolved.CreatedBeforeDate is { } cb) o.WriteLine($"  created-before : {cb:yyyy-MM-dd}");
         if (resolved.ModifiedAfterDate is { } ma) o.WriteLine($"  modified-after : {ma:yyyy-MM-dd}");
         if (resolved.ModifiedBeforeDate is { } mb)o.WriteLine($"  modified-before: {mb:yyyy-MM-dd}");
+        if (resolved.SortModeIndex is { } smi)
+        {
+            string sortKey = smi switch { 1 => "matches", 2 => "date", 3 => "size", 4 => "name", 5 => "directory", _ => smi.ToString() };
+            o.WriteLine($"  sort           : {sortKey} {(resolved.SortDirectionIndex == 1 ? "asc" : "desc")}");
+        }
+        if (resolved.GroupMode is { } gm)         o.WriteLine($"  group          : {gm}{(resolved.GroupSortDirectionIndex == 1 ? " (reversed)" : "")}");
+        if (resolved.SearchHiddenFiles is { } sh) o.WriteLine($"  hidden         : {sh}");
+        if (resolved.SearchInsideArchives is { } ar) o.WriteLine($"  archives       : {ar}");
+        if (resolved.SearchBinary is { } sb)      o.WriteLine($"  binary         : {sb}");
+        if (resolved.SearchImageText is { } sit)  o.WriteLine($"  image-text     : {sit}");
+        if (resolved.Warnings.Count > 0)          o.WriteLine($"  warnings       : {string.Join(" | ", resolved.Warnings)}");
     }
 
     /// <summary>Result of the first-run model-selection step.</summary>

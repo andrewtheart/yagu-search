@@ -151,6 +151,29 @@ public sealed class SemanticPlanJsonExtractorTests
     }
 
     [Fact]
+    public void TryParsePlan_InvalidRegexEscapesInPattern_AreRepairedNotRejected()
+    {
+        // The model emitted single-backslash regex metacharacters (\w, \.) inside the JSON string,
+        // which is INVALID JSON and previously hard-errored ("'w' is an invalid escapable character").
+        // The escapes must be repaired so the pattern survives as a literal regex.
+        const string raw = "{\"searchMode\":\"content\",\"pattern\":\"\\w+@\\w+\\.\\w+\"}";
+
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(raw, out SemanticSearchPlan? plan, out string? error), error);
+        Assert.NotNull(plan);
+        Assert.Equal("\\w+@\\w+\\.\\w+", plan!.Pattern);
+    }
+
+    [Fact]
+    public void TryParsePlan_ValidEscapesInPattern_ArePreserved()
+    {
+        // A properly double-escaped pattern must be unchanged by the invalid-escape repair.
+        const string raw = "{\"pattern\":\"\\\\bTODO\\\\b\",\"useRegex\":true}";
+
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(raw, out SemanticSearchPlan? plan, out _));
+        Assert.Equal("\\bTODO\\b", plan!.Pattern);
+    }
+
+    [Fact]
     public void RepairBalancedObject_FirstFieldMalformed_ReturnsNull()
     {
         // No top-level comma precedes the break, so there is no earlier field to trim back to.

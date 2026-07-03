@@ -178,6 +178,9 @@
   <ItemGroup>
     <ProjectReference Include="..\vendor\TextControlBox-WinUI\TextControlBox\TextControlBox.csproj" />
     <ProjectReference Include="..\vendor\SharpSevenZip\SharpSevenZip\SharpSevenZip\SharpSevenZip.csproj" />
+    <!-- Vendored, AOT-hardened nChronic (Ruby Chronic port) for natural-language date parsing
+         in the semantic-search layer (SemanticPlanApplier.ResolveDate). -->
+    <ProjectReference Include="..\vendor\nChronic\Chronic\Chronic.csproj" />
   </ItemGroup>
 
   <ItemGroup>
