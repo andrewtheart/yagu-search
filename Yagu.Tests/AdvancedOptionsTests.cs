@@ -146,6 +146,18 @@ public sealed class AdvancedOptionsTests
         Assert.Contains("MaxSearchDepth = double.NaN;", method);
     }
 
+    [Fact]
+    public void SearchBinaryToggle_SelectsAllBinaryTypesWhenTurnedOn()
+    {
+        // Turning "Search binary" ON must select ALL binary types (the dropdown shows N/N, not 0/N).
+        // BinaryExtensions is internally the SKIP list, so "search all" == an empty skip list; OFF
+        // restores the full skip list. The change is guarded so it does not run during construction.
+        string method = ExtractViewModelMethod("partial void OnSkipBinaryChanged(bool value)");
+        Assert.Contains("if (!_binaryExtensionsInitialized) return;", method);
+        Assert.Contains("BinaryExtensions = value ? SettingsBinaryExtensions : string.Empty;", method);
+        Assert.Contains("SyncBinaryExtensionItems();", method);
+    }
+
     // ══════════════════════════════════════════════════════════════════
     // Save as Defaults
     // ══════════════════════════════════════════════════════════════════
@@ -184,7 +196,9 @@ public sealed class AdvancedOptionsTests
         Assert.Contains("_advancedOptionsTransientlyChanged = false;", method);
         // Promote the active filter values into the persisted-default mirrors Reset/launch read from.
         Assert.Contains("SettingsSkipExtensions = SkipExtensions;", method);
-        Assert.Contains("SettingsBinaryExtensions = BinaryExtensions;", method);
+        // Binary is a SKIP list (empty when searching all types), so Save-as-Defaults preserves the
+        // universe of known binary types rather than overwrite it with the inverted active list.
+        Assert.Contains("SettingsBinaryExtensions = string.Join(';', ParseExtensionSet(SettingsBinaryExtensions)", method);
         Assert.Contains("SettingsArchiveExtensions = ArchiveExtensions;", method);
         Assert.Contains("DefaultMinFileSizeBytes = MinFileSizeBytes;", method);
         Assert.Contains("DefaultModifiedBeforeDate = ModifiedBeforeDate;", method);

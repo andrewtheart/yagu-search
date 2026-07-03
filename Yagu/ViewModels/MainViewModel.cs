@@ -387,6 +387,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         SyncSkipExtensionItems();
         SyncBinaryExtensionItems();
         SyncArchiveExtensionItems();
+        // From here on, toggling "Search binary" drives the dropdown selection (see OnSkipBinaryChanged).
+        _binaryExtensionsInitialized = true;
     }
 
     private static int NormalizePreviewWrapModeIndex(bool legacyPreviewWordWrap, int modeIndex)
@@ -1135,6 +1137,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     {
         OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(SearchBinary)));
         OnPropertyChanged(new System.ComponentModel.PropertyChangedEventArgs(nameof(BinaryExtensionsVisibility)));
+
+        // Keep the binary-types dropdown consistent with the toggle. "Search binary" ON means "search all
+        // binary types by default"; because BinaryExtensions is internally the SKIP list, that maps to an
+        // EMPTY skip list (every type selected -> N/N shown). OFF restores the full skip list so content-only
+        // mode still early-skips binary types (the dropdown is hidden in that state). Skipped during
+        // construction, where the initial extension lists are seeded directly.
+        if (!_binaryExtensionsInitialized) return;
+        BinaryExtensions = value ? SettingsBinaryExtensions : string.Empty;
+        SyncBinaryExtensionItems();
     }
 
     [ObservableProperty] public partial string SkipExtensions { get; set; } = AppSettings.DefaultSkipExtensions;
@@ -1466,6 +1477,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
     private bool _suppressBinaryExtensionSync;
     private bool _updatingBinaryExtensionsFromItems;
+    private bool _binaryExtensionsInitialized;
 
     partial void OnBinaryExtensionsChanged(string value)
     {
@@ -4957,7 +4969,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         // Promote the active filter values into the persisted-default mirrors that Reset and a fresh
         // launch read from, so the saved default equals exactly what is shown now.
         SettingsSkipExtensions = SkipExtensions;
-        SettingsBinaryExtensions = BinaryExtensions;
+        // BinaryExtensions is the SKIP list and is EMPTY when "Search binary" is on (all types searched), so
+        // it must never overwrite the universe of known binary types the dropdown is built from -- that would
+        // drop every searched type. Preserve the full known set instead (active list is a subset of it).
+        SettingsBinaryExtensions = string.Join(';', ParseExtensionSet(SettingsBinaryExtensions)
+            .Union(ParseExtensionSet(BinaryExtensions))
+            .OrderBy(e => e, StringComparer.OrdinalIgnoreCase));
         SettingsArchiveExtensions = ArchiveExtensions;
         DefaultMinFileSizeBytes = MinFileSizeBytes;
         DefaultMaxFileSizeBytes = MaxFileSizeBytes;
