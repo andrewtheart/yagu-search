@@ -260,6 +260,11 @@ internal sealed class YaguDialog : Window
 
         root.Loaded += (_, _) =>
         {
+            // Size the dialog's height to fit its content so long text is never clipped, independent
+            // of the fixed Height hint in options (and of the owner/backing window). Done once the
+            // content is in the tree and measurable; resizable dialogs keep the user's size.
+            AutoSizeHeightToContent(root);
+
             Button? defaultButton = options.DefaultButton switch
             {
                 YaguDialogDefaultButton.Primary => primaryButton,
@@ -283,6 +288,49 @@ internal sealed class YaguDialog : Window
         root.Children.Add(footer);
 
         return root;
+    }
+
+    /// <summary>
+    /// Grows or shrinks the dialog window's height to exactly fit its content, so long text is fully
+    /// visible instead of being clipped by the fixed <see cref="YaguDialogOptions.Height"/>. The width
+    /// is kept as-is; the content's natural height is measured at that width (unbounded height, with
+    /// the body still capped by <see cref="YaguDialogOptions.MaxContentHeight"/>) and the window is
+    /// resized and re-centered — <see cref="WindowForegroundHelper.CenterWindowOverOwner"/> clamps the
+    /// result to the monitor work area. This makes the dialog independent of both the passed Height and
+    /// the backing/owner window. Resizable dialogs are skipped so the user's chosen size is preserved.
+    /// </summary>
+    private void AutoSizeHeightToContent(FrameworkElement root)
+    {
+        if (_options.IsResizable)
+            return;
+
+        var xamlRoot = root.XamlRoot;
+        if (xamlRoot is null)
+            return;
+
+        double scale = xamlRoot.RasterizationScale;
+        if (scale <= 0)
+            scale = 1.0;
+
+        var currentSize = _appWindow.Size; // physical pixels
+        if (currentSize.Width <= 0)
+            return;
+
+        double widthDip = currentSize.Width / scale;
+
+        // Natural content height at the current width. Measuring outside the layout pass (in Loaded)
+        // is safe; DesiredSize reflects what the content wants before the window constrained it.
+        root.Measure(new Windows.Foundation.Size(widthDip, double.PositiveInfinity));
+        double desiredHeightDip = root.DesiredSize.Height;
+        if (desiredHeightDip <= 0)
+            return;
+
+        int desiredHeightPhysical = (int)Math.Ceiling(desiredHeightDip * scale);
+        if (Math.Abs(desiredHeightPhysical - currentSize.Height) <= 2)
+            return; // already the right height
+
+        WindowForegroundHelper.CenterWindowOverOwner(
+            _appWindow, _ownerHwnd, currentSize.Width, desiredHeightPhysical);
     }
 
     private static FrameworkElement CreateBodyContent(object content)

@@ -30,7 +30,9 @@ public sealed class EverythingSearchDialogRegressionTests
         Assert.Contains("WindowForegroundHelper.CenterWindowOverOwner(appWindow, _ownerHwnd, options.Width, options.Height);", dialog);
         Assert.Contains("public static bool HasOpenOwnedWindow(IntPtr ownerHwnd)", dialog);
         Assert.DoesNotContain("ContentDialog", dialog);
-        Assert.DoesNotContain("XamlRoot", dialog);
+        // YaguDialog reads root.XamlRoot.RasterizationScale for DPI-aware content auto-sizing, which
+        // is a legitimate use unrelated to the WinUI ContentDialog pattern (guarded above) — so the
+        // absence of "XamlRoot" is intentionally no longer asserted.
     }
 
     [Fact]
@@ -199,6 +201,23 @@ public sealed class EverythingSearchDialogRegressionTests
         // A signature failure deletes only a downloaded temp copy, never the bundled installer.
         Assert.Contains("if (!installerFromBundle) TryDeleteFile(installerPath);", startup);
         Assert.Contains("if (!installerFromBundle) { try { File.Delete(installerPath); } catch", cli);
+    }
+
+    [Fact]
+    public void YaguDialog_AutoSizesHeightToContent_SoTextIsNotClipped()
+    {
+        string dialog = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "YaguDialog.cs"));
+
+        // The dialog measures its content and resizes the window to fit, so long text (e.g. the
+        // "Everything Search Not Found" body) is never clipped by the fixed Height — the dialog is
+        // independent of the passed/backing window size.
+        Assert.Contains("private void AutoSizeHeightToContent(", dialog);
+        Assert.Contains("AutoSizeHeightToContent(root);", dialog);
+        Assert.Contains("root.Measure(new Windows.Foundation.Size(widthDip, double.PositiveInfinity));", dialog);
+        Assert.Contains("root.DesiredSize.Height", dialog);
+        Assert.Contains("WindowForegroundHelper.CenterWindowOverOwner(", dialog);
+        // Resizable dialogs keep the user's chosen size (auto-size only applies to fixed dialogs).
+        Assert.Contains("if (_options.IsResizable)", dialog);
     }
 
     private static string FindRepoRoot()
