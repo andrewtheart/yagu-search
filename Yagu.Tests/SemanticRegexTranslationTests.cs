@@ -81,6 +81,7 @@ public sealed class SemanticRegexTranslationTests : IDisposable
         public bool ObeyGitignore { get; set; }
         public bool SearchInsideArchives { get; set; }
         public bool SearchHiddenFiles { get; set; } = true;
+        public bool SearchImageText { get; set; }
         public int SortModeIndex { get; set; }
         public int SortDirectionIndex { get; set; }
         public int GroupModeIndex { get; set; }

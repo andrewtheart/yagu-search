@@ -33,6 +33,7 @@ public interface ISemanticPlanTarget
     bool ObeyGitignore { get; set; }
     bool SearchInsideArchives { get; set; }
     bool SearchHiddenFiles { get; set; }
+    bool SearchImageText { get; set; }
     int SortModeIndex { get; set; }
     int SortDirectionIndex { get; set; }
     int GroupModeIndex { get; set; }
@@ -64,6 +65,9 @@ public sealed class ResolvedSearchPlan
     public bool? ObeyGitignore { get; init; }
     public bool? SearchInsideArchives { get; init; }
     public bool? SearchHiddenFiles { get; init; }
+
+    /// <summary>Enable "Search image text (OCR)" — reading text inside image files. Null = leave unchanged.</summary>
+    public bool? SearchImageText { get; init; }
 
     /// <summary>Sort column: 1=matches, 2=date(modified), 3=size, 4=name, 5=directory. Null = leave unchanged.</summary>
     public int? SortModeIndex { get; init; }
@@ -208,6 +212,20 @@ public static class SemanticPlanApplier
             mode = Models.SearchMode.FileNames;
         }
 
+        // Finding TEXT inside image files requires OCR ("Search image text"). A request like
+        // "png files with the word CUDA in it" carries a real content term whose include filter targets
+        // image extensions, but the engine can only match that text via OCR. Enable it deterministically
+        // when the search has a content term, is not a filename-only listing, and its include filter is
+        // image-typed. The model can also request it explicitly via searchImageText.
+        bool? searchImageText = plan.SearchImageText;
+        if (searchImageText != true
+            && pattern is not null
+            && mode != Models.SearchMode.FileNames
+            && include.Exists(IsImageExtensionToken))
+        {
+            searchImageText = true;
+        }
+
         // A request like "all png files modified last year" carries no text term — the model emits
         // an empty pattern and relies purely on globs/metadata filters. Yagu's engine yields nothing
         // for an empty query, so synthesize a match-all filename query (regex ".") that enumerates
@@ -252,6 +270,7 @@ public static class SemanticPlanApplier
             ObeyGitignore = plan.ObeyGitignore,
             SearchInsideArchives = plan.SearchInsideArchives,
             SearchHiddenFiles = searchHidden,
+            SearchImageText = searchImageText,
             SortModeIndex = sortModeIndex,
             SortDirectionIndex = sortDirectionIndex,
             GroupMode = groupMode,
@@ -294,6 +313,7 @@ public static class SemanticPlanApplier
         if (r.ObeyGitignore is { } gi) parts.Add($"obeyGitignore={gi}");
         if (r.SearchInsideArchives is { } ar) parts.Add($"archives={ar}");
         if (r.SearchHiddenFiles is { } sh) parts.Add($"searchHidden={sh}");
+        if (r.SearchImageText is { } oit) parts.Add($"searchImageText={oit}");
         if (r.SortModeIndex is { } sm) parts.Add($"sortMode={sm}");
         if (r.SortDirectionIndex is { } sd) parts.Add($"sortDir={sd}");
         if (r.GroupMode is { } gm) parts.Add($"group={gm}");
@@ -346,6 +366,7 @@ public static class SemanticPlanApplier
         if (resolved.ObeyGitignore is { } gi) target.ObeyGitignore = gi;
         if (resolved.SearchInsideArchives is { } arc) target.SearchInsideArchives = arc;
         if (resolved.SearchHiddenFiles is { } sh) target.SearchHiddenFiles = sh;
+        if (resolved.SearchImageText is { } sit) target.SearchImageText = sit;
 
         // Sort: set the column first, then the direction, so the view-model's change handlers
         // settle on the final (mode, direction) pair regardless of the target's prior state.
@@ -417,6 +438,9 @@ public static class SemanticPlanApplier
 
         if (resolved.SearchHiddenFiles is { } hidden)
             sb.Append(hidden ? ", including hidden files" : ", excluding hidden files");
+
+        if (resolved.SearchImageText == true)
+            sb.Append(", reading text inside images (OCR)");
 
         AppendSizeClause(sb, resolved.MinFileSizeBytes, resolved.MaxFileSizeBytes);
         AppendDateClause(sb, "modified", resolved.ModifiedAfterDate, resolved.ModifiedBeforeDate);
@@ -553,6 +577,7 @@ public static class SemanticPlanApplier
             ObeyGitignore = resolved.ObeyGitignore,
             SearchInsideArchives = resolved.SearchInsideArchives,
             SearchHiddenFiles = resolved.SearchHiddenFiles,
+            SearchImageText = resolved.SearchImageText,
             SortBy = SortModeIndexToCliKey(resolved.SortModeIndex),
             SortDescending = resolved.SortModeIndex is null ? null : resolved.SortDirectionIndex != 1,
             GroupBy = GroupModeToCliKey(resolved.GroupMode),
@@ -927,6 +952,22 @@ public static class SemanticPlanApplier
         return dot >= 0 && string.Equals(glob[(dot + 1)..].Trim(), bareExt, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// True when <paramref name="token"/> is an image-file filter (glob or bare extension) whose
+    /// extension is one Yagu can OCR (png/jpg/jpeg/bmp/gif/tif/tiff/webp). Used to enable
+    /// "Search image text" when a content search targets image files.
+    /// </summary>
+    private static bool IsImageExtensionToken(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return false;
+        string t = token.Trim();
+        string ext = System.IO.Path.GetExtension(t);
+        if (string.IsNullOrEmpty(ext))
+            ext = t; // bare token like "png"
+        ext = ext.TrimStart('.', '*');
+        return Yagu.Services.Ocr.ImageOcrSupport.DefaultImageExtensions.Contains(ext);
+    }
+
     // "hidden" used as a file-attribute filter: "hidden file(s)/folder(s)/item(s)/…", or a bare
     // "hidden" governed by an include/exclude verb ("show hidden", "exclude hidden"). Anything else
     // (e.g. searching for the literal word "hidden" in file contents) is left to the model.
@@ -1106,6 +1147,9 @@ public sealed class SemanticSearchOverlay
     public bool? ObeyGitignore { get; init; }
     public bool? SearchInsideArchives { get; init; }
     public bool? SearchHiddenFiles { get; init; }
+
+    /// <summary>Enable "Search image text (OCR)". Null when unset.</summary>
+    public bool? SearchImageText { get; init; }
 
     /// <summary>CLI <c>--sort</c> key (matches, date, size, name, directory), or null when unset.</summary>
     public string? SortBy { get; init; }

@@ -91,6 +91,14 @@ public sealed class SemanticSearchPlan
     [JsonPropertyName("searchHidden")]
     public bool? SearchHidden { get; init; }
 
+    /// <summary>Whether to read text inside image files (OCR). Set <c>true</c> when the request is to
+    /// find text WITHIN images — e.g. "png files with the word CUDA in it", "screenshots mentioning
+    /// invoice". Maps to the Advanced Options "Search image text (OCR)" toggle. Null = leave the
+    /// current toggle; the applier also enables this automatically when a content search targets image
+    /// extensions.</summary>
+    [JsonPropertyName("searchImageText")]
+    public bool? SearchImageText { get; init; }
+
     /// <summary>Field to sort the results by, e.g. <c>name</c>, <c>size</c>, <c>date</c>/<c>modified</c>,
     /// <c>relevance</c>/<c>matches</c>, or <c>directory</c>/<c>path</c>. Null = leave the current sort.</summary>
     [JsonPropertyName("sortBy")]

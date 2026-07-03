@@ -3388,6 +3388,7 @@ internal sealed class CliArgs
         if (overlay.ObeyGitignore is { } gi && ObeyGitignore is null) ObeyGitignore = gi;
         if (overlay.SearchInsideArchives is { } arc && SearchInsideArchives is null) SearchInsideArchives = arc;
         if (overlay.SearchHiddenFiles is { } sh && SearchHiddenFiles is null) SearchHiddenFiles = sh;
+        if (overlay.SearchImageText is { } sit && SearchImageText is null) SearchImageText = sit;
 
         // Sort/group: only fill from the model when the user did not set them explicitly.
         if (overlay.SortBy is { } sortKey && SortBy is null)

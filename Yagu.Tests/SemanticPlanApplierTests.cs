@@ -42,6 +42,7 @@ public sealed class SemanticPlanApplierTests
         public bool ObeyGitignore { get; set; }
         public bool SearchInsideArchives { get; set; }
         public bool SearchHiddenFiles { get; set; } = true;
+        public bool SearchImageText { get; set; }
         public int SortModeIndex { get; set; }
         public int SortDirectionIndex { get; set; }
         public int GroupModeIndex { get; set; }
@@ -107,6 +108,61 @@ public sealed class SemanticPlanApplierTests
         var resolved = SemanticPlanApplier.Resolve(plan, Context());
 
         Assert.Equal("report", resolved.Pattern);
+    }
+
+    // ---- image-text (OCR) enablement ---------------------------------------
+
+    [Fact]
+    public void Resolve_ContentSearchOverImageExtensions_EnablesSearchImageText()
+    {
+        // "png files with the word CUDA in it" — finding text inside images requires OCR.
+        var plan = new SemanticSearchPlan { Pattern = "CUDA", SearchMode = "content", IncludeGlobs = new() { "*.png" } };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.True(resolved.SearchImageText);
+    }
+
+    [Fact]
+    public void ApplyToTarget_ContentSearchOverImages_TurnsOnSearchImageText()
+    {
+        var target = new FakeTarget();
+        var plan = new SemanticSearchPlan { Pattern = "CUDA", SearchMode = "both", IncludeGlobs = new() { "png", "jpg" } };
+
+        SemanticPlanApplier.ApplyToTarget(plan, Context(), target);
+
+        Assert.True(target.SearchImageText);
+    }
+
+    [Fact]
+    public void Resolve_ContentSearchOverNonImageExtensions_DoesNotEnableSearchImageText()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "test", SearchMode = "content", IncludeGlobs = new() { "*.cs" } };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.Null(resolved.SearchImageText);
+    }
+
+    [Fact]
+    public void Resolve_FilenameOnlyImageListing_DoesNotEnableSearchImageText()
+    {
+        // "all png files" — a filename listing with no text term needs no OCR.
+        var plan = new SemanticSearchPlan { Pattern = null, SearchMode = "filenames", IncludeGlobs = new() { "*.png" } };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.Null(resolved.SearchImageText);
+    }
+
+    [Fact]
+    public void Resolve_ModelExplicitlyRequestsSearchImageText_IsHonored()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "invoice", SearchMode = "content", SearchImageText = true };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.True(resolved.SearchImageText);
     }
 
     [Fact]
