@@ -289,7 +289,7 @@ dotnet run -c Release --project Yagu.Benchmarks -- --filter "*LiteralSearch*" --
 
 ### Run Throughput Regression Tests
 
-The [`Yagu.Benchmarks`](Yagu.Benchmarks/) project also hosts the real-world throughput regression tests (`PerformanceBenchmarkTests`), which drive the full `SearchService` pipeline for a fixed wall-clock duration and append metrics to [`Yagu.Benchmarks/results/perf-baselines.jsonl`](Yagu.Benchmarks/results/perf-baselines.jsonl). They are tagged `Category=Slow`, so the fast test filter skips them.
+The [`Yagu.Benchmarks`](Yagu.Benchmarks/) project also hosts the real-world throughput regression tests (`PerformanceBenchmarkTests`), which drive the full `SearchService` pipeline for a fixed wall-clock duration and append metrics to `Yagu.Benchmarks/results/perf-baselines.jsonl`. They are tagged `Category=Slow`, so the fast test filter skips them.
 
 ```powershell
 dotnet test Yagu.Benchmarks/Yagu.Benchmarks.csproj -c Release
@@ -378,7 +378,7 @@ The installer creates a Start Menu shortcut, optional desktop icon, optional Exp
 | [Yagu.Benchmarks](Yagu.Benchmarks/) | BenchmarkDotNet benchmark harness plus the real-world `SearchService` throughput regression tests (run via `dotnet test`). |
 | [scripts/register-context-menu.ps1](scripts/register-context-menu.ps1) | Explorer context menu registration script. |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | Windows CI: Rust build/test, .NET restore/build/test, benchmark smoke test. |
-| [PLANS](PLANS/) | Design notes, performance reports, and future work. |
+| `PLANS/` | Design notes, performance reports, and future work. |
 
 ## Architecture
 
@@ -483,7 +483,7 @@ By default, the Rust crate uses the in-tree scanner in [yagu-core/src/scan.rs](y
 
 Yagu's search hot path has been **profiled and fine-tuned to be competitive with [ripgrep](https://github.com/BurntSushi/ripgrep)** — the current benchmark for fast command-line search. In many workloads it **exceeds ripgrep's throughput**, and in the remaining cases it **matches** it. The gains come from the native Rust scanner ([yagu-core/src/scan.rs](yagu-core/src/scan.rs)), which compiles the matcher once per search and reuses it across files, streams matches back without buffering, and skips work early (binary detection, size caps, extension/`.gitignore` filters) before touching file contents.
 
-This is measured, not assumed. The [`Yagu.Benchmarks`](Yagu.Benchmarks/) project tracks literal and regex search throughput — through a BenchmarkDotNet harness and a suite of real-world throughput regression tests that append recorded baselines to [`Yagu.Benchmarks/results/perf-baselines.jsonl`](Yagu.Benchmarks/results/perf-baselines.jsonl) — and the native binary can be built with a symbol-rich profiling profile (`-p:RustProfile=profiling`) for deeper flame-graph analysis. Real-world results still depend on hardware, storage (SSD vs. HDD), corpus shape, and pattern complexity — but Yagu is engineered to keep pace with the fastest searchers available.
+This is measured, not assumed. The [`Yagu.Benchmarks`](Yagu.Benchmarks/) project tracks literal and regex search throughput — through a BenchmarkDotNet harness and a suite of real-world throughput regression tests that append recorded baselines to `Yagu.Benchmarks/results/perf-baselines.jsonl` — and the native binary can be built with a symbol-rich profiling profile (`-p:RustProfile=profiling`) for deeper flame-graph analysis. Real-world results still depend on hardware, storage (SSD vs. HDD), corpus shape, and pattern complexity — but Yagu is engineered to keep pace with the fastest searchers available.
 
 ### Scaling To Large Files And Thousands Of Results
 
