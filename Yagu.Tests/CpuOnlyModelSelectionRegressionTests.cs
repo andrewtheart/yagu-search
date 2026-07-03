@@ -27,8 +27,14 @@ public sealed class CpuOnlyModelSelectionRegressionTests
         Assert.Contains("if (!availableDevices.Contains(variantDevice)) continue;", source);
         Assert.Contains("id.Contains(\"-cpu\")", source);
 
-        // Auto-selection also ranks ONLY runnable variants, so a GPU/NPU-only family is never chosen.
-        Assert.Contains("var runnable = candidates.Where(c => availableDevices.Contains(c.Device)).ToList();", source);
+        // Auto-selection resolves each family's REAL runnable variant (device from the id via
+        // ResolveVariantDevice / BestRunnableVariant, NOT Foundry's unreliable family-level DeviceType,
+        // which reports "GPU" on a CPU-only box because DirectML registers everywhere) and DROPS families
+        // with no runnable variant. This both prevents auto-choosing a GPU/NPU-only family AND stops CPU
+        // chat families being wrongly dropped (the "no compatible model" bug on the 4 GB CPU-only box).
+        Assert.Contains("BestRunnableVariant(family, deviceOrder, availableDevices)", source);
+        Assert.Contains("Device: ResolveVariantDevice(runnable)", source);
+        Assert.Contains("if (runnable is null) continue;", source);
     }
 
     [Fact]
@@ -71,10 +77,11 @@ public sealed class CpuOnlyModelSelectionRegressionTests
         Assert.Contains("!IsReasoningAlias(c.Alias)", source);
 
         // Memory guard: SelectAlias takes a budget and drops models whose weights + headroom won't fit,
-        // so a too-large model is not auto-selected (it would load then OOM during generation).
+        // so a too-large model is not auto-selected (it would load then OOM during generation). The
+        // SCALED-headroom math is extracted to the pure, unit-tested ModelMemoryBudget; the selector
+        // just delegates to it (this file pulls in Foundry types and cannot itself be unit-tested).
         Assert.Contains("SelectAlias(IReadOnlyList<ModelCandidate> candidates, int? availableMemoryMb", source);
-        Assert.Contains("FitsInMemory", source);
-        Assert.Contains("sizeMb + ModelMemoryHeadroomMb <= availableMemoryMb", source);
+        Assert.Contains("ModelMemoryBudget.Fits(candidate.FileSizeMb, availableMemoryMb)", source);
         Assert.Contains("SelectAlias(candidates, availableMemoryMb)", source);
     }
 
@@ -106,6 +113,73 @@ public sealed class CpuOnlyModelSelectionRegressionTests
 
         Assert.Contains("_semanticTranslator.SetAvailableAccelerators(_semanticHasGpu, _semanticHasNpu);", vm);
         Assert.Contains("translator.SetAvailableAccelerators(cliHasGpu, cliHasNpu);", cli);
+    }
+
+    [Fact]
+    public void Selector_ExcludesNonChatModelsByAliasNotJustTask()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryModelSelector.cs"));
+
+        // Whisper regression: on a CPU-only, low-RAM box the whisper-tiny build reports no catalog Task,
+        // so a task-only screen let it pass as "usable" and it was auto-selected as the smallest model —
+        // then failed because whisper is ASR with a 448-token context vs the ~8.5K-token prompt. The
+        // modality exclusion must ALSO screen the alias/id, where the "whisper" token always appears.
+        Assert.Contains("\"whisper\"", source);
+        Assert.Contains("ExcludedTaskFragments.Any(f => alias.Contains(f, StringComparison.Ordinal))", source);
+
+        // The last-ditch fallback must NEVER re-select a task-incompatible model. When nothing is
+        // text-chat-capable the selector returns null so the caller reports "no compatible model".
+        Assert.DoesNotContain("candidates.ToList(); // fall back to anything compatible", source);
+        Assert.Contains("refusing to fall back to a non-chat model", source);
+
+        // Alias-aware helper the model picker uses to screen the catalog list.
+        Assert.Contains("public static bool IsTextChatModel(string? alias, string? task)", source);
+    }
+
+    [Fact]
+    public void Picker_ScreensModelListByAliasAndTask()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
+
+        // The Settings model picker must screen by alias AND task so whisper/embedding models (whose
+        // catalog Task is often unset) never appear, and must not re-add every model when the filtered
+        // list is empty (that is what surfaced whisper).
+        Assert.Contains("FoundryModelSelector.IsTextChatModel(AliasOf(m), m.Info?.Task)", source);
+        Assert.DoesNotContain("usable = models.Where(m => m is not null).Select(m => m!).ToList();", source);
+    }
+
+    [Fact]
+    public void Translator_CondensesPromptOnlyUnderExtremeMemoryPressure()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
+
+        // The condense-gating + {{TODAY}} substitution now live in the pure, unit-tested
+        // SemanticPromptText.BuildSystemPrompt; the translator only supplies the live inputs (template,
+        // today, the CPU-only memory budget, and the threshold). Below the threshold it condenses;
+        // otherwise (null budget on accelerated hardware, or ample RAM) it sends the identical full prompt.
+        Assert.Contains("PromptCondenseMemoryThresholdMb", source);
+        Assert.Contains("SemanticPromptText.BuildSystemPrompt(", source);
+        Assert.Contains("AvailableMemoryBudgetMb(),", source);
+        Assert.Contains("PromptCondenseMemoryThresholdMb);", source);
+    }
+
+    [Fact]
+    public void Picker_FlagsModelsTooLargeForAvailableMemory()
+    {
+        string translator = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
+        string dialog = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "SemanticModelDownloadDialog.cs"));
+        string contract = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "ISemanticQueryTranslator.cs"));
+
+        // The option carries a memory-fit flag computed from the CPU-only budget + scaled headroom, so a
+        // model that can't load (e.g. a 12 GB model on a 4 GB machine) is flagged rather than silently
+        // selectable.
+        Assert.Contains("bool ExceedsAvailableMemory", contract);
+        Assert.Contains("int? memBudgetMb = AvailableMemoryBudgetMb();", translator);
+        Assert.Contains("ExceedsAvailableMemory = memBudgetMb is { } budget && sizeMb is { } sz && !ModelMemoryBudget.Fits(sz, budget)", translator);
+
+        // The picker dialog renders a visible warning on such options.
+        Assert.Contains("option.ExceedsAvailableMemory", dialog);
+        Assert.Contains("Too large for this PC's memory", dialog);
     }
 
     private static string FindRepoRoot()

@@ -308,6 +308,24 @@ internal sealed class SemanticModelDownloadDialog : Window
             ToolTipService.SetToolTip(warn, "This model may produce less accurate results than the recommended model.");
             titleLine.Children.Add(warn);
         }
+        if (option.ExceedsAvailableMemory)
+        {
+            var tooBig = new Border
+            {
+                Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x33, 0xE0, 0x4C, 0x4C)),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(6, 1, 6, 1),
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = new TextBlock
+                {
+                    Text = "Too large for this PC's memory",
+                    FontSize = 11,
+                    Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xB4, 0xB4)),
+                },
+            };
+            ToolTipService.SetToolTip(tooBig, "This model needs more memory than your PC has available, so it will fail to load. Choose a smaller model.");
+            titleLine.Children.Add(tooBig);
+        }
         content.Children.Add(titleLine);
 
         var detailParts = new List<string>();
@@ -316,6 +334,8 @@ internal sealed class SemanticModelDownloadDialog : Window
             detailParts.Add(option.DeviceLabel!);
         if (option.IsBelowRecommended)
             detailParts.Add("may be less accurate");
+        if (option.ExceedsAvailableMemory)
+            detailParts.Add("too large for available memory");
         content.Children.Add(new TextBlock
         {
             Text = string.Join("  ·  ", detailParts),

@@ -128,6 +128,7 @@
     <Compile Include="..\Yagu\Services\Ai\SemanticPlanApplier.cs" Link="Source\Services\Ai\SemanticPlanApplier.cs" />    <Compile Include="..\Yagu\Services\Ai\SemanticPlanJsonExtractor.cs" Link="Source\Services\Ai\SemanticPlanJsonExtractor.cs" />
     <Compile Include="..\Yagu\Services\Ai\SemanticCapabilityDetector.cs" Link="Source\Services\Ai\SemanticCapabilityDetector.cs" />
     <Compile Include="..\Yagu\Services\Ai\SemanticPromptText.cs" Link="Source\Services\Ai\SemanticPromptText.cs" />
+    <Compile Include="..\Yagu\Services\Ai\ModelMemoryBudget.cs" Link="Source\Services\Ai\ModelMemoryBudget.cs" />
   </ItemGroup>
 
   <!-- Copy the Rust cdylib next to the test assembly so the native fast-path

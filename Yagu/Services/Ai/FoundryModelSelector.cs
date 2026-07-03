@@ -45,7 +45,12 @@ public sealed class FoundryModelSelector
         "qwen2.5-0.5b", // last resort: weak, only when nothing better is available
     ];
 
-    // Task/modality fragments that disqualify a model from text-only semantic translation.
+    // Task/modality fragments that disqualify a model from text-only semantic translation. Matched
+    // against BOTH the catalog Task field AND the model alias/id: the catalog Task is frequently unset
+    // (e.g. the whisper-tiny CPU build reports no Task), so relying on Task alone lets a speech/embedding
+    // model slip through as "unknown task: assume usable" and get auto-selected — then fail every request
+    // (whisper is ASR with a 448-token context that cannot hold the ~8.5K-token system prompt). The model
+    // NAME reliably carries the modality token ("openai-whisper-tiny-generic-cpu"), so we screen it too.
     private static readonly string[] ExcludedTaskFragments =
         ["embed", "audio", "transcription", "whisper", "speech", "vision", "image", "rerank"];
 
@@ -178,24 +183,38 @@ public sealed class FoundryModelSelector
             return null;
         }
 
-        var candidates = models
-            .Where(m => m is not null)
-            .Select(m => new ModelCandidate(
-                Alias: !string.IsNullOrWhiteSpace(m.Alias) ? m.Alias : m.Info?.Alias ?? m.Id,
-                FileSizeMb: m.Info?.FileSizeMb,
-                Task: m.Info?.Task,
-                Device: m.Info?.Runtime?.DeviceType ?? DeviceType.CPU))
-            .ToList();
-
-        // Rank only variants this machine can actually run, so a family whose ONLY builds are GPU/NPU
-        // is never auto-chosen (loading it would fall back to a device default that crashes during
-        // inference). CPU is always available, so this keeps at least the CPU builds.
-        if (availableDevices is not null)
+        // Resolve each family to the variant this machine will ACTUALLY run. Foundry's family-level Info
+        // (Runtime.DeviceType, FileSizeMb) reflects its GPU/DirectML default, which is UNRELIABLE on a
+        // CPU-only box: DirectML registers on almost any Windows machine, so every chat family reports
+        // "GPU". A reported-device filter then drops EVERY chat model, leaving only the non-chat
+        // (embedding/whisper) families that happen to report CPU -- which are correctly rejected, yielding
+        // a bogus "no compatible model" even though the picker lists dozens of CPU chat models. Descending
+        // to the best runnable variant (device parsed from the id via ResolveVariantDevice, honoring
+        // availableDevices) gives the REAL device AND the CPU build's size -- matching the picker and what
+        // PreferAccurateVariantAsync will load. Families with no runnable variant are dropped (never
+        // auto-picked, so a GPU/NPU-only family can't be chosen then crash). ListModelsAsync items may not
+        // carry Variants, so re-fetch each family by alias (as the picker does); this is a once-per-session
+        // path so the extra catalog lookups are cheap.
+        var candidates = new List<ModelCandidate>(models.Count);
+        foreach (var m in models)
         {
-            var runnable = candidates.Where(c => availableDevices.Contains(c.Device)).ToList();
-            if (runnable.Count > 0) candidates = runnable;
+            if (m is null) continue;
+            string alias = !string.IsNullOrWhiteSpace(m.Alias) ? m.Alias : m.Info?.Alias ?? m.Id;
+            IModel family = await catalog.GetModelAsync(alias, cancellationToken).ConfigureAwait(false) ?? m;
+            IModel? runnable = BestRunnableVariant(family, deviceOrder, availableDevices);
+            if (runnable is null) continue; // no build this machine can run
+            candidates.Add(new ModelCandidate(
+                Alias: alias,
+                FileSizeMb: runnable.Info?.FileSizeMb,
+                Task: runnable.Info?.Task,
+                Device: ResolveVariantDevice(runnable)));
         }
-        LogService.Instance.Verbose(LogSource, $"Ranking {candidates.Count} hardware-compatible catalog model(s).");
+        if (candidates.Count == 0)
+        {
+            LogService.Instance.Warning(LogSource, "No catalog model has a variant this machine can run.");
+            return null;
+        }
+        LogService.Instance.Verbose(LogSource, $"Ranking {candidates.Count} runnable catalog model(s).");
 
         string? chosenAlias = SelectAlias(candidates, availableMemoryMb);
         if (chosenAlias is null)
@@ -357,7 +376,16 @@ public sealed class FoundryModelSelector
 
         var eligible = candidates.Where(IsAutoSelectable).ToList();
         if (eligible.Count == 0) eligible = candidates.Where(IsTextChatCandidate).ToList();
-        if (eligible.Count == 0) eligible = candidates.ToList(); // fall back to anything compatible
+        if (eligible.Count == 0)
+        {
+            // Nothing text-chat-capable in the catalog. NEVER fall back to a task-incompatible model
+            // (embedding / audio / whisper / vision): it cannot perform JSON translation and would fail
+            // every request (e.g. whisper-tiny's 448-token context). Returning null makes the caller
+            // report that no compatible model is available instead of silently selecting an unusable one.
+            LogService.Instance.Warning(LogSource,
+                "No text-chat-capable model in catalog; refusing to fall back to a non-chat model.");
+            return null;
+        }
 
         // Memory guard (CPU only): prefer models that actually fit. If NOTHING fits the budget, give
         // the lightest model the best chance rather than the highest-preference (heaviest) one, which
@@ -396,18 +424,11 @@ public sealed class FoundryModelSelector
         .ThenBy(c => c.Alias, StringComparer.OrdinalIgnoreCase)
         .First().Alias;
 
-    /// <summary>
-    /// RAM (MB) to reserve on top of a model's on-disk weights for its KV cache, the ONNX runtime, and
-    /// OS headroom. The semantic system prompt is large (~6-7K tokens), so the KV cache is the dominant
-    /// extra cost; a model only "fits" when its weights plus this reserve sit within available physical
-    /// memory. This is why a ~3.8B model (e.g. phi-4-mini) is rejected on a ~4 GB machine.
-    /// </summary>
-    private const int ModelMemoryHeadroomMb = 1536;
-
-    /// <summary>Whether a candidate's estimated footprint (weights + <see cref="ModelMemoryHeadroomMb"/>)
-    /// fits within <paramref name="availableMemoryMb"/>. Models of unknown size pass (cannot judge).</summary>
+    /// <summary>Whether a candidate's estimated footprint (weights + a size-scaled headroom) fits within
+    /// <paramref name="availableMemoryMb"/>. Delegates the pure math to <see cref="ModelMemoryBudget"/>
+    /// (unit-tested; this file pulls in Foundry types and cannot be). Models of unknown size pass.</summary>
     private static bool FitsInMemory(ModelCandidate candidate, int availableMemoryMb)
-        => candidate.FileSizeMb is not int sizeMb || sizeMb + ModelMemoryHeadroomMb <= availableMemoryMb;
+        => ModelMemoryBudget.Fits(candidate.FileSizeMb, availableMemoryMb);
 
     // Reasoning / chain-of-thought model markers, excluded from AUTO selection (an explicit user
     // override can still force one). Matched as a lowercase substring of the alias — chiefly to stop the
@@ -458,7 +479,16 @@ public sealed class FoundryModelSelector
 
     private static bool IsTextChatCandidate(ModelCandidate c)
     {
-        if (string.IsNullOrWhiteSpace(c.Task)) return true; // unknown task: assume usable
+        // Screen the alias/id FIRST: the catalog Task field is frequently null/unset (notably the
+        // whisper-tiny CPU build), so a speech/embedding/vision model would otherwise pass the
+        // "unknown task: assume usable" branch below, get auto-selected as the smallest model, and then
+        // fail hard (e.g. whisper's 448-token context vs the ~8.5K-token prompt). The model NAME always
+        // carries the modality token, so an excluded fragment in the alias disqualifies it outright.
+        string alias = c.Alias?.ToLowerInvariant() ?? string.Empty;
+        if (alias.Length > 0 && ExcludedTaskFragments.Any(f => alias.Contains(f, StringComparison.Ordinal)))
+            return false;
+
+        if (string.IsNullOrWhiteSpace(c.Task)) return true; // unknown task: assume usable (name already screened)
         string task = c.Task.ToLowerInvariant();
         return !ExcludedTaskFragments.Any(task.Contains);
     }
@@ -481,6 +511,15 @@ public sealed class FoundryModelSelector
     /// translation (excludes embedding, audio, vision, rerank models).</summary>
     public static bool IsTextChatModel(string? task) =>
         IsTextChatCandidate(new ModelCandidate(string.Empty, null, task, DeviceType.CPU));
+
+    /// <summary>
+    /// Whether a catalog model — identified by BOTH its alias/id and its task — is usable for text
+    /// chat / structured translation. Prefer this over the task-only overload: the catalog Task field
+    /// is frequently unset (e.g. the whisper-tiny CPU build), so screening the alias/id catches
+    /// speech/embedding/vision models that a task-only check would let through.
+    /// </summary>
+    public static bool IsTextChatModel(string? alias, string? task) =>
+        IsTextChatCandidate(new ModelCandidate(alias ?? string.Empty, null, task, DeviceType.CPU));
 
     private static bool IsBetterTiebreak(ModelCandidate candidate, ModelCandidate current)
     {

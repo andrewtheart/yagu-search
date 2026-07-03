@@ -379,7 +379,9 @@ internal static class CliRunner
             if (o.IsCached) tags.Add("already downloaded");
             if (!string.IsNullOrWhiteSpace(o.DeviceLabel)) tags.Add(o.DeviceLabel!);
             string suffix = tags.Count > 0 ? $"  [{string.Join(", ", tags)}]" : string.Empty;
-            string warn = o.IsBelowRecommended ? "  (!) may give less accurate results" : string.Empty;
+            string warn = o.ExceedsAvailableMemory
+                ? "  (!) too large for this PC's memory - will fail to load"
+                : o.IsBelowRecommended ? "  (!) may give less accurate results" : string.Empty;
             WriteError($"  {idx + 1,2}) {o.DisplayName,-28} {FormatModelSize(o.SizeBytes),8}{suffix}{warn}");
         }
 

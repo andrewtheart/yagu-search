@@ -44,6 +44,7 @@ public sealed partial class MainWindow
         }
 
         FocusSearchOnLaunch();
+        await ShowTelemetryConsentIfNeededAsync();
         await CheckFirstRunResultStoreTempLocationAsync();
         await CheckEverythingAsync();
         await CheckFirstRunContextMenuAsync();
@@ -91,6 +92,24 @@ public sealed partial class MainWindow
                 DispatcherQueue.TryEnqueue(() => QueryBox.IsSuggestionListOpen = false);
             }
         });
+    }
+
+    /// <summary>
+    /// First-run only: ask once whether the user wants to help improve Yagu (anonymized telemetry and/or
+    /// bug reports). Sequenced into the startup-modal chain rather than fired from <see cref="App"/>, so it
+    /// never stacks on top of another first-run prompt - only one startup modal is shown at a time. The
+    /// dialog records "prompt shown" itself; if another owned modal is somehow open it simply retries next
+    /// launch (matching the other startup checks).
+    /// </summary>
+    private async Task ShowTelemetryConsentIfNeededAsync()
+    {
+        if (ViewModel.TelemetryConsentPromptShown)
+            return;
+        // Don't stack on another startup prompt; not marked shown yet, so it tries again next launch.
+        if (YaguDialog.HasOpenOwnedWindow(_hwnd))
+            return;
+
+        await TelemetryConsentDialog.RequestConsentAsync(this);
     }
 
     /// <summary>

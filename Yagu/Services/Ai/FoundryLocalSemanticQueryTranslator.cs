@@ -19,6 +19,12 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     private const string PromptResourceName = "Yagu.Services.Ai.Prompts.SemanticSearchSystemPrompt.prompt.md";
     private const string LogSource = "Semantic.Translator";
 
+    /// <summary>Below this available-RAM budget (MB) on a CPU-only machine, <see cref="BuildSystemPrompt"/>
+    /// sends the condensed prompt (schema + rules, no few-shot examples) so a tiny model's KV cache fits.
+    /// At/above it — or on accelerated hardware, where the budget is null — the full prompt is sent
+    /// unchanged. 2048 MB targets genuinely extreme cases (e.g. a 4 GB machine with little free RAM).</summary>
+    private const int PromptCondenseMemoryThresholdMb = 2048;
+
     /// <summary>Maximum time to wait for a single model inference before treating the translation as
     /// failed. A healthy response takes a few seconds on GPU/NPU (and is slower but still bounded on
     /// CPU); this watchdog only fires when the Foundry Local runtime wedges mid-generation and the
@@ -454,12 +460,13 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             }
 
             // Restrict to text-chat models and rank them so the recommended pick can be flagged.
+            // Screen by alias AND task: the catalog Task field is often unset (e.g. whisper-tiny), so a
+            // task-only filter would leave speech/embedding models in the list. If nothing qualifies we
+            // return an empty list rather than re-adding non-chat models (they can never translate).
             var usable = models
-                .Where(m => m is not null && FoundryModelSelector.IsTextChatModel(m.Info?.Task))
+                .Where(m => m is not null && FoundryModelSelector.IsTextChatModel(AliasOf(m), m.Info?.Task))
                 .Select(m => m!)
                 .ToList();
-            if (usable.Count == 0)
-                usable = models.Where(m => m is not null).Select(m => m!).ToList();
 
             // Resolve each family to the BEST variant this machine can actually run. Foundry reports a
             // misleading family-level DeviceType (it reflects the registered execution provider —
@@ -494,6 +501,9 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                 ? int.MaxValue
                 : FoundryModelSelector.RankOf(recommendedAlias);
 
+            // CPU-only memory budget (null on accelerated hardware) used to flag models too big to load.
+            int? memBudgetMb = AvailableMemoryBudgetMb();
+
             var options = new List<SemanticModelOption>(resolved.Count);
             foreach ((IModel family, IModel variant) in resolved)
             {
@@ -514,6 +524,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                     IsBelowRecommended = !isRecommended && rank > recommendedRank,
                     IsCached = isCached,
                     DeviceLabel = DeviceLabelOf(FoundryModelSelector.ResolveVariantDevice(variant)),
+                    ExceedsAvailableMemory = memBudgetMb is { } budget && sizeMb is { } sz && !ModelMemoryBudget.Fits(sz, budget),
                 });
             }
 
@@ -668,9 +679,15 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
 
     private string BuildSystemPrompt(SemanticTranslationContext context)
     {
-        DateTimeOffset now = context.Now;
-        return _systemPromptTemplate.Value
-            .Replace("{{TODAY}}", now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        // All the testable logic (low-memory condense gating + {{TODAY}} substitution) lives in the pure,
+        // unit-tested SemanticPromptText.BuildSystemPrompt; this wrapper only gathers the live inputs (the
+        // embedded template, today's date, and the CPU-only memory budget). AvailableMemoryBudgetMb() is
+        // null on accelerated hardware, so the full prompt is sent unchanged there.
+        return SemanticPromptText.BuildSystemPrompt(
+            _systemPromptTemplate.Value,
+            context.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            AvailableMemoryBudgetMb(),
+            PromptCondenseMemoryThresholdMb);
     }
 
     /// <summary>

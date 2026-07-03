@@ -37,6 +37,44 @@ internal static class SemanticPromptText
         return content;
     }
 
+    /// <summary>
+    /// Produces a shorter variant of the system prompt for EXTREMELY memory-constrained CPU machines,
+    /// where the full ~8.5K-token prompt's KV cache would risk an out-of-memory failure on a tiny model.
+    /// Drops the few-shot "## Examples" section (the bulk of the tokens) while keeping the complete
+    /// schema, interpretation rules, and decision tree. Matches the heading only at the start of a line
+    /// so a mid-text mention is never cut, and returns <paramref name="prompt"/> UNCHANGED when the
+    /// heading is absent — so nothing is lost if the prompt is restructured, and every non-constrained
+    /// case still sends the identical full prompt.
+    /// </summary>
+    public static string CondenseForLowMemory(string prompt)
+    {
+        if (string.IsNullOrEmpty(prompt))
+            return prompt;
+
+        int idx = prompt.IndexOf("\n## Examples", StringComparison.Ordinal);
+        if (idx < 0)
+            return prompt;
+
+        return prompt[..idx].TrimEnd() + "\n";
+    }
+
+    /// <summary>
+    /// Builds the final system prompt to send to the model: substitutes the <c>{{TODAY}}</c> placeholder
+    /// with <paramref name="todayIso"/>, and — ONLY when a CPU-only memory budget is supplied and falls
+    /// below <paramref name="condenseThresholdMb"/> — first condenses the prompt via
+    /// <see cref="CondenseForLowMemory"/> so a tiny model's KV cache fits. A null
+    /// <paramref name="availableMemoryBudgetMb"/> (accelerated hardware) or a budget at/above the
+    /// threshold yields the IDENTICAL full prompt. Kept pure/dependency-free so the condense-gating
+    /// decision is unit-testable without the Foundry-coupled translator.
+    /// </summary>
+    public static string BuildSystemPrompt(string template, string todayIso, int? availableMemoryBudgetMb, int condenseThresholdMb)
+    {
+        string prompt = template ?? string.Empty;
+        if (availableMemoryBudgetMb is { } budgetMb && budgetMb < condenseThresholdMb)
+            prompt = CondenseForLowMemory(prompt);
+        return prompt.Replace("{{TODAY}}", todayIso ?? string.Empty);
+    }
+
     /// <summary>True when the line starting at <paramref name="index"/> is exactly "---" (the YAML
     /// front-matter delimiter), ignoring a trailing CR.</summary>
     private static bool IsDelimiterAt(string content, int index)

@@ -85,4 +85,126 @@ public class SemanticPromptTextTests
 
         Assert.Equal(content, result);
     }
+
+    [Fact]
+    public void StripFrontMatter_EmptyString_ReturnsInput()
+        => Assert.Equal(string.Empty, SemanticPromptText.StripFrontMatter(string.Empty));
+
+    [Fact]
+    public void StripFrontMatter_DelimiterWithoutTrailingNewline_ReturnsUnchanged()
+    {
+        // A lone "---" with no newline exercises the no-newline paths (IndexOf('\n') == -1) in both
+        // the delimiter check and the line-advance helper; front matter is unterminated so it is kept.
+        Assert.Equal("---", SemanticPromptText.StripFrontMatter("---"));
+    }
+
+    [Fact]
+    public void StripFrontMatter_BlankLineInsideFrontMatter_StripsToBody()
+    {
+        // A blank line inside the block makes the delimiter scan hit an empty line (lineEnd == index),
+        // then the closing "---" terminates the block and only the body survives.
+        Assert.Equal("body\n", SemanticPromptText.StripFrontMatter("---\n\n---\nbody\n"));
+    }
+
+    [Fact]
+    public void CondenseForLowMemory_DropsExamplesSection_KeepsSchemaAndRules()
+    {
+        const string content =
+            "# Yagu semantic search\n" +
+            "## Output schema\n" +
+            "fields...\n" +
+            "## INTERPRETATION RULES\n" +
+            "rules...\n" +
+            "## Examples\n" +
+            "### Example 1\n" +
+            "User: ...\n" +
+            "JSON: {...}\n";
+
+        string result = SemanticPromptText.CondenseForLowMemory(content);
+
+        Assert.Contains("## Output schema", result);
+        Assert.Contains("## INTERPRETATION RULES", result);
+        Assert.DoesNotContain("## Examples", result);
+        Assert.DoesNotContain("### Example 1", result);
+        Assert.EndsWith("rules...\n", result);
+    }
+
+    [Fact]
+    public void CondenseForLowMemory_NoExamplesHeading_ReturnsUnchanged()
+    {
+        const string content = "# Prompt\n## Output schema\nfields...\n";
+
+        string result = SemanticPromptText.CondenseForLowMemory(content);
+
+        Assert.Equal(content, result);
+    }
+
+    [Fact]
+    public void CondenseForLowMemory_MidLineExamplesMention_IsNotCut()
+    {
+        // "## Examples" must be a heading at the start of a line; a mid-text mention is body content.
+        const string content = "Rules mention the ## Examples section inline.\nmore rules\n";
+
+        string result = SemanticPromptText.CondenseForLowMemory(content);
+
+        Assert.Equal(content, result);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(null)]
+    public void CondenseForLowMemory_EmptyOrNull_ReturnsInput(string? content)
+    {
+        Assert.Equal(content, SemanticPromptText.CondenseForLowMemory(content!));
+    }
+
+    private const string SampleTemplate =
+        "# Prompt for {{TODAY}}\n" +
+        "## Output schema\n" +
+        "fields...\n" +
+        "## Examples\n" +
+        "### Example 1\n";
+
+    [Fact]
+    public void BuildSystemPrompt_NullBudget_UsesFullPromptAndSubstitutesDate()
+    {
+        // Accelerated hardware reports a null budget → the identical full prompt (examples kept).
+        string result = SemanticPromptText.BuildSystemPrompt(SampleTemplate, "2026-07-02", availableMemoryBudgetMb: null, condenseThresholdMb: 2048);
+
+        Assert.Contains("# Prompt for 2026-07-02", result);
+        Assert.DoesNotContain("{{TODAY}}", result);
+        Assert.Contains("## Examples", result);
+    }
+
+    [Fact]
+    public void BuildSystemPrompt_BudgetAtThreshold_UsesFullPrompt()
+    {
+        // Boundary: a budget EQUAL to the threshold is not "below" it, so the full prompt is used.
+        string result = SemanticPromptText.BuildSystemPrompt(SampleTemplate, "2026-07-02", availableMemoryBudgetMb: 2048, condenseThresholdMb: 2048);
+
+        Assert.Contains("## Examples", result);
+        Assert.Contains("2026-07-02", result);
+    }
+
+    [Fact]
+    public void BuildSystemPrompt_BudgetBelowThreshold_CondensesPrompt()
+    {
+        string result = SemanticPromptText.BuildSystemPrompt(SampleTemplate, "2026-07-02", availableMemoryBudgetMb: 2047, condenseThresholdMb: 2048);
+
+        Assert.DoesNotContain("## Examples", result);
+        Assert.Contains("## Output schema", result);
+        Assert.Contains("# Prompt for 2026-07-02", result);
+    }
+
+    [Fact]
+    public void BuildSystemPrompt_NullTemplate_ReturnsEmpty()
+        => Assert.Equal(string.Empty, SemanticPromptText.BuildSystemPrompt(null!, "2026-07-02", availableMemoryBudgetMb: null, condenseThresholdMb: 2048));
+
+    [Fact]
+    public void BuildSystemPrompt_NullToday_SubstitutesEmptyForPlaceholder()
+    {
+        string result = SemanticPromptText.BuildSystemPrompt("date={{TODAY}}", todayIso: null!, availableMemoryBudgetMb: null, condenseThresholdMb: 2048);
+
+        Assert.Equal("date=", result);
+    }
 }

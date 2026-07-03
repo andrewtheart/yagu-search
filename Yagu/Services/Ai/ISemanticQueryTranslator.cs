@@ -102,6 +102,12 @@ public sealed class SemanticModelOption
 
     /// <summary>Optional hardware label (e.g. "GPU", "NPU", "CPU").</summary>
     public string? DeviceLabel { get; init; }
+
+    /// <summary>True when the model's estimated memory footprint exceeds this machine's available RAM
+    /// (computed for CPU-only machines; always false on accelerated hardware, where the model runs in
+    /// device memory). The picker warns that such a model will fail to load, but still allows selecting
+    /// it as a deliberate override.</summary>
+    public bool ExceedsAvailableMemory { get; init; }
 }
 
 /// <summary>Ambient information the model needs to resolve relative dates and defaults.</summary>

@@ -96,10 +96,10 @@ public sealed partial class App : Application, IDisposable
             // consent-gated telemetry + bug-report subsystems. Both calls self-gate on user consent.
             LogService.Instance.CriticalLogged += OnCriticalLogged;
 
-            // First-run only: ask once whether the user wants to help improve Yagu. The dialog marshals
-            // to the UI thread itself and always records that the prompt was shown (so it never repeats).
-            if (!_window.ViewModel.TelemetryConsentPromptShown)
-                _ = TelemetryConsentDialog.RequestConsentAsync(_window);
+            // First-run telemetry/bug-report consent ("Help improve Yagu?") is sequenced into MainWindow's
+            // OnContentLoaded startup-modal chain (ShowTelemetryConsentIfNeededAsync) rather than fired here,
+            // so it never stacks on top of another first-run prompt (e.g. the result-store temp-location
+            // modal) - only one startup modal is shown at a time.
         }
         catch (Exception ex)
         {
