@@ -2749,14 +2749,16 @@ public sealed class PreviewCoreRegressionTests
             "var imageBorder = CreateSectionImageThumbnail(filePath);",
             "Grid.SetColumnSpan(imageBorder, 2);");
 
-        string sectionThumb = ExtractMethodWindow(MainWindowSource, "CreateSectionImageThumbnail", window: 3000);
+        string sectionThumb = ExtractMethodWindow(MainWindowSource, "CreateSectionImageThumbnail", window: 4000);
         Assert.Contains("LoadSectionImageThumbnailAsync(image, path)", sectionThumb);
         Assert.DoesNotContain("await UpdateSectionsImageThumbnailAsync();", MainWindowSource);
 
         // The thumbnail is centered in the drawer and carries an expand button that opens the
-        // full-resolution original in a closable, resizable modal.
+        // full-resolution original in a closable, resizable modal. The button uses a constant
+        // dark chip + white glyph so it stays visible on any image behind it.
         Assert.Contains("HorizontalAlignment = HorizontalAlignment.Center", sectionThumb);
         Assert.Contains("ShowFullSizeImageModalAsync(capturedPath)", sectionThumb);
+        Assert.Contains("[\"ButtonBackground\"] = chipBackground", sectionThumb);
         string fullSize = ExtractMethodWindow(MainWindowSource, "ShowFullSizeImageModalAsync", window: 2000);
         Assert.Contains("YaguDialog.ShowAsync(", fullSize);
         Assert.Contains("ShowTopRightCloseButton = true", fullSize);

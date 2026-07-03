@@ -1829,7 +1829,15 @@ public sealed partial class MainWindow
         };
 
         // Expand button overlays the thumbnail's top-right corner. Clicking it opens the
-        // full-resolution original in a closable modal.
+        // full-resolution original in a closable modal. It uses a constant semi-opaque dark
+        // "chip" with a white glyph (per-control lightweight styling that pins the Button's
+        // per-state theme brushes) so the affordance stays visible on ANY image behind it —
+        // light, dark, or busy — in every visual state, instead of blending into the picture.
+        var chipGlyphBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.White);
+        var chipBackground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(0xB3, 0x00, 0x00, 0x00));
+        var chipBackgroundHover = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(0xCC, 0x00, 0x00, 0x00));
+        var chipBackgroundPressed = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(0xE6, 0x00, 0x00, 0x00));
+        var chipBorderBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(0x66, 0xFF, 0xFF, 0xFF));
         var expandButton = new Button
         {
             Content = new FontIcon { Glyph = "\uE740", FontSize = 12 },
@@ -1838,9 +1846,24 @@ public sealed partial class MainWindow
             MinWidth = 0,
             MinHeight = 0,
             Padding = new Thickness(0),
+            CornerRadius = new CornerRadius(16),
+            BorderThickness = new Thickness(1),
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Top,
             Margin = new Thickness(0, 4, 4, 0),
+            Resources =
+            {
+                ["ButtonBackground"] = chipBackground,
+                ["ButtonBackgroundPointerOver"] = chipBackgroundHover,
+                ["ButtonBackgroundPressed"] = chipBackgroundPressed,
+                ["ButtonBackgroundDisabled"] = chipBackground,
+                ["ButtonForeground"] = chipGlyphBrush,
+                ["ButtonForegroundPointerOver"] = chipGlyphBrush,
+                ["ButtonForegroundPressed"] = chipGlyphBrush,
+                ["ButtonBorderBrush"] = chipBorderBrush,
+                ["ButtonBorderBrushPointerOver"] = chipBorderBrush,
+                ["ButtonBorderBrushPressed"] = chipBorderBrush,
+            },
         };
         ToolTipService.SetToolTip(expandButton, "View full size");
         string capturedPath = path;

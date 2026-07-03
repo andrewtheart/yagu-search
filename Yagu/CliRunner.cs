@@ -3387,6 +3387,9 @@ internal sealed class CliArgs
         if (overlay.MaxSearchDepth is { } depth && MaxSearchDepth is null) MaxSearchDepth = depth < 0 ? 0 : depth;
         if (overlay.ObeyGitignore is { } gi && ObeyGitignore is null) ObeyGitignore = gi;
         if (overlay.SearchInsideArchives is { } arc && SearchInsideArchives is null) SearchInsideArchives = arc;
+        // The plan targets known-binary extensions (.exe/.com/.cpl…): stop skipping binary content so a
+        // content search over those files actually reads them (mirrors the GUI's binary auto-enable).
+        if (overlay.SearchBinary == true && SkipBinary is null) SkipBinary = false;
         if (overlay.SearchHiddenFiles is { } sh && SearchHiddenFiles is null) SearchHiddenFiles = sh;
         if (overlay.SearchImageText is { } sit && SearchImageText is null) SearchImageText = sit;
 

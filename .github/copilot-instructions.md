@@ -51,8 +51,9 @@ discovery. See [README.md](../README.md) for the feature tour and build prerequi
 
 ## Build & Launch Rules
 
-- If the user asks to build, rebuild, validate a change, or launch after changes without explicitly saying Release, build **Debug** with the Rust profiling profile: `dotnet build Yagu/Yagu.csproj -c Debug -p:RustProfile=profiling`.
-- Build **Release** only when the user explicitly asks for a Release build. For Release builds, use the normal Release profile without Rust profiling: `dotnet build Yagu/Yagu.csproj -c Release`.
+- If the user asks to build, rebuild, validate a change, or launch after changes without explicitly saying Release, build **Debug** with the Rust profiling profile **and skip the version bump**: `dotnet build Yagu/Yagu.csproj -c Debug -p:RustProfile=profiling -p:SkipYaguVersionIncrement=true`.
+- **Always pass `-p:SkipYaguVersionIncrement=true` on local Debug/validation/launch builds.** Without it, every build auto-increments `Yagu/Properties/build-version.txt` + `AppInfo.g.cs`, which then has to be reverted (wasted work). The flag suppresses that churn entirely, so there is nothing to revert. Do NOT pass it for Release/installer builds (they must bump so artifact names match the binary).
+- Build **Release** only when the user explicitly asks for a Release build. For Release builds, use the normal Release profile without Rust profiling (and without the skip flag): `dotnet build Yagu/Yagu.csproj -c Release`.
 - When launching the app, always launch the **Debug** build: `Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe`.
 - If a build fails only because `Yagu.exe` (or `yagu_core.dll`) is locked by a running Yagu instance (MSB3027/MSB3021 "being used by another process" / "file is locked by: Yagu (PID)"), you are **authorized to kill that running Yagu session** and rebuild. Kill it targeted — by the PID from the error, or `Get-Process Yagu -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*\Yagu\bin\*' } | Stop-Process -Force` — then re-run the build. Do NOT broadly kill unrelated processes; this exception is for the Yagu app under build only.
 
@@ -64,11 +65,11 @@ discovery. See [README.md](../README.md) for the feature tour and build prerequi
 
 ## Native Crash & Profiling Rules
 
-- When investigating a `yagu_core.dll` native crash, WER crash dump, native stack, Rust FFI issue, or native search performance problem, build **Debug** with the Rust profiling profile so the app output contains a symbol-rich native binary and PDB: `dotnet build Yagu/Yagu.csproj -c Debug -p:RustProfile=profiling`.
+- When investigating a `yagu_core.dll` native crash, WER crash dump, native stack, Rust FFI issue, or native search performance problem, build **Debug** with the Rust profiling profile so the app output contains a symbol-rich native binary and PDB: `dotnet build Yagu/Yagu.csproj -c Debug -p:RustProfile=profiling -p:SkipYaguVersionIncrement=true`.
 - After a Debug profiling build, verify `yagu_core.dll` and `yagu_core.pdb` are present beside `Yagu.exe` under `Yagu\bin\Debug\net10.0-windows10.0.19041.0\`.
 - Do not build Release for crash/profiling validation unless the user explicitly asks for Release. If they ask for Release, use `dotnet build Yagu/Yagu.csproj -c Release` without Rust profiling unless they explicitly request Release with Rust profiling.
 - For native crash reproduction, make sure Yagu-specific WER LocalDumps are enabled under `HKCU:\Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\Yagu.exe` with `DumpType=2`, `DumpCount=10`, and `DumpFolder=C:\src\Yagu\TestResults\CrashDumps`.
-- Yagu builds auto-increment `Yagu/Properties/build-version.txt` and `Yagu/Properties/AppInfo.g.cs`; revert that generated version churn after validation builds unless the user explicitly asked for a version bump.
+- Yagu builds auto-increment `Yagu/Properties/build-version.txt` and `Yagu/Properties/AppInfo.g.cs`. Pass `-p:SkipYaguVersionIncrement=true` (as above) to suppress that churn on validation builds so there is nothing to revert. Only Release/installer builds — or an explicit user-requested version bump — should omit the flag; if you do produce churn that way and the user didn't ask for a bump, revert it with `git checkout -- Yagu/Properties/build-version.txt Yagu/Properties/AppInfo.g.cs`.
 
 ## Test File Naming Rules
 

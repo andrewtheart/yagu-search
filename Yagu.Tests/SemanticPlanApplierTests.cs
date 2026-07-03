@@ -562,6 +562,142 @@ public sealed class SemanticPlanApplierTests
         Assert.True(double.IsNaN(target.MaxSearchDepth));
     }
 
+    // ---- Deterministic archive / binary enable + empty-plan fallback -------
+
+    [Theory]
+    [InlineData("*.docx")]
+    [InlineData("*.xlsx")]
+    [InlineData("**/*.ZIP")]
+    public void Resolve_ArchiveTypedInclude_EnablesSearchInsideArchives(string glob)
+    {
+        var resolved = SemanticPlanApplier.Resolve(
+            new SemanticSearchPlan { Pattern = "budget", IncludeGlobs = new() { glob } }, Context());
+        Assert.True(resolved.SearchInsideArchives);
+    }
+
+    [Fact]
+    public void Resolve_NonArchiveInclude_LeavesSearchInsideArchivesNull()
+    {
+        var resolved = SemanticPlanApplier.Resolve(
+            new SemanticSearchPlan { Pattern = "x", IncludeGlobs = new() { "*.png" } }, Context());
+        Assert.Null(resolved.SearchInsideArchives);
+    }
+
+    [Fact]
+    public void Resolve_ArchiveInclude_FlowsThroughToOverlayAndTarget()
+    {
+        var resolved = SemanticPlanApplier.Resolve(
+            new SemanticSearchPlan { Pattern = "budget", IncludeGlobs = new() { "*.docx" } }, Context());
+
+        // Both consumers inherit the deterministic enable from the single resolved plan.
+        Assert.True(SemanticPlanApplier.ToOverlay(resolved).SearchInsideArchives);   // CLI overlay
+        var target = new FakeTarget();
+        SemanticPlanApplier.ApplyToTarget(resolved, target);
+        Assert.True(target.SearchInsideArchives);                                    // GUI target
+    }
+
+    [Theory]
+    [InlineData("*.exe")]
+    [InlineData("*.com")]
+    [InlineData("*.cpl")]
+    public void Resolve_BinaryTypedInclude_EnablesSearchBinary(string glob)
+    {
+        var resolved = SemanticPlanApplier.Resolve(
+            new SemanticSearchPlan { Pattern = "MZ", IncludeGlobs = new() { glob } }, Context());
+        Assert.True(resolved.SearchBinary);
+        Assert.True(SemanticPlanApplier.ToOverlay(resolved).SearchBinary);
+    }
+
+    [Fact]
+    public void Resolve_NonBinaryInclude_LeavesSearchBinaryNull()
+    {
+        var resolved = SemanticPlanApplier.Resolve(
+            new SemanticSearchPlan { Pattern = "x", IncludeGlobs = new() { "*.txt" } }, Context());
+        Assert.Null(resolved.SearchBinary);
+        Assert.Null(SemanticPlanApplier.ToOverlay(resolved).SearchBinary);
+    }
+
+    [Fact]
+    public void Resolve_EmptyPlan_FallsBackToLiteralOriginalQuery()
+    {
+        var context = new SemanticTranslationContext { Now = Now, OriginalQuery = "find my thing" };
+        var resolved = SemanticPlanApplier.Resolve(new SemanticSearchPlan(), context);
+
+        Assert.Equal("find my thing", resolved.Pattern);
+        Assert.False(resolved.UseRegex); // literal search of the typed text, not the match-all "." regex
+    }
+
+    [Fact]
+    public void Resolve_EmptyPlan_NoOriginalQuery_LeavesPatternNull()
+    {
+        var resolved = SemanticPlanApplier.Resolve(new SemanticSearchPlan(), Context());
+        Assert.Null(resolved.Pattern);
+    }
+
+    [Fact]
+    public void Resolve_PlanWithFilters_DoesNotOverridePatternWithOriginalQuery()
+    {
+        // A metadata-only plan synthesizes the match-all "." filename listing; the empty-plan literal
+        // fallback must NOT clobber it with the raw query text.
+        var context = new SemanticTranslationContext { Now = Now, OriginalQuery = "png files" };
+        var resolved = SemanticPlanApplier.Resolve(
+            new SemanticSearchPlan { IncludeGlobs = new() { "*.png" } }, context);
+
+        Assert.Equal(".", resolved.Pattern);
+        Assert.True(resolved.UseRegex);
+    }
+
+    [Fact]
+    public void Resolve_ModelExplicitlyEnabledArchives_IsPreservedForNonArchiveGlobs()
+    {
+        // plan.SearchInsideArchives == true short-circuits the deterministic archive check, so the
+        // model's explicit choice is kept even when the include filter is not archive-typed.
+        var resolved = SemanticPlanApplier.Resolve(
+            new SemanticSearchPlan { Pattern = "x", SearchInsideArchives = true, IncludeGlobs = new() { "*.png" } },
+            Context());
+        Assert.True(resolved.SearchInsideArchives);
+    }
+
+    [Fact]
+    public void DescribeResolved_EmitsOnlySetFields_IncludingSearchBinary()
+    {
+        string full = SemanticPlanApplier.DescribeResolved(new ResolvedSearchPlan
+        {
+            Directory = @"C:\",
+            Pattern = "x",
+            SearchMode = SearchMode.Content,
+            CaseSensitive = true,
+            UseRegex = false,
+            ExactMatch = false,
+            IncludeGlobs = new[] { "*.exe" },
+            ExcludeGlobs = new[] { "*.tmp" },
+            MinFileSizeBytes = 1,
+            MaxFileSizeBytes = 2,
+            CreatedAfterDate = Now,
+            CreatedBeforeDate = Now,
+            ModifiedAfterDate = Now,
+            ModifiedBeforeDate = Now,
+            MaxSearchDepth = 3,
+            ObeyGitignore = true,
+            SearchInsideArchives = true,
+            SearchBinary = true,
+            SearchHiddenFiles = true,
+            SearchImageText = true,
+            SortModeIndex = 1,
+            SortDirectionIndex = 0,
+            GroupMode = GroupMode.Folder,
+            GroupSortDirectionIndex = 1,
+        });
+        Assert.Contains("searchBinary=True", full);
+        Assert.Contains("archives=True", full);
+
+        // A plan with no overrides emits the sentinel and none of the optional clauses (covers the
+        // null branch of every field, including searchBinary).
+        string empty = SemanticPlanApplier.DescribeResolved(new ResolvedSearchPlan());
+        Assert.Equal("(no overrides)", empty);
+        Assert.DoesNotContain("searchBinary", empty);
+    }
+
     // ---- ToOverlay (CLI surface) -------------------------------------------
 
     [Fact]
@@ -1620,6 +1756,20 @@ public sealed class SemanticPlanApplierTests
             new ResolvedSearchPlan { SearchHiddenFiles = false }));
         Assert.Contains("including hidden files", SemanticPlanApplier.BuildExplanation(
             new ResolvedSearchPlan { SearchHiddenFiles = true }));
+    }
+
+    [Fact]
+    public void BuildExplanation_ArchiveAndBinaryEnable_StatedInPlainWords()
+    {
+        Assert.Contains("searching inside archives",
+            SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan { SearchInsideArchives = true }));
+        Assert.Contains("including binary files",
+            SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan { SearchBinary = true }));
+
+        // Not narrated when unset (the default), so a plain search reads cleanly.
+        string plain = SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan { Pattern = "x" });
+        Assert.DoesNotContain("archives", plain);
+        Assert.DoesNotContain("binary", plain);
     }
 
 

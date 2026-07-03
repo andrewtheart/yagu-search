@@ -64,6 +64,11 @@ public sealed class ResolvedSearchPlan
     public int? MaxSearchDepth { get; init; }
     public bool? ObeyGitignore { get; init; }
     public bool? SearchInsideArchives { get; init; }
+
+    /// <summary>Enable binary-file content search — the plan targets known-binary extensions
+    /// (.exe/.com/.cpl…) which Yagu otherwise skips. Null = leave unchanged.</summary>
+    public bool? SearchBinary { get; init; }
+
     public bool? SearchHiddenFiles { get; init; }
 
     /// <summary>Enable "Search image text (OCR)" — reading text inside image files. Null = leave unchanged.</summary>
@@ -95,6 +100,30 @@ public sealed class ResolvedSearchPlan
 public static class SemanticPlanApplier
 {
     private const string LogSource = "Semantic.PlanApplier";
+
+    /// <summary>Bare, lower-case extensions Yagu treats as archive containers (from
+    /// <see cref="AppSettings.DefaultArchiveExtensions"/>). Used to deterministically enable "Search
+    /// archives" when a plan filters to Office/OpenDocument/zip-family files whose text lives inside
+    /// the container.</summary>
+    private static readonly Lazy<IReadOnlySet<string>> ArchiveExtensionUniverse =
+        new(() => ParseSemicolonExtensions(AppSettings.DefaultArchiveExtensions));
+
+    /// <summary>Bare, lower-case extensions Yagu skips as binary (from
+    /// <see cref="AppSettings.DefaultBinaryExtensions"/>). Used to deterministically enable binary
+    /// search when a plan filters to known-binary types (.exe/.com/.cpl…).</summary>
+    private static readonly Lazy<IReadOnlySet<string>> BinaryExtensionUniverse =
+        new(() => ParseSemicolonExtensions(AppSettings.DefaultBinaryExtensions));
+
+    private static HashSet<string> ParseSemicolonExtensions(string semicolonList)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in semicolonList.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            string ext = raw.TrimStart('.').Trim();
+            if (ext.Length > 0) set.Add(ext);
+        }
+        return set;
+    }
 
     /// <summary>
     /// Normalizes <paramref name="plan"/> using <paramref name="context"/> for relative-date and
@@ -226,6 +255,24 @@ public static class SemanticPlanApplier
             searchImageText = true;
         }
 
+        // Office Open XML / OpenDocument / zip-family files are archives — their text lives INSIDE the
+        // container and is only reachable with "Search archives" on. When the plan filters to such
+        // extensions, enable it deterministically (small models routinely forget searchInsideArchives).
+        // This flows to BOTH the GUI and the CLI via the resolved plan; the GUI additionally adds the
+        // specific extensions to its archive set and syncs the dropdown.
+        bool? searchInsideArchives = plan.SearchInsideArchives;
+        if (searchInsideArchives != true
+            && GetArchiveExtensionsToEnable(include, ArchiveExtensionUniverse.Value).Count > 0)
+            searchInsideArchives = true;
+
+        // Yagu skips known-binary content by default, so a content search scoped to binary types
+        // (.exe/.com/.cpl…) would read nothing. When the plan filters to such extensions, enable binary
+        // search deterministically (again flowing to both consumers; the GUI additionally un-skips only
+        // the targeted types in its dropdown). Null when no binary type is targeted.
+        bool? searchBinary = GetBinaryExtensionsToEnable(include, BinaryExtensionUniverse.Value).Count > 0
+            ? true
+            : null;
+
         // A request like "all png files modified last year" carries no text term — the model emits
         // an empty pattern and relies purely on globs/metadata filters. Yagu's engine yields nothing
         // for an empty query, so synthesize a match-all filename query (regex ".") that enumerates
@@ -239,6 +286,17 @@ public static class SemanticPlanApplier
             pattern = ".";
             useRegex = true;
             mode ??= Models.SearchMode.FileNames;
+        }
+
+        // Empty/unusable plan (e.g. the model returned "{}"): with no pattern and nothing to enumerate,
+        // the search would do nothing. Fall back to a literal substring search of the user's typed text
+        // so it still searches something — the same intent as the "AI couldn't interpret" fallback, but
+        // reachable here because a valid-but-empty plan counts as success and bypasses that path. Both
+        // the GUI and the CLI populate context.OriginalQuery, so this works for both.
+        if (pattern is null && !string.IsNullOrWhiteSpace(context.OriginalQuery))
+        {
+            pattern = context.OriginalQuery!.Trim();
+            useRegex = false;
         }
 
         // Natural-language queries express SUBSTRING intent ("image files with 'a' in them",
@@ -268,7 +326,8 @@ public static class SemanticPlanApplier
             ModifiedBeforeDate = modifiedBefore,
             MaxSearchDepth = plan.MaxSearchDepth is { } d ? Math.Max(0, d) : null,
             ObeyGitignore = plan.ObeyGitignore,
-            SearchInsideArchives = plan.SearchInsideArchives,
+            SearchInsideArchives = searchInsideArchives,
+            SearchBinary = searchBinary,
             SearchHiddenFiles = searchHidden,
             SearchImageText = searchImageText,
             SortModeIndex = sortModeIndex,
@@ -292,7 +351,7 @@ public static class SemanticPlanApplier
     /// <summary>Compact, allocation-light summary of a resolved plan for Verbose diagnostics. Only
     /// the fields the model actually set are emitted, so the log shows exactly what will override the
     /// search inputs.</summary>
-    private static string DescribeResolved(ResolvedSearchPlan r)
+    internal static string DescribeResolved(ResolvedSearchPlan r)
     {
         var parts = new List<string>();
         if (r.Directory is { } dir) parts.Add($"dir={dir}");
@@ -312,6 +371,7 @@ public static class SemanticPlanApplier
         if (r.MaxSearchDepth is { } md) parts.Add($"maxDepth={md}");
         if (r.ObeyGitignore is { } gi) parts.Add($"obeyGitignore={gi}");
         if (r.SearchInsideArchives is { } ar) parts.Add($"archives={ar}");
+        if (r.SearchBinary is { } sb) parts.Add($"searchBinary={sb}");
         if (r.SearchHiddenFiles is { } sh) parts.Add($"searchHidden={sh}");
         if (r.SearchImageText is { } oit) parts.Add($"searchImageText={oit}");
         if (r.SortModeIndex is { } sm) parts.Add($"sortMode={sm}");
@@ -435,6 +495,12 @@ public static class SemanticPlanApplier
 
         if (resolved.ExcludeGlobs is { Count: > 0 } excludes)
             sb.Append(", excluding ").Append(string.Join(", ", excludes));
+
+        if (resolved.SearchInsideArchives == true)
+            sb.Append(", searching inside archives");
+
+        if (resolved.SearchBinary == true)
+            sb.Append(", including binary files");
 
         if (resolved.SearchHiddenFiles is { } hidden)
             sb.Append(hidden ? ", including hidden files" : ", excluding hidden files");
@@ -576,6 +642,7 @@ public static class SemanticPlanApplier
             MaxSearchDepth = resolved.MaxSearchDepth,
             ObeyGitignore = resolved.ObeyGitignore,
             SearchInsideArchives = resolved.SearchInsideArchives,
+            SearchBinary = resolved.SearchBinary,
             SearchHiddenFiles = resolved.SearchHiddenFiles,
             SearchImageText = resolved.SearchImageText,
             SortBy = SortModeIndexToCliKey(resolved.SortModeIndex),
@@ -1146,6 +1213,10 @@ public sealed class SemanticSearchOverlay
     public int? MaxSearchDepth { get; init; }
     public bool? ObeyGitignore { get; init; }
     public bool? SearchInsideArchives { get; init; }
+
+    /// <summary>Enable binary-file content search (CLI maps this to <c>SkipBinary=false</c>). Null when unset.</summary>
+    public bool? SearchBinary { get; init; }
+
     public bool? SearchHiddenFiles { get; init; }
 
     /// <summary>Enable "Search image text (OCR)". Null when unset.</summary>

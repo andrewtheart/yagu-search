@@ -151,6 +151,16 @@ public sealed class CliRunnerRegressionTests
     }
 
     [Fact]
+    public void CliSemanticOverlay_UnskipsBinaryWhenPlanTargetsBinaryExtensions()
+    {
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+
+        // A semantic plan targeting known-binary extensions (.exe/.com/.cpl) must stop skipping binary
+        // content so a content search over those files actually reads them (GUI/CLI parity).
+        Assert.Contains("if (overlay.SearchBinary == true && SkipBinary is null) SkipBinary = false;", source);
+    }
+
+    [Fact]
     public void SemanticSystemPrompt_DocumentsSortAndGroupFields()
     {
         string prompt = File.ReadAllText(Path.Combine(

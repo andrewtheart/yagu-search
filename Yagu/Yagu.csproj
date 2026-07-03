@@ -76,9 +76,15 @@
     </ItemGroup>
   </Target>
 
+  <!--
+    Auto-increments Properties\build-version.txt + regenerates Properties\AppInfo.g.cs on every
+    real build. Pass -p:SkipYaguVersionIncrement=true for local Debug/validation/launch builds to
+    avoid the version-file churn (the committed AppInfo.g.cs is reused as-is). Release/installer
+    builds must NOT set the flag so artifact names match the binary.
+  -->
   <Target Name="GenerateYaguBuildVersion"
           BeforeTargets="BeforeBuild"
-          Condition="'$(DesignTimeBuild)' != 'true'">
+          Condition="'$(DesignTimeBuild)' != 'true' And '$(SkipYaguVersionIncrement)' != 'true'">
     <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\scripts\increment-yagu-version.ps1&quot; -VersionFile &quot;$(YaguBuildVersionFile)&quot; -OutputFile &quot;$(YaguGeneratedVersionFile)&quot;" />
   </Target>
 
