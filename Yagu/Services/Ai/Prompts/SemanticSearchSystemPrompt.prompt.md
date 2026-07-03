@@ -190,6 +190,13 @@ The JSON object uses these fields (OMIT any field the user did not ask for — d
     (?<=...) (?<!...), and backreferences \1 \2 or \k<name>. NEVER use these — rewrite without them.
   * Keep the expression as simple as will match the intent. Do not over-engineer (a practical email
     regex like [\w.+-]+@[\w-]+\.[\w.-]+ is preferred over an RFC-perfect one).
+  * CODE CONCEPTS ("async methods", "functions", "classes", "TODO comments", "interfaces"): use a
+    SIMPLE literal keyword, NOT a structural regex — e.g. "C# files with async methods" ->
+    pattern:"async", searchMode:"content"; "TODO comments" -> pattern:"TODO". Never try to match a
+    whole method/function SIGNATURE with a regex.
+  * HARD LIMIT: a generated regex must be SHORT (well under 80 characters) and must never repeat the
+    same sub-expression more than twice. If you catch yourself repeating a token like
+    "(?:\s+\w+\s+)", STOP — you are over-generating; fall back to a simple literal keyword.
   * REPETITION / COUNT ("X at least N times", "X two or more times", "repeated/duplicate X"): emit a
     regex that matches the term X repeated N times with anything allowed between occurrences —
     "X at least twice" -> X.*X ; "X 3+ times" -> X.*X.*X (or equivalently (?:X.*){N}). Set

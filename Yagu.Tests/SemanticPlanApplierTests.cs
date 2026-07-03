@@ -648,6 +648,42 @@ public sealed class SemanticPlanApplierTests
     }
 
     [Fact]
+    public void Resolve_RunawayModelRegexPattern_IsDroppedSoFiltersDriveTheSearch()
+    {
+        // Reproduces the phi-4 "C# files with async methods modified this year" failure: the model
+        // emitted a ~700-char runaway regex as the pattern (truncating the rest of the plan). The
+        // garbage pattern must be dropped so the surviving *.cs include lists the C# files instead of
+        // running a nonsensical / catastrophic regex.
+        string runaway = @".*\b" + string.Concat(System.Linq.Enumerable.Repeat(@"(?:\s+\w+\s+){1,}\b\s+", 25));
+        var resolved = SemanticPlanApplier.Resolve(
+            new SemanticSearchPlan { Pattern = runaway, UseRegex = true, IncludeGlobs = new() { "*.cs" } },
+            Context());
+
+        Assert.DoesNotContain("(?:", resolved.Pattern ?? "");  // the garbage regex is gone
+        Assert.Equal(".", resolved.Pattern);                   // match-all synthesis lists the *.cs files
+        Assert.NotNull(resolved.IncludeGlobs);
+        Assert.Contains("*.cs", resolved.IncludeGlobs!);
+        Assert.Contains(resolved.Warnings, w => w.Contains("unusable search pattern"));
+    }
+
+    [Theory]
+    [InlineData("async")]
+    [InlineData(@"async\s+Task<")]
+    [InlineData(@"\b(TODO|FIXME|HACK)\b")]
+    [InlineData(@"(?:GET|POST)\s+/api/(?:v1|v2)")] // a legit 2-group regex is NOT degenerate
+    public void IsDegenerateSearchPattern_KeepsRealTerms(string pattern)
+        => Assert.False(SemanticPlanApplier.IsDegenerateSearchPattern(pattern));
+
+    [Fact]
+    public void IsDegenerateSearchPattern_FlagsRunawayAndOverlongPatterns()
+    {
+        Assert.True(SemanticPlanApplier.IsDegenerateSearchPattern(new string('a', 201)));        // overlong
+        Assert.True(SemanticPlanApplier.IsDegenerateSearchPattern("(?:a)(?:b)(?:c)(?:d)(?:e)"));  // >= 5 groups
+        Assert.False(SemanticPlanApplier.IsDegenerateSearchPattern(null));
+        Assert.False(SemanticPlanApplier.IsDegenerateSearchPattern(""));
+    }
+
+    [Fact]
     public void Resolve_ModelExplicitlyEnabledArchives_IsPreservedForNonArchiveGlobs()
     {
         // plan.SearchInsideArchives == true short-circuits the deterministic archive check, so the

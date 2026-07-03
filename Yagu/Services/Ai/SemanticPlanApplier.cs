@@ -222,6 +222,19 @@ public static class SemanticPlanApplier
         string? pattern = string.IsNullOrWhiteSpace(plan.Pattern) ? null : plan.Pattern!.Trim();
         bool? useRegex = plan.UseRegex;
 
+        // Guard against a runaway / pathological model pattern. Observed: phi-4 emitting a ~700-char
+        // repeated "\b(?:\s+\w+\s+){1,}\b(?:…)" regex for "C# files with async methods…", which also
+        // burned the whole output budget so the rest of the plan (the date filter) was truncated away.
+        // Such a pattern matches nothing useful and, as a regex, risks catastrophic backtracking. Drop
+        // it (and its regex flag) so the surviving filters — e.g. the *.cs include — drive a sane result
+        // instead of garbage.
+        if (pattern is not null && IsDegenerateSearchPattern(pattern))
+        {
+            warnings.Add("Ignored an unusable search pattern produced by the AI model.");
+            pattern = null;
+            useRegex = null;
+        }
+
         // Weak models sometimes echo a file-type filter into "pattern" (e.g. pattern "*.png" when
         // includeGlobs already has "*.png"). That term isn't a real search query and would make the
         // engine match the literal text; drop it so the match-all synthesis below takes over and the
@@ -1006,6 +1019,31 @@ public static class SemanticPlanApplier
         if (s.Length == 0) return false;
         if (s.IndexOfAny(['*', '?']) >= 0) return true;
         return s[0] == '.' && s.Length > 1 && s.AsSpan(1).IndexOfAnyExcept(BareExtensionChars) < 0;
+    }
+
+    /// <summary>No natural-language-derived search term or regex is anywhere near this long.</summary>
+    private const int MaxReasonableSearchPatternLength = 200;
+
+    /// <summary>A plausible NL-translated regex rarely stacks this many non-capturing groups; a
+    /// runaway repetition does.</summary>
+    private const int DegenerateNonCapturingGroupCount = 5;
+
+    /// <summary>
+    /// True when <paramref name="pattern"/> is a pathological / runaway search term rather than a real
+    /// one — chiefly a model that ran away generating a huge repeated regex (observed: phi-4 emitting a
+    /// ~700-char <c>\b(?:\s+\w+\s+){1,}\b(?:…)</c> for "async methods"). Such a pattern matches nothing
+    /// useful and, as a regex, risks catastrophic backtracking, so it is rejected and the other filters
+    /// drive the search. Legitimate terms ("async", <c>async\s+Task&lt;</c>, <c>\b(TODO|FIXME)\b</c>) are
+    /// short and stack few groups, so they pass.
+    /// </summary>
+    internal static bool IsDegenerateSearchPattern(string? pattern)
+    {
+        if (string.IsNullOrEmpty(pattern)) return false;
+        if (pattern.Length > MaxReasonableSearchPatternLength) return true;
+        int groups = 0;
+        for (int i = pattern.IndexOf("(?:", StringComparison.Ordinal); i >= 0; i = pattern.IndexOf("(?:", i + 3, StringComparison.Ordinal))
+            if (++groups >= DegenerateNonCapturingGroupCount) return true;
+        return false;
     }
 
     private static readonly System.Buffers.SearchValues<char> BareExtensionChars =
