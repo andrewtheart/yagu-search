@@ -36,6 +36,27 @@ public sealed class EverythingSearchDialogRegressionTests
     }
 
     [Fact]
+    public void EverythingNotFoundPrompt_HasStandoutInstallRecommendation()
+    {
+        string startupChecks = File.ReadAllText(
+            Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+
+        // The not-found dialog uses a rich content builder (not a plain string) so it can render a
+        // standout install recommendation.
+        Assert.Contains("Content = BuildEverythingNotFoundContent(),", startupChecks);
+        Assert.Contains("private static StackPanel BuildEverythingNotFoundContent()", startupChecks);
+
+        // The recommendation stands out: bold, a distinct color, and a glyph.
+        int start = startupChecks.IndexOf("private static StackPanel BuildEverythingNotFoundContent()", StringComparison.Ordinal);
+        Assert.True(start >= 0);
+        string body = startupChecks.Substring(start, System.Math.Min(1600, startupChecks.Length - start));
+        Assert.Contains("SolidColorBrush(Microsoft.UI.Colors.DarkOrange)", body);
+        Assert.Contains("FontWeight = Microsoft.UI.Text.FontWeights.Bold", body);
+        Assert.Contains("Glyph = \"\\uE735\"", body); // filled star
+        Assert.Contains("Very strongly recommended", body);
+    }
+
+    [Fact]
     public void TitleGlyph_UsesWidthConstrainedGridSoTitleWraps()
     {
         // Regression: the title glyph was originally placed in a horizontal StackPanel next to the

@@ -597,38 +597,15 @@ public class SettingsServiceNewFieldTests
         Assert.Equal("paddle", AppSettings.DefaultImageOcrEngine);
     }
 
-    [Theory]
-    [InlineData("X86", "tesseract")]
-    [InlineData("X64", "paddle")]
-    [InlineData("Arm64", "paddle")]
-    [InlineData("Arm", "paddle")]
-    public void ResolveDefaultImageOcrEngine_OnlyX86DefaultsToTesseract(string architecture, string expected)
-    {
-        var arch = Enum.Parse<System.Runtime.InteropServices.Architecture>(architecture);
-        Assert.Equal(expected, AppSettings.ResolveDefaultImageOcrEngine(arch));
-    }
-
-    [Theory]
-    // Bundled Tesseract data (the Offline / x64-offline edition) forces Tesseract on EVERY arch.
-    [InlineData("X64", true, "tesseract")]
-    [InlineData("Arm64", true, "tesseract")]
-    [InlineData("X86", true, "tesseract")]
-    // Without it, the per-architecture rule applies (x86 -> tesseract, else paddle).
-    [InlineData("X64", false, "paddle")]
-    [InlineData("Arm64", false, "paddle")]
-    [InlineData("X86", false, "tesseract")]
-    public void ResolveDefaultImageOcrEngine_BundledTesseractOverridesArchitecture(string architecture, bool bundledTesseract, string expected)
-    {
-        var arch = Enum.Parse<System.Runtime.InteropServices.Architecture>(architecture);
-        Assert.Equal(expected, AppSettings.ResolveDefaultImageOcrEngine(arch, bundledTesseract));
-    }
-
     [Fact]
-    public void EffectiveDefaultImageOcrEngine_MatchesCurrentProcessArchitecture()
+    public void EffectiveDefaultImageOcrEngine_IsAlwaysPaddle()
     {
-        Assert.Equal(
-            AppSettings.ResolveDefaultImageOcrEngine(System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture),
-            AppSettings.EffectiveDefaultImageOcrEngine);
+        // PaddleSharp is the default OCR engine on every edition and architecture: it is faster and
+        // more accurate than Tesseract on CPU (OCR always runs on the x64 worker), and the offline
+        // installer bundles its full runtime + models so it runs download-free. There is no arch or
+        // edition where Tesseract is the default.
+        Assert.Equal("paddle", AppSettings.EffectiveDefaultImageOcrEngine);
+        Assert.Equal(AppSettings.DefaultImageOcrEngine, AppSettings.EffectiveDefaultImageOcrEngine);
     }
 
     [Fact]

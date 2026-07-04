@@ -370,6 +370,7 @@ public sealed partial class SettingsWindow : Window
                 break;
             case NumberBox numberBox:
                 numberBox.ValueChanged += (_, _) => MarkSettingsDirty();
+                ApplyNumericInputMaxLength(numberBox);
                 break;
             case ComboBox comboBox:
                 comboBox.SelectionChanged += (_, _) => MarkSettingsDirty();
@@ -393,6 +394,44 @@ public sealed partial class SettingsWindow : Window
         else if (element is Panel panel)
             foreach (var childElement in panel.Children)
                 AttachSettingDirtyHandlers(childElement);
+    }
+
+    // Digit count of Int32.MaxValue (2,147,483,647). Numeric setting boxes are backed by integer
+    // (or small double) settings, so capping the editable text at 10 characters lets a user type any
+    // value across the full range of the backing type while blocking absurd over-long input. Only
+    // typed/pasted input is limited — NumberBox still displays programmatically-set values in full.
+    private const int NumericSettingMaxInputLength = 10;
+
+    // NumberBox hosts its editable text in a templated inner TextBox, so the max length can only be
+    // applied once the control template is realized (after the control loads into the visual tree).
+    private static void ApplyNumericInputMaxLength(NumberBox numberBox)
+    {
+        void Apply()
+        {
+            if (FindFirstDescendantTextBox(numberBox) is { } inputBox)
+                inputBox.MaxLength = NumericSettingMaxInputLength;
+        }
+
+        if (numberBox.IsLoaded)
+            Apply();
+        else
+            numberBox.Loaded += (_, _) => Apply();
+    }
+
+    private static TextBox? FindFirstDescendantTextBox(DependencyObject root)
+    {
+        int count = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < count; i++)
+        {
+            DependencyObject childObject = VisualTreeHelper.GetChild(root, i);
+            if (childObject is TextBox textBox)
+                return textBox;
+
+            if (FindFirstDescendantTextBox(childObject) is { } nested)
+                return nested;
+        }
+
+        return null;
     }
 
     private void MarkSettingsDirty(bool requireValueChanges = true)

@@ -80,8 +80,9 @@ public static class OcrAssetPaths
 
     /// <summary>
     /// True when the OCR-bundled (offline) installer pre-staged the Tesseract English data beside the
-    /// app. This is the signal that identifies the offline edition — it makes Tesseract the default OCR
-    /// engine (see <see cref="AppSettings.EffectiveDefaultImageOcrEngine"/>).
+    /// app, so a user who switches to the Tesseract engine runs download-free. PaddleSharp is the
+    /// default engine on every edition (see <see cref="AppSettings.EffectiveDefaultImageOcrEngine"/>);
+    /// this probe no longer selects the default.
     /// </summary>
     public static bool BundledTesseractDataPresent() => TesseractDataPresent(BundledTesseractDir);
 

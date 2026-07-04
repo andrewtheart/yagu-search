@@ -3,6 +3,8 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.Web.WebView2.Core;
 using Windows.ApplicationModel.DataTransfer;
 using Yagu.Services;
@@ -27,6 +29,17 @@ public sealed partial class MainWindow
     private TerminalShellKind _terminalActiveShellKind = TerminalShellKind.Cmd;
     private bool _suppressTerminalShellSelectionChanged;
 
+    // Height of the embedded terminal pane, remembered across expand/collapse within the session and
+    // updated live while the user drags the resize gripper.
+    private double _terminalPaneHeight = 250;
+    private bool _terminalResizeDragging;
+    private double _terminalResizeStartY;
+    private double _terminalResizeStartHeight;
+    private const double MinTerminalPaneHeight = 120;
+    // Space reserved for the title bar, search card, split pane, and status bar so the terminal can
+    // never grow tall enough to squeeze the rest of the window off-screen.
+    private const double MinNonTerminalHeight = 260;
+
     private void OnToggleTerminalPane(object sender, RoutedEventArgs e)
     {
         SetTerminalPaneExpanded(!_terminalPaneExpanded);
@@ -41,7 +54,7 @@ public sealed partial class MainWindow
 
         if (_terminalPaneExpanded)
         {
-            TerminalRow.Height = new GridLength(250);
+            TerminalRow.Height = new GridLength(_terminalPaneHeight);
             TerminalHost.Visibility = Visibility.Visible;
         }
         else
@@ -55,6 +68,52 @@ public sealed partial class MainWindow
 
         if (_launcherMode)
             PositionLauncherWindow();
+    }
+
+    // ---- Vertical resize gripper (drag the thin bar at the top of the terminal pane) ----
+
+    private void OnTerminalResizePressed(object sender, PointerRoutedEventArgs e)
+    {
+        var gripper = (Border)sender;
+        _terminalResizeDragging = true;
+        _terminalResizeStartY = e.GetCurrentPoint(RootGrid).Position.Y;
+        _terminalResizeStartHeight = TerminalRow.ActualHeight;
+        // Keep the WebView from swallowing pointer moves mid-drag so resizing stays smooth in both directions.
+        TerminalWebView.IsHitTestVisible = false;
+        gripper.CapturePointer(e.Pointer);
+        e.Handled = true;
+    }
+
+    private void OnTerminalResizeMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_terminalResizeDragging) return;
+        double currentY = e.GetCurrentPoint(RootGrid).Position.Y;
+        double delta = currentY - _terminalResizeStartY;
+        double newHeight = _terminalResizeStartHeight - delta; // dragging up grows the terminal, down shrinks it
+        double maxHeight = Math.Max(MinTerminalPaneHeight, RootGrid.ActualHeight - MinNonTerminalHeight);
+        newHeight = Math.Clamp(newHeight, MinTerminalPaneHeight, maxHeight);
+        _terminalPaneHeight = newHeight;
+        TerminalRow.Height = new GridLength(newHeight);
+        e.Handled = true;
+    }
+
+    private void OnTerminalResizeReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_terminalResizeDragging) return;
+        _terminalResizeDragging = false;
+        ((Border)sender).ReleasePointerCapture(e.Pointer);
+        TerminalWebView.IsHitTestVisible = true;
+        TerminalResizeGripper.Opacity = 0.6;
+        e.Handled = true;
+    }
+
+    private void OnTerminalResizePointerEntered(object sender, PointerRoutedEventArgs e)
+        => TerminalResizeGripper.Opacity = 1.0;
+
+    private void OnTerminalResizePointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_terminalResizeDragging)
+            TerminalResizeGripper.Opacity = 0.6;
     }
 
     private void UpdateTerminalChevronGlyphs()

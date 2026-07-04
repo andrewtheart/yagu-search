@@ -129,6 +129,19 @@ xterm.js assets
     javascript vt100 for jslinux, Copyright (c) 2011 Fabrice Bellard
 
 
+nChronic (natural-language date/time parser)
+
+- Path: vendor/nChronic/
+- Description: A C# port of Ruby's "Chronic" natural-language date/time parser,
+  vendored (and AOT-hardened) for the semantic-search date resolution layer
+  (SemanticPlanApplier.ResolveDate).
+- Copyright: Copyright (c) Tom Preston-Werner (original Chronic) and the nChronic
+  .NET port contributors
+- License: MIT
+- Source: https://github.com/robertwilczynski/nChronic
+- License file: vendor/nChronic/LICENSE
+
+
 MIT License Text for MIT-Licensed Vendored Assets
 -------------------------------------------------
 

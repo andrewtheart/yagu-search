@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Yagu.Models;
@@ -82,9 +81,8 @@ public sealed class AppSettings
         ? DefaultLowDiskSpaceWarningPercent
         : Math.Clamp(value, MinimumLowDiskSpaceWarningPercent, MaximumLowDiskSpaceWarningPercent);
 
-    /// <summary>Normalizes the persisted OCR engine id to a known value, defaulting to the
-    /// per-architecture default (Tesseract on the x86 build, PaddleSharp elsewhere — see
-    /// <see cref="EffectiveDefaultImageOcrEngine"/>).</summary>
+    /// <summary>Normalizes the persisted OCR engine id to a known value, defaulting to PaddleSharp
+    /// (see <see cref="EffectiveDefaultImageOcrEngine"/>).</summary>
     public static string NormalizeImageOcrEngine(string? value)
     {
         var v = value?.Trim().ToLowerInvariant();
@@ -266,34 +264,21 @@ public sealed class AppSettings
     /// Advanced Options ▸ Filters "Search image text" toggle.</summary>
     public bool SearchImageText { get; set; }
     /// <summary>OCR engine used when <see cref="SearchImageText"/> is on: "paddle" (PaddleSharp) or
-    /// "tesseract". Defaults to <see cref="EffectiveDefaultImageOcrEngine"/> (Tesseract on the x86
-    /// build, PaddleSharp elsewhere). Normalized on load.</summary>
+    /// "tesseract". Defaults to <see cref="EffectiveDefaultImageOcrEngine"/> (PaddleSharp on every
+    /// edition; the offline installer bundles the full PaddleOCR runtime + models so it runs
+    /// download-free). Normalized on load.</summary>
     public string ImageOcrEngine { get; set; } = EffectiveDefaultImageOcrEngine;
-    /// <summary>Platform-neutral default OCR engine (PaddleSharp). The actual per-build default is
-    /// <see cref="EffectiveDefaultImageOcrEngine"/>, which overrides this to Tesseract on the x86 build.</summary>
+    /// <summary>Platform-neutral default OCR engine (PaddleSharp). PaddleSharp is the default on every
+    /// build/edition: it is faster and more accurate than Tesseract on CPU (OCR always runs on CPU in
+    /// the x64 worker), and the offline installer bundles its full native runtime + PP-OCR models so it
+    /// needs no download. Tesseract remains a user-selectable engine (also bundled offline).</summary>
     public const string DefaultImageOcrEngine = "paddle";
 
-    /// <summary>Resolves the default OCR engine for a given process architecture. The x86 edition
-    /// defaults to Tesseract; every other architecture defaults to <see cref="DefaultImageOcrEngine"/>
-    /// (PaddleSharp). Pure and testable.</summary>
-    public static string ResolveDefaultImageOcrEngine(Architecture processArchitecture) =>
-        processArchitecture == Architecture.X86 ? "tesseract" : DefaultImageOcrEngine;
-
-    /// <summary>Resolves the default OCR engine, layering the OCR-bundled (offline) edition on top of the
-    /// per-architecture rule: when the offline installer has bundled the Tesseract English data beside
-    /// the app (<paramref name="bundledTesseractPresent"/>), Tesseract is the default because it runs
-    /// fully offline; otherwise the architecture rule applies. Pure and testable.</summary>
-    public static string ResolveDefaultImageOcrEngine(Architecture processArchitecture, bool bundledTesseractPresent) =>
-        bundledTesseractPresent ? "tesseract" : ResolveDefaultImageOcrEngine(processArchitecture);
-
-    /// <summary>The effective default OCR engine for this build. Resolved once from the current process
-    /// architecture and whether the OCR-bundled (offline) installer pre-staged the Tesseract data: the
-    /// offline edition defaults to Tesseract, the x86 build defaults to Tesseract, and all other builds
-    /// default to PaddleSharp.</summary>
-    public static readonly string EffectiveDefaultImageOcrEngine =
-        ResolveDefaultImageOcrEngine(
-            RuntimeInformation.ProcessArchitecture,
-            Yagu.Services.Ocr.OcrAssetPaths.BundledTesseractDataPresent());
+    /// <summary>The effective default OCR engine for this build: always <see cref="DefaultImageOcrEngine"/>
+    /// (PaddleSharp). PaddleSharp wins on both speed and accuracy on CPU, and the OCR-bundled (offline)
+    /// installer ships its complete runtime + models, so there is no edition or architecture where
+    /// Tesseract is a better default. The user can still switch to Tesseract in settings.</summary>
+    public static readonly string EffectiveDefaultImageOcrEngine = DefaultImageOcrEngine;
     /// <summary>PaddleOCR model used for image-text recognition: "EnglishV3", "EnglishV4",
     /// "ChineseV4" or "ChineseV5" (default; PP-OCRv5, multilingual). Higher/newer models trade speed for
     /// accuracy. Normalized on load. Ignored by the Tesseract engine.</summary>

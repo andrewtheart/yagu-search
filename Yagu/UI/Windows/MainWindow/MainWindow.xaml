@@ -2309,12 +2309,30 @@
         <!-- Embedded terminal panel (ConPTY + xterm.js in WebView2) -->
         <Grid x:Name="TerminalHost" Grid.Row="5" Visibility="Collapsed" Background="#1E1E1E">
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />  <!-- Vertical resize gripper -->
+                <RowDefinition Height="Auto" />  <!-- Shell toolbar -->
+                <RowDefinition Height="*" />     <!-- Terminal surface -->
             </Grid.RowDefinitions>
 
+            <!-- Vertical resize gripper: drag up/down to change the terminal pane height. -->
+            <Border x:Name="TerminalResizeGripper" Grid.Row="0" Height="10" Background="#252526" Opacity="0.6"
+                    PointerPressed="OnTerminalResizePressed"
+                    PointerMoved="OnTerminalResizeMoved"
+                    PointerReleased="OnTerminalResizeReleased"
+                    PointerEntered="OnTerminalResizePointerEntered"
+                    PointerExited="OnTerminalResizePointerExited"
+                    ToolTipService.ToolTip="Drag to resize the terminal">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="3" Opacity="0.5">
+                    <Ellipse Width="3" Height="3" Fill="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <Ellipse Width="3" Height="3" Fill="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <Ellipse Width="3" Height="3" Fill="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <Ellipse Width="3" Height="3" Fill="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <Ellipse Width="3" Height="3" Fill="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+            </Border>
+
             <!-- Thin toolbar: pick the shell (Command Prompt vs PowerShell) for the embedded terminal. -->
-            <Grid Grid.Row="0" Background="#252526" Padding="8,3,8,3">
+            <Grid Grid.Row="1" Background="#252526" Padding="8,3,8,3">
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Spacing="6">
                     <TextBlock Text="Shell:" Foreground="#B8B8B8" FontSize="12" VerticalAlignment="Center" />
                     <ComboBox x:Name="TerminalShellSelector"
@@ -2328,13 +2346,13 @@
                 </StackPanel>
             </Grid>
 
-            <WebView2 x:Name="TerminalWebView" Grid.Row="1" DefaultBackgroundColor="#1E1E1E" IsTabStop="True" />
+            <WebView2 x:Name="TerminalWebView" Grid.Row="2" DefaultBackgroundColor="#1E1E1E" IsTabStop="True" />
             <!-- Shown instead of a black WebView when the Microsoft Edge WebView2 Runtime is missing
                  (e.g. a clean Windows install/Sandbox). The embedded terminal is the only feature that
                  needs WebView2; the rest of Yagu works without it. The installer normally installs the
                  runtime, so this is a fallback for offline installs or machines that still lack it. -->
             <StackPanel x:Name="TerminalWebView2MissingPanel"
-                        Grid.Row="1"
+                        Grid.Row="2"
                         Visibility="Collapsed"
                         HorizontalAlignment="Center" VerticalAlignment="Center"
                         MaxWidth="440" Spacing="10" Padding="24">
@@ -2349,7 +2367,7 @@
                            TextWrapping="Wrap" TextAlignment="Center" Foreground="#9A9A9A" FontSize="12" />
             </StackPanel>
             <Button x:Name="TerminalChevron"
-                    Grid.Row="1"
+                    Grid.Row="2"
                     Click="OnToggleTerminalPane"
                     HorizontalAlignment="Right"
                     VerticalAlignment="Bottom"

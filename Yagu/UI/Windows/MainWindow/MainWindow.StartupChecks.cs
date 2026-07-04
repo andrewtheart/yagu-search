@@ -172,6 +172,55 @@ public sealed partial class MainWindow
         return panel;
     }
 
+    /// <summary>Body of the first-run "Everything Search Not Found" prompt. Leads with a bold,
+    /// color + glyph standout line that very strongly recommends installing Everything for the best
+    /// experience, then explains why and reassures that the install is verified and safe.</summary>
+    private static StackPanel BuildEverythingNotFoundContent()
+    {
+        var panel = new StackPanel { Spacing = 12 };
+
+        // Standout recommendation: a bold amber line with a star glyph so it clearly stands apart from
+        // the body text — installing Everything is the single biggest speed win for Yagu. DarkOrange is
+        // chosen because it stays readable on both the light and dark dialog themes.
+        var recommendBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.DarkOrange);
+        var recommend = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        recommend.Children.Add(new FontIcon
+        {
+            Glyph = "\uE735", // filled star
+            FontSize = 20,
+            Foreground = recommendBrush,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        recommend.Children.Add(new TextBlock
+        {
+            Text = "Very strongly recommended for the best Yagu experience",
+            FontSize = 15,
+            FontWeight = Microsoft.UI.Text.FontWeights.Bold,
+            Foreground = recommendBrush,
+            TextWrapping = TextWrapping.WrapWholeWords,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        panel.Children.Add(recommend);
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Everything Search by voidtools gives Yagu near-instant file discovery. Without it, Yagu "
+                 + "falls back to a much slower built-in file scan — searches over large drives can take "
+                 + "far longer.",
+            TextWrapping = TextWrapping.WrapWholeWords,
+            FontSize = 14,
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "It's free, tiny, and safe: Yagu verifies the official voidtools signature before running "
+                 + "the installer. Would you like to download and install it now?",
+            TextWrapping = TextWrapping.WrapWholeWords,
+            FontSize = 13,
+            Opacity = 0.85,
+        });
+        return panel;
+    }
+
     private async Task CheckForNewFoundryModelsAsync()
     {
         // Don't stack on top of another startup prompt (Everything, font-contrast, etc.). If one is
@@ -469,7 +518,7 @@ public sealed partial class MainWindow
             {
                 Title = "Everything Search Not Found",
                 TitleGlyph = "\uE721", // Search
-                Content = "Everything Search by voidtools provides significantly faster file discovery.\n\nDownloading and installing it significantly improves your Yagu experience — searches feel near-instant and file listing is dramatically faster. We strongly recommend installing it.\n\nWould you like to download and install it now?",
+                Content = BuildEverythingNotFoundContent(),
                 PrimaryButtonText = "Install",
                 CloseButtonText = "Skip",
                 DefaultButton = YaguDialogDefaultButton.Primary,

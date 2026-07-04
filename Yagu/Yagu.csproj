@@ -198,6 +198,16 @@
     <None Update="Assets\yagu.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <!-- Ship Yagu's GPLv3 license text and the consolidated third-party notices next to the app so
+         every binary distribution carries the required license/attribution texts (GPLv3 conveyance +
+         the MIT/BSD/Apache/LGPL and 7-Zip/unRAR notice requirements). build-installer.ps1 stages the
+         publish output, so these land at <app>\LICENSE and <app>\THIRD-PARTY-NOTICES.txt. -->
+    <Content Include="..\LICENSE" Link="LICENSE">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\THIRD-PARTY-NOTICES.txt" Link="THIRD-PARTY-NOTICES.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <None Include="Everything64.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
@@ -437,16 +447,22 @@
   <PropertyGroup>
     <BuildOcrWorker Condition="'$(BuildOcrWorker)' == ''">true</BuildOcrWorker>
     <OcrWorkerProject>$(MSBuildThisFileDirectory)..\Yagu.OcrWorker\Yagu.OcrWorker.csproj</OcrWorkerProject>
-    <OcrWorkerOutDir>$(MSBuildThisFileDirectory)..\Yagu.OcrWorker\bin\$(Configuration)\net10.0\</OcrWorkerOutDir>
+    <!-- The worker is PUBLISHED self-contained for win-x64 (not a plain build) so it carries its own
+         .NET runtime and runs on machines that do not have .NET installed. Yagu.exe is self-contained
+         Native AOT, so nothing else provides a shared runtime; a framework-dependent worker fails with
+         "You must install .NET" on clean/offline machines (image-text OCR silently broke). Its native
+         OCR stack (PaddleSharp/OpenCvSharp/Tesseract) is win-x64 only, so win-x64 is correct for every
+         Yagu architecture (the x64 worker runs under emulation on arm64). -->
+    <OcrWorkerOutDir>$(MSBuildThisFileDirectory)..\Yagu.OcrWorker\bin\$(Configuration)\net10.0\win-x64\publish\</OcrWorkerOutDir>
   </PropertyGroup>
 
   <Target Name="BuildOcrWorker"
           BeforeTargets="BeforeBuild"
           Condition="'$(BuildOcrWorker)' == 'true' And '$(DesignTimeBuild)' != 'true' And Exists('$(OcrWorkerProject)')">
-    <Exec Command="dotnet build &quot;$(OcrWorkerProject)&quot; -c $(Configuration) --nologo -v quiet"
+    <Exec Command="dotnet publish &quot;$(OcrWorkerProject)&quot; -c $(Configuration) -r win-x64 --self-contained true --nologo -v quiet"
           ContinueOnError="WarnAndContinue" />
     <Warning Condition="!Exists('$(OcrWorkerOutDir)Yagu.OcrWorker.exe')"
-             Text="Yagu.OcrWorker did not build to $(OcrWorkerOutDir)Yagu.OcrWorker.exe; image-text (OCR) search will be unavailable. Build Yagu.OcrWorker manually, or pass -p:BuildOcrWorker=false to silence this warning." />
+             Text="Yagu.OcrWorker did not publish to $(OcrWorkerOutDir)Yagu.OcrWorker.exe; image-text (OCR) search will be unavailable. Build Yagu.OcrWorker manually, or pass -p:BuildOcrWorker=false to silence this warning." />
   </Target>
 
   <Target Name="CopyOcrWorkerToOutput"

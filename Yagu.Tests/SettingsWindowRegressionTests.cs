@@ -1531,6 +1531,76 @@ public sealed class SettingsWindowRegressionTests
         }
     }
 
+    [Fact]
+    public void NumericSettings_CapInnerTextBoxMaxLengthToTenDigits()
+    {
+        // Every numeric setting is a NumberBox; the single dirty-tracking registration hook also caps
+        // the inner editable TextBox so a user can type any value across the full Int32 range (10 digits)
+        // but no absurd over-long input. Applied once per NumberBox from that one central place.
+        AssertContainsInOrder(SettingsWindowSource,
+            "case NumberBox numberBox:",
+            "numberBox.ValueChanged += (_, _) => MarkSettingsDirty();",
+            "ApplyNumericInputMaxLength(numberBox);");
+
+        // 10 == digit count of Int32.MaxValue (2,147,483,647).
+        Assert.Contains("private const int NumericSettingMaxInputLength = 10;", SettingsWindowSource);
+
+        // NumberBox hosts its text in a templated inner TextBox, so the cap is applied once the control
+        // template is realized (on load) by walking to that inner TextBox.
+        AssertContainsInOrder(SettingsWindowSource,
+            "private static void ApplyNumericInputMaxLength(NumberBox numberBox)",
+            "if (FindFirstDescendantTextBox(numberBox) is { } inputBox)",
+            "inputBox.MaxLength = NumericSettingMaxInputLength;",
+            "numberBox.Loaded += (_, _) => Apply();");
+
+        AssertContainsInOrder(SettingsWindowSource,
+            "private static TextBox? FindFirstDescendantTextBox(DependencyObject root)",
+            "VisualTreeHelper.GetChildrenCount(root)",
+            "if (childObject is TextBox textBox)",
+            "return textBox;");
+    }
+
+    [Fact]
+    public void TerminalPane_HasVerticalResizeGripper()
+    {
+        // XAML: a draggable gripper row sits at the top of the terminal pane — above the shell toolbar
+        // (now Grid.Row 1) and the WebView (Grid.Row 2) — wired to the five pointer handlers.
+        AssertContainsInOrder(MainWindowXaml,
+            "<Grid x:Name=\"TerminalHost\" Grid.Row=\"5\"",
+            "x:Name=\"TerminalResizeGripper\" Grid.Row=\"0\"",
+            "PointerPressed=\"OnTerminalResizePressed\"",
+            "PointerMoved=\"OnTerminalResizeMoved\"",
+            "PointerReleased=\"OnTerminalResizeReleased\"",
+            "PointerEntered=\"OnTerminalResizePointerEntered\"",
+            "PointerExited=\"OnTerminalResizePointerExited\"",
+            "<Grid Grid.Row=\"1\" Background=\"#252526\"",
+            "<WebView2 x:Name=\"TerminalWebView\" Grid.Row=\"2\"");
+
+        // Press: capture the pointer and disable WebView hit-testing so it can't swallow the drag.
+        AssertContainsInOrder(MainWindowTerminalSource,
+            "private void OnTerminalResizePressed(object sender, PointerRoutedEventArgs e)",
+            "_terminalResizeStartY = e.GetCurrentPoint(RootGrid).Position.Y;",
+            "_terminalResizeStartHeight = TerminalRow.ActualHeight;",
+            "TerminalWebView.IsHitTestVisible = false;",
+            "gripper.CapturePointer(e.Pointer);");
+
+        // Move: dragging up grows the terminal, clamped between the min and (window - reserved) max.
+        AssertContainsInOrder(MainWindowTerminalSource,
+            "private void OnTerminalResizeMoved(object sender, PointerRoutedEventArgs e)",
+            "double delta = currentY - _terminalResizeStartY;",
+            "double newHeight = _terminalResizeStartHeight - delta;",
+            "Math.Clamp(newHeight, MinTerminalPaneHeight, maxHeight)",
+            "_terminalPaneHeight = newHeight;",
+            "TerminalRow.Height = new GridLength(newHeight);");
+
+        // Release restores WebView hit-testing; the clamp bounds and session-persisted height exist.
+        Assert.Contains("TerminalWebView.IsHitTestVisible = true;", MainWindowTerminalSource);
+        Assert.Contains("private const double MinTerminalPaneHeight = 120;", MainWindowTerminalSource);
+        Assert.Contains("private const double MinNonTerminalHeight = 260;", MainWindowTerminalSource);
+        // The dragged height is remembered across expand/collapse within the session.
+        Assert.Contains("TerminalRow.Height = new GridLength(_terminalPaneHeight);", MainWindowTerminalSource);
+    }
+
     private static void AssertContainsInOrder(string text, params string[] expected)
     {
         int cursor = 0;

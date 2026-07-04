@@ -38,9 +38,15 @@ public sealed class SemanticResolutionVisibilityTests
     [Fact]
     public void SemanticResolution_StaysVisible_ResetsNextSearch_AndIsNotPersisted()
     {
-        // The next search clears a previous resolution back to the saved defaults before running.
+        // The reset runs ONLY inside the Semantic branch, so a Traditional search never alters Advanced
+        // Options (the include-glob-wiped-in-traditional-mode bug). The mode gate must appear BEFORE the
+        // reset call within SubmitSearchAsync.
         string submit = Method("SubmitSearchAsync", 3400);
-        Assert.Contains("ResetVisibleSemanticResolution();", submit);
+        int semanticGate = submit.IndexOf("if (IsSemanticQueryMode && SemanticSearchAvailable)", StringComparison.Ordinal);
+        int resetCall = submit.IndexOf("ResetVisibleSemanticResolution();", StringComparison.Ordinal);
+        Assert.True(semanticGate >= 0, "SubmitSearchAsync must gate on the Semantic mode.");
+        Assert.True(resetCall > semanticGate,
+            "ResetVisibleSemanticResolution must run only inside the Semantic branch — a Traditional search must never touch Advanced Options.");
         // A committed search is left visible on purpose — only an uncommitted run reverts in the finally.
         Assert.Contains("_semanticDefaultsSnapshot is { } leftover && !_semanticResolutionVisible", submit);
 
@@ -79,6 +85,18 @@ public sealed class SemanticResolutionVisibilityTests
         Assert.Contains("_settings.SearchImageText = d is null ? SearchImageText : d.SearchImageText;", persist);
         // The resolved directory is the deliberate exception that DOES persist.
         Assert.Contains("_settings.LastDirectory = Directory;", persist);
+    }
+
+    [Fact]
+    public void SemanticStatus_SurfacesResolvedWarnings()
+    {
+        // The interpretation status line appends any plan warnings (e.g. an unsupported content
+        // exclusion like "but not X") so the user is told part of the request was not honored, instead
+        // of silently dropping it. The CLI already prints these; the GUI used to swallow them.
+        string translate = Method("TranslateSemanticQueryAsync", 7000);
+        Assert.Contains("if (resolved.Warnings.Count > 0)", translate);
+        Assert.Contains("string.Join(\"  \\u26A0 \", resolved.Warnings)", translate);
+        Assert.Contains("SemanticStatusText = interpretation;", translate);
     }
 
     private static string Method(string name, int window)

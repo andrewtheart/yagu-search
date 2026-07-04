@@ -1133,8 +1133,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty] public partial bool SearchImageText { get; set; }
 
     /// <summary>OCR engine used when <see cref="SearchImageText"/> is on: "paddle" (PaddleSharp) or
-    /// "tesseract". Defaults to <see cref="AppSettings.EffectiveDefaultImageOcrEngine"/> (Tesseract on
-    /// the x86 build, PaddleSharp elsewhere). Settings-only.</summary>
+    /// "tesseract". Defaults to <see cref="AppSettings.EffectiveDefaultImageOcrEngine"/> (PaddleSharp on
+    /// every edition; the offline installer bundles Paddle's full runtime + models). Settings-only.</summary>
     [ObservableProperty] public partial string ImageOcrEngine { get; set; } = AppSettings.EffectiveDefaultImageOcrEngine;
 
     /// <summary>PaddleSharp recognition model used for image OCR (e.g. "EnglishV4", "ChineseV5").
@@ -2231,12 +2231,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         // a JSON object"). Ignore additional submits until the translation finishes or is cancelled.
         if (IsTranslatingSemanticQuery) return;
 
-        // Clear any previous semantic search's resolved settings from Advanced Options back to the saved
-        // defaults before this run; a new semantic search re-applies its own.
-        ResetVisibleSemanticResolution();
-
         if (IsSemanticQueryMode && SemanticSearchAvailable)
         {
+            // Clear any previous semantic search's resolved settings from Advanced Options back to the
+            // saved defaults before this run; a new semantic search re-applies its own. This runs ONLY on
+            // a Semantic submit — a Traditional search must NEVER read from or write to Advanced Options,
+            // so whatever the user typed there (e.g. an include glob) is used verbatim and left untouched.
+            ResetVisibleSemanticResolution();
+
             // Capture the typed NL text (translation overwrites Query) and snapshot the filter defaults.
             _pendingSemanticHistoryEntry = Query?.Trim();
             var defaultsSnapshot = CaptureSearchDefaults();
@@ -2405,7 +2407,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             // Pass the live directory box as the effective directory so an unscoped query (the model
             // resolves no directory) is described as the box's location — not the misleading "all
             // drives" — since the actual search honors whatever is in the box.
-            SemanticStatusText = SemanticPlanApplier.BuildExplanation(resolved, Directory);
+            string interpretation = SemanticPlanApplier.BuildExplanation(resolved, Directory);
+            // Surface any warnings the plan raised (e.g. an unsupported content exclusion like "but not
+            // X", or an exclusion that would have removed all matches) so the user knows part of the
+            // request was not honored instead of silently dropping it. The CLI already prints these.
+            if (resolved.Warnings.Count > 0)
+                interpretation += "  \u26A0 " + string.Join("  \u26A0 ", resolved.Warnings);
+            SemanticStatusText = interpretation;
             return SemanticTranslationOutcome.Applied;
         }
         catch (OperationCanceledException)
@@ -2634,14 +2642,21 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.CpuSemanticWarningShown = true;
         if (useTraditionalDefault)
         {
+            // CPU-only machine + the user chose Traditional: turn AI (Semantic) search OFF entirely so the
+            // "Enable AI (semantic) search" setting reflects their choice — not just the default mode.
+            // OnSemanticSearchAvailableChanged persists SemanticSearchEnabled=false, disables the translator,
+            // and forces Semantic mode off. (No-op on a GPU/NPU machine, which never sees this prompt.)
+            SemanticSearchAvailable = false;
             DefaultToTraditionalSearchMode = true; // OnChanged persists + re-resolves launch mode when unpinned
             IsSemanticQueryMode = false;           // immediate switch to Traditional (idempotent if already off)
         }
         else
         {
-            // User explicitly opted into AI (Semantic) search despite the CPU warning. Select it now and
-            // make it the persisted default. Setting IsSemanticQueryMode first records the explicit choice
-            // (HasChosenQueryMode = true) so flipping the default below does not re-resolve it away.
+            // User explicitly opted into AI (Semantic) search despite the CPU warning. Keep the feature
+            // enabled, select it now and make it the persisted default. Setting IsSemanticQueryMode first
+            // records the explicit choice (HasChosenQueryMode = true) so flipping the default below does
+            // not re-resolve it away.
+            SemanticSearchAvailable = true;        // ensure the AI-search feature stays enabled
             IsSemanticQueryMode = true;            // immediate switch to Semantic + persists the explicit choice
             DefaultToTraditionalSearchMode = false; // persisted default = AI/Semantic, reflected in settings
         }

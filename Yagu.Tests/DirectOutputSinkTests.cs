@@ -536,4 +536,31 @@ public sealed class DirectOutputSinkTests
         Assert.Contains("3:hello MATCH world", text);
         Assert.DoesNotContain("\u001b[", text);
     }
+
+    [Fact]
+    public unsafe void Flush_ForwardsToUnderlyingStream()
+    {
+        // DirectOutputSink writes straight to the wrapped stream (buffering lives at the CliRunner
+        // call site), so Flush() must forward to that stream so the CLI's BufferedStream drains.
+        using var tracker = new FlushCountingStream();
+        var paths = new List<string> { @"C:\src\example.txt" };
+        int cancel = 0;
+        int filesScanned = 0;
+        using var sink = new DirectOutputSink(tracker, color: false, paths, maxResults: 0, currentTotalMatches: 0, (IntPtr)(&cancel), &filesScanned);
+
+        Assert.Equal(0, tracker.FlushCount);
+        sink.Flush();
+        Assert.Equal(1, tracker.FlushCount);
+    }
+
+    private sealed class FlushCountingStream : MemoryStream
+    {
+        public int FlushCount { get; private set; }
+
+        public override void Flush()
+        {
+            FlushCount++;
+            base.Flush();
+        }
+    }
 }

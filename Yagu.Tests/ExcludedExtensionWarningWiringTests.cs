@@ -50,7 +50,7 @@ public sealed class ExcludedExtensionWarningWiringTests
     {
         int idx = MainViewModelSource.IndexOf("public async Task SubmitSearchAsync(", StringComparison.Ordinal);
         Assert.True(idx >= 0, "Expected SubmitSearchAsync in MainViewModel.cs");
-        string method = Slice(MainViewModelSource, idx, 2600);
+        string method = Slice(MainViewModelSource, idx, 3000);
 
         int translate = method.IndexOf("TranslateSemanticQueryAsync()", StringComparison.Ordinal);
         int gate = method.IndexOf("postTranslationGate is not null", StringComparison.Ordinal);

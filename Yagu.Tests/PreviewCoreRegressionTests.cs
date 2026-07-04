@@ -684,7 +684,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("x:Name=\"PreSearchTerminalChevronIcon\"", preSearchChevron);
         Assert.Contains("ToolTipService.ToolTip=\"Toggle embedded terminal\"", preSearchChevron);
 
-        string terminalHost = ExtractXamlWindow("x:Name=\"TerminalHost\"", 4000);
+        string terminalHost = ExtractXamlWindow("x:Name=\"TerminalHost\"", 5600);
         AssertContainsInOrder(terminalHost,
             "<ComboBox x:Name=\"TerminalShellSelector\"",
             "SelectionChanged=\"OnTerminalShellSelectionChanged\"",

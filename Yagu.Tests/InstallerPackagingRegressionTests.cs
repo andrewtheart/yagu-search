@@ -18,6 +18,44 @@ public sealed class InstallerPackagingRegressionTests
     }
 
     [Fact]
+    public void App_ShipsGplLicenseAndThirdPartyNoticesInInstallDir()
+    {
+        string root = FindRepoRoot();
+        string csproj = File.ReadAllText(Path.Combine(root, "Yagu", "Yagu.csproj"));
+        string buildInstaller = File.ReadAllText(Path.Combine(root, "build-installer.ps1"));
+
+        // The GPLv3 license and the consolidated third-party notices are copied to the app output so
+        // every binary distribution carries the required license/attribution texts (GPLv3 conveyance +
+        // the MIT/BSD/Apache/LGPL and 7-Zip/unRAR notice requirements).
+        Assert.Contains("<Content Include=\"..\\LICENSE\" Link=\"LICENSE\">", csproj);
+        Assert.Contains("<Content Include=\"..\\THIRD-PARTY-NOTICES.txt\" Link=\"THIRD-PARTY-NOTICES.txt\">", csproj);
+
+        // The installer stages the whole publish output, so those files ship as <app>\LICENSE and
+        // <app>\THIRD-PARTY-NOTICES.txt.
+        Assert.Contains("Copy-Item -Path \"$publishDir\\*\" -Destination $stagingDir -Recurse -Force", buildInstaller);
+
+        // Sanity: the notices file exists and carries the unRAR redistribution statement required by
+        // the bundled 7-Zip 7z.dll.
+        string notices = File.ReadAllText(Path.Combine(root, "THIRD-PARTY-NOTICES.txt"));
+        Assert.Contains("develop a RAR (WinRAR) compatible archiver", notices);
+    }
+
+    [Fact]
+    public void OcrWorker_IsPublishedSelfContained_SoItRunsWithoutDotnetInstalled()
+    {
+        string root = FindRepoRoot();
+        string csproj = File.ReadAllText(Path.Combine(root, "Yagu", "Yagu.csproj"));
+
+        // The OCR worker is a separate managed process (PaddleSharp/Tesseract are not Native-AOT safe).
+        // It must be PUBLISHED self-contained for win-x64 so it carries its own .NET runtime: Yagu.exe is
+        // self-contained Native AOT and provides no shared runtime, so a framework-dependent worker fails
+        // with "You must install .NET" on clean/offline machines (image-text OCR silently broke there).
+        Assert.Contains("dotnet publish &quot;$(OcrWorkerProject)&quot; -c $(Configuration) -r win-x64 --self-contained true", csproj);
+        Assert.Contains("net10.0\\win-x64\\publish\\", csproj);
+        Assert.DoesNotContain("dotnet build &quot;$(OcrWorkerProject)&quot;", csproj);
+    }
+
+    [Fact]
     public void Installers_RunWindowsAppRuntimePrerequisiteBeforeLaunchOrCopy()
     {
         string root = FindRepoRoot();
@@ -86,8 +124,10 @@ public sealed class InstallerPackagingRegressionTests
         Assert.Contains("[ValidateSet('x64', 'x86', 'arm64', 'all')]", buildInstaller);
         Assert.Contains("$architectures = @('x64', 'x86', 'arm64')", buildInstaller);
 
-        // Publishes self-contained per RID and suppresses the recursive installer hook.
-        Assert.Contains("dotnet publish $projectPath -c Release -r $rid", buildInstaller);
+        // Publishes self-contained per RID and suppresses the recursive installer hook. The publish
+        // invocation is built as a splatted argument array (@publishArgs) rather than an inline command.
+        Assert.Contains("$publishArgs = @($projectPath, '-c', 'Release', '-r', $rid", buildInstaller);
+        Assert.Contains("& dotnet publish @publishArgs", buildInstaller);
         Assert.Contains("--self-contained", buildInstaller);
         Assert.Contains("-p:BuildInstallerOnPublish=false", buildInstaller);
 

@@ -177,8 +177,9 @@ public sealed class OcrAssetPathsTests
         Assert.True(OcrAssetPaths.PaddleRuntimeDir().StartsWith(OcrAssetPaths.BundledRoot, StringComparison.OrdinalIgnoreCase));
         Assert.True(OcrAssetPaths.PaddleModelDir().StartsWith(OcrAssetPaths.BundledRoot, StringComparison.OrdinalIgnoreCase));
         Assert.True(OcrAssetPaths.TesseractDataDir().StartsWith(OcrAssetPaths.BundledRoot, StringComparison.OrdinalIgnoreCase));
-        // The Tesseract worker reuses the bundled OpenCv native from the Paddle payload (offline), and
-        // the bundled Tesseract data identifies the Offline edition (Tesseract becomes the default).
+        // The Tesseract worker reuses the bundled OpenCv native from the Paddle payload (offline). The
+        // offline edition also bundles the Tesseract English data so a user who switches to Tesseract
+        // runs download-free, even though PaddleSharp is the default engine.
         Assert.True(OcrAssetPaths.OpenCvNativeDir().StartsWith(OcrAssetPaths.BundledRoot, StringComparison.OrdinalIgnoreCase));
         Assert.True(OcrAssetPaths.BundledTesseractDataPresent());
     }

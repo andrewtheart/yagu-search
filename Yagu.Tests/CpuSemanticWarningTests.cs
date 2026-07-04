@@ -49,6 +49,12 @@ public sealed class CpuSemanticWarningTests
         // default (both in the search bar and in settings).
         Assert.Contains("IsSemanticQueryMode = true;", src);
         Assert.Contains("DefaultToTraditionalSearchMode = false;", src);
+
+        // The CPU-only first-run choice also drives the "Enable AI (semantic) search" feature toggle:
+        // choosing Traditional turns AI search OFF (SemanticSearchAvailable=false → SemanticSearchEnabled
+        // persisted false), while keeping AI leaves it enabled — so the setting matches the choice.
+        Assert.Contains("SemanticSearchAvailable = false;", src);
+        Assert.Contains("SemanticSearchAvailable = true;", src);
     }
 
     [Fact]
