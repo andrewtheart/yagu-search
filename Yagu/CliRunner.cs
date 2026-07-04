@@ -408,6 +408,7 @@ internal static class CliRunner
         if (resolved.SearchInsideArchives is { } ar) o.WriteLine($"  archives       : {ar}");
         if (resolved.SearchBinary is { } sb)      o.WriteLine($"  binary         : {sb}");
         if (resolved.SearchImageText is { } sit)  o.WriteLine($"  image-text     : {sit}");
+        if (resolved.ObeyGitignore is { } gi)     o.WriteLine($"  obey-gitignore : {gi}");
         if (resolved.Warnings.Count > 0)          o.WriteLine($"  warnings       : {string.Join(" | ", resolved.Warnings)}");
     }
 

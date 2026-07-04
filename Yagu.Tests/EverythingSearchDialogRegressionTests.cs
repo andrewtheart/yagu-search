@@ -218,6 +218,22 @@ public sealed class EverythingSearchDialogRegressionTests
         Assert.Contains("WindowForegroundHelper.CenterWindowOverOwner(", dialog);
         // Resizable dialogs keep the user's chosen size (auto-size only applies to fixed dialogs).
         Assert.Contains("if (_options.IsResizable)", dialog);
+
+        // The measured height is the CLIENT height; the non-client frame (border + resize grip) must be
+        // added back or it eats into the client and clips the last line. Query DPI-aware Win32 metrics
+        // (AppWindow.Size vs ClientSize can lag after SetBorderAndTitleBar).
+        Assert.Contains("private int NonClientFrameHeight()", dialog);
+        Assert.Contains("GetSystemMetricsForDpi(33 /* SM_CYFRAME */", dialog);
+        Assert.Contains("GetSystemMetricsForDpi(92 /* SM_CXPADDEDBORDER */", dialog);
+        Assert.Contains("+ chromeHeight;", dialog);
+
+        // The body is hosted in a ScrollViewer so content that still exceeds the available height
+        // scrolls instead of being clipped — a hard guarantee independent of the height measurement.
+        Assert.Contains("new ScrollViewer", dialog);
+        Assert.Contains("VerticalScrollBarVisibility = ScrollBarVisibility.Auto", dialog);
+
+        // A second, settled re-fit pass catches wrapping/font-metric growth after the first measure.
+        Assert.Contains("DispatcherQueuePriority.Low", dialog);
     }
 
     private static string FindRepoRoot()

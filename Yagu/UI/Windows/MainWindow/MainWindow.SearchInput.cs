@@ -462,6 +462,9 @@ public sealed partial class MainWindow
             return;
 
         CollapseInputSuggestionDropdowns();
+        // Keep the Advanced Options drawer open when a modal is raised from within it (e.g. the
+        // .gitignore-vs-Include-filter prompt) — the modal deactivating the window must not dismiss it.
+        SuppressAdvancedOptionsFlyoutDismissForModal();
     }
 
     /// <summary>

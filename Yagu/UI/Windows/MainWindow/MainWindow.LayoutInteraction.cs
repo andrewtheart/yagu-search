@@ -58,6 +58,34 @@ public sealed partial class MainWindow
         AdvancedOptionsExpandGlyph.Glyph = "\uE70D"; // chevron down
     }
 
+    // Any owned modal/dialog taking foreground deactivates the main window, which would light-dismiss
+    // the Advanced Options flyout out from under the dialog (e.g. toggling ".gitignore precedence"
+    // inside the drawer pops the ".gitignore vs Include filter" prompt and closed the drawer). This
+    // timestamp bridges the brief instant between "a modal is preparing to show" and it registering as
+    // open, so the Closing handler below can cancel the dismiss in every case.
+    private System.DateTimeOffset _suppressAdvancedOptionsDismissUntilUtc;
+
+    /// <summary>Keep the Advanced Options drawer open across a modal that is about to be shown from
+    /// within it. Called from <c>OnModalDialogPreparingToShow</c>, just before a modal activates.</summary>
+    private void SuppressAdvancedOptionsFlyoutDismissForModal()
+        => _suppressAdvancedOptionsDismissUntilUtc = System.DateTimeOffset.UtcNow.AddSeconds(5);
+
+    private bool IsAdvancedOptionsFlyoutDismissSuppressed()
+        => _suppressAdvancedOptionsDismissUntilUtc > System.DateTimeOffset.UtcNow;
+
+    /// <summary>
+    /// Cancels a flyout light-dismiss caused by ANY owned modal/dialog taking foreground, so no dialog
+    /// ever closes the Advanced Options drawer out from under itself. Normal light-dismiss (clicking
+    /// away with no modal open) is unaffected, so the drawer still closes as usual.
+    /// </summary>
+    private void OnAdvancedOptionsFlyoutClosing(
+        Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase sender,
+        Microsoft.UI.Xaml.Controls.Primitives.FlyoutBaseClosingEventArgs args)
+    {
+        if (HasOpenAppOwnedWindowOrModal() || IsAdvancedOptionsFlyoutDismissSuppressed())
+            args.Cancel = true;
+    }
+
     /// <summary>
     /// Sizes the flyout drawer to half the search card's bottom action bar width, left-aligned under
     /// the "Advanced Options" toggle.

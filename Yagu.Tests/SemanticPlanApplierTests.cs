@@ -593,6 +593,71 @@ public sealed class SemanticPlanApplierTests
         Assert.False(SemanticPlanApplier.TryDetectRelativeDateWindow(query, Now, out _, out _));
     }
 
+    // ---- deterministic .gitignore obey/disobey (read from the ORIGINAL query) ----
+
+    [Theory]
+    [InlineData("obey .gitignore", true)]
+    [InlineData("respect the .gitignore", true)]
+    [InlineData("follow gitignore rules", true)]
+    [InlineData("use .gitignore", true)]
+    [InlineData("do not obey .gitignore", false)]
+    [InlineData("don't obey the .gitignore", false)]
+    [InlineData("ignore .gitignore", false)]
+    [InlineData("disregard the .gitignore", false)]
+    [InlineData("bypass gitignore", false)]
+    [InlineData("don't ignore .gitignore", true)]
+    [InlineData("include gitignored files", false)]
+    [InlineData("exclude gitignored files", true)]
+    public void DetectGitignorePreference_MapsObeyAndDisobeyPhrases(string query, bool expectObey)
+    {
+        Assert.Equal(expectObey, SemanticPlanApplier.DetectGitignorePreference(query));
+    }
+
+    [Theory]
+    [InlineData("find the .gitignore file")]
+    [InlineData("show me all .gitignore files")]
+    [InlineData("all png files")]
+    [InlineData("files containing the word gitignore")]
+    public void DetectGitignorePreference_ReturnsNullForNonDirectiveMentions(string query)
+    {
+        Assert.Null(SemanticPlanApplier.DetectGitignorePreference(query));
+    }
+
+    [Fact]
+    public void Resolve_ObeyGitignorePhrase_SetsResolvedObeyGitignoreTrue()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "todo" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "find todo, obey .gitignore" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.True(resolved.ObeyGitignore);
+    }
+
+    [Fact]
+    public void Resolve_DoNotObeyGitignorePhrase_OverridesModelAndSetsFalse()
+    {
+        // Even if the model wrongly emitted obeyGitignore=true, the deterministic query directive wins.
+        var plan = new SemanticSearchPlan { Pattern = "todo", ObeyGitignore = true };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "find todo but do not obey .gitignore" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.False(resolved.ObeyGitignore);
+    }
+
+    [Fact]
+    public void ApplyToTarget_ObeyGitignorePreference_SetsTargetToggle()
+    {
+        var target = new FakeTarget { ObeyGitignore = false };
+        var plan = new SemanticSearchPlan { Pattern = "x" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "search x and respect .gitignore" };
+
+        SemanticPlanApplier.ApplyToTarget(plan, ctx, target);
+
+        Assert.True(target.ObeyGitignore);
+    }
+
     // ---- Tier-1 B: content-negation exclude globs that would nuke the include set ----
 
     [Fact]

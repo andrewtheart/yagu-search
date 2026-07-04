@@ -236,7 +236,20 @@ internal sealed class YaguDialog : Window
             root.Children.Add(topRightClose);
         }
 
-        var bodyContent = CreateBodyContent(options.Content);
+        var innerBody = CreateBodyContent(options.Content);
+        // Host the body in a ScrollViewer so content that exceeds the available/MaxContentHeight
+        // scrolls instead of being clipped. This is a hard guarantee that dialog text is never cut off
+        // even if the auto-height sizing under-measures (wrapping/font metrics, DPI, or a tiny screen).
+        // Content that is already a ScrollViewer is used as-is to avoid nesting scrollers.
+        FrameworkElement bodyContent = innerBody is ScrollViewer
+            ? innerBody
+            : new ScrollViewer
+            {
+                Content = innerBody,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                VerticalScrollMode = ScrollMode.Auto,
+            };
         if (options.MinContentHeight > 0)
             bodyContent.MinHeight = options.MinContentHeight;
         if (options.MaxContentHeight > 0)
@@ -264,6 +277,12 @@ internal sealed class YaguDialog : Window
             // of the fixed Height hint in options (and of the owner/backing window). Done once the
             // content is in the tree and measurable; resizable dialogs keep the user's size.
             AutoSizeHeightToContent(root);
+            // Re-fit once more after layout has fully settled: text wrapping and font metrics can make
+            // the natural height taller than the first measurement (e.g. a long body wraps to an extra
+            // line), so a low-priority second pass guarantees the final size fits every line.
+            DispatcherQueue.TryEnqueue(
+                Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                () => AutoSizeHeightToContent(root));
 
             Button? defaultButton = options.DefaultButton switch
             {
@@ -316,7 +335,10 @@ internal sealed class YaguDialog : Window
         if (currentSize.Width <= 0)
             return;
 
-        double widthDip = currentSize.Width / scale;
+        // Measure at the CLIENT width (outer width minus the left/right frame) so text wrapping matches
+        // what is actually rendered; fall back to the outer width before the client size is reported.
+        int clientWidthPhysical = _appWindow.ClientSize.Width > 0 ? _appWindow.ClientSize.Width : currentSize.Width;
+        double widthDip = clientWidthPhysical / scale;
 
         // Natural content height at the current width. Measuring outside the layout pass (in Loaded)
         // is safe; DesiredSize reflects what the content wants before the window constrained it.
@@ -325,12 +347,35 @@ internal sealed class YaguDialog : Window
         if (desiredHeightDip <= 0)
             return;
 
-        int desiredHeightPhysical = (int)Math.Ceiling(desiredHeightDip * scale);
+        // desiredHeightDip is the CLIENT (content) height. The window's outer rect also includes the
+        // non-client frame (border + resize grip); without adding it back the frame eats into the
+        // client and clips the last line of text. Compute it from DPI-aware system metrics — AppWindow
+        // .Size vs ClientSize can lag right after SetBorderAndTitleBar, so query Win32 directly like the
+        // launcher does. A small safety pad absorbs sub-pixel measurement rounding.
+        int chromeHeight = NonClientFrameHeight();
+        int desiredHeightPhysical = (int)Math.Ceiling((desiredHeightDip + 2) * scale) + chromeHeight;
         if (Math.Abs(desiredHeightPhysical - currentSize.Height) <= 2)
             return; // already the right height
 
         WindowForegroundHelper.CenterWindowOverOwner(
             _appWindow, _ownerHwnd, currentSize.Width, desiredHeightPhysical);
+    }
+
+    /// <summary>Top+bottom non-client frame height in physical pixels at this window's DPI (border +
+    /// padded resize grip), so the auto-sized CLIENT content height is not clipped by the frame.</summary>
+    private int NonClientFrameHeight()
+    {
+        try
+        {
+            int dpi = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this));
+            int frameY = GetSystemMetricsForDpi(33 /* SM_CYFRAME */, (uint)dpi);
+            int padded = GetSystemMetricsForDpi(92 /* SM_CXPADDEDBORDER */, (uint)dpi);
+            return (frameY + padded) * 2;
+        }
+        catch
+        {
+            return 0;
+        }
     }
 
     private static FrameworkElement CreateBodyContent(object content)
@@ -427,5 +472,11 @@ internal sealed class YaguDialog : Window
 
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern int GetDpiForWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetricsForDpi(int nIndex, uint dpi);
 
 }

@@ -178,6 +178,12 @@ public static class SemanticPlanApplier
             exclude.RemoveAll(IsLikelyHiddenExclusionToken);
         searchHidden ??= plan.SearchHidden;
 
+        // "obey .gitignore" / "do not obey .gitignore" (and synonyms: respect/follow/use vs
+        // ignore/disregard/bypass/disable) map to the "Obey .gitignore" toggle. Detect it
+        // deterministically from the ORIGINAL query (the small model is unreliable at this) and fall
+        // back to the model's obeyGitignore only when the query says nothing about it.
+        bool? obeyGitignore = DetectGitignorePreference(context.OriginalQuery) ?? plan.ObeyGitignore;
+
         // Content-negation guard: a small model turns "log files with error but WITHOUT warning" (a
         // CONTENT exclusion the engine can't express) into a FILENAME exclude glob — often the SAME
         // extension it just included (exclude *.log while include *.log) or a match-everything token
@@ -388,7 +394,7 @@ public static class SemanticPlanApplier
             ModifiedAfterDate = modifiedAfter,
             ModifiedBeforeDate = modifiedBefore,
             MaxSearchDepth = plan.MaxSearchDepth is { } d ? Math.Max(0, d) : null,
-            ObeyGitignore = plan.ObeyGitignore,
+            ObeyGitignore = obeyGitignore,
             SearchInsideArchives = searchInsideArchives,
             SearchBinary = searchBinary,
             SearchHiddenFiles = searchHidden,
@@ -567,6 +573,9 @@ public static class SemanticPlanApplier
 
         if (resolved.SearchHiddenFiles is { } hidden)
             sb.Append(hidden ? ", including hidden files" : ", excluding hidden files");
+
+        if (resolved.ObeyGitignore is { } obeyGit)
+            sb.Append(obeyGit ? ", obeying .gitignore" : ", ignoring .gitignore");
 
         if (resolved.SearchImageText == true)
             sb.Append(", reading text inside images (OCR)");
@@ -1264,6 +1273,63 @@ public static class SemanticPlanApplier
             hiddenIndex = match.Index;
         string before = HiddenClauseBefore(query, hiddenIndex);
         return !HiddenExclusionCueRegex.IsMatch(before);
+    }
+
+    // ".gitignore" behavior directive detection. Matches ".gitignore", "gitignore", "git ignore",
+    // "git-ignore", and the "gitignored" participle; the leading verb (scanned in the clause BEFORE the
+    // token, so the token's own "ignore" is never counted) decides obey vs don't-obey.
+    private static readonly Regex GitignoreTokenRegex = new(
+        @"\.?\bgit[\s-]?ignore(d)?\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex GitignoreObeyVerb = new(
+        @"\b(?:obey|obeying|respect|respecting|honou?r|honou?ring|follow|following|use|using|apply|applying|enforce|enforcing|observe|observing|heed|heeding|enable|enabling|abide)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex GitignoreDisobeyVerb = new(
+        @"\b(?:ignore|ignoring|disregard|disregarding|bypass|bypassing|disable|disabling|skip|skipping|omit|omitting|override|overriding|without|no)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex GitignoreExcludeCue = new(
+        @"\b(?:exclude|excluding|without|skip|skipping|omit|omitting|hide|hiding|no|not|remove|removing|drop|dropping|except)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex GitignoreNegationCue = new(
+        @"\b(?:not|never|don'?t|doesn'?t|didn'?t|won'?t|cannot|can'?t|shouldn'?t|wouldn'?t)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Detects whether the ORIGINAL query asks to obey or ignore <c>.gitignore</c> — Yagu's "Obey
+    /// .gitignore" toggle. Returns <c>true</c> for "obey/respect/follow/use .gitignore", <c>false</c>
+    /// for "do not obey/ignore/disregard/bypass .gitignore" or "include gitignored files", and
+    /// <c>null</c> when the query has no .gitignore behavior directive (e.g. a search for the
+    /// <c>.gitignore</c> file itself). A negation in the same clause flips the polarity, so both
+    /// "do not obey .gitignore" (false) and "don't ignore .gitignore" (true) resolve correctly.
+    /// </summary>
+    internal static bool? DetectGitignorePreference(string? query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return null;
+
+        // Ignore quoted spans so a literal content search (containing "obey gitignore") isn't hijacked.
+        string scan = Regex.Replace(query, "\"[^\"]*\"|'[^']*'", " ");
+
+        var m = GitignoreTokenRegex.Match(scan);
+        if (!m.Success)
+            return null;
+
+        bool ignoredFilesForm = m.Groups[1].Success; // "gitignored"
+        // The governing clause up to (but not including) the .gitignore token.
+        string before = HiddenClauseBefore(scan, m.Index);
+
+        bool? obey;
+        if (GitignoreObeyVerb.IsMatch(before))
+            obey = !GitignoreNegationCue.IsMatch(before);      // "do not obey" -> false
+        else if (GitignoreDisobeyVerb.IsMatch(before))
+            obey = GitignoreNegationCue.IsMatch(before);       // "don't ignore" -> true
+        else if (ignoredFilesForm)
+            // "gitignored files": excluding/hiding them = obey; otherwise the user wants to see them.
+            obey = GitignoreExcludeCue.IsMatch(before);
+        else
+            return null; // a bare ".gitignore" mention with no behavior directive = a filename search.
+
+        return obey;
     }
 
     /// <summary>The text within the same clause leading up to <paramref name="index"/> — i.e. after the

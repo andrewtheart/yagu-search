@@ -37,6 +37,15 @@
   successful build the four table rows are updated so their filename, GitHub raw
   URL, and (~N MB) size match the newest installer of each suffix on disk.
 
+.PARAMETER Commit
+  After a fully successful build, stage every change (git add -A, which includes any
+  untracked files) and commit them with the message
+  "Build installers v<version> (<variants>)". A no-op when the working tree is clean.
+
+.PARAMETER Push
+  After a successful build, stage + commit (exactly as -Commit) and then run git push.
+  Implies the commit step, since there must be a commit to push.
+
 .EXAMPLE
   .\build-all-installers.ps1
   Builds all four variants (x64, x86, arm64, x64-offline).
@@ -53,6 +62,14 @@
   .\build-all-installers.ps1 -WhatIf
   Prints the build plan (resolved variants + the build-installer.ps1 commands)
   without building anything.
+
+.EXAMPLE
+  .\build-all-installers.ps1 -Commit
+  Builds all variants, then stages (git add -A) and commits the result.
+
+.EXAMPLE
+  .\build-all-installers.ps1 -Variant x64 -Push
+  Builds the x64 installer, commits the result, and pushes it to the remote.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
@@ -61,7 +78,9 @@ param(
   [string]$InnoSetupPath,
   [string]$OcrPayloadCacheDir,
   [switch]$SkipReadmeUpdate,
-  [switch]$KeepVersion
+  [switch]$KeepVersion,
+  [switch]$Commit,
+  [switch]$Push
 )
 
 $ErrorActionPreference = 'Stop'
@@ -177,6 +196,9 @@ if ($WhatIfPreference) {
     if ($spec.IncludeOcr) { $cmd += ' -IncludeOcr' }
     Write-Host ("  {0,-8} -> {1}" -f $name, $cmd)
   }
+  if ($Commit -or $Push) {
+    Write-Host ("  post-build: git add -A + commit{0}" -f $(if ($Push) { ' + push' } else { '' })) -ForegroundColor Yellow
+  }
   return
 }
 
@@ -264,3 +286,61 @@ if ($failed.Count -gt 0) {
 }
 
 Write-Host "All $($results.Count) variant(s) built successfully." -ForegroundColor Green
+
+# Optionally stage + commit (and push) everything the build produced or changed (the version bump,
+# generated AppInfo, the installers, the README table, etc.). -Push implies the commit step, since
+# there must be a commit to push. This is only reached after a fully successful build (a failed
+# build throws above), so we never commit a half-built release.
+if ($Commit -or $Push) {
+  if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    throw "-Commit/-Push was requested but 'git' is not available on PATH."
+  }
+
+  # git signals success/failure via exit code, not exceptions. Turn off native-command
+  # auto-throwing (PowerShell 7.3+) for this block so the "is anything staged?" probe
+  # (git diff --cached --quiet exits 1 BY DESIGN when there are staged changes) is not treated as an
+  # error; we inspect $LASTEXITCODE ourselves and throw only on genuine failures.
+  $restoreNativePref = $false
+  $savedNativePref = $null
+  if (Test-Path variable:PSNativeCommandUseErrorActionPreference) {
+    $savedNativePref = $PSNativeCommandUseErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $false
+    $restoreNativePref = $true
+  }
+  try {
+    $inside = (& git -C $repoRoot rev-parse --is-inside-work-tree 2>$null)
+    if ($LASTEXITCODE -ne 0 -or "$inside".Trim() -ne 'true') {
+      throw "-Commit/-Push was requested but '$repoRoot' is not a git working tree."
+    }
+
+    Write-Host ""
+    Write-Host "Staging all changes (git add -A)..." -ForegroundColor Cyan
+    & git -C $repoRoot add -A
+    if ($LASTEXITCODE -ne 0) { throw "git add -A failed (exit $LASTEXITCODE)." }
+
+    & git -C $repoRoot diff --cached --quiet
+    $stagedExit = $LASTEXITCODE
+    if ($stagedExit -gt 1) { throw "git diff --cached failed (exit $stagedExit)." }
+
+    if ($stagedExit -eq 1) {
+      $commitMessage = "Build installers v$pinnedVersion ($($requested -join ', '))"
+      Write-Host "Committing: $commitMessage" -ForegroundColor Cyan
+      & git -C $repoRoot commit -m $commitMessage
+      if ($LASTEXITCODE -ne 0) { throw "git commit failed (exit $LASTEXITCODE)." }
+      Write-Host "Committed." -ForegroundColor Green
+    }
+    else {
+      Write-Host "Nothing to commit - working tree already clean." -ForegroundColor DarkGray
+    }
+
+    if ($Push) {
+      Write-Host "Pushing (git push)..." -ForegroundColor Cyan
+      & git -C $repoRoot push
+      if ($LASTEXITCODE -ne 0) { throw "git push failed (exit $LASTEXITCODE)." }
+      Write-Host "Pushed." -ForegroundColor Green
+    }
+  }
+  finally {
+    if ($restoreNativePref) { $PSNativeCommandUseErrorActionPreference = $savedNativePref }
+  }
+}

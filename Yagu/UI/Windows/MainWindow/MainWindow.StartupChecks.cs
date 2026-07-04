@@ -156,7 +156,8 @@ public sealed partial class MainWindow
         panel.Children.Add(new TextBlock
         {
             Text = "Yagu didn't find a compatible GPU or NPU on this PC, so AI (Semantic) search would run on "
-                 + "your CPU. It still works, but it can be slow and the quality of results may vary.",
+                 + "your CPU. This model will likely provide a degraded and inconsistent experience, and "
+                 + "searches may be slow.",
             TextWrapping = TextWrapping.WrapWholeWords,
             FontSize = 14,
         });
