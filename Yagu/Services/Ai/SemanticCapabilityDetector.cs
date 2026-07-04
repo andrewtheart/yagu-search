@@ -20,6 +20,11 @@ public interface ISemanticCapabilityDetector
 
     /// <summary>True when a compute accelerator / NPU is present on a physical bus.</summary>
     bool HasNpu();
+
+    /// <summary>Largest dedicated video memory (in bytes) among the real (non-software) GPUs present,
+    /// or 0 when unknown/none. Used to decide whether the machine can auto-run a larger, more accurate
+    /// model (e.g. phi-4 14B) instead of the small default.</summary>
+    long GetMaxDedicatedGpuMemoryBytes();
 }
 
 /// <summary>
@@ -51,7 +56,7 @@ public sealed class GpuNpuCapabilityDetector : ISemanticCapabilityDetector
     ];
 
     /// <summary>A single device-class instance's identifying values, as read from the registry.</summary>
-    public readonly record struct DeviceClassEntry(string DriverDesc, string MatchingDeviceId);
+    public readonly record struct DeviceClassEntry(string DriverDesc, string MatchingDeviceId, long DedicatedMemoryBytes = 0);
 
     private readonly Func<string, IEnumerable<DeviceClassEntry>> _readDeviceClass;
 
@@ -116,6 +121,29 @@ public sealed class GpuNpuCapabilityDetector : ISemanticCapabilityDetector
         }
     }
 
+    /// <summary>Largest dedicated video memory (bytes) among the real (non-software) GPUs, read from
+    /// each display adapter's <c>HardwareInformation.qwMemorySize</c> registry value. Returns 0 when no
+    /// real GPU is present or the value is unavailable. Software/basic/remote adapters are excluded via
+    /// <see cref="IsHardwareAccelerator"/>, so a headless/Sandbox box reports 0.</summary>
+    public long GetMaxDedicatedGpuMemoryBytes()
+    {
+        try
+        {
+            long max = 0;
+            foreach (DeviceClassEntry entry in _readDeviceClass(DisplayClassKey))
+            {
+                if (!IsHardwareAccelerator(entry.DriverDesc, entry.MatchingDeviceId)) continue;
+                if (entry.DedicatedMemoryBytes > max) max = entry.DedicatedMemoryBytes;
+            }
+            return max;
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Verbose("Semantic.Capability", "GPU memory detection failed; assuming unknown.", ex);
+            return 0;
+        }
+    }
+
     /// <summary>Best-effort human-readable descriptions of the real (non-software) GPUs present, e.g.
     /// "NVIDIA GeForce RTX 4070". Empty when none are detected or the registry is unreadable. Used to
     /// enrich user-reviewed bug reports; never sent on the silent telemetry channel.</summary>
@@ -169,11 +197,29 @@ public sealed class GpuNpuCapabilityDetector : ISemanticCapabilityDetector
 
             string driverDesc = instance.GetValue("DriverDesc") as string ?? string.Empty;
             string matchingDeviceId = instance.GetValue("MatchingDeviceId") as string ?? string.Empty;
+            long dedicatedMemoryBytes = ReadDedicatedMemoryBytes(instance);
 
-            entries.Add(new DeviceClassEntry(driverDesc, matchingDeviceId));
+            entries.Add(new DeviceClassEntry(driverDesc, matchingDeviceId, dedicatedMemoryBytes));
         }
 
         return entries;
+    }
+
+    /// <summary>Reads a display adapter's dedicated VRAM from <c>HardwareInformation.qwMemorySize</c>,
+    /// which the driver stores as a REG_QWORD (long) or, on some drivers, a little-endian REG_BINARY.
+    /// Returns 0 when absent/unreadable.</summary>
+    [ExcludeFromCodeCoverage]
+    private static long ReadDedicatedMemoryBytes(RegistryKey instance)
+    {
+        object? value = instance.GetValue("HardwareInformation.qwMemorySize");
+        return value switch
+        {
+            long l => l,
+            int i => i,
+            byte[] b when b.Length >= 8 => BitConverter.ToInt64(b, 0),
+            byte[] b when b.Length >= 4 => BitConverter.ToUInt32(b, 0),
+            _ => 0,
+        };
     }
 
     /// <summary>

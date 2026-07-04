@@ -66,6 +66,17 @@ public interface ISemanticQueryTranslator
     /// Applied to the next selection; drops the loaded model so the change takes effect immediately.</summary>
     void SetAvailableAccelerators(bool hasGpu, bool hasNpu);
 
+    /// <summary>Tells the translator how much dedicated GPU memory (bytes) this machine has, so AUTO
+    /// selection can upgrade to a larger, more-accurate model (e.g. phi-4 14B) when there is ample VRAM
+    /// instead of always picking the small default. 0 = unknown / no GPU. Applied to the next selection;
+    /// drops the loaded model so the change takes effect without a restart.</summary>
+    void SetGpuMemoryBytes(long dedicatedVideoMemoryBytes);
+
+    /// <summary>Clears the cached Foundry model catalog and drops the loaded model so the next selection
+    /// re-queries Foundry Local. Use to pick up models downloaded/updated out of band and to re-resolve
+    /// the current model. Cheap and synchronous; the actual re-query happens on next use.</summary>
+    void RefreshCatalog();
+
     /// <summary>A stable key identifying the model variant currently selected/loaded for translation —
     /// the catalog variant id when known (alias + accelerator build + quantization + version), otherwise
     /// the alias. Null when no model has been selected yet. Used to suppress the slow-interpretation

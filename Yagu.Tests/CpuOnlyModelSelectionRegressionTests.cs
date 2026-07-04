@@ -116,6 +116,31 @@ public sealed class CpuOnlyModelSelectionRegressionTests
     }
 
     [Fact]
+    public void Translator_UpgradesToLargerModelOnAmpleGpuVram()
+    {
+        string translator = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
+        string iface = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "ISemanticQueryTranslator.cs"));
+        string vm = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "ViewModels", "MainViewModel.cs"));
+        string cli = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+
+        // Interface + translator expose a VRAM setter and a VRAM-budget helper.
+        Assert.Contains("void SetGpuMemoryBytes(long dedicatedVideoMemoryBytes);", iface);
+        Assert.Contains("public void SetGpuMemoryBytes(long dedicatedVideoMemoryBytes)", translator);
+        Assert.Contains("private int AvailableVramBudgetMb()", translator);
+        Assert.Contains("if (!_hasGpu || _gpuMemoryBytes <= 0) return 0;", translator);
+
+        // Auto-select (no user override) upgrades to the policy's larger model when VRAM allows, then
+        // ALWAYS falls back to normal auto-selection (so an unavailable upgrade never yields null).
+        Assert.Contains("HighAccuracyModelPolicy.UpgradeAliasFor(AvailableVramBudgetMb())", translator);
+        Assert.Contains("string.IsNullOrWhiteSpace(_preferredAlias)", translator);
+        Assert.Contains("model ??= await FoundryModelSelector.SelectAsync(catalog, _preferredAlias, _deviceOrder, AvailableDevices(), AvailableMemoryBudgetMb(), cancellationToken)", translator);
+
+        // GUI + CLI feed detected dedicated VRAM to the translator.
+        Assert.Contains("_semanticTranslator.SetGpuMemoryBytes(SafeDetectGpuMemoryBytes());", vm);
+        Assert.Contains("translator.SetGpuMemoryBytes(cliGpuMemoryBytes);", cli);
+    }
+
+    [Fact]
     public void Selector_ExcludesNonChatModelsByAliasNotJustTask()
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryModelSelector.cs"));

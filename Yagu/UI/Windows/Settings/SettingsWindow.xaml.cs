@@ -3737,6 +3737,18 @@ public sealed partial class SettingsWindow : Window
             };
             modelGroup.Children.Add(modelValue);
 
+            // Resolve + show the ACTUAL current model in the background (non-blocking) so automatic mode
+            // shows e.g. "phi-4 (automatic)" instead of a generic label, even before the first AI search.
+            if (_viewModel.SemanticSearchAvailable)
+            {
+                _ = ResolveModelDisplayAsync();
+                async Task ResolveModelDisplayAsync()
+                {
+                    try { modelValue.Text = await _viewModel.ResolveCurrentSemanticModelDisplayAsync(null, System.Threading.CancellationToken.None); }
+                    catch { /* leave whatever is shown */ }
+                }
+            }
+
             var modelButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 6, 0, 0) };
             var chooseModel = new Button { Content = "Choose / download model\u2026" };
             chooseModel.Click += async (_, _) =>
@@ -3755,6 +3767,8 @@ public sealed partial class SettingsWindow : Window
             {
                 await _viewModel.ClearSemanticModelOverrideAsync();
                 modelValue.Text = _viewModel.CurrentSemanticModelDisplay;
+                try { modelValue.Text = await _viewModel.ResolveCurrentSemanticModelDisplayAsync(null, System.Threading.CancellationToken.None); }
+                catch { /* leave the generic automatic label */ }
             };
             modelButtons.Children.Add(chooseModel);
             modelButtons.Children.Add(resetModel);
@@ -3762,6 +3776,31 @@ public sealed partial class SettingsWindow : Window
             modelGroup.Children.Add(new TextBlock { Text = "Pick which on-device model translates your requests. The recommended model is the best fit for your hardware; in the picker, any model that is not the one you're currently using is flagged \"Results may vary.\" Changing the model takes effect on your next AI search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
             dependentControls.Add(chooseModel);
             dependentControls.Add(resetModel);
+
+            // ── Refresh Foundry cache ──
+            var refreshRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 0) };
+            var refreshCache = new Button { Content = "Refresh Foundry cache" };
+            refreshCache.Click += async (_, _) =>
+            {
+                refreshCache.IsEnabled = false;
+                modelValue.Text = "Refreshing\u2026";
+                try
+                {
+                    modelValue.Text = await _viewModel.RefreshFoundryCacheAsync(null, System.Threading.CancellationToken.None);
+                }
+                catch
+                {
+                    modelValue.Text = _viewModel.CurrentSemanticModelDisplay;
+                }
+                finally
+                {
+                    refreshCache.IsEnabled = _viewModel.SemanticSearchAvailable;
+                }
+            };
+            refreshRow.Children.Add(refreshCache);
+            modelGroup.Children.Add(refreshRow);
+            modelGroup.Children.Add(new TextBlock { Text = "Re-scan Foundry Local for models you've downloaded or updated out of band, and re-resolve the current model shown above. Takes effect on your next AI search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            dependentControls.Add(refreshCache);
 
             // ── Accelerator preference ──
             deviceGroup.Children.Add(NextSearchLabel("Preferred accelerator order (which device runs the model):"));

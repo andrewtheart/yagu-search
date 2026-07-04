@@ -133,6 +133,7 @@
     <Compile Include="..\Yagu\Services\Ai\ModelMemoryBudget.cs" Link="Source\Services\Ai\ModelMemoryBudget.cs" />
     <Compile Include="..\Yagu\Services\Ai\ModelContextBudget.cs" Link="Source\Services\Ai\ModelContextBudget.cs" />
     <Compile Include="..\Yagu\Services\Ai\GenAiConfigReader.cs" Link="Source\Services\Ai\GenAiConfigReader.cs" />
+    <Compile Include="..\Yagu\Services\Ai\HighAccuracyModelPolicy.cs" Link="Source\Services\Ai\HighAccuracyModelPolicy.cs" />
   </ItemGroup>
 
   <!-- Copy the Rust cdylib next to the test assembly so the native fast-path

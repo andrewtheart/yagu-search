@@ -155,6 +155,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         // build on a machine that lacks one (such a build can load via DirectML yet crash during
         // inference). A CPU-only machine deterministically gets the CPU model build.
         _semanticTranslator.SetAvailableAccelerators(_semanticHasGpu, _semanticHasNpu);
+        // Tell the translator how much dedicated GPU VRAM exists so AUTO selection can upgrade to a
+        // larger, more accurate model (e.g. phi-4 14B) on a strong GPU instead of always defaulting to
+        // the small phi-4-mini. 0 (unknown / no GPU) leaves the small default in place.
+        _semanticTranslator.SetGpuMemoryBytes(SafeDetectGpuMemoryBytes());
         DefaultToTraditionalSearchMode = _settings.DefaultToTraditionalSearchMode;
         SemanticModelAlias = _settings.SemanticModelAlias;
         SemanticDevicePreferenceOrder = _settings.SemanticDevicePreferenceOrder;
@@ -486,10 +490,21 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [NotifyPropertyChangedFor(nameof(HasSemanticModelOverride))]
     public partial string SemanticModelAlias { get; set; } = string.Empty;
 
-    /// <summary>Friendly description of the model currently selected for semantic translation.</summary>
-    public string CurrentSemanticModelDisplay => string.IsNullOrWhiteSpace(SemanticModelAlias)
-        ? "Automatic (recommended for your hardware)"
-        : SemanticModelAlias;
+    /// <summary>Friendly description of the model currently selected for semantic translation. Shows a
+    /// pinned override by name, else the actually-loaded automatic model ("phi-4 (automatic)") when one
+    /// is loaded, else a generic "Automatic" label until the first search (or a Refresh) resolves it.</summary>
+    public string CurrentSemanticModelDisplay
+    {
+        get
+        {
+            if (!string.IsNullOrWhiteSpace(SemanticModelAlias))
+                return SemanticModelAlias;
+            string? loaded = (_semanticTranslator as FoundryLocalSemanticQueryTranslator)?.SelectedModelAlias;
+            return string.IsNullOrWhiteSpace(loaded)
+                ? "Automatic (recommended for your hardware)"
+                : $"{loaded} (automatic)";
+        }
+    }
 
     /// <summary>Whether the user has pinned a specific model rather than using automatic selection.</summary>
     public bool HasSemanticModelOverride => !string.IsNullOrWhiteSpace(SemanticModelAlias);
@@ -689,6 +704,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     {
         try { return probe(); }
         catch { return false; }
+    }
+
+    /// <summary>Reads the machine's dedicated GPU VRAM (bytes) for the larger-model auto-upgrade
+    /// decision, swallowing any fault as 0 (unknown) so startup never breaks.</summary>
+    private long SafeDetectGpuMemoryBytes()
+    {
+        try { return _capabilityDetector.GetMaxDedicatedGpuMemoryBytes(); }
+        catch { return 0; }
     }
 
     [ObservableProperty] public partial int ContextLines { get; set; } = 3;
@@ -2390,6 +2413,49 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         if (_semanticTranslator is null || !_semanticTranslator.IsAvailable)
             return Task.FromResult<IReadOnlyList<SemanticModelOption>>(Array.Empty<SemanticModelOption>());
         return _semanticTranslator.ListModelOptionsAsync(progress, cancellationToken);
+    }
+
+    /// <summary>
+    /// Resolves the human-readable name of the model that AI search will actually use right now, for
+    /// display in Settings: a pinned override by name, else the loaded automatic model, else the
+    /// recommended automatic model (resolved by querying the catalog). Falls back to a generic label on
+    /// any failure. Does NOT change any state or reset the cache.
+    /// </summary>
+    public async Task<string> ResolveCurrentSemanticModelDisplayAsync(
+        IProgress<SemanticTranslationProgress>? progress, CancellationToken cancellationToken)
+    {
+        // A pinned override, or an already-loaded automatic model, is authoritative and needs no query.
+        if (!string.IsNullOrWhiteSpace(SemanticModelAlias))
+            return SemanticModelAlias;
+        string? loaded = (_semanticTranslator as FoundryLocalSemanticQueryTranslator)?.SelectedModelAlias;
+        if (!string.IsNullOrWhiteSpace(loaded))
+            return $"{loaded} (automatic)";
+
+        // Automatic mode with nothing loaded yet: resolve the recommended model from the catalog.
+        try
+        {
+            var options = await GetSemanticModelOptionsAsync(progress, cancellationToken).ConfigureAwait(true);
+            var recommended = options.FirstOrDefault(o => o.IsRecommended);
+            if (recommended is not null && !string.IsNullOrWhiteSpace(recommended.Alias))
+                return $"{recommended.Alias} (automatic)";
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { /* fall through to the generic label */ }
+
+        return "Automatic (recommended for your hardware)";
+    }
+
+    /// <summary>
+    /// Clears the cached Foundry Local model catalog and loaded model (picking up models downloaded or
+    /// updated out of band), then re-resolves and returns the current model's display name. Used by the
+    /// "Refresh Foundry cache" button in Settings.
+    /// </summary>
+    public async Task<string> RefreshFoundryCacheAsync(
+        IProgress<SemanticTranslationProgress>? progress, CancellationToken cancellationToken)
+    {
+        _semanticTranslator?.RefreshCatalog();
+        OnPropertyChanged(nameof(CurrentSemanticModelDisplay));
+        return await ResolveCurrentSemanticModelDisplayAsync(progress, cancellationToken).ConfigureAwait(true);
     }
 
     /// <summary>Downloads and selects the given semantic model, persisting it as the chosen model.</summary>

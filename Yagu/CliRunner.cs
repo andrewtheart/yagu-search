@@ -186,8 +186,10 @@ internal static class CliRunner
         // "generic-gpu" build can load yet crash during inference on CPU-only hardware). Detection
         // failure falls back to CPU-only, the safe choice.
         bool cliHasGpu = false, cliHasNpu = false;
-        try { var capability = new GpuNpuCapabilityDetector(); cliHasGpu = capability.HasGpu(); cliHasNpu = capability.HasNpu(); } catch { /* CPU-only fallback */ }
+        long cliGpuMemoryBytes = 0;
+        try { var capability = new GpuNpuCapabilityDetector(); cliHasGpu = capability.HasGpu(); cliHasNpu = capability.HasNpu(); cliGpuMemoryBytes = capability.GetMaxDedicatedGpuMemoryBytes(); } catch { /* CPU-only fallback */ }
         translator.SetAvailableAccelerators(cliHasGpu, cliHasNpu);
+        translator.SetGpuMemoryBytes(cliGpuMemoryBytes);
 
         var context = new SemanticTranslationContext
         {
@@ -322,8 +324,10 @@ internal static class CliRunner
 
         // Match the GUI/CLI: never pick a GPU/NPU build on hardware that lacks one.
         bool cliHasGpu = false, cliHasNpu = false;
-        try { var capability = new GpuNpuCapabilityDetector(); cliHasGpu = capability.HasGpu(); cliHasNpu = capability.HasNpu(); } catch { /* CPU-only fallback */ }
+        long cliGpuMemoryBytes = 0;
+        try { var capability = new GpuNpuCapabilityDetector(); cliHasGpu = capability.HasGpu(); cliHasNpu = capability.HasNpu(); cliGpuMemoryBytes = capability.GetMaxDedicatedGpuMemoryBytes(); } catch { /* CPU-only fallback */ }
         translator.SetAvailableAccelerators(cliHasGpu, cliHasNpu);
+        translator.SetGpuMemoryBytes(cliGpuMemoryBytes);
 
         string? lastProgress = null;
         var progress = new Progress<SemanticTranslationProgress>(p =>

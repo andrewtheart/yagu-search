@@ -159,6 +159,50 @@ public sealed class SemanticCapabilityDetectorTests
         Assert.False(detector.HasNpu());
     }
 
+    // ── Dedicated GPU VRAM detection (drives the larger-model auto-upgrade) ──
+
+    [Fact]
+    public void GetMaxDedicatedGpuMemoryBytes_ReturnsLargestRealGpuMemory()
+    {
+        const long gb24 = 24L * 1024 * 1024 * 1024;
+        const long gb1 = 1L * 1024 * 1024 * 1024;
+        var detector = DetectorWith(
+            display:
+            [
+                new("NVIDIA GeForce RTX 5090", "PCI\\VEN_10DE&DEV_2B85", gb24),
+                new("Intel(R) UHD Graphics", "PCI\\VEN_8086&DEV_9BC4", gb1),
+                new("Microsoft Basic Render Driver", "ROOT\\BasicRender", 4096), // software: excluded
+            ],
+            compute: []);
+        Assert.Equal(gb24, detector.GetMaxDedicatedGpuMemoryBytes());
+    }
+
+    [Fact]
+    public void GetMaxDedicatedGpuMemoryBytes_ZeroWhenOnlySoftwareAdapters()
+    {
+        var detector = DetectorWith(
+            display: [new("Microsoft Basic Render Driver", "ROOT\\BasicRender", 8192)],
+            compute: []);
+        Assert.Equal(0, detector.GetMaxDedicatedGpuMemoryBytes());
+    }
+
+    [Fact]
+    public void GetMaxDedicatedGpuMemoryBytes_ZeroWhenReaderThrows()
+    {
+        var detector = new GpuNpuCapabilityDetector(
+            _ => throw new InvalidOperationException("registry unreadable"));
+        Assert.Equal(0, detector.GetMaxDedicatedGpuMemoryBytes());
+    }
+
+    [Fact]
+    public void ViewModel_WiresGpuVramIntoTranslatorForLargerModelUpgrade()
+    {
+        // The VM must detect dedicated VRAM and hand it to the translator so auto-selection can upgrade
+        // to a larger, more accurate model on a strong GPU.
+        Assert.Contains("_semanticTranslator.SetGpuMemoryBytes(SafeDetectGpuMemoryBytes());", ViewModelSource);
+        Assert.Contains("_capabilityDetector.GetMaxDedicatedGpuMemoryBytes()", ViewModelSource);
+    }
+
     // ── ViewModel launch-mode wiring ──
 
     [Fact]

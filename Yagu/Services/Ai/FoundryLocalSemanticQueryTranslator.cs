@@ -56,6 +56,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     private IReadOnlyList<DeviceType> _deviceOrder;
     private bool _hasGpu = true;
     private bool _hasNpu = true;
+    private long _gpuMemoryBytes;
     private bool _selectedModelIsReasoning;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private readonly Lazy<string> _systemPromptTemplate = new(LoadSystemPromptTemplate);
@@ -136,6 +137,16 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         ResetLoadedModel();
     }
 
+    public void SetGpuMemoryBytes(long dedicatedVideoMemoryBytes)
+    {
+        long normalized = dedicatedVideoMemoryBytes > 0 ? dedicatedVideoMemoryBytes : 0;
+        if (_gpuMemoryBytes == normalized) return;
+        _gpuMemoryBytes = normalized;
+        LogService.Instance.Info(LogSource, $"GPU memory set ({normalized / (1024L * 1024L)} MB); will re-select on next translation.");
+        // The larger-model auto-upgrade decision depends on this, so re-select on next use.
+        ResetLoadedModel();
+    }
+
     /// <summary>The execution devices this machine can actually run, per Yagu's capability detector.
     /// CPU is always present; GPU/NPU only when detected. Passed to the model selector so a build for an
     /// absent accelerator is never chosen (it could load via DirectML yet crash during inference).</summary>
@@ -168,6 +179,19 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         }
         catch { /* P/Invoke unavailable; disable the memory guard */ }
         return null;
+    }
+
+    /// <summary>
+    /// Dedicated GPU memory (MB) used to decide whether AUTO selection may upgrade to a larger, more
+    /// accurate model (e.g. phi-4 14B) than the small default. 0 when there is no GPU or the amount is
+    /// unknown — in which case no upgrade happens and the small default stands. Only meaningful on a
+    /// machine with a real GPU (an NPU-only or CPU-only box gets 0).
+    /// </summary>
+    private int AvailableVramBudgetMb()
+    {
+        if (!_hasGpu || _gpuMemoryBytes <= 0) return 0;
+        long mb = _gpuMemoryBytes / (1024L * 1024L);
+        return (int)Math.Min(mb, int.MaxValue);
     }
 
     /// <summary>
@@ -260,6 +284,14 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         _model = null;
         _initialized = false;
         SelectedModelId = null;
+    }
+
+    public void RefreshCatalog()
+    {
+        _catalog = null;
+        SelectedModelAlias = null;
+        ResetLoadedModel();
+        LogService.Instance.Info(LogSource, "Foundry catalog cache cleared; will re-query Foundry Local on next use.");
     }
 
     public async Task<SemanticTranslationResult> TranslateAsync(
@@ -398,7 +430,22 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             var catalog = await EnsureCatalogLockedAsync(progress, cancellationToken).ConfigureAwait(false);
 
             log.Verbose(LogSource, $"Selecting model (preferredAlias={_preferredAlias ?? "<auto>"}, deviceOrder={string.Join(">", _deviceOrder)}).");
-            var model = await FoundryModelSelector.SelectAsync(catalog, _preferredAlias, _deviceOrder, AvailableDevices(), AvailableMemoryBudgetMb(), cancellationToken).ConfigureAwait(false);
+            IModel? model = null;
+            // Ample-GPU auto-upgrade: when the user hasn't pinned a model and this machine has plenty of
+            // dedicated VRAM, prefer a larger, more-accurate family (e.g. phi-4 14B) over the small
+            // default. Resolve it via the normal override path so it downloads + upgrades to the best
+            // runnable variant exactly like a manual pick; if that family isn't in the catalog we fall
+            // through to normal auto selection (never null just because the upgrade was unavailable).
+            if (string.IsNullOrWhiteSpace(_preferredAlias)
+                && HighAccuracyModelPolicy.UpgradeAliasFor(AvailableVramBudgetMb()) is { } upgradeAlias)
+            {
+                model = await FoundryModelSelector.SelectAsync(catalog, upgradeAlias, _deviceOrder, AvailableDevices(), AvailableMemoryBudgetMb(), cancellationToken).ConfigureAwait(false);
+                if (model is not null)
+                    log.Info(LogSource, $"Ample GPU VRAM ({AvailableVramBudgetMb()} MB): upgraded auto-selection to '{upgradeAlias}'.");
+                else
+                    log.Verbose(LogSource, $"VRAM upgrade '{upgradeAlias}' not available in catalog; using normal auto-selection.");
+            }
+            model ??= await FoundryModelSelector.SelectAsync(catalog, _preferredAlias, _deviceOrder, AvailableDevices(), AvailableMemoryBudgetMb(), cancellationToken).ConfigureAwait(false);
             if (model is null)
             {
                 log.Warning(LogSource, "No compatible local model is available for this machine.");
@@ -604,6 +651,14 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                     Task: p.Variant.Info?.Task,
                     Device: FoundryModelSelector.ResolveVariantDevice(p.Variant))).ToList(),
                 AvailableMemoryBudgetMb());
+            // Ample-GPU upgrade: mirror the auto-load decision so the picker recommends the larger, more
+            // accurate model (e.g. phi-4) when this machine has plenty of VRAM AND that family is in the
+            // resolved list. Keeps the "recommended" pill consistent with what auto-select actually loads.
+            if (HighAccuracyModelPolicy.UpgradeAliasFor(AvailableVramBudgetMb()) is { } upgradeAlias
+                && resolved.Any(p => string.Equals(AliasOf(p.Family), upgradeAlias, StringComparison.OrdinalIgnoreCase)))
+            {
+                recommendedAlias = upgradeAlias;
+            }
             int recommendedRank = recommendedAlias is null
                 ? int.MaxValue
                 : FoundryModelSelector.RankOf(recommendedAlias);
