@@ -9,6 +9,12 @@ The name means "Yet Another Grep Utility". The goal is the speed of command-line
 
 For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
 
+> ## ⚠️ License & Legal Notice
+>
+> Yagu is free, open-source software released under the **[GNU General Public License v3.0](LICENSE)**. You are welcome to use, study, modify, and redistribute it — but **only** under the same GPL v3 terms, **with the complete corresponding source code included**.
+>
+> **⚠️ I am fortunate enough to have a lawyer, and I 100% plan on suing and taking legal action against any individuals who attempt to rebrand and sell this software without providing the source and distributing it under the exact same license, as required by the GNU General Public License v3. Violations are actively monitored and scanned for.**
+
 ## Why Yagu?
 
 <table>
@@ -66,6 +72,20 @@ For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
     <td align="center" width="33%">
       <h3>🧪 Thousands of Tests</h3>
       Backed by thousands of automated tests — unit, native/managed parity, and real-world throughput benchmarks — so search stays fast, accurate, and reliable release after release.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <h3>🧠 Built for Scale</h3>
+      Tuned to stream millions of matches and preview thousands of files at once. Memory-pressure paging spills results to disk and virtualized rendering keep the window responsive, no matter how huge the search.
+    </td>
+    <td align="center" width="33%">
+      <h3>🔎 Precision Matching</h3>
+      Literal, whole-word, and full .NET regex with case control — plus a heads-up when your filters would hide a file type you're actually searching for.
+    </td>
+    <td align="center" width="33%">
+      <h3>📤 Export Anywhere</h3>
+      Send matches, file lists, or whole files out as styled HTML reports — or JSON and CSV from the CLI — ready for the next tool in your pipeline.
     </td>
   </tr>
 </table>
