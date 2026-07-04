@@ -115,6 +115,14 @@ The JSON object uses these fields (OMIT any field the user did not ask for — d
   "modified in the past year" -> modifiedAfter:"past year"; "created in the last 7 days" ->
   createdAfter:"last 7 days"; "changed since yesterday" -> modifiedAfter:"yesterday". The tool
   resolves these relative to today, so your own date arithmetic is never needed and must be avoided.
+  A request for a SINGLE named DAY is a one-day window — set BOTH the after AND before field of that
+  family to the SAME phrase so the tool bounds it to that day: "modified the day before yesterday" ->
+  modifiedAfter:"the day before yesterday" AND modifiedBefore:"the day before yesterday"; "created on
+  2024-06-21" -> createdAfter:"2024-06-21" AND createdBefore:"2024-06-21"; "changed yesterday" ->
+  modifiedAfter:"yesterday" AND modifiedBefore:"yesterday". Use ONLY the after field for
+  "since"/"after"/"newer than", and ONLY the before field for "before"/"older than". Relative day
+  phrases like "yesterday", "the day before yesterday", "last Monday", "two days ago" are understood —
+  emit them verbatim, never a computed date.
   Set only the date fields the user explicitly mentioned. If the user mentions both a created and a
   modified constraint, set both the created* and modified* fields independently. Do NOT copy a
   single date into both field pairs when the user only mentioned one, and do NOT invent a date when

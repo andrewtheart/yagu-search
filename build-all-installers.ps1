@@ -60,7 +60,8 @@ param(
   [string[]]$Variant = @('all'),
   [string]$InnoSetupPath,
   [string]$OcrPayloadCacheDir,
-  [switch]$SkipReadmeUpdate
+  [switch]$SkipReadmeUpdate,
+  [switch]$KeepVersion
 )
 
 $ErrorActionPreference = 'Stop'
@@ -179,6 +180,20 @@ if ($WhatIfPreference) {
   return
 }
 
+# A release is ONE version across EVERY variant. build-installer.ps1's `dotnet publish` step
+# auto-increments build-version.txt on each call, so without pinning, a 4-variant run gives the
+# same release four different version numbers (e.g. x64=2327, x86=2328, arm64=2329, offline=2330).
+# Pin one version for the whole run: bump ONCE here (a fresh release number) unless -KeepVersion is
+# set, then build every variant with -SkipVersionIncrement so they all share this single version.
+$versionFile = Join-Path $repoRoot 'Yagu\Properties\build-version.txt'
+if (-not $KeepVersion) {
+  $appInfoFile = Join-Path $repoRoot 'Yagu\Properties\AppInfo.g.cs'
+  $incrementScript = Join-Path $repoRoot 'scripts\increment-yagu-version.ps1'
+  & $incrementScript -VersionFile $versionFile -OutputFile $appInfoFile
+}
+$pinnedVersion = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+Write-Host ("Pinned release version for all variants: {0}{1}" -f $pinnedVersion, $(if ($KeepVersion) { ' (kept current, not bumped)' } else { ' (bumped once)' })) -ForegroundColor Cyan
+
 $results = New-Object System.Collections.Generic.List[object]
 foreach ($name in $requested) {
   $spec = $variantSpecs[$name]
@@ -190,6 +205,8 @@ foreach ($name in $requested) {
 
   $params = @{ Architecture = $spec.Architecture }
   if ($spec.IncludeOcr) { $params['IncludeOcr'] = $true }
+  # Every variant in this run shares the single pinned version (see the version-pin block above).
+  $params['SkipVersionIncrement'] = $true
   if (-not [string]::IsNullOrWhiteSpace($InnoSetupPath)) { $params['InnoSetupPath'] = $InnoSetupPath }
   if (-not [string]::IsNullOrWhiteSpace($OcrPayloadCacheDir)) { $params['OcrPayloadCacheDir'] = $OcrPayloadCacheDir }
 

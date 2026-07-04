@@ -195,24 +195,16 @@ public static class SemanticPlanApplier
         long? minSize = ClampSize(plan.MinFileSizeBytes);
         long? maxSize = ClampSize(plan.MaxFileSizeBytes);
 
-        // phi-3.5-mini sometimes pads every date field with a single value, yielding a contradictory
-        // "between X and X" window that matches nothing. Identical raw bounds are never a real user
-        // intent, so drop the degenerate pair before resolving (resolution would otherwise hide it by
-        // pushing the "before" bound to end-of-day, making 00:00..23:59 look like a valid 1-day range).
+        // A single named DAY is a legitimate range, NOT padding: "modified 2024-06-21" / "modified the
+        // day before yesterday" set the SAME token on BOTH bounds, which resolves to that day's
+        // 00:00..23:59 window (the "before" bound is pushed to end-of-day). So identical bounds are NOT
+        // dropped up front here (doing so used to nuke every single-day query). Genuine phi padding of
+        // both bounds with the identical EXACT INSTANT yields an empty window, which is caught AFTER
+        // resolution below (after >= before) — a real one-day range never triggers that.
         string? createdAfterRaw = plan.CreatedAfter;
         string? createdBeforeRaw = plan.CreatedBefore;
-        if (IsSameDateToken(createdAfterRaw, createdBeforeRaw))
-        {
-            createdAfterRaw = createdBeforeRaw = null;
-            warnings.Add("Ignored a contradictory created-date range (identical bounds).");
-        }
         string? modifiedAfterRaw = plan.ModifiedAfter;
         string? modifiedBeforeRaw = plan.ModifiedBefore;
-        if (IsSameDateToken(modifiedAfterRaw, modifiedBeforeRaw))
-        {
-            modifiedAfterRaw = modifiedBeforeRaw = null;
-            warnings.Add("Ignored a contradictory modified-date range (identical bounds).");
-        }
 
         // phi-3.5-mini also pads by COPYING one user-intended date across the created*/modified*
         // families (e.g. "created before 2024" emits createdBefore AND modifiedBefore = "2024-01-01").
@@ -234,6 +226,22 @@ public static class SemanticPlanApplier
         DateTimeOffset? createdBefore = ResolveDate(createdBeforeRaw, context, "createdBefore", warnings, endOfDay: true);
         DateTimeOffset? modifiedAfter = ResolveDate(modifiedAfterRaw, context, "modifiedAfter", warnings, endOfDay: false);
         DateTimeOffset? modifiedBefore = ResolveDate(modifiedBeforeRaw, context, "modifiedBefore", warnings, endOfDay: true);
+
+        // Empty/inverted window guard: a resolved after-bound at or past its before-bound matches
+        // nothing (the model padded both bounds with the identical exact INSTANT, e.g. a full
+        // timestamp). A one-day range never hits this — date-only / relative-day tokens resolve to
+        // 00:00 < 23:59:59 — so single-day queries survive.
+        if (createdAfter is { } caLo && createdBefore is { } caHi && caLo >= caHi)
+        {
+            createdAfter = createdBefore = null;
+            warnings.Add("Ignored a contradictory created-date range (empty window).");
+        }
+        if (modifiedAfter is { } maLo && modifiedBefore is { } maHi && maLo >= maHi)
+        {
+            modifiedAfter = modifiedBefore = null;
+            warnings.Add("Ignored a contradictory modified-date range (empty window).");
+        }
+
         SearchMode? mode = ParseSearchMode(plan.SearchMode, warnings);
 
         var (sortModeIndex, sortDirectionIndex) = ParseSort(plan.SortBy, plan.SortDirection, warnings);
@@ -1314,6 +1322,13 @@ public static class SemanticPlanApplier
         {
             case "today": return DayBound(now, endOfDay);
             case "yesterday": return DayBound(now.AddDays(-1), endOfDay);
+            // Chronic (nChronic) does NOT parse "the day before yesterday" / "the day after tomorrow",
+            // so resolve these common single-day phrases explicitly (= today -/+ 2 days).
+            case "the day before yesterday":
+            case "day before yesterday": return DayBound(now.AddDays(-2), endOfDay);
+            case "the day after tomorrow":
+            case "day after tomorrow": return DayBound(now.AddDays(2), endOfDay);
+            case "tomorrow": return DayBound(now.AddDays(1), endOfDay);
         }
 
         var ago = RelativeAgo.Match(v);

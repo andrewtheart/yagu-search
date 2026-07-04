@@ -453,6 +453,15 @@ public sealed class SemanticPlanApplierTests
     }
 
     [Fact]
+    public void Resolve_DayBeforeYesterday_ResolvesToTwoDaysAgo()
+    {
+        // Now is 2025-06-15; "the day before yesterday" is 2025-06-13.
+        var plan = new SemanticSearchPlan { Pattern = "x", ModifiedAfter = "the day before yesterday" };
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+        Assert.Equal(new DateTimeOffset(2025, 6, 13, 0, 0, 0, TimeSpan.Zero), resolved.ModifiedAfterDate);
+    }
+
+    [Fact]
     public void Resolve_ModifiedLastDecember_ResolvedIntoPreviousDecember()
     {
         // "last december" is beyond the fast paths; Chronic resolves it to the previous December.
@@ -679,36 +688,72 @@ public sealed class SemanticPlanApplierTests
     }
 
     [Fact]
-    public void Resolve_IdenticalModifiedBounds_AreDroppedAsPadding()
+    public void Resolve_SameDayModifiedBounds_FormSingleDayRange()
     {
-        // phi-3.5-mini's padding mode dumps the same date into every field, producing a contradictory
-        // "modified between X and X" window. Both modified bounds must be dropped, leaving an unrelated
-        // createdBefore intact.
+        // "modified on 2024-06-21" sets the SAME day on both bounds. That is a VALID one-day window
+        // (00:00 .. end-of-day), NOT padding to drop.
+        var plan = new SemanticSearchPlan { Pattern = "x", ModifiedAfter = "2024-06-21", ModifiedBefore = "2024-06-21" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.NotNull(resolved.ModifiedAfterDate);
+        Assert.NotNull(resolved.ModifiedBeforeDate);
+        Assert.Equal(new DateTime(2024, 6, 21), resolved.ModifiedAfterDate!.Value.Date);
+        Assert.Equal(new DateTime(2024, 6, 21), resolved.ModifiedBeforeDate!.Value.Date);
+        Assert.True(resolved.ModifiedBeforeDate > resolved.ModifiedAfterDate);  // end-of-day > start-of-day
+    }
+
+    [Fact]
+    public void Resolve_SameDayCreatedBounds_FormSingleDayRange()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "x", CreatedAfter = "2024-01-01", CreatedBefore = "2024-01-01" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.NotNull(resolved.CreatedAfterDate);
+        Assert.NotNull(resolved.CreatedBeforeDate);
+        Assert.Equal(new DateTime(2024, 1, 1), resolved.CreatedAfterDate!.Value.Date);
+        Assert.True(resolved.CreatedBeforeDate > resolved.CreatedAfterDate);
+    }
+
+    [Fact]
+    public void Resolve_ModifiedOnDayBeforeYesterday_FormsSingleDayRange()
+    {
+        // The whole point of the vendored date parser: "modified the day before yesterday" is a single
+        // day (2025-06-13), expressed by setting the SAME phrase on both bounds.
         var plan = new SemanticSearchPlan
         {
             Pattern = "x",
-            CreatedBefore = "2024-06-21",
-            ModifiedAfter = "2024-06-21",
-            ModifiedBefore = "2024-06-21",
+            ModifiedAfter = "the day before yesterday",
+            ModifiedBefore = "the day before yesterday",
+        };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.NotNull(resolved.ModifiedAfterDate);
+        Assert.NotNull(resolved.ModifiedBeforeDate);
+        Assert.Equal(new DateTime(2025, 6, 13), resolved.ModifiedAfterDate!.Value.Date);
+        Assert.True(resolved.ModifiedBeforeDate > resolved.ModifiedAfterDate);
+        Assert.DoesNotContain(resolved.Warnings, w => w.Contains("Could not interpret"));
+    }
+
+    [Fact]
+    public void Resolve_IdenticalFullTimestampBounds_DroppedAsEmptyWindow()
+    {
+        // Both bounds the identical EXACT instant (a full timestamp, not a day) -> empty window ->
+        // dropped. This is the genuine phi padding case a one-day range must NOT be confused with.
+        var plan = new SemanticSearchPlan
+        {
+            Pattern = "x",
+            ModifiedAfter = "2024-06-21T10:00:00",
+            ModifiedBefore = "2024-06-21T10:00:00",
         };
 
         var resolved = SemanticPlanApplier.Resolve(plan, Context());
 
         Assert.Null(resolved.ModifiedAfterDate);
         Assert.Null(resolved.ModifiedBeforeDate);
-        Assert.NotNull(resolved.CreatedBeforeDate);
-        Assert.Contains(resolved.Warnings, w => w.Contains("modified-date", StringComparison.OrdinalIgnoreCase));
-    }
-
-    [Fact]
-    public void Resolve_IdenticalCreatedBounds_AreDroppedAsPadding()
-    {
-        var plan = new SemanticSearchPlan { Pattern = "x", CreatedAfter = "2024-01-01", CreatedBefore = "2024-01-01" };
-
-        var resolved = SemanticPlanApplier.Resolve(plan, Context());
-
-        Assert.Null(resolved.CreatedAfterDate);
-        Assert.Null(resolved.CreatedBeforeDate);
+        Assert.Contains(resolved.Warnings, w => w.Contains("empty window"));
     }
 
     [Fact]

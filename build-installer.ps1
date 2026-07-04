@@ -41,6 +41,7 @@ param(
   [string]$InnoSetupPath,
   [switch]$SkipBuild,
   [switch]$IncludeOcr,
+  [switch]$SkipVersionIncrement,
   [string]$OcrPayloadCacheDir = (Join-Path $env:LOCALAPPDATA 'Yagu\ocr-runtime')
 )
 
@@ -153,7 +154,11 @@ foreach ($arch in $architectures) {
   $publishDir = Join-Path $projectDir "bin\$arch\Release\$targetFramework\$rid\publish"
   if (-not $SkipBuild) {
     Write-Host "Publishing Yagu (Release, $rid, self-contained Native AOT)..."
-    & dotnet publish $projectPath -c Release -r $rid -p:Platform=$arch --self-contained -p:BuildInstallerOnPublish=false --nologo
+    # -p:SkipYaguVersionIncrement=true (when requested) keeps build-version.txt fixed so a
+    # multi-variant release can share ONE version instead of the publish bumping it per arch.
+    $publishArgs = @($projectPath, '-c', 'Release', '-r', $rid, "-p:Platform=$arch", '--self-contained', '-p:BuildInstallerOnPublish=false', '--nologo')
+    if ($SkipVersionIncrement) { $publishArgs += '-p:SkipYaguVersionIncrement=true' }
+    & dotnet publish @publishArgs
     if ($LASTEXITCODE -ne 0) { throw "dotnet publish ($rid) failed." }
   } else {
     Write-Host "Skipping build (using existing publish output for $rid)."
