@@ -58,6 +58,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     private bool _hasNpu = true;
     private long _gpuMemoryBytes;
     private bool _selectedModelIsReasoning;
+    private bool _unloadAfterUse;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private readonly Lazy<string> _systemPromptTemplate = new(LoadSystemPromptTemplate);
 
@@ -145,6 +146,15 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         LogService.Instance.Info(LogSource, $"GPU memory set ({normalized / (1024L * 1024L)} MB); will re-select on next translation.");
         // The larger-model auto-upgrade decision depends on this, so re-select on next use.
         ResetLoadedModel();
+    }
+
+    public void SetUnloadAfterUse(bool unloadAfterUse)
+    {
+        if (_unloadAfterUse == unloadAfterUse) return;
+        _unloadAfterUse = unloadAfterUse;
+        LogService.Instance.Info(LogSource,
+            $"Unload-after-use {(unloadAfterUse ? "enabled (model released from VRAM after each translation)" : "disabled (model stays resident)")}.");
+        // No reload needed: the flag only changes what happens AFTER the next translation finishes.
     }
 
     /// <summary>The execution devices this machine can actually run, per Yagu's capability detector.
@@ -284,6 +294,114 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         _model = null;
         _initialized = false;
         SelectedModelId = null;
+    }
+
+    /// <summary>
+    /// Unloads the currently loaded model from memory (freeing GPU VRAM) via the Foundry SDK's
+    /// <see cref="IModel.UnloadAsync"/>, then drops the cached references so the next translation reloads
+    /// it. Called after a translation finishes when "unload after use" is enabled. Best-effort and never
+    /// throws: a failure to unload is logged and the search continues (the model simply stays resident).
+    /// </summary>
+    private async Task UnloadLoadedModelAfterUseAsync()
+    {
+        IModel? model;
+        await _initLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            model = _model;
+            // Drop references first so a concurrent/next translation re-selects and reloads cleanly.
+            _chatClient = null;
+            _model = null;
+            _initialized = false;
+        }
+        finally
+        {
+            _initLock.Release();
+        }
+
+        if (model is null) return;
+        try
+        {
+            var stopwatch = Stopwatch.StartNew();
+            await model.UnloadAsync().ConfigureAwait(false);
+            stopwatch.Stop();
+            LogService.Instance.Info(LogSource,
+                $"Unloaded model '{model.Alias ?? model.Id}' from memory after use in {stopwatch.ElapsedMilliseconds} ms (freed VRAM).");
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning(LogSource,
+                $"Failed to unload model '{model.Alias ?? model.Id}' after use; it stays resident until re-selected.", ex);
+        }
+    }
+
+    /// <summary>
+    /// Clamps a downloaded model's advertised context window down to
+    /// <see cref="ModelContextBudget.OptimizedContextTokens"/> before it is loaded, so its KV cache and
+    /// accelerator (TensorRT/DirectML) activation buffers are sized to what Yagu's request actually needs
+    /// (~10K tokens) instead of the model's full window (often 16384–131072). This frees VRAM without
+    /// changing translation quality. Re-applied on every load so a Foundry re-download that restores the
+    /// original config is re-clamped. Skipped for REASONING models (their long &lt;think&gt; output needs
+    /// the larger window) and never grows a window that is already small. Best-effort: any failure is
+    /// logged and the model loads with its original window.
+    /// </summary>
+    private async Task ClampModelContextWindowAsync(IModel model, bool isReasoning, CancellationToken cancellationToken)
+    {
+        if (isReasoning) return;
+
+        string? modelDir = await ResolveModelDirectoryAsync(model, cancellationToken).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(modelDir)) return;
+
+        try
+        {
+            int patched = GenAiConfigReader.TryClampContextWindow(
+                modelDir, ModelContextBudget.OptimizedContextTokens, out int applied);
+            if (patched > 0)
+                LogService.Instance.Info(LogSource,
+                    $"Clamped context window of '{model.Alias ?? model.Id}' to {applied} tokens " +
+                    $"({patched} config file(s)) to reduce reserved VRAM; translation quality is unaffected.");
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning(LogSource,
+                $"Could not clamp context window for '{model.Alias ?? model.Id}'; loading with its original window.", ex);
+        }
+    }
+
+    /// <summary>Resolves the on-disk directory of a downloaded model, preferring the SDK's
+    /// <see cref="IModel.GetPathAsync"/> (robust to a custom Foundry model dir such as a secondary drive)
+    /// and falling back to the resolved Foundry cache root + variant folder. Returns null when neither
+    /// yields an existing directory.</summary>
+    private async Task<string?> ResolveModelDirectoryAsync(IModel model, CancellationToken cancellationToken)
+    {
+        try
+        {
+            string? path = await model.GetPathAsync(cancellationToken).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                if (Directory.Exists(path)) return path;
+                string? dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir)) return dir;
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            LogService.Instance.Verbose(LogSource, $"GetPathAsync failed for '{model.Alias ?? model.Id}': {ex.Message}; using cache-root fallback.");
+        }
+
+        string? id = model.Id;
+        if (string.IsNullOrWhiteSpace(_cacheLocation) || string.IsNullOrWhiteSpace(id)) return null;
+        try
+        {
+            string folder = GenAiConfigReader.VariantFolderName(id);
+            return folder.Length == 0
+                ? null
+                : Directory.EnumerateDirectories(_cacheLocation, folder, SearchOption.AllDirectories).FirstOrDefault();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     public void RefreshCatalog()
@@ -489,6 +607,13 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             // + output before loading it — some variants (e.g. 4224-token OpenVINO-NPU builds) load fine
             // yet fail the first inference with an opaque context-length error.
             EnsureModelContextFits(model);
+
+            // Shrink an over-large context window (e.g. phi-4's 16384) down to what Yagu actually needs
+            // BEFORE loading, so the KV cache / accelerator activation buffers reserve far less VRAM. This
+            // must happen before LoadAsync (which sizes those buffers from genai_config.json) and is a
+            // no-op for reasoning models and windows already at/below the target.
+            bool willBeReasoning = FoundryModelSelector.IsReasoningAlias(model.Alias);
+            await ClampModelContextWindowAsync(model, willBeReasoning, cancellationToken).ConfigureAwait(false);
 
             progress?.Report(new SemanticTranslationProgress
             {

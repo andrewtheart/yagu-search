@@ -72,6 +72,12 @@ public interface ISemanticQueryTranslator
     /// drops the loaded model so the change takes effect without a restart.</summary>
     void SetGpuMemoryBytes(long dedicatedVideoMemoryBytes);
 
+    /// <summary>When enabled, the loaded model is unloaded from memory (freeing GPU VRAM) immediately
+    /// after each translation finishes, and reloaded on the next translation. When disabled (default) the
+    /// model stays resident for the fastest repeat queries. Applied live; does not itself drop or reload
+    /// the currently loaded model — the unload happens after the next translation completes.</summary>
+    void SetUnloadAfterUse(bool unloadAfterUse);
+
     /// <summary>Clears the cached Foundry model catalog and drops the loaded model so the next selection
     /// re-queries Foundry Local. Use to pick up models downloaded/updated out of band and to re-resolve
     /// the current model. Cheap and synchronous; the actual re-query happens on next use.</summary>

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Yagu.Services.Ai;
 
@@ -102,5 +103,95 @@ internal static class GenAiConfigReader
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Clamps a downloaded model's advertised context window down to <paramref name="targetContextLength"/>
+    /// by rewriting <c>model.context_length</c> and <c>search.max_length</c> in every
+    /// <c>genai_config.json</c>/<c>default_genai_config.json</c> found under <paramref name="modelDirectory"/>.
+    /// Only ever REDUCES the window (a config already at/below the target is left untouched), so a model's
+    /// KV cache and accelerator activation buffers are sized to what Yagu's request needs instead of the
+    /// model's full window — freeing VRAM without changing translation quality. Idempotent: re-running it
+    /// after Foundry re-writes the config re-applies the clamp. All edits go through <see cref="JsonNode"/>
+    /// (DOM, no reflection) so it stays Native-AOT safe.
+    /// </summary>
+    /// <param name="modelDirectory">The downloaded model's on-disk directory (its config lives in a
+    /// <c>v&lt;N&gt;</c> sub-folder).</param>
+    /// <param name="targetContextLength">The window to clamp down to (tokens). Must be positive.</param>
+    /// <param name="appliedContextLength">The smallest resulting context length across patched files, or 0
+    /// when nothing was changed.</param>
+    /// <returns>The number of config files actually modified.</returns>
+    public static int TryClampContextWindow(string? modelDirectory, int targetContextLength, out int appliedContextLength)
+    {
+        appliedContextLength = 0;
+        if (string.IsNullOrWhiteSpace(modelDirectory) || targetContextLength <= 0 || !Directory.Exists(modelDirectory))
+            return 0;
+
+        int patched = 0;
+        foreach (string name in ConfigFileNames)
+        {
+            string[] paths;
+            try
+            {
+                paths = Directory.EnumerateFiles(modelDirectory, name, SearchOption.AllDirectories).ToArray();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            foreach (string path in paths)
+            {
+                if (TryClampConfigFile(path, targetContextLength, out int applied))
+                {
+                    patched++;
+                    appliedContextLength = appliedContextLength == 0 ? applied : Math.Min(appliedContextLength, applied);
+                }
+            }
+        }
+        return patched;
+    }
+
+    /// <summary>
+    /// Clamps <c>model.context_length</c> and <c>search.max_length</c> in a single config file down to
+    /// <paramref name="targetContextLength"/>, writing the file back only when at least one value changed.
+    /// Returns false (and leaves the file untouched) when the file is missing/locked/unparseable or both
+    /// values are already at/below the target.
+    /// </summary>
+    private static bool TryClampConfigFile(string configPath, int targetContextLength, out int appliedContextLength)
+    {
+        appliedContextLength = targetContextLength;
+        try
+        {
+            JsonNode? root = JsonNode.Parse(File.ReadAllText(configPath));
+            if (root is not JsonObject obj) return false;
+
+            bool changed = false;
+            if (obj["model"] is JsonObject model && TryClampNumber(model, "context_length", targetContextLength))
+                changed = true;
+            if (obj["search"] is JsonObject search && TryClampNumber(search, "max_length", targetContextLength))
+                changed = true;
+            if (!changed) return false;
+
+            File.WriteAllText(configPath, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException or NotSupportedException)
+        {
+            // Corrupt/locked config, or a value we cannot parse — leave the model as-is.
+            return false;
+        }
+    }
+
+    /// <summary>Sets <paramref name="obj"/>[<paramref name="property"/>] to <paramref name="target"/> when
+    /// it is currently a positive number greater than the target. Returns whether it changed.</summary>
+    private static bool TryClampNumber(JsonObject obj, string property, int target)
+    {
+        if (obj[property] is JsonValue value && value.TryGetValue(out int current) && current > target)
+        {
+            obj[property] = target;
+            return true;
+        }
+        return false;
     }
 }

@@ -40,6 +40,17 @@ internal static class ModelContextBudget
     public const int RequiredContextTokens = SystemPromptTokens + OutputReserveTokens + InputHeadroomTokens;
 
     /// <summary>
+    /// Context window (tokens) that Yagu clamps an over-large non-reasoning model down to before loading
+    /// it, so the model's KV cache and TensorRT/DirectML activation buffers are sized to what Yagu's
+    /// request actually needs instead of the model's full advertised window (often 16384–131072). Holds
+    /// the whole request (<see cref="RequiredContextTokens"/> ≈ 10K) with ~2K margin, so translation
+    /// quality is unchanged, while freeing VRAM that would otherwise be reserved for tokens Yagu never
+    /// uses. Must stay ≥ <see cref="RequiredContextTokens"/> (guarded by a test); only ever used to
+    /// REDUCE a larger window, never to grow a smaller one.
+    /// </summary>
+    public const int OptimizedContextTokens = 12288;
+
+    /// <summary>
     /// Whether a model whose context window is <paramref name="contextLength"/> can hold the full
     /// request. A null <paramref name="contextLength"/> (unknown — e.g. the model is not downloaded yet
     /// so its genai_config.json cannot be read) is treated as fitting: the guard never excludes a model

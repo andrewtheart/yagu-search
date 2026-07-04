@@ -437,6 +437,10 @@ public sealed class AppSettings
     public string TerminalDefaultWorkingDirectory { get; set; } = string.Empty;
     /// <summary>Which shell backs the embedded terminal: 0 = Command Prompt (cmd.exe), 1 = PowerShell (default).</summary>
     public int TerminalShellKindIndex { get; set; } = 1;
+    /// <summary>When true, the on-device semantic model is unloaded from memory (freeing GPU VRAM)
+    /// immediately after each AI-search translation finishes; the next query reloads it. Default false
+    /// keeps the model resident for the fastest repeat queries at the cost of held VRAM.</summary>
+    public bool SemanticUnloadModelAfterUse { get; set; }
     /// <summary>When true (default), checking a file header checkbox immediately adds it to the preview pane.</summary>
     public bool FileHeaderCheckAddsToPreview { get; set; } = true;
     /// <summary>When true (default), checking a match line checkbox immediately adds it to the preview pane.</summary>
