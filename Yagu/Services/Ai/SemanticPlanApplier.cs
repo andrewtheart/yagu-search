@@ -227,6 +227,18 @@ public static class SemanticPlanApplier
         DateTimeOffset? modifiedAfter = ResolveDate(modifiedAfterRaw, context, "modifiedAfter", warnings, endOfDay: false);
         DateTimeOffset? modifiedBefore = ResolveDate(modifiedBeforeRaw, context, "modifiedBefore", warnings, endOfDay: true);
 
+        // Deterministic relative "recent window" override. A small model mangles single-sided phrases
+        // like "in the past 6 months" — phi-4-mini emitted modifiedAfter="6 months" (unparseable) plus a
+        // hallucinated modifiedBefore, which the empty-window guard below then dropped, leaving NO date
+        // filter. When the ORIGINAL query states such a window, compute the after-bound in C# (relative
+        // to context.Now) and drop the — usually hallucinated — before-bound for that family, so the
+        // filter is applied reliably regardless of what the model produced.
+        if (TryDetectRelativeDateWindow(context.OriginalQuery, context.Now, out var relativeAfter, out bool relativeTargetsCreated))
+        {
+            if (relativeTargetsCreated) { createdAfter = relativeAfter; createdBefore = null; }
+            else { modifiedAfter = relativeAfter; modifiedBefore = null; }
+        }
+
         // Empty/inverted window guard: a resolved after-bound at or past its before-bound matches
         // nothing (the model padded both bounds with the identical exact INSTANT, e.g. a full
         // timestamp). A one-day range never hits this — date-only / relative-day tokens resolve to
@@ -1308,6 +1320,28 @@ public static class SemanticPlanApplier
         new(@"^\s*(\d+)\s*(hour|day|week|month|year)s?\s*ago\s*$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex LastN =
         new(@"^\s*(?:in\s+the\s+)?(?:last|past)\s+(\d+)?\s*(hour|day|week|month|year)s?\s*$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // A bare "N units" AFTER-bound with no "ago"/"last"/"past" — small models emit e.g.
+    // modifiedAfter="6 months" for "in the past 6 months"; treat it as "N units ago".
+    private static readonly Regex BareUnits =
+        new(@"^\s*(\d+)\s*(hour|day|week|month|year)s?\s*$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // Deterministic relative "recent window" detection read from the ORIGINAL query (model-independent,
+    // like the language/extension/hidden extractors). Small models mangle "in the past 6 months" into an
+    // unparseable bare unit plus a hallucinated fixed before-bound, so we compute the window ourselves.
+    private static readonly Regex RelativePastWindow =
+        new(@"\b(?:in|within|over|during|for)?\s*(?:the\s+)?past\s+(\d+)?\s*(hour|day|week|month|year)s?\b",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex RelativeLastWindow =
+        new(@"\b(?:in|within|over|during|for)?\s*(?:the\s+)?last\s+(\d+)\s+(hour|day|week|month|year)s?\b",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex RelativeAgoWindow =
+        new(@"\b(\d+)\s+(hour|day|week|month|year)s?\s+ago\b",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex CreatedCue =
+        new(@"\bcreat|\bmade\b|\badded\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex NegatedWindowPrefix =
+        new(@"\b(?:not|never|without|no\s+longer|haven'?t|hasn'?t|hadn'?t|isn'?t|aren'?t|wasn'?t|weren'?t|don'?t|doesn'?t|didn'?t)\b[\w\s'-]{0,30}$",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     /// <summary>Parses an ISO date or a small set of relative phrases into a concrete instant. For
     /// "before" bounds, dates without a time component are pushed to end-of-day so the named day is
@@ -1333,13 +1367,24 @@ public static class SemanticPlanApplier
 
         var ago = RelativeAgo.Match(v);
         if (ago.Success && int.TryParse(ago.Groups[1].Value, out int agoN))
-            return Shift(now, ago.Groups[2].Value, -agoN);
+            return ShiftUnits(now, ago.Groups[2].Value, -agoN);
 
         var last = LastN.Match(v);
         if (last.Success)
         {
             int n = last.Groups[1].Success && int.TryParse(last.Groups[1].Value, out int parsed) ? parsed : 1;
-            return Shift(now, last.Groups[2].Value, -n);
+            return ShiftUnits(now, last.Groups[2].Value, -n);
+        }
+
+        // A bare "N units" (no "ago"/"last"/"past") in an AFTER bound almost always means "N units ago"
+        // (e.g. a weak model emits modifiedAfter="6 months" for "in the past 6 months"). Resolve it as a
+        // past instant. Only for after-bounds (endOfDay is false); a bare unit in a "before" bound is
+        // ambiguous, so leave that to Chronic / the warning path.
+        if (!endOfDay)
+        {
+            var bare = BareUnits.Match(v);
+            if (bare.Success && int.TryParse(bare.Groups[1].Value, out int bareN))
+                return ShiftUnits(now, bare.Groups[2].Value, -bareN);
         }
 
         // Date-only (yyyy-MM-dd and friends) -> day bound; otherwise full timestamp.
@@ -1361,17 +1406,64 @@ public static class SemanticPlanApplier
 
         warnings.Add($"Could not interpret {field} value '{raw}'; ignored.");
         return null;
+    }
 
-        static DateTimeOffset Shift(DateTimeOffset from, string unit, int amount) => unit.ToLowerInvariant() switch
+    /// <summary>Shifts an instant by a whole number of hour/day/week/month/year units. Callers only
+    /// ever pass hour|day|week|month|year, so the default arm ("year") keeps every branch reachable.</summary>
+    private static DateTimeOffset ShiftUnits(DateTimeOffset from, string unit, int amount) => unit.ToLowerInvariant() switch
+    {
+        "hour" => from.AddHours(amount),
+        "day" => from.AddDays(amount),
+        "week" => from.AddDays(amount * 7),
+        "month" => from.AddMonths(amount),
+        _ => from.AddYears(amount),
+    };
+
+    /// <summary>Detects a single-sided "recent window" date phrase ("in the past 6 months", "modified
+    /// within the last 30 days", "created 2 weeks ago") in the ORIGINAL query and returns the resulting
+    /// after-bound. Model-independent because a small model mangles these into an unparseable bare unit
+    /// plus a hallucinated fixed before-bound. Phrases inside quotes, and negated windows ("NOT modified
+    /// in the last 6 months" = an older-than/before bound), are ignored.</summary>
+    internal static bool TryDetectRelativeDateWindow(string? query, DateTimeOffset now, out DateTimeOffset afterBound, out bool targetsCreated)
+    {
+        afterBound = default;
+        targetsCreated = false;
+        if (string.IsNullOrWhiteSpace(query)) return false;
+
+        string scan = Regex.Replace(query, "\"[^\"]*\"|'[^']*'", " ");
+
+        int n;
+        string unit;
+        Match m;
+        if ((m = RelativePastWindow.Match(scan)).Success)
         {
-            "hour" => from.AddHours(amount),
-            "day" => from.AddDays(amount),
-            "week" => from.AddDays(amount * 7),
-            "month" => from.AddMonths(amount),
-            // The calling regexes only ever capture hour|day|week|month|year, so the remaining unit
-            // here is always "year"; folding it into the default arm keeps every branch reachable.
-            _ => from.AddYears(amount),
-        };
+            n = m.Groups[1].Success && int.TryParse(m.Groups[1].Value, out int pn) ? pn : 1;
+            unit = m.Groups[2].Value;
+        }
+        else if ((m = RelativeLastWindow.Match(scan)).Success)
+        {
+            n = int.TryParse(m.Groups[1].Value, out int ln) ? ln : 0;
+            unit = m.Groups[2].Value;
+        }
+        else if ((m = RelativeAgoWindow.Match(scan)).Success)
+        {
+            n = int.TryParse(m.Groups[1].Value, out int an) ? an : 0;
+            unit = m.Groups[2].Value;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (n <= 0) return false;
+
+        // Defer a negated window ("not modified in the last 6 months") to the model — it means a
+        // before/older-than bound we don't infer here, so firing the after-bound would be wrong.
+        if (NegatedWindowPrefix.IsMatch(scan[..m.Index])) return false;
+
+        afterBound = ShiftUnits(now, unit, -n);
+        targetsCreated = CreatedCue.IsMatch(scan);
+        return true;
     }
 
     private static bool DateOnlyParses(string v) =>

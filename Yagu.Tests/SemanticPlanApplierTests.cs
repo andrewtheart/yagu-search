@@ -475,6 +475,124 @@ public sealed class SemanticPlanApplierTests
         Assert.Equal(12, resolved.ModifiedAfterDate!.Value.Month);
     }
 
+    // ---- deterministic relative "recent window" (read from the ORIGINAL query) ----
+
+    [Fact]
+    public void Resolve_PastSixMonths_SetsModifiedAfterFromQuery_EvenWhenModelMangledIt()
+    {
+        // Reproduces the real phi-4-mini failure for "png files on C: modified in the past 6 months":
+        // the model emitted a bare unparseable after ("6 months") plus a hallucinated before
+        // ("2024-03-03") that the empty-window guard used to drop, leaving NO date filter. The
+        // query-level override must compute the after-bound and discard the bogus before-bound.
+        var plan = new SemanticSearchPlan
+        {
+            IncludeGlobs = new() { "*.png" },
+            ModifiedAfter = "6 months",
+            ModifiedBefore = "2024-03-03",
+        };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "png files on C: modified in the past 6 months" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal(new DateTimeOffset(2024, 12, 15, 12, 0, 0, TimeSpan.Zero), resolved.ModifiedAfterDate);
+        Assert.Null(resolved.ModifiedBeforeDate);
+        Assert.DoesNotContain(resolved.Warnings, w => w.Contains("empty window"));
+    }
+
+    [Fact]
+    public void Resolve_LastThirtyDays_SetsModifiedAfter()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "x" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "documents modified in the last 30 days" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal(new DateTimeOffset(2025, 5, 16, 12, 0, 0, TimeSpan.Zero), resolved.ModifiedAfterDate);
+        Assert.Null(resolved.ModifiedBeforeDate);
+    }
+
+    [Fact]
+    public void Resolve_CreatedTwoWeeksAgo_SetsCreatedAfterNotModified()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "x" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "files created 2 weeks ago" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal(new DateTimeOffset(2025, 6, 1, 12, 0, 0, TimeSpan.Zero), resolved.CreatedAfterDate);
+        Assert.Null(resolved.ModifiedAfterDate);
+    }
+
+    [Fact]
+    public void Resolve_PastYear_NoNumber_SetsModifiedAfterOneYearBack()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "x" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "logs from the past year" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal(new DateTimeOffset(2024, 6, 15, 12, 0, 0, TimeSpan.Zero), resolved.ModifiedAfterDate);
+    }
+
+    [Fact]
+    public void Resolve_NegatedWindow_DefersToModelDates()
+    {
+        // "not modified in the last 6 months" is an older-than/before intent we do not infer here, so
+        // the deterministic after-bound must NOT fire and the model's own dates stand.
+        var plan = new SemanticSearchPlan { Pattern = "x", ModifiedBefore = "2025-01-01" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "files not modified in the last 6 months" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Null(resolved.ModifiedAfterDate);
+        Assert.NotNull(resolved.ModifiedBeforeDate);
+    }
+
+    [Fact]
+    public void Resolve_QuotedWindowPhrase_IsNotTreatedAsDateFilter()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "in the last 6 months" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "files containing \"in the last 6 months\"" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Null(resolved.ModifiedAfterDate);
+        Assert.Null(resolved.CreatedAfterDate);
+    }
+
+    [Theory]
+    [InlineData("in the past 6 months", false, 6, "month")]
+    [InlineData("modified within the last 30 days", false, 30, "day")]
+    [InlineData("created 2 weeks ago", true, 14, "day")]
+    [InlineData("stuff from the past year", false, 1, "year")]
+    [InlineData("edited in the past 24 hours", false, 24, "hour")]
+    public void TryDetectRelativeDateWindow_ParsesCommonPhrasings(string query, bool expectCreated, int amount, string unitKind)
+    {
+        bool ok = SemanticPlanApplier.TryDetectRelativeDateWindow(query, Now, out var after, out bool created);
+
+        Assert.True(ok);
+        Assert.Equal(expectCreated, created);
+        DateTimeOffset expected = unitKind switch
+        {
+            "hour" => Now.AddHours(-amount),
+            "day" => Now.AddDays(-amount),
+            "month" => Now.AddMonths(-amount),
+            _ => Now.AddYears(-amount),
+        };
+        Assert.Equal(expected, after);
+    }
+
+    [Theory]
+    [InlineData("all png files")]
+    [InlineData("files modified before 2024")]
+    [InlineData("files not modified in the last 6 months")]
+    [InlineData("last name report")]
+    [InlineData("the past deadline")]
+    public void TryDetectRelativeDateWindow_ReturnsFalseWhenNoUsableWindow(string query)
+    {
+        Assert.False(SemanticPlanApplier.TryDetectRelativeDateWindow(query, Now, out _, out _));
+    }
+
     // ---- Tier-1 B: content-negation exclude globs that would nuke the include set ----
 
     [Fact]
