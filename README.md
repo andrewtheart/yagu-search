@@ -1,14 +1,46 @@
-# Yagu
-
-<p align="center">
-  <img src="docs/images/yagu.png" alt="Yagu logo" width="160">
-</p>
+<h1 align="center">
+  <img src="docs/images/yagu.png" alt="Yagu logo" width="56" align="middle">
+  &nbsp;Yagu
+</h1>
 
 Yagu is a hyperfast Windows directory search tool for finding, previewing and bulk editing text or regex matches across large folder trees. It is a native hybrid WinUI 3 desktop and CLI app built on .NET 10, with a Rust search engine DLL for the hot content-scanning path and optional voidtools Everything integration for very fast file discovery.
 
 The name means "Yet Another Grep Utility". The goal is the speed of command-line search with a GUI built for repeated code and log investigation: streaming results, context preview, filtering, sorting, exporting, and quick opening in your editor.
 
 For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
+
+## Why Yagu?
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <h3>⚡ Hyper Fast</h3>
+      A native Rust scanner profiled to match — and often beat — ripgrep, with results streaming in while the scan is still running.
+    </td>
+    <td align="center" width="33%">
+      <h3>🤖 AI-Powered</h3>
+      Describe a search in plain English and a local model turns it into real Yagu options — folders, filters, dates, sorting — then runs it.
+    </td>
+    <td align="center" width="33%">
+      <h3>🔒 Privacy-Focused</h3>
+      Everything runs on-device. Your queries and files never leave your PC, and diagnostics are off by default.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <h3>🛠️ Super Configurable</h3>
+      Almost everything in the app is configurable — search filters, .gitignore, size and date ranges, skip lists, parallelism and memory caps, themes, fonts, the editor, shortcuts, and much more.
+    </td>
+    <td align="center" width="33%">
+      <h3>🖼️ Image-Text (OCR)</h3>
+      Find text <em>inside</em> images and screenshots (PNG, JPG, BMP, TIFF…) with a choice of PaddleOCR or Tesseract engines.
+    </td>
+    <td align="center" width="33%">
+      <h3>💾 Instant Sessions</h3>
+      Save any search — results and all — to a file and reopen it instantly, with no rescanning, even weeks later.
+    </td>
+  </tr>
+</table>
 
 ## Download Installer
 
