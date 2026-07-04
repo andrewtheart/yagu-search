@@ -458,80 +458,91 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
 
         progress?.Report(new SemanticTranslationProgress { Stage = SemanticTranslationStage.Interpreting });
 
-        string raw;
-        var inferenceStopwatch = Stopwatch.StartNew();
-
-        // Watchdog: a wedged model inference must not leave the search stuck on "Interpreting your
-        // request…" forever. The Foundry Local runtime occasionally hangs mid-generation (the call
-        // never returns), so cap it with a timeout linked to the user's cancellation token. Reasoning
-        // models get a longer budget because their <think> trace legitimately takes much longer.
-        TimeSpan inferenceTimeout = _selectedModelIsReasoning ? ReasoningInferenceTimeout : InferenceTimeout;
-        using var inferenceCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        inferenceCts.CancelAfter(inferenceTimeout);
+        // Everything below runs against the loaded model. Wrap it so that, when "unload after use" is
+        // enabled, the model is released from memory (freeing VRAM) once interpretation finishes —
+        // whether it succeeded, failed, hit the watchdog, or was cancelled.
         try
         {
-            string systemPrompt = BuildSystemPrompt(context);
-            var messages = new List<ChatMessage>
+            string raw;
+            var inferenceStopwatch = Stopwatch.StartNew();
+
+            // Watchdog: a wedged model inference must not leave the search stuck on "Interpreting your
+            // request…" forever. The Foundry Local runtime occasionally hangs mid-generation (the call
+            // never returns), so cap it with a timeout linked to the user's cancellation token. Reasoning
+            // models get a longer budget because their <think> trace legitimately takes much longer.
+            TimeSpan inferenceTimeout = _selectedModelIsReasoning ? ReasoningInferenceTimeout : InferenceTimeout;
+            using var inferenceCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            inferenceCts.CancelAfter(inferenceTimeout);
+            try
             {
-                ChatMessage.FromSystem(systemPrompt),
-                ChatMessage.FromUser(trimmedQuery),
-            };
-            log.Verbose(LogSource,
-                $"Sending chat completion (model={SelectedModelAlias ?? "<unknown>"}, systemPromptChars={systemPrompt.Length}, " +
-                $"userQueryChars={trimmedQuery.Length}, watchdogTimeout={inferenceTimeout.TotalSeconds:F0}s).");
+                string systemPrompt = BuildSystemPrompt(context);
+                var messages = new List<ChatMessage>
+                {
+                    ChatMessage.FromSystem(systemPrompt),
+                    ChatMessage.FromUser(trimmedQuery),
+                };
+                log.Verbose(LogSource,
+                    $"Sending chat completion (model={SelectedModelAlias ?? "<unknown>"}, systemPromptChars={systemPrompt.Length}, " +
+                    $"userQueryChars={trimmedQuery.Length}, watchdogTimeout={inferenceTimeout.TotalSeconds:F0}s).");
 
-            var response = await chat.CompleteChatAsync(messages, inferenceCts.Token).ConfigureAwait(false);
-            raw = response?.Choices?.FirstOrDefault()?.Message?.Content ?? string.Empty;
-            inferenceStopwatch.Stop();
+                var response = await chat.CompleteChatAsync(messages, inferenceCts.Token).ConfigureAwait(false);
+                raw = response?.Choices?.FirstOrDefault()?.Message?.Content ?? string.Empty;
+                inferenceStopwatch.Stop();
+                log.Info(LogSource,
+                    $"Model responded in {inferenceStopwatch.ElapsedMilliseconds} ms (model={SelectedModelAlias ?? "<unknown>"}, responseChars={raw.Length}).");
+            }
+            catch (OperationCanceledException) when (inferenceCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                // The watchdog fired (not the user) — the model wedged and never returned. Report a failed
+                // translation so the caller falls back to a literal Traditional search instead of silently
+                // aborting the whole submit (which is what a real user-cancellation does).
+                inferenceStopwatch.Stop();
+                log.Warning(LogSource,
+                    $"Inference watchdog fired: the local AI model did not respond within {inferenceTimeout.TotalSeconds:F0}s " +
+                    $"(elapsed={inferenceStopwatch.ElapsedMilliseconds} ms, model={SelectedModelAlias ?? "<unknown>"}); " +
+                    "treating as a failed translation so the search falls back to a literal one.");
+                return SemanticTranslationResult.Fail(
+                    $"The local AI model did not respond within {inferenceTimeout.TotalSeconds:F0} seconds.");
+            }
+            catch (OperationCanceledException)
+            {
+                log.Info(LogSource, "Translation canceled during model inference.");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                log.Warning(LogSource, $"The local AI model failed to respond (model={SelectedModelAlias ?? "<unknown>"}).", ex);
+                return SemanticTranslationResult.Fail($"The local AI model failed to respond: {ex.Message}");
+            }
+
+            if (log.IsVerboseEnabled)
+                log.Verbose(LogSource, $"Raw model output:\n{raw}");
+
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                log.Warning(LogSource, $"The local AI model returned an empty response (model={SelectedModelAlias ?? "<unknown>"}).");
+                return SemanticTranslationResult.Fail("The local AI model returned an empty response.", raw);
+            }
+
+            if (!TryParsePlan(raw, out var plan, out var parseError))
+            {
+                log.Warning(LogSource, $"Could not parse a search plan from model output: {parseError}");
+                return SemanticTranslationResult.Fail(parseError ?? "Could not understand the model output.", raw);
+            }
+
+            totalStopwatch.Stop();
             log.Info(LogSource,
-                $"Model responded in {inferenceStopwatch.ElapsedMilliseconds} ms (model={SelectedModelAlias ?? "<unknown>"}, responseChars={raw.Length}).");
-        }
-        catch (OperationCanceledException) when (inferenceCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-        {
-            // The watchdog fired (not the user) — the model wedged and never returned. Report a failed
-            // translation so the caller falls back to a literal Traditional search instead of silently
-            // aborting the whole submit (which is what a real user-cancellation does).
-            inferenceStopwatch.Stop();
-            log.Warning(LogSource,
-                $"Inference watchdog fired: the local AI model did not respond within {inferenceTimeout.TotalSeconds:F0}s " +
-                $"(elapsed={inferenceStopwatch.ElapsedMilliseconds} ms, model={SelectedModelAlias ?? "<unknown>"}); " +
-                "treating as a failed translation so the search falls back to a literal one.");
-            return SemanticTranslationResult.Fail(
-                $"The local AI model did not respond within {inferenceTimeout.TotalSeconds:F0} seconds.");
-        }
-        catch (OperationCanceledException)
-        {
-            log.Info(LogSource, "Translation canceled during model inference.");
-            throw;
-        }
-        catch (Exception ex)
-        {
-            log.Warning(LogSource, $"The local AI model failed to respond (model={SelectedModelAlias ?? "<unknown>"}).", ex);
-            return SemanticTranslationResult.Fail($"The local AI model failed to respond: {ex.Message}");
-        }
+                $"Translation succeeded in {totalStopwatch.ElapsedMilliseconds} ms (model={SelectedModelAlias ?? "<unknown>"}).");
+            if (log.IsVerboseEnabled)
+                log.Verbose(LogSource, $"Parsed plan: {DescribePlan(plan!)}");
 
-        if (log.IsVerboseEnabled)
-            log.Verbose(LogSource, $"Raw model output:\n{raw}");
-
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            log.Warning(LogSource, $"The local AI model returned an empty response (model={SelectedModelAlias ?? "<unknown>"}).");
-            return SemanticTranslationResult.Fail("The local AI model returned an empty response.", raw);
+            return SemanticTranslationResult.Ok(plan!, raw);
         }
-
-        if (!TryParsePlan(raw, out var plan, out var parseError))
+        finally
         {
-            log.Warning(LogSource, $"Could not parse a search plan from model output: {parseError}");
-            return SemanticTranslationResult.Fail(parseError ?? "Could not understand the model output.", raw);
+            if (_unloadAfterUse)
+                await UnloadLoadedModelAfterUseAsync().ConfigureAwait(false);
         }
-
-        totalStopwatch.Stop();
-        log.Info(LogSource,
-            $"Translation succeeded in {totalStopwatch.ElapsedMilliseconds} ms (model={SelectedModelAlias ?? "<unknown>"}).");
-        if (log.IsVerboseEnabled)
-            log.Verbose(LogSource, $"Parsed plan: {DescribePlan(plan!)}");
-
-        return SemanticTranslationResult.Ok(plan!, raw);
     }
 
     private async Task<OpenAIChatClient> EnsureChatClientAsync(

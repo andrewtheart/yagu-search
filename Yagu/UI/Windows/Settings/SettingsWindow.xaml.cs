@@ -3689,6 +3689,7 @@ public sealed partial class SettingsWindow : Window
             var g = AddTab("AI");
             var aiGroup = AddSettingsGroupBox(g, "AI (Semantic) Search");
             var modelGroup = AddSettingsGroupBox(g, "Model");
+            var memoryGroup = AddSettingsGroupBox(g, "GPU Memory");
             var deviceGroup = AddSettingsGroupBox(g, "Accelerator Preference");
             var hardwareGroup = AddSettingsGroupBox(g, "Detected Hardware");
 
@@ -3823,6 +3824,28 @@ public sealed partial class SettingsWindow : Window
             modelGroup.Children.Add(refreshRow);
             modelGroup.Children.Add(new TextBlock { Text = "Re-scan Foundry Local for models you've downloaded or updated out of band, and re-resolve the current model shown above. Takes effect on your next AI search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
             dependentControls.Add(refreshCache);
+
+            // ── GPU memory ──
+            var unloadToggle = new ToggleSwitch
+            {
+                IsOn = _viewModel.SemanticUnloadModelAfterUse,
+                OnContent = "Release model from memory after each search",
+                OffContent = "Release model from memory after each search",
+            };
+            unloadToggle.Toggled += (_, _) =>
+            {
+                _viewModel.SemanticUnloadModelAfterUse = unloadToggle.IsOn;
+                MarkSettingsDirty(requireValueChanges: false);
+            };
+            memoryGroup.Children.Add(unloadToggle);
+            memoryGroup.Children.Add(new TextBlock
+            {
+                Text = "The on-device model can occupy several GB of GPU VRAM while loaded. On by default: the model is unloaded as soon as each AI search finishes, freeing that memory for other apps, and reloaded on the next search (a few seconds). Turn off to keep the model resident for the fastest back-to-back searches. Either way, translation quality is identical.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+            dependentControls.Add(unloadToggle);
 
             // ── Accelerator preference ──
             deviceGroup.Children.Add(NextSearchLabel("Preferred accelerator order (which device runs the model):"));

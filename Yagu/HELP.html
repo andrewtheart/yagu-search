@@ -548,6 +548,18 @@ pushes the search box down.</li>
 <li><strong>Transparent.</strong> After translating, Yagu fills in the
 Advanced Options so you can see and tweak exactly what it set before or
 after searching.</li>
+<li><strong>Frees GPU memory automatically.</strong> A larger model can
+hold several GB of GPU VRAM while loaded. By default Yagu
+<strong>releases the model from memory after each search</strong> — it
+unloads as soon as each translation finishes and reloads on the next
+search (a few seconds). You can turn this off under <strong>Settings →
+AI → GPU Memory</strong> (uncheck <strong>Release model from memory
+after each search</strong>) to keep the model resident for the fastest
+back‑to‑back searches at the cost of held VRAM. Either way, translation
+quality is identical. Yagu also automatically trims an over‑large
+model’s reserved context window down to what a search request needs
+before loading, reducing the VRAM it reserves without affecting
+quality.</li>
 <li><strong>Switching back to Traditional</strong> (via the same
 Search‑button chevron menu) restores the literal/regex query behavior;
 the inline Case/Regex/Exact toggles apply in Traditional mode only.</li>

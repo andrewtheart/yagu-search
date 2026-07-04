@@ -159,10 +159,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         // larger, more accurate model (e.g. phi-4 14B) on a strong GPU instead of always defaulting to
         // the small phi-4-mini. 0 (unknown / no GPU) leaves the small default in place.
         _semanticTranslator.SetGpuMemoryBytes(SafeDetectGpuMemoryBytes());
+        // Whether to release the model from VRAM after each translation (frees GPU memory between AI
+        // searches at the cost of a reload); mirrors the AI settings toggle.
+        _semanticTranslator.SetUnloadAfterUse(_settings.SemanticUnloadModelAfterUse);
         DefaultToTraditionalSearchMode = _settings.DefaultToTraditionalSearchMode;
         SemanticModelAlias = _settings.SemanticModelAlias;
         SemanticDevicePreferenceOrder = _settings.SemanticDevicePreferenceOrder;
         FoundryModelUpdateAlertsEnabled = _settings.FoundryModelUpdateAlertsEnabled;
+        SemanticUnloadModelAfterUse = _settings.SemanticUnloadModelAfterUse;
         // Launch mode: once the user has explicitly chosen, honor that; otherwise follow the
         // hardware-based default (Semantic on accelerated machines, Traditional elsewhere).
         IsSemanticQueryMode = ResolveLaunchQueryMode();
@@ -520,6 +524,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty]
     public partial bool FoundryModelUpdateAlertsEnabled { get; set; } = true;
 
+    /// <summary>When true (default), the on-device semantic model is unloaded from memory (freeing GPU
+    /// VRAM) right after each AI-search translation finishes; the next query reloads it. Set false to keep
+    /// the model resident for the fastest repeat queries. Bound to the AI settings tab toggle, applied live
+    /// to the translator, and persisted.</summary>
+    [ObservableProperty]
+    public partial bool SemanticUnloadModelAfterUse { get; set; } = true;
+
     /// <summary>Settings-panel toggle for the silent, anonymized telemetry channel. Two-way bound;
     /// applied live to <see cref="Yagu.Services.Telemetry.TelemetryGate"/> and persisted.</summary>
     [ObservableProperty]
@@ -632,6 +643,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     {
         if (!_queryModeInitialized) return;
         _settings.FoundryModelUpdateAlertsEnabled = value;
+        _ = PersistSettingsAsync();
+    }
+
+    partial void OnSemanticUnloadModelAfterUseChanged(bool value)
+    {
+        if (!_queryModeInitialized) return;
+        _settings.SemanticUnloadModelAfterUse = value;
+        _semanticTranslator?.SetUnloadAfterUse(value);
         _ = PersistSettingsAsync();
     }
 
@@ -4301,6 +4320,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.SemanticSearchEnabled = SemanticSearchAvailable;
         _settings.SemanticModelAlias = SemanticModelAlias;
         _settings.SemanticDevicePreferenceOrder = SemanticDevicePreferenceOrder;
+        _settings.SemanticUnloadModelAfterUse = SemanticUnloadModelAfterUse;
         _settings.IncludeGlobs = d is null ? IncludeGlobs : d.IncludeGlobs;
         _settings.ExcludeGlobs = d is null ? ExcludeGlobs : d.ExcludeGlobs;
         _settings.IncludeFilterModeIndex = d is null ? IncludeFilterModeIndex : d.IncludeFilterModeIndex;

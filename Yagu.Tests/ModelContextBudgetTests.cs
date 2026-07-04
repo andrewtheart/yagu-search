@@ -50,6 +50,17 @@ public sealed class ModelContextBudgetTests
     [InlineData(-5)]    // nonsense -> unknown -> assume it fits
     public void Fits_UnknownContextIsNotExcluded(int? contextLength)
         => Assert.True(ModelContextBudget.Fits(contextLength));
+
+    [Fact]
+    public void OptimizedContextTokens_HoldsTheWholeRequestAndReducesTheDefaultWindow()
+    {
+        // The clamp target must always be able to hold the full request (system prompt + query + plan),
+        // so clamping to it never degrades translation quality...
+        Assert.True(ModelContextBudget.OptimizedContextTokens >= ModelContextBudget.RequiredContextTokens);
+        // ...and it must still be smaller than the common 16384-token full-context build, or clamping
+        // would never actually free any VRAM.
+        Assert.True(ModelContextBudget.OptimizedContextTokens < 16384);
+    }
 }
 
 /// <summary>Unit tests for <see cref="GenAiConfigReader"/>.</summary>
@@ -149,5 +160,88 @@ public sealed class GenAiConfigReaderTests : IDisposable
         Assert.False(GenAiConfigReader.TryResolveContextLength(null, "x:1", out _));
         Assert.False(GenAiConfigReader.TryResolveContextLength(_root, null, out _));
         Assert.False(GenAiConfigReader.TryResolveContextLength(Path.Combine(_root, "missing"), "x:1", out _));
+    }
+
+    [Fact]
+    public void TryClampContextWindow_ReducesContextLengthAndMaxLength()
+    {
+        string dir = MakeVariant("Phi-4-trtrtx-gpu-2", "genai_config.json",
+            "{ \"model\": { \"context_length\": 16384 }, \"search\": { \"max_length\": 16384 } }");
+
+        int patched = GenAiConfigReader.TryClampContextWindow(dir, 12288, out int applied);
+
+        Assert.Equal(1, patched);
+        Assert.Equal(12288, applied);
+        // Both fields are clamped, and it is now readable at the reduced value.
+        Assert.True(GenAiConfigReader.TryReadContextLength(dir, out int ctx));
+        Assert.Equal(12288, ctx);
+        string written = File.ReadAllText(Path.Combine(dir, "v2", "genai_config.json"));
+        Assert.Contains("\"context_length\": 12288", written);
+        Assert.Contains("\"max_length\": 12288", written);
+    }
+
+    [Fact]
+    public void TryClampContextWindow_LeavesAlreadySmallWindowsUntouched()
+    {
+        string dir = MakeVariant("small", "genai_config.json",
+            "{ \"model\": { \"context_length\": 4224 }, \"search\": { \"max_length\": 4224 } }");
+
+        int patched = GenAiConfigReader.TryClampContextWindow(dir, 12288, out int applied);
+
+        Assert.Equal(0, patched);
+        Assert.Equal(0, applied);
+        Assert.True(GenAiConfigReader.TryReadContextLength(dir, out int ctx));
+        Assert.Equal(4224, ctx);   // never grown up to the target
+    }
+
+    [Fact]
+    public void TryClampContextWindow_ClampsOnlyTheOversizedField()
+    {
+        // context_length already small, only search.max_length is oversized -> still a patch.
+        string dir = MakeVariant("mixed", "genai_config.json",
+            "{ \"model\": { \"context_length\": 8192 }, \"search\": { \"max_length\": 131072 } }");
+
+        int patched = GenAiConfigReader.TryClampContextWindow(dir, 12288, out _);
+
+        Assert.Equal(1, patched);
+        string written = File.ReadAllText(Path.Combine(dir, "v2", "genai_config.json"));
+        Assert.Contains("\"context_length\": 8192", written);   // untouched (below target)
+        Assert.Contains("\"max_length\": 12288", written);      // clamped
+    }
+
+    [Fact]
+    public void TryClampContextWindow_PatchesDefaultConfigToo()
+    {
+        string dir = MakeVariant("defaulted", "default_genai_config.json",
+            "{ \"model\": { \"context_length\": 32768 } }");
+
+        int patched = GenAiConfigReader.TryClampContextWindow(dir, 12288, out int applied);
+
+        Assert.Equal(1, patched);
+        Assert.Equal(12288, applied);
+    }
+
+    [Fact]
+    public void TryClampContextWindow_IsIdempotent()
+    {
+        string dir = MakeVariant("idem", "genai_config.json",
+            "{ \"model\": { \"context_length\": 16384 }, \"search\": { \"max_length\": 16384 } }");
+
+        Assert.Equal(1, GenAiConfigReader.TryClampContextWindow(dir, 12288, out _));
+        // Second run finds nothing over the target, so it makes no further changes.
+        Assert.Equal(0, GenAiConfigReader.TryClampContextWindow(dir, 12288, out int applied2));
+        Assert.Equal(0, applied2);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void TryClampContextWindow_InvalidArgsAreNoOps(int target)
+    {
+        string dir = MakeVariant("args", "genai_config.json", "{ \"model\": { \"context_length\": 16384 } }");
+        Assert.Equal(0, GenAiConfigReader.TryClampContextWindow(dir, target, out int applied));
+        Assert.Equal(0, applied);
+        Assert.Equal(0, GenAiConfigReader.TryClampContextWindow(null, 12288, out _));
+        Assert.Equal(0, GenAiConfigReader.TryClampContextWindow(Path.Combine(_root, "nope"), 12288, out _));
     }
 }
