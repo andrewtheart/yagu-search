@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="docs/images/yagu.png" alt="Yagu logo" width="96" align="middle">
+  <img src="docs/images/yagu-logo.png" alt="Yagu logo" width="96" align="middle">
   &nbsp;Yagu
 </h1>
 
