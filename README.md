@@ -6,6 +6,25 @@ The name means "Yet Another Grep Utility". The goal is the speed of command-line
 
 For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
 
+## Download Installer
+
+To install Yagu without building from source, download the installer that matches your PC and run it. Yagu ships as a self-contained Native AOT build, so no separate .NET runtime is required; every installer also bundles the Windows App Runtime payloads the desktop app needs.
+
+**Which one do I need?** Pick by CPU architecture — most people want **x64**. The separate **x64 · Offline** edition is only for offline/air-gapped machines that need image-text (OCR) search — and, when you consent, the bundled voidtools Everything installer — without any first-run download.
+
+| Installer | What it's for | Image-text (OCR) search |
+| --- | --- | --- |
+| [**x64** — YaguSetup-1.0.0.2331-x64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2331-x64.exe) (~90 MB) | Most modern PCs: 64-bit Intel/AMD Windows. Start here if unsure. | Works. Defaults to the PaddleOCR engine; the OCR runtime and English models download once on first use. |
+| [**x64 · Offline** — YaguSetup-1.0.0.2331-x64-offline.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2331-x64-offline.exe) (~464 MB) | Same as x64, but for machines that must run fully **offline** — air-gapped PCs, or to skip first-run downloads. Bundles everything needed offline: the voidtools **Everything** installer (installs with your consent, no download) and the Microsoft Edge **WebView2** runtime for the embedded terminal. | Bundled in the installer: the **Tesseract** engine (the default for this edition) plus the PaddleOCR engine and English models are installed up front, so image-text search works with no download. |
+| [**Arm64** — YaguSetup-1.0.0.2331-arm64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2331-arm64.exe) (~89 MB) | Windows on ARM: Snapdragon-based laptops, Surface Pro X, Windows Dev Kit. | Works. Defaults to PaddleOCR; the OCR runtime and models download once on first use. |
+| [**x86** — YaguSetup-1.0.0.2331-x86.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2331-x86.exe) (~70 MB) | 32-bit Windows. | Works. Defaults to the Tesseract engine (PaddleOCR's runtime is x64-only); language data downloads once on first use. |
+
+> There is no Arm64 or x86 "Offline" edition: the bundled OCR runtime is win-x64 only, so it can only be packaged offline for x64. On Arm64 and x86, image-text search still works — it downloads what it needs on first use.
+
+> **Note: Yagu is currently unsigned and is not supported on machines with Smart App Control enabled.**
+>
+> Yagu is an open-source project without a code-signing certificate. We applied for free open-source signing through SignPath, but it is not accepting new applications at the moment due to high volume (see [OSSign — Code Signing for Open Source](https://ossign.org/#apply)). Because Windows **Smart App Control** only allows programs that are signed by a recognized publisher, Yagu cannot run on PCs where Smart App Control is turned on. The installer detects this and stops with a message; to install Yagu, turn Smart App Control off (Windows Security → App & browser control → Smart App Control), or use a machine where it is not enabled. We will sign future releases once free open-source signing becomes available.
+
 ## Screenshots
 
 **Traditional search** — literal, exact, or .NET-regex matching with streaming, grouped results and per-file match counts.
@@ -76,26 +95,6 @@ A quick taste of the range of queries Yagu handles — literal, regex, whole‑w
 | any file ≥ 25 MB | Space hogs, tracked down by size. |
 | `(?i)api[_-]?key` *(regex)* | API keys — `apikey`, `API_KEY`, or `api-key`. |
 | `copyright` — `*.cs`, case‑sensitive, file contents only | Audit license headers. |
-
-## Download Installer
-
-To install Yagu without building from source, download the installer that matches your PC and run it. Yagu ships as a self-contained Native AOT build, so no separate .NET runtime is required; every installer also bundles the Windows App Runtime payloads the desktop app needs.
-
-**Which one do I need?** Pick by CPU architecture — most people want **x64**. The separate **x64 · Offline** edition is only for offline/air-gapped machines that need image-text (OCR) search — and, when you consent, the bundled voidtools Everything installer — without any first-run download.
-
-| Installer | What it's for | Image-text (OCR) search |
-| --- | --- | --- |
-| [**x64** — YaguSetup-1.0.0.2331-x64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2331-x64.exe) (~90 MB) | Most modern PCs: 64-bit Intel/AMD Windows. Start here if unsure. | Works. Defaults to the PaddleOCR engine; the OCR runtime and English models download once on first use. |
-| [**x64 · Offline** — YaguSetup-1.0.0.2331-x64-offline.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2331-x64-offline.exe) (~464 MB) | Same as x64, but for machines that must run fully **offline** — air-gapped PCs, or to skip first-run downloads. Bundles everything needed offline: the voidtools **Everything** installer (installs with your consent, no download) and the Microsoft Edge **WebView2** runtime for the embedded terminal. | Bundled in the installer: the **Tesseract** engine (the default for this edition) plus the PaddleOCR engine and English models are installed up front, so image-text search works with no download. |
-| [**Arm64** — YaguSetup-1.0.0.2331-arm64.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2331-arm64.exe) (~89 MB) | Windows on ARM: Snapdragon-based laptops, Surface Pro X, Windows Dev Kit. | Works. Defaults to PaddleOCR; the OCR runtime and models download once on first use. |
-| [**x86** — YaguSetup-1.0.0.2331-x86.exe](https://github.com/andrewtheart/yagu-search/raw/main/installer/YaguSetup-1.0.0.2331-x86.exe) (~70 MB) | 32-bit Windows. | Works. Defaults to the Tesseract engine (PaddleOCR's runtime is x64-only); language data downloads once on first use. |
-
-> There is no Arm64 or x86 "Offline" edition: the bundled OCR runtime is win-x64 only, so it can only be packaged offline for x64. On Arm64 and x86, image-text search still works — it downloads what it needs on first use.
-
-> **Note: Yagu is currently unsigned and is not supported on machines with Smart App Control enabled.**
->
-> Yagu is an open-source project without a code-signing certificate. We applied for free open-source signing through SignPath, but it is not accepting new applications at the moment due to high volume (see [OSSign — Code Signing for Open Source](https://ossign.org/#apply)). Because Windows **Smart App Control** only allows programs that are signed by a recognized publisher, Yagu cannot run on PCs where Smart App Control is turned on. The installer detects this and stops with a message; to install Yagu, turn Smart App Control off (Windows Security → App & browser control → Smart App Control), or use a machine where it is not enabled. We will sign future releases once free open-source signing becomes available.
-
 
 ## Current Project Status
 
