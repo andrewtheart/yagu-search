@@ -2200,11 +2200,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             var defaultsSnapshot = CaptureSearchDefaults();
             var outcome = await TranslateSemanticQueryAsync().ConfigureAwait(true);
             if (outcome == SemanticTranslationOutcome.Aborted) return;
-            if (outcome == SemanticTranslationOutcome.Applied)
+            if (outcome is SemanticTranslationOutcome.Applied or SemanticTranslationOutcome.Salvaged)
                 _semanticDefaultsSnapshot = defaultsSnapshot; // armed: StartSearchAsync leaves the plan visible
             else
             {
-                // No plan (e.g. a bare token like "#define") — fall back to a plain Traditional search.
+                // No plan and nothing to salvage (e.g. a bare token like "#define") — fall back to a
+                // plain Traditional search of the typed text. (A salvaged plan already set its own
+                // "best guess" status inside TranslateSemanticQueryAsync.)
                 ErrorText = string.Empty;
                 SemanticStatusText = "AI couldn't interpret that — searching for the text directly.";
             }
@@ -2249,6 +2251,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     {
         /// <summary>The model's plan was applied to this view-model; run the semantic search.</summary>
         Applied,
+        /// <summary>The model produced no usable plan, but a deterministic best-guess salvage was applied
+        /// from the raw query (file types, content term, OCR, hidden, folder). Run it like a normal plan;
+        /// the status line tells the user it is a best guess.</summary>
+        Salvaged,
         /// <summary>The model could not produce a usable plan; the caller may fall back to a literal search.</summary>
         Failed,
         /// <summary>Translation was cancelled or there was nothing to translate; do not search.</summary>
@@ -2324,7 +2330,22 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             if (!result.Success || result.Plan is null)
             {
                 // The model returned no usable plan (small on-device models often do this for bare
-                // code tokens like "#define"). Let the caller fall back to a literal Traditional search.
+                // code tokens like "#define", and phi-mini has narrow quirks such as failing "jpg files
+                // containing the word secret"). Before dropping to a bare literal search, try a
+                // DETERMINISTIC best-guess salvage that rebuilds the obvious parts of the query — file
+                // types, a content term, image OCR, hidden-file preference, a known folder — with the
+                // same rules the model is taught. When it recovers something, apply it and tell the user
+                // it is a best guess; otherwise fall through to the literal fallback.
+                if (SemanticQuerySalvage.TryBuildPlan(text, out var salvagePlan))
+                {
+                    var salvaged = SemanticPlanApplier.ApplyToTarget(salvagePlan, context, this);
+                    EnableArchiveSearchForContainerGlobs(salvaged.IncludeGlobs);
+                    EnableBinarySearchForBinaryGlobs(salvaged.IncludeGlobs);
+                    SemanticStatusText = "AI couldn't interpret that — using our best guess: "
+                        + SemanticPlanApplier.BuildExplanation(salvaged, Directory);
+                    return SemanticTranslationOutcome.Salvaged;
+                }
+
                 SemanticStatusText = string.Empty;
                 return SemanticTranslationOutcome.Failed;
             }

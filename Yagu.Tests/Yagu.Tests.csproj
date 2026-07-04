@@ -126,6 +126,7 @@
     <Compile Include="..\Yagu\Services\Ai\ISemanticQueryTranslator.cs" Link="Source\Services\Ai\ISemanticQueryTranslator.cs" />
     <Compile Include="..\Yagu\Services\Ai\FoundryModelUpdateChecker.cs" Link="Source\Services\Ai\FoundryModelUpdateChecker.cs" />
     <Compile Include="..\Yagu\Services\Ai\SlowSemanticModelAdvisor.cs" Link="Source\Services\Ai\SlowSemanticModelAdvisor.cs" />
+    <Compile Include="..\Yagu\Services\Ai\SemanticQuerySalvage.cs" Link="Source\Services\Ai\SemanticQuerySalvage.cs" />
     <Compile Include="..\Yagu\Services\Ai\SemanticPlanApplier.cs" Link="Source\Services\Ai\SemanticPlanApplier.cs" />    <Compile Include="..\Yagu\Services\Ai\SemanticPlanJsonExtractor.cs" Link="Source\Services\Ai\SemanticPlanJsonExtractor.cs" />
     <Compile Include="..\Yagu\Services\Ai\SemanticCapabilityDetector.cs" Link="Source\Services\Ai\SemanticCapabilityDetector.cs" />
     <Compile Include="..\Yagu\Services\Ai\SemanticPromptText.cs" Link="Source\Services\Ai\SemanticPromptText.cs" />

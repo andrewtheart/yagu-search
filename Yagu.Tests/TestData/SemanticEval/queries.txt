@@ -1,0 +1,305 @@
+﻿all png files
+all pdf files
+every markdown file
+json files
+csv files
+log files
+text files
+yaml files
+xml files
+c# files
+c++ files
+f# files
+objective-c files
+python files
+javascript files
+typescript files
+powershell scripts
+shell scripts
+word documents
+excel spreadsheets
+powerpoint presentations
+zip archives
+executable files
+image files
+video files
+audio files
+config files
+source code files
+c# files containing 'TODO'
+c# files containing 'async'
+c# files containing 'password'
+c# files containing 'error'
+python files containing 'TODO'
+python files containing 'async'
+python files containing 'password'
+python files containing 'error'
+javascript files containing 'TODO'
+javascript files containing 'async'
+javascript files containing 'password'
+javascript files containing 'error'
+typescript files containing 'TODO'
+typescript files containing 'async'
+typescript files containing 'password'
+typescript files containing 'error'
+markdown files containing 'TODO'
+markdown files containing 'async'
+markdown files containing 'password'
+markdown files containing 'error'
+log files containing 'TODO'
+log files containing 'async'
+log files containing 'password'
+log files containing 'error'
+json files containing 'TODO'
+json files containing 'async'
+json files containing 'password'
+json files containing 'error'
+files that contain the word error
+files with the word invoice in them
+documents mentioning budget
+any file that has a password in it
+code files containing a TODO comment
+logs that contain the word timeout
+c# files that contain 'async' but not 'Legacy'
+python files containing import but not test
+log files with error but without warning
+files that mention invoice but not refund
+javascript files with TODO but no FIXME
+config files containing password but not example
+markdown files that talk about async but not deprecated
+source files containing api_key but not sample
+files containing 'CUDA'
+anything mentioning hunter2
+files with 555-123-4567
+files containing an email address
+files that reference 192.168.0.1
+search for the phrase connection refused
+files containing the word secret
+files modified today
+files changed yesterday
+files modified this week
+files updated last week
+files modified this month
+files changed last month
+files modified this year
+files created last year
+files modified in the last 7 days
+files changed in the last 30 days
+files edited in the past 24 hours
+files modified in the last hour
+files files from the last 3 months
+files created in the last 2 weeks
+c# files modified this year
+log files changed today
+documents updated last week
+python files modified in the last 30 days
+images created this month
+files modified after 2024-01-01
+files created before March 2023
+files modified between January and June 2025
+documents from 2022
+logs created after 2025-06-01
+files changed since the start of the year
+c# files modified before last December
+anything created in 2023
+files larger than 10 MB
+files smaller than 1 KB
+files bigger than 500 kb
+files between 1 and 5 MB
+empty files
+huge log files
+tiny text files
+images larger than 2 megabytes
+json files over 1MB
+files under 100 bytes
+the biggest files
+very small config files
+png files ordered by date
+log files sorted by size
+documents sorted by name
+files ordered by relevance
+c# files newest first
+images biggest first
+text files oldest first
+files sorted by modified date descending
+results ordered by match count
+files sorted alphabetically
+logs by size largest to smallest
+source files by most recently changed
+all files grouped by folder
+images grouped by extension
+files grouped by type
+logs grouped by date
+source files grouped by directory
+files grouped by size
+documents grouped by month modified
+png files in the images folder
+c# files in the src directory
+log files under logs
+config files in the config folder
+files on C drive
+documents on D:
+everything in the data folder
+python files in src/api
+files on my desktop
+text files in the docs folder
+including hidden files show me config files
+hidden files containing password
+text files that are not hidden
+search hidden files for secret
+all files including hidden ones
+png files but no hidden files
+the .env file
+dotfiles in the project
+word documents containing invoice
+excel files with numbers
+docx files modified this year
+zip files
+spreadsheets mentioning budget
+powerpoint files created last month
+office documents containing password
+search inside zip archives for readme
+xlsx files larger than 1MB
+screenshots containing invoice
+png files with the word CUDA in them
+images mentioning error
+photos with text that says budget
+screenshots that mention connection refused
+jpg files containing the word secret
+images with '555' in them
+any picture referencing an api key
+files with email addresses
+files containing IP addresses
+find phone numbers
+files with GUIDs
+TODO or FIXME comments
+lines starting with ERROR
+files containing hex color codes
+words in ALL CAPS
+credit card like numbers
+files with URLs
+the word test at least twice
+MAC addresses
+c# files with async methods modified this year
+c++ source files
+f# scripts
+objective-c files containing init
+c sharp files
+c and c# files
+typescript or javascript files
+python or ruby files
+go source files
+rust files containing unsafe
+c# files on C:/ that contain 'async' but don't contain 'Legacy', ordered by date
+python files in src containing import modified this month sorted by size
+large log files from last week grouped by folder
+json files over 1MB modified today ordered by name
+markdown files containing TODO created this year sorted by date descending
+images in the images folder larger than 1MB modified this month
+config files containing password not in hidden folders sorted by name
+c# files modified this year larger than 100kb excluding generated files
+typescript files containing async but not test ordered by relevance
+word documents modified last month containing invoice grouped by folder
+log files bigger than 10kb changed today containing error sorted by size
+python files in src/api containing api_key created in the last 30 days
+recent c# files with TODO comments sorted newest first
+small json config files modified this week ordered by name
+pdf and docx files containing budget modified this year
+source files under src modified after 2025-01-01 excluding the bin folder
+csv files in data larger than 1kb containing invoice sorted by size descending
+images larger than 500kb modified this month grouped by extension
+hidden config files containing password modified this year
+c++ or c# files containing async modified in the last 90 days ordered by date
+case-sensitive search for 'Error'
+whole word 'id'
+exactly the word test
+match 'API' case sensitively
+the exact phrase connection refused
+regex search for \bTODO\b
+case insensitive search for password
+recent code
+big log files
+config stuff
+anything with passwords
+important documents
+old files
+stuff from last week
+my python scripts
+the largest images
+something about invoices
+recently changed source code
+broken tests
+files I edited today
+everything
+search ignoring .gitignore
+search binary files too for MZ
+only top-level files containing readme
+search including archives for password
+respect gitignore and find TODO
+search exe files for a version string
+shallow search only the current folder for config
+config files containing 'invoice'
+config files containing 'import'
+config files containing 'api_key'
+config files containing 'budget'
+config files containing 'deprecated'
+text files containing 'invoice'
+text files containing 'import'
+text files containing 'api_key'
+text files containing 'budget'
+text files containing 'deprecated'
+html files containing 'invoice'
+html files containing 'import'
+html files containing 'api_key'
+html files containing 'budget'
+html files containing 'deprecated'
+html files containing a form
+xml files with a config element
+json files containing apiKey
+yaml files mentioning replicas
+sql files containing select
+dockerfiles containing FROM
+markdown files modified today
+json files changed this week
+csv files created this month
+log files from yesterday
+images modified in the last 48 hours
+config files changed since last Monday
+text files older than 6 months
+c# files not modified this year
+documents modified more than a year ago
+files untouched since 2023
+log files over 20 kilobytes
+c# files smaller than 2 KB
+pdf files larger than 5MB
+png files under 50kb
+zip files bigger than 100MB
+data files between 500kb and 2mb
+executables larger than 1MB
+markdown files under 4kb
+c# files ordered by size then name
+logs grouped by folder sorted by date
+images sorted by newest
+documents grouped by type ordered by name
+files sorted by extension
+results grouped by created date
+biggest json files first
+most relevant matches first
+config files in config modified this month
+c# files in src/api containing async
+logs under the logs folder larger than 10kb
+images in images folder created today
+markdown files in docs containing invoice
+python files in src not modified this year
+files in the data folder over 1mb sorted by size
+text files in docs modified last week ordered by date
+large png files in images modified this week ordered by size descending
+c# files containing password not in the config folder sorted by name
+recent json files over 100kb grouped by folder
+python scripts containing api_key modified today excluding tests
+markdown or text files containing budget modified this year sorted by date
+log files from last month bigger than 5kb containing error grouped by day
+docx files containing invoice modified this year ordered by name
+source files under src containing TODO but not FIXME sorted by recency
+images larger than 200kb containing text about invoices created this month
+config files with passwords modified in the last 90 days not hidden
