@@ -54,6 +54,20 @@ For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
       Beyond plain text: look inside ZIP and Office archives, binaries, and cloud-only files — powered by an optional Everything index for instant file discovery.
     </td>
   </tr>
+  <tr>
+    <td align="center" width="33%">
+      <h3>🖥️ GUI + CLI, No Compromises</h3>
+      One binary, two faces. Everything the GUI can do, the <code>Yagu.exe --cli</code> command can do too — full feature parity, so you prototype visually and automate in scripts with identical results.
+    </td>
+    <td align="center" width="33%">
+      <h3>🆓 Free &amp; Open Source</h3>
+      100% free and fully open source. Read the code, audit it, or build it yourself — nothing is hidden, nothing phones home, and there's nothing to buy.
+    </td>
+    <td align="center" width="33%">
+      <h3>🧪 Thousands of Tests</h3>
+      Backed by thousands of automated tests — unit, native/managed parity, and real-world throughput benchmarks — so search stays fast, accurate, and reliable release after release.
+    </td>
+  </tr>
 </table>
 
 ## Download Installer
