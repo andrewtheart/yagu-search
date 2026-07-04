@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="docs/images/yagu.png" alt="Yagu logo" width="56" align="middle">
+  <img src="docs/images/yagu.png" alt="Yagu logo" width="96" align="middle">
   &nbsp;Yagu
 </h1>
 
@@ -38,6 +38,20 @@ For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
     <td align="center" width="33%">
       <h3>💾 Instant Sessions</h3>
       Save any search — results and all — to a file and reopen it instantly, with no rescanning, even weeks later.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <h3>💻 Embedded Terminal</h3>
+      A built-in terminal runs Yagu's CLI — or any shell command — right beside your results. One click drops the exact <code>--cli</code> equivalent of your search in, ready to run.
+    </td>
+    <td align="center" width="33%">
+      <h3>✏️ Built-in Editor</h3>
+      Open any matched file in-app and fix it on the spot — syntax highlighting, find/replace, jump-to-match, and safe <code>.yagubak</code> backups.
+    </td>
+    <td align="center" width="33%">
+      <h3>📦 Searches Everywhere</h3>
+      Beyond plain text: look inside ZIP and Office archives, binaries, and cloud-only files — powered by an optional Everything index for instant file discovery.
     </td>
   </tr>
 </table>
