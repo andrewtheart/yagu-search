@@ -2389,6 +2389,38 @@ public sealed class SemanticPlanApplierTests
     }
 
     [Fact]
+    public void BuildExplanation_IncludesSortAndGroupClauses()
+    {
+        var resolved = new ResolvedSearchPlan
+        {
+            Directory = "C:/",
+            Pattern = "Mitchell",
+            SearchMode = SearchMode.Content,
+            IncludeGlobs = new[] { "*.png" },
+            SortModeIndex = 2,       // modified date
+            SortDirectionIndex = 0,  // descending -> newest first
+            GroupMode = Yagu.Models.GroupMode.Folder,
+            GroupSortDirectionIndex = 0,
+        };
+
+        string text = SemanticPlanApplier.BuildExplanation(resolved);
+
+        Assert.Contains("sorted by modified date (newest first)", text);
+        Assert.Contains("grouped by folder", text);
+    }
+
+    [Fact]
+    public void BuildExplanation_NoSortOrGroup_OmitsThoseClauses()
+    {
+        var resolved = new ResolvedSearchPlan { Directory = "C:/", Pattern = "x", SearchMode = SearchMode.Content };
+
+        string text = SemanticPlanApplier.BuildExplanation(resolved);
+
+        Assert.DoesNotContain("sorted by", text);
+        Assert.DoesNotContain("grouped by", text);
+    }
+
+    [Fact]
     public void BuildExplanation_EmptyPlan_FallsBackToGenericSummary()
     {
         string text = SemanticPlanApplier.BuildExplanation(new ResolvedSearchPlan());

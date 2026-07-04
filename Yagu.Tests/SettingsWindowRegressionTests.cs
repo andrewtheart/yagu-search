@@ -870,6 +870,27 @@ public sealed class SettingsWindowRegressionTests
     }
 
     [Fact]
+    public void TerminalDefaultShell_HasSettingsDropdownAndDefaultsToPowerShell()
+    {
+        // PowerShell is the persisted default for the embedded terminal.
+        Assert.Contains("public int TerminalShellKindIndex { get; set; } = 1;", SettingsServiceSource);
+
+        // Settings window exposes a "Default Shell" picker on the Terminal Emulator tab.
+        Assert.Contains("AddSettingsGroupBox(g, \"Default Shell\")", SettingsWindowSource);
+        Assert.Contains("AddTerminalShellSetting(shellGroup);", SettingsWindowSource);
+        Assert.Contains("private void AddTerminalShellSetting(StackPanel parent)", SettingsWindowSource);
+        AssertContainsInOrder(SettingsWindowSource,
+            "private void AddTerminalShellSetting(StackPanel parent)",
+            "shell.Items.Add(\"Command Prompt (cmd.exe)\");",
+            "shell.Items.Add(\"PowerShell\");",
+            "shell.SelectedIndex = TerminalShell.NormalizeSettingsIndex(_viewModel.TerminalShellKindIndex);",
+            "shell.SelectionChanged += (_, _) => _viewModel.TerminalShellKindIndex = shell.SelectedIndex;");
+
+        // The choice round-trips through the view model to persisted settings.
+        Assert.Contains("_settings.TerminalShellKindIndex = TerminalShell.NormalizeSettingsIndex(TerminalShellKindIndex);", MainViewModelSource);
+    }
+
+    [Fact]
     public void TerminalStartup_IsTransactionalAndReportsFailures()
     {
         AssertContainsInOrder(MainWindowTerminalSource,

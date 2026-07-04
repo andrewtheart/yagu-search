@@ -2087,6 +2087,26 @@ public sealed partial class SettingsWindow : Window
         });
     }
 
+    private void AddTerminalShellSetting(StackPanel parent)
+    {
+        parent.Children.Add(new TextBlock { Text = "Default shell for the embedded terminal:" });
+
+        var shell = new ComboBox { HorizontalAlignment = HorizontalAlignment.Left, MinWidth = 220 };
+        shell.Items.Add("Command Prompt (cmd.exe)");
+        shell.Items.Add("PowerShell");
+        shell.SelectedIndex = TerminalShell.NormalizeSettingsIndex(_viewModel.TerminalShellKindIndex);
+        shell.SelectionChanged += (_, _) => _viewModel.TerminalShellKindIndex = shell.SelectedIndex;
+        parent.Children.Add(shell);
+
+        parent.Children.Add(new TextBlock
+        {
+            Text = "PowerShell is the default. The choice applies the next time the terminal starts; use the Shell dropdown in the terminal toolbar to switch a running session live.",
+            FontSize = 11,
+            Opacity = 0.6,
+            TextWrapping = TextWrapping.Wrap,
+        });
+    }
+
     private void PickTerminalWorkingDirectory(TextBox target)
     {
         try
@@ -3353,8 +3373,10 @@ public sealed partial class SettingsWindow : Window
         // ── Terminal Emulator ──
         {
             var g = AddTab("Terminal Emulator");
+            var shellGroup = AddSettingsGroupBox(g, "Default Shell");
             var workingDirectoryGroup = AddSettingsGroupBox(g, "Working Directory");
 
+            AddTerminalShellSetting(shellGroup);
             AddTerminalEmulationSetting(workingDirectoryGroup);
         }
 

@@ -168,6 +168,8 @@ The embedded terminal is a command shell hosted inside Yagu below the main conte
 
 A **Shell** dropdown in the terminal's toolbar lets you switch between **Command Prompt (cmd.exe)** and **PowerShell**. The choice is saved and reused the next time the terminal opens. Switching shells starts a fresh session in the selected shell — pick PowerShell if you want PowerShell cmdlets and aliases such as `cat`, `ls`, and `Get-ChildItem`.
 
+**PowerShell is the default shell.** You can change the default under **Settings → Terminal Emulator → Default Shell**; the terminal-toolbar dropdown switches a running session live.
+
 The PowerShell session is fully interactive: running a cmdlet that needs a mandatory parameter (for example, a bare `Get-Item`) prompts you with **Supply values for the following parameters** instead of hanging, and `Read-Host` prompts work too. Variables and the current directory persist across commands, and errors (such as a missing file or a failed download) appear as readable text.
 
 Right-click inside the terminal pane for **Copy**, **Paste**, **Cut**, **Select all**, **Clear**, and **Reset terminal session**. **Clear** runs `cls` and clears the xterm surface; typing `cls` at the prompt clears the surface and erases the typed command line too. **Reset terminal session** disposes the current shell session and starts a fresh one; use it if the terminal appears disconnected, stuck, or out of sync. The generated CLI command overlay can send commands into this terminal without executing them, which gives you a chance to review or edit before pressing Enter.

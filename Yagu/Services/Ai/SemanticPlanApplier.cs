@@ -583,6 +583,8 @@ public static class SemanticPlanApplier
         AppendSizeClause(sb, resolved.MinFileSizeBytes, resolved.MaxFileSizeBytes);
         AppendDateClause(sb, "modified", resolved.ModifiedAfterDate, resolved.ModifiedBeforeDate);
         AppendDateClause(sb, "created", resolved.CreatedAfterDate, resolved.CreatedBeforeDate);
+        AppendSortClause(sb, resolved.SortModeIndex, resolved.SortDirectionIndex);
+        AppendGroupClause(sb, resolved.GroupMode, resolved.GroupSortDirectionIndex);
 
         sb.Append('.');
         return sb.ToString();
@@ -610,6 +612,54 @@ public static class SemanticPlanApplier
             sb.Append(CultureInfo.InvariantCulture, $", {label} after {D(after.Value)}");
         else if (before.HasValue)
             sb.Append(CultureInfo.InvariantCulture, $", {label} before {D(before.Value)}");
+    }
+
+    /// <summary>Describes the resolved sort (mode index 1=matches, 2=modified date, 3=size, 4=name,
+    /// 5=folder; direction 1=ascending, else descending). No-op when no sort is set.</summary>
+    private static void AppendSortClause(StringBuilder sb, int? modeIndex, int? directionIndex)
+    {
+        if (modeIndex is not { } m || m <= 0) return;
+
+        string? field = m switch
+        {
+            1 => "match count",
+            2 => "modified date",
+            3 => "size",
+            4 => "name",
+            5 => "folder",
+            _ => null,
+        };
+        if (field is null) return;
+
+        bool asc = directionIndex == 1;
+        string dir = m switch
+        {
+            1 => asc ? "fewest first" : "most first",
+            2 => asc ? "oldest first" : "newest first",
+            3 => asc ? "smallest first" : "largest first",
+            _ => asc ? "A\u2013Z" : "Z\u2013A", // name / folder
+        };
+        sb.Append(", sorted by ").Append(field).Append(" (").Append(dir).Append(')');
+    }
+
+    /// <summary>Describes the resolved grouping (folder / file type / size / modified / created / date).
+    /// No-op when grouping is None/unset. A reversed group order is noted.</summary>
+    private static void AppendGroupClause(StringBuilder sb, GroupMode? mode, int? directionIndex)
+    {
+        if (mode is not { } g || g == GroupMode.None) return;
+
+        string label = g switch
+        {
+            GroupMode.Folder => "folder",
+            GroupMode.Extension => "file type",
+            GroupMode.FileSize => "size",
+            GroupMode.DateRangeModified => "modified date",
+            GroupMode.DateRangeCreated => "created date",
+            _ => "date",
+        };
+        sb.Append(", grouped by ").Append(label);
+        if (directionIndex == 1)
+            sb.Append(" (reversed)");
     }
 
     private static string FormatSize(long bytes)
