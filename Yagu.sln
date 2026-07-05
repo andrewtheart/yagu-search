@@ -15,8 +15,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TextControlBox", "vendor\Te
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "SharpSevenZip", "SharpSevenZip", "{5BEA7D07-666D-76A1-60CB-03D43B49609C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "peinspect", "..\..\yaguTemp\peinspect\peinspect.csproj", "{2DC85ADD-7A1A-4D15-8CD3-B371789A3E05}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Yagu.OcrWorker", "Yagu.OcrWorker\Yagu.OcrWorker.csproj", "{462301E6-FF8F-4A37-BA67-84298144736C}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "PaddleSharp", "PaddleSharp", "{FD18E42A-CA0B-A260-59C5-711E3E6B76B3}"
