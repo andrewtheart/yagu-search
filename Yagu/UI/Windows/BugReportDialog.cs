@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml.Controls;
 using Yagu.Helpers;
 using Yagu.Services;
 using Yagu.Services.Telemetry;
+using System.Text;
 
 namespace Yagu;
 
@@ -203,7 +204,7 @@ internal static class BugReportDialog
 
     private static string BuildErrorText(BugReportPayload payload)
     {
-        var sb = new System.Text.StringBuilder();
+        var sb = new StringBuilder();
         sb.Append("Source: ").AppendLine(payload.Source);
         if (!string.IsNullOrWhiteSpace(payload.ExceptionType)) sb.Append("Type: ").AppendLine(payload.ExceptionType);
         if (!string.IsNullOrWhiteSpace(payload.Message)) sb.Append("Message: ").AppendLine(payload.Message);

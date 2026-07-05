@@ -255,6 +255,33 @@ public sealed class LogService : IDisposable
         catch { }
     }
 
+    /// <summary>
+    /// Clears the current log file, truncating it to empty and discarding any buffered lines that have
+    /// not yet been flushed (so the periodic flush timer cannot immediately re-populate it right after).
+    /// Best-effort and crash-safe: returns <c>false</c> when the file could not be truncated (e.g. it is
+    /// locked by another process). Log entries produced after this call are written normally.
+    /// </summary>
+    public bool Clear()
+    {
+        try
+        {
+            // Discard buffered-but-unwritten lines first so a pending flush doesn't resurrect old content.
+            while (_queue.TryDequeue(out _)) { }
+
+            var dir = Path.GetDirectoryName(_logPath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+            // FileMode.Create truncates an existing file (or creates an empty one). ShareReadWrite so an
+            // open viewer (Notepad/tail) doesn't block the truncate.
+            using (new FileStream(_logPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite, 4096)) { }
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;

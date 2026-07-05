@@ -7,6 +7,14 @@ using Yagu.Models;
 using Yagu.Helpers;
 using Yagu.Services;
 using Yagu.Services.Ai;
+using System.Collections;
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
+using System.Runtime;
+using System.Security;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Yagu.ViewModels;
 
@@ -78,7 +86,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     private readonly List<SortCriterion> _sortCriteria = [new(1, 0)];
     private readonly HashSet<string> _selectedExtensionFilters = new(StringComparer.OrdinalIgnoreCase);
     private bool _updatingSortCriteria;
-    private System.Diagnostics.Stopwatch? _searchTimer;
+    private Stopwatch? _searchTimer;
     private DateTime _searchStartedUtc;
     private TimeSpan _lastSearchElapsed;
     private long _lastSearchSortRefreshTicks;
@@ -2089,22 +2097,22 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             if (b is null || FilesSkipped == 0)
                 return $"No files skipped{Environment.NewLine}{Environment.NewLine}{ExtensionExclusionSkipNote}";
 
-            var lines = new System.Text.StringBuilder();
+            var lines = new StringBuilder();
             lines.AppendLine("Skipped files breakdown:");
             lines.AppendLine(ExtensionExclusionSkipNote);
             lines.AppendLine();
-            if (b.GlobExcluded > 0)   lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  🚫  Glob exclusions       {b.GlobExcluded,8:N0}");
-            if (b.GitignoreExcluded > 0) lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  🙈  .gitignore excluded   {b.GitignoreExcluded,8:N0}");
-            if (b.CloudOnly > 0)      lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  ☁️  Cloud-only skipped    {b.CloudOnly,8:N0}");
-            if (b.Binary > 0)         lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  🔒  Binary files          {b.Binary,8:N0}");
-            if (b.ByExtension > 0)    lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  📄  Scanner extension skips {b.ByExtension,8:N0}");
-            if (b.TooLarge > 0)       lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  📏  Too large             {b.TooLarge,8:N0}");
-            if (b.AccessDenied > 0)   lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  🔐  Access denied         {b.AccessDenied,8:N0}");
-            if (b.Directories > 0)    lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  📁  Inaccessible dirs     {b.Directories,8:N0}");
-            if (b.IOError > 0)        lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  ⚠️  I/O errors            {b.IOError,8:N0}");
-            if (b.NotFound > 0)       lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  ❓  Not found             {b.NotFound,8:N0}");
-            if (b.Encoding > 0)       lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  🔤  Encoding errors       {b.Encoding,8:N0}");
-            if (b.Other > 0)          lines.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"  ❔  Other                 {b.Other,8:N0}");
+            if (b.GlobExcluded > 0)   lines.AppendLine(CultureInfo.InvariantCulture, $"  🚫  Glob exclusions       {b.GlobExcluded,8:N0}");
+            if (b.GitignoreExcluded > 0) lines.AppendLine(CultureInfo.InvariantCulture, $"  🙈  .gitignore excluded   {b.GitignoreExcluded,8:N0}");
+            if (b.CloudOnly > 0)      lines.AppendLine(CultureInfo.InvariantCulture, $"  ☁️  Cloud-only skipped    {b.CloudOnly,8:N0}");
+            if (b.Binary > 0)         lines.AppendLine(CultureInfo.InvariantCulture, $"  🔒  Binary files          {b.Binary,8:N0}");
+            if (b.ByExtension > 0)    lines.AppendLine(CultureInfo.InvariantCulture, $"  📄  Scanner extension skips {b.ByExtension,8:N0}");
+            if (b.TooLarge > 0)       lines.AppendLine(CultureInfo.InvariantCulture, $"  📏  Too large             {b.TooLarge,8:N0}");
+            if (b.AccessDenied > 0)   lines.AppendLine(CultureInfo.InvariantCulture, $"  🔐  Access denied         {b.AccessDenied,8:N0}");
+            if (b.Directories > 0)    lines.AppendLine(CultureInfo.InvariantCulture, $"  📁  Inaccessible dirs     {b.Directories,8:N0}");
+            if (b.IOError > 0)        lines.AppendLine(CultureInfo.InvariantCulture, $"  ⚠️  I/O errors            {b.IOError,8:N0}");
+            if (b.NotFound > 0)       lines.AppendLine(CultureInfo.InvariantCulture, $"  ❓  Not found             {b.NotFound,8:N0}");
+            if (b.Encoding > 0)       lines.AppendLine(CultureInfo.InvariantCulture, $"  🔤  Encoding errors       {b.Encoding,8:N0}");
+            if (b.Other > 0)          lines.AppendLine(CultureInfo.InvariantCulture, $"  ❔  Other                 {b.Other,8:N0}");
 
             return lines.ToString().TrimEnd();
         }
@@ -2781,7 +2789,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             return;
         }
 
-        int runId = System.Threading.Interlocked.Increment(ref _searchRunId);
+        int runId = Interlocked.Increment(ref _searchRunId);
         CancelPreviousSearchForNewRun(runId);
 
         await _searchLifecycleGate.WaitAsync();
@@ -2905,22 +2913,22 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             // when the events channel is draining many buffered items synchronously.
             // Without this, the await foreach completes synchronously for thousands of
             // already-buffered items, starving the WinUI message pump and freezing the UI.
-            long yieldTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
-            long yieldIntervalTicks = System.Diagnostics.Stopwatch.Frequency / 60; // ~16ms (one frame)
+            long yieldTimestamp = Stopwatch.GetTimestamp();
+            long yieldIntervalTicks = Stopwatch.Frequency / 60; // ~16ms (one frame)
 
             // UI consumer diagnostics
             long uiEventsReceived = 0;
             long uiMatchesReceived = 0;
             long uiYieldCount = 0;
-            long uiLastLogTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            long uiLastLogTicks = Stopwatch.GetTimestamp();
             long uiLastStatusRefreshTicks = uiLastLogTicks;
             const long UiLogIntervalSec = 10;
-            long uiStatusRefreshIntervalTicks = System.Diagnostics.Stopwatch.Frequency / 4;
-            var uiEventSw = new System.Diagnostics.Stopwatch();
+            long uiStatusRefreshIntervalTicks = Stopwatch.Frequency / 4;
+            var uiEventSw = new Stopwatch();
 
             void RefreshStatusFromReceivedMatches(bool force = false)
             {
-                long statusNow = System.Diagnostics.Stopwatch.GetTimestamp();
+                long statusNow = Stopwatch.GetTimestamp();
                 if (!force && statusNow - uiLastStatusRefreshTicks < uiStatusRefreshIntervalTicks)
                     return;
 
@@ -2934,12 +2942,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             await foreach (var evt in _search.SearchManyAsync(perRootOptions, token).ConfigureAwait(true))
             {
                 uiEventsReceived++;
-                long now = System.Diagnostics.Stopwatch.GetTimestamp();
+                long now = Stopwatch.GetTimestamp();
                 if (now - yieldTimestamp >= yieldIntervalTicks)
                 {
                     uiYieldCount++;
                     await Task.Delay(1, token).ConfigureAwait(true);
-                    yieldTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+                    yieldTimestamp = Stopwatch.GetTimestamp();
                 }
 
                 if (!IsCurrentSearch(runId, cts))
@@ -2949,8 +2957,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 }
 
                 // Periodic UI consumer throughput log
-                now = System.Diagnostics.Stopwatch.GetTimestamp();
-                if ((now - uiLastLogTicks) >= System.Diagnostics.Stopwatch.Frequency * UiLogIntervalSec)
+                now = Stopwatch.GetTimestamp();
+                if ((now - uiLastLogTicks) >= Stopwatch.Frequency * UiLogIntervalSec)
                 {
                     uiLastLogTicks = now;
                     LogService.Instance.Warning("UIConsumer",
@@ -3032,7 +3040,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                         // in RAM while the disk writer catches up.
                         _ = Task.Run(() =>
                         {
-                            var evictSw = System.Diagnostics.Stopwatch.StartNew();
+                            var evictSw = Stopwatch.StartNew();
                             int enqueued = EvictAllResults();
                             evictSw.Stop();
                             LogService.Instance.Warning("ViewModel", $"Eviction enqueued {enqueued:N0} results in {evictSw.ElapsedMilliseconds}ms (drain continues in background)");
@@ -3159,7 +3167,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     /// </summary>
     private async Task RunSingleFilePathDisplayAsync(string filePath)
     {
-        int runId = System.Threading.Interlocked.Increment(ref _searchRunId);
+        int runId = Interlocked.Increment(ref _searchRunId);
         CancelPreviousSearchForNewRun(runId);
 
         await _searchLifecycleGate.WaitAsync();
@@ -3196,7 +3204,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             MatchesFound = 1;
             Truncated = false;
             Degraded = false;
-            StatusText = $"1 file matched the path \u2014 {System.IO.Path.GetFileName(filePath)} ({FormatElapsed(elapsed)})";
+            StatusText = $"1 file matched the path \u2014 {Path.GetFileName(filePath)} ({FormatElapsed(elapsed)})";
             ApplySortAndFilter();
 
             // Record the typed path in Traditional search history (mirrors StartSearchAsync).
@@ -3302,7 +3310,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _instantMbPerSec = 0;
         ThroughputSamples.Clear();
         _searchStartedUtc = DateTime.UtcNow;
-        _searchTimer = System.Diagnostics.Stopwatch.StartNew();
+        _searchTimer = Stopwatch.StartNew();
         StartSearchStatusHeartbeat();
         StatusText = "Searching…";
 
@@ -3477,7 +3485,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _editor.Open(result.FilePath, result.LineNumber);
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "RelayCommand source generator expects instance command methods.")]
+    [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "RelayCommand source generator expects instance command methods.")]
     [RelayCommand]
     public void OpenContainingFolder(SearchResult? result)
     {
@@ -3485,7 +3493,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         EditorLauncher.OpenContainingFolder(result.FilePath);
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "RelayCommand source generator expects instance command methods.")]
+    [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "RelayCommand source generator expects instance command methods.")]
     [RelayCommand]
     public void OpenTerminalHere(SearchResult? result)
     {
@@ -3493,7 +3501,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         EditorLauncher.OpenTerminalAt(result.FilePath);
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "RelayCommand source generator expects instance command methods.")]
+    [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "RelayCommand source generator expects instance command methods.")]
     [RelayCommand]
     public void CopyFilePath(SearchResult? result)
     {
@@ -3501,7 +3509,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         SetClipboard(result.FilePath);
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "RelayCommand source generator expects instance command methods.")]
+    [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "RelayCommand source generator expects instance command methods.")]
     [RelayCommand]
     public void CopyMatchLine(SearchResult? result)
     {
@@ -3582,7 +3590,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         if (_resultStore is null || results.Count == 0)
             return;
 
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var sw = Stopwatch.StartNew();
         int evicted = await Task.Run(() => _resultStore.EvictManyNow(results), cancellationToken).ConfigureAwait(true);
         sw.Stop();
         if (sw.ElapsedMilliseconds >= 500)
@@ -3653,8 +3661,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         if (!IsSearching || _searchSortRefreshQueued || groupCount < 2)
             return;
 
-        long now = System.Diagnostics.Stopwatch.GetTimestamp();
-        long intervalTicks = (long)(System.Diagnostics.Stopwatch.Frequency * _searchSortRefreshIntervalSec);
+        long now = Stopwatch.GetTimestamp();
+        long intervalTicks = (long)(Stopwatch.Frequency * _searchSortRefreshIntervalSec);
 
         if (Degraded && groupCount >= SearchSortRefreshDegradedDeferGroupThreshold)
         {
@@ -3700,7 +3708,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             if (AnyResultGroupExpanded())
                 return;
 
-            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var sw = Stopwatch.StartNew();
             try
             {
                 ApplySortAndFilter();
@@ -3765,11 +3773,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
     private static void CollectPostEvictionIfDue()
     {
-        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        long now = Stopwatch.GetTimestamp();
         long last = Volatile.Read(ref s_lastPostEvictionCompactingGcTicks);
         if (last != 0)
         {
-            double secondsSinceLast = (double)(now - last) / System.Diagnostics.Stopwatch.Frequency;
+            double secondsSinceLast = (double)(now - last) / Stopwatch.Frequency;
             if (secondsSinceLast < PostEvictionCompactingGcCooldown.TotalSeconds)
                 return;
         }
@@ -3777,11 +3785,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         if (Interlocked.CompareExchange(ref s_postEvictionCompactingGcInFlight, 1, 0) != 0)
             return;
 
-        var gcStopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var gcStopwatch = Stopwatch.StartNew();
         try
         {
-            System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
-                System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+            GCSettings.LargeObjectHeapCompactionMode =
+                GCLargeObjectHeapCompactionMode.CompactOnce;
             GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
             GC.WaitForPendingFinalizers();
             GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
@@ -3793,7 +3801,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         finally
         {
             gcStopwatch.Stop();
-            Volatile.Write(ref s_lastPostEvictionCompactingGcTicks, System.Diagnostics.Stopwatch.GetTimestamp());
+            Volatile.Write(ref s_lastPostEvictionCompactingGcTicks, Stopwatch.GetTimestamp());
             Volatile.Write(ref s_postEvictionCompactingGcInFlight, 0);
 
             if (gcStopwatch.ElapsedMilliseconds >= 500)
@@ -3842,8 +3850,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         {
             oldStore?.Dispose();
 
-            System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
-                System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+            GCSettings.LargeObjectHeapCompactionMode =
+                GCLargeObjectHeapCompactionMode.CompactOnce;
             GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
             GC.WaitForPendingFinalizers();
             GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
@@ -4026,7 +4034,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 charCount = 2;
             }
 
-            int byteCount = System.Text.Encoding.UTF8.GetByteCount(line.AsSpan(sourceColumn + chars, charCount));
+            int byteCount = Encoding.UTF8.GetByteCount(line.AsSpan(sourceColumn + chars, charCount));
             if (consumedBytes + byteCount > utf8ByteLength && chars > 0)
                 break;
 
@@ -4053,7 +4061,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 charCount = 2;
             }
 
-            int byteCount = System.Text.Encoding.UTF8.GetByteCount(line.AsSpan(column, charCount));
+            int byteCount = Encoding.UTF8.GetByteCount(line.AsSpan(column, charCount));
             if (consumedBytes + byteCount > utf8ByteOffset)
                 break;
 
@@ -4095,15 +4103,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         var query = Query;
         if (string.IsNullOrEmpty(query)) return group.Count > 0;
 
-        System.Text.RegularExpressions.Regex? regex = null;
+        Regex? regex = null;
         string? literal = null;
         StringComparison literalComparison = StringComparison.OrdinalIgnoreCase;
 
         if (UseRegex)
         {
-            var regexOptions = System.Text.RegularExpressions.RegexOptions.Multiline;
-            if (!CaseSensitive) regexOptions |= System.Text.RegularExpressions.RegexOptions.IgnoreCase;
-            try { regex = new System.Text.RegularExpressions.Regex(query, regexOptions, TimeSpan.FromSeconds(5)); }
+            var regexOptions = RegexOptions.Multiline;
+            if (!CaseSensitive) regexOptions |= RegexOptions.IgnoreCase;
+            try { regex = new Regex(query, regexOptions, TimeSpan.FromSeconds(5)); }
             catch { return group.Count > 0; } // invalid regex — don't remove anything
         }
         else
@@ -4656,7 +4664,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             for (int i = 0; i < group.Count; i++)
                 yield return group[i];
         }
-        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     /// <summary>
@@ -5156,7 +5164,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
     private static string DescribeDateRange(DateTimeOffset? after, DateTimeOffset? before)
     {
-        static string D(DateTimeOffset d) => d.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        static string D(DateTimeOffset d) => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (after.HasValue && before.HasValue) return $"between {D(after.Value)} and {D(before.Value)}";
         if (after.HasValue) return $"after {D(after.Value)}";
         if (before.HasValue) return $"before {D(before.Value)}";
@@ -5203,8 +5211,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 <toast>
                   <visual>
                     <binding template="ToastGeneric">
-                      <text>{System.Security.SecurityElement.Escape(title)}</text>
-                      <text>{System.Security.SecurityElement.Escape(body)}</text>
+                      <text>{SecurityElement.Escape(title)}</text>
+                      <text>{SecurityElement.Escape(body)}</text>
                     </binding>
                   </visual>
                 </toast>

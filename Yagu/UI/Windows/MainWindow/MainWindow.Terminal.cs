@@ -8,6 +8,8 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.Web.WebView2.Core;
 using Windows.ApplicationModel.DataTransfer;
 using Yagu.Services;
+using System.Diagnostics;
+using System.Globalization;
 
 namespace Yagu;
 
@@ -174,7 +176,7 @@ public sealed partial class MainWindow
         }
         catch (TimeoutException ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Timed out waiting for terminal readiness: {ex.Message}");
+            Debug.WriteLine($"Timed out waiting for terminal readiness: {ex.Message}");
         }
     }
 
@@ -189,7 +191,7 @@ public sealed partial class MainWindow
         }
         catch (TimeoutException ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Timed out waiting for terminal shell readiness: {ex.Message}");
+            Debug.WriteLine($"Timed out waiting for terminal shell readiness: {ex.Message}");
         }
     }
 
@@ -271,7 +273,7 @@ public sealed partial class MainWindow
         catch (Exception ex)
         {
             LogService.Instance.Warning("Terminal", "Terminal WebView initialization failed", ex);
-            System.Diagnostics.Debug.WriteLine($"Terminal init failed: {ex}");
+            Debug.WriteLine($"Terminal init failed: {ex}");
             ShowTerminalWebView2MissingMessage();
         }
     }
@@ -654,7 +656,7 @@ public sealed partial class MainWindow
             catch (Exception ex)
             {
                 LogService.Instance.Warning("Terminal", "Terminal output post failed", ex);
-                System.Diagnostics.Debug.WriteLine($"Terminal output error: {ex.Message}");
+                Debug.WriteLine($"Terminal output error: {ex.Message}");
             }
         });
     }
@@ -746,7 +748,7 @@ public sealed partial class MainWindow
 
     private static string EscapeForJson(string s)
     {
-        var sb = new System.Text.StringBuilder(s.Length + 16);
+        var sb = new StringBuilder(s.Length + 16);
         foreach (char c in s)
         {
             switch (c)
@@ -762,7 +764,7 @@ public sealed partial class MainWindow
                     if (c < ' ')
                     {
                         sb.Append("\\u");
-                        sb.Append(((int)c).ToString("X4", System.Globalization.CultureInfo.InvariantCulture));
+                        sb.Append(((int)c).ToString("X4", CultureInfo.InvariantCulture));
                     }
                     else
                         sb.Append(c);

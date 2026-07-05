@@ -830,14 +830,14 @@ public sealed partial class MainWindow
                                FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan))
                     {
                         encoding = Helpers.EncodingDetector.DetectEncoding(stream);
-                        if (encoding is System.Text.UTF8Encoding)
-                            encoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
+                        if (encoding is UTF8Encoding)
+                            encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
                         using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true);
                         original = reader.ReadToEnd();
                         encoding = reader.CurrentEncoding;
                     }
 
-                    var sb = new System.Text.StringBuilder(original.Length);
+                    var sb = new StringBuilder(original.Length);
                     int replaceCount = 0;
                     int pos = 0;
                     while (true)

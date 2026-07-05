@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Yagu.Models;
+using System.Globalization;
 
 namespace Yagu.Services;
 
@@ -246,7 +247,7 @@ public static class SessionFileService
         if (!string.Equals(schema, SchemaVersion, StringComparison.Ordinal))
             throw new InvalidDataException($"Unsupported session schema '{schema}' (this build understands '{SchemaVersion}').");
 
-        DateTime savedUtc = root.TryGetProperty("savedUtc", out var su) && DateTime.TryParse(su.GetString(), null, System.Globalization.DateTimeStyles.RoundtripKind, out var savedParsed)
+        DateTime savedUtc = root.TryGetProperty("savedUtc", out var su) && DateTime.TryParse(su.GetString(), null, DateTimeStyles.RoundtripKind, out var savedParsed)
             ? savedParsed : DateTime.UtcNow;
         string query = root.TryGetProperty("query", out var q) ? (q.GetString() ?? string.Empty) : string.Empty;
         string searchRoot = root.TryGetProperty("searchRoot", out var sr) ? (sr.GetString() ?? string.Empty) : string.Empty;
@@ -297,7 +298,7 @@ public static class SessionFileService
             return new SessionStats(DateTime.UtcNow, TimeSpan.Zero, 0, 0, 0);
 
         DateTime startedUtc = statsEl.TryGetProperty("startedUtc", out var su)
-            && DateTime.TryParse(su.GetString(), null, System.Globalization.DateTimeStyles.RoundtripKind, out var startedParsed)
+            && DateTime.TryParse(su.GetString(), null, DateTimeStyles.RoundtripKind, out var startedParsed)
             ? startedParsed : DateTime.UtcNow;
 
         long elapsedMs = statsEl.TryGetProperty("elapsedMs", out var em) && em.TryGetInt64(out var emv) ? emv : 0;

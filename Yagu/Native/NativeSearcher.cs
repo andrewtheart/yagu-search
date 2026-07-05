@@ -3,6 +3,8 @@ using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using Yagu.Models;
 using Yagu.Services;
+using System.Runtime.CompilerServices;
+using System.Text;
 
 namespace Yagu.Native;
 
@@ -243,7 +245,7 @@ internal static partial class NativeSearcher
 
         QgResult result = default;
         int status;
-        var patternBytes = System.Text.Encoding.UTF8.GetBytes(pattern);
+        var patternBytes = Encoding.UTF8.GetBytes(pattern);
         fixed (char* pPath = filePath)
         fixed (byte* pPattern = patternBytes)
         {
@@ -278,7 +280,7 @@ internal static partial class NativeSearcher
     private static unsafe string? ReadError(QgResult result)
     {
         if (result.ErrorMsg == IntPtr.Zero || result.ErrorMsgLen == 0) return null;
-        return System.Text.Encoding.UTF8.GetString((byte*)result.ErrorMsg, (int)result.ErrorMsgLen);
+        return Encoding.UTF8.GetString((byte*)result.ErrorMsg, (int)result.ErrorMsgLen);
     }
 
     /// <summary>
@@ -296,7 +298,7 @@ internal static partial class NativeSearcher
 
         var ffiOptions = CreateOptions(options);
 
-        var patternBytes = System.Text.Encoding.UTF8.GetBytes(pattern);
+        var patternBytes = Encoding.UTF8.GetBytes(pattern);
         var handle = GCHandle.Alloc(sink, GCHandleType.Normal);
         int status = StatusOk;
         byte* errMsg = null;
@@ -326,7 +328,7 @@ internal static partial class NativeSearcher
 
             if (status == StatusInvalidRegex && errMsg != null && errMsgLen > 0)
             {
-                sink.ErrorMessage = System.Text.Encoding.UTF8.GetString(errMsg, (int)errMsgLen);
+                sink.ErrorMessage = Encoding.UTF8.GetString(errMsg, (int)errMsgLen);
             }
 
             return status;
@@ -338,7 +340,7 @@ internal static partial class NativeSearcher
         }
     }
 
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static unsafe int OnMatchTrampoline(void* ctx, QgMatchView* m)
     {
         // Must NOT throw — UnmanagedCallersOnly forbids managed exceptions across the FFI boundary.
@@ -377,7 +379,7 @@ internal static partial class NativeSearcher
 
         var ffiOptions = CreateOptions(options);
 
-        var patternBytes = System.Text.Encoding.UTF8.GetBytes(pattern);
+        var patternBytes = Encoding.UTF8.GetBytes(pattern);
         byte* errMsg = null;
         nuint errMsgLen = 0;
         IntPtr handle;
@@ -423,7 +425,7 @@ internal static partial class NativeSearcher
                 throw new InvalidOperationException("Streaming sink threw inside native callback", ex);
 
             if (status == StatusInvalidRegex && errMsg != null && errMsgLen > 0)
-                sink.ErrorMessage = System.Text.Encoding.UTF8.GetString(errMsg, (int)errMsgLen);
+                sink.ErrorMessage = Encoding.UTF8.GetString(errMsg, (int)errMsgLen);
 
             return status;
         }
@@ -612,7 +614,7 @@ internal static partial class NativeSearcher
         if (scanner != IntPtr.Zero) QgScannerDestroy(scanner);
     }
 
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static unsafe int OnParallelMatchTrampoline(void* ctx, uint fileIndex, QgMatchView* m)
     {
         try
@@ -633,7 +635,7 @@ internal static partial class NativeSearcher
         }
     }
 
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static unsafe void OnParallelFileDoneTrampoline(void* ctx, uint fileIndex, int status, ulong fileLength, ulong lastModifiedFileTime)
     {
         try
@@ -677,7 +679,7 @@ internal sealed class NativeSession : IDisposable
 
     public void Dispose()
     {
-        var h = System.Threading.Interlocked.Exchange(ref Handle, IntPtr.Zero);
+        var h = Interlocked.Exchange(ref Handle, IntPtr.Zero);
         if (h != IntPtr.Zero)
         {
             unsafe { NativeSearcher.QgFreeSessionPublic(h); }
@@ -835,7 +837,7 @@ internal sealed class NativeSearchOutcome
             if (len > int.MaxValue) { value = null; return false; }
             int ilen = (int)len;
             if (_pos < 0 || _pos + ilen > _data.Length || _pos + ilen < 0) { value = null; return false; }
-            value = System.Text.Encoding.UTF8.GetString(_data.Slice(_pos, ilen));
+            value = Encoding.UTF8.GetString(_data.Slice(_pos, ilen));
             _pos += ilen;
             return true;
         }

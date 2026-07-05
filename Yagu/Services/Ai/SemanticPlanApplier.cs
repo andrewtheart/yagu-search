@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
 using Yagu.Models;
+using System.Security;
 
 namespace Yagu.Services.Ai;
 
@@ -1241,10 +1242,10 @@ public static class SemanticPlanApplier
         else if (DownloadsFolderRef.IsMatch(originalQuery))
         {
             string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            candidate = string.IsNullOrEmpty(profile) ? null : System.IO.Path.Combine(profile, "Downloads");
+            candidate = string.IsNullOrEmpty(profile) ? null : Path.Combine(profile, "Downloads");
         }
 
-        if (string.IsNullOrEmpty(candidate) || !System.IO.Directory.Exists(candidate))
+        if (string.IsNullOrEmpty(candidate) || !Directory.Exists(candidate))
             return false;
         path = candidate;
         return true;
@@ -1277,7 +1278,7 @@ public static class SemanticPlanApplier
     {
         if (string.IsNullOrWhiteSpace(token)) return false;
         string t = token.Trim();
-        string ext = System.IO.Path.GetExtension(t);
+        string ext = Path.GetExtension(t);
         if (string.IsNullOrEmpty(ext))
             ext = t; // bare token like "png"
         ext = ext.TrimStart('.', '*');
@@ -1779,8 +1780,8 @@ internal static class KnownFileExtensions
                     set.Add(keyName[1..]);
             }
         }
-        catch (Exception ex) when (ex is System.Security.SecurityException
-            or UnauthorizedAccessException or System.IO.IOException or ObjectDisposedException)
+        catch (Exception ex) when (ex is SecurityException
+            or UnauthorizedAccessException or IOException or ObjectDisposedException)
         {
             // Best-effort: keep the curated baseline when the registry can't be read.
         }

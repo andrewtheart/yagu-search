@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using System.Threading.Channels;
 using Yagu.Helpers;
 using Yagu.Models;
+using System.Runtime.CompilerServices;
 
 namespace Yagu.Services;
 
@@ -67,7 +68,7 @@ public sealed class SearchService
     internal static async IAsyncEnumerable<SearchEvent> AggregateManyAsync(
         IReadOnlyList<SearchOptions> perRootOptions,
         Func<SearchOptions, CancellationToken, IAsyncEnumerable<SearchEvent>> runRoot,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (perRootOptions is null || perRootOptions.Count == 0)
         {
@@ -165,7 +166,7 @@ public sealed class SearchService
 
     public async IAsyncEnumerable<SearchEvent> SearchAsync(
         SearchOptions options,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(options.Query))
         {
@@ -936,7 +937,7 @@ public sealed class SearchService
                                 unsafe { *(int*)cancelPtr = 0; }
                                 using var ctr = cancellationToken.Register(static state =>
                                 {
-                                    unsafe { System.Threading.Interlocked.Exchange(ref *(int*)(IntPtr)state!, 1); }
+                                    unsafe { Interlocked.Exchange(ref *(int*)(IntPtr)state!, 1); }
                                 }, cancelPtr);
 
                                 // When archive search is enabled, zip files must go through the managed
@@ -2088,7 +2089,7 @@ public sealed class SearchService
             return;
         try
         {
-            using var proc = System.Diagnostics.Process.GetCurrentProcess();
+            using var proc = Process.GetCurrentProcess();
             EmptyWorkingSet(proc.Handle);
         }
         catch { /* best-effort */ }
@@ -2464,7 +2465,7 @@ public sealed class SearchService
                     matchLineUtf8 = new ReadOnlySpan<byte>(view.LinePtr, lineBytes);
                     int safeStart = Math.Min(matchStartBytes, lineBytes);
                     int safeLen = Math.Min(matchLenBytes, lineBytes - safeStart);
-                    if (System.Text.Ascii.IsValid(matchLineUtf8[..Math.Min(safeStart + safeLen, lineBytes)]))
+                    if (Ascii.IsValid(matchLineUtf8[..Math.Min(safeStart + safeLen, lineBytes)]))
                     {
                         charMatchStart = safeStart;
                         charMatchLen = safeLen;
@@ -2492,7 +2493,7 @@ public sealed class SearchService
                     matchLineUtf8 = new ReadOnlySpan<byte>(view.LinePtr + windowStart, windowEnd - windowStart);
                     int matchBytesFromWindow = Math.Max(0, matchStartBytes - windowStart);
                     int safeLenW = Math.Min(matchLenBytes, matchLineUtf8.Length - matchBytesFromWindow);
-                    if (System.Text.Ascii.IsValid(matchLineUtf8[..Math.Min(matchBytesFromWindow + safeLenW, matchLineUtf8.Length)]))
+                    if (Ascii.IsValid(matchLineUtf8[..Math.Min(matchBytesFromWindow + safeLenW, matchLineUtf8.Length)]))
                     {
                         charMatchStart = matchBytesFromWindow;
                         charMatchLen = safeLenW;
@@ -2527,7 +2528,7 @@ public sealed class SearchService
                 else
                 {
                     int safeStartForCol = Math.Min(matchStartBytes, lineBytes);
-                    sourceMatchStart = System.Text.Ascii.IsValid(new ReadOnlySpan<byte>(view.LinePtr, safeStartForCol))
+                    sourceMatchStart = Ascii.IsValid(new ReadOnlySpan<byte>(view.LinePtr, safeStartForCol))
                         ? safeStartForCol
                         : matchStartBytes;
                 }

@@ -1,5 +1,6 @@
 using System.Text;
 using Yagu.Helpers;
+using System.Globalization;
 
 namespace Yagu.Services;
 
@@ -14,7 +15,7 @@ public static class SelectedFileExportService
 
     public static async Task<string> BuildFilesWithContentTextAsync(IEnumerable<string> filePaths, CancellationToken cancellationToken = default)
     {
-        using var writer = new StringWriter(new StringBuilder(), System.Globalization.CultureInfo.InvariantCulture);
+        using var writer = new StringWriter(new StringBuilder(), CultureInfo.InvariantCulture);
         await WriteFilesWithContentAsync(filePaths, writer, cancellationToken).ConfigureAwait(false);
         return writer.ToString();
     }
@@ -128,7 +129,7 @@ public static class SelectedFileExportService
         return $"{fileName} {filePath}".Trim();
     }
 
-    private static string FormatDateTime(DateTime value) => value.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+    private static string FormatDateTime(DateTime value) => value.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
     private static IEnumerable<string> NormalizeFilePaths(IEnumerable<string> filePaths)
     {

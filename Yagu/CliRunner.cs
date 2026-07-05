@@ -679,7 +679,7 @@ internal static class CliRunner
         if (resolved.CreatedBeforeDate is { } cb) o.WriteLine($"  created-before : {cb:yyyy-MM-dd}");
         if (resolved.ModifiedAfterDate is { } ma) o.WriteLine($"  modified-after : {ma:yyyy-MM-dd}");
         if (resolved.ModifiedBeforeDate is { } mb)o.WriteLine($"  modified-before: {mb:yyyy-MM-dd}");
-        if (resolved.MaxSearchDepth is { } depth) o.WriteLine($"  max-depth      : {(depth <= 0 ? "unlimited" : depth.ToString(System.Globalization.CultureInfo.InvariantCulture))}");
+        if (resolved.MaxSearchDepth is { } depth) o.WriteLine($"  max-depth      : {(depth <= 0 ? "unlimited" : depth.ToString(CultureInfo.InvariantCulture))}");
         if (resolved.ObeyGitignore is { } gi)     o.WriteLine($"  obey-gitignore : {gi}");
         if (resolved.SearchInsideArchives is { } arc) o.WriteLine($"  archives       : {arc}");
         if (resolved.SearchHiddenFiles is { } sh) o.WriteLine($"  hidden         : {sh}");

@@ -7,6 +7,8 @@ using System.Threading.Channels;
 using Yagu.Helpers;
 using Yagu.Models;
 using static Yagu.Helpers.LineTruncator;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 namespace Yagu.Services;
 
@@ -125,7 +127,7 @@ public sealed class ContentSearcher
         CancellationToken cancellationToken)
     {
         bool watched = FileWatchDiagnostics.IsWatched(filePath);
-        var totalSw = watched ? System.Diagnostics.Stopwatch.StartNew() : null;
+        var totalSw = watched ? Stopwatch.StartNew() : null;
         if (watched) FileWatchDiagnostics.Checkpoint(filePath, "ENTER");
 
         FileInfo fi;
@@ -586,7 +588,7 @@ public sealed class ContentSearcher
     /// every file scanned on a given thread.
     /// </summary>
     private static readonly ThreadLocal<IntPtr> t_cancelPtr = new(
-        () => System.Runtime.InteropServices.Marshal.AllocHGlobal(sizeof(int)),
+        () => Marshal.AllocHGlobal(sizeof(int)),
         trackAllValues: false);
 
 
@@ -599,7 +601,7 @@ public sealed class ContentSearcher
         CancellationToken cancellationToken)
     {
         bool watched = FileWatchDiagnostics.IsWatched(filePath);
-        var gateSw = watched ? System.Diagnostics.Stopwatch.StartNew() : null;
+        var gateSw = watched ? Stopwatch.StartNew() : null;
         // Gate native scans to bound concurrent mmap views. See s_nativeGate.
         await s_nativeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         if (watched)
@@ -616,11 +618,11 @@ public sealed class ContentSearcher
                 unsafe { *(int*)cancelPtr = 0; }
                 using var ctr = cancellationToken.Register(static state =>
                 {
-                    unsafe { System.Threading.Interlocked.Exchange(ref *(int*)(IntPtr)state!, 1); }
+                    unsafe { Interlocked.Exchange(ref *(int*)(IntPtr)state!, 1); }
                 }, cancelPtr);
 
                 var sink = new StreamingSink(filePath, writer, options.ContextLines, metadata, cancellationToken);
-                var scanSw = watched ? System.Diagnostics.Stopwatch.StartNew() : null;
+                var scanSw = watched ? Stopwatch.StartNew() : null;
                 if (watched) FileWatchDiagnostics.Checkpoint(filePath, "NATIVE-SCAN-START");
                 int status;
                 try
@@ -895,7 +897,7 @@ public sealed class ContentSearcher
         private static unsafe bool IsAsciiRegion(byte* ptr, int len)
         {
             if (len <= 0) return true;
-            return System.Text.Ascii.IsValid(new ReadOnlySpan<byte>(ptr, len));
+            return Ascii.IsValid(new ReadOnlySpan<byte>(ptr, len));
         }
 
         internal static unsafe IReadOnlyList<string> UnpackLinesTruncated(byte* ptr, nuint totalBytes, uint count)
@@ -930,7 +932,7 @@ public sealed class ContentSearcher
             {
                 while (decodeBytes > 0 && (ptr[decodeBytes] & 0xC0) == 0x80) decodeBytes--;
             }
-            var s = System.Text.Encoding.UTF8.GetString(ptr, decodeBytes);
+            var s = Encoding.UTF8.GetString(ptr, decodeBytes);
             if (LineTruncator.TruncatedLength > 0 && bytesTruncated && s.Length <= LineTruncator.MaxDisplayLength)
             {
                 int keep = Math.Min(s.Length, LineTruncator.TruncatedLength);

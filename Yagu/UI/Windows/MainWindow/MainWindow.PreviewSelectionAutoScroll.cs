@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.Foundation;
 using Yagu.Services;
+using System.Globalization;
 
 namespace Yagu;
 
@@ -201,7 +202,7 @@ public sealed partial class MainWindow
         _previewEditorPointerOpenTick = Environment.TickCount64;
         var filePath = ResolvePreviewBlockFilePath(block);
         LogService.Instance.Verbose("PreviewEditor",
-            $"Pointer double-click editor entry: file='{(filePath is null ? "null" : System.IO.Path.GetFileName(filePath))}', point=({point.X:N1},{point.Y:N1})");
+            $"Pointer double-click editor entry: file='{(filePath is null ? "null" : Path.GetFileName(filePath))}', point=({point.X:N1},{point.Y:N1})");
         bool opened = await TryEnterPreviewEditorAtPointAsync(block, point, filePath);
         LogService.Instance.Verbose("PreviewEditor",
             $"Pointer double-click editor entry result: opened={opened}");
@@ -1237,12 +1238,12 @@ public sealed partial class MainWindow
             {
                 if (lineNumber > 0 && !isContinuation)
                 {
-                    selectedText.Append(System.Globalization.CultureInfo.InvariantCulture, $"{lineNumber,5} \u2502 {slice}");
+                    selectedText.Append(CultureInfo.InvariantCulture, $"{lineNumber,5} \u2502 {slice}");
                     lastEmittedLineNumber = lineNumber;
                 }
                 else
                 {
-                    selectedText.Append(System.Globalization.CultureInfo.InvariantCulture, $"      \u2502 {slice}");
+                    selectedText.Append(CultureInfo.InvariantCulture, $"      \u2502 {slice}");
                 }
             }
             else

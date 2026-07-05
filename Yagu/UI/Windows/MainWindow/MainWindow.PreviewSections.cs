@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml.Media;
 using Windows.System;
 using Yagu.Models;
 using Yagu.Services;
+using System.Diagnostics;
 namespace Yagu;
 
 /// <summary>
@@ -1206,7 +1207,7 @@ public sealed partial class MainWindow
     /// </summary>
     private void ExpandOverflowChunk(RichTextBlock section, int matchCount)
     {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var sw = Stopwatch.StartNew();
         if (!_sectionOverflow.TryGetValue(section, out var ov)) return;
         int chunkSize = Math.Min(matchCount, ov.RemainingResults.Count);
         if (ov.IsHighlightMode && ov.AllLines != null && chunkSize > 0)

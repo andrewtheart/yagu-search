@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Yagu.Models;
+using System.Runtime.InteropServices;
 
 namespace Yagu.Services;
 
@@ -283,8 +284,8 @@ public sealed class AppSettings
     /// is win-x64 only and cannot load in a 32-bit (x86) process. True on x64 and Arm64 (Arm64 runs the
     /// x64 runtime under emulation); false on x86, where the effective OCR engine is always Tesseract.</summary>
     internal static bool PaddleOcrSupported =>
-        System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture
-            != System.Runtime.InteropServices.Architecture.X86;
+        RuntimeInformation.ProcessArchitecture
+            != Architecture.X86;
 
     /// <summary>Resolves the default OCR engine given whether Paddle can run: PaddleSharp when
     /// supported, otherwise Tesseract. Pure (arch injected) so both branches are testable.</summary>

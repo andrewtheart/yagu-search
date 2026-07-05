@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using Yagu.Models;
+using System.Text.RegularExpressions;
 
 namespace Yagu.Services.Ocr;
 
@@ -17,7 +18,7 @@ public sealed class ImageOcrSearchSession
 {
     private readonly IOcrEngine _engine;
     private readonly OcrTextCache _cache;
-    private readonly System.Text.RegularExpressions.Regex? _regex;
+    private readonly Regex? _regex;
     private readonly string? _literal;
     private readonly StringComparison _comparison;
     private readonly int _contextLines;
@@ -38,7 +39,7 @@ public sealed class ImageOcrSearchSession
     public ImageOcrSearchSession(
         IOcrEngine engine,
         OcrTextCache cache,
-        System.Text.RegularExpressions.Regex? regex,
+        Regex? regex,
         string? literal,
         StringComparison comparison,
         int contextLines,

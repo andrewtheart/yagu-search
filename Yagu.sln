@@ -1,6 +1,8 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Yagu
+# Visual Studio Version 18
+VisualStudioVersion = 18.0.0.0
+MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Yagu", "Yagu\Yagu.csproj", "{11111111-1111-1111-1111-111111111111}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Yagu.Tests", "Yagu.Tests\Yagu.Tests.csproj", "{22222222-2222-2222-2222-222222222222}"

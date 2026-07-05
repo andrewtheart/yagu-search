@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Globalization;
 
 namespace Yagu.Services.Ocr;
 
@@ -20,7 +21,7 @@ public sealed class OcrTextCache
     // before the next search) and so a process only ever reads back the OCR text it wrote itself — a
     // secondary sanity check on top of the size/mtime/engine header validation.
     private static readonly string PidToken =
-        Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
     private static readonly string PidFileSuffix = ".p" + PidToken + ".txt";
 
     public OcrTextCache(string? baseDirectory = null)
@@ -97,7 +98,7 @@ public sealed class OcrTextCache
             Directory.CreateDirectory(_baseDir);
             string cacheFile = GetCacheFilePath(imagePath, engineId);
             string header = BuildHeader(info.Length, info.LastWriteTimeUtc.Ticks, engineId);
-            string tmp = cacheFile + ".tmp" + Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            string tmp = cacheFile + ".tmp" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
             File.WriteAllText(tmp, header + "\n" + (text ?? string.Empty), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             File.Move(tmp, cacheFile, overwrite: true);
         }
@@ -196,6 +197,6 @@ public sealed class OcrTextCache
     }
 
     private static string BuildHeader(long length, long mtimeTicks, string? engineId)
-        => string.Create(System.Globalization.CultureInfo.InvariantCulture,
+        => string.Create(CultureInfo.InvariantCulture,
             $"{HeaderMagic}|{length}|{mtimeTicks}|{engineId}");
 }

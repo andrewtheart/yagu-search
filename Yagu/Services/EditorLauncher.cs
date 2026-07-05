@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 
 namespace Yagu.Services;
 
@@ -41,7 +42,7 @@ public sealed class EditorLauncher
             }
         }
 
-        var rendered = Command.Replace("{file}", actualPath).Replace("{line}", line.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var rendered = Command.Replace("{file}", actualPath).Replace("{line}", line.ToString(CultureInfo.InvariantCulture));
         var (exe, args) = Split(rendered);
         try
         {

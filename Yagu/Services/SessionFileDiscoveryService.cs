@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Yagu.Native;
+using System.Text;
 
 namespace Yagu.Services;
 
@@ -179,7 +180,7 @@ internal sealed class SessionFileDiscoveryService
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardOutputEncoding = Encoding.UTF8,
         };
         psi.ArgumentList.Add("/a-d");
         psi.ArgumentList.Add("ext:yagu-session");
@@ -272,7 +273,7 @@ internal sealed class SessionFileDiscoveryService
 
         return byPath.Values
             .OrderByDescending(candidate => candidate.ModifiedUtc ?? DateTimeOffset.MinValue)
-            .ThenBy(candidate => System.IO.Path.GetFileName(candidate.Path), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(candidate => Path.GetFileName(candidate.Path), StringComparer.OrdinalIgnoreCase)
             .ThenBy(candidate => candidate.Path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
@@ -283,7 +284,7 @@ internal sealed class SessionFileDiscoveryService
             return false;
 
         return string.Equals(
-            System.IO.Path.GetExtension(path.Trim()),
+            Path.GetExtension(path.Trim()),
             SessionFileService.FileExtension,
             StringComparison.OrdinalIgnoreCase);
     }

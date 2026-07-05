@@ -179,9 +179,9 @@ public sealed class SessionLoadDialogRegressionTests
     public void LoadSession_SortsByAllColumnsCorrectly()
     {
         Assert.Contains("SortColumn.Name => currentAscending", SessionLoadDialogSource);
-        Assert.Contains("sortedSessions.OrderBy(s => System.IO.Path.GetFileName(s.Path), StringComparer.OrdinalIgnoreCase)", SessionLoadDialogSource);
+        Assert.Contains("sortedSessions.OrderBy(s => Path.GetFileName(s.Path), StringComparer.OrdinalIgnoreCase)", SessionLoadDialogSource);
         Assert.Contains("SortColumn.Directory => currentAscending", SessionLoadDialogSource);
-        Assert.Contains("sortedSessions.OrderBy(s => System.IO.Path.GetDirectoryName(s.Path)", SessionLoadDialogSource);
+        Assert.Contains("sortedSessions.OrderBy(s => Path.GetDirectoryName(s.Path)", SessionLoadDialogSource);
         Assert.Contains("SortColumn.Size => currentAscending", SessionLoadDialogSource);
         Assert.Contains("sortedSessions.OrderBy(s => s.SizeBytes ?? 0)", SessionLoadDialogSource);
         Assert.Contains("SortColumn.Created => currentAscending", SessionLoadDialogSource);
@@ -213,7 +213,7 @@ public sealed class SessionLoadDialogRegressionTests
     {
         AssertContainsInOrder(SessionLoadDialogSource,
             "private static Grid BuildTableRow(SessionFileCandidate session)",
-            "string directory = System.IO.Path.GetDirectoryName(session.Path)",
+            "string directory = Path.GetDirectoryName(session.Path)",
             "TextTrimming = TextTrimming.CharacterEllipsis",
             "ToolTipService.SetToolTip(dirBlock, directory)");
     }

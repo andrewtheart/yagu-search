@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Yagu.Services.Ai;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Yagu.Services.Telemetry;
 
@@ -64,7 +65,7 @@ public sealed class BugReportService
 
     /// <summary>Submits a (possibly user-edited) bug report. Returns the server response on success or
     /// null on failure. Never throws.</summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static",
+    [SuppressMessage("Performance", "CA1822:Mark members as static",
         Justification = "Kept as an instance method to match the singleton's BuildPayload call pattern and allow future per-instance state.")]
     public async Task<BugReportResponse?> SubmitAsync(BugReportPayload payload, CancellationToken cancellationToken = default)
     {

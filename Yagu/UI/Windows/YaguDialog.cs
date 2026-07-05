@@ -447,8 +447,8 @@ internal sealed class YaguDialog : Window
     {
         try
         {
-            string iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "yagu.ico");
-            if (System.IO.File.Exists(iconPath))
+            string iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "yagu.ico");
+            if (File.Exists(iconPath))
                 appWindow.SetIcon(iconPath);
         }
         catch { }

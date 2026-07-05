@@ -116,7 +116,7 @@ public sealed partial class MainWindow
     private async Task EnsureVisibleResultsForExpandedGroupAsync(FileGroup group)
     {
         LogService.Instance.Info("FileGroup",
-            $"EnsureVisible START: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+            $"EnsureVisible START: file='{Path.GetFileName(group.FilePath)}', " +
             $"Count={group.Count}, VisibleCount={group.VisibleResults.Count}, HasMore={group.HasMore}, IsExpanded={group.IsExpanded}");
 
         // OOM safety net: under critical memory pressure, materializing more rows
@@ -143,7 +143,7 @@ public sealed partial class MainWindow
                 }
 
                 LogService.Instance.Info("FileGroup",
-                    $"EnsureVisible AFTER ShowMore: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+                    $"EnsureVisible AFTER ShowMore: file='{Path.GetFileName(group.FilePath)}', " +
                     $"Count={group.Count}, VisibleCount={group.VisibleResults.Count}, HasMore={group.HasMore}");
                 return;
             }
@@ -161,7 +161,7 @@ public sealed partial class MainWindow
         if (!_visibleResultsEnsureInProgress.Add(group))
         {
             LogService.Instance.Verbose("FileGroup",
-                $"EnsureVisible skipped duplicate caller={caller} file='{System.IO.Path.GetFileName(group.FilePath)}'");
+                $"EnsureVisible skipped duplicate caller={caller} file='{Path.GetFileName(group.FilePath)}'");
             return;
         }
 
@@ -178,7 +178,7 @@ public sealed partial class MainWindow
     private void EnsureVisibleResultsForExpandedGroup(FileGroup group)
     {
         LogService.Instance.Info("FileGroup",
-            $"EnsureVisible SYNC START: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+            $"EnsureVisible SYNC START: file='{Path.GetFileName(group.FilePath)}', " +
             $"Count={group.Count}, VisibleCount={group.VisibleResults.Count}, HasMore={group.HasMore}, IsExpanded={group.IsExpanded}");
 
         if (group.VisibleResults.Count == 0 && group.Count > 0)
@@ -196,7 +196,7 @@ public sealed partial class MainWindow
             }
 
             LogService.Instance.Info("FileGroup",
-                $"EnsureVisible SYNC AFTER ShowMore: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+                $"EnsureVisible SYNC AFTER ShowMore: file='{Path.GetFileName(group.FilePath)}', " +
                 $"Count={group.Count}, VisibleCount={group.VisibleResults.Count}, HasMore={group.HasMore}");
             return;
         }
@@ -231,7 +231,7 @@ public sealed partial class MainWindow
         }
 
         LogService.Instance.Info("FileGroup",
-            $"HydrateRange: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+            $"HydrateRange: file='{Path.GetFileName(group.FilePath)}', " +
             $"range=[{start},{end}), evictedToHydrate={evicted.Count}, totalInRange={end - start}");
 
         if (evicted.Count == 0) return;
@@ -244,7 +244,7 @@ public sealed partial class MainWindow
         if (stillEvicted > 0 || stillEmpty > 0)
         {
             LogService.Instance.Warning("FileGroup",
-                $"HydrateRange AFTER: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+                $"HydrateRange AFTER: file='{Path.GetFileName(group.FilePath)}', " +
                 $"stillEvicted={stillEvicted}, stillEmptyMatchLine={stillEmpty} (of {evicted.Count} attempted)");
         }
     }
@@ -259,7 +259,7 @@ public sealed partial class MainWindow
         }
 
         LogService.Instance.Info("FileGroup",
-            $"HydrateRange SYNC: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+            $"HydrateRange SYNC: file='{Path.GetFileName(group.FilePath)}', " +
             $"range=[{start},{end}), evictedToHydrate={evicted.Count}, totalInRange={end - start}");
 
         if (evicted.Count == 0) return;
@@ -271,7 +271,7 @@ public sealed partial class MainWindow
         if (stillEvicted > 0 || stillEmpty > 0)
         {
             LogService.Instance.Warning("FileGroup",
-                $"HydrateRange SYNC AFTER: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+                $"HydrateRange SYNC AFTER: file='{Path.GetFileName(group.FilePath)}', " +
                 $"stillEvicted={stillEvicted}, stillEmptyMatchLine={stillEmpty} (of {evicted.Count} attempted)");
         }
     }

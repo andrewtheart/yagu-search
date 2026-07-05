@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Yagu.Helpers;
 using Yagu.Services.Ai;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Yagu;
 
@@ -17,7 +18,7 @@ namespace Yagu;
 /// chosen model with a progress bar. Returns the chosen alias on success (empty string = use the
 /// recommended/auto model) or null when the user declined / the download failed.
 /// </summary>
-[System.Diagnostics.CodeAnalysis.SuppressMessage(
+[SuppressMessage(
     "Reliability", "CA1001",
     Justification = "The CancellationTokenSource is cancelled and disposed in OnClosed when the window closes.")]
 internal sealed class SemanticModelDownloadDialog : Window
@@ -547,8 +548,8 @@ internal sealed class SemanticModelDownloadDialog : Window
     {
         try
         {
-            string iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "yagu.ico");
-            if (System.IO.File.Exists(iconPath))
+            string iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "yagu.ico");
+            if (File.Exists(iconPath))
                 appWindow.SetIcon(iconPath);
         }
         catch { }

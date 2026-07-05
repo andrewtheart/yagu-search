@@ -1,3 +1,4 @@
+using System.Globalization;
 namespace Yagu.Services.Ocr;
 
 /// <summary>
@@ -64,7 +65,7 @@ public sealed class PaddleOcrEngine : WorkerOcrEngine
         }
         if (_maxSide >= 0)
         {
-            environment[MaxSideEnvVar] = _maxSide.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            environment[MaxSideEnvVar] = _maxSide.ToString(CultureInfo.InvariantCulture);
         }
     }
 

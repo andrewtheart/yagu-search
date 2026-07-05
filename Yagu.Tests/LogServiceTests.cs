@@ -178,6 +178,54 @@ public class LogServiceTests : IDisposable
     }
 
     [Fact]
+    public void Clear_TruncatesExistingLogFile()
+    {
+        File.WriteAllText(_logPath, "existing content" + Environment.NewLine);
+        using var svc = new LogService(_logPath);
+        bool cleared = svc.Clear();
+        Assert.True(cleared);
+        Assert.True(File.Exists(_logPath));
+        Assert.Empty(File.ReadAllText(_logPath));
+    }
+
+    [Fact]
+    public void Clear_DiscardsBufferedLinesSoTheyAreNotFlushedBack()
+    {
+        using var svc = new LogService(_logPath);
+        svc.Level = LogLevel.Info;
+        svc.Info("test", "buffered before clear"); // queued, not yet flushed
+        svc.Clear();
+        svc.Flush();                                // must not resurrect the buffered line
+        var content = File.Exists(_logPath) ? File.ReadAllText(_logPath) : string.Empty;
+        Assert.DoesNotContain("buffered before clear", content);
+    }
+
+    [Fact]
+    public void Clear_FileDoesNotExist_CreatesEmptyFile()
+    {
+        using var svc = new LogService(_logPath);
+        Assert.False(File.Exists(_logPath));
+        bool cleared = svc.Clear();
+        Assert.True(cleared);
+        Assert.True(File.Exists(_logPath));
+        Assert.Empty(File.ReadAllText(_logPath));
+    }
+
+    [Fact]
+    public void Clear_ThenNewEntriesStillLog()
+    {
+        File.WriteAllText(_logPath, "old content" + Environment.NewLine);
+        using var svc = new LogService(_logPath);
+        svc.Level = LogLevel.Info;
+        svc.Clear();
+        svc.Info("test", "after clear");
+        svc.Flush();
+        var content = File.ReadAllText(_logPath);
+        Assert.DoesNotContain("old content", content);
+        Assert.Contains("after clear", content);
+    }
+
+    [Fact]
     public void Init_SetsLevelAndLogs()
     {
         // Init uses the singleton. Just verify it doesn't throw.

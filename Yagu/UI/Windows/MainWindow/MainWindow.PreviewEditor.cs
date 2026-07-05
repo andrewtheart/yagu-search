@@ -8,6 +8,9 @@ using Windows.System;
 using Yagu.Helpers;
 using Yagu.Models;
 using Yagu.Services;
+using System.Diagnostics;
+using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace Yagu;
 
@@ -303,7 +306,7 @@ public sealed partial class MainWindow
             if (IsImagePreviewPath(filePath))
             {
                 LogService.Instance.Verbose("PreviewEditor",
-                    $"TryEnterPreviewEditorAtPoint: abort — image preview is read-only, file='{System.IO.Path.GetFileName(filePath)}'");
+                    $"TryEnterPreviewEditorAtPoint: abort — image preview is read-only, file='{Path.GetFileName(filePath)}'");
                 return false;
             }
 
@@ -314,7 +317,7 @@ public sealed partial class MainWindow
             if (!IsPreviewSectionBodyLaidOutForPointer(block, out string layoutReason))
             {
                 LogService.Instance.Verbose("PreviewEditor",
-                    $"TryEnterPreviewEditorAtPoint: abort — section not laid out ({layoutReason}), file='{System.IO.Path.GetFileName(filePath)}', point=({point.X:N1},{point.Y:N1})");
+                    $"TryEnterPreviewEditorAtPoint: abort — section not laid out ({layoutReason}), file='{Path.GetFileName(filePath)}', point=({point.X:N1},{point.Y:N1})");
                 return false;
             }
 
@@ -330,7 +333,7 @@ public sealed partial class MainWindow
             if (lineNum <= 0)
             {
                 LogService.Instance.Verbose("PreviewEditor",
-                    $"TryEnterPreviewEditorAtPoint: abort — no line at point=({point.X:N1},{point.Y:N1}), tpOffset={(tp is null ? "null" : tp.Offset.ToString(System.Globalization.CultureInfo.InvariantCulture))}, lineNum={lineNum}, file='{System.IO.Path.GetFileName(filePath)}'");
+                    $"TryEnterPreviewEditorAtPoint: abort — no line at point=({point.X:N1},{point.Y:N1}), tpOffset={(tp is null ? "null" : tp.Offset.ToString(CultureInfo.InvariantCulture))}, lineNum={lineNum}, file='{Path.GetFileName(filePath)}'");
                 return false;
             }
 
@@ -362,7 +365,7 @@ public sealed partial class MainWindow
                 var rx = BuildSearchHighlightRegex();
                 if (rx is not null)
                 {
-                    var paraText = new System.Text.StringBuilder();
+                    var paraText = new StringBuilder();
                     if (clickedPara is not null)
                     {
                         // In two-column layout, gutter runs are in a separate
@@ -392,7 +395,7 @@ public sealed partial class MainWindow
 
             await ShowFullFileEditorAsync(target, scrollToMatch: true);
             LogService.Instance.Verbose("PreviewEditor",
-                $"TryEnterPreviewEditorAtPoint: opened editor file='{System.IO.Path.GetFileName(filePath)}', line={lineNum}, matchIndex={clickedMatchIndex}, col={target.MatchStartColumn}, len={target.MatchLength}");
+                $"TryEnterPreviewEditorAtPoint: opened editor file='{Path.GetFileName(filePath)}', line={lineNum}, matchIndex={clickedMatchIndex}, col={target.MatchStartColumn}, len={target.MatchLength}");
             return true;
         }
         catch (Exception ex)
@@ -507,13 +510,13 @@ public sealed partial class MainWindow
 
     private async Task ShowFullFileEditorAsync(SearchResult result, bool scrollToMatch)
     {
-        LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: start file='{System.IO.Path.GetFileName(result.FilePath)}', scrollToMatch={scrollToMatch}");
+        LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: start file='{Path.GetFileName(result.FilePath)}', scrollToMatch={scrollToMatch}");
         if (IsImagePreviewPath(result.FilePath))
         {
             LogService.Instance.Info("Preview", "ShowFullFileEditorAsync: blocked - image preview is read-only");
             return;
         }
-        var editorSw = System.Diagnostics.Stopwatch.StartNew();
+        var editorSw = Stopwatch.StartNew();
         if (PreviewEditor.Visibility == Visibility.Visible && HasRealEditorChanges())
         {
             LogService.Instance.Info("Preview", "ShowFullFileEditorAsync: blocked - editor has unsaved changes");
@@ -596,7 +599,7 @@ public sealed partial class MainWindow
 
             // Assign while collapsed so the editor does one document load instead of
             // repeatedly re-laying out an ever-growing text buffer.
-            var textSetSw = System.Diagnostics.Stopwatch.StartNew();
+            var textSetSw = Stopwatch.StartNew();
             _suppressPreviewEditorTextChanged = true;
             LoadPreviewEditorText(text);
             ResetPreviewEditorCaretToTop();
@@ -608,14 +611,14 @@ public sealed partial class MainWindow
             _previewEditorDirty = false;
             UpdateEditorDirtyIndicator();
 
-            var showEditorSw = System.Diagnostics.Stopwatch.StartNew();
+            var showEditorSw = Stopwatch.StartNew();
             SetPreviewEditorVisible(true);
             showEditorSw.Stop();
             LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: editor visible, elapsed={showEditorSw.ElapsedMilliseconds}ms");
 
             PreviewEditor.Focus(FocusState.Programmatic);
 
-            var scrollSw = System.Diagnostics.Stopwatch.StartNew();
+            var scrollSw = Stopwatch.StartNew();
             if (scrollToMatch)
             {
                 ScrollEditorToMatch(text, result);
@@ -674,7 +677,7 @@ public sealed partial class MainWindow
         finally
         {
             editorSw.Stop();
-            LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: done file='{System.IO.Path.GetFileName(result.FilePath)}', elapsed={editorSw.ElapsedMilliseconds}ms");
+            LogService.Instance.Info("Preview", $"ShowFullFileEditorAsync: done file='{Path.GetFileName(result.FilePath)}', elapsed={editorSw.ElapsedMilliseconds}ms");
             if (ReferenceEquals(_previewLoadCts, cts))
                 _previewLoadCts = null;
             cts.Dispose();
@@ -741,7 +744,7 @@ public sealed partial class MainWindow
         var panel = new StackPanel { Spacing = 12, MinWidth = 360 };
         panel.Children.Add(new TextBlock
         {
-            Text = $"\u201c{System.IO.Path.GetFileName(filePath)}\u201d contains a very long line ({maxLineLength:N0} characters).",
+            Text = $"\u201c{Path.GetFileName(filePath)}\u201d contains a very long line ({maxLineLength:N0} characters).",
             TextWrapping = TextWrapping.Wrap,
         });
         panel.Children.Add(new TextBlock
@@ -790,7 +793,7 @@ public sealed partial class MainWindow
 
     private async Task ShowChunkedPreviewEditorAsync(SearchResult result, FileInfo fileInfo, bool scrollToMatch, CancellationToken cancellationToken)
     {
-        var chunkSw = System.Diagnostics.Stopwatch.StartNew();
+        var chunkSw = Stopwatch.StartNew();
         var chunk = await LoadPreviewEditorChunkAsync(
             result.FilePath,
             offset: 0,
@@ -862,7 +865,7 @@ public sealed partial class MainWindow
         UpdatePreviewEditorChunkUi();
         var cts = new CancellationTokenSource();
         _previewLoadCts = cts;
-        var loadMoreSw = System.Diagnostics.Stopwatch.StartNew();
+        var loadMoreSw = Stopwatch.StartNew();
 
         try
         {
@@ -1189,14 +1192,14 @@ public sealed partial class MainWindow
         return true;
     }
 
-    private static bool TryFindNearestRegexMatch(string lineText, System.Text.RegularExpressions.Regex rx, int targetColumn, out int matchColumn, out int matchLength)
+    private static bool TryFindNearestRegexMatch(string lineText, Regex rx, int targetColumn, out int matchColumn, out int matchLength)
     {
         matchColumn = 0;
         matchLength = 0;
-        System.Text.RegularExpressions.Match? best = null;
+        Match? best = null;
         int bestDistance = int.MaxValue;
 
-        foreach (System.Text.RegularExpressions.Match match in rx.Matches(lineText))
+        foreach (Match match in rx.Matches(lineText))
         {
             if (!match.Success || match.Length <= 0)
                 continue;
@@ -1627,7 +1630,7 @@ public sealed partial class MainWindow
             if (LogService.Instance.IsVerboseEnabled)
             {
                 LogService.Instance.Verbose("PreviewEditor",
-                    $"ApplyPreviewEditorSyntaxHighlighting: file='{System.IO.Path.GetFileName(filePath)}', language={languageId}");
+                    $"ApplyPreviewEditorSyntaxHighlighting: file='{Path.GetFileName(filePath)}', language={languageId}");
             }
         }
         catch (Exception ex)

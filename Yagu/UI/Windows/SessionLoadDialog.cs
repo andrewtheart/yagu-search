@@ -233,11 +233,11 @@ internal static class SessionLoadDialog
             sortedSessions = currentSort switch
             {
                 SortColumn.Name => currentAscending
-                    ? sortedSessions.OrderBy(s => System.IO.Path.GetFileName(s.Path), StringComparer.OrdinalIgnoreCase).ToList()
-                    : sortedSessions.OrderByDescending(s => System.IO.Path.GetFileName(s.Path), StringComparer.OrdinalIgnoreCase).ToList(),
+                    ? sortedSessions.OrderBy(s => Path.GetFileName(s.Path), StringComparer.OrdinalIgnoreCase).ToList()
+                    : sortedSessions.OrderByDescending(s => Path.GetFileName(s.Path), StringComparer.OrdinalIgnoreCase).ToList(),
                 SortColumn.Directory => currentAscending
-                    ? sortedSessions.OrderBy(s => System.IO.Path.GetDirectoryName(s.Path) ?? "", StringComparer.OrdinalIgnoreCase).ToList()
-                    : sortedSessions.OrderByDescending(s => System.IO.Path.GetDirectoryName(s.Path) ?? "", StringComparer.OrdinalIgnoreCase).ToList(),
+                    ? sortedSessions.OrderBy(s => Path.GetDirectoryName(s.Path) ?? "", StringComparer.OrdinalIgnoreCase).ToList()
+                    : sortedSessions.OrderByDescending(s => Path.GetDirectoryName(s.Path) ?? "", StringComparer.OrdinalIgnoreCase).ToList(),
                 SortColumn.Size => currentAscending
                     ? sortedSessions.OrderBy(s => s.SizeBytes ?? 0).ToList()
                     : sortedSessions.OrderByDescending(s => s.SizeBytes ?? 0).ToList(),
@@ -288,8 +288,8 @@ internal static class SessionLoadDialog
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) }); // Size
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(140) }); // Created
 
-        string fileName = System.IO.Path.GetFileName(session.Path);
-        string directory = System.IO.Path.GetDirectoryName(session.Path) ?? "";
+        string fileName = Path.GetFileName(session.Path);
+        string directory = Path.GetDirectoryName(session.Path) ?? "";
 
         var nameBlock = new TextBlock
         {

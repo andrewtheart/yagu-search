@@ -1305,7 +1305,7 @@ public sealed class PreviewCoreRegressionTests
 
         string openLogMethod = ExtractMethodWindow(SettingsWindowSource, "OpenLogFileInNotepad", window: 600);
         AssertContainsInOrder(openLogMethod,
-            "System.IO.Path.Combine(System.Environment.SystemDirectory, \"notepad.exe\")",
+            "Path.Combine(System.Environment.SystemDirectory, \"notepad.exe\")",
             "Arguments = $\"\\\"{logPath}\\\"\",",
             "UseShellExecute = false,");
     }
@@ -2588,7 +2588,7 @@ public sealed class PreviewCoreRegressionTests
         // the active-match overlay can be positioned and the run colored gold.
         string recover = ExtractMethodWindow(MainWindowSource, "TryRecoverUnregisteredMatchRuns", window: 2400);
         Assert.Contains("BuildSearchHighlightRegex()", recover);
-        Assert.Contains("foreach (System.Text.RegularExpressions.Match m in rx.Matches(paragraphText))", recover);
+        Assert.Contains("foreach (Match m in rx.Matches(paragraphText))", recover);
         // Registration restores recognition only for runs fully inside a regex match span,
         // and never colors them (unselected siblings stay visually plain).
         Assert.Contains("start >= matchStart && start + length <= matchEnd", recover);

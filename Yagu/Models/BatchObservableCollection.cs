@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Collections;
 
 namespace Yagu.Models;
 
@@ -86,7 +87,7 @@ public class BatchObservableCollection<T> : ObservableCollection<T>
         OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
         OnCollectionChanged(new NotifyCollectionChangedEventArgs(
             NotifyCollectionChangedAction.Add,
-            items is System.Collections.IList itemList ? itemList : items.ToList(),
+            items is IList itemList ? itemList : items.ToList(),
             startIndex));
     }
 

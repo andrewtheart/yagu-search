@@ -51,8 +51,8 @@ public sealed class ResultStore : IDisposable
     public ResultStore(string? tempDirectory = null)
     {
         string baseDir = tempDirectory ?? Path.GetTempPath();
-        if (!System.IO.Directory.Exists(baseDir))
-            System.IO.Directory.CreateDirectory(baseDir);
+        if (!Directory.Exists(baseDir))
+            Directory.CreateDirectory(baseDir);
         _path = Path.Combine(baseDir, $"yagu-results-p{Environment.ProcessId}-{Guid.NewGuid():N}.tmp");
         _stream = new FileStream(_path, FileMode.Create, FileAccess.ReadWrite, FileShare.Read, 1024 * 1024);
         _writer = new BinaryWriter(_stream, Encoding.UTF8, leaveOpen: true);

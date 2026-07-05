@@ -12,6 +12,8 @@ using Yagu.Helpers;
 using Yagu.Models;
 using Yagu.Services;
 using Yagu.ViewModels;
+using System.Diagnostics;
+using System.Globalization;
 using XamlFontFamily = Microsoft.UI.Xaml.Media.FontFamily;
 
 namespace Yagu;
@@ -138,8 +140,8 @@ public sealed partial class SettingsWindow : Window
         Closed += OnSettingsWindowClosed;
 
         // Set window icon to match the main Yagu window
-        var icoPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "yagu.ico");
-        if (System.IO.File.Exists(icoPath))
+        var icoPath = Path.Combine(AppContext.BaseDirectory, "Assets", "yagu.ico");
+        if (File.Exists(icoPath))
             appWindow.SetIcon(icoPath);
 
         ShowSettingsLoadingPlaceholder();
@@ -212,10 +214,10 @@ public sealed partial class SettingsWindow : Window
     {
         try
         {
-            string notepadPath = System.IO.Path.Combine(System.Environment.SystemDirectory, "notepad.exe");
-            if (System.IO.File.Exists(notepadPath))
+            string notepadPath = Path.Combine(System.Environment.SystemDirectory, "notepad.exe");
+            if (File.Exists(notepadPath))
             {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                Process.Start(new ProcessStartInfo
                 {
                     FileName = notepadPath,
                     Arguments = $"\"{logPath}\"",
@@ -226,7 +228,7 @@ public sealed partial class SettingsWindow : Window
 
             // Notepad not present at the canonical location (e.g. Store-only Notepad): let the shell
             // open the log file with whatever text handler is registered.
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            Process.Start(new ProcessStartInfo
             {
                 FileName = logPath,
                 UseShellExecute = true,
@@ -1208,7 +1210,7 @@ public sealed partial class SettingsWindow : Window
                 AddSearchTextPart(parts, numberBox.Text);
                 AddSearchTextPart(parts, numberBox.PlaceholderText);
                 if (!double.IsNaN(numberBox.Value))
-                    AddSearchTextPart(parts, numberBox.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    AddSearchTextPart(parts, numberBox.Value.ToString(CultureInfo.InvariantCulture));
                 break;
             case ComboBox comboBox:
                 AddSearchTextPart(parts, comboBox.PlaceholderText);
@@ -1249,7 +1251,7 @@ public sealed partial class SettingsWindow : Window
                 CollectControlSearchText(element, parts);
                 return;
             case char or bool or byte or sbyte or short or ushort or int or uint or long or ulong or float or double or decimal:
-                AddSearchTextPart(parts, Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture));
+                AddSearchTextPart(parts, Convert.ToString(value, CultureInfo.InvariantCulture));
                 return;
         }
 
@@ -2644,7 +2646,7 @@ public sealed partial class SettingsWindow : Window
             // Seed the selections from the view model BEFORE attaching change handlers so the initial
             // sync never marks settings dirty or recurses.
             SelectComboByTag(modelCombo, CurrentModel());
-            SelectComboByTag(resolutionCombo, CurrentMaxSide().ToString(System.Globalization.CultureInfo.InvariantCulture));
+            SelectComboByTag(resolutionCombo, CurrentMaxSide().ToString(CultureInfo.InvariantCulture));
             SelectComboByTag(presetCombo, PresetForModelAndResolution(CurrentModel(), CurrentMaxSide()));
             UpdateQualityEnabled();
 
@@ -2671,7 +2673,7 @@ public sealed partial class SettingsWindow : Window
                 _viewModel.ImageOcrModel = target.Value.Model;
                 _viewModel.ImageOcrMaxSide = target.Value.MaxSide;
                 SelectComboByTag(modelCombo, target.Value.Model);
-                SelectComboByTag(resolutionCombo, target.Value.MaxSide.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                SelectComboByTag(resolutionCombo, target.Value.MaxSide.ToString(CultureInfo.InvariantCulture));
                 syncing = false;
             };
 
@@ -2688,7 +2690,7 @@ public sealed partial class SettingsWindow : Window
             resolutionCombo.SelectionChanged += (_, _) =>
             {
                 if (resolutionCombo.SelectedItem is ComboBoxItem { Tag: string raw } &&
-                    int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int maxSide))
+                    int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out int maxSide))
                 {
                     _viewModel.ImageOcrMaxSide = AppSettings.NormalizeImageOcrMaxSide(maxSide);
                 }
@@ -3682,6 +3684,27 @@ public sealed partial class SettingsWindow : Window
             logFileBlock.Inlines.Add(logHyperlink);
             ToolTipService.SetToolTip(logFileBlock, "Open the log file in Notepad");
             loggingGroup.Children.Add(logFileBlock);
+
+            // "Clear log file" empties the current log file's contents on demand.
+            var clearLogButton = new Button { Content = "Clear log file", Margin = new Thickness(0, 4, 0, 0) };
+            ToolTipService.SetToolTip(clearLogButton, "Erase the contents of the current log file.");
+            clearLogButton.Click += (_, _) =>
+            {
+                bool cleared = LogService.Instance.Clear();
+                clearLogButton.Content = cleared ? "Log file cleared \u2713" : "Could not clear log file";
+                clearLogButton.IsEnabled = false;
+                var resetTimer = DispatcherQueue.CreateTimer();
+                resetTimer.Interval = TimeSpan.FromSeconds(2);
+                resetTimer.IsRepeating = false;
+                resetTimer.Tick += (_, _) =>
+                {
+                    resetTimer.Stop();
+                    clearLogButton.Content = "Clear log file";
+                    clearLogButton.IsEnabled = true;
+                };
+                resetTimer.Start();
+            };
+            loggingGroup.Children.Add(clearLogButton);
         }
 
         // ── Shortcuts & History ──
@@ -3813,7 +3836,7 @@ public sealed partial class SettingsWindow : Window
                 _ = ResolveModelDisplayAsync();
                 async Task ResolveModelDisplayAsync()
                 {
-                    try { modelValue.Text = await _viewModel.ResolveCurrentSemanticModelDisplayAsync(null, System.Threading.CancellationToken.None); }
+                    try { modelValue.Text = await _viewModel.ResolveCurrentSemanticModelDisplayAsync(null, CancellationToken.None); }
                     catch { /* leave whatever is shown */ }
                 }
             }
@@ -3836,7 +3859,7 @@ public sealed partial class SettingsWindow : Window
             {
                 await _viewModel.ClearSemanticModelOverrideAsync();
                 modelValue.Text = _viewModel.CurrentSemanticModelDisplay;
-                try { modelValue.Text = await _viewModel.ResolveCurrentSemanticModelDisplayAsync(null, System.Threading.CancellationToken.None); }
+                try { modelValue.Text = await _viewModel.ResolveCurrentSemanticModelDisplayAsync(null, CancellationToken.None); }
                 catch { /* leave the generic automatic label */ }
             };
             modelButtons.Children.Add(chooseModel);
@@ -3855,7 +3878,7 @@ public sealed partial class SettingsWindow : Window
                 modelValue.Text = "Refreshing\u2026";
                 try
                 {
-                    modelValue.Text = await _viewModel.RefreshFoundryCacheAsync(null, System.Threading.CancellationToken.None);
+                    modelValue.Text = await _viewModel.RefreshFoundryCacheAsync(null, CancellationToken.None);
                 }
                 catch
                 {

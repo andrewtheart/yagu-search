@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Text;
 using Yagu.Native;
+using System.Globalization;
 
 namespace Yagu.Services;
 
@@ -306,14 +307,14 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
     private void WriteLineNumber(int lineNum)
     {
         // Format line number directly to UTF-8 bytes (no string allocation)
-        if (lineNum.TryFormat(_scratchBuffer, out int written, provider: System.Globalization.CultureInfo.InvariantCulture))
+        if (lineNum.TryFormat(_scratchBuffer, out int written, provider: CultureInfo.InvariantCulture))
         {
             _output.Write(_scratchBuffer.AsSpan(0, written));
         }
         else
         {
             // Fallback (shouldn't happen for int)
-            WriteUtf8String(lineNum.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            WriteUtf8String(lineNum.ToString(CultureInfo.InvariantCulture));
         }
     }
 

@@ -6,6 +6,11 @@ using Microsoft.UI.Xaml.Media;
 using Yagu.Helpers;
 using Yagu.Models;
 using Yagu.Services;
+using System.Diagnostics;
+using System.Globalization;
+using System.Runtime.CompilerServices;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Yagu;
 
@@ -39,7 +44,7 @@ public sealed partial class MainWindow
                 // paragraph composition so the root render path can be identified.
                 // See yagu-preview.md overlay notes.
                 TryGetPreviewParagraphLineNumber(para, out int boxLine);
-                var sb = new System.Text.StringBuilder();
+                var sb = new StringBuilder();
                 int runIdx = 0;
                 foreach (var inline in para.Inlines)
                 {
@@ -47,7 +52,7 @@ public sealed partial class MainWindow
                     {
                         bool registered = s_previewSearchMatchRuns.TryGetValue(r, out _);
                         bool bold = r.FontWeight.Weight == Microsoft.UI.Text.FontWeights.Bold.Weight;
-                        string color = (r.Foreground as SolidColorBrush)?.Color.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "n/a";
+                        string color = (r.Foreground as SolidColorBrush)?.Color.ToString(CultureInfo.InvariantCulture) ?? "n/a";
                         string text = r.Text.Length > 24 ? r.Text[..24] + "\u2026" : r.Text;
                         sb.Append(System.FormattableString.Invariant($"[{runIdx}:reg={registered},bold={bold},fg={color},'{text.Replace("\n", "\\n")}'] "));
                         runIdx++;
@@ -172,7 +177,7 @@ public sealed partial class MainWindow
             return false;
 
         var runs = new List<(Run run, int start, int length)>();
-        var builder = new System.Text.StringBuilder();
+        var builder = new StringBuilder();
         foreach (var inline in para.Inlines)
         {
             if (inline is Run run)
@@ -194,7 +199,7 @@ public sealed partial class MainWindow
 
         string paragraphText = builder.ToString();
         bool recovered = false;
-        foreach (System.Text.RegularExpressions.Match m in rx.Matches(paragraphText))
+        foreach (Match m in rx.Matches(paragraphText))
         {
             if (m.Length == 0)
                 continue;
@@ -237,7 +242,7 @@ public sealed partial class MainWindow
         run.Foreground = _matchTextBrush;
     }
 
-    private void UnboxCurrentMatch([System.Runtime.CompilerServices.CallerMemberName] string caller = "")
+    private void UnboxCurrentMatch([CallerMemberName] string caller = "")
     {
         if (_activeMatchHighlight is null) return;
         if (LogService.Instance.IsVerboseEnabled)
@@ -296,8 +301,8 @@ public sealed partial class MainWindow
         int requestId = _matchScrollRequestId;
         int idxAtAttach = _currentMatchIndex;
         EventHandler<object>? handler = null;
-        var idleStopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var hardCapStopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var idleStopwatch = Stopwatch.StartNew();
+        var hardCapStopwatch = Stopwatch.StartNew();
         const int kIdleWindowMs = 1500;        // detach if no rescroll needed for 1.5 s
         const int kHardCapMs = 5000;           // never watch longer than 5 s total
         const int kMaxRescrolls = 30;
@@ -338,7 +343,7 @@ public sealed partial class MainWindow
                 {
                     if (_activeMatchHighlight is { para: var ap, run: var ar } && ar is not null)
                     {
-                        var fg = (ar.Foreground as SolidColorBrush)?.Color.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "(non-solid)";
+                        var fg = (ar.Foreground as SolidColorBrush)?.Color.ToString(CultureInfo.InvariantCulture) ?? "(non-solid)";
                         var rect2 = ar.ContentStart.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
                         var t2 = block.TransformToVisual(PreviewScrollViewer);
                         var p2 = t2.TransformPoint(new Windows.Foundation.Point(rect2.X, rect2.Y));
@@ -1496,7 +1501,7 @@ public sealed partial class MainWindow
             if (LogService.Instance.IsVerboseEnabled)
             {
                 int paragraphIndex = GetParagraphIndex(block, targetPara);
-                string expectedScroll = expectedVerticalOffset.HasValue ? expectedVerticalOffset.Value.ToString("N1", System.Globalization.CultureInfo.InvariantCulture) : "actual";
+                string expectedScroll = expectedVerticalOffset.HasValue ? expectedVerticalOffset.Value.ToString("N1", CultureInfo.InvariantCulture) : "actual";
                 LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: idx={_currentMatchIndex}, paraIdx={paragraphIndex}, matchInPara={matchInPara}, rect=({rect.X:N1},{rect.Y:N1},{rect.Width:N1},{rect.Height:N1}), endRect=({endRect.X:N1},{endRect.Y:N1},{endRect.Width:N1},{endRect.Height:N1}), point=({point.X:N1},{point.Y:N1}), scrollY={currentVerticalOffset:N1}, expectedScrollY={expectedScroll}, effectiveScrollY={effectiveVerticalOffset:N1}, centeredActual={centeredFromActualRun}, centerAccepted={actualCenterAccepted}, endRectUsed={usedEndRect}, wrapPointEstimateUsed={usedWrappedPointEstimate}, wrapEstimateUsed={usedWrappedEstimate}, wrapSegments={effectiveWrappedMarkerRects?.Count ?? 0} {wrappedMarkerDetails}, marker=({markerLeft:N1},{overlayTop:N1},{visibleMarkerWidth:N1},{markerHeight:N1}), unclampedMarkerW={markerWidth:N1}, text='{targetRun.Text}'");
             }
             return true;
@@ -1987,7 +1992,7 @@ public sealed partial class MainWindow
             if (text.Length > 100)
                 text = string.Concat(text.AsSpan(0, 100), "...");
 
-            string expectedScroll = expectedVerticalOffset.HasValue ? expectedVerticalOffset.Value.ToString("N1", System.Globalization.CultureInfo.InvariantCulture) : "actual";
+            string expectedScroll = expectedVerticalOffset.HasValue ? expectedVerticalOffset.Value.ToString("N1", CultureInfo.InvariantCulture) : "actual";
             string estimatedText = estimatedPoint.HasValue ? FormatPoint(estimatedPoint.Value) : "none";
             string markerRectsText = FormatMarkerRects(markerRects);
 
@@ -2118,7 +2123,7 @@ public sealed partial class MainWindow
 
                 LogService.Instance.Info("MatchNav",
                     $"VerifyActiveMatch: idx={navIdx}, activeIdx={activeIdx}, paraMatches={paraMatches}, paraIdx={paragraphIndex}, " +
-                    $"col={column}, runText='{runText}', runFG={(activeRun.Foreground is SolidColorBrush sb ? sb.Color.ToString(System.Globalization.CultureInfo.InvariantCulture) : "?")}, " +
+                    $"col={column}, runText='{runText}', runFG={(activeRun.Foreground is SolidColorBrush sb ? sb.Color.ToString(CultureInfo.InvariantCulture) : "?")}, " +
                     $"vpTop={vpTop:N1}, vpBottom={vpBottom:N1}, vpH={vpH:N1}, paraAbsY={paraY:N1}, runAbsY={runY:N1}, runH={runH:N1}, runOnScreen={runOnScreen}");
 
                 // Self-correcting: if the run isn't centered/visible but we now have an
@@ -3142,7 +3147,7 @@ public sealed partial class MainWindow
         RadioButton? selected = null;
         foreach (int v in new[] { 10, 50, 100, 1000 })
         {
-            var rb = new RadioButton { Content = v.ToString(System.Globalization.CultureInfo.InvariantCulture), Tag = v, GroupName = "BulkStep" };
+            var rb = new RadioButton { Content = v.ToString(CultureInfo.InvariantCulture), Tag = v, GroupName = "BulkStep" };
             if (v == 10) { rb.IsChecked = true; selected = rb; }
             rb.Checked += (s, _) => selected = s as RadioButton;
             radioPanel.Children.Add(rb);
@@ -3200,7 +3205,7 @@ public sealed partial class MainWindow
     {
         if (_matchParagraphs.Count == 0 && _lazyMatchCount == 0) return;
 
-        var navSw = System.Diagnostics.Stopwatch.StartNew();
+        var navSw = Stopwatch.StartNew();
         int startIndex = _currentMatchIndex;
         int renderedBefore = _matchParagraphs.Count;
         int expandedChunks = 0;
@@ -3263,7 +3268,7 @@ public sealed partial class MainWindow
     {
         if (_matchParagraphs.Count == 0) return;
 
-        var navSw = System.Diagnostics.Stopwatch.StartNew();
+        var navSw = Stopwatch.StartNew();
         int startIndex = _currentMatchIndex;
         int targetIndex = _currentMatchIndex - step;
         bool hitBoundary = targetIndex < 0;
@@ -3310,7 +3315,7 @@ public sealed partial class MainWindow
 
     private async Task GoToNextMatchAsync()
     {
-        var navSw = System.Diagnostics.Stopwatch.StartNew();
+        var navSw = Stopwatch.StartNew();
         int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
         if (totalMatches == 0) return;
         Paragraph? previousPara = _currentMatchIndex >= 0 && _currentMatchIndex < _matchParagraphs.Count ? _matchParagraphs[_currentMatchIndex].para : null;
@@ -3387,7 +3392,7 @@ public sealed partial class MainWindow
             return;
         }
 
-        var navSw = System.Diagnostics.Stopwatch.StartNew();
+        var navSw = Stopwatch.StartNew();
         int totalMatches = _matchParagraphs.Count + _lazyMatchCount;
         if (totalMatches == 0) return;
         Paragraph? previousPara = _currentMatchIndex >= 0 && _currentMatchIndex < _matchParagraphs.Count ? _matchParagraphs[_currentMatchIndex].para : null;
@@ -3480,7 +3485,7 @@ public sealed partial class MainWindow
     /// </summary>
     private bool ExpandSectionNextChunk(RichTextBlock section, int? maxResultsToExpand = null)
     {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var sw = Stopwatch.StartNew();
         if (!_sectionOverflow.TryGetValue(section, out var ov)) return false;
         int requestedChunkSize = maxResultsToExpand is > 0 ? maxResultsToExpand.Value : MaxMatchesPerExpandChunk;
         int chunkSize = Math.Min(requestedChunkSize, ov.RemainingResults.Count);

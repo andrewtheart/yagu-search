@@ -1,5 +1,8 @@
 using Yagu.Helpers;
 using Yagu.Services;
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 
 namespace Yagu.Models;
 
@@ -7,7 +10,7 @@ namespace Yagu.Models;
 /// Maintains the grouped result collections that back the search results UI.
 /// Kept free of WinUI dependencies so large-result UI performance can be tested directly.
 /// </summary>
-[System.Diagnostics.CodeAnalysis.SuppressMessage("Naming", "CA1711:Identifiers should not have incorrect suffix", Justification = "Existing internal model name is widely used by tests and view-model code.")]
+[SuppressMessage("Naming", "CA1711:Identifiers should not have incorrect suffix", Justification = "Existing internal model name is widely used by tests and view-model code.")]
 public sealed class SearchResultCollection
 {
     internal const int EvictionBatchSize = 2048;
@@ -230,7 +233,7 @@ public sealed class SearchResultCollection
         // while new groups may still be appended by the dispatcher.
         var groupsSnapshot = _allGroups.ToArray();
         int enqueued = 0;
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var sw = Stopwatch.StartNew();
 
         foreach (var group in groupsSnapshot)
         {
@@ -422,7 +425,7 @@ public sealed class SearchResultCollection
             || ContainsFilter(group.FormattedSize, value)
             || ContainsFilter(group.FormattedDate, value)
             || ContainsFilter(
-                group.MatchCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                group.MatchCount.ToString(CultureInfo.InvariantCulture),
                 value);
     }
 

@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using Yagu.Services;
+using System.Globalization;
 
 namespace Yagu.Models;
 
@@ -69,9 +70,9 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     {
         get
         {
-            if (!IsArchiveEntry) return System.IO.Path.GetFileName(FilePath);
+            if (!IsArchiveEntry) return Path.GetFileName(FilePath);
             var (archivePath, entryPath) = ZipArchiveSearcher.SplitArchivePath(FilePath);
-            return $"{System.IO.Path.GetFileName(archivePath)}{ZipArchiveSearcher.ArchiveSeparator}/{entryPath}";
+            return $"{Path.GetFileName(archivePath)}{ZipArchiveSearcher.ArchiveSeparator}/{entryPath}";
         }
     }
 
@@ -82,9 +83,9 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     {
         get
         {
-            if (!IsArchiveEntry) return System.IO.Path.GetDirectoryName(FilePath) ?? string.Empty;
+            if (!IsArchiveEntry) return Path.GetDirectoryName(FilePath) ?? string.Empty;
             var (archivePath, _) = ZipArchiveSearcher.SplitArchivePath(FilePath);
-            return System.IO.Path.GetDirectoryName(archivePath) ?? string.Empty;
+            return Path.GetDirectoryName(archivePath) ?? string.Empty;
         }
     }
 
@@ -644,7 +645,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         if (evictedCount > 0 || emptyMatchCount > 0)
         {
             Services.LogService.Instance.Info("FileGroup",
-                $"ShowMore: file='{System.IO.Path.GetFileName(FilePath)}', start={start}, end={end}, " +
+                $"ShowMore: file='{Path.GetFileName(FilePath)}', start={start}, end={end}, " +
                 $"batchSize={batch.Count}, stillEvicted={evictedCount}, emptyMatchLine={emptyMatchCount}");
         }
         VisibleResults.AppendRange(batch);
@@ -696,7 +697,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     public DateTime Created { get; private set; }
     public DateTime ModifiedOrCreated => LaterOf(LastModified, Created);
     public string FormattedSize => FormatSize(FileSize);
-    public string FormattedDate => LastModified == default ? string.Empty : LastModified.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+    public string FormattedDate => LastModified == default ? string.Empty : LastModified.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
 
     private string? _groupHeaderText;
     public string? GroupHeaderText
@@ -727,7 +728,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
 
         try
         {
-            var fi = new System.IO.FileInfo(physicalPath);
+            var fi = new FileInfo(physicalPath);
             if (fi.Exists)
             {
                 var metadata = new FileMetadata(fi.Length, fi.LastWriteTime, fi.CreationTime);
@@ -760,7 +761,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             return;
         }
 
-        _ = System.Threading.Tasks.Task.Run(() =>
+        _ = Task.Run(() =>
         {
             if (_cleaned || cancellationToken.IsCancellationRequested) return;
             bool hasCached = FileMetadataCache.TryGet(physicalPath, out var cachedMetadata);
@@ -769,7 +770,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             DateTime created = hasCached ? cachedMetadata.Created : default;
             try
             {
-                var fi = new System.IO.FileInfo(physicalPath);
+                var fi = new FileInfo(physicalPath);
                 if (fi.Exists)
                 {
                     size = fi.Length;

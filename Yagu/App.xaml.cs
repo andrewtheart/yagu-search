@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Yagu.Helpers;
 using Yagu.Services;
+using System.Globalization;
 
 namespace Yagu;
 
@@ -48,7 +49,7 @@ public sealed partial class App : Application, IDisposable
     {
         InitializeComponent();
         UnhandledException += OnUnhandledException;
-        System.Threading.Tasks.TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+        TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
         AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
 
         // Initialize logging from persisted settings
@@ -112,7 +113,7 @@ public sealed partial class App : Application, IDisposable
     public void Dispose()
     {
         UnhandledException -= OnUnhandledException;
-        System.Threading.Tasks.TaskScheduler.UnobservedTaskException -= OnUnobservedTaskException;
+        TaskScheduler.UnobservedTaskException -= OnUnobservedTaskException;
         AppDomain.CurrentDomain.UnhandledException -= OnDomainUnhandledException;
         LogService.Instance.CriticalLogged -= OnCriticalLogged;
         Yagu.Services.Telemetry.TelemetryService.Instance.Shutdown();
@@ -151,7 +152,7 @@ public sealed partial class App : Application, IDisposable
             ShowUnhandledExceptionMessageBox("UnhandledException", e.Exception);
     }
 
-    private static void OnUnobservedTaskException(object? sender, System.Threading.Tasks.UnobservedTaskExceptionEventArgs e)
+    private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
     {
         LogCrash("UnobservedTaskException", e.Exception);
         e.SetObserved();
@@ -264,9 +265,9 @@ public sealed partial class App : Application, IDisposable
             exceptionText = exceptionText[..maxExceptionChars] + Environment.NewLine + "... truncated; see the crash log for the full exception.";
 
         var details = new StringBuilder();
-        details.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"Source: {source}");
-        details.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"Time (UTC): {DateTime.UtcNow:O}");
-        details.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"Crash log: {CrashLogPath}");
+        details.AppendLine(CultureInfo.InvariantCulture, $"Source: {source}");
+        details.AppendLine(CultureInfo.InvariantCulture, $"Time (UTC): {DateTime.UtcNow:O}");
+        details.AppendLine(CultureInfo.InvariantCulture, $"Crash log: {CrashLogPath}");
         details.AppendLine();
         details.AppendLine(exceptionText);
         return details.ToString();

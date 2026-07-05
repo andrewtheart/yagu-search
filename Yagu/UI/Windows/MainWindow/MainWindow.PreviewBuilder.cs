@@ -1303,8 +1303,8 @@ public sealed partial class MainWindow
             bufferSize: 64 * 1024,
             FileOptions.SequentialScan);
         var encoding = Helpers.EncodingDetector.DetectEncoding(fs);
-        if (encoding is System.Text.UTF8Encoding)
-            encoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
+        if (encoding is UTF8Encoding)
+            encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
         fs.Position = 0;
         using var reader = new StreamReader(fs, encoding, detectEncodingFromByteOrderMarks: true);
         var content = reader.ReadToEnd();
@@ -1351,8 +1351,8 @@ public sealed partial class MainWindow
             bufferSize: 64 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         var encoding = Helpers.EncodingDetector.DetectEncoding(fs);
-        if (encoding is System.Text.UTF8Encoding)
-            encoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
+        if (encoding is UTF8Encoding)
+            encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
         fs.Position = 0;
         using var reader = new StreamReader(fs, encoding, detectEncodingFromByteOrderMarks: true);
         var content = await reader.ReadToEndAsync();
@@ -1952,7 +1952,7 @@ public sealed partial class MainWindow
                 _hwnd,
                 new YaguDialogOptions
                 {
-                    Title = System.IO.Path.GetFileName(path),
+                    Title = Path.GetFileName(path),
                     TitleGlyph = "\uEB9F", // Picture
                     Content = scroller,
                     CloseButtonText = "Close",

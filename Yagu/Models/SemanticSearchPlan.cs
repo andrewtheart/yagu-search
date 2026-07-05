@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using System.Text.Json;
 
 namespace Yagu.Models;
 
@@ -133,9 +134,9 @@ public sealed class SemanticSearchPlan
 /// </summary>
 [JsonSourceGenerationOptions(
     PropertyNameCaseInsensitive = true,
-    ReadCommentHandling = System.Text.Json.JsonCommentHandling.Skip,
+    ReadCommentHandling = JsonCommentHandling.Skip,
     AllowTrailingCommas = true)]
 [JsonSerializable(typeof(SemanticSearchPlan))]
-public sealed partial class SemanticSearchPlanJsonContext : System.Text.Json.Serialization.JsonSerializerContext
+public sealed partial class SemanticSearchPlanJsonContext : JsonSerializerContext
 {
 }

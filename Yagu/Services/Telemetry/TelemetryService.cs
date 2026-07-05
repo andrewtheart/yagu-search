@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Yagu.Services.Telemetry;
 
@@ -16,7 +17,7 @@ namespace Yagu.Services.Telemetry;
 /// random install GUID, coarse app/OS version, scrubbed exception type/message/stack, and timings.
 /// </para>
 /// </summary>
-[System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA1001:Types that own disposable fields should be disposable",
+[SuppressMessage("Reliability", "CA1001:Types that own disposable fields should be disposable",
     Justification = "Process-lifetime singleton; the flush timer is disposed in Shutdown() and the semaphore lives for the app's lifetime by design.")]
 public sealed class TelemetryService
 {

@@ -4,6 +4,9 @@ using System.Globalization;
 using System.Threading.Channels;
 using Microsoft.Win32;
 using Yagu.Native;
+using System.Runtime.CompilerServices;
+using System.Security.Principal;
+using System.Text;
 
 namespace Yagu.Services;
 
@@ -224,15 +227,15 @@ public sealed class FileLister : IFileLister
 #pragma warning disable CS0649
     internal static Func<List<string>>? GetEverythingInstallDirsOverride; // test seam
 #pragma warning restore CS0649
-    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+    [ExcludeFromCodeCoverage]
     internal static bool CheckIsElevated()
     {
         if (ElevationOverride is not null) return ElevationOverride();
         try
         {
-            using var id = System.Security.Principal.WindowsIdentity.GetCurrent();
-            var principal = new System.Security.Principal.WindowsPrincipal(id);
-            return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+            using var id = WindowsIdentity.GetCurrent();
+            var principal = new WindowsPrincipal(id);
+            return principal.IsInRole(WindowsBuiltInRole.Administrator);
         }
         catch { return true; /* fail-open: assume elevated, do not exclude */ }
     }
@@ -394,7 +397,7 @@ public sealed class FileLister : IFileLister
         string directory,
         IReadOnlyList<string> includeExtensions,
         int maxFiles,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         FallbackReason = null;
         Volatile.Write(ref _skippedDirectories, 0);
@@ -514,7 +517,7 @@ public sealed class FileLister : IFileLister
         string directory,
         IReadOnlyList<string> includeExtensions,
         int maxFiles,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (!_sdkAvailable)
         {
@@ -833,7 +836,7 @@ public sealed class FileLister : IFileLister
                             // ── Early skip by extension blocklist ──
                             if (hasSkipExts)
                             {
-                                var ext = System.IO.Path.GetExtension(path.AsSpan());
+                                var ext = Path.GetExtension(path.AsSpan());
                                 if (ext.Length > 1 && extLookup.Contains(ext.Slice(1)))
                                 {
                                     excludedByExtension++;
@@ -1049,7 +1052,7 @@ public sealed class FileLister : IFileLister
     }
 
 
-    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+    [ExcludeFromCodeCoverage]
     internal static Task<EverythingReadinessResult> WaitForEverythingSdkReadyAsync(
         TimeSpan timeout,
         TimeSpan pollInterval,
@@ -1174,7 +1177,7 @@ public sealed class FileLister : IFileLister
         string directory,
         IReadOnlyList<string> includeExtensions,
         int maxFiles,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         // es.exe expects a path-prefix query. Wrap in quotes and ensure trailing slash for prefix match.
         var dirArg = directory.EndsWith(Path.DirectorySeparatorChar) ? directory : directory + Path.DirectorySeparatorChar;
@@ -1221,7 +1224,7 @@ public sealed class FileLister : IFileLister
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardOutputEncoding = Encoding.UTF8,
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
 
@@ -1282,7 +1285,7 @@ public sealed class FileLister : IFileLister
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardOutputEncoding = Encoding.UTF8,
         };
         psi.ArgumentList.Add("-get-result-count");
         foreach (var argument in queryArgs) psi.ArgumentList.Add(argument);
@@ -1579,7 +1582,7 @@ public sealed class FileLister : IFileLister
         string directory,
         IReadOnlyList<string> includeExtensions,
         int maxFiles,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         // Pre-size visited to avoid repeated backing-array resize on large trees.
         var visited = new HashSet<string>(capacity: 4096, StringComparer.OrdinalIgnoreCase);
@@ -1727,14 +1730,14 @@ public sealed class FileLister : IFileLister
 
     // ---- Excluded JIT/construction exception helpers ----
 
-    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
-    private static void ChannelWrite(System.Threading.Channels.ChannelWriter<string> writer, string value, CancellationToken ct)
+    [ExcludeFromCodeCoverage]
+    private static void ChannelWrite(ChannelWriter<string> writer, string value, CancellationToken ct)
     {
         if (!writer.TryWrite(value))
             writer.WriteAsync(value, ct).AsTask().GetAwaiter().GetResult();
     }
 
-    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+    [ExcludeFromCodeCoverage]
     private IAsyncEnumerable<string>? TryCreateSdkEnumerable(
         string fullDir, IReadOnlyList<string>? includeExtensions, int maxFiles, CancellationToken ct)
     {
@@ -1746,7 +1749,7 @@ public sealed class FileLister : IFileLister
         }
     }
 
-    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+    [ExcludeFromCodeCoverage]
     private IAsyncEnumerable<string>? TryCreateEsEnumerable(
         string esPath, string fullDir, IReadOnlyList<string>? includeExtensions, int maxFiles, CancellationToken ct)
     {
@@ -1761,14 +1764,14 @@ public sealed class FileLister : IFileLister
 
     // ---- Excluded OS exception helpers (untestable without filesystem injection) ----
 
-    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+    [ExcludeFromCodeCoverage]
     private static FileAttributes? TryGetAttributes(FileSystemInfo fsi, string entry)
     {
         try { return fsi.Attributes; }
         catch (Exception ex) { LogService.Instance.Verbose("FileLister", $"Cannot get attrs: {entry}", ex); return null; }
     }
 
-    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+    [ExcludeFromCodeCoverage]
     private string? TryResolvePath(string current)
     {
         try { return Path.GetFullPath(current); }
@@ -1780,7 +1783,7 @@ public sealed class FileLister : IFileLister
         }
     }
 
-    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+    [ExcludeFromCodeCoverage]
     private IEnumerator<FileSystemInfo>? TryGetDirectoryEnumerator(string canonical)
     {
         try
@@ -1811,7 +1814,7 @@ public sealed class FileLister : IFileLister
         }
     }
 
-    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+    [ExcludeFromCodeCoverage]
     private (FileSystemInfo fsi, string entry)? TryMoveNextEntry(IEnumerator<FileSystemInfo> entries, string canonical)
     {
         try
@@ -1847,7 +1850,7 @@ public sealed class FileLister : IFileLister
     /// a target not yet in <paramref name="visited"/>; false if already visited
     /// or resolution fails.
     /// </summary>
-    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+    [ExcludeFromCodeCoverage]
     private static bool TryResolveReparseTarget(string entry, HashSet<string> visited)
     {
         try
@@ -1863,7 +1866,7 @@ public sealed class FileLister : IFileLister
     }
 
 
-    [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+    [ExcludeFromCodeCoverage]
     internal sealed class RealProcess : IProcess, IDisposable
     {
         private readonly Process _p;

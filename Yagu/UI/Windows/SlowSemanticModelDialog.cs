@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Yagu.Helpers;
 using Yagu.Services.Ai;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Yagu;
 
@@ -24,7 +25,7 @@ internal sealed record SlowSemanticModelChoice(string? ChosenAlias, bool DontWar
 /// "Don't show this warning again for this model" checkbox lets the user permanently suppress the prompt
 /// for the exact variant that was running.
 /// </summary>
-[System.Diagnostics.CodeAnalysis.SuppressMessage(
+[SuppressMessage(
     "Reliability", "CA1001",
     Justification = "The CancellationTokenSource is cancelled and disposed in OnClosed when the window closes.")]
 internal sealed class SlowSemanticModelDialog : Window
@@ -496,8 +497,8 @@ internal sealed class SlowSemanticModelDialog : Window
     {
         try
         {
-            string iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "yagu.ico");
-            if (System.IO.File.Exists(iconPath))
+            string iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "yagu.ico");
+            if (File.Exists(iconPath))
                 appWindow.SetIcon(iconPath);
         }
         catch { }

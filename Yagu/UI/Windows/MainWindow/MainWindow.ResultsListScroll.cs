@@ -131,7 +131,7 @@ public sealed partial class MainWindow
         if (log && LogService.Instance.IsVerboseEnabled)
         {
             LogService.Instance.Verbose("ResultsList",
-                $"RestoreResultsListVerticalOffsetAfterShowMore: file='{System.IO.Path.GetFileName(filePath)}', requested={targetOffset:N1}, clamped={clampedOffset:N1}, accepted={accepted}, current={scroller.VerticalOffset:N1}");
+                $"RestoreResultsListVerticalOffsetAfterShowMore: file='{Path.GetFileName(filePath)}', requested={targetOffset:N1}, clamped={clampedOffset:N1}, accepted={accepted}, current={scroller.VerticalOffset:N1}");
         }
 
         CaptureResultsListScrollPosition();
@@ -522,7 +522,7 @@ public sealed partial class MainWindow
     private static readonly Windows.UI.Color DrawerSecondaryLightColor = Windows.UI.Color.FromArgb(0x9E, 0x00, 0x00, 0x00);
     private static readonly Windows.UI.Color DrawerTertiaryLightColor = Windows.UI.Color.FromArgb(0x72, 0x00, 0x00, 0x00);
 
-    private readonly System.Collections.Generic.HashSet<Grid> _realizedFileGroupHeaders = new();
+    private readonly HashSet<Grid> _realizedFileGroupHeaders = new();
 
     private static Windows.UI.Color ResolveThemedLabelColor(
         string? configuredColor, string defaultColor,

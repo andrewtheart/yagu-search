@@ -6,6 +6,8 @@ using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Windows.System;
 using Yagu.Services;
+using System.Collections.ObjectModel;
+using System.Globalization;
 namespace Yagu;
 
 /// <summary>
@@ -432,7 +434,7 @@ public sealed partial class MainWindow
 
     /// <summary>The autocomplete history that backs the query box for the active search mode:
     /// the Semantic natural-language history in Semantic mode, otherwise the Traditional history.</summary>
-    private System.Collections.ObjectModel.ObservableCollection<string> ActiveQueryHistory()
+    private ObservableCollection<string> ActiveQueryHistory()
         => ViewModel.IsSemanticQueryMode ? ViewModel.SemanticSearchHistory : ViewModel.SearchHistory;
 
     private bool AreQuerySuggestionsSuppressed()
@@ -720,7 +722,7 @@ public sealed partial class MainWindow
                 }
             }
             existing.Add("--wait-for-pid");
-            existing.Add(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            existing.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
             var args = string.Join(" ", existing.Select(a => a.Contains(' ') ? $"\"{a}\"" : a));
 
             // Release the single-instance mutex BEFORE starting the elevated process,
@@ -748,7 +750,7 @@ public sealed partial class MainWindow
             // remains the single instance, then do nothing.
             try
             {
-                App.InstanceMutex = new System.Threading.Mutex(true, @"Global\YaguSingleInstance", out _);
+                App.InstanceMutex = new Mutex(true, @"Global\YaguSingleInstance", out _);
             }
             catch { /* best-effort */ }
         }

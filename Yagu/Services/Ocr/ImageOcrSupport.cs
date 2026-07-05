@@ -20,7 +20,7 @@ public static class ImageOcrSupport
     public static bool IsImageCandidate(string path, IReadOnlySet<string>? extensions = null)
     {
         if (string.IsNullOrEmpty(path)) return false;
-        string ext = System.IO.Path.GetExtension(path);
+        string ext = Path.GetExtension(path);
         if (string.IsNullOrEmpty(ext)) return false;
         ext = ext.TrimStart('.');
         return (extensions ?? DefaultImageExtensions).Contains(ext);

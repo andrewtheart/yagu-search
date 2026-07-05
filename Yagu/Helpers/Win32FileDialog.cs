@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Yagu.Helpers;
 
@@ -12,7 +13,7 @@ namespace Yagu.Helpers;
 /// CoCreateInstance plus vtable calls so it also works when built-in COM interop is disabled
 /// by Yagu's Native AOT settings.
 /// </summary>
-[System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage] // thin COM interop over a modal OS dialog
+[ExcludeFromCodeCoverage] // thin COM interop over a modal OS dialog
 internal static unsafe class Win32FileDialog
 {
     /// <summary>Shows a Save dialog. Returns the chosen full path, or null if cancelled.</summary>

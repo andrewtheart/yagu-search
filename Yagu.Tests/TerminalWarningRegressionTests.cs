@@ -22,8 +22,8 @@ public sealed class TerminalWarningRegressionTests
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
 
-        Assert.Contains("System.Globalization.CultureInfo.InvariantCulture", source);
-        Assert.Contains("ToString(\"X4\", System.Globalization.CultureInfo.InvariantCulture)", source);
+        Assert.Contains("CultureInfo.InvariantCulture", source);
+        Assert.Contains("ToString(\"X4\", CultureInfo.InvariantCulture)", source);
         Assert.DoesNotContain("sb.Append($\"\\\\u{(int)c:X4}\");", source);
     }
 

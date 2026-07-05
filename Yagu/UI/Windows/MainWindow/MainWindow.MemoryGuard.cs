@@ -104,6 +104,6 @@ public sealed partial class MainWindow
 
         ViewModel.StatusText = group is null
             ? "Low memory: paused loading more results. Narrow your search or collapse some file groups to free memory."
-            : $"Low memory: paused loading more matches for {System.IO.Path.GetFileName(group.FilePath)} ({group.Count:N0} matches). Narrow your search or collapse some file groups to free memory.";
+            : $"Low memory: paused loading more matches for {Path.GetFileName(group.FilePath)} ({group.Count:N0} matches). Narrow your search or collapse some file groups to free memory.";
     }
 }

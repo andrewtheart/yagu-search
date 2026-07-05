@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Yagu.Native;
+using System.Text;
 
 namespace Yagu.Services;
 
@@ -230,7 +231,7 @@ internal sealed class DirectoryAutoCompleteService
             UseShellExecute = false,
             RedirectStandardOutput = true,
             CreateNoWindow = true,
-            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardOutputEncoding = Encoding.UTF8,
         };
         // Each argument is added individually so the runtime escapes it: the caller-influenced query
         // is passed as ONE argument and can never be split into additional es.exe switches.

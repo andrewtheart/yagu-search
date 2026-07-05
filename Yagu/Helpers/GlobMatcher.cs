@@ -1,4 +1,6 @@
 using Yagu.Models;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Yagu.Helpers;
 
@@ -67,7 +69,7 @@ public sealed class GlobMatcher
         public enum Kind { Extension, Segment, Regex, Invalid }
         public Kind PatternKind;
         public string Value = string.Empty;
-        public System.Text.RegularExpressions.Regex? Regex;
+        public Regex? Regex;
 
         public bool IsMatch(string normalizedPath) => PatternKind switch
         {
@@ -92,7 +94,7 @@ public sealed class GlobMatcher
             {
                 return Regex!.IsMatch(normalizedPath);
             }
-            catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
+            catch (RegexMatchTimeoutException)
             {
                 return false;
             }
@@ -134,9 +136,9 @@ public sealed class GlobMatcher
                 return new Pattern
                 {
                     PatternKind = Kind.Regex,
-                    Regex = new System.Text.RegularExpressions.Regex(
+                    Regex = new Regex(
                         pattern,
-                        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled,
+                        RegexOptions.IgnoreCase | RegexOptions.Compiled,
                         RegexTimeout),
                 };
             }
@@ -146,10 +148,10 @@ public sealed class GlobMatcher
             }
         }
 
-        private static System.Text.RegularExpressions.Regex GlobToRegex(string glob)
+        private static Regex GlobToRegex(string glob)
         {
             var g = glob.Replace('\\', '/');
-            var sb = new System.Text.StringBuilder();
+            var sb = new StringBuilder();
             sb.Append("(^|/)");
             int i = 0;
             while (i < g.Length)
@@ -167,9 +169,9 @@ public sealed class GlobMatcher
                 else { sb.Append(c); i++; }
             }
             sb.Append('$');
-            return new System.Text.RegularExpressions.Regex(
+            return new Regex(
                 sb.ToString(),
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled,
+                RegexOptions.IgnoreCase | RegexOptions.Compiled,
                 RegexTimeout);
         }
     }

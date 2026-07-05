@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml.Media;
 using Windows.System;
 using Yagu.Services;
 using Yagu.Services.Ai;
+using System.Globalization;
 namespace Yagu;
 
 /// <summary>
@@ -232,7 +233,7 @@ public sealed partial class MainWindow
         IReadOnlyList<FoundryModelChange> changes;
         try
         {
-            changes = await ViewModel.CheckForNewFoundryModelsAsync(System.Threading.CancellationToken.None);
+            changes = await ViewModel.CheckForNewFoundryModelsAsync(CancellationToken.None);
         }
         catch (System.Exception ex)
         {
@@ -795,9 +796,9 @@ public sealed partial class MainWindow
     private static string FormatDownloadBytes(long bytes)
     {
         if (bytes >= 1024L * 1024L)
-            return string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{bytes / (1024.0 * 1024.0):0.0} MB");
+            return string.Create(CultureInfo.InvariantCulture, $"{bytes / (1024.0 * 1024.0):0.0} MB");
         if (bytes >= 1024L)
-            return string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{bytes / 1024.0:0} KB");
+            return string.Create(CultureInfo.InvariantCulture, $"{bytes / 1024.0:0} KB");
         return $"{bytes} B";
     }
 

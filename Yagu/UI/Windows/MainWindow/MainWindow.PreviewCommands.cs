@@ -11,6 +11,9 @@ using Windows.System;
 using Yagu.Helpers;
 using Yagu.Models;
 using Yagu.Services;
+using System.Globalization;
+using System.Runtime;
+using System.Runtime.InteropServices;
 namespace Yagu;
 
 /// <summary>
@@ -32,7 +35,7 @@ public sealed partial class MainWindow
             return;
         }
 
-        LogService.Instance.Info("Preview", $"OnShowFullFile: {targets.Count} target(s), files=[{string.Join(", ", targets.Select(t => System.IO.Path.GetFileName(t.FilePath)))}]");
+        LogService.Instance.Info("Preview", $"OnShowFullFile: {targets.Count} target(s), files=[{string.Join(", ", targets.Select(t => Path.GetFileName(t.FilePath)))}]");
         await ShowFullFilePreviewAsync(targets);
         LogService.Instance.Info("Preview", "OnShowFullFile: completed");
     }
@@ -327,7 +330,7 @@ public sealed partial class MainWindow
             MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
             QueueActiveMatchOverlayRefresh();
         }
-        catch (System.Runtime.InteropServices.COMException ex)
+        catch (COMException ex)
         {
             LogService.Instance.Warning("Preview", "RestoreActiveMatchAfterPreviewRefresh: skipping due to stale paragraph", ex);
         }
@@ -426,8 +429,8 @@ public sealed partial class MainWindow
         // sees process memory stay high. Run a compacting Gen2 GC + LOH
         // compaction here — this is rare and user-initiated, so the cost is
         // acceptable in exchange for visibly reclaiming memory.
-        System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
-            System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+        GCSettings.LargeObjectHeapCompactionMode =
+            GCLargeObjectHeapCompactionMode.CompactOnce;
         GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
         GC.WaitForPendingFinalizers();
         GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
@@ -1371,7 +1374,7 @@ public sealed partial class MainWindow
     private async Task<int> ShowMoreVisibleResultsIncrementalAsync(FileGroup group, int requestedCount, double? restoreVerticalOffset = null)
     {
         LogService.Instance.Info("FileGroup",
-            $"ShowMoreIncremental START: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+            $"ShowMoreIncremental START: file='{Path.GetFileName(group.FilePath)}', " +
             $"requested={requestedCount}, Count={group.Count}, VisibleCount={group.VisibleResults.Count}, " +
             $"HasMore={group.HasMore}, RemainingCount={group.RemainingCount}");
 
@@ -1417,7 +1420,7 @@ public sealed partial class MainWindow
         if (sw.ElapsedMilliseconds >= 250)
         {
             LogService.Instance.Info("Results",
-                $"ShowMoreVisibleResultsIncrementalAsync: file='{System.IO.Path.GetFileName(group.FilePath)}', requested={requestedCount:N0}, elapsed={sw.ElapsedMilliseconds}ms");
+                $"ShowMoreVisibleResultsIncrementalAsync: file='{Path.GetFileName(group.FilePath)}', requested={requestedCount:N0}, elapsed={sw.ElapsedMilliseconds}ms");
         }
 
         return totalShown;
@@ -1426,7 +1429,7 @@ public sealed partial class MainWindow
     private void ShowMoreVisibleResultsIncremental(FileGroup group, int requestedCount)
     {
         LogService.Instance.Info("FileGroup",
-            $"ShowMoreIncremental SYNC START: file='{System.IO.Path.GetFileName(group.FilePath)}', " +
+            $"ShowMoreIncremental SYNC START: file='{Path.GetFileName(group.FilePath)}', " +
             $"requested={requestedCount}, Count={group.Count}, VisibleCount={group.VisibleResults.Count}, " +
             $"HasMore={group.HasMore}, RemainingCount={group.RemainingCount}");
 
@@ -1460,7 +1463,7 @@ public sealed partial class MainWindow
         if (sw.ElapsedMilliseconds >= 25)
         {
             LogService.Instance.Info("Results",
-                $"ShowMoreVisibleResultsIncremental SYNC: file='{System.IO.Path.GetFileName(group.FilePath)}', requested={requestedCount:N0}, elapsed={sw.ElapsedMilliseconds}ms");
+                $"ShowMoreVisibleResultsIncremental SYNC: file='{Path.GetFileName(group.FilePath)}', requested={requestedCount:N0}, elapsed={sw.ElapsedMilliseconds}ms");
         }
     }
 
@@ -1482,7 +1485,7 @@ public sealed partial class MainWindow
             // First item: "Preview <filename>"
             if (flyout.Items.Count > 0 && flyout.Items[0] is MenuFlyoutItem singleItem)
             {
-                string fileName = contextGroup is not null ? System.IO.Path.GetFileName(contextGroup.FilePath) : "";
+                string fileName = contextGroup is not null ? Path.GetFileName(contextGroup.FilePath) : "";
                 singleItem.Text = $"Preview {fileName}";
                 singleItem.Tag = contextGroup;
             }
@@ -1524,9 +1527,9 @@ public sealed partial class MainWindow
 
         // "Preview <filename>" — always visible, shows right-clicked file name
         string fileName = contextGroup is not null
-            ? System.IO.Path.GetFileName(contextGroup.FilePath)
+            ? Path.GetFileName(contextGroup.FilePath)
             : checkedCount == 1
-                ? System.IO.Path.GetFileName(checkedGroups[0].FilePath)
+                ? Path.GetFileName(checkedGroups[0].FilePath)
                 : "";
         CtxPreviewSingle.Text = $"Preview {fileName}";
         CtxPreviewSingle.Tag = contextGroup ?? (checkedCount == 1 ? checkedGroups[0] : null);
@@ -1590,7 +1593,7 @@ public sealed partial class MainWindow
 
         if (group is null) return;
 
-        LogService.Instance.Info("Preview", $"OnPreviewSingleFile: {System.IO.Path.GetFileName(group.FilePath)}");
+        LogService.Instance.Info("Preview", $"OnPreviewSingleFile: {Path.GetFileName(group.FilePath)}");
         _suppressPreviewUpdate = true;
         try
         {
@@ -1624,7 +1627,7 @@ public sealed partial class MainWindow
     {
         var selectedGroups = GetPreviewFileGroups(sender);
         var groupNames = selectedGroups.Select(g => g.FilePath).ToList();
-        LogService.Instance.Info("Preview", $"OnPreviewSelectedFiles: {groupNames.Count} groups selected: [{string.Join(", ", groupNames.Select(System.IO.Path.GetFileName))}]");
+        LogService.Instance.Info("Preview", $"OnPreviewSelectedFiles: {groupNames.Count} groups selected: [{string.Join(", ", groupNames.Select(Path.GetFileName))}]");
         _suppressPreviewUpdate = true;
         try
         {
@@ -1965,7 +1968,7 @@ public sealed partial class MainWindow
 
         var parent = FindParentGroup(_previewResult);
         var matches = parent is null ? new List<SearchResult> { _previewResult } : parent.ToList();
-        LogService.Instance.Info("Preview", $"GetFullFilePreviewTargets: fallback to current preview file='{System.IO.Path.GetFileName(_previewResult.FilePath)}', matches={matches.Count}");
+        LogService.Instance.Info("Preview", $"GetFullFilePreviewTargets: fallback to current preview file='{Path.GetFileName(_previewResult.FilePath)}', matches={matches.Count}");
         return [new FullFilePreviewTarget(_previewResult.FilePath, matches)];
     }
 
@@ -1999,9 +2002,9 @@ public sealed partial class MainWindow
             selected = new List<SearchResult> { single };
         if (selected.Count == 0) return;
 
-        var sb = new System.Text.StringBuilder();
+        var sb = new StringBuilder();
         foreach (var r in selected)
-            sb.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"{r.FilePath}:{r.LineNumber}: {r.MatchLine}");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"{r.FilePath}:{r.LineNumber}: {r.MatchLine}");
 
         try
         {
@@ -2056,7 +2059,7 @@ public sealed partial class MainWindow
         var file = await picker.PickSaveFileAsync();
         if (file is null) return;
 
-        var sb = new System.Text.StringBuilder();
+        var sb = new StringBuilder();
         string ext = Path.GetExtension(file.Name).ToLowerInvariant();
         if (ext == ".csv")
         {
@@ -2064,13 +2067,13 @@ public sealed partial class MainWindow
             foreach (var r in selected)
             {
                 var escaped = r.MatchLine.Replace("\"", "\"\"");
-                sb.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"\"{r.FilePath}\",{r.LineNumber},\"{escaped}\"");
+                sb.AppendLine(CultureInfo.InvariantCulture, $"\"{r.FilePath}\",{r.LineNumber},\"{escaped}\"");
             }
         }
         else
         {
             foreach (var r in selected)
-                sb.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"{r.FilePath}:{r.LineNumber}: {r.MatchLine}");
+                sb.AppendLine(CultureInfo.InvariantCulture, $"{r.FilePath}:{r.LineNumber}: {r.MatchLine}");
         }
 
         await Windows.Storage.FileIO.WriteTextAsync(file, sb.ToString());
@@ -2323,14 +2326,14 @@ public sealed partial class MainWindow
 
                     if (lineNum > 0 && !isContinuation)
                     {
-                        sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"{lineNum,5} \u2502 {lineText}");
+                        sb.Append(CultureInfo.InvariantCulture, $"{lineNum,5} \u2502 {lineText}");
                         lastEmittedLineNum = lineNum;
                     }
                     else
                     {
                         // Blank gutter for continuation segments or unknown line numbers,
                         // matching the visual style ("      \u2502 ").
-                        sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"      \u2502 {lineText}");
+                        sb.Append(CultureInfo.InvariantCulture, $"      \u2502 {lineText}");
                     }
                 }
                 LogService.Instance.Info("Preview",
@@ -2425,7 +2428,7 @@ public sealed partial class MainWindow
             {
                 string text = gutter.Text;
                 if (!string.IsNullOrWhiteSpace(text)
-                    && int.TryParse(text.AsSpan().Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int parsed)
+                    && int.TryParse(text.AsSpan().Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed)
                     && parsed > 0)
                 {
                     return parsed;
@@ -2648,7 +2651,7 @@ public sealed partial class MainWindow
         int fileIndex = 0;
         foreach (var (filePath, results) in pageFiles)
         {
-            var fileSw = System.Diagnostics.Stopwatch.StartNew();
+            var fileSw = Stopwatch.StartNew();
             var (section, _) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
 
             fileContents.TryGetValue(filePath, out string[]? allLines);
@@ -2729,7 +2732,7 @@ public sealed partial class MainWindow
             }
 
             fileSw.Stop();
-            LogService.Instance.Verbose("Preview", $"ShowConcatenatedPreviewAsync: file='{System.IO.Path.GetFileName(filePath)}', results={results.Count}, paragraphs={parasInFile}, elapsed={fileSw.ElapsedMilliseconds}ms");
+            LogService.Instance.Verbose("Preview", $"ShowConcatenatedPreviewAsync: file='{Path.GetFileName(filePath)}', results={results.Count}, paragraphs={parasInFile}, elapsed={fileSw.ElapsedMilliseconds}ms");
 
             // Yield to the UI thread periodically so the app stays responsive.
             if (++fileIndex % PreviewYieldBatchSize == 0)
@@ -2794,7 +2797,7 @@ public sealed partial class MainWindow
         int fileIndex = 0;
         foreach (var (filePath, results) in pageFiles)
         {
-            var fileSw = System.Diagnostics.Stopwatch.StartNew();
+            var fileSw = Stopwatch.StartNew();
             var (section, _) = AddPreviewSection(filePath, $"{results.Count:N0} selected match(es)", results);
             int sectionMatchStart = _matchParagraphs.Count;
             int startingBlocks = section.Blocks.Count;
@@ -2805,7 +2808,7 @@ public sealed partial class MainWindow
             {
                 BuildConcatenatedSection(section, results, allLines, ViewModel.PreviewContextLines, rx: null);
                 fileSw.Stop();
-                LogService.Instance.Verbose("Preview", $"ShowMultiHighlightPreviewAsync: filename-only file='{System.IO.Path.GetFileName(filePath)}', results={results.Count}, blocks={section.Blocks.Count}, elapsed={fileSw.ElapsedMilliseconds}ms");
+                LogService.Instance.Verbose("Preview", $"ShowMultiHighlightPreviewAsync: filename-only file='{Path.GetFileName(filePath)}', results={results.Count}, blocks={section.Blocks.Count}, elapsed={fileSw.ElapsedMilliseconds}ms");
 
                 if (++fileIndex % PreviewYieldBatchSize == 0)
                 {
@@ -2969,7 +2972,7 @@ public sealed partial class MainWindow
             }
 
             fileSw.Stop();
-            LogService.Instance.Verbose("Preview", $"ShowMultiHighlightPreviewAsync: file='{System.IO.Path.GetFileName(filePath)}', results={results.Count}, blocks={section.Blocks.Count}, elapsed={fileSw.ElapsedMilliseconds}ms");
+            LogService.Instance.Verbose("Preview", $"ShowMultiHighlightPreviewAsync: file='{Path.GetFileName(filePath)}', results={results.Count}, blocks={section.Blocks.Count}, elapsed={fileSw.ElapsedMilliseconds}ms");
 
             // Yield to the UI thread periodically so the app stays responsive.
             if (++fileIndex % PreviewYieldBatchSize == 0)

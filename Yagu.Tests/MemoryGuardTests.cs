@@ -327,7 +327,7 @@ public sealed class MemoryGuardTests
         string svcSource = File.ReadAllText(
             Path.Combine(RepoRoot, "Yagu", "Services", "SessionFileDiscoveryService.cs"));
         Assert.Contains(".OrderByDescending(candidate => candidate.ModifiedUtc ?? DateTimeOffset.MinValue)", svcSource);
-        Assert.Contains(".ThenBy(candidate => System.IO.Path.GetFileName(candidate.Path), StringComparer.OrdinalIgnoreCase)", svcSource);
+        Assert.Contains(".ThenBy(candidate => Path.GetFileName(candidate.Path), StringComparer.OrdinalIgnoreCase)", svcSource);
     }
 
     [Fact]

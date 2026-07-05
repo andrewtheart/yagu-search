@@ -526,6 +526,7 @@ Controls image text recognition (OCR). When OCR is on, image files (PNG, JPG, BM
 | File log level | Controls file logging: None, Critical, Warning, Info, or Verbose. Verbose can degrade performance. |
 | Console log level | Controls console logging with the same levels as file logging. |
 | Log file | Shows the path to the active Yagu log file as a clickable link — click it to open the log in Notepad. |
+| Clear log file | Erases the contents of the current log file. New activity is logged normally afterward. |
 
 ### Privacy Tab
 

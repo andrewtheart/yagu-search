@@ -88,7 +88,7 @@ internal static class GitignoreService
         // Recurse into subdirectories, skipping already-known excluded folders.
         try
         {
-            foreach (var subDir in System.IO.Directory.EnumerateDirectories(currentDir))
+            foreach (var subDir in Directory.EnumerateDirectories(currentDir))
             {
                 var dirName = Path.GetFileName(subDir);
                 if (folders.Contains(dirName)) continue;
@@ -161,7 +161,7 @@ internal static class GitignoreService
                 // Resolve to a full path relative to the gitignore's directory.
                 var cleaned = pattern.TrimStart('/').Replace('/', '\\');
                 var fullPath = Path.GetFullPath(Path.Combine(gitignoreDir, cleaned));
-                if (System.IO.Directory.Exists(fullPath))
+                if (Directory.Exists(fullPath))
                 {
                     fullPaths.Add(fullPath);
                 }

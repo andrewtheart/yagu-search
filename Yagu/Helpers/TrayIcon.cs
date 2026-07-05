@@ -206,7 +206,7 @@ internal sealed class TrayIcon : IDisposable
 
     private static IntPtr LoadIcon(string icoPath)
     {
-        if (!System.IO.File.Exists(icoPath)) return IntPtr.Zero;
+        if (!File.Exists(icoPath)) return IntPtr.Zero;
         const int IMAGE_ICON = 1;
         const int LR_LOADFROMFILE = 0x0010;
         const int LR_DEFAULTSIZE = 0x0040;
