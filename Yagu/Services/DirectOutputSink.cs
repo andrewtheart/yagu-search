@@ -5,7 +5,7 @@ using Yagu.Native;
 namespace Yagu.Services;
 
 /// <summary>
-/// A sink that writes ripgrep-compatible UTF-8 output directly from the raw
+/// A sink that writes grep-style UTF-8 output directly from the raw
 /// byte pointers delivered by the Rust scanner — zero SearchResult allocation,
 /// zero managed string creation in the hot path.
 /// </summary>
@@ -25,7 +25,7 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
     private int _capacity;
     private readonly object _resizeLock = new();
 
-    // State for ripgrep-format output
+    // State for grep-style output
     private string? _currentFile;
     private int _lastLineWritten;
     private int _lastMatchLine;
@@ -143,10 +143,10 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
             FilesWithMatches++;
         }
 
-        // ripgrep is line-oriented: a single source line containing several matches
+        // grep is line-oriented: a single source line containing several matches
         // is printed once. The scanner delivers same-line matches consecutively in
         // ascending order, so fold any repeat of the just-written match line into the
-        // single emitted line (and count it once, like ripgrep's matching-line count).
+        // single emitted line (and count it once, like grep's matching-line count).
         // (Line numbers are 1-based, so 0 is a safe "no line yet" sentinel.)
         if (lineNum == _lastMatchLine)
             return 0;
@@ -221,7 +221,7 @@ internal sealed class DirectOutputSink : NativeSearcher.IParallelSink, IDisposab
         // block-buffered for throughput, so flush at file boundaries to keep a
         // human-watched search responsive). Piped/redirected output (color off)
         // stays fully buffered and flushes once at the end for max throughput,
-        // matching ripgrep's buffered-when-not-a-tty behavior.
+        // matching the common buffered-when-not-a-tty behavior.
         if (_color && _wroteMatchInFile)
             _output.Flush();
     }

@@ -920,7 +920,7 @@ enum LiteralImpl {
         /// prefilter. Chosen to be the *rarest* byte (by memchr's background
         /// frequency model) rather than always the first byte, so a common
         /// leading byte like 't' in "test" no longer fires a verify at nearly
-        /// every position in t-dense text. Mirrors ripgrep/memmem's rare-byte
+        /// every position in t-dense text. Mirrors memchr/memmem's rare-byte
         /// strategy for the ASCII case-insensitive path.
         rare_offset: usize,
         /// Lowercase form of the prefilter byte.

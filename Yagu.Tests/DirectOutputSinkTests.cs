@@ -7,7 +7,7 @@ namespace Yagu.Tests;
 public sealed class DirectOutputSinkTests
 {
     [Fact]
-    public unsafe void OnMatchForFile_WritesPlainRipgrepOutputWithContextSeparatorsAndTruncation()
+    public unsafe void OnMatchForFile_WritesPlainGrepStyleOutputWithContextSeparatorsAndTruncation()
     {
         using var output = new MemoryStream();
         var paths = new List<string> { @"C:\src\example.txt" };
@@ -257,7 +257,7 @@ public sealed class DirectOutputSinkTests
     [Fact]
     public unsafe void OnMatchForFile_NoContext_NonContiguousMatches_OmitsSeparator()
     {
-        // ripgrep prints "--" separators only when context (-A/-B/-C) is enabled.
+        // grep prints "--" separators only when context (-A/-B/-C) is enabled.
         // At context 0 (contextEnabled: false), non-contiguous matches must NOT be
         // separated by "--".
         using var output = new MemoryStream();
@@ -286,7 +286,7 @@ public sealed class DirectOutputSinkTests
     [Fact]
     public unsafe void OnMatchForFile_MultipleMatchesOnSameLine_EmitsLineOnce()
     {
-        // ripgrep is line-oriented: a source line containing several matches is
+        // grep is line-oriented: a source line containing several matches is
         // printed exactly once. The scanner delivers same-line matches consecutively,
         // so the sink must fold them into a single emitted line and count it once.
         using var output = new MemoryStream();
@@ -317,7 +317,7 @@ public sealed class DirectOutputSinkTests
         int occurrences = text.Split("1:foo foo foo").Length - 1;
         Assert.Equal(1, occurrences);
         Assert.Contains("2:foo bar", text);
-        // Matching-line count (like ripgrep), not raw match count: 2 lines, not 4.
+        // Matching-line count (like grep), not raw match count: 2 lines, not 4.
         Assert.Equal(2, sink.TotalMatches);
     }
 

@@ -40,7 +40,7 @@ managed per-match marshalling (it is bounded by `MaxResults`).
 5. **Unbuffered per-match output syscalls (CLI).** `DirectOutputSink` output is wrapped in a
    `BufferedStream` **at the `CliRunner` call site** (16× speedup) — keep the buffering at the call
    site, because sink unit tests read the `MemoryStream` mid-scan. Also: `--` separators are emitted
-   only when context (`-A/-B/-C`) is on, and same-line matches fold to one emitted line (ripgrep parity).
+   only when context (`-A/-B/-C`) is on, and same-line matches fold to one emitted line (grep parity).
 
 ## FFI / ABI discipline (`yagu-core` ↔ `Yagu/Native`)
 

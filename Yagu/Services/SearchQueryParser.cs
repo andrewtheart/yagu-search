@@ -62,7 +62,7 @@ internal static class SearchQueryParser
     /// adjacent character of the term is itself a word character, so a query
     /// made of punctuation (e.g. <c>"+="</c>) still matches as a literal
     /// substring. This mirrors "match whole word" in common editors and
-    /// ripgrep's <c>--word-regexp</c> for word-edged terms.
+    /// grep's <c>--word-regexp</c> for word-edged terms.
     /// </summary>
     public static string BuildWholeWordPattern(string term)
     {

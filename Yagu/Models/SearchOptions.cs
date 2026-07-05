@@ -209,7 +209,7 @@ public sealed class SearchOptions
     public IReadOnlyList<string>? AdminProtectedPathSegments { get; init; }
 
     /// <summary>
-    /// When set, the streaming scanner writes ripgrep-formatted UTF-8 output
+    /// When set, the streaming scanner writes grep-style-formatted UTF-8 output
     /// directly to this stream, bypassing SearchResult allocation entirely.
     /// Used by CLI mode for maximum throughput.
     /// </summary>

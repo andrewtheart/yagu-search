@@ -14,7 +14,7 @@ namespace Yagu;
 /// Implements <c>--cli</c> mode: attaches to the parent console, parses command-line
 /// arguments, loads settings (current-directory <c>.yagu.json</c> → process launch-directory
 /// <c>.yagu.json</c> → global AppData → CLI overrides),
-/// and streams search results to stdout in ripgrep-compatible format while writing
+/// and streams search results to stdout in grep-style format while writing
 /// warnings and the completion summary to stderr.
 /// </summary>
 internal static class CliRunner
@@ -85,7 +85,7 @@ internal static class CliRunner
         }
 
         // --load-session short-circuits the entire search pipeline: just
-        // read the file and re-emit results in ripgrep-compatible format.
+        // read the file and re-emit results in grep-style format.
         if (!string.IsNullOrWhiteSpace(args.LoadSessionPath))
             return RunLoadSession(args.LoadSessionPath!, vtEnabled);
 
@@ -200,7 +200,7 @@ internal static class CliRunner
             DirectoryExists = static d => Directory.Exists(d),
         };
 
-        // Progress goes to stderr so stdout stays ripgrep-clean.
+        // Progress goes to stderr so stdout stays clean (only match output).
         string? lastProgress = null;
         var progress = new Progress<SemanticTranslationProgress>(p =>
         {
@@ -571,7 +571,7 @@ internal static class CliRunner
     }
 
     /// <summary>
-    /// Warns (to stderr, keeping stdout ripgrep-clean) before the first OCR asset download and decides
+    /// Warns (to stderr, keeping stdout clean) before the first OCR asset download and decides
     /// whether to proceed. Honors <c>--allow-ocr-download</c> (non-interactive opt-in); otherwise, on an
     /// interactive console, asks y/N. Declining (or a non-interactive run without the flag) returns
     /// false, so image-text search reports the components are unavailable rather than downloading them.
@@ -1176,7 +1176,7 @@ internal static class CliRunner
     }
 
     // -----------------------------------------------------------------------
-    // Search + ripgrep-style output
+    // Search + grep-style output
     // -----------------------------------------------------------------------
 
     private static async Task<int> RunSearchAsync(List<SearchOptions> perRootOptions, CliArgs args, bool vtEnabled)
@@ -1197,10 +1197,10 @@ internal static class CliRunner
 
         var service  = new SearchService();
 
-        // Direct output mode: bypass RipgrepWriter entirely — the DirectOutputSink writes
-        // ripgrep-formatted UTF-8 directly from Rust's byte buffers. A single 128 KiB buffered stdout
+        // Direct output mode: bypass GrepStyleWriter entirely — the DirectOutputSink writes
+        // grep-style-formatted UTF-8 directly from Rust's byte buffers. A single 128 KiB buffered stdout
         // stream is shared by every root (roots are scanned sequentially), coalescing the many tiny
-        // per-match writes into block writes like ripgrep's buffered stdout. Disabled while collecting
+        // per-match writes into block writes like a buffered stdout. Disabled while collecting
         // results for post-processing (sort/export/replace/group/save-session).
         Stream? directStream = needsCollection ? null : new BufferedStream(Console.OpenStandardOutput(), 1 << 17);
         foreach (var rootOptions in perRootOptions)
@@ -1485,7 +1485,7 @@ internal static class CliRunner
         }
 
         SessionFileService.SessionHeader? header = null;
-        var writer = new RipgrepWriter(Console.Out, useColor);
+        var writer = new GrepStyleWriter(Console.Out, useColor);
         int emitted = 0;
 
         try
@@ -1587,7 +1587,7 @@ internal static class CliRunner
 
     private static void WriteSortedResults(IReadOnlyList<SearchResult> results, bool useColor)
     {
-        var writer = new RipgrepWriter(Console.Out, useColor);
+        var writer = new GrepStyleWriter(Console.Out, useColor);
         foreach (var result in results)
             writer.Add(result);
         writer.Flush();
@@ -1687,7 +1687,7 @@ internal static class CliRunner
                 ? OrderFileGroups(bucket.Files, args.SortBy!, args.SortDescending)
                 : bucket.Files;
 
-            var writer = new RipgrepWriter(o, useColor);
+            var writer = new GrepStyleWriter(o, useColor);
             foreach (var fg in filesInBucket)
                 foreach (var r in fg)
                     writer.Add(r);
@@ -1966,7 +1966,8 @@ internal static class CliRunner
                   --allow-ocr-download    Permit the one-time OCR engine/model download (~365 MB) without
                                           an interactive prompt. Needed only on the very first OCR run of
                                           an edition that does not bundle the OCR components.
-                  --ocr-engine <name>     OCR engine for --image-text: paddle (default) or tesseract.
+                  --ocr-engine <name>     OCR engine for --image-text: paddle or tesseract. Default is
+                                          paddle on x64/Arm64, tesseract on x86 (Paddle's runtime is x64-only).
                   --ocr-model <name>      PaddleSharp recognition model: EnglishV3, EnglishV4,
                                           ChineseV4, or ChineseV5 (default). Ignored by the tesseract engine.
                   --ocr-max-side <px>     PaddleSharp detection resolution (longest side, default 960;
@@ -2888,12 +2889,12 @@ internal static class CliRunner
 }
 
 // ---------------------------------------------------------------------------
-// Ripgrep-compatible output writer
+// grep-style output writer
 // ---------------------------------------------------------------------------
 
 /// <summary>
 /// Writes search results to a <see cref="TextWriter"/> (stdout) in the same
-/// format that ripgrep uses:
+/// format that grep-style tools use:
 /// <list type="bullet">
 ///   <item>File path header, bold when ANSI is supported.</item>
 ///   <item><c>LINE:</c> prefix for match lines.</item>
@@ -2966,9 +2967,9 @@ internal sealed class ProgressLine
     }
 }
 
-internal sealed class RipgrepWriter
+internal sealed class GrepStyleWriter
 {
-    // ANSI escape sequences — matches ripgrep defaults
+    // ANSI escape sequences — grep-style defaults
     private const string BoldMagenta = "\x1B[1;35m";  // file path header
     private const string BoldGreen   = "\x1B[1;32m";  // match line numbers
     private const string BoldBlue    = "\x1B[1;34m";  // context line numbers + separator
@@ -2984,7 +2985,7 @@ internal sealed class RipgrepWriter
 
     public int TotalMatches { get; private set; }
 
-    public RipgrepWriter(TextWriter @out, bool color)
+    public GrepStyleWriter(TextWriter @out, bool color)
     {
         _out   = @out;
         _color = color;
@@ -2995,7 +2996,7 @@ internal sealed class RipgrepWriter
         bool sameFile = string.Equals(_currentFile, result.FilePath, StringComparison.OrdinalIgnoreCase);
 
         // Dedup: multiple matches on the same line produce separate SearchResults;
-        // ripgrep prints each line once, so skip any that repeat a line already written.
+        // grep-style output prints each line once, so skip any that repeat a line already written.
         if (sameFile && result.LineNumber > 0 && result.LineNumber == _lastLine)
             return;
 
