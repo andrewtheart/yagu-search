@@ -1567,7 +1567,19 @@ pub struct QgStreamingScanner {
 }
 
 fn finish_streaming_scanner(sc: &mut QgStreamingScanner) {
-    sc.work.finished.store(true, Ordering::Release);
+    // Set the `finished` flag UNDER the queue lock. It is the wait-predicate the
+    // workers check (while holding this same lock) before parking on the condvar,
+    // so mutating it without the lock is a lost-wakeup race: a worker can observe
+    // an empty queue + finished==false, then — in the gap before it calls
+    // `available.wait(q)` — this thread could store `finished=true` and
+    // `notify_all()` with no waiter registered yet, so the worker parks forever and
+    // `join()` below blocks indefinitely (an intermittent native-search deadlock).
+    // Taking the lock first serializes against that gap (mirrors the push path,
+    // which mutates the queue under the lock and only then notifies).
+    {
+        let _guard = sc.work.queue.lock().unwrap();
+        sc.work.finished.store(true, Ordering::Release);
+    }
     sc.work.available.notify_all();
 
     for handle in sc.workers.drain(..) {
