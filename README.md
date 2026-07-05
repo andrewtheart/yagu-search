@@ -53,7 +53,7 @@ For a user-focused walkthrough of the app, see [HELP.md](HELP.md).
     </td>
     <td align="center" width="33%">
       <h3>✏️ Built-in Editor</h3>
-      Open any matched file in-app and fix it on the spot — syntax highlighting, find/replace, jump-to-match, and safe <code>.yagubak</code> backups.
+      Open any matched file in-app and fix it on the spot — syntax highlighting, find/replace, jump-to-match, and safe automatic <code>.yagubak</code> backups.
     </td>
     <td align="center" width="33%">
       <h3>📦 Searches Everywhere</h3>
@@ -107,9 +107,9 @@ To install Yagu without building from source, download the installer that matche
 
 > **Why is Tesseract the default engine for the Offline edition?** Tesseract is fully self-contained: its native engine binaries are bundled directly inside the installer, so image-text (OCR) search works on a completely air-gapped machine with zero network access. PaddleOCR normally downloads its native runtime and recognition models on first use; the Offline edition bundles those too, but Tesseract is chosen as the default so OCR is *guaranteed* to work offline out of the box. You can switch to PaddleOCR at any time in **Settings → OCR**. On CPU — where both engines run in Yagu — PaddleOCR is typically faster, which is why it remains the default on the online (non-offline) editions.
 
-> **Note: Yagu is currently unsigned and is not supported on machines with Smart App Control enabled.**
+> ⚠️**Note: Yagu is currently unsigned and is not supported on machines with Smart App Control enabled.**
 >
-> Yagu is an open-source project without a code-signing certificate. We applied for free open-source signing through SignPath, but it is not accepting new applications at the moment due to high volume (see [OSSign — Code Signing for Open Source](https://ossign.org/#apply)). Because Windows **Smart App Control** only allows programs that are signed by a recognized publisher, Yagu cannot run on PCs where Smart App Control is turned on. The installer detects this and stops with a message; to install Yagu, turn Smart App Control off (Windows Security → App & browser control → Smart App Control), or use a machine where it is not enabled. We will sign future releases once free open-source signing becomes available.
+> Yagu is an open-source project without a code-signing certificate. Free open-source signing through SignPath is not currently possible as SignPath is not accepting new applications at the moment due to high volume (see [OSSign — Code Signing for Open Source](https://ossign.org/#apply)). Because Windows **Smart App Control** only allows programs that are signed by a recognized publisher, Yagu cannot run on PCs where Smart App Control is turned on. The installer detects this and stops with a message; to install Yagu, turn Smart App Control off (Windows Security → App & browser control → Smart App Control), or use a machine where it is not enabled. We will sign future releases once free open-source signing becomes available.
 
 ## Screenshots
 
