@@ -1,0 +1,8 @@
+<!-- LOCAL ONLY - gitignored. Real proxy endpoint + app token injected into local/CI builds.
+     Delete this file (or blank YaguProxyUrl) to make your builds offline again. -->
+<Project>
+  <PropertyGroup>
+    <YaguProxyUrl>https://func-yagu-telemetry.azurewebsites.net</YaguProxyUrl>
+    <YaguAppToken>QpbYN7kEa0iQYVIM0N/ZhA==</YaguAppToken>
+  </PropertyGroup>
+</Project>
