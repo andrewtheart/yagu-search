@@ -1,5 +1,5 @@
 ---
-description: "Yagu test-authoring conventions — source-pin vs unit tests, compiling engine source into Yagu.Tests, coverage runsettings, and the iterative filter. Use when: adding a test, writing a test, source-pin test, CS0103 in tests, new .cs not found in tests, code coverage, IncludeTestAssembly, runsettings, Category!=Slow, benchmark test, Yagu.Tests, Yagu.Benchmarks."
+description: "Yagu test-authoring conventions — source-pin vs unit tests, compiling engine source into Yagu.Tests, coverage runsettings, and the iterative filter. Use when: adding a test, writing a test, source-pin test, CS0103 in tests, new .cs not found in tests, code coverage, IncludeTestAssembly, runsettings, Category!=Slow, Category=GPU, GPU test, Slow test, test trait, benchmark test, Yagu.Tests, Yagu.Benchmarks."
 applyTo: "Yagu.Tests/**, Yagu.Benchmarks/**"
 ---
 
@@ -7,7 +7,13 @@ applyTo: "Yagu.Tests/**, Yagu.Benchmarks/**"
 
 Also follow the **Test File Naming Rules** and **Test Run Rules** in
 [copilot-instructions.md](../copilot-instructions.md) (name tests after the class under test;
-default to the iterative `--filter "Category!=Slow"` run; don't kill long runs prematurely).
+default to the iterative `--filter "Category!=Slow&Category!=GPU"` run; don't kill long runs prematurely).
+
+## Test categories
+
+- `[Trait("Category", "Slow")]` — perf/UI/large-corpus tests that take minutes (excluded from the iterative run).
+- `[Trait("Category", "GPU")]` — tests that need a GPU + a local Foundry model (e.g. `SemanticEvalGoldenTests`, which
+  is tagged BOTH `Slow` and `GPU`). CI and GPU-less machines exclude them with `--filter "Category!=Slow&Category!=GPU"`.
 
 ## Two kinds of tests
 

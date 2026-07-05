@@ -923,17 +923,30 @@ public sealed class PreviewCoreRegressionTests
             "_previewCustomSelectionLastRangeEnd = endIndex;");
         Assert.DoesNotContain("block.TextHighlighters.Add(_previewCustomSelectionHighlighter);", highlighter);
 
-        string overlay = ExtractMethodWindow(MainWindowSource, "DrawPreviewCustomSelectionOverlay", window: 6000);
+        string overlay = ExtractMethodWindow(MainWindowSource, "DrawPreviewCustomSelectionOverlay", window: 8600);
         AssertContainsInOrder(overlay,
             "PreviewSelectionOverlay.ActualWidth > 0",
             "PreviewScrollViewer.ActualWidth",
+            // The highlight bands are clamped to the visible content region: the right edge
+            // stops at the viewport (never over the scrollbar), the left edge stops at the
+            // content column (never over the inline line-number gutter).
+            "double contentRightBound = overlayWidth;",
+            "PreviewScrollViewer.ViewportWidth",
+            "bool hasInlineGutter = !_sectionGutterBlocks.ContainsKey(block);",
             "foreach (var textBlock in block.Blocks)",
             "int paragraphStart = blockIndex;",
             "int paragraphEnd = paragraphStart + paragraphLength;",
             "int rangeStart = Math.Max(selectionStart, paragraphStart);",
             "block.TransformToVisual(PreviewSelectionOverlay)",
+            "TryGetParagraphInlineGutterLength(paragraph, out int gutterCharLength)",
+            "double visibleLeft = Math.Max(contentLeftBound, left);",
+            "double visibleRight = Math.Min(contentRightBound, right);",
             "GetPreviewCustomSelectionOverlayMarker(markerIndex++)",
             "PreviewSelectionOverlay.Visibility = Visibility.Visible;");
+
+        // The inline gutter length is recorded so the overlay can find the content column.
+        string makeParagraph = ExtractMethodWindow(MainWindowSource, "MakePreviewParagraph", window: 3200);
+        Assert.Contains("s_paragraphInlineGutterLength.AddOrUpdate(para,", makeParagraph);
         Assert.Contains("<Canvas x:Name=\"PreviewSelectionOverlay\"", MainWindowXaml);
         Assert.DoesNotContain("x:Name=\"PreviewSelectionOverlay\" Grid.Row=\"1\"\r\n                            HorizontalAlignment=\"Stretch\" VerticalAlignment=\"Stretch\"\r\n                            Canvas.ZIndex=\"19\"\r\n                            IsHitTestVisible=\"False\" Visibility=\"Collapsed\"", MainWindowXaml);
 

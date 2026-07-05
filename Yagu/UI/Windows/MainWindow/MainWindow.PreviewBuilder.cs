@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.UI.Xaml;
@@ -721,7 +723,7 @@ public sealed partial class MainWindow
         string[]? allLines, int previewLines, Regex? rx)
     {
         ResetPreviewShowMoreDiagnostics();
-        var buildSw = System.Diagnostics.Stopwatch.StartNew();
+        var buildSw = Stopwatch.StartNew();
         bool truncatePreviewLines = ViewModel.IsSearching
             ? ShouldTruncateOverflowPreviewLines()
             : ShouldTruncateInitialPreviewLines();
@@ -832,7 +834,7 @@ public sealed partial class MainWindow
         }
 
         ResetPreviewShowMoreDiagnostics();
-        var buildSw = System.Diagnostics.Stopwatch.StartNew();
+        var buildSw = Stopwatch.StartNew();
         bool truncatePreviewLines = ViewModel.IsSearching
             ? ShouldTruncateOverflowPreviewLines()
             : ShouldTruncateInitialPreviewLines();
@@ -1155,8 +1157,8 @@ public sealed partial class MainWindow
         if (!_lazySections.Remove(section, out var lazy))
             return false;
 
-        var matSw = System.Diagnostics.Stopwatch.StartNew();
-        LogService.Instance.Info("Preview", $"MaterializeLazySection: file='{System.IO.Path.GetFileName(lazy.FilePath)}', matches={lazy.MatchCount}");
+        var matSw = Stopwatch.StartNew();
+        LogService.Instance.Info("Preview", $"MaterializeLazySection: file='{Path.GetFileName(lazy.FilePath)}', matches={lazy.MatchCount}");
 
         // Lazy file read: bulk inserts skip the upfront read for collapsed
         // sections. Read the single file now, on demand.
@@ -1180,7 +1182,7 @@ public sealed partial class MainWindow
 
         _lazyMatchCount -= lazy.MatchCount;
         matSw.Stop();
-        LogService.Instance.Info("Preview", $"MaterializeLazySection complete: file='{System.IO.Path.GetFileName(lazy.FilePath)}', elapsed={matSw.ElapsedMilliseconds}ms, remainingLazy={_lazySections.Count}");
+        LogService.Instance.Info("Preview", $"MaterializeLazySection complete: file='{Path.GetFileName(lazy.FilePath)}', elapsed={matSw.ElapsedMilliseconds}ms, remainingLazy={_lazySections.Count}");
         return true;
     }
 
@@ -1521,7 +1523,7 @@ public sealed partial class MainWindow
         LogService.Instance.Info("Preview", $"ShowSingleFilePreviewAsync: file='{r.FilePath}', line={r.LineNumber}, fullFile={fullFile}");
         bool isFileNameOnlyPreview = r.LineNumber <= 0;
         fullFile |= isFileNameOnlyPreview;
-        var singleSw = System.Diagnostics.Stopwatch.StartNew();
+        var singleSw = Stopwatch.StartNew();
         BeginPreviewContentUpdate();
         ShowPreviewBlockSurface();
         PreviewBlock.Tag = r.FilePath;
@@ -2018,7 +2020,7 @@ public sealed partial class MainWindow
 
     private (RichTextBlock block, Expander expander) AddPreviewSection(string filePath, string? detail = null, List<SearchResult>? results = null, bool isExpanded = true, bool addToPanel = true)
     {
-        LogService.Instance.Verbose("Preview", $"AddPreviewSection: file='{System.IO.Path.GetFileName(filePath)}', detail='{detail}', expanded={isExpanded}, addToPanel={addToPanel}");
+        LogService.Instance.Verbose("Preview", $"AddPreviewSection: file='{Path.GetFileName(filePath)}', detail='{detail}', expanded={isExpanded}, addToPanel={addToPanel}");
         bool wrap = ViewModel.PreviewWrapModeIndex == (int)Models.PreviewWrapMode.Wrap;
         string previewTextFontFamily = ResolvePreviewTextFontFamily();
         int previewTextFontSize = ResolvePreviewTextFontSize();
@@ -2526,9 +2528,9 @@ public sealed partial class MainWindow
 
                 try
                 {
-                    LogService.Instance.Info("Preview", $"ShowFullFilePreviewAsync: loading file '{System.IO.Path.GetFileName(target.FilePath)}', matches={target.Matches.Count}");
+                    LogService.Instance.Info("Preview", $"ShowFullFilePreviewAsync: loading file '{Path.GetFileName(target.FilePath)}', matches={target.Matches.Count}");
                     var document = await LoadPreviewDocumentAsync(target.FilePath, cts.Token, fileSizeLimit: EffectiveFullFilePreviewLimitBytes).ConfigureAwait(true);
-                    LogService.Instance.Info("Preview", $"ShowFullFilePreviewAsync: loaded '{System.IO.Path.GetFileName(target.FilePath)}', bytes={document.ByteLength:N0}, textLen={document.Text.Length:N0}");
+                    LogService.Instance.Info("Preview", $"ShowFullFilePreviewAsync: loaded '{Path.GetFileName(target.FilePath)}', bytes={document.ByteLength:N0}, textLen={document.Text.Length:N0}");
                     var section = AddFullFileSection(target, document.ByteLength);
                     _sectionMatchNavs.TryGetValue(section, out var sectionNav);
                     var renderedMatch = RenderFullFileDocument(section, target, document.Text, rx, _matchParagraphs, sectionNav, _previewResult);
@@ -2616,7 +2618,7 @@ public sealed partial class MainWindow
             SectionMatchNav? sectionNav,
             SearchResult? preferredResult)
     {
-        var renderSw = System.Diagnostics.Stopwatch.StartNew();
+        var renderSw = Stopwatch.StartNew();
         var matchByLine = new Dictionary<int, SearchResult>();
         foreach (var result in target.Matches.OrderBy(r => r.LineNumber))
         {
@@ -2651,7 +2653,7 @@ public sealed partial class MainWindow
         }
 
         renderSw.Stop();
-        LogService.Instance.Info("Preview", $"RenderFullFileDocument: file='{System.IO.Path.GetFileName(target.FilePath)}', lines={lineNumber - 1}, matches={matchByLine.Count}, blocks={section.Blocks.Count}, elapsed={renderSw.ElapsedMilliseconds}ms");
+        LogService.Instance.Info("Preview", $"RenderFullFileDocument: file='{Path.GetFileName(target.FilePath)}', lines={lineNumber - 1}, matches={matchByLine.Count}, blocks={section.Blocks.Count}, elapsed={renderSw.ElapsedMilliseconds}ms");
 
         if (!wroteLine)
         {
@@ -2682,8 +2684,8 @@ public sealed partial class MainWindow
     private static async Task<PreviewTextDocument> LoadPreviewDocumentAsync(string filePath, CancellationToken cancellationToken, bool enforceLimit = true, long fileSizeLimit = 0)
     {
         long effectiveLimit = fileSizeLimit > 0 ? fileSizeLimit : 1L * 1024 * 1024 * 1024;
-        var loadSw = System.Diagnostics.Stopwatch.StartNew();
-        LogService.Instance.Verbose("Preview", $"LoadPreviewDocumentAsync: start file='{System.IO.Path.GetFileName(filePath)}'");
+        var loadSw = Stopwatch.StartNew();
+        LogService.Instance.Verbose("Preview", $"LoadPreviewDocumentAsync: start file='{Path.GetFileName(filePath)}'");
 
         // Handle archive entry paths: extract the entry to a memory stream
         if (ZipArchiveSearcher.IsArchivePath(filePath))
@@ -2729,7 +2731,7 @@ public sealed partial class MainWindow
             var text = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             int maxLineLength = GetMaxLineLength(text);
             loadSw.Stop();
-            LogService.Instance.Info("Preview", $"LoadPreviewDocumentAsync: done file='{System.IO.Path.GetFileName(filePath)}', bytes={info.Length:N0}, textLen={text.Length:N0}, maxLineLen={maxLineLength:N0}, elapsed={loadSw.ElapsedMilliseconds}ms");
+            LogService.Instance.Info("Preview", $"LoadPreviewDocumentAsync: done file='{Path.GetFileName(filePath)}', bytes={info.Length:N0}, textLen={text.Length:N0}, maxLineLen={maxLineLength:N0}, elapsed={loadSw.ElapsedMilliseconds}ms");
             return new PreviewTextDocument(text, reader.CurrentEncoding, info.Length, maxLineLength);
         }
         catch (PreviewLoadException) { throw; }
@@ -2946,10 +2948,30 @@ public sealed partial class MainWindow
     private SolidColorBrush _resultMatchTextBrush = new(Microsoft.UI.Colors.Gold);
     private SolidColorBrush _matchLineBrush = new(Microsoft.UI.Colors.White);
     private Windows.UI.Color _overlayColor = Microsoft.UI.Colors.OrangeRed;
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphLineNumbers = new();
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphPrimaryResults = new();
+    private static readonly ConditionalWeakTable<Paragraph, object> s_paragraphLineNumbers = new();
+    private static readonly ConditionalWeakTable<Paragraph, object> s_paragraphPrimaryResults = new();
     /// <summary>Marks paragraphs that are continuation segments of a long source line (no leading line number gutter).</summary>
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphIsContinuation = new();
+    private static readonly ConditionalWeakTable<Paragraph, object> s_paragraphIsContinuation = new();
+    /// <summary>
+    /// Records the character length of the INLINE gutter prefix (indicator + centered line
+    /// number + separator) prepended to single-file <c>PreviewBlock</c> paragraphs, so the
+    /// drag-selection overlay can clamp its highlight bands to the content column and never
+    /// paint over the gutter. Absent for section content blocks (their gutter is a separate
+    /// block, so their content already starts at the block's left edge).
+    /// </summary>
+    private static readonly ConditionalWeakTable<Paragraph, object> s_paragraphInlineGutterLength = new();
+
+    /// <summary>Returns the inline gutter character length recorded for <paramref name="paragraph"/>, if any.</summary>
+    private static bool TryGetParagraphInlineGutterLength(Paragraph paragraph, out int gutterCharLength)
+    {
+        if (s_paragraphInlineGutterLength.TryGetValue(paragraph, out var value) && value is int length)
+        {
+            gutterCharLength = length;
+            return true;
+        }
+        gutterCharLength = 0;
+        return false;
+    }
     /// <summary>
     /// Records the source-line column window [SourceStart, SourceEnd) rendered for a
     /// truncated match-line paragraph. Lets same-line occurrence clicks decide whether a
@@ -2957,9 +2979,9 @@ public sealed partial class MainWindow
     /// outside every rendered window (append a dedicated window for it). Absent entry =
     /// the full untruncated line was rendered, which contains every occurrence.
     /// </summary>
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Paragraph, object> s_paragraphMatchWindows = new();
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Run, object> s_previewSearchMatchRuns = new();
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DependencyObject, object> s_previewShowMoreActions = new();
+    private static readonly ConditionalWeakTable<Paragraph, object> s_paragraphMatchWindows = new();
+    private static readonly ConditionalWeakTable<Run, object> s_previewSearchMatchRuns = new();
+    private static readonly ConditionalWeakTable<DependencyObject, object> s_previewShowMoreActions = new();
     private const int PreviewShowMoreTooltipHideDelayMs = 700;
     // How far below the top edge of the "Show more" button the cursor should land so the button is
     // directly layered underneath the pointer (the pointer overlaps the button rather than sitting above it).
@@ -3642,7 +3664,7 @@ public sealed partial class MainWindow
 
         string coreText = segment[coreStart..coreEnd];
         int ordinal = 0;
-        foreach (System.Text.RegularExpressions.Match match in rx.Matches(coreText))
+        foreach (Match match in rx.Matches(coreText))
         {
             if (match.Index == targetCoreStart
                 || (match.Index <= targetCoreStart && targetCoreStart < match.Index + match.Length))
@@ -3950,14 +3972,14 @@ public sealed partial class MainWindow
     {
         const int runWidth = 6;        // emitted run width; keeps the column edge straight
         const int indicatorCells = 1;  // leading indicator cell sits to the left of this run
-        string token = lineNum.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        string token = lineNum.ToString(CultureInfo.InvariantCulture);
         if (continuation)
             token += "+";
         if (token.Length >= runWidth)
             return token;
         int totalPad = (runWidth + indicatorCells) - token.Length;
         int leftCells = totalPad / 2;                                  // total left padding incl. indicator cell
-        int leftSpaces = System.Math.Max(0, leftCells - indicatorCells); // spaces before the number
+        int leftSpaces = Math.Max(0, leftCells - indicatorCells); // spaces before the number
         int rightSpaces = runWidth - token.Length - leftSpaces;       // remainder fills the fixed run width
         if (rightSpaces < 0)
             rightSpaces = 0;
@@ -4003,6 +4025,10 @@ public sealed partial class MainWindow
             para.Inlines.Add(indicator);
             para.Inlines.Add(gutterRun);
             para.Inlines.Add(gutterSep);
+            // Record the inline gutter's character length so the drag-selection overlay can
+            // keep its highlight bands off the gutter (they must start at the content column).
+            s_paragraphInlineGutterLength.AddOrUpdate(para,
+                (indicator.Text?.Length ?? 0) + (gutterRun.Text?.Length ?? 0) + (gutterSep.Text?.Length ?? 0));
         }
 
         if (truncationState is not null)
@@ -4044,7 +4070,7 @@ public sealed partial class MainWindow
         {
             int lastIdx = 0;
             int matchOrdinal = 0;
-            foreach (System.Text.RegularExpressions.Match m in rx.Matches(text))
+            foreach (Match m in rx.Matches(text))
             {
                 if (m.Index > lastIdx)
                 {

@@ -31,6 +31,7 @@ namespace Yagu.Tests;
 /// which rewrites <c>expected-plans.json</c> from the current run instead of asserting.
 /// </summary>
 [Trait("Category", "Slow")]
+[Trait("Category", "GPU")]
 public sealed class SemanticEvalGoldenTests
 {
     private readonly ITestOutputHelper _out;
