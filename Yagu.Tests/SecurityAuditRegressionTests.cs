@@ -105,6 +105,17 @@ public sealed class SecurityAuditRegressionTests
     [Fact]
     public void EverythingInstallerDownloads_UseHttps()
     {
+        // The download URL is built centrally in EverythingAssetPaths.DownloadUrl; assert it is HTTPS
+        // and targets the voidtools "Everything-" setup, and that no plaintext-HTTP URL exists.
+        // ("http" + "://" dodges the insecure-URL analyzer on this negative assertion.)
+        const string insecureVoidtools = "http" + "://www.voidtools.com";
+        string assetPaths = File.ReadAllText(Path.Combine(
+            FindRepoRoot(), "Yagu", "Services", "EverythingAssetPaths.cs"));
+        Assert.Contains("https://www.voidtools.com/", assetPaths);
+        Assert.Contains("Everything-", assetPaths);
+        Assert.DoesNotContain(insecureVoidtools, assetPaths);
+
+        // Both installer sites must obtain the URL from that central helper (never hand-roll an http:// one).
         foreach (string relative in new[]
                  {
                      Path.Combine("Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"),
@@ -112,16 +123,17 @@ public sealed class SecurityAuditRegressionTests
                  })
         {
             string source = File.ReadAllText(Path.Combine(FindRepoRoot(), relative));
-            Assert.Contains("https://www.voidtools.com/Everything-", source);
-            Assert.DoesNotContain("http://www.voidtools.com/Everything-", source);
+            Assert.Contains("EverythingAssetPaths.DownloadUrl(", source);
+            Assert.DoesNotContain(insecureVoidtools, source);
         }
     }
 
     private static void AssertVerifyBeforeRunAs(string source)
     {
         int verifyIndex = source.IndexOf(
-            "AuthenticodeVerifier.IsTrustedPublisher(tempPath, \"voidtools\"", StringComparison.Ordinal);
-        int runAsIndex = source.IndexOf("Verb", StringComparison.Ordinal);
+            "AuthenticodeVerifier.IsTrustedPublisher(installerPath, EverythingAssetPaths.TrustedPublisher",
+            StringComparison.Ordinal);
+        int runAsIndex = source.IndexOf("\"runas\"", StringComparison.Ordinal);
 
         Assert.True(verifyIndex >= 0, "Installer site must call AuthenticodeVerifier.IsTrustedPublisher.");
         Assert.True(runAsIndex >= 0, "Installer site must elevate via Verb = \"runas\".");
