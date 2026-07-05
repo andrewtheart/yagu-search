@@ -12,7 +12,7 @@ public sealed class WindowFocusBehaviorRegressionTests
     [Fact]
     public void FocusLossBehavior_AppliesInAllModes_NotTiedToPinStateOrLauncher()
     {
-        string launcher = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Launcher.cs"));
+        string launcher = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Launcher.cs"));
 
         // Runtime field driving the effect in all modes.
         Assert.Contains("private int _focusLossBehavior = 1;", launcher);
@@ -34,7 +34,7 @@ public sealed class WindowFocusBehaviorRegressionTests
     [Fact]
     public void WindowInit_SeedsAndLiveAppliesFocusBehavior()
     {
-        string xamlCs = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml.cs"));
+        string xamlCs = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml.cs"));
 
         // Seeded from the saved setting and applied at startup (covers a traditional-mode start).
         Assert.Contains("_focusLossBehavior = ViewModel.WindowFocusBehavior;", xamlCs);

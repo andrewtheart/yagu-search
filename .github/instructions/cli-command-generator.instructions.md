@@ -1,12 +1,12 @@
 ---
 description: "Keep the in-app CLI command generator in sync with Advanced Options. Use when: adding/changing/removing an Advanced Option, search/scope/performance option, BuildGeneratedCliCommand, CLI flag, --pattern, --semantic-pattern, hidden files flag."
-applyTo: "Yagu/UI/Windows/MainWindow/MainWindow.xaml, Yagu/UI/Windows/MainWindow/MainWindow.CliCommand.cs, Yagu/ViewModels/MainViewModel.cs, Yagu/Services/SettingsService.cs"
+applyTo: "src/Yagu/UI/Windows/MainWindow/MainWindow.xaml, src/Yagu/UI/Windows/MainWindow/MainWindow.CliCommand.cs, src/Yagu/ViewModels/MainViewModel.cs, src/Yagu/Services/SettingsService.cs"
 ---
 
 # Keep the CLI Command Generator in Sync with Advanced Options
 
 The **Generate CLI command** button builds a reproducible `Yagu.exe --cli` command from the current
-UI state in `BuildGeneratedCliCommand` (in `Yagu/UI/Windows/MainWindow/MainWindow.CliCommand.cs`).
+UI state in `BuildGeneratedCliCommand` (in `src/Yagu/UI/Windows/MainWindow/MainWindow.CliCommand.cs`).
 
 ## Rule
 
@@ -23,7 +23,7 @@ For each affected option:
   established ordering/grouping.
 - Make sure the flag is actually parsed in `CliRunner.cs`; if it is a new flag, add it to the arg
   parser, the `--help` output, and `HELP.md` (per the repo's CLI documentation rules).
-- Keep `Yagu.Tests/MainWindowCliCommandRegressionTests.cs` passing and extend it for the new flag.
+- Keep `tests/Yagu.Tests/MainWindowCliCommandRegressionTests.cs` passing and extend it for the new flag.
 
 ## Mode-specific reminders
 

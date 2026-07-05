@@ -8,17 +8,17 @@ public sealed class AdvancedOptionsTests
 {
     private static readonly string RepoRoot = FindRepoRoot();
     private static readonly string AdvancedOptionsSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdvancedOptions.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdvancedOptions.cs"));
     private static readonly string MainWindowXaml = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
     private static readonly string MainViewModelSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
     private static readonly string SearchInputSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SearchInput.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SearchInput.cs"));
     private static readonly string StartupChecksSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
     private static readonly string MainWindowCodeBehindSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml.cs"));
 
     // ══════════════════════════════════════════════════════════════════
     // Tab switching logic
@@ -27,7 +27,7 @@ public sealed class AdvancedOptionsTests
     [Fact]
     public void AdvancedOptionsFile_Exists()
     {
-        string path = Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdvancedOptions.cs");
+        string path = Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdvancedOptions.cs");
         Assert.True(File.Exists(path));
     }
 

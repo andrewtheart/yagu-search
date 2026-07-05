@@ -1,6 +1,6 @@
 ---
 description: "Yagu test-authoring conventions — source-pin vs unit tests, compiling engine source into Yagu.Tests, coverage runsettings, and the iterative filter. Use when: adding a test, writing a test, source-pin test, CS0103 in tests, new .cs not found in tests, code coverage, IncludeTestAssembly, runsettings, Category!=Slow, Category=GPU, GPU test, Slow test, test trait, benchmark test, Yagu.Tests, Yagu.Benchmarks."
-applyTo: "Yagu.Tests/**, Yagu.Benchmarks/**"
+applyTo: "tests/Yagu.Tests/**, tests/Yagu.Benchmarks/**"
 ---
 
 # Yagu — Test Authoring
@@ -17,8 +17,8 @@ default to the iterative `--filter "Category!=Slow&Category!=GPU"` run; don't ki
 
 ## Two kinds of tests
 
-- **Pure engine/helper code** (files under `Yagu/Services`, `Yagu/Helpers`, `Yagu/Models`,
-  `Yagu/Native` with no WinUI/Foundry dependency) gets **real unit tests**. The production `.cs` is
+- **Pure engine/helper code** (files under `src/Yagu/Services`, `src/Yagu/Helpers`, `src/Yagu/Models`,
+  `src/Yagu/Native` with no WinUI/Foundry dependency) gets **real unit tests**. The production `.cs` is
   `<Compile Include="..\Yagu\...">`'d directly into `Yagu.Tests`, so `internal` (and
   `private`→`internal`) members are callable from tests with no `InternalsVisibleTo`.
 - **WinUI/Foundry-coupled code** — `MainViewModel`, every `MainWindow.*.cs`, `SettingsWindow`,
@@ -32,7 +32,7 @@ default to the iterative `--filter "Category!=Slow&Category!=GPU"` run; don't ki
 New `.cs` files are NOT auto-included. If a test references a new engine/helper type and fails with
 **CS0103 "name does not exist"**, add a
 `<Compile Include="..\Yagu\<path>\X.cs" Link="Source\<path>\X.cs" />` line to
-[Yagu.Tests.csproj](../../Yagu.Tests/Yagu.Tests.csproj), next to the existing includes.
+[Yagu.Tests.csproj](../../tests/Yagu.Tests/Yagu.Tests.csproj), next to the existing includes.
 
 ## Coverage
 
@@ -42,7 +42,7 @@ the collector + a runsettings file (e.g. `TestResults\ace-coverage.runsettings`)
 `coverlet.msbuild`:
 
 ```powershell
-dotnet test Yagu.Tests/Yagu.Tests.csproj -c Debug -p:RustProfile=profiling `
+dotnet test tests/Yagu.Tests/Yagu.Tests.csproj -c Debug -p:RustProfile=profiling `
   --filter "FullyQualifiedName~X" --collect:"XPlat Code Coverage" `
   --settings TestResults\ace-coverage.runsettings --results-directory <dir>
 ```
@@ -67,5 +67,5 @@ there need an explicit `using Xunit;`.
 
 Telemetry ships **offline by default**: `TelemetryConfigTests` / `TelemetryGateTests` assert
 `TelemetryConfig.IsConfigured == false`. If they fail, someone committed a real proxy URL/token into
-`Yagu/Services/Telemetry/TelemetryConfig.cs` — restore the placeholder; inject real values only at
+`src/Yagu/Services/Telemetry/TelemetryConfig.cs` — restore the placeholder; inject real values only at
 build/package time.

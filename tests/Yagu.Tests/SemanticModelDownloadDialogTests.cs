@@ -14,7 +14,7 @@ public sealed class SemanticModelDownloadDialogTests
     public void LoadingState_DisclosesOneTimeAiRuntimeDownloadAndSize()
     {
         string src = File.ReadAllText(
-            Path.Combine(Root, "Yagu", "UI", "Windows", "SemanticModelDownloadDialog.cs"));
+            Path.Combine(Root, "src", "Yagu", "UI", "Windows", "SemanticModelDownloadDialog.cs"));
 
         // The loading state is the disclosure surface shown while the execution providers (AI runtime)
         // download during "loading options" — before the user commits to a model. It must explicitly

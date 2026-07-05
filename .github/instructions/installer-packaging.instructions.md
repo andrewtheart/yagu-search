@@ -50,9 +50,9 @@ Runtime, which the installer bundles and installs. Building from source needs th
 
 ## Version churn
 
-Release/publish auto-increment `Yagu/Properties/build-version.txt` + `AppInfo.g.cs`. Revert that churn
+Release/publish auto-increment `src/Yagu/Properties/build-version.txt` + `AppInfo.g.cs`. Revert that churn
 after validation builds unless a version bump was requested:
-`git checkout -- Yagu/Properties/build-version.txt Yagu/Properties/AppInfo.g.cs`.
+`git checkout -- src/Yagu/Properties/build-version.txt src/Yagu/Properties/AppInfo.g.cs`.
 
 ## Prerequisite staging scripts
 

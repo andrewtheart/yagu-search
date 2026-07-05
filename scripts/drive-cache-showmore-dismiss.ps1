@@ -344,7 +344,7 @@ function Dump-ShowButtons {
 
 # ──────────────────────────────────────────────────────────────────────────────
 Log "=== Drive Yagu: Show-more panel dismissal validation ==="
-$yaguExe = "C:\src\Yagu\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe"
+$yaguExe = "C:\src\Yagu\src\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe"
 $root = $AE::RootElement
 
 Log "[1] Launching a fresh Yagu instance (Word wrap ON)..."

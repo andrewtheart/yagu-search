@@ -5,7 +5,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void CliSearch_ForcesConsoleLoggingToCritical()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         Assert.Contains("LogService.InitFromSettings((LogLevel)settings.LogLevelIndex, LogLevel.Critical);", source);
         Assert.DoesNotContain("LogService.InitFromSettings((LogLevel)settings.LogLevelIndex, (LogLevel)settings.ConsoleLogLevelIndex);", source);
@@ -14,7 +14,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void CliParser_RecognizesDashHelpAlias()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         Assert.Contains("Eq(tok, \"--help\", \"-help\"", source);
     }
@@ -22,7 +22,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void ProgramHelpShortcut_ExitsProcessAfterPrintingHelp()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Program.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Program.cs"));
 
         Assert.Matches("CliRunner\\.RunHelp\\(\\);\\s*Environment\\.Exit\\(0\\);", source);
     }
@@ -30,7 +30,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void YaguExecutable_UsesConsoleSubsystemForCliHelp()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Yagu.csproj"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Yagu.csproj"));
 
         Assert.Contains("<OutputType>Exe</OutputType>", source);
         Assert.DoesNotContain("<OutputType>WinExe</OutputType>", source);
@@ -39,7 +39,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void ProgramGuiMode_RelaunchesDetachedBeforeStartingWinUi()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Program.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Program.cs"));
 
         Assert.Contains("TryRelaunchDetachedGui(args)", source);
         Assert.Contains("CreateNoWindow = true", source);
@@ -49,7 +49,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void CliHelp_IncludesTwoHundredExamples()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         int exampleCount = System.Text.RegularExpressions.Regex.Matches(source, @"(?m)^\s+\d{3}\. ").Count;
         int explanationCount = System.Text.RegularExpressions.Regex.Matches(source, @"(?m)^\s+Does: ").Count;
@@ -79,7 +79,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void CliSettings_LoadsCurrentDirectoryThenProcessLaunchDirectoryThenGlobal()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         AssertContainsInOrder(source,
             "Path.Combine(Directory.GetCurrentDirectory(), LocalSettingsFileName)",
@@ -94,7 +94,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void CliParser_RecognizesAcceptModelDownloadFlag()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         Assert.Contains("public bool             AcceptModelDownload { get; private set; }", source);
         Assert.Contains("Eq(tok, \"--accept-model-download\", \"--yes-download\")", source);
@@ -103,7 +103,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void CliParser_RecognizesGroupFlags()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         // The --group value flag plus the asc/desc orientation flags are parsed.
         Assert.Contains("TryGetVal(raw, ref i, out v, \"--group\")", source);
@@ -122,7 +122,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void CliParser_SortFlagAcceptsDirectoryKey()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         // --sort now accepts the directory/dir keys (previously rejected as unknown).
         Assert.Contains("or \"size\" or \"name\" or \"filename\" or \"directory\" or \"dir\" or \"path\")", source);
@@ -131,7 +131,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void CliSearch_GroupingWaitsForCompletionThenRendersGrouped()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         // Grouping forces result collection (no live streaming) and renders via WriteGroupedResults.
         Assert.Contains("bool grouping = !string.IsNullOrWhiteSpace(args.GroupBy);", source);
@@ -143,7 +143,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void CliSemanticOverlay_FoldsSortAndGroupWhenUnset()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         // The semantic overlay only fills sort/group when the user did not set them explicitly.
         Assert.Contains("if (overlay.SortBy is { } sortKey && SortBy is null)", source);
@@ -153,7 +153,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void CliSemanticOverlay_UnskipsBinaryWhenPlanTargetsBinaryExtensions()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         // A semantic plan targeting known-binary extensions (.exe/.com/.cpl) must stop skipping binary
         // content so a content search over those files actually reads them (GUI/CLI parity).
@@ -164,7 +164,7 @@ public sealed class CliRunnerRegressionTests
     public void SemanticSystemPrompt_DocumentsSortAndGroupFields()
     {
         string prompt = File.ReadAllText(Path.Combine(
-            FindRepoRoot(), "Yagu", "Services", "Ai", "Prompts", "SemanticSearchSystemPrompt.prompt.md"));
+            FindRepoRoot(), "src", "Yagu", "Services", "Ai", "Prompts", "SemanticSearchSystemPrompt.prompt.md"));
 
         Assert.Contains("\"sortBy\"", prompt);
         Assert.Contains("\"sortDirection\"", prompt);
@@ -176,7 +176,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void CliParser_RecognizesHiddenFileFlags()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         // Parser recognizes both enable and disable forms (with aliases).
         Assert.Contains("Eq(tok, \"--hidden\", \"--search-hidden\")", source);
@@ -192,7 +192,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void CliParser_RecognizesImageTextFlags()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         // Parser recognizes both enable and disable forms (with aliases) plus the engine option.
         Assert.Contains("Eq(tok, \"--image-text\", \"--search-image-text\", \"--ocr\")", source);
@@ -212,7 +212,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void CliParser_RecognizesImageOcrQualityFlags()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         // Parser recognizes the model and detection-resolution options.
         Assert.Contains("TryGetVal(raw, ref i, out v, \"--ocr-model\")", source);
@@ -233,7 +233,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void SemanticFirstRun_OffersModelPickWithTraditionalFallback()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         // First-run prompt is skipped for an explicit model or a previously downloaded one.
         AssertContainsInOrder(source,
@@ -250,7 +250,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void FallBackSemanticToTraditional_ReusesSemanticTextAsLiteralPattern()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         AssertContainsInOrder(source,
             "internal void FallBackSemanticToTraditional()",
@@ -262,7 +262,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void SemanticModelSetup_NonInteractiveConsoleFallsBackWithoutAcceptFlag()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         AssertContainsInOrder(source,
             "bool interactive = !Console.IsInputRedirected;",
@@ -273,7 +273,7 @@ public sealed class CliRunnerRegressionTests
     [Fact]
     public void SemanticModelSetup_PersistsChoiceToGlobalSettings()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         // Recommended pick is stored as an empty alias (auto) and the downloaded flag is set,
         // mirroring the GUI so later runs (CLI or GUI) skip the prompt.

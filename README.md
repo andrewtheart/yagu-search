@@ -226,9 +226,9 @@ This README is the entry point for new contributors.
 
 Yagu can translate a natural-language request (e.g. *"word documents with 'Andrew' in them, modified this year"*) into concrete search options and run it. The translation happens **entirely on-device** — the query is never sent over the network.
 
-- **On-device model via Microsoft Foundry Local.** [`FoundryLocalSemanticQueryTranslator`](Yagu/Services/Ai/FoundryLocalSemanticQueryTranslator.cs) hosts a small instruct model in-process through the `Microsoft.AI.Foundry.Local` SDK. The model and its hardware execution providers are downloaded once on first use and cached; there is no HTTP server and no network egress of the user's query.
-- **Hardware-aware model selection.** [`FoundryModelSelector`](Yagu/Services/Ai/FoundryModelSelector.cs) ranks the hardware-compatible catalog models and auto-picks the best instruct model your machine can run: a small model (e.g. `phi-4-mini`) by default, **upgrading to a larger, more accurate model (e.g. `phi-4` 14B) when a GPU with ample VRAM is detected**. It prefers the less-quantized **GPU** build for accuracy, falling back to **NPU** then **CPU**, and on low-memory or CPU-only machines it excludes models whose weights or context window would not fit. A specific model can always be forced by family alias or exact variant id in **Settings → AI**, which also shows the current model and offers a **Refresh Foundry cache** action to re-scan for models downloaded out of band.
-- **Strict JSON search plan.** The model is driven by an embedded system prompt ([`SemanticSearchSystemPrompt.prompt.md`](Yagu/Services/Ai/Prompts/SemanticSearchSystemPrompt.prompt.md)) that constrains it to emit a single JSON object describing the search. [`SemanticPlanJsonExtractor`](Yagu/Services/Ai/SemanticPlanJsonExtractor.cs) extracts and repairs that JSON (small local models are chatty and occasionally emit malformed output), and [`SemanticPlanApplier`](Yagu/Services/Ai/SemanticPlanApplier.cs) normalizes it — rooting drive shorthands, resolving relative dates against "today", expanding name-excludes to globs, clamping sizes, and parsing the search mode — into a `ResolvedSearchPlan` that is applied to the search inputs.
+- **On-device model via Microsoft Foundry Local.** [`FoundryLocalSemanticQueryTranslator`](src/Yagu/Services/Ai/FoundryLocalSemanticQueryTranslator.cs) hosts a small instruct model in-process through the `Microsoft.AI.Foundry.Local` SDK. The model and its hardware execution providers are downloaded once on first use and cached; there is no HTTP server and no network egress of the user's query.
+- **Hardware-aware model selection.** [`FoundryModelSelector`](src/Yagu/Services/Ai/FoundryModelSelector.cs) ranks the hardware-compatible catalog models and auto-picks the best instruct model your machine can run: a small model (e.g. `phi-4-mini`) by default, **upgrading to a larger, more accurate model (e.g. `phi-4` 14B) when a GPU with ample VRAM is detected**. It prefers the less-quantized **GPU** build for accuracy, falling back to **NPU** then **CPU**, and on low-memory or CPU-only machines it excludes models whose weights or context window would not fit. A specific model can always be forced by family alias or exact variant id in **Settings → AI**, which also shows the current model and offers a **Refresh Foundry cache** action to re-scan for models downloaded out of band.
+- **Strict JSON search plan.** The model is driven by an embedded system prompt ([`SemanticSearchSystemPrompt.prompt.md`](src/Yagu/Services/Ai/Prompts/SemanticSearchSystemPrompt.prompt.md)) that constrains it to emit a single JSON object describing the search. [`SemanticPlanJsonExtractor`](src/Yagu/Services/Ai/SemanticPlanJsonExtractor.cs) extracts and repairs that JSON (small local models are chatty and occasionally emit malformed output), and [`SemanticPlanApplier`](src/Yagu/Services/Ai/SemanticPlanApplier.cs) normalizes it — rooting drive shorthands, resolving relative dates against "today", expanding name-excludes to globs, clamping sizes, and parsing the search mode — into a `ResolvedSearchPlan` that is applied to the search inputs.
 - **Archive-aware.** Office Open XML and OpenDocument files (`.docx`/`.xlsx`/`.pptx`/`.odt`…) are ZIP containers, so when a plan targets those formats Yagu automatically enables **Search archives** so their inner text is searched.
 - **Available in the GUI and CLI.** In the GUI, switch the Search button's chevron to **Semantic**; from the CLI, use `--semantic-pattern "<text>"` (add `--explain` for a dry-run that prints the interpreted plan). The query is translated to a plan, the plan fills in the Advanced Options, and the normal search runs. See [HELP.md](HELP.md) for step-by-step usage and example prompts.
 
@@ -275,14 +275,14 @@ cd Yagu
 
 dotnet restore Yagu.sln
 dotnet build Yagu.sln -c Release
-dotnet run -c Release --project Yagu -- --dir "D:\projects\myapp"
+dotnet run -c Release --project src/Yagu -- --dir "D:\projects\myapp"
 ```
 
 If Rust is not installed or you want to iterate on managed code only:
 
 ```powershell
 dotnet build Yagu.sln -c Release -p:BuildRustCore=false
-dotnet run -c Release --project Yagu -p:BuildRustCore=false -- --dir "D:\projects\myapp"
+dotnet run -c Release --project src/Yagu -p:BuildRustCore=false -- --dir "D:\projects\myapp"
 ```
 
 The C# app loader tolerates a missing `yagu_core.dll`; native search is an optimization, not a hard runtime requirement.
@@ -311,10 +311,10 @@ dotnet build Yagu.sln -c Release -p:BuildRustCore=false
 ### Run The App
 
 ```powershell
-dotnet run -c Release --project Yagu
-dotnet run -c Release --project Yagu -- --dir "D:\projects\myapp"
-dotnet run -c Release --project Yagu -- --dir="D:\projects\myapp"
-dotnet run -c Release --project Yagu -- --window-mode traditional
+dotnet run -c Release --project src/Yagu
+dotnet run -c Release --project src/Yagu -- --dir "D:\projects\myapp"
+dotnet run -c Release --project src/Yagu -- --dir="D:\projects\myapp"
+dotnet run -c Release --project src/Yagu -- --window-mode traditional
 ```
 
 `--window-mode` accepts the same four modes exposed in Settings: `minimize-to-tray`, `stay-open`, `always-on-top`, and `traditional`. Numeric values `0` through `3` are also accepted. `--windowing-mode` is available as an alias.
@@ -324,16 +324,16 @@ dotnet run -c Release --project Yagu -- --window-mode traditional
 ### Run .NET Tests
 
 ```powershell
-dotnet test Yagu.Tests/Yagu.Tests.csproj
-dotnet test Yagu.Tests/Yagu.Tests.csproj -c Release
+dotnet test tests/Yagu.Tests/Yagu.Tests.csproj
+dotnet test tests/Yagu.Tests/Yagu.Tests.csproj -c Release
 ```
 
 ### Run Focused .NET Tests
 
 ```powershell
-dotnet test Yagu.Tests/Yagu.Tests.csproj -c Release --filter ContentSearcherTests
-dotnet test Yagu.Tests/Yagu.Tests.csproj -c Release --filter SearchServiceTests
-dotnet test Yagu.Tests/Yagu.Tests.csproj -c Release --filter NativeParityTests
+dotnet test tests/Yagu.Tests/Yagu.Tests.csproj -c Release --filter ContentSearcherTests
+dotnet test tests/Yagu.Tests/Yagu.Tests.csproj -c Release --filter SearchServiceTests
+dotnet test tests/Yagu.Tests/Yagu.Tests.csproj -c Release --filter NativeParityTests
 ```
 
 ### Run UI Automation Tests
@@ -341,15 +341,15 @@ dotnet test Yagu.Tests/Yagu.Tests.csproj -c Release --filter NativeParityTests
 Most tests run without extra setup, but the match-navigation UI regression test is opt-in because it launches Yagu, drives the desktop UI through UI Automation, and captures screenshots. It requires Windows in an interactive desktop session, a Debug build of the app, and `YAGU_RUN_UI_REGRESSION=1`. Without that variable, the test exits early with a skipped message.
 
 ```powershell
-dotnet build Yagu/Yagu.csproj -c Debug
+dotnet build src/Yagu/Yagu.csproj -c Debug
 $env:YAGU_RUN_UI_REGRESSION = '1'
-dotnet test Yagu.Tests/Yagu.Tests.csproj -c Release --filter MatchNavRegressionTests
+dotnet test tests/Yagu.Tests/Yagu.Tests.csproj -c Release --filter MatchNavRegressionTests
 ```
 
 ### Run Coverage
 
 ```powershell
-dotnet test Yagu.Tests/Yagu.Tests.csproj -c Release --settings Yagu.Tests/coverage.runsettings --collect:"XPlat Code Coverage"
+dotnet test tests/Yagu.Tests/Yagu.Tests.csproj -c Release --settings tests/Yagu.Tests/coverage.runsettings --collect:"XPlat Code Coverage"
 ```
 
 Coverage output is written under `TestResults/`.
@@ -357,28 +357,28 @@ Coverage output is written under `TestResults/`.
 ### Run Rust Tests
 
 ```powershell
-cargo test --manifest-path yagu-core/Cargo.toml
-cargo test --manifest-path yagu-core/Cargo.toml --release
+cargo test --manifest-path src/yagu-core/Cargo.toml
+cargo test --manifest-path src/yagu-core/Cargo.toml --release
 ```
 
 ### Run Benchmarks
 
 ```powershell
-dotnet run -c Release --project Yagu.Benchmarks
+dotnet run -c Release --project tests/Yagu.Benchmarks
 ```
 
 For a short BenchmarkDotNet smoke run similar to CI:
 
 ```powershell
-dotnet run -c Release --project Yagu.Benchmarks -- --filter "*LiteralSearch*" --job short --launchCount 1 --warmupCount 1 --iterationCount 1
+dotnet run -c Release --project tests/Yagu.Benchmarks -- --filter "*LiteralSearch*" --job short --launchCount 1 --warmupCount 1 --iterationCount 1
 ```
 
 ### Run Throughput Regression Tests
 
-The [`Yagu.Benchmarks`](Yagu.Benchmarks/) project also hosts the real-world throughput regression tests (`PerformanceBenchmarkTests`), which drive the full `SearchService` pipeline for a fixed wall-clock duration and append metrics to `Yagu.Benchmarks/results/perf-baselines.jsonl`. They are tagged `Category=Slow`, so the fast test filter skips them.
+The [`Yagu.Benchmarks`](tests/Yagu.Benchmarks/) project also hosts the real-world throughput regression tests (`PerformanceBenchmarkTests`), which drive the full `SearchService` pipeline for a fixed wall-clock duration and append metrics to `tests/Yagu.Benchmarks/results/perf-baselines.jsonl`. They are tagged `Category=Slow`, so the fast test filter skips them.
 
 ```powershell
-dotnet test Yagu.Benchmarks/Yagu.Benchmarks.csproj -c Release
+dotnet test tests/Yagu.Benchmarks/Yagu.Benchmarks.csproj -c Release
 ```
 
 They search a synthetic temp tree by default. Point them at a real path or tune the run with environment variables:
@@ -388,7 +388,7 @@ $env:YAGU_PERF_DIRECTORY = 'C:\'          # benchmark a real file system (defaul
 $env:YAGU_PERF_DURATION_SECONDS = '120'   # run duration per scenario in seconds (default: 30)
 $env:YAGU_PERF_FILE_COUNT = '50000'       # synthetic file count (default: 50000)
 $env:YAGU_PERF_LINES_PER_FILE = '200'     # lines per synthetic file (default: 200)
-dotnet test Yagu.Benchmarks/Yagu.Benchmarks.csproj -c Release
+dotnet test tests/Yagu.Benchmarks/Yagu.Benchmarks.csproj -c Release
 ```
 
 ### Register Explorer Context Menu
@@ -450,18 +450,18 @@ The installer creates a Start Menu shortcut, optional desktop icon, optional Exp
 | Path | Purpose |
 | --- | --- |
 | [Yagu.sln](Yagu.sln) | Current solution for the app, tests, and benchmarks. |
-| [Yagu](Yagu/) | Main WinUI 3 application: XAML UI, view model, services, models, and native wrappers. |
-| [Yagu/Yagu.csproj](Yagu/Yagu.csproj) | App project, package references, WinUI settings, and Rust build integration. |
-| [Yagu/UI/Windows/MainWindow](Yagu/UI/Windows/MainWindow/) | Main search window XAML and partial code-behind files. |
-| [Yagu/UI/Windows/Settings](Yagu/UI/Windows/Settings/) | Settings window XAML and code-behind. |
-| [Yagu/UI/Windows/Help](Yagu/UI/Windows/Help/) | Help window XAML and code-behind. |
-| [Yagu/ViewModels/MainViewModel.cs](Yagu/ViewModels/MainViewModel.cs) | MVVM search state, settings binding, result grouping, commands, memory-pressure handling. |
-| [Yagu/Models](Yagu/Models/) | Search options, results, grouped result collection, progress summaries, and file groups. |
-| [Yagu/Services](Yagu/Services/) | File discovery, content scanning, settings, logging, editor launch, hotkeys, result export, disk-backed result store. |
-| [Yagu/Native](Yagu/Native/) | P/Invoke wrappers for `yagu_core.dll` and the Everything SDK. |
-| [yagu-core](yagu-core/) | Rust native search engine built as `yagu_core.dll`. |
-| [Yagu.Tests](Yagu.Tests/) | xUnit tests for the engine-facing C# code and helpers. |
-| [Yagu.Benchmarks](Yagu.Benchmarks/) | BenchmarkDotNet benchmark harness plus the real-world `SearchService` throughput regression tests (run via `dotnet test`). |
+| [Yagu](src/Yagu/) | Main WinUI 3 application: XAML UI, view model, services, models, and native wrappers. |
+| [src/Yagu/Yagu.csproj](src/Yagu/Yagu.csproj) | App project, package references, WinUI settings, and Rust build integration. |
+| [src/Yagu/UI/Windows/MainWindow](src/Yagu/UI/Windows/MainWindow/) | Main search window XAML and partial code-behind files. |
+| [src/Yagu/UI/Windows/Settings](src/Yagu/UI/Windows/Settings/) | Settings window XAML and code-behind. |
+| [src/Yagu/UI/Windows/Help](src/Yagu/UI/Windows/Help/) | Help window XAML and code-behind. |
+| [src/Yagu/ViewModels/MainViewModel.cs](src/Yagu/ViewModels/MainViewModel.cs) | MVVM search state, settings binding, result grouping, commands, memory-pressure handling. |
+| [src/Yagu/Models](src/Yagu/Models/) | Search options, results, grouped result collection, progress summaries, and file groups. |
+| [src/Yagu/Services](src/Yagu/Services/) | File discovery, content scanning, settings, logging, editor launch, hotkeys, result export, disk-backed result store. |
+| [src/Yagu/Native](src/Yagu/Native/) | P/Invoke wrappers for `yagu_core.dll` and the Everything SDK. |
+| [yagu-core](src/yagu-core/) | Rust native search engine built as `yagu_core.dll`. |
+| [Yagu.Tests](tests/Yagu.Tests/) | xUnit tests for the engine-facing C# code and helpers. |
+| [Yagu.Benchmarks](tests/Yagu.Benchmarks/) | BenchmarkDotNet benchmark harness plus the real-world `SearchService` throughput regression tests (run via `dotnet test`). |
 | [scripts/register-context-menu.ps1](scripts/register-context-menu.ps1) | Explorer context menu registration script. |
 | [.github/workflows/ci.yml](.github/workflows/ci.yml) | Windows CI: Rust build/test, .NET restore/build/test, benchmark smoke test. |
 | `PLANS/` | Design notes, performance reports, and future work. |
@@ -546,8 +546,8 @@ If Everything is not installed or not running, the UI can prompt to start it or 
 
 Yagu has two content-search implementations:
 
-- Native fast path: [yagu-core](yagu-core/) builds `yagu_core.dll`, and [Yagu/Native/NativeSearcher.cs](Yagu/Native/NativeSearcher.cs) calls it through P/Invoke.
-- Managed fallback: [Yagu/Services/ContentSearcher.cs](Yagu/Services/ContentSearcher.cs) reads files with buffered streams or memory-mapped files and uses compiled .NET regex/literal matching.
+- Native fast path: [yagu-core](src/yagu-core/) builds `yagu_core.dll`, and [src/Yagu/Native/NativeSearcher.cs](src/Yagu/Native/NativeSearcher.cs) calls it through P/Invoke.
+- Managed fallback: [src/Yagu/Services/ContentSearcher.cs](src/Yagu/Services/ContentSearcher.cs) reads files with buffered streams or memory-mapped files and uses compiled .NET regex/literal matching.
 
 The native path is optional. If the DLL is missing, has the wrong architecture, or fails the ABI check, Yagu logs the condition and uses the managed scanner.
 
@@ -563,25 +563,25 @@ The Rust crate exposes a C ABI and supports:
 - Streaming callbacks so matches do not need to be buffered as one giant native result.
 - Native sessions that compile the matcher once and reuse it across many files.
 
-By default, the Rust crate uses the in-tree scanner in [yagu-core/src/scan.rs](yagu-core/src/scan.rs). Experimental ripgrep-library spike code exists behind the `grep_crates` Cargo feature and is off by default.
+By default, the Rust crate uses the in-tree scanner in [src/yagu-core/src/scan.rs](src/yagu-core/src/scan.rs). Experimental ripgrep-library spike code exists behind the `grep_crates` Cargo feature and is off by default.
 
 ## Performance
 
-Yagu's search hot path has been **profiled and fine-tuned to be competitive with [ripgrep](https://github.com/BurntSushi/ripgrep)** — the current benchmark for fast command-line search. In many workloads it **exceeds ripgrep's throughput**, and in the remaining cases it **matches** it. The gains come from the native Rust scanner ([yagu-core/src/scan.rs](yagu-core/src/scan.rs)), which compiles the matcher once per search and reuses it across files, streams matches back without buffering, and skips work early (binary detection, size caps, extension/`.gitignore` filters) before touching file contents.
+Yagu's search hot path has been **profiled and fine-tuned to be competitive with [ripgrep](https://github.com/BurntSushi/ripgrep)** — the current benchmark for fast command-line search. In many workloads it **exceeds ripgrep's throughput**, and in the remaining cases it **matches** it. The gains come from the native Rust scanner ([src/yagu-core/src/scan.rs](src/yagu-core/src/scan.rs)), which compiles the matcher once per search and reuses it across files, streams matches back without buffering, and skips work early (binary detection, size caps, extension/`.gitignore` filters) before touching file contents.
 
-This is measured, not assumed. The [`Yagu.Benchmarks`](Yagu.Benchmarks/) project tracks literal and regex search throughput — through a BenchmarkDotNet harness and a suite of real-world throughput regression tests that append recorded baselines to `Yagu.Benchmarks/results/perf-baselines.jsonl` — and the native binary can be built with a symbol-rich profiling profile (`-p:RustProfile=profiling`) for deeper flame-graph analysis. Real-world results still depend on hardware, storage (SSD vs. HDD), corpus shape, and pattern complexity — but Yagu is engineered to keep pace with the fastest searchers available.
+This is measured, not assumed. The [`Yagu.Benchmarks`](tests/Yagu.Benchmarks/) project tracks literal and regex search throughput — through a BenchmarkDotNet harness and a suite of real-world throughput regression tests that append recorded baselines to `tests/Yagu.Benchmarks/results/perf-baselines.jsonl` — and the native binary can be built with a symbol-rich profiling profile (`-p:RustProfile=profiling`) for deeper flame-graph analysis. Real-world results still depend on hardware, storage (SSD vs. HDD), corpus shape, and pattern complexity — but Yagu is engineered to keep pace with the fastest searchers available.
 
 ### Scaling To Large Files And Thousands Of Results
 
 Yagu is fine-tuned and deliberately designed to **load very large files and thousands of file results and matches at once** while staying responsive — the window does not freeze while realizing a huge result set or rendering a long document. That scale is made possible by several performance optimizations working together:
 
-- **Virtualized result groups.** Each `FileGroup` realizes only the first `PageSize = 200` matches as live UI items and loads the rest on demand through incremental "Show more" pages, so a single file with tens of thousands of hits never materializes them all at once ([FileGroup.cs](Yagu/Models/FileGroup.cs)).
-- **Single-notification batch collections.** The result and group lists use `BatchObservableCollection`, which raises one `Reset` notification per batch instead of one `CollectionChanged` event per item, avoiding a per-item layout pass on high-cardinality searches ([BatchObservableCollection.cs](Yagu/Models/BatchObservableCollection.cs)).
-- **Bounded-channel result batching.** Content and filename matches are coalesced into 256-item batches and handed to the UI thread through bounded channels with back-pressure, so a fast native scanner cannot flood the dispatcher ([SearchService.cs](Yagu/Services/SearchService.cs)).
-- **Disk-backed result eviction under memory pressure.** When the working set approaches the process memory cap (auto-sized between **512 MB and 768 MB**, recovery triggered at 90%), match payloads are evicted to `ResultStore` temp files and kept only as compact varint-encoded stubs (sized below the Large Object Heap threshold), then rehydrated on demand when a group is expanded or a result is previewed ([ResultStore.cs](Yagu/Services/ResultStore.cs), [FileGroup.cs](Yagu/Models/FileGroup.cs)). A background `LowDiskSpaceMonitor` guards the temp drive during large runs ([LowDiskSpaceMonitor.cs](Yagu/Services/LowDiskSpaceMonitor.cs)).
-- **Off-UI-thread metadata.** File size and timestamps are loaded on background threads and cached, so populating thousands of rows never blocks the UI on file-system I/O ([FileMetadataCache.cs](Yagu/Services/FileMetadataCache.cs)).
-- **Large-file preview windowing.** The preview renders file sections incrementally (50 per page, "Show more" for the rest), folds extremely long physical lines into 4 KB paragraph chunks to avoid DirectWrite layout failures, and bounds a single "Show all" reveal to 20,000 characters — so even a minified multi-hundred-KB single-line file previews without hanging ([MainWindow.PreviewBuilder.cs](Yagu/UI/Windows/MainWindow/MainWindow.PreviewBuilder.cs)). You can also **add just the matched lines you care about** to the preview instead of loading the whole file (see *Add individual lines to preview* near the top of this README).
-- **Zero-copy native streaming.** The Rust scanner compiles the matcher once per search, streams matches back without buffering whole files, borrows line bytes instead of allocating per match, and early-skips binary, oversized, and ignored files before ever reading their contents ([yagu-core/src/scan.rs](yagu-core/src/scan.rs)).
+- **Virtualized result groups.** Each `FileGroup` realizes only the first `PageSize = 200` matches as live UI items and loads the rest on demand through incremental "Show more" pages, so a single file with tens of thousands of hits never materializes them all at once ([FileGroup.cs](src/Yagu/Models/FileGroup.cs)).
+- **Single-notification batch collections.** The result and group lists use `BatchObservableCollection`, which raises one `Reset` notification per batch instead of one `CollectionChanged` event per item, avoiding a per-item layout pass on high-cardinality searches ([BatchObservableCollection.cs](src/Yagu/Models/BatchObservableCollection.cs)).
+- **Bounded-channel result batching.** Content and filename matches are coalesced into 256-item batches and handed to the UI thread through bounded channels with back-pressure, so a fast native scanner cannot flood the dispatcher ([SearchService.cs](src/Yagu/Services/SearchService.cs)).
+- **Disk-backed result eviction under memory pressure.** When the working set approaches the process memory cap (auto-sized between **512 MB and 768 MB**, recovery triggered at 90%), match payloads are evicted to `ResultStore` temp files and kept only as compact varint-encoded stubs (sized below the Large Object Heap threshold), then rehydrated on demand when a group is expanded or a result is previewed ([ResultStore.cs](src/Yagu/Services/ResultStore.cs), [FileGroup.cs](src/Yagu/Models/FileGroup.cs)). A background `LowDiskSpaceMonitor` guards the temp drive during large runs ([LowDiskSpaceMonitor.cs](src/Yagu/Services/LowDiskSpaceMonitor.cs)).
+- **Off-UI-thread metadata.** File size and timestamps are loaded on background threads and cached, so populating thousands of rows never blocks the UI on file-system I/O ([FileMetadataCache.cs](src/Yagu/Services/FileMetadataCache.cs)).
+- **Large-file preview windowing.** The preview renders file sections incrementally (50 per page, "Show more" for the rest), folds extremely long physical lines into 4 KB paragraph chunks to avoid DirectWrite layout failures, and bounds a single "Show all" reveal to 20,000 characters — so even a minified multi-hundred-KB single-line file previews without hanging ([MainWindow.PreviewBuilder.cs](src/Yagu/UI/Windows/MainWindow/MainWindow.PreviewBuilder.cs)). You can also **add just the matched lines you care about** to the preview instead of loading the whole file (see *Add individual lines to preview* near the top of this README).
+- **Zero-copy native streaming.** The Rust scanner compiles the matcher once per search, streams matches back without buffering whole files, borrows line bytes instead of allocating per match, and early-skips binary, oversized, and ignored files before ever reading their contents ([src/yagu-core/src/scan.rs](src/yagu-core/src/scan.rs)).
 - **Throttled progress and auto-scroll.** Statistics and auto-scroll update on fixed 100 ms / 500 ms timers rather than per file or per match (see [UI Update Throttling](#ui-update-throttling) below).
 
 ### UI Update Throttling
@@ -627,9 +627,9 @@ The app schedules best-effort cleanup for orphaned Yagu result temp files on sta
 
 ## Test Setup
 
-The .NET test project intentionally compiles selected source files from [Yagu](Yagu/) directly instead of referencing the WinUI app project. This keeps the test assembly free of Windows App SDK UI runtime requirements and makes engine/helper behavior easier to test.
+The .NET test project intentionally compiles selected source files from [Yagu](src/Yagu/) directly instead of referencing the WinUI app project. This keeps the test assembly free of Windows App SDK UI runtime requirements and makes engine/helper behavior easier to test.
 
-Areas covered by [Yagu.Tests](Yagu.Tests/) include:
+Areas covered by [Yagu.Tests](tests/Yagu.Tests/) include:
 
 - `ContentSearcher` literal, regex, binary, size, encoding, and skip behavior.
 - `SearchService` progress, batching, limits, fallback events, and memory pressure behavior.
@@ -642,7 +642,7 @@ Areas covered by [Yagu.Tests](Yagu.Tests/) include:
 - Export formatting for selected files and selected content.
 - Syntax highlighting, glob matching, line truncation, and other helpers.
 
-Run Rust tests when changing [yagu-core](yagu-core/). Run .NET tests when changing [Yagu/Services](Yagu/Services/), [Yagu/Models](Yagu/Models/), [Yagu/Helpers](Yagu/Helpers/), [Yagu/Native](Yagu/Native/), or settings behavior. Run both when changing the native ABI or native search semantics.
+Run Rust tests when changing [yagu-core](src/yagu-core/). Run .NET tests when changing [src/Yagu/Services](src/Yagu/Services/), [src/Yagu/Models](src/Yagu/Models/), [src/Yagu/Helpers](src/Yagu/Helpers/), [src/Yagu/Native](src/Yagu/Native/), or settings behavior. Run both when changing the native ABI or native search semantics.
 
 ## CI
 
@@ -656,16 +656,16 @@ The GitHub Actions workflow in [.github/workflows/ci.yml](.github/workflows/ci.y
 6. Test `yagu-core` in release mode.
 7. Restore [Yagu.sln](Yagu.sln).
 8. Build [Yagu.sln](Yagu.sln) in release mode.
-9. Run [Yagu.Tests](Yagu.Tests/).
+9. Run [Yagu.Tests](tests/Yagu.Tests/).
 10. Upload test result artifacts.
 11. Run a short BenchmarkDotNet smoke benchmark.
 
 ## Development Notes
 
-- The app build attempts `cargo build --release --quiet` for [yagu-core](yagu-core/) before C# compilation unless `BuildRustCore=false` is set.
-- After changing Rust FFI exports or ABI-sensitive code, rebuild [yagu-core](yagu-core/) before running .NET native parity tests.
+- The app build attempts `cargo build --release --quiet` for [yagu-core](src/yagu-core/) before C# compilation unless `BuildRustCore=false` is set.
+- After changing Rust FFI exports or ABI-sensitive code, rebuild [yagu-core](src/yagu-core/) before running .NET native parity tests.
 - The native DLL must match the process architecture.
-- Avoid broad formatting churn in [yagu-core](yagu-core/) unless that is the goal of the change.
+- Avoid broad formatting churn in [yagu-core](src/yagu-core/) unless that is the goal of the change.
 - The managed scanner remains important because it is the fallback path and handles cases the native engine may reject.
 - Keep UI-free behavior in services/models where possible so tests can cover it without WinUI.
 - Use the memory and result caps during broad scans; unchecked searches over an entire drive can produce very large result sets.
@@ -680,7 +680,7 @@ Build without the native fast path:
 dotnet build Yagu.sln -c Release -p:BuildRustCore=false
 ```
 
-Install Rust from https://rustup.rs/ when you want to build and test [yagu-core](yagu-core/).
+Install Rust from https://rustup.rs/ when you want to build and test [yagu-core](src/yagu-core/).
 
 ### Everything is missing or not running
 
@@ -695,8 +695,8 @@ Some folders require elevation. Use the in-app "Restart as Admin" action from th
 Build the Rust DLL first:
 
 ```powershell
-cargo build --manifest-path yagu-core/Cargo.toml --release
-dotnet test Yagu.Tests/Yagu.Tests.csproj -c Release --filter NativeParityTests
+cargo build --manifest-path src/yagu-core/Cargo.toml --release
+dotnet test tests/Yagu.Tests/Yagu.Tests.csproj -c Release --filter NativeParityTests
 ```
 
 ### The result set is huge

@@ -100,7 +100,7 @@ public sealed class SingleFilePathQueryDetectorTests : IDisposable
         // single-file-path query in Traditional mode, before the Directory validation, and display the
         // file as a LineNumber:0 file-name match.
         string root = FindRepoRoot();
-        string vm = File.ReadAllText(Path.Combine(root, "Yagu", "ViewModels", "MainViewModel.cs"));
+        string vm = File.ReadAllText(Path.Combine(root, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
 
         Assert.Contains("if (!IsSemanticQueryMode && Yagu.Helpers.SingleFilePathQueryDetector.Resolve(Query) is { } singleFilePath)", vm);
         Assert.Contains("await RunSingleFilePathDisplayAsync(singleFilePath)", vm);

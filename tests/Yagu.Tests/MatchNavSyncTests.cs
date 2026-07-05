@@ -8,9 +8,9 @@ public sealed class MatchNavSyncTests
 {
     private static readonly string RepoRoot = FindRepoRoot();
     private static readonly string MatchNavSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.MatchNav.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.MatchNav.cs"));
     private static readonly string SearchInputSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SearchInput.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SearchInput.cs"));
 
     // ══════════════════════════════════════════════════════════════════
     // SyncGlobalIndexFromSection

@@ -20,7 +20,7 @@ public sealed class SemanticQuerySalvageWiringTests
     }
 
     private static string ViewModel() =>
-        File.ReadAllText(Path.Combine(RepoRoot(), "Yagu", "ViewModels", "MainViewModel.cs"));
+        File.ReadAllText(Path.Combine(RepoRoot(), "src", "Yagu", "ViewModels", "MainViewModel.cs"));
 
     [Fact]
     public void TranslateSemanticQuery_OnModelFailure_TriesSalvageBeforeLiteralFallback()

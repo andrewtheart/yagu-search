@@ -18,7 +18,7 @@ namespace Yagu.Tests;
 public sealed class CheckBoxIndeterminateGlyphRegressionTests
 {
     private static string AppXaml() =>
-        File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "App.xaml"));
+        File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "App.xaml"));
 
     [Fact]
     public void IndeterminateGlyphForeground_IsTransparent_InDefaultAndLightThemes()

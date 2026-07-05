@@ -19,7 +19,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = $PSScriptRoot
-$projectPath = Join-Path $repoRoot 'Yagu\Yagu.csproj'
+$projectPath = Join-Path $repoRoot 'src\Yagu\Yagu.csproj'
 $projectDir = Split-Path -Parent $projectPath
 $contextMenuScript = Join-Path $repoRoot 'scripts\register-context-menu.ps1'
 $manifestName = '.wagu-install-manifest.txt'

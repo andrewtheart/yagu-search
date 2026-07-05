@@ -116,7 +116,7 @@ public sealed class SemanticResolutionVisibilityTests
     }
 
     private static string ReadSource(params string[] parts)
-        => File.ReadAllText(Path.Combine(new[] { FindRepoRoot() }.Concat(parts).ToArray()));
+        => File.ReadAllText(Path.Combine(new[] { FindRepoRoot(), "src" }.Concat(parts).ToArray()));
 
     private static string FindRepoRoot()
     {

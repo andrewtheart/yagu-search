@@ -7,7 +7,7 @@
   Default (no switch): stop running Yagu, build, revert version churn, then launch.
 
   1. Stops any running Yagu instance so the locked exe can be overwritten.
-  2. Builds Yagu/Yagu.csproj in Debug with -p:RustProfile=profiling (symbol-rich native binary).
+  2. Builds src/Yagu/Yagu.csproj in Debug with -p:RustProfile=profiling (symbol-rich native binary).
   3. Reverts the auto-incremented build-version files so the working tree stays clean.
   4. Launches the freshly built Debug Yagu.exe.
 
@@ -34,9 +34,9 @@ if ($BuildOnly -and $RunOnly) {
 }
 
 $repoRoot    = $PSScriptRoot
-$projectPath = Join-Path $repoRoot 'Yagu\Yagu.csproj'
+$projectPath = Join-Path $repoRoot 'src\Yagu\Yagu.csproj'
 $tfm         = 'net10.0-windows10.0.19041.0'
-$exePath     = Join-Path $repoRoot "Yagu\bin\Debug\$tfm\Yagu.exe"
+$exePath     = Join-Path $repoRoot "src\Yagu\bin\Debug\$tfm\Yagu.exe"
 
 if (-not $RunOnly) {
     Write-Host 'Stopping any running Yagu instance...' -ForegroundColor Cyan

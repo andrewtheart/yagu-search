@@ -35,10 +35,10 @@ public sealed class SlowSemanticModelWarningTests
     [Fact]
     public void Translator_ExposesCurrentVariantKey()
     {
-        string iface = File.ReadAllText(Path.Combine(Root, "Yagu", "Services", "Ai", "ISemanticQueryTranslator.cs"));
+        string iface = File.ReadAllText(Path.Combine(Root, "src", "Yagu", "Services", "Ai", "ISemanticQueryTranslator.cs"));
         Assert.Contains("string? CurrentModelKey { get; }", iface);
 
-        string impl = File.ReadAllText(Path.Combine(Root, "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
+        string impl = File.ReadAllText(Path.Combine(Root, "src", "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
         // The variant id is captured wherever a model is selected/loaded, and exposed as the key
         // (preferring the variant id over the alias).
         Assert.Contains("public string? SelectedModelId { get; private set; }", impl);
@@ -51,7 +51,7 @@ public sealed class SlowSemanticModelWarningTests
     [Fact]
     public void ViewModel_ExposesSlowModelHelpers_BackedByAdvisor()
     {
-        string src = File.ReadAllText(Path.Combine(Root, "Yagu", "ViewModels", "MainViewModel.SlowSemanticModel.cs"));
+        string src = File.ReadAllText(Path.Combine(Root, "src", "Yagu", "ViewModels", "MainViewModel.SlowSemanticModel.cs"));
 
         Assert.Contains("public string? CurrentSemanticModelKey => _semanticTranslator?.CurrentModelKey;", src);
         Assert.Contains("public bool IsSlowSemanticModelWarningSuppressed(string? modelKey)", src);
@@ -67,7 +67,7 @@ public sealed class SlowSemanticModelWarningTests
     public void MainWindow_RunsThirtySecondWatchdog_AndReRunsOnSwitch()
     {
         string src = File.ReadAllText(
-            Path.Combine(Root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SlowSemanticModel.cs"));
+            Path.Combine(Root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SlowSemanticModel.cs"));
 
         // 30-second threshold, only in Semantic mode, guarded against re-entrancy.
         Assert.Contains("TimeSpan.FromSeconds(30)", src);
@@ -96,7 +96,7 @@ public sealed class SlowSemanticModelWarningTests
     public void MainWindow_RoutesSemanticSearchesThroughTheWatchdog()
     {
         string src = File.ReadAllText(
-            Path.Combine(Root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SearchInput.cs"));
+            Path.Combine(Root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SearchInput.cs"));
         // Both submit entry points go through the watchdog wrapper rather than calling SubmitSearchAsync
         // directly, so a slow interpretation is always detected.
         Assert.Contains("await SubmitSearchWithSlowModelWatchAsync();", src);
@@ -106,7 +106,7 @@ public sealed class SlowSemanticModelWarningTests
     [Fact]
     public void Dialog_IsTitlelessWarningModal_WithSuppressionCheckbox()
     {
-        string src = File.ReadAllText(Path.Combine(Root, "Yagu", "UI", "Windows", "SlowSemanticModelDialog.cs"));
+        string src = File.ReadAllText(Path.Combine(Root, "src", "Yagu", "UI", "Windows", "SlowSemanticModelDialog.cs"));
 
         // Titleless modal recipe (ExtendsContentIntoTitleBar + SetBorderAndTitleBar), matching the app's
         // other owned windows.

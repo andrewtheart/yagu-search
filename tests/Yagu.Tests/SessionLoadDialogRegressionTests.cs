@@ -6,13 +6,13 @@ public sealed class SessionLoadDialogRegressionTests
 {
     private static readonly string RepoRoot = FindRepoRoot();
     private static readonly string PreviewCommandsSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewCommands.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewCommands.cs"));
     private static readonly string MainViewModelSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
     private static readonly string SessionLoadDialogSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "SessionLoadDialog.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "SessionLoadDialog.cs"));
     private static readonly string YaguDialogSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "YaguDialog.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "YaguDialog.cs"));
 
     [Fact]
     public void LoadSession_UsesFastDiscoveryBeforeNativePickerFallback()

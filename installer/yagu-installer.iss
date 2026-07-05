@@ -54,7 +54,7 @@ OutputBaseFilename=YaguSetup-{#MyAppVersion}-{#YaguArch}-offline
 #else
 OutputBaseFilename=YaguSetup-{#MyAppVersion}-{#YaguArch}
 #endif
-SetupIconFile=..\Yagu\Assets\yagu.ico
+SetupIconFile=..\src\Yagu\Assets\yagu.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/ultra64
 SolidCompression=yes

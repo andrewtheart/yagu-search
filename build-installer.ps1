@@ -48,7 +48,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = $PSScriptRoot
-$projectPath = Join-Path $repoRoot 'Yagu\Yagu.csproj'
+$projectPath = Join-Path $repoRoot 'src\Yagu\Yagu.csproj'
 $projectDir = Join-Path $repoRoot 'Yagu'
 $installerDir = Join-Path $repoRoot 'installer'
 $stagingDir = Join-Path $installerDir 'staging'

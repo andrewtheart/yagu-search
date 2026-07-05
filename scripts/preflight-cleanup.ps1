@@ -235,7 +235,7 @@ if (-not $everythingRunning) {
 
 # -- 6. Kill any existing Yagu processes from this workspace (by PID) --
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$yaguBinRoot = Join-Path $repoRoot 'Yagu\bin'
+$yaguBinRoot = Join-Path $repoRoot 'src\Yagu\bin'
 $yaguProcs = @(Get-CimInstance Win32_Process -Filter "Name = 'Yagu.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($yaguBinRoot, [System.StringComparison]::OrdinalIgnoreCase) })
 if ($yaguProcs.Count -gt 0) {

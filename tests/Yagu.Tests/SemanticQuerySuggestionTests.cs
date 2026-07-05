@@ -31,7 +31,7 @@ public sealed class SemanticQuerySuggestionTests
     [Fact]
     public void ViewModel_GatesSuggestion_AndAppliesChoice()
     {
-        string src = File.ReadAllText(Path.Combine(Root, "Yagu", "ViewModels", "MainViewModel.cs"));
+        string src = File.ReadAllText(Path.Combine(Root, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
 
         // Offered in Traditional mode whenever a model is downloaded (the AI-search toggle may be off),
         // the user hasn't dismissed it, and the query passes the heuristic.
@@ -54,7 +54,7 @@ public sealed class SemanticQuerySuggestionTests
     public void Submit_OffersSuggestionBeforeRunning()
     {
         string src = File.ReadAllText(
-            Path.Combine(Root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SlowSemanticModel.cs"));
+            Path.Combine(Root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SlowSemanticModel.cs"));
 
         // The suggestion runs at the very start of the submit path, before the Semantic/Traditional split,
         // so accepting can flip the mode for this run.
@@ -68,7 +68,7 @@ public sealed class SemanticQuerySuggestionTests
     public void MainWindow_ShowsTitlelessSuggestionModalWithDontRemind()
     {
         string src = File.ReadAllText(
-            Path.Combine(Root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SearchInput.cs"));
+            Path.Combine(Root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.SearchInput.cs"));
 
         Assert.Contains("private async Task MaybeOfferSemanticSuggestionAsync()", src);
         Assert.Contains("if (!ViewModel.ShouldOfferSemanticSuggestion(ViewModel.Query))", src);

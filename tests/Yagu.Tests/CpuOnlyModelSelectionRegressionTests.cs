@@ -13,7 +13,7 @@ public sealed class CpuOnlyModelSelectionRegressionTests
     [Fact]
     public void Selector_HardExcludesVariantsForUnavailableDevices()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryModelSelector.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "Ai", "FoundryModelSelector.cs"));
 
         // SelectAsync gained an availableDevices set, threaded into the variant chooser.
         Assert.Contains("IReadOnlySet<DeviceType>? availableDevices, CancellationToken cancellationToken)", source);
@@ -40,7 +40,7 @@ public sealed class CpuOnlyModelSelectionRegressionTests
     [Fact]
     public void Picker_OnlyListsAndRecommendsRunnableDeviceVariants()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
 
         // The model picker must not list/recommend GPU/NPU variants on a CPU-only machine (DirectML
         // registers even in Windows Sandbox, so those builds look compatible yet crash on inference).
@@ -53,7 +53,7 @@ public sealed class CpuOnlyModelSelectionRegressionTests
     [Fact]
     public void Translator_PassesDetectedAcceleratorsToSelector()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
 
         Assert.Contains("public void SetAvailableAccelerators(bool hasGpu, bool hasNpu)", source);
         Assert.Contains("private HashSet<DeviceType> AvailableDevices()", source);
@@ -67,7 +67,7 @@ public sealed class CpuOnlyModelSelectionRegressionTests
     [Fact]
     public void Selector_ExcludesReasoningModelsAndModelsThatDoNotFitMemory()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryModelSelector.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "Ai", "FoundryModelSelector.cs"));
 
         // Reasoning / chain-of-thought models are dropped from AUTO selection — the "phi-4-mini"
         // preference fragment must not accidentally pick "phi-4-mini-reasoning".
@@ -88,7 +88,7 @@ public sealed class CpuOnlyModelSelectionRegressionTests
     [Fact]
     public void Translator_CapsAutoSelectionByAvailableMemoryOnCpuOnlyMachines()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
 
         // The budget applies only to CPU inference (null on accelerated machines, where the model runs
         // in device memory), and reads available physical RAM.
@@ -101,15 +101,15 @@ public sealed class CpuOnlyModelSelectionRegressionTests
     [Fact]
     public void Interface_ExposesSetAvailableAccelerators()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "ISemanticQueryTranslator.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "Ai", "ISemanticQueryTranslator.cs"));
         Assert.Contains("void SetAvailableAccelerators(bool hasGpu, bool hasNpu);", source);
     }
 
     [Fact]
     public void Gui_And_Cli_TellTranslatorTheDetectedHardware()
     {
-        string vm = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "ViewModels", "MainViewModel.cs"));
-        string cli = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string vm = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string cli = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         Assert.Contains("_semanticTranslator.SetAvailableAccelerators(_semanticHasGpu, _semanticHasNpu);", vm);
         Assert.Contains("translator.SetAvailableAccelerators(cliHasGpu, cliHasNpu);", cli);
@@ -118,10 +118,10 @@ public sealed class CpuOnlyModelSelectionRegressionTests
     [Fact]
     public void Translator_UpgradesToLargerModelOnAmpleGpuVram()
     {
-        string translator = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
-        string iface = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "ISemanticQueryTranslator.cs"));
-        string vm = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "ViewModels", "MainViewModel.cs"));
-        string cli = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string translator = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
+        string iface = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "Ai", "ISemanticQueryTranslator.cs"));
+        string vm = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string cli = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         // Interface + translator expose a VRAM setter and a VRAM-budget helper.
         Assert.Contains("void SetGpuMemoryBytes(long dedicatedVideoMemoryBytes);", iface);
@@ -143,7 +143,7 @@ public sealed class CpuOnlyModelSelectionRegressionTests
     [Fact]
     public void Selector_ExcludesNonChatModelsByAliasNotJustTask()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryModelSelector.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "Ai", "FoundryModelSelector.cs"));
 
         // Whisper regression: on a CPU-only, low-RAM box the whisper-tiny build reports no catalog Task,
         // so a task-only screen let it pass as "usable" and it was auto-selected as the smallest model —
@@ -164,7 +164,7 @@ public sealed class CpuOnlyModelSelectionRegressionTests
     [Fact]
     public void Picker_ScreensModelListByAliasAndTask()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
 
         // The Settings model picker must screen by alias AND task so whisper/embedding models (whose
         // catalog Task is often unset) never appear, and must not re-add every model when the filtered
@@ -176,7 +176,7 @@ public sealed class CpuOnlyModelSelectionRegressionTests
     [Fact]
     public void Translator_CondensesPromptOnlyUnderExtremeMemoryPressure()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
 
         // The condense-gating + {{TODAY}} substitution now live in the pure, unit-tested
         // SemanticPromptText.BuildSystemPrompt; the translator only supplies the live inputs (template,
@@ -191,9 +191,9 @@ public sealed class CpuOnlyModelSelectionRegressionTests
     [Fact]
     public void Picker_FlagsModelsTooLargeForAvailableMemory()
     {
-        string translator = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
-        string dialog = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "SemanticModelDownloadDialog.cs"));
-        string contract = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ai", "ISemanticQueryTranslator.cs"));
+        string translator = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
+        string dialog = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "SemanticModelDownloadDialog.cs"));
+        string contract = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "Ai", "ISemanticQueryTranslator.cs"));
 
         // The option carries a memory-fit flag computed from the CPU-only budget + scaled headroom, so a
         // model that can't load (e.g. a 12 GB model on a 4 GB machine) is flagged rather than silently

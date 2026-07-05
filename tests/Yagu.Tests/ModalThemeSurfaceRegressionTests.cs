@@ -58,7 +58,7 @@ public sealed class ModalThemeSurfaceRegressionTests
     }
 
     private static string ReadAppFile(string relativePath)
-        => File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", relativePath));
+        => File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", relativePath));
 
     private static string FindRepoRoot()
     {

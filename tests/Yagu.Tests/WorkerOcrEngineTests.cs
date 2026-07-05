@@ -464,7 +464,7 @@ public sealed class WorkerOcrEngineEnvironmentCollection
 public sealed class WorkerOcrEngineProtocolSourceTests
 {
     private static readonly string Source = File.ReadAllText(
-        Path.Combine(FindRepoRoot(), "Yagu", "Services", "Ocr", "WorkerOcrEngine.cs"));
+        Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "Ocr", "WorkerOcrEngine.cs"));
 
     [Fact]
     public void WireProtocol_UsesPascalCasePropertyNames()
@@ -544,7 +544,7 @@ public sealed class WorkerOcrEngineProtocolSourceTests
 public sealed class PaddleModelResolverSourceTests
 {
     private static readonly string Source = File.ReadAllText(
-        Path.Combine(FindRepoRoot(), "Yagu.OcrWorker", "PaddleModelResolver.cs"));
+        Path.Combine(FindRepoRoot(), "src", "Yagu.OcrWorker", "PaddleModelResolver.cs"));
 
     [Fact]
     public void DefaultModelName_IsChineseV5()

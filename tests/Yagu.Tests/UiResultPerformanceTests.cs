@@ -459,9 +459,9 @@ public class SearchResultCollectionCoverageTests
     public void PagingSource_PreEvictsNewMatchesAndQueuesBulkEviction()
     {
         string repoRoot = FindRepoRoot();
-        string viewModelSource = File.ReadAllText(Path.Combine(repoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
-        string collectionSource = File.ReadAllText(Path.Combine(repoRoot, "Yagu", "Models", "SearchResultCollection.cs"));
-        string storeSource = File.ReadAllText(Path.Combine(repoRoot, "Yagu", "Services", "ResultStore.cs"));
+        string viewModelSource = File.ReadAllText(Path.Combine(repoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
+        string collectionSource = File.ReadAllText(Path.Combine(repoRoot, "src", "Yagu", "Models", "SearchResultCollection.cs"));
+        string storeSource = File.ReadAllText(Path.Combine(repoRoot, "src", "Yagu", "Services", "ResultStore.cs"));
 
         string addMatch = ExtractMethodWindow(viewModelSource, "AddMatchAsync", window: 900);
         Assert.Contains("await EvictNewResultsBeforeUiAsync([result], cancellationToken).ConfigureAwait(true);", addMatch);

@@ -132,7 +132,7 @@ function Dismiss-GotItTips {
 Log "=== Drive Yagu: OCR image preview verification ==="
 Log "Directory=$Directory Query=$Query ImageFile=$ImageFile"
 
-$yaguExe = "C:\src\Yagu\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe"
+$yaguExe = "C:\src\Yagu\src\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe"
 $root = $AE::RootElement
 
 $existing = Get-Process -Name Yagu -ErrorAction SilentlyContinue

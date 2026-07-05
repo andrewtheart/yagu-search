@@ -11,7 +11,7 @@
     <EnableNETAnalyzers>false</EnableNETAnalyzers>
     <RustProfile Condition="'$(RustProfile)' == '' And '$(Configuration)' == 'Debug'">profiling</RustProfile>
     <RustProfile Condition="'$(RustProfile)' == ''">release</RustProfile>
-    <RustCoreDir>$(MSBuildThisFileDirectory)..\yagu-core\</RustCoreDir>
+    <RustCoreDir>$(MSBuildThisFileDirectory)..\..\src\yagu-core\</RustCoreDir>
     <RustTargetDir>$(RustCoreDir)target\$(RustProfile)\</RustTargetDir>
     <RustDllPath>$(RustTargetDir)yagu_core.dll</RustDllPath>
     <RustPdbPath>$(RustTargetDir)yagu_core.pdb</RustPdbPath>
@@ -41,99 +41,99 @@
 
   <!-- Pull in only the engine source so tests don't depend on WindowsAppSDK. -->
   <ItemGroup>
-    <Compile Include="..\Yagu\Models\SearchResult.cs" Link="Source\Models\SearchResult.cs" />
-    <Compile Include="..\Yagu\Models\HistorySuggestion.cs" Link="Source\Models\HistorySuggestion.cs" />
-    <Compile Include="..\Yagu\Models\SearchResultCollection.cs" Link="Source\Models\SearchResultCollection.cs" />
-    <Compile Include="..\Yagu\Models\SortCriterion.cs" Link="Source\Models\SortCriterion.cs" />
-    <Compile Include="..\Yagu\Models\SearchOptions.cs" Link="Source\Models\SearchOptions.cs" />
-    <Compile Include="..\Yagu\Models\SearchProgress.cs" Link="Source\Models\SearchProgress.cs" />
-    <Compile Include="..\Yagu\Models\FileGroup.cs" Link="Source\Models\FileGroup.cs" />
-    <Compile Include="..\Yagu\Models\GroupMode.cs" Link="Source\Models\GroupMode.cs" />
-    <Compile Include="..\Yagu\Models\BatchObservableCollection.cs" Link="Source\Models\BatchObservableCollection.cs" />
-    <Compile Include="..\Yagu\Models\ResultGroupHeaderRow.cs" Link="Source\Models\ResultGroupHeaderRow.cs" />
-    <Compile Include="..\Yagu\Models\ResultRowProjection.cs" Link="Source\Models\ResultRowProjection.cs" />
-    <Compile Include="..\Yagu\Helpers\BinaryDetector.cs" Link="Source\Helpers\BinaryDetector.cs" />
-    <Compile Include="..\Yagu\Helpers\DiskTypeDetector.cs" Link="Source\Helpers\DiskTypeDetector.cs" />
-    <Compile Include="..\Yagu\Helpers\GlobMatcher.cs" Link="Source\Helpers\GlobMatcher.cs" />
-    <Compile Include="..\Yagu\Helpers\SingleFilePathQueryDetector.cs" Link="Source\Helpers\SingleFilePathQueryDetector.cs" />
-    <Compile Include="..\Yagu\Helpers\SemanticQueryHeuristicDetector.cs" Link="Source\Helpers\SemanticQueryHeuristicDetector.cs" />
-    <Compile Include="..\Yagu\Helpers\EditorSyntaxHighlightingResolver.cs" Link="Source\Helpers\EditorSyntaxHighlightingResolver.cs" />
-    <Compile Include="..\Yagu\Helpers\EncodingDetector.cs" Link="Source\Helpers\EncodingDetector.cs" />
-    <Compile Include="..\Yagu\Helpers\LineTruncator.cs" Link="Source\Helpers\LineTruncator.cs" />
-    <Compile Include="..\Yagu\Helpers\PreviewZoomMath.cs" Link="Source\Helpers\PreviewZoomMath.cs" />
-    <Compile Include="..\Yagu\Helpers\SyntaxHighlighter.cs" Link="Source\Helpers\SyntaxHighlighter.cs" />
-    <Compile Include="..\Yagu\Services\FileLister.cs" Link="Source\Services\FileLister.cs" />
-    <Compile Include="..\Yagu\Services\EverythingAssetPaths.cs" Link="Source\Services\EverythingAssetPaths.cs" />
-    <Compile Include="..\Yagu\Services\ContentSearcher.cs" Link="Source\Services\ContentSearcher.cs" />
-    <Compile Include="..\Yagu\Services\CloudFileHelper.cs" Link="Source\Services\CloudFileHelper.cs" />
-    <Compile Include="..\Yagu\Services\FileMetadataCache.cs" Link="Source\Services\FileMetadataCache.cs" />
-    <Compile Include="..\Yagu\Services\SearchService.cs" Link="Source\Services\SearchService.cs" />
-    <Compile Include="..\Yagu\Services\SearchQueryParser.cs" Link="Source\Services\SearchQueryParser.cs" />
-    <Compile Include="..\Yagu\Services\ExcludedExtensionPredictor.cs" Link="Source\Services\ExcludedExtensionPredictor.cs" />
-    <Compile Include="..\Yagu\Services\SettingsService.cs" Link="Source\Services\SettingsService.cs" />
-    <Compile Include="..\Yagu\Services\DriveEnumerator.cs" Link="Source\Services\DriveEnumerator.cs" />
-    <Compile Include="..\Yagu\Services\HotkeyService.cs" Link="Source\Services\HotkeyService.cs" />
-    <Compile Include="..\Yagu\Services\EditorLauncher.cs" Link="Source\Services\EditorLauncher.cs" />
-    <Compile Include="..\Yagu\Services\AuthenticodeVerifier.cs" Link="Source\Services\AuthenticodeVerifier.cs" />
-    <Compile Include="..\Yagu\Services\ZipArchiveSearcher.cs" Link="Source\Services\ZipArchiveSearcher.cs" />
-    <Compile Include="..\Yagu\Services\SelectedFileExportService.cs" Link="Source\Services\SelectedFileExportService.cs" />
-    <Compile Include="..\Yagu\Services\HtmlReportExportService.cs" Link="Source\Services\HtmlReportExportService.cs" />
-    <Compile Include="..\Yagu\Services\ReportExportService.cs" Link="Source\Services\ReportExportService.cs" />
-    <Compile Include="..\Yagu\Services\LogService.cs" Link="Source\Services\LogService.cs" />
-    <Compile Include="..\Yagu\Services\Telemetry\TelemetryConfig.cs" Link="Source\Services\Telemetry\TelemetryConfig.cs" />
-    <Compile Include="..\Yagu\Services\Telemetry\TelemetryConfig.Defaults.cs" Link="Source\Services\Telemetry\TelemetryConfig.Defaults.cs" />
-    <Compile Include="..\Yagu\Services\Telemetry\TelemetryGate.cs" Link="Source\Services\Telemetry\TelemetryGate.cs" />
-    <Compile Include="..\Yagu\Services\Telemetry\TelemetryScrubber.cs" Link="Source\Services\Telemetry\TelemetryScrubber.cs" />
-    <Compile Include="..\Yagu\Services\Telemetry\TelemetryPayloads.cs" Link="Source\Services\Telemetry\TelemetryPayloads.cs" />
-    <Compile Include="..\Yagu\Services\Telemetry\BugReportThrottle.cs" Link="Source\Services\Telemetry\BugReportThrottle.cs" />
-    <Compile Include="..\Yagu\Services\LowDiskSpaceMonitor.cs" Link="Source\Services\LowDiskSpaceMonitor.cs" />
-    <Compile Include="..\Yagu\Services\ConPtyTerminalService.cs" Link="Source\Services\ConPtyTerminalService.cs" />
-    <Compile Include="..\Yagu\Services\TerminalShellKind.cs" Link="Source\Services\TerminalShellKind.cs" />
-    <Compile Include="..\Yagu\Services\TerminalDirectoryGuard.cs" Link="Source\Services\TerminalDirectoryGuard.cs" />
-    <Compile Include="..\Yagu\Services\TerminalCompletionService.cs" Link="Source\Services\TerminalCompletionService.cs" />
-    <Compile Include="..\Yagu\Services\DirectoryAutoCompleteService.cs" Link="Source\Services\DirectoryAutoCompleteService.cs" />
-    <Compile Include="..\Yagu\Services\GitignoreService.cs" Link="Source\Services\GitignoreService.cs" />
-    <Compile Include="..\Yagu\Services\DynamicGitignoreMatcher.cs" Link="Source\Services\DynamicGitignoreMatcher.cs" />
-    <Compile Include="..\Yagu\Services\ResultStoreTempLocationService.cs" Link="Source\Services\ResultStoreTempLocationService.cs" />
-    <Compile Include="..\Yagu\Services\ResultStore.cs" Link="Source\Services\ResultStore.cs" />
-    <Compile Include="..\Yagu\Services\SessionFileService.cs" Link="Source\Services\SessionFileService.cs" />
-    <Compile Include="..\Yagu\Services\SessionFileDiscoveryService.cs" Link="Source\Services\SessionFileDiscoveryService.cs" />
-    <Compile Include="..\Yagu\Services\DirectOutputSink.cs" Link="Source\Services\DirectOutputSink.cs" />
-    <Compile Include="..\Yagu\Services\FileWatchDiagnostics.cs" Link="Source\Services\FileWatchDiagnostics.cs" />
-    <Compile Include="..\Yagu\Services\FontContrastWarningService.cs" Link="Source\Services\FontContrastWarningService.cs" />
-    <Compile Include="..\Yagu\Native\NativeSearcher.cs" Link="Source\Native\NativeSearcher.cs" />
-    <Compile Include="..\Yagu\Native\EverythingSdk.cs" Link="Source\Native\EverythingSdk.cs" />
+    <Compile Include="..\..\src\Yagu\Models\SearchResult.cs" Link="Source\Models\SearchResult.cs" />
+    <Compile Include="..\..\src\Yagu\Models\HistorySuggestion.cs" Link="Source\Models\HistorySuggestion.cs" />
+    <Compile Include="..\..\src\Yagu\Models\SearchResultCollection.cs" Link="Source\Models\SearchResultCollection.cs" />
+    <Compile Include="..\..\src\Yagu\Models\SortCriterion.cs" Link="Source\Models\SortCriterion.cs" />
+    <Compile Include="..\..\src\Yagu\Models\SearchOptions.cs" Link="Source\Models\SearchOptions.cs" />
+    <Compile Include="..\..\src\Yagu\Models\SearchProgress.cs" Link="Source\Models\SearchProgress.cs" />
+    <Compile Include="..\..\src\Yagu\Models\FileGroup.cs" Link="Source\Models\FileGroup.cs" />
+    <Compile Include="..\..\src\Yagu\Models\GroupMode.cs" Link="Source\Models\GroupMode.cs" />
+    <Compile Include="..\..\src\Yagu\Models\BatchObservableCollection.cs" Link="Source\Models\BatchObservableCollection.cs" />
+    <Compile Include="..\..\src\Yagu\Models\ResultGroupHeaderRow.cs" Link="Source\Models\ResultGroupHeaderRow.cs" />
+    <Compile Include="..\..\src\Yagu\Models\ResultRowProjection.cs" Link="Source\Models\ResultRowProjection.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\BinaryDetector.cs" Link="Source\Helpers\BinaryDetector.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\DiskTypeDetector.cs" Link="Source\Helpers\DiskTypeDetector.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\GlobMatcher.cs" Link="Source\Helpers\GlobMatcher.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\SingleFilePathQueryDetector.cs" Link="Source\Helpers\SingleFilePathQueryDetector.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\SemanticQueryHeuristicDetector.cs" Link="Source\Helpers\SemanticQueryHeuristicDetector.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\EditorSyntaxHighlightingResolver.cs" Link="Source\Helpers\EditorSyntaxHighlightingResolver.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\EncodingDetector.cs" Link="Source\Helpers\EncodingDetector.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\LineTruncator.cs" Link="Source\Helpers\LineTruncator.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\PreviewZoomMath.cs" Link="Source\Helpers\PreviewZoomMath.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\SyntaxHighlighter.cs" Link="Source\Helpers\SyntaxHighlighter.cs" />
+    <Compile Include="..\..\src\Yagu\Services\FileLister.cs" Link="Source\Services\FileLister.cs" />
+    <Compile Include="..\..\src\Yagu\Services\EverythingAssetPaths.cs" Link="Source\Services\EverythingAssetPaths.cs" />
+    <Compile Include="..\..\src\Yagu\Services\ContentSearcher.cs" Link="Source\Services\ContentSearcher.cs" />
+    <Compile Include="..\..\src\Yagu\Services\CloudFileHelper.cs" Link="Source\Services\CloudFileHelper.cs" />
+    <Compile Include="..\..\src\Yagu\Services\FileMetadataCache.cs" Link="Source\Services\FileMetadataCache.cs" />
+    <Compile Include="..\..\src\Yagu\Services\SearchService.cs" Link="Source\Services\SearchService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\SearchQueryParser.cs" Link="Source\Services\SearchQueryParser.cs" />
+    <Compile Include="..\..\src\Yagu\Services\ExcludedExtensionPredictor.cs" Link="Source\Services\ExcludedExtensionPredictor.cs" />
+    <Compile Include="..\..\src\Yagu\Services\SettingsService.cs" Link="Source\Services\SettingsService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\DriveEnumerator.cs" Link="Source\Services\DriveEnumerator.cs" />
+    <Compile Include="..\..\src\Yagu\Services\HotkeyService.cs" Link="Source\Services\HotkeyService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\EditorLauncher.cs" Link="Source\Services\EditorLauncher.cs" />
+    <Compile Include="..\..\src\Yagu\Services\AuthenticodeVerifier.cs" Link="Source\Services\AuthenticodeVerifier.cs" />
+    <Compile Include="..\..\src\Yagu\Services\ZipArchiveSearcher.cs" Link="Source\Services\ZipArchiveSearcher.cs" />
+    <Compile Include="..\..\src\Yagu\Services\SelectedFileExportService.cs" Link="Source\Services\SelectedFileExportService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\HtmlReportExportService.cs" Link="Source\Services\HtmlReportExportService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\ReportExportService.cs" Link="Source\Services\ReportExportService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\LogService.cs" Link="Source\Services\LogService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Telemetry\TelemetryConfig.cs" Link="Source\Services\Telemetry\TelemetryConfig.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Telemetry\TelemetryConfig.Defaults.cs" Link="Source\Services\Telemetry\TelemetryConfig.Defaults.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Telemetry\TelemetryGate.cs" Link="Source\Services\Telemetry\TelemetryGate.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Telemetry\TelemetryScrubber.cs" Link="Source\Services\Telemetry\TelemetryScrubber.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Telemetry\TelemetryPayloads.cs" Link="Source\Services\Telemetry\TelemetryPayloads.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Telemetry\BugReportThrottle.cs" Link="Source\Services\Telemetry\BugReportThrottle.cs" />
+    <Compile Include="..\..\src\Yagu\Services\LowDiskSpaceMonitor.cs" Link="Source\Services\LowDiskSpaceMonitor.cs" />
+    <Compile Include="..\..\src\Yagu\Services\ConPtyTerminalService.cs" Link="Source\Services\ConPtyTerminalService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\TerminalShellKind.cs" Link="Source\Services\TerminalShellKind.cs" />
+    <Compile Include="..\..\src\Yagu\Services\TerminalDirectoryGuard.cs" Link="Source\Services\TerminalDirectoryGuard.cs" />
+    <Compile Include="..\..\src\Yagu\Services\TerminalCompletionService.cs" Link="Source\Services\TerminalCompletionService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\DirectoryAutoCompleteService.cs" Link="Source\Services\DirectoryAutoCompleteService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\GitignoreService.cs" Link="Source\Services\GitignoreService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\DynamicGitignoreMatcher.cs" Link="Source\Services\DynamicGitignoreMatcher.cs" />
+    <Compile Include="..\..\src\Yagu\Services\ResultStoreTempLocationService.cs" Link="Source\Services\ResultStoreTempLocationService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\ResultStore.cs" Link="Source\Services\ResultStore.cs" />
+    <Compile Include="..\..\src\Yagu\Services\SessionFileService.cs" Link="Source\Services\SessionFileService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\SessionFileDiscoveryService.cs" Link="Source\Services\SessionFileDiscoveryService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\DirectOutputSink.cs" Link="Source\Services\DirectOutputSink.cs" />
+    <Compile Include="..\..\src\Yagu\Services\FileWatchDiagnostics.cs" Link="Source\Services\FileWatchDiagnostics.cs" />
+    <Compile Include="..\..\src\Yagu\Services\FontContrastWarningService.cs" Link="Source\Services\FontContrastWarningService.cs" />
+    <Compile Include="..\..\src\Yagu\Native\NativeSearcher.cs" Link="Source\Native\NativeSearcher.cs" />
+    <Compile Include="..\..\src\Yagu\Native\EverythingSdk.cs" Link="Source\Native\EverythingSdk.cs" />
     <!-- OCR (image text search): pure helpers with no native engine deps. The worker-hosted engines
          (WorkerOcrEngine and its PaddleOcrEngine/TesseractOcrEngine subclasses) are pure-managed
          out-of-process hosts (Process + stdio JSON) with no native dependencies, so they are safe to
          link here; all native OCR work lives in Yagu.OcrWorker.exe. -->
-    <Compile Include="..\Yagu\Services\Ocr\IOcrEngine.cs" Link="Source\Services\Ocr\IOcrEngine.cs" />
-    <Compile Include="..\Yagu\Services\Ocr\ImageOcrSupport.cs" Link="Source\Services\Ocr\ImageOcrSupport.cs" />
-    <Compile Include="..\Yagu\Services\Ocr\OcrTextCache.cs" Link="Source\Services\Ocr\OcrTextCache.cs" />
-    <Compile Include="..\Yagu\Services\Ocr\OcrTextMatcher.cs" Link="Source\Services\Ocr\OcrTextMatcher.cs" />
-    <Compile Include="..\Yagu\Services\Ocr\OcrAssetPaths.cs" Link="Source\Services\Ocr\OcrAssetPaths.cs" />
-    <Compile Include="..\Yagu\Services\Ocr\OcrDownloadGate.cs" Link="Source\Services\Ocr\OcrDownloadGate.cs" />
-    <Compile Include="..\Yagu\Services\Ocr\UnavailableOcrEngine.cs" Link="Source\Services\Ocr\UnavailableOcrEngine.cs" />
-    <Compile Include="..\Yagu\Services\Ocr\WorkerOcrEngine.cs" Link="Source\Services\Ocr\WorkerOcrEngine.cs" />
-    <Compile Include="..\Yagu\Services\Ocr\PaddleOcrEngine.cs" Link="Source\Services\Ocr\PaddleOcrEngine.cs" />
-    <Compile Include="..\Yagu\Services\Ocr\TesseractOcrEngine.cs" Link="Source\Services\Ocr\TesseractOcrEngine.cs" />
-    <Compile Include="..\Yagu\Services\Ocr\OcrEngineFactory.cs" Link="Source\Services\Ocr\OcrEngineFactory.cs" />
-    <Compile Include="..\Yagu\Services\Ocr\ImageOcrSearchSession.cs" Link="Source\Services\Ocr\ImageOcrSearchSession.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ocr\IOcrEngine.cs" Link="Source\Services\Ocr\IOcrEngine.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ocr\ImageOcrSupport.cs" Link="Source\Services\Ocr\ImageOcrSupport.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ocr\OcrTextCache.cs" Link="Source\Services\Ocr\OcrTextCache.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ocr\OcrTextMatcher.cs" Link="Source\Services\Ocr\OcrTextMatcher.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ocr\OcrAssetPaths.cs" Link="Source\Services\Ocr\OcrAssetPaths.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ocr\OcrDownloadGate.cs" Link="Source\Services\Ocr\OcrDownloadGate.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ocr\UnavailableOcrEngine.cs" Link="Source\Services\Ocr\UnavailableOcrEngine.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ocr\WorkerOcrEngine.cs" Link="Source\Services\Ocr\WorkerOcrEngine.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ocr\PaddleOcrEngine.cs" Link="Source\Services\Ocr\PaddleOcrEngine.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ocr\TesseractOcrEngine.cs" Link="Source\Services\Ocr\TesseractOcrEngine.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ocr\OcrEngineFactory.cs" Link="Source\Services\Ocr\OcrEngineFactory.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ocr\ImageOcrSearchSession.cs" Link="Source\Services\Ocr\ImageOcrSearchSession.cs" />
     <!-- Worker-side consent guard: pure-managed (env var check + exception), no native deps. -->
-    <Compile Include="..\Yagu.OcrWorker\DownloadGuard.cs" Link="Source\OcrWorker\DownloadGuard.cs" />
+    <Compile Include="..\..\src\Yagu.OcrWorker\DownloadGuard.cs" Link="Source\OcrWorker\DownloadGuard.cs" />
     <!-- Semantic search: pure model→SearchOptions mapping (no Foundry/WindowsAppSDK deps). -->
-    <Compile Include="..\Yagu\Models\SemanticSearchPlan.cs" Link="Source\Models\SemanticSearchPlan.cs" />
-    <Compile Include="..\Yagu\Services\Ai\ISemanticQueryTranslator.cs" Link="Source\Services\Ai\ISemanticQueryTranslator.cs" />
-    <Compile Include="..\Yagu\Services\Ai\FoundryModelUpdateChecker.cs" Link="Source\Services\Ai\FoundryModelUpdateChecker.cs" />
-    <Compile Include="..\Yagu\Services\Ai\SlowSemanticModelAdvisor.cs" Link="Source\Services\Ai\SlowSemanticModelAdvisor.cs" />
-    <Compile Include="..\Yagu\Services\Ai\SemanticQuerySalvage.cs" Link="Source\Services\Ai\SemanticQuerySalvage.cs" />
-    <Compile Include="..\Yagu\Services\Ai\SemanticPlanApplier.cs" Link="Source\Services\Ai\SemanticPlanApplier.cs" />    <Compile Include="..\Yagu\Services\Ai\SemanticPlanJsonExtractor.cs" Link="Source\Services\Ai\SemanticPlanJsonExtractor.cs" />
-    <Compile Include="..\Yagu\Services\Ai\SemanticCapabilityDetector.cs" Link="Source\Services\Ai\SemanticCapabilityDetector.cs" />
-    <Compile Include="..\Yagu\Services\Ai\SemanticPromptText.cs" Link="Source\Services\Ai\SemanticPromptText.cs" />
-    <Compile Include="..\Yagu\Services\Ai\ModelMemoryBudget.cs" Link="Source\Services\Ai\ModelMemoryBudget.cs" />
-    <Compile Include="..\Yagu\Services\Ai\ModelContextBudget.cs" Link="Source\Services\Ai\ModelContextBudget.cs" />
-    <Compile Include="..\Yagu\Services\Ai\GenAiConfigReader.cs" Link="Source\Services\Ai\GenAiConfigReader.cs" />
-    <Compile Include="..\Yagu\Services\Ai\HighAccuracyModelPolicy.cs" Link="Source\Services\Ai\HighAccuracyModelPolicy.cs" />
+    <Compile Include="..\..\src\Yagu\Models\SemanticSearchPlan.cs" Link="Source\Models\SemanticSearchPlan.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\ISemanticQueryTranslator.cs" Link="Source\Services\Ai\ISemanticQueryTranslator.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\FoundryModelUpdateChecker.cs" Link="Source\Services\Ai\FoundryModelUpdateChecker.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\SlowSemanticModelAdvisor.cs" Link="Source\Services\Ai\SlowSemanticModelAdvisor.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\SemanticQuerySalvage.cs" Link="Source\Services\Ai\SemanticQuerySalvage.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\SemanticPlanApplier.cs" Link="Source\Services\Ai\SemanticPlanApplier.cs" />    <Compile Include="..\..\src\Yagu\Services\Ai\SemanticPlanJsonExtractor.cs" Link="Source\Services\Ai\SemanticPlanJsonExtractor.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\SemanticCapabilityDetector.cs" Link="Source\Services\Ai\SemanticCapabilityDetector.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\SemanticPromptText.cs" Link="Source\Services\Ai\SemanticPromptText.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\ModelMemoryBudget.cs" Link="Source\Services\Ai\ModelMemoryBudget.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\ModelContextBudget.cs" Link="Source\Services\Ai\ModelContextBudget.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\GenAiConfigReader.cs" Link="Source\Services\Ai\GenAiConfigReader.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\HighAccuracyModelPolicy.cs" Link="Source\Services\Ai\HighAccuracyModelPolicy.cs" />
   </ItemGroup>
 
   <!-- Copy the Rust cdylib next to the test assembly so the native fast-path
@@ -154,10 +154,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\vendor\SharpSevenZip\SharpSevenZip\SharpSevenZip\SharpSevenZip.csproj" />
+    <ProjectReference Include="..\..\src\vendor\SharpSevenZip\SharpSevenZip\SharpSevenZip\SharpSevenZip.csproj" />
     <!-- SemanticPlanApplier (compiled into the test assembly) now uses vendored nChronic for
          natural-language date parsing, so the tests need the same reference. -->
-    <ProjectReference Include="..\vendor\nChronic\Chronic\Chronic.csproj" />
+    <ProjectReference Include="..\..\src\vendor\nChronic\Chronic\Chronic.csproj" />
   </ItemGroup>
 
 </Project>

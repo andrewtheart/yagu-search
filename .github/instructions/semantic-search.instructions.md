@@ -1,6 +1,6 @@
 ---
 description: "Yagu on-device semantic (natural-language) search subsystem. Use when: editing Services/Ai, FoundryLocalSemanticQueryTranslator, FoundryModelSelector, SemanticPlanApplier, SemanticPlanJsonExtractor, semantic plan, NL to search, model selection, model context/memory guard, SemanticSearchSystemPrompt, Foundry Local."
-applyTo: "Yagu/Services/Ai/**"
+applyTo: "src/Yagu/Services/Ai/**"
 ---
 
 # Yagu — Semantic (NL→search) Subsystem

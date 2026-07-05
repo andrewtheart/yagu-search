@@ -5,7 +5,7 @@ public sealed class MainWindowCliCommandRegressionTests
     [Fact]
     public void AdvancedOptions_GenerateCliCommandButton_IsWiredToClosableOverlay()
     {
-        string xaml = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
+        string xaml = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
 
         Assert.Contains("x:Name=\"GenerateCliCommandButton\"", xaml);
         Assert.Contains("Click=\"OnGenerateCliCommandClick\"", xaml);
@@ -60,10 +60,10 @@ public sealed class MainWindowCliCommandRegressionTests
     [Fact]
     public void CliCommandGenerator_EmitsExplicitSearchAndAdvancedOptionFlags()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.CliCommand.cs"));
-        string terminalSource = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
-        string terminalDirectoryGuardSource = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "TerminalDirectoryGuard.cs"));
-        string terminalHtml = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Assets", "terminal.html"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.CliCommand.cs"));
+        string terminalSource = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
+        string terminalDirectoryGuardSource = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "TerminalDirectoryGuard.cs"));
+        string terminalHtml = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Assets", "terminal.html"));
 
         Assert.Contains("\"--directory\"", source);
         Assert.Contains("\"--pattern\"", source);
@@ -154,9 +154,9 @@ public sealed class MainWindowCliCommandRegressionTests
     public void EmbeddedTerminal_UsesPageSideLineEditorForPromptSafeInputAndShortcuts()
     {
         string root = FindRepoRoot();
-        string terminalSource = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
-        string terminalHtml = File.ReadAllText(Path.Combine(root, "Yagu", "Assets", "terminal.html"));
-        string terminalServiceSource = File.ReadAllText(Path.Combine(root, "Yagu", "Services", "ConPtyTerminalService.cs"));
+        string terminalSource = File.ReadAllText(Path.Combine(root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
+        string terminalHtml = File.ReadAllText(Path.Combine(root, "src", "Yagu", "Assets", "terminal.html"));
+        string terminalServiceSource = File.ReadAllText(Path.Combine(root, "src", "Yagu", "Services", "ConPtyTerminalService.cs"));
 
         Assert.Contains("let inputBuffer = '';", terminalHtml);
         Assert.Contains("let inputCursor = 0;", terminalHtml);

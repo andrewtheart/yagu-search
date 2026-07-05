@@ -6,9 +6,9 @@ public sealed class TitleBarThemeRegressionTests
     public void LightTheme_UsesBlackForegroundForNativeAndCustomTopBarIcons()
     {
         string root = FindRepoRoot();
-        string themeService = File.ReadAllText(Path.Combine(root, "Yagu", "Services", "AppThemeService.cs"));
-        string titleBarSource = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.TitleBar.cs"));
-        string mainWindowXaml = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
+        string themeService = File.ReadAllText(Path.Combine(root, "src", "Yagu", "Services", "AppThemeService.cs"));
+        string titleBarSource = File.ReadAllText(Path.Combine(root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.TitleBar.cs"));
+        string mainWindowXaml = File.ReadAllText(Path.Combine(root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
 
         Assert.Contains("var lightForeground = Colors.Black;", themeService);
         Assert.Contains("var lightInactiveForeground = Colors.Black;", themeService);

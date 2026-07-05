@@ -94,7 +94,7 @@ public sealed class VerboseLogOverrideRegressionTests
     [Fact]
     public void LogService_ExposesInstallerOverrideApiAndRegistryLocation()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "LogService.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "LogService.cs"));
 
         Assert.Contains("public static void InitFromSettings(LogLevel fileLevel, LogLevel consoleLevel)", source);
         Assert.Contains("ReadInstallerLogLevelOverride()", source);
@@ -109,8 +109,8 @@ public sealed class VerboseLogOverrideRegressionTests
     [Fact]
     public void Startup_GuiAndCli_InitializeViaInitFromSettings()
     {
-        string app = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "App.xaml.cs"));
-        string cli = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string app = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "App.xaml.cs"));
+        string cli = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         Assert.Contains("LogService.InitFromSettings((LogLevel)settings.LogLevelIndex, (LogLevel)settings.ConsoleLogLevelIndex);", app);
         Assert.Contains("LogService.InitFromSettings((LogLevel)settings.LogLevelIndex, LogLevel.Critical);", cli);

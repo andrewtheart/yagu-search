@@ -253,7 +253,7 @@ public sealed class ExcludedExtensionWarningWiringTests
         => text.Substring(start, Math.Min(length, text.Length - start));
 
     private static string ReadSource(params string[] parts)
-        => File.ReadAllText(Path.Combine(new[] { RepoRoot }.Concat(parts).ToArray()));
+        => File.ReadAllText(Path.Combine(new[] { RepoRoot, "src" }.Concat(parts).ToArray()));
 
     private static string FindRepoRoot()
     {

@@ -3,7 +3,7 @@ namespace Yagu.Tests;
 public sealed class MainViewModelSearchStatusRegressionTests
 {
     private static readonly string MainViewModelSource = File.ReadAllText(
-        Path.Combine(FindRepoRoot(), "Yagu", "ViewModels", "MainViewModel.cs"));
+        Path.Combine(FindRepoRoot(), "src", "Yagu", "ViewModels", "MainViewModel.cs"));
 
     [Fact]
     public void SearchLoop_RefreshesStatusFromConsumedMatches_WhenProgressEventsAreBacklogged()
@@ -83,7 +83,7 @@ public sealed class MainViewModelSearchStatusRegressionTests
     public void SkippedCount_RemainsHiddenUntilSearchStarts()
     {
         string mainWindowXaml = File.ReadAllText(
-            Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
+            Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
         Assert.Contains("Visibility=\"{x:Bind ViewModel.SkippedCountVisibility, Mode=OneWay}\"", mainWindowXaml);
 
         Assert.Contains("[ObservableProperty] public partial bool HasPerformedSearch { get; set; }", MainViewModelSource);

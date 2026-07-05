@@ -10,63 +10,63 @@ public sealed class SettingsWindowRegressionTests
 {
     private static readonly string RepoRoot = FindRepoRoot();
     private static readonly string MainWindowSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdminSettings.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.AdminSettings.cs"));
     private static readonly string MainWindowLauncherSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Launcher.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Launcher.cs"));
     private static readonly string MainWindowStartupChecksSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
     private static readonly string MainWindowTerminalSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
     private static readonly string MainWindowWindowSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml.cs"));
     private static readonly string MainWindowKeyboardSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Keyboard.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Keyboard.cs"));
     private static readonly string MainWindowIntroTipsSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.IntroTips.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.IntroTips.cs"));
     private static readonly string MainWindowMatchNavSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.MatchNav.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.MatchNav.cs"));
     private static readonly string MainWindowXaml = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
     private static readonly string SettingsWindowSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
     private static readonly string SettingsWindowXaml = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml"));
     private static readonly string SettingsServiceSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "Services", "SettingsService.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "Services", "SettingsService.cs"));
     private static readonly string AppThemeServiceSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "Services", "AppThemeService.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "Services", "AppThemeService.cs"));
     private static readonly string MainViewModelSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
     private static readonly string ConPtyTerminalServiceSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "Services", "ConPtyTerminalService.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "Services", "ConPtyTerminalService.cs"));
     private static readonly string AppSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "App.xaml.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "App.xaml.cs"));
     private static readonly string HelpWindowSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "Help", "HelpWindow.xaml.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "Help", "HelpWindow.xaml.cs"));
     private static readonly string ResultStoreTempLocationWindowSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "ResultStoreTempLocationWindow.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "ResultStoreTempLocationWindow.cs"));
     private static readonly string MainWindowResultsListScrollSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.ResultsListScroll.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.ResultsListScroll.cs"));
     private static readonly string AdminProtectedPathsDialogSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "AdminProtectedPathsDialog.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "AdminProtectedPathsDialog.cs"));
     private static readonly string YaguDialogSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "YaguDialog.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "YaguDialog.cs"));
     private static readonly string WindowForegroundHelperSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "Helpers", "WindowForegroundHelper.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "Helpers", "WindowForegroundHelper.cs"));
     private static readonly string SelectionRendererSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "vendor", "TextControlBox-WinUI", "TextControlBox",
+        Path.Combine(RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox",
             "Core", "Renderer", "SelectionRenderer.cs"));
     private static readonly string CoreTextControlBoxSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "vendor", "TextControlBox-WinUI", "TextControlBox",
+        Path.Combine(RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox",
             "Core", "CoreTextControlBox.xaml.cs"));
     private static readonly string TextControlBoxDiagnosticsSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "vendor", "TextControlBox-WinUI", "TextControlBox",
+        Path.Combine(RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox",
             "TextControlBoxDiagnostics.cs"));
     private static readonly string LinkHighlightManagerSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "vendor", "TextControlBox-WinUI", "TextControlBox",
+        Path.Combine(RepoRoot, "src", "vendor", "TextControlBox-WinUI", "TextControlBox",
             "Core", "Text", "LinkHighlightManager.cs"));
     private static readonly string TerminalHtml = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "Assets", "terminal.html"));
+        Path.Combine(RepoRoot, "src", "Yagu", "Assets", "terminal.html"));
 
     // ── SettingsWindow XAML structure ──
 

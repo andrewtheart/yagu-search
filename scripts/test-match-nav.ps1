@@ -328,7 +328,7 @@ Write-Host "[1] Launching Yagu..."
 # administrator" dialog that steals focus and hangs this script until it times out.
 # The exe name does not exist, so EditorLauncher.Open fails silently (no window, no dialog).
 $env:YAGU_EDITOR_COMMAND = 'yagu-ui-test-noop-editor --goto "{file}:{line}"'
-$yaguExe = "C:\src\Yagu\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe"
+$yaguExe = "C:\src\Yagu\src\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe"
 $proc = Start-Process -FilePath $yaguExe `
     -ArgumentList "--dir `"$Directory`" --query `"$Query`" --window-mode traditional" `
     -PassThru

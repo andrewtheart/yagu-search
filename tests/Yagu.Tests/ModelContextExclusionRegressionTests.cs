@@ -23,7 +23,7 @@ public sealed class ModelContextExclusionRegressionTests
     }
 
     private static string Translator() =>
-        File.ReadAllText(Path.Combine(RepoRoot(), "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
+        File.ReadAllText(Path.Combine(RepoRoot(), "src", "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
 
     [Fact]
     public void Translator_BoundsRunawayGenerationWithTokenCapTimeoutAndJsonMode()
@@ -49,7 +49,7 @@ public sealed class ModelContextExclusionRegressionTests
     public void Prompt_RoutesPhrasesAndWordsToLiteralNotRegex()
     {
         string prompt = File.ReadAllText(Path.Combine(
-            RepoRoot(), "Yagu", "Services", "Ai", "Prompts", "SemanticSearchSystemPrompt.prompt.md"));
+            RepoRoot(), "src", "Yagu", "Services", "Ai", "Prompts", "SemanticSearchSystemPrompt.prompt.md"));
         // A word/phrase must be a literal content search, never a generated regex (the runaway trigger).
         Assert.Contains("LITERAL WORDS AND PHRASES ARE NOT REGEX", prompt);
         Assert.Contains("Regex is ONLY for the machine-format patterns", prompt);
@@ -100,7 +100,7 @@ public sealed class ModelContextExclusionRegressionTests
     [Fact]
     public void Cli_ExposesSemanticBatchEvaluationMode()
     {
-        string cli = File.ReadAllText(Path.Combine(RepoRoot(), "Yagu", "CliRunner.cs"));
+        string cli = File.ReadAllText(Path.Combine(RepoRoot(), "src", "Yagu", "CliRunner.cs"));
         Assert.Contains("--semantic-batch", cli);
         Assert.Contains("a.SemanticBatch = v.Trim('\"');", cli);
         Assert.Contains("RunSemanticBatchAsync(args, batchSettings)", cli);

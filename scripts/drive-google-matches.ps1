@@ -224,7 +224,7 @@ function Scroll-IntoComfortBand($element, $listElement, $scrollPattern) {
 Log "=== Drive Yagu: google match overlay verification ==="
 Log "Directory=$Directory Query=$Query FileFilter=$FileFilter"
 
-$yaguExe = "C:\src\Yagu\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe"
+$yaguExe = "C:\src\Yagu\src\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe"
 $root = $AE::RootElement
 
 Log "[1] Launching a completely fresh Yagu instance..."

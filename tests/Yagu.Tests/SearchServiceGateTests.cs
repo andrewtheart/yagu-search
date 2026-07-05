@@ -14,7 +14,7 @@ public sealed class SearchServiceGateTests
     [Fact]
     public void CollectForMemoryPressureIfDue_UsesNonBlockingGc()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "SearchService.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SearchService.cs"));
         string method = ExtractMethodWindow(source, "CollectForMemoryPressureIfDue", window: 1400);
 
         Assert.Contains("GC.Collect(2, GCCollectionMode.Optimized, blocking: false, compacting: false);", method);
@@ -28,7 +28,7 @@ public sealed class SearchServiceGateTests
         // OCR'd images must only ever appear under their image path (set by OcrTextMatcher). The
         // internal OCR text cache (%LOCALAPPDATA%\Yagu\ocr-cache\*.txt) must never surface as its own
         // result row, so discovery skips any path under that directory before glob/content/OCR routing.
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "SearchService.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SearchService.cs"));
 
         Assert.Contains("string ocrCacheDirPrefix = Ocr.OcrTextCache.DefaultBaseDirectory() + Path.DirectorySeparatorChar;", source);
         AssertContainsInOrder(source,
@@ -41,7 +41,7 @@ public sealed class SearchServiceGateTests
     [Fact]
     public void StreamingScannerCancellationCleanup_FinishesBeforeDestroyingCallbacks()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "SearchService.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SearchService.cs"));
         string cleanup = source[source.IndexOf("bool scannerFinished = false;", StringComparison.Ordinal)..];
 
         Assert.Contains("bool scannerFinished = false;", cleanup);
@@ -56,7 +56,7 @@ public sealed class SearchServiceGateTests
     [Fact]
     public void RoutineSearchTelemetry_LogsAtInfoLevel()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "SearchService.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SearchService.cs"));
 
         Assert.Contains("LogService.Instance.Info(\"SearchService\", $\"Pipeline channels created:", source);
         Assert.Contains("LogService.Instance.Info(\"Discovery\", $\"Progress:", source);
@@ -89,7 +89,7 @@ public sealed class SearchServiceGateTests
     [Fact]
     public void SourceBackedResults_UseCoarseBatchesAndDedicatedBuffer()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "SearchService.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SearchService.cs"));
 
         Assert.Contains("private const int SourceBackedResultChannelCapacity = 65_536;", source);
         Assert.Contains("int sourceBackedCap = options.DegradedResultStore != null", source);
@@ -156,7 +156,7 @@ public sealed class SearchServiceGateTests
     [Fact]
     public void ImageOcr_BypassesSkipExtensionsSoImagesReachTheOcrQueue()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "SearchService.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SearchService.cs"));
 
         Assert.Contains("bool bypassImages = options.SearchImageText && skipExts.Count > 0 && options.ImageOcrExtensions.Count > 0;", source);
         AssertContainsInOrder(source,
@@ -169,7 +169,7 @@ public sealed class SearchServiceGateTests
     [Fact]
     public void ImageOcr_SessionIsCreatedOnlyWhenContentSearchAndImageTextEnabled()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "SearchService.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SearchService.cs"));
 
         AssertContainsInOrder(source,
             "if (searchContent && options.SearchImageText)",
@@ -183,7 +183,7 @@ public sealed class SearchServiceGateTests
     [Fact]
     public void ImageOcr_RoutesImageCandidatesToTheQueueOnBothScanPaths()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "SearchService.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SearchService.cs"));
 
         // The session is started alongside the content workers.
         Assert.Contains("imageOcr?.Start();", source);
@@ -196,7 +196,7 @@ public sealed class SearchServiceGateTests
     [Fact]
     public void ImageOcr_DrainsAndDisposesEngineInFinallyBeforeClosingResults()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "SearchService.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SearchService.cs"));
 
         AssertContainsInOrder(source,
             "if (imageOcr != null)",

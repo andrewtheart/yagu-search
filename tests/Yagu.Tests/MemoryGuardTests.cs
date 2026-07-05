@@ -12,11 +12,11 @@ namespace Yagu.Tests;
 public sealed class MemoryGuardTests
 {
     private static readonly string RepoRoot = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
 
     private static readonly string MainWindowSource = ReadMainWindowSources();
     private static readonly string MainViewModelSource = File.ReadAllText(
-        Path.Combine(RepoRoot, "Yagu", "ViewModels", "MainViewModel.cs"));
+        Path.Combine(RepoRoot, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
 
     // ══════════════════════════════════════════════════════════════════
     // MemoryGuard file existence and structure
@@ -25,7 +25,7 @@ public sealed class MemoryGuardTests
     [Fact]
     public void MemoryGuardFile_Exists()
     {
-        string path = Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.MemoryGuard.cs");
+        string path = Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.MemoryGuard.cs");
         Assert.True(File.Exists(path), "MainWindow.MemoryGuard.cs should exist.");
     }
 
@@ -316,7 +316,7 @@ public sealed class MemoryGuardTests
         // NormalizeCandidates should keep the entry with the most metadata
         var source = MainWindowSource; // Loaded for the method window pattern
         string svcSource = File.ReadAllText(
-            Path.Combine(RepoRoot, "Yagu", "Services", "SessionFileDiscoveryService.cs"));
+            Path.Combine(RepoRoot, "src", "Yagu", "Services", "SessionFileDiscoveryService.cs"));
         Assert.Contains("StringComparer.OrdinalIgnoreCase", svcSource);
         Assert.Contains("byPath.TryGetValue(candidate.Path", svcSource);
     }
@@ -325,7 +325,7 @@ public sealed class MemoryGuardTests
     public void NormalizeCandidates_SortsByModifiedDescending_ThenByFileName()
     {
         string svcSource = File.ReadAllText(
-            Path.Combine(RepoRoot, "Yagu", "Services", "SessionFileDiscoveryService.cs"));
+            Path.Combine(RepoRoot, "src", "Yagu", "Services", "SessionFileDiscoveryService.cs"));
         Assert.Contains(".OrderByDescending(candidate => candidate.ModifiedUtc ?? DateTimeOffset.MinValue)", svcSource);
         Assert.Contains(".ThenBy(candidate => Path.GetFileName(candidate.Path), StringComparer.OrdinalIgnoreCase)", svcSource);
     }
@@ -334,7 +334,7 @@ public sealed class MemoryGuardTests
     public void IsSessionFilePath_RequiresYaguSessionExtension()
     {
         string svcSource = File.ReadAllText(
-            Path.Combine(RepoRoot, "Yagu", "Services", "SessionFileDiscoveryService.cs"));
+            Path.Combine(RepoRoot, "src", "Yagu", "Services", "SessionFileDiscoveryService.cs"));
         Assert.Contains("SessionFileService.FileExtension", svcSource);
         Assert.Contains("StringComparison.OrdinalIgnoreCase", svcSource);
     }
@@ -345,7 +345,7 @@ public sealed class MemoryGuardTests
 
     private static string ReadMainWindowSources()
     {
-        string yaguRoot = Path.Combine(RepoRoot, "Yagu", "UI", "Windows", "MainWindow");
+        string yaguRoot = Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow");
         var sources = Directory.GetFiles(yaguRoot, "MainWindow*.cs")
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .Select(File.ReadAllText);

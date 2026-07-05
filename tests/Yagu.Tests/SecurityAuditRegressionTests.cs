@@ -72,7 +72,7 @@ public sealed class SecurityAuditRegressionTests
     public void AuthenticodeVerifier_UsesWholeChainRevocationAndFailsSafe()
     {
         string source = File.ReadAllText(
-            Path.Combine(FindRepoRoot(), "Yagu", "Services", "AuthenticodeVerifier.cs"));
+            Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "AuthenticodeVerifier.cs"));
 
         // Whole-chain revocation checking must stay on so a revoked signer is rejected.
         Assert.Contains("WTD_REVOKE_WHOLECHAIN", source);
@@ -89,7 +89,7 @@ public sealed class SecurityAuditRegressionTests
     public void GuiInstaller_VerifiesSignatureBeforeRunAs()
     {
         string source = File.ReadAllText(Path.Combine(
-            FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+            FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
 
         AssertVerifyBeforeRunAs(source);
     }
@@ -97,7 +97,7 @@ public sealed class SecurityAuditRegressionTests
     [Fact]
     public void CliInstaller_VerifiesSignatureBeforeRunAs()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "CliRunner.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         AssertVerifyBeforeRunAs(source);
     }
@@ -110,7 +110,7 @@ public sealed class SecurityAuditRegressionTests
         // ("http" + "://" dodges the insecure-URL analyzer on this negative assertion.)
         const string insecureVoidtools = "http" + "://www.voidtools.com";
         string assetPaths = File.ReadAllText(Path.Combine(
-            FindRepoRoot(), "Yagu", "Services", "EverythingAssetPaths.cs"));
+            FindRepoRoot(), "src", "Yagu", "Services", "EverythingAssetPaths.cs"));
         Assert.Contains("https://www.voidtools.com/", assetPaths);
         Assert.Contains("Everything-", assetPaths);
         Assert.DoesNotContain(insecureVoidtools, assetPaths);
@@ -118,8 +118,8 @@ public sealed class SecurityAuditRegressionTests
         // Both installer sites must obtain the URL from that central helper (never hand-roll an http:// one).
         foreach (string relative in new[]
                  {
-                     Path.Combine("Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"),
-                     Path.Combine("Yagu", "CliRunner.cs"),
+                     Path.Combine("src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"),
+                     Path.Combine("src", "Yagu", "CliRunner.cs"),
                  })
         {
             string source = File.ReadAllText(Path.Combine(FindRepoRoot(), relative));
@@ -147,7 +147,7 @@ public sealed class SecurityAuditRegressionTests
     public void TelemetryFunction_SanitizesCorrelationIdBeforeUse()
     {
         string source = File.ReadAllText(Path.Combine(
-            FindRepoRoot(), "cloud", "Yagu.TelemetryFunction", "TelemetryFunctions.cs"));
+            FindRepoRoot(), "src", "cloud", "Yagu.TelemetryFunction", "TelemetryFunctions.cs"));
 
         // The raw payload value must be routed through the sanitizer, never used verbatim.
         Assert.Contains("SanitizeCorrelationId(payload.CorrelationId)", source);
@@ -162,7 +162,7 @@ public sealed class SecurityAuditRegressionTests
     public void TelemetryFunction_BugReportContainerIsPrivate()
     {
         string source = File.ReadAllText(Path.Combine(
-            FindRepoRoot(), "cloud", "Yagu.TelemetryFunction", "TelemetryFunctions.cs"));
+            FindRepoRoot(), "src", "cloud", "Yagu.TelemetryFunction", "TelemetryFunctions.cs"));
 
         Assert.Contains("PublicAccessType.None", source);
         Assert.DoesNotContain("PublicAccessType.Blob", source);
@@ -175,7 +175,7 @@ public sealed class SecurityAuditRegressionTests
     public void DirectoryAutoComplete_BuildsEsExeArgsWithArgumentList_NotRawArgumentString()
     {
         string source = File.ReadAllText(Path.Combine(
-            FindRepoRoot(), "Yagu", "Services", "DirectoryAutoCompleteService.cs"));
+            FindRepoRoot(), "src", "Yagu", "Services", "DirectoryAutoCompleteService.cs"));
 
         // The production process builder must add each argument individually (ArgumentList), so the
         // caller-influenced query is a single escaped argument that cannot inject extra es.exe

@@ -22,7 +22,7 @@ public class TelemetryConsentStartupSequencingTests
     [Fact]
     public void App_OnLaunched_DoesNotShowTelemetryConsentDirectly()
     {
-        string app = File.ReadAllText(Path.Combine(RepoRoot(), "Yagu", "App.xaml.cs"));
+        string app = File.ReadAllText(Path.Combine(RepoRoot(), "src", "Yagu", "App.xaml.cs"));
 
         // The consent must NOT be fired from App.OnLaunched anymore (that path bypassed the startup-modal
         // sequencing and stacked the dialog on top of another first-run prompt).
@@ -32,7 +32,7 @@ public class TelemetryConsentStartupSequencingTests
     [Fact]
     public void StartupChain_AwaitsTelemetryConsentInSequence()
     {
-        string startup = File.ReadAllText(Path.Combine(RepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+        string startup = File.ReadAllText(Path.Combine(RepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
 
         // OnContentLoaded awaits the consent as part of the sequential first-run chain, BEFORE the
         // result-store temp-location prompt, so the two can never overlap.
@@ -46,7 +46,7 @@ public class TelemetryConsentStartupSequencingTests
     [Fact]
     public void TelemetryConsentCheck_GatesAndDelegatesToDialog()
     {
-        string startup = File.ReadAllText(Path.Combine(RepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+        string startup = File.ReadAllText(Path.Combine(RepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
 
         // The check is a one-time, don't-stack-on-another-modal gate that delegates to the consent dialog.
         Assert.Contains("private async Task ShowTelemetryConsentIfNeededAsync()", startup);

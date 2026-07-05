@@ -69,7 +69,7 @@
     <PropertyGroup>
       <YaguGeneratedTelemetryFile>$(IntermediateOutputPath)TelemetryConfig.Configured.g.cs</YaguGeneratedTelemetryFile>
     </PropertyGroup>
-    <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\scripts\generate-telemetry-config.ps1&quot; -ProxyUrl &quot;$(YaguProxyUrl)&quot; -AppToken &quot;$(YaguAppToken)&quot; -OutputFile &quot;$(YaguGeneratedTelemetryFile)&quot;" />
+    <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\scripts\generate-telemetry-config.ps1&quot; -ProxyUrl &quot;$(YaguProxyUrl)&quot; -AppToken &quot;$(YaguAppToken)&quot; -OutputFile &quot;$(YaguGeneratedTelemetryFile)&quot;" />
     <ItemGroup>
       <Compile Remove="Services\Telemetry\TelemetryConfig.Defaults.cs" />
       <Compile Include="$(YaguGeneratedTelemetryFile)" />
@@ -85,7 +85,7 @@
   <Target Name="GenerateYaguBuildVersion"
           BeforeTargets="BeforeBuild"
           Condition="'$(DesignTimeBuild)' != 'true' And '$(SkipYaguVersionIncrement)' != 'true'">
-    <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\scripts\increment-yagu-version.ps1&quot; -VersionFile &quot;$(YaguBuildVersionFile)&quot; -OutputFile &quot;$(YaguGeneratedVersionFile)&quot;" />
+    <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\scripts\increment-yagu-version.ps1&quot; -VersionFile &quot;$(YaguBuildVersionFile)&quot; -OutputFile &quot;$(YaguGeneratedVersionFile)&quot;" />
   </Target>
 
   <!--
@@ -98,9 +98,9 @@
           BeforeTargets="BeforeBuild"
           Condition="'$(Configuration)' == 'Debug' And '$(DesignTimeBuild)' != 'true'">
     <PropertyGroup>
-      <YaguCrashDumpFolder>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\TestResults\CrashDumps'))</YaguCrashDumpFolder>
+      <YaguCrashDumpFolder>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\TestResults\CrashDumps'))</YaguCrashDumpFolder>
     </PropertyGroup>
-    <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\scripts\ensure-wer-localdumps.ps1&quot; -DumpFolder &quot;$(YaguCrashDumpFolder)&quot;"
+    <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\scripts\ensure-wer-localdumps.ps1&quot; -DumpFolder &quot;$(YaguCrashDumpFolder)&quot;"
           IgnoreExitCode="true"
           ContinueOnError="WarnAndContinue" />
   </Target>
@@ -112,9 +112,9 @@
   <Target Name="ConvertHelpMdToHtml"
           BeforeTargets="BeforeBuild"
           Condition="'$(DesignTimeBuild)' != 'true'"
-          Inputs="$(MSBuildThisFileDirectory)..\HELP.md;$(MSBuildThisFileDirectory)help-style.html"
+          Inputs="$(MSBuildThisFileDirectory)..\..\HELP.md;$(MSBuildThisFileDirectory)help-style.html"
           Outputs="$(MSBuildThisFileDirectory)HELP.html">
-    <Exec Command="pandoc &quot;$(MSBuildThisFileDirectory)..\HELP.md&quot; -s --metadata pagetitle=&quot;Yagu Help&quot; --include-in-header=&quot;$(MSBuildThisFileDirectory)help-style.html&quot; -o &quot;$(MSBuildThisFileDirectory)HELP.html&quot;"
+    <Exec Command="pandoc &quot;$(MSBuildThisFileDirectory)..\..\HELP.md&quot; -s --metadata pagetitle=&quot;Yagu Help&quot; --include-in-header=&quot;$(MSBuildThisFileDirectory)help-style.html&quot; -o &quot;$(MSBuildThisFileDirectory)HELP.html&quot;"
           IgnoreExitCode="true"
           ContinueOnError="WarnAndContinue" />
   </Target>
@@ -202,10 +202,10 @@
          every binary distribution carries the required license/attribution texts (GPLv3 conveyance +
          the MIT/BSD/Apache/LGPL and 7-Zip/unRAR notice requirements). build-installer.ps1 stages the
          publish output, so these land at <app>\LICENSE and <app>\THIRD-PARTY-NOTICES.txt. -->
-    <Content Include="..\LICENSE" Link="LICENSE">
+    <Content Include="..\..\LICENSE" Link="LICENSE">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="..\THIRD-PARTY-NOTICES.txt" Link="THIRD-PARTY-NOTICES.txt">
+    <Content Include="..\..\THIRD-PARTY-NOTICES.txt" Link="THIRD-PARTY-NOTICES.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <None Include="Everything64.dll">
@@ -255,7 +255,7 @@
   <Target Name="BuildInstallerAfterPublish"
           AfterTargets="Publish"
           Condition="'$(BuildInstallerOnPublish)' != 'false' And '$(DesignTimeBuild)' != 'true' And '$(YaguInstallerArch)' != ''">
-    <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\build-installer.ps1&quot; -SkipBuild -Architecture $(YaguInstallerArch)" />
+    <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\build-installer.ps1&quot; -SkipBuild -Architecture $(YaguInstallerArch)" />
   </Target>
 
   <!--
@@ -278,7 +278,7 @@
   <Target Name="BuildAllInstallersAfterPublish"
           AfterTargets="Publish"
           Condition="'$(BuildInstallerOnPublish)' != 'false' And '$(DesignTimeBuild)' != 'true' And '$(UseCurrentRuntimeIdentifier)' == 'true'">
-    <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\build-all-installers.ps1&quot;" />
+    <Exec Command="&quot;$(PowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\build-all-installers.ps1&quot;" />
   </Target>
 
   <!--

@@ -8,10 +8,10 @@ namespace Yagu.Tests;
 public class PreviewSectionLayoutTests
 {
     private static readonly string PreviewSectionsSource = File.ReadAllText(
-        Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewSections.cs"));
+        Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewSections.cs"));
 
     private static readonly string PreviewBuilderSource = File.ReadAllText(
-        Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewBuilder.cs"));
+        Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewBuilder.cs"));
 
     [Fact]
     public void AddPreviewSection_Expander_HasHorizontalContentAlignmentStretch()

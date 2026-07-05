@@ -5,7 +5,7 @@ public sealed class TerminalWarningRegressionTests
     [Fact]
     public void TerminalService_UsesRedirectedShellAndScopedCleanup()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "Services", "ConPtyTerminalService.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "ConPtyTerminalService.cs"));
 
         Assert.Contains("RedirectStandardInput = true", source);
         Assert.Contains("RedirectStandardOutput = true", source);
@@ -20,7 +20,7 @@ public sealed class TerminalWarningRegressionTests
     [Fact]
     public void TerminalJsonEscaping_FormatsUnicodeEscapesInvariantly()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
 
         Assert.Contains("CultureInfo.InvariantCulture", source);
         Assert.Contains("ToString(\"X4\", CultureInfo.InvariantCulture)", source);

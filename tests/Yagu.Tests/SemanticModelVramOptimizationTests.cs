@@ -21,7 +21,7 @@ namespace Yagu.Tests;
 public sealed class SemanticModelVramOptimizationTests
 {
     private static string Read(params string[] parts)
-        => File.ReadAllText(Path.Combine(FindRepoRoot(), Path.Combine(parts)));
+        => File.ReadAllText(Path.Combine(FindRepoRoot(), "src", Path.Combine(parts)));
 
     [Fact]
     public void UnloadAfterUse_IsExposedOnTheInterface()

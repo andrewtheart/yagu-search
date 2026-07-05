@@ -26,15 +26,15 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            yagu-core/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('yagu-core/Cargo.toml') }}
+            src/yagu-core/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src/yagu-core/Cargo.toml') }}
 
       - name: Build yagu-core (Rust)
-        working-directory: yagu-core
+        working-directory: src/yagu-core
         run: cargo build --release
 
       - name: Test yagu-core (Rust)
-        working-directory: yagu-core
+        working-directory: src/yagu-core
         run: cargo test --release
 
       - name: Restore
@@ -48,7 +48,7 @@ jobs:
       # (ContentSearchPerformanceRegressionTests, MatchNavRegressionTests) that are unreliable on shared
       # CI runners. They run on-demand on a dev machine. The BenchmarkDotNet smoke job covers throughput.
       - name: Test
-        run: dotnet test Yagu.Tests/Yagu.Tests.csproj -c Release --no-build --filter "Category!=Slow&Category!=GPU" --logger "trx;LogFileName=test-results.trx"
+        run: dotnet test tests/Yagu.Tests/Yagu.Tests.csproj -c Release --no-build --filter "Category!=Slow&Category!=GPU" --logger "trx;LogFileName=test-results.trx"
 
       - name: Upload test results
         if: always()
@@ -74,8 +74,8 @@ jobs:
       # Build the native core so the benchmark exercises the Rust fast path instead of the
       # managed fallback (Yagu.Benchmarks only copies target/release/yagu_core.dll if it exists).
       - name: Build yagu-core (Rust)
-        working-directory: yagu-core
+        working-directory: src/yagu-core
         run: cargo build --release
 
       - name: Run BenchmarkDotNet smoke
-        run: dotnet run -c Release --project Yagu.Benchmarks -- --filter "*LiteralSearch*" --job short --launchCount 1 --warmupCount 1 --iterationCount 1
+        run: dotnet run -c Release --project tests/Yagu.Benchmarks -- --filter "*LiteralSearch*" --job short --launchCount 1 --warmupCount 1 --iterationCount 1

@@ -21,14 +21,14 @@ public sealed class InstallerPackagingRegressionTests
     public void App_ShipsGplLicenseAndThirdPartyNoticesInInstallDir()
     {
         string root = FindRepoRoot();
-        string csproj = File.ReadAllText(Path.Combine(root, "Yagu", "Yagu.csproj"));
+        string csproj = File.ReadAllText(Path.Combine(root, "src", "Yagu", "Yagu.csproj"));
         string buildInstaller = File.ReadAllText(Path.Combine(root, "build-installer.ps1"));
 
         // The GPLv3 license and the consolidated third-party notices are copied to the app output so
         // every binary distribution carries the required license/attribution texts (GPLv3 conveyance +
         // the MIT/BSD/Apache/LGPL and 7-Zip/unRAR notice requirements).
-        Assert.Contains("<Content Include=\"..\\LICENSE\" Link=\"LICENSE\">", csproj);
-        Assert.Contains("<Content Include=\"..\\THIRD-PARTY-NOTICES.txt\" Link=\"THIRD-PARTY-NOTICES.txt\">", csproj);
+        Assert.Contains("<Content Include=\"..\\..\\LICENSE\" Link=\"LICENSE\">", csproj);
+        Assert.Contains("<Content Include=\"..\\..\\THIRD-PARTY-NOTICES.txt\" Link=\"THIRD-PARTY-NOTICES.txt\">", csproj);
 
         // The installer stages the whole publish output, so those files ship as <app>\LICENSE and
         // <app>\THIRD-PARTY-NOTICES.txt.
@@ -44,7 +44,7 @@ public sealed class InstallerPackagingRegressionTests
     public void OcrWorker_IsPublishedSelfContained_SoItRunsWithoutDotnetInstalled()
     {
         string root = FindRepoRoot();
-        string csproj = File.ReadAllText(Path.Combine(root, "Yagu", "Yagu.csproj"));
+        string csproj = File.ReadAllText(Path.Combine(root, "src", "Yagu", "Yagu.csproj"));
 
         // The OCR worker is a separate managed process (PaddleSharp/Tesseract are not Native-AOT safe).
         // It must be PUBLISHED self-contained for win-x64 so it carries its own .NET runtime: Yagu.exe is
@@ -174,7 +174,7 @@ public sealed class InstallerPackagingRegressionTests
     public void Csproj_CrossCompilesRustCoreAndPackagesPerArchitecture()
     {
         string root = FindRepoRoot();
-        string csproj = File.ReadAllText(Path.Combine(root, "Yagu", "Yagu.csproj"));
+        string csproj = File.ReadAllText(Path.Combine(root, "src", "Yagu", "Yagu.csproj"));
 
         // RuntimeIdentifier maps to an installer architecture token, and the
         // AfterPublish hook packages exactly that architecture (only when a RID is set).
@@ -194,7 +194,7 @@ public sealed class InstallerPackagingRegressionTests
     public void Csproj_BarePublishBuildsAllThreeInstallers()
     {
         string root = FindRepoRoot();
-        string csproj = File.ReadAllText(Path.Combine(root, "Yagu", "Yagu.csproj"));
+        string csproj = File.ReadAllText(Path.Combine(root, "src", "Yagu", "Yagu.csproj"));
 
         // A bare `dotnet publish` (no -r) lets the SDK auto-infer the host RID, which it
         // signals via UseCurrentRuntimeIdentifier == 'true'. That case fans out to build

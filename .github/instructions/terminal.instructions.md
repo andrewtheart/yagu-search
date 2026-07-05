@@ -1,11 +1,11 @@
 ---
 description: "Yagu embedded terminal (WebView2 + xterm.js over a redirected cmd.exe). Use when: editing ConPtyTerminalService, MainWindow.Terminal, terminal.html, TerminalCompletionService, TerminalDirectoryGuard, xterm, WebView2 terminal, terminal input/echo, shell backend."
-applyTo: "Yagu/Services/ConPtyTerminalService.cs, Yagu/Services/TerminalCompletionService.cs, Yagu/Services/TerminalDirectoryGuard.cs, Yagu/Services/TerminalShellKind.cs, Yagu/UI/Windows/MainWindow/MainWindow.Terminal.cs, Yagu/Assets/terminal.html"
+applyTo: "src/Yagu/Services/ConPtyTerminalService.cs, src/Yagu/Services/TerminalCompletionService.cs, src/Yagu/Services/TerminalDirectoryGuard.cs, src/Yagu/Services/TerminalShellKind.cs, src/Yagu/UI/Windows/MainWindow/MainWindow.Terminal.cs, src/Yagu/Assets/terminal.html"
 ---
 
 # Yagu — Embedded Terminal
 
-The embedded terminal is **WebView2 + xterm.js** (`Yagu/Assets/terminal.html`) driving a **redirected
+The embedded terminal is **WebView2 + xterm.js** (`src/Yagu/Assets/terminal.html`) driving a **redirected
 `cmd.exe /Q /K` over pipes** — NOT a real ConPTY, even though the host class is named
 `ConPtyTerminalService`.
 

@@ -16,7 +16,7 @@ param(
     [string]$Scenario = 'all',
     [string]$Directory = 'C:\src\Yagu\Yagu',
     [string]$OutDir = 'C:\src\Yagu\docs\images',
-    [string]$YaguExe = 'C:\src\Yagu\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe'
+    [string]$YaguExe = 'C:\src\Yagu\src\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -771,7 +771,7 @@ function Scenario-Terminal {
     Stop-AllYagu
     # Launch with a real directory + query so the generated CLI command is meaningful. A query is
     # REQUIRED — OnSendGeneratedCliCommandToTerminalClick refuses an empty pattern.
-    $termDir = 'C:\src\Yagu\Yagu\Services\Ai'
+    $termDir = 'C:\src\Yagu\src\Yagu\Services\Ai'
     Start-Yagu "--dir `"$termDir`" --query `"public`" --window-mode traditional" | Out-Null
     $win = Get-YaguWindow 25
     if (-not $win) { Write-Host 'FAILED: no Yagu window'; return }

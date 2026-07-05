@@ -17,7 +17,7 @@ public sealed class TelemetryInjectionTests
     public void LogicFile_IsPartial_AndCommitsNoEndpointOrToken()
     {
         string config = File.ReadAllText(
-            Path.Combine(Root, "Yagu", "Services", "Telemetry", "TelemetryConfig.cs"));
+            Path.Combine(Root, "src", "Yagu", "Services", "Telemetry", "TelemetryConfig.cs"));
 
         Assert.Contains("public static partial class TelemetryConfig", config);
         // The real values live only in the (swappable) companion partial, never in the logic file.
@@ -29,7 +29,7 @@ public sealed class TelemetryInjectionTests
     public void DefaultsFile_KeepsBuildOffline()
     {
         string defaults = File.ReadAllText(
-            Path.Combine(Root, "Yagu", "Services", "Telemetry", "TelemetryConfig.Defaults.cs"));
+            Path.Combine(Root, "src", "Yagu", "Services", "Telemetry", "TelemetryConfig.Defaults.cs"));
 
         Assert.Contains("public static partial class TelemetryConfig", defaults);
         Assert.Contains("public const string ProxyBaseUrl = PlaceholderBaseUrl;", defaults);
@@ -47,7 +47,7 @@ public sealed class TelemetryInjectionTests
     [Fact]
     public void BuildPlumbing_InjectsWhenConfigured_AndKeepsSecretsOutOfGit()
     {
-        string csproj = File.ReadAllText(Path.Combine(Root, "Yagu", "Yagu.csproj"));
+        string csproj = File.ReadAllText(Path.Combine(Root, "src", "Yagu", "Yagu.csproj"));
         Assert.Contains("GenerateYaguTelemetryConfig", csproj);
         Assert.Contains("telemetry.local.props", csproj);
         Assert.Contains("YAGU_PROXY_URL", csproj);

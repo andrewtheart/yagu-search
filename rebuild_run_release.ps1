@@ -5,16 +5,16 @@
 
 .DESCRIPTION
   1. Stops any running Yagu instance so the locked exe can be overwritten.
-  2. Builds Yagu/Yagu.csproj in Release (normal profile, no Rust profiling).
+  2. Builds src/Yagu/Yagu.csproj in Release (normal profile, no Rust profiling).
   3. Reverts the auto-incremented build-version files so the working tree stays clean.
   4. Launches the freshly built Release Yagu.exe.
 #>
 $ErrorActionPreference = 'Stop'
 
 $repoRoot    = $PSScriptRoot
-$projectPath = Join-Path $repoRoot 'Yagu\Yagu.csproj'
+$projectPath = Join-Path $repoRoot 'src\Yagu\Yagu.csproj'
 $tfm         = 'net10.0-windows10.0.19041.0'
-$exePath     = Join-Path $repoRoot "Yagu\bin\Release\$tfm\Yagu.exe"
+$exePath     = Join-Path $repoRoot "src\Yagu\bin\Release\$tfm\Yagu.exe"
 
 Write-Host 'Stopping any running Yagu instance...' -ForegroundColor Cyan
 Get-Process -Name Yagu -ErrorAction SilentlyContinue | Stop-Process -Force

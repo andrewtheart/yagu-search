@@ -115,7 +115,7 @@ public sealed class FontContrastWarningServiceTests
     [Fact]
     public void WarningDialog_UsesSharedCustomDialogWindow()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "FontContrastWarningDialog.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "FontContrastWarningDialog.cs"));
 
         Assert.Contains("YaguDialog.ShowAsync", source);
         Assert.Contains("YaguDialogResult.Primary", source);
@@ -128,7 +128,7 @@ public sealed class FontContrastWarningServiceTests
     [Fact]
     public void ViewModel_CreatesSelectedAndUnselectedPreviewContrastCandidates()
     {
-        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "ViewModels", "MainViewModel.cs"));
+        string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "ViewModels", "MainViewModel.cs"));
 
         Assert.Contains("selectedPreviewBackground", source);
         Assert.Contains("unselectedPreviewBackground", source);

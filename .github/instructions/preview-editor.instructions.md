@@ -1,6 +1,6 @@
 ---
 description: "Yagu context-preview pane and built-in editor (WinUI RichTextBlock + vendored TextControlBox). Use when: editing MainWindow.Preview*, MainWindow.MatchNav, MainWindow.FindReplace, preview highlighting, match navigation, RichTextBlock selection, TextControlBox, editor, 0xc0000005 / 0xc000027b preview crash, long-line preview."
-applyTo: "Yagu/UI/Windows/MainWindow/MainWindow.Preview*.cs, Yagu/UI/Windows/MainWindow/MainWindow.MatchNav.cs, Yagu/UI/Windows/MainWindow/MainWindow.FindReplace.cs, vendor/TextControlBox-WinUI/**"
+applyTo: "src/Yagu/UI/Windows/MainWindow/MainWindow.Preview*.cs, src/Yagu/UI/Windows/MainWindow/MainWindow.MatchNav.cs, src/Yagu/UI/Windows/MainWindow/MainWindow.FindReplace.cs, src/vendor/TextControlBox-WinUI/**"
 ---
 
 # Yagu — Preview Pane & Built-in Editor
@@ -49,5 +49,5 @@ rather than fighting it.
 
 ## Editor
 
-The active editor is the vendored `TextControlBox-WinUI` under `vendor/`. An AvaloniaEdit migration is
+The active editor is the vendored `TextControlBox-WinUI` under `src/vendor/`. An AvaloniaEdit migration is
 **planned but not done** (`PLANS/AVALONIAEDIT_MIGRATION_PLAN.md`) — TextControlBox is still live.

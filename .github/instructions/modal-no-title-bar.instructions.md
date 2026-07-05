@@ -35,5 +35,5 @@ explicitly asks for a modal to have a title bar.
 ## Regression test
 
 Title-bar-less behavior is source-pinned in
-`Yagu.Tests/EverythingSearchDialogRegressionTests.cs`. When adding a new modal type, extend the
+`tests/Yagu.Tests/EverythingSearchDialogRegressionTests.cs`. When adding a new modal type, extend the
 relevant pin so the `ExtendsContentIntoTitleBar = true` recipe can't silently regress.

@@ -441,7 +441,7 @@ function Scroll-IntoComfortBand($element, $listElement, $scrollPattern) {
 Log "=== Drive Yagu: cache preview wrap-mode verification ($WrapMode) ==="
 Log "Directory=$Directory Query=$Query FileFilter=$FileFilter TargetFileName=$TargetFileName WrapMode=$WrapMode"
 
-$yaguExe = "C:\src\Yagu\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe"
+$yaguExe = "C:\src\Yagu\src\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe"
 $root = $AE::RootElement
 
 Log "[1] Launching a completely fresh Yagu instance..."

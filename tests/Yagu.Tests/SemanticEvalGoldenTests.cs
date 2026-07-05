@@ -55,8 +55,8 @@ public sealed class SemanticEvalGoldenTests
     {
         string root = RepoRoot();
         string exe = FindYaguExe(root);
-        string queriesFile = Path.Combine(root, "Yagu.Tests", "TestData", "SemanticEval", "queries.txt");
-        string goldenFile = Path.Combine(root, "Yagu.Tests", "TestData", "SemanticEval", "expected-plans.json");
+        string queriesFile = Path.Combine(root, "tests", "Yagu.Tests", "TestData", "SemanticEval", "queries.txt");
+        string goldenFile = Path.Combine(root, "tests", "Yagu.Tests", "TestData", "SemanticEval", "expected-plans.json");
         Assert.True(File.Exists(queriesFile), $"query fixture not found: {queriesFile}");
 
         if (exe is null)
@@ -128,7 +128,7 @@ public sealed class SemanticEvalGoldenTests
         const string tfm = "net10.0-windows10.0.19041.0";
         foreach (var cfg in new[] { "Debug", "Release" })
         {
-            string p = Path.Combine(root, "Yagu", "bin", cfg, tfm, "Yagu.exe");
+            string p = Path.Combine(root, "src", "Yagu", "bin", cfg, tfm, "Yagu.exe");
             if (File.Exists(p)) return p;
         }
         return null;

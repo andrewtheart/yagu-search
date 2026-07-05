@@ -14,8 +14,8 @@ public sealed class WebView2PrerequisiteRegressionTests
     [Fact]
     public void TerminalPane_ShowsActionableMessageWhenWebView2Missing()
     {
-        string xaml = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
-        string terminalCs = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
+        string xaml = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
+        string terminalCs = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.Terminal.cs"));
 
         // A hidden overlay panel with a WebView2-runtime download link lives over the terminal WebView.
         Assert.Contains("x:Name=\"TerminalWebView2MissingPanel\"", xaml);

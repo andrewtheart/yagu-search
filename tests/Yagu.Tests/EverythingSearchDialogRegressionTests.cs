@@ -6,8 +6,8 @@ public sealed class EverythingSearchDialogRegressionTests
     public void EverythingNotFoundPrompt_UsesSharedCustomDialog()
     {
         string root = FindRepoRoot();
-        string startupChecks = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
-        string dialog = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "YaguDialog.cs"));
+        string startupChecks = File.ReadAllText(Path.Combine(root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+        string dialog = File.ReadAllText(Path.Combine(root, "src", "Yagu", "UI", "Windows", "YaguDialog.cs"));
 
         Assert.Contains("Title = \"Everything Search Not Found\"", startupChecks);
         Assert.Contains("YaguDialog.ShowAsync(", startupChecks);
@@ -39,7 +39,7 @@ public sealed class EverythingSearchDialogRegressionTests
     public void EverythingNotFoundPrompt_HasStandoutInstallRecommendation()
     {
         string startupChecks = File.ReadAllText(
-            Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+            Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
 
         // The not-found dialog uses a rich content builder (not a plain string) so it can render a
         // standout install recommendation.
@@ -64,7 +64,7 @@ public sealed class EverythingSearchDialogRegressionTests
         // disables the title's TextWrapping and lets long titles overflow the dialog horizontally.
         // The glyph + title must live in a two-column Grid (Auto glyph + star title) so the title
         // column is width-constrained and the text wraps to fit the dialog.
-        string dialog = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "YaguDialog.cs"));
+        string dialog = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "YaguDialog.cs"));
 
         int glyphIndex = dialog.IndexOf("options.TitleGlyph is { Length: > 0 } glyph", StringComparison.Ordinal);
         Assert.True(glyphIndex >= 0, "Expected the title-glyph branch in YaguDialog.");
@@ -87,7 +87,7 @@ public sealed class EverythingSearchDialogRegressionTests
     public void AppCode_DoesNotUseWinUiContentDialog()
     {
         string root = FindRepoRoot();
-        foreach (string path in Directory.EnumerateFiles(Path.Combine(root, "Yagu"), "*.cs", SearchOption.AllDirectories))
+        foreach (string path in Directory.EnumerateFiles(Path.Combine(root, "src", "Yagu"), "*.cs", SearchOption.AllDirectories))
         {
             string relativePath = Path.GetRelativePath(root, path);
             string source = File.ReadAllText(path);
@@ -101,7 +101,7 @@ public sealed class EverythingSearchDialogRegressionTests
     public void EverythingNotRunningPrompts_AreTitleless()
     {
         string root = FindRepoRoot();
-        string startupChecks = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+        string startupChecks = File.ReadAllText(Path.Combine(root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
 
         const string titleMarker = "Title = \"Everything Search Not Running\"";
         int count = 0;
@@ -123,7 +123,7 @@ public sealed class EverythingSearchDialogRegressionTests
     public void EverythingSearchReadyDialog_IsTitleless()
     {
         string root = FindRepoRoot();
-        string startupChecks = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+        string startupChecks = File.ReadAllText(Path.Combine(root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
 
         const string titleMarker = "Title = \"Everything Search Ready\"";
         int index = startupChecks.IndexOf(titleMarker, StringComparison.Ordinal);
@@ -138,9 +138,9 @@ public sealed class EverythingSearchDialogRegressionTests
     public void EverythingNotRunningPrompt_OffersDontShowAgainBackedByRestorableSetting()
     {
         string root = FindRepoRoot();
-        string startupChecks = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
-        string settingsService = File.ReadAllText(Path.Combine(root, "Yagu", "Services", "SettingsService.cs"));
-        string settingsWindow = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
+        string startupChecks = File.ReadAllText(Path.Combine(root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+        string settingsService = File.ReadAllText(Path.Combine(root, "src", "Yagu", "Services", "SettingsService.cs"));
+        string settingsWindow = File.ReadAllText(Path.Combine(root, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
 
         // The not-running prompt body carries a "Don't show this again" checkbox.
         Assert.Contains("Content = \"Don't show this again\"", startupChecks);
@@ -158,7 +158,7 @@ public sealed class EverythingSearchDialogRegressionTests
     public void EverythingInstallerDownload_ShowsProgressModalAndOfflineFailureModal()
     {
         string root = FindRepoRoot();
-        string startupChecks = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+        string startupChecks = File.ReadAllText(Path.Combine(root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
 
         // The installer download is gated by a helper that shows a modal instead of the old silent
         // one-shot GetByteArrayAsync download that only updated the status bar.
@@ -197,8 +197,8 @@ public sealed class EverythingSearchDialogRegressionTests
     public void EverythingInstall_PrefersBundledInstaller_ButAlwaysBehindConsent()
     {
         string root = FindRepoRoot();
-        string startup = File.ReadAllText(Path.Combine(root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
-        string cli = File.ReadAllText(Path.Combine(root, "Yagu", "CliRunner.cs"));
+        string startup = File.ReadAllText(Path.Combine(root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+        string cli = File.ReadAllText(Path.Combine(root, "src", "Yagu", "CliRunner.cs"));
 
         // Installing Everything ALWAYS requires consent — the bundled path never bypasses the prompt.
         // GUI: the "Install" dialog result; CLI: the [Y/n] answer.
@@ -227,7 +227,7 @@ public sealed class EverythingSearchDialogRegressionTests
     [Fact]
     public void YaguDialog_AutoSizesHeightToContent_SoTextIsNotClipped()
     {
-        string dialog = File.ReadAllText(Path.Combine(FindRepoRoot(), "Yagu", "UI", "Windows", "YaguDialog.cs"));
+        string dialog = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "UI", "Windows", "YaguDialog.cs"));
 
         // The dialog measures its content and resizes the window to fit, so long text (e.g. the
         // "Everything Search Not Found" body) is never clipped by the fixed Height — the dialog is

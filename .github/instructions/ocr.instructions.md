@@ -1,6 +1,6 @@
 ---
 description: "Yagu image-text (OCR) search — out-of-process worker + engines. Use when: editing Services/Ocr, Yagu.OcrWorker, WorkerOcrEngine, PaddleSharp, Tesseract, OCR protocol, OCR worker, image text search, YAGU_OCR env vars, OcrTextCache, ocr-worker staging."
-applyTo: "Yagu/Services/Ocr/**, Yagu.OcrWorker/**"
+applyTo: "src/Yagu/Services/Ocr/**, src/Yagu.OcrWorker/**"
 ---
 
 # Yagu — Image-Text (OCR) Search

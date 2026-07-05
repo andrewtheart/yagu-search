@@ -10,7 +10,7 @@
 
     Phase 2 (use): merges the raw profiles with `llvm-profdata.exe` and rebuilds
     yagu_core.dll with `-C profile-use=<merged.profdata>`. The final DLL ends
-    up at <repo>\yagu-core\target\release\yagu_core.dll, which Yagu.csproj
+    up at <repo>\src\yagu-core\target\release\yagu_core.dll, which Yagu.csproj
     already copies to the host output on the next normal build.
 
 .NOTES
@@ -57,12 +57,12 @@ Set-StrictMode -Version Latest
 # Paths
 # ---------------------------------------------------------------------------
 $RepoRoot     = Split-Path -Parent $PSScriptRoot
-$RustCoreDir  = Join-Path $RepoRoot 'yagu-core'
+$RustCoreDir  = Join-Path $RepoRoot 'src\yagu-core'
 $ProfileDir   = Join-Path $RustCoreDir 'target\pgo-profiles'
 $MergedFile   = Join-Path $RustCoreDir 'target\merged.profdata'
 $RustDll      = Join-Path $RustCoreDir 'target\release\yagu_core.dll'
-$YaguCsproj   = Join-Path $RepoRoot 'Yagu\Yagu.csproj'
-$YaguOutDir   = Join-Path $RepoRoot 'Yagu\bin\x64\Release\net10.0-windows10.0.19041.0'
+$YaguCsproj   = Join-Path $RepoRoot 'src\Yagu\Yagu.csproj'
+$YaguOutDir   = Join-Path $RepoRoot 'src\Yagu\bin\x64\Release\net10.0-windows10.0.19041.0'
 $YaguExe      = Join-Path $YaguOutDir 'Yagu.exe'
 $HostedDll    = Join-Path $YaguOutDir 'yagu_core.dll'
 

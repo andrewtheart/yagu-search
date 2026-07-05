@@ -31,7 +31,7 @@ public sealed class CpuSemanticWarningTests
     [Fact]
     public void ViewModel_GatesWarning_ToCpuOnlyFirstRun_AndAppliesTraditionalDefault()
     {
-        string src = File.ReadAllText(Path.Combine(Root, "Yagu", "ViewModels", "MainViewModel.cs"));
+        string src = File.ReadAllText(Path.Combine(Root, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
 
         // Shown only when semantic search is available, no GPU/NPU was detected, and not shown before.
         Assert.Contains(
@@ -61,7 +61,7 @@ public sealed class CpuSemanticWarningTests
     public void Startup_ShowsTitlelessWarningModalWithWarningGlyph()
     {
         string src = File.ReadAllText(
-            Path.Combine(Root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+            Path.Combine(Root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
 
         // Wired into the awaited first-run startup sequence.
         Assert.Contains("await ShowCpuSemanticWarningIfNeededAsync();", src);

@@ -13,7 +13,7 @@ public sealed class FoundryModelUpdateAlertTests
     [Fact]
     public void AppSettings_PersistsFoundryModelBaselineAndToggle()
     {
-        string src = File.ReadAllText(Path.Combine(Root, "Yagu", "Services", "SettingsService.cs"));
+        string src = File.ReadAllText(Path.Combine(Root, "src", "Yagu", "Services", "SettingsService.cs"));
         Assert.Contains("public bool FoundryModelUpdateAlertsEnabled { get; set; } = true;", src);
         Assert.Contains("public List<string> KnownFoundryModelIds { get; set; } = [];", src);
         Assert.Contains("public DateTimeOffset? LastFoundryModelCheckUtc { get; set; }", src);
@@ -23,7 +23,7 @@ public sealed class FoundryModelUpdateAlertTests
     [Fact]
     public void ViewModel_CheckMethod_IsGatedThrottledAndSeedsBaseline()
     {
-        string src = File.ReadAllText(Path.Combine(Root, "Yagu", "ViewModels", "MainViewModel.cs"));
+        string src = File.ReadAllText(Path.Combine(Root, "src", "Yagu", "ViewModels", "MainViewModel.cs"));
 
         // Gating: alerts on + semantic on + has actually used semantic search (so we never trigger a
         // model/EP download just to check), plus the once/day throttle.
@@ -50,7 +50,7 @@ public sealed class FoundryModelUpdateAlertTests
     public void Startup_FiresFoundryCheck_AndModalUsesSharedCustomDialog()
     {
         string src = File.ReadAllText(
-            Path.Combine(Root, "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
+            Path.Combine(Root, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.StartupChecks.cs"));
 
         Assert.Contains("_ = CheckForNewFoundryModelsAsync();", src);
         Assert.Contains("await ViewModel.CheckForNewFoundryModelsAsync(", src);
@@ -68,7 +68,7 @@ public sealed class FoundryModelUpdateAlertTests
     public void SettingsAiTab_HasModelAlertToggle()
     {
         string src = File.ReadAllText(
-            Path.Combine(Root, "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
+            Path.Combine(Root, "src", "Yagu", "UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
 
         Assert.Contains("Alert me when new on-device models are available", src);
         Assert.Contains("_viewModel.FoundryModelUpdateAlertsEnabled = true;", src);

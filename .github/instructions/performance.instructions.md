@@ -1,6 +1,6 @@
 ---
 description: "Yagu search-engine performance & hot-path regression guards. Use when: editing the search hot path, yagu-core / yagu_core.dll, Rust scanner, NativeSearcher / FFI / ABI, SearchService, FileLister, ContentSearcher, ResultStore, SearchResultCollection, FileGroup, DirectOutputSink, Everything SDK query, throughput, eviction, utf16_col, source_match_start, perf regression, benchmark."
-applyTo: "yagu-core/**, Yagu/Services/SearchService.cs, Yagu/Services/FileLister.cs, Yagu/Services/ContentSearcher.cs, Yagu/Services/ResultStore.cs, Yagu/Services/DirectOutputSink.cs, Yagu/Native/**, Yagu/Models/SearchResultCollection.cs, Yagu/Models/FileGroup.cs, Yagu.Benchmarks/**"
+applyTo: "src/yagu-core/**, src/Yagu/Services/SearchService.cs, src/Yagu/Services/FileLister.cs, src/Yagu/Services/ContentSearcher.cs, src/Yagu/Services/ResultStore.cs, src/Yagu/Services/DirectOutputSink.cs, src/Yagu/Native/**, src/Yagu/Models/SearchResultCollection.cs, src/Yagu/Models/FileGroup.cs, tests/Yagu.Benchmarks/**"
 ---
 
 # Yagu — Performance & Hot-Path Regression Guards
@@ -42,10 +42,10 @@ managed per-match marshalling (it is bounded by `MaxResults`).
    site, because sink unit tests read the `MemoryStream` mid-scan. Also: `--` separators are emitted
    only when context (`-A/-B/-C`) is on, and same-line matches fold to one emitted line (grep parity).
 
-## FFI / ABI discipline (`yagu-core` ↔ `Yagu/Native`)
+## FFI / ABI discipline (`yagu-core` ↔ `src/Yagu/Native`)
 
 - Bump `qg_abi_version` whenever the `QgOptions` / `QgSession` / `QgMatchView` layout changes (C#
-  checks it; a test asserts it). A stale `yagu-core/target/<profile>/yagu_core.dll` makes an ABI change
+  checks it; a test asserts it). A stale `src/yagu-core/target/<profile>/yagu_core.dll` makes an ABI change
   look broken — Yagu.Tests copies the profiling DLL.
 - `MMAP_THRESHOLD_BYTES` (in `ffi.rs`) is coupled to Rust test fixtures: fixtures that must exceed it
   are sized `MMAP_THRESHOLD_BYTES + 16`. Audit those when you change the threshold.
@@ -72,7 +72,7 @@ managed per-match marshalling (it is bounded by `MaxResults`).
 - Profile the **native / filter stack** (ETW `WPR -start CPU`, parsed by `scripts/EtlParser`) or the
   **result-model allocation** path (`dotnet-trace` / `dotnet-gcdump`), not managed match code.
 - Perf throughput benchmarks live in **Yagu.Benchmarks** (`[Trait("Category","Slow")]`); UI budget
-  guards in `Yagu.Tests/UiResultPerformanceTests.cs` (env-tunable budgets, e.g. `YAGU_UI_PERF_INGEST_MS`).
+  guards in `tests/Yagu.Tests/UiResultPerformanceTests.cs` (env-tunable budgets, e.g. `YAGU_UI_PERF_INGEST_MS`).
   Both are skipped by the iterative `--filter "Category!=Slow"` run — run them explicitly to validate a
   perf change (see the testing instruction).
 - Profile **warm with ample free RAM** so results stay in memory. Do NOT drop the standby cache first —
