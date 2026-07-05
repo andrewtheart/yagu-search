@@ -2,8 +2,10 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -152,10 +154,141 @@ public sealed class SemanticEvalGoldenTests
         psi.ArgumentList.Add("--semantic-model");
         psi.ArgumentList.Add(GoldenModel);
 
+        // The batch child loads a multi-GB Foundry Local model IN-PROCESS. If it were ever orphaned
+        // (WaitForExit timeout, an exception here, or the TEST HOST being force-killed mid-run — e.g.
+        // Ctrl+C on `dotnet test`), it would keep the model resident and balloon memory (observed:
+        // 20+ GB per orphan). Two guards: (1) a kill-on-close Job Object — the OS terminates the child
+        // (and its tree) the instant this job handle closes, which INCLUDES the test host dying, so a
+        // cancelled run can't orphan it; (2) explicit TryKillTree on timeout and in finally.
+        using var job = new KillOnCloseJob();
         using var p = Process.Start(psi)!;
-        string stdout = p.StandardOutput.ReadToEnd();
-        p.WaitForExit(90 * 60 * 1000); // generous: the full set can take many minutes on a busy GPU
-        return stdout;
+        job.AssignProcess(p);
+
+        try
+        {
+            // Drain stdout concurrently so a large batch output can't deadlock the pipe while we wait.
+            Task<string> readTask = p.StandardOutput.ReadToEndAsync();
+            if (!p.WaitForExit(90 * 60 * 1000)) // generous: the full set can take many minutes on a busy GPU
+                TryKillTree(p);                  // wedged past the cap — kill the tree (which closes stdout)
+            return readTask.GetAwaiter().GetResult();
+        }
+        finally
+        {
+            TryKillTree(p); // never leave the model-loaded child alive on any exit path
+        }
+    }
+
+    private static void TryKillTree(Process p)
+    {
+        try { if (!p.HasExited) p.Kill(entireProcessTree: true); }
+        catch { /* best-effort: already exited / access race */ }
+    }
+
+    /// <summary>
+    /// A Windows Job Object created with <c>JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE</c>: every process
+    /// assigned to it is terminated the moment the last handle to the job closes. Because that handle
+    /// lives in THIS (test-host) process, it also closes when the test host itself is force-killed — so
+    /// a cancelled `dotnet test` can no longer orphan the model-loaded semantic-batch subprocess.
+    /// Best-effort: if any P/Invoke fails, the explicit <see cref="TryKillTree"/> paths still apply.
+    /// </summary>
+    private sealed class KillOnCloseJob : IDisposable
+    {
+        private IntPtr _handle;
+
+        public KillOnCloseJob()
+        {
+            _handle = CreateJobObject(IntPtr.Zero, IntPtr.Zero);
+            if (_handle == IntPtr.Zero) return;
+
+            var info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+            {
+                BasicLimitInformation = new JOBOBJECT_BASIC_LIMIT_INFORMATION
+                {
+                    LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                },
+            };
+            int length = Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>();
+            IntPtr infoPtr = Marshal.AllocHGlobal(length);
+            try
+            {
+                Marshal.StructureToPtr(info, infoPtr, fDeleteOld: false);
+                SetInformationJobObject(_handle, JobObjectExtendedLimitInformation, infoPtr, (uint)length);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(infoPtr);
+            }
+        }
+
+        public void AssignProcess(Process p)
+        {
+            if (_handle == IntPtr.Zero) return;
+            try { AssignProcessToJobObject(_handle, p.Handle); }
+            catch { /* best-effort: nested-job or timing race — TryKillTree still covers it */ }
+        }
+
+        public void Dispose()
+        {
+            if (_handle == IntPtr.Zero) return;
+            CloseHandle(_handle); // KILL_ON_JOB_CLOSE terminates anything still in the job
+            _handle = IntPtr.Zero;
+        }
+
+        private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
+        private const int JobObjectExtendedLimitInformation = 9;
+
+#pragma warning disable SYSLIB1054 // classic DllImport is fine here (test-only, never AOT-published)
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, IntPtr lpName);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetInformationJobObject(IntPtr hJob, int jobObjectInfoClass, IntPtr lpJobObjectInfo, uint cbJobObjectInfoLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseHandle(IntPtr hObject);
+#pragma warning restore SYSLIB1054
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+        {
+            public long PerProcessUserTimeLimit;
+            public long PerJobUserTimeLimit;
+            public uint LimitFlags;
+            public UIntPtr MinimumWorkingSetSize;
+            public UIntPtr MaximumWorkingSetSize;
+            public uint ActiveProcessLimit;
+            public UIntPtr Affinity;
+            public uint PriorityClass;
+            public uint SchedulingClass;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct IO_COUNTERS
+        {
+            public ulong ReadOperationCount;
+            public ulong WriteOperationCount;
+            public ulong OtherOperationCount;
+            public ulong ReadTransferCount;
+            public ulong WriteTransferCount;
+            public ulong OtherTransferCount;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+        {
+            public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+            public IO_COUNTERS IoInfo;
+            public UIntPtr ProcessMemoryLimit;
+            public UIntPtr JobMemoryLimit;
+            public UIntPtr PeakProcessMemoryUsed;
+            public UIntPtr PeakJobMemoryUsed;
+        }
     }
 
     private static readonly Regex FieldLine = new(@"^\s{2}([a-z][a-z-]+)\s*:\s*(.*)$", RegexOptions.Compiled);
