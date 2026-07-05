@@ -32,10 +32,12 @@ because the native OCR stack (paddle_inference / OpenCvSharpExtern) is **not** N
 
 ## Engines & quality knobs
 
-- Default engine is **PaddleSharp on every edition and architecture** (`AppSettings.EffectiveDefaultImageOcrEngine`
-  == `DefaultImageOcrEngine` == `"paddle"`). Paddle is faster + more accurate than Tesseract on CPU (OCR
-  always runs in the x64 worker), and the offline installer bundles Paddle's full runtime + models so it
-  runs download-free. Tesseract stays a user-selectable engine (also bundled offline).
+- Default engine is **PaddleSharp on x64/Arm64, Tesseract on x86** (`AppSettings.EffectiveDefaultImageOcrEngine`;
+  `DefaultImageOcrEngine` == `"paddle"` is the *preferred* engine, but PaddleOCR's native runtime is win-x64
+  only, so `AppSettings.PaddleOcrSupported` is false on x86 and the effective default — plus any persisted
+  `paddle` — is coerced to `"tesseract"`). Paddle is faster + more accurate than Tesseract on CPU (OCR runs
+  in the x64 worker), and the offline installer (x64) bundles Paddle's full runtime + models so it runs
+  download-free. Tesseract stays a user-selectable engine (also bundled offline).
 - Quality threads to the worker via env vars — `YAGU_OCR_MODEL`, `YAGU_OCR_MAX_SIDE` — both **ignored
   by Tesseract**. Default model `ChineseV5`, default maxSide `960`. maxSide sentinel: `-1` unspecified
   (omit env var), `0` unlimited, `>0` cap.

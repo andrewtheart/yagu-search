@@ -9,11 +9,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 Copyright (C) 2026 Yagu contributors
 
-This file lists the third-party code and assets bundled with Yagu under
-vendor/. Some components have been modified from their original versions for
-usage in this application. Those components remain under their own licenses and
-are not relicensed by Yagu's GPL-3.0-or-later notice above. Upstream license
-files are retained where included by the upstream projects.
+This file lists the third-party code and assets bundled with Yagu: the
+components vendored under vendor/, and the third-party Rust crates statically
+linked into the native search engine (yagu_core.dll). Some components have been
+modified from their original versions for usage in this application. Those
+components remain under their own licenses and are not relicensed by Yagu's
+GPL-3.0-or-later notice above. Upstream license files are retained where
+included by the upstream projects.
 
 
 SharpSevenZip
@@ -142,8 +144,67 @@ nChronic (natural-language date/time parser)
 - License file: vendor/nChronic/LICENSE
 
 
-MIT License Text for MIT-Licensed Vendored Assets
--------------------------------------------------
+Rust crates linked into the native search engine (yagu-core / yagu_core.dll)
+---------------------------------------------------------------------------
+
+The native search engine `yagu_core.dll` is compiled from Yagu's own Rust source
+(yagu-core/), which is part of Yagu and licensed GPL-3.0-or-later. It statically
+links the third-party crates below from crates.io. For any crate offered under
+"MIT OR Apache-2.0" or "Unlicense OR MIT", Yagu elects the **MIT** option, so the
+MIT License text at the end of this file applies to it.
+
+Shipped in released builds (default Cargo features):
+
+- regex 1.12.3 - MIT OR Apache-2.0 (MIT elected)
+  Copyright (c) 2014 The Rust Project Developers. https://github.com/rust-lang/regex
+- regex-automata 0.4.14 - MIT OR Apache-2.0 (MIT elected)
+  Copyright (c) 2014 The Rust Project Developers. https://github.com/rust-lang/regex
+- regex-syntax 0.8.10 - MIT OR Apache-2.0 (MIT elected)
+  Copyright (c) 2014 The Rust Project Developers. https://github.com/rust-lang/regex
+- aho-corasick 1.1.4 - Unlicense OR MIT (MIT elected)
+  Copyright (c) 2015 Andrew Gallant. https://github.com/BurntSushi/aho-corasick
+- memchr 2.8.0 - Unlicense OR MIT (MIT elected)
+  Copyright (c) 2015 Andrew Gallant. https://github.com/BurntSushi/memchr
+- bstr 1.12.1 - MIT OR Apache-2.0 (MIT elected)
+  Copyright (c) 2018-2019 Andrew Gallant. https://github.com/BurntSushi/bstr
+- memmap2 0.9.10 - MIT OR Apache-2.0 (MIT elected)
+  Copyright (c) 2020 Yevhenii Reizner; portions (c) 2015 Dan Burkert.
+  https://github.com/RazrFalcon/memmap2-rs
+
+Other permissive transitive crates pulled in by the above (for example libc and
+bitflags) are licensed "MIT OR Apache-2.0" (MIT elected) or equivalently
+permissive terms.
+
+NOT shipped in released builds (optional Cargo features, off by default):
+
+- grep-searcher 0.1.16, grep-regex 0.1.14, grep-matcher 0.1.8 - Unlicense OR MIT
+  (MIT elected). Copyright (c) 2015 Andrew Gallant. ripgrep library crates,
+  https://github.com/BurntSushi/ripgrep. Gated behind the `grep_crates` feature,
+  which is disabled in released `yagu_core.dll` binaries.
+- mimalloc 0.1.50 - MIT. Copyright (c) 2019 Octavian Oncescu; underlying mimalloc
+  Copyright (c) 2018-2021 Microsoft Corporation. https://github.com/microsoft/mimalloc.
+  Gated behind the `mimalloc` feature, which is disabled in released binaries.
+
+
+Acknowledgment - ripgrep (design inspiration; no obligation)
+------------------------------------------------------------
+
+Yagu's native search engine and its command-line output were designed with heavy
+inspiration from ripgrep (https://github.com/BurntSushi/ripgrep) by Andrew
+Gallant and contributors. Based on a direct comparison of Yagu's Rust source
+against the ripgrep source, Yagu's scanner is an INDEPENDENT REIMPLEMENTATION: it
+uses the published crates listed above (notably `regex`, `memchr`/`memmem`, and
+`bstr`) as libraries and reproduces ripgrep's *ideas* - its scanning strategy,
+the rare-byte literal prefilter (which originates in the `memchr` crate), and a
+ripgrep-compatible output format - rather than copying ripgrep's source code.
+No attribution is legally required for this (ideas and algorithms are not
+copyrightable, and ripgrep is in any case available under the Unlicense); this
+acknowledgment is provided purely as a courtesy. ripgrep is licensed
+"Unlicense OR MIT".
+
+
+MIT License Text (applies to the MIT-licensed and MIT-elected components above)
+------------------------------------------------------------------------------
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in

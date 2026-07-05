@@ -598,14 +598,34 @@ public class SettingsServiceNewFieldTests
     }
 
     [Fact]
-    public void EffectiveDefaultImageOcrEngine_IsAlwaysPaddle()
+    public void EffectiveDefaultImageOcrEngine_IsPaddleWhereSupported_TesseractOnX86()
     {
-        // PaddleSharp is the default OCR engine on every edition and architecture: it is faster and
-        // more accurate than Tesseract on CPU (OCR always runs on the x64 worker), and the offline
-        // installer bundles its full runtime + models so it runs download-free. There is no arch or
-        // edition where Tesseract is the default.
-        Assert.Equal("paddle", AppSettings.EffectiveDefaultImageOcrEngine);
-        Assert.Equal(AppSettings.DefaultImageOcrEngine, AppSettings.EffectiveDefaultImageOcrEngine);
+        // PaddleSharp is the preferred default (faster + more accurate on CPU), but PaddleOCR's native
+        // runtime is win-x64 only, so on x86 the effective default falls back to Tesseract. The test
+        // runner's architecture decides which branch is live; both branches are covered deterministically
+        // by ResolveDefaultImageOcrEngine / CoerceImageOcrEngineForArch below.
+        Assert.Equal(
+            AppSettings.PaddleOcrSupported ? "paddle" : "tesseract",
+            AppSettings.EffectiveDefaultImageOcrEngine);
+        Assert.Equal("paddle", AppSettings.DefaultImageOcrEngine); // preferred engine is unchanged
+    }
+
+    [Theory]
+    [InlineData(true, "paddle")]
+    [InlineData(false, "tesseract")]
+    public void ResolveDefaultImageOcrEngine_FallsBackToTesseractWhenPaddleUnsupported(bool paddleSupported, string expected)
+    {
+        Assert.Equal(expected, AppSettings.ResolveDefaultImageOcrEngine(paddleSupported));
+    }
+
+    [Theory]
+    [InlineData("paddle", true, "paddle")]
+    [InlineData("paddle", false, "tesseract")] // PaddleOCR is x64-only; coerced on x86
+    [InlineData("tesseract", true, "tesseract")]
+    [InlineData("tesseract", false, "tesseract")]
+    public void CoerceImageOcrEngineForArch_CoercesPaddleToTesseractOnX86(string engine, bool paddleSupported, string expected)
+    {
+        Assert.Equal(expected, AppSettings.CoerceImageOcrEngineForArch(engine, paddleSupported));
     }
 
     [Fact]

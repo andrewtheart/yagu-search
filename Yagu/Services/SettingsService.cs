@@ -81,17 +81,20 @@ public sealed class AppSettings
         ? DefaultLowDiskSpaceWarningPercent
         : Math.Clamp(value, MinimumLowDiskSpaceWarningPercent, MaximumLowDiskSpaceWarningPercent);
 
-    /// <summary>Normalizes the persisted OCR engine id to a known value, defaulting to PaddleSharp
-    /// (see <see cref="EffectiveDefaultImageOcrEngine"/>).</summary>
+    /// <summary>Normalizes the persisted OCR engine id to a known value, defaulting to
+    /// <see cref="EffectiveDefaultImageOcrEngine"/>. On x86, "paddle" is coerced to "tesseract"
+    /// because PaddleOCR's x64-only native runtime cannot load in a 32-bit process
+    /// (see <see cref="PaddleOcrSupported"/>).</summary>
     public static string NormalizeImageOcrEngine(string? value)
     {
         var v = value?.Trim().ToLowerInvariant();
-        return v switch
+        var engine = v switch
         {
             "tesseract" => "tesseract",
             "paddle" or "paddleocr" or "paddlesharp" => "paddle",
             _ => EffectiveDefaultImageOcrEngine,
         };
+        return CoerceImageOcrEngineForArch(engine, PaddleOcrSupported);
     }
 
     /// <summary>Normalizes the persisted PaddleOCR model name to a known value (canonical casing),
@@ -264,21 +267,40 @@ public sealed class AppSettings
     /// Advanced Options ▸ Filters "Search image text" toggle.</summary>
     public bool SearchImageText { get; set; }
     /// <summary>OCR engine used when <see cref="SearchImageText"/> is on: "paddle" (PaddleSharp) or
-    /// "tesseract". Defaults to <see cref="EffectiveDefaultImageOcrEngine"/> (PaddleSharp on every
-    /// edition; the offline installer bundles the full PaddleOCR runtime + models so it runs
-    /// download-free). Normalized on load.</summary>
+    /// "tesseract". Defaults to <see cref="EffectiveDefaultImageOcrEngine"/> (PaddleSharp on x64 and
+    /// Arm64; Tesseract on x86, where PaddleOCR's x64-only runtime cannot load). Normalized on load —
+    /// a persisted "paddle" is coerced to "tesseract" on x86.</summary>
     public string ImageOcrEngine { get; set; } = EffectiveDefaultImageOcrEngine;
-    /// <summary>Platform-neutral default OCR engine (PaddleSharp). PaddleSharp is the default on every
-    /// build/edition: it is faster and more accurate than Tesseract on CPU (OCR always runs on CPU in
-    /// the x64 worker), and the offline installer bundles its full native runtime + PP-OCR models so it
-    /// needs no download. Tesseract remains a user-selectable engine (also bundled offline).</summary>
+    /// <summary>Preferred OCR engine where it can run (PaddleSharp): faster and more accurate than
+    /// Tesseract on CPU (OCR runs on CPU in the x64 worker), and the offline installer bundles its full
+    /// native runtime + PP-OCR models so it needs no download. NOTE: PaddleOCR's native runtime is
+    /// win-x64 only, so this is the effective default only on x64/Arm64 — see
+    /// <see cref="EffectiveDefaultImageOcrEngine"/>. Tesseract remains a user-selectable engine
+    /// (also bundled offline).</summary>
     public const string DefaultImageOcrEngine = "paddle";
 
-    /// <summary>The effective default OCR engine for this build: always <see cref="DefaultImageOcrEngine"/>
-    /// (PaddleSharp). PaddleSharp wins on both speed and accuracy on CPU, and the OCR-bundled (offline)
-    /// installer ships its complete runtime + models, so there is no edition or architecture where
-    /// Tesseract is a better default. The user can still switch to Tesseract in settings.</summary>
-    public static readonly string EffectiveDefaultImageOcrEngine = DefaultImageOcrEngine;
+    /// <summary>Whether PaddleOCR can run in this process. Its native runtime (PaddleInference + OpenCV)
+    /// is win-x64 only and cannot load in a 32-bit (x86) process. True on x64 and Arm64 (Arm64 runs the
+    /// x64 runtime under emulation); false on x86, where the effective OCR engine is always Tesseract.</summary>
+    internal static bool PaddleOcrSupported =>
+        System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture
+            != System.Runtime.InteropServices.Architecture.X86;
+
+    /// <summary>Resolves the default OCR engine given whether Paddle can run: PaddleSharp when
+    /// supported, otherwise Tesseract. Pure (arch injected) so both branches are testable.</summary>
+    internal static string ResolveDefaultImageOcrEngine(bool paddleSupported) =>
+        paddleSupported ? DefaultImageOcrEngine : "tesseract";
+
+    /// <summary>Coerces a resolved engine id to Tesseract when Paddle is unsupported (x86), since
+    /// PaddleOCR's x64-only runtime cannot load there. Pure (arch injected) for testability.</summary>
+    internal static string CoerceImageOcrEngineForArch(string engine, bool paddleSupported) =>
+        engine == "paddle" && !paddleSupported ? "tesseract" : engine;
+
+    /// <summary>The effective default OCR engine for this build: <see cref="DefaultImageOcrEngine"/>
+    /// (PaddleSharp) on x64 and Arm64, but "tesseract" on x86 because PaddleOCR's x64-only runtime
+    /// cannot load in a 32-bit process (<see cref="PaddleOcrSupported"/>). Users can still switch
+    /// engines in settings, but a paddle selection is coerced back to tesseract on x86.</summary>
+    public static readonly string EffectiveDefaultImageOcrEngine = ResolveDefaultImageOcrEngine(PaddleOcrSupported);
     /// <summary>PaddleOCR model used for image-text recognition: "EnglishV3", "EnglishV4",
     /// "ChineseV4" or "ChineseV5" (default; PP-OCRv5, multilingual). Higher/newer models trade speed for
     /// accuracy. Normalized on load. Ignored by the Tesseract engine.</summary>

@@ -2555,7 +2555,14 @@ public sealed partial class SettingsWindow : Window
             ocrEngineLabel.Margin = new Thickness(0, 4, 0, 0);
             ocrEnableGroup.Children.Add(ocrEngineLabel);
             var ocrEngineCombo = new ComboBox { MinWidth = 260, HorizontalAlignment = HorizontalAlignment.Left };
-            ocrEngineCombo.Items.Add(new ComboBoxItem { Content = "PaddleSharp (recommended)", Tag = "paddle" });
+            // PaddleOCR's native runtime is win-x64 only, so it can't run on x86 — disable that option
+            // there (NormalizeImageOcrEngine also coerces a persisted "paddle" to "tesseract" on x86).
+            ocrEngineCombo.Items.Add(new ComboBoxItem
+            {
+                Content = AppSettings.PaddleOcrSupported ? "PaddleSharp (recommended)" : "PaddleSharp (unavailable on 32-bit x86)",
+                Tag = "paddle",
+                IsEnabled = AppSettings.PaddleOcrSupported,
+            });
             ocrEngineCombo.Items.Add(new ComboBoxItem { Content = "Tesseract", Tag = "tesseract" });
             ocrEngineCombo.SelectedIndex =
                 string.Equals(AppSettings.NormalizeImageOcrEngine(_viewModel.ImageOcrEngine), "tesseract", StringComparison.OrdinalIgnoreCase) ? 1 : 0;

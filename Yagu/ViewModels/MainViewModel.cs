@@ -1134,7 +1134,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
     /// <summary>OCR engine used when <see cref="SearchImageText"/> is on: "paddle" (PaddleSharp) or
     /// "tesseract". Defaults to <see cref="AppSettings.EffectiveDefaultImageOcrEngine"/> (PaddleSharp on
-    /// every edition; the offline installer bundles Paddle's full runtime + models). Settings-only.</summary>
+    /// x64/Arm64; Tesseract on x86, where PaddleOCR's x64-only runtime cannot load). Settings-only.</summary>
     [ObservableProperty] public partial string ImageOcrEngine { get; set; } = AppSettings.EffectiveDefaultImageOcrEngine;
 
     /// <summary>PaddleSharp recognition model used for image OCR (e.g. "EnglishV4", "ChineseV5").

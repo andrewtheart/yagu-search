@@ -6,7 +6,8 @@
 //! * [`GrepSession`] — long-lived holder of a `RegexMatcher` for reuse across
 //!   many files. **This is the only path that should be used from the FFI
 //!   streaming/packed loops** — per-call construction is ~5x slower on small
-//!   files (see `tests/phase6_bench.rs`).
+//!   files (measured in the Phase 6 grep spike; the standalone benchmark was
+//!   removed as a settled experiment — see git history / `PLANS/RIPGREP_PHASE6_SPIKE.md`).
 //! * [`scan_bytes_grep`] — convenience wrapper that builds a one-shot session.
 //!
 //! Feature-gated behind `grep_crates`.

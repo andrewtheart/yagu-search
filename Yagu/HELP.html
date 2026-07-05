@@ -1548,15 +1548,15 @@ and their text is searched like any other file’s contents.</p>
 and language models the first time you actually use image-text search,
 and an <strong>Offline</strong> installer (the <code>x64-offline</code>
 download) that bundles those components so OCR works fully offline with
-no download. The Offline edition ships <strong>both</strong> engines'
-runtimes and data — the PaddleOCR runtime and models <strong>and</strong>
-the Tesseract engine with its English data — and
-it <strong>defaults to PaddleSharp</strong> (faster and more accurate on
+no download. The Offline edition ships <strong>both</strong> engines’
+runtimes and data — the PaddleOCR runtime and models
+<strong>and</strong> the Tesseract engine with its English data — and it
+<strong>defaults to PaddleSharp</strong> (faster and more accurate on
 the CPU), so image-text search works out of the box with nothing to
-fetch and you can still switch to Tesseract offline. With the lite edition, Yagu
-<strong>warns you before any external download</strong> and only
-proceeds once you approve; consent is then remembered. The Offline
-edition also bundles the voidtools <strong>Everything</strong>
+fetch and you can still switch to Tesseract offline. With the lite
+edition, Yagu <strong>warns you before any external download</strong>
+and only proceeds once you approve; consent is then remembered. The
+Offline edition also bundles the voidtools <strong>Everything</strong>
 installer, so Yagu can install Everything for fast file discovery with
 no download (the lite editions fetch it on demand). Installing
 Everything <strong>always</strong> requires your explicit consent — Yagu
@@ -1585,12 +1585,13 @@ queue and the recognized text is searched.</td>
 <td>PaddleSharp or Tesseract. PaddleSharp is generally more accurate and
 runs on the CPU (MKL-accelerated) — no GPU or NPU is required or used;
 Tesseract is a lighter alternative with a fixed pipeline that runs
-entirely from bundled data. The default is <strong>PaddleSharp on every
-edition and architecture</strong> (it is faster and more accurate than
-Tesseract on the CPU). With the lite installer,
-the selected engine’s runtime and models download on first use (after
-you approve the warning); the Offline installer ships both engines’
-runtimes and data so no download is needed.</td>
+entirely from bundled data. The default is <strong>PaddleSharp on x64
+and Arm64</strong> (faster and more accurate than Tesseract on the CPU);
+on <strong>x86 the default is Tesseract</strong>, because PaddleOCR’s
+native runtime is x64-only and cannot run in a 32-bit process. With the
+lite installer, the selected engine’s runtime and models download on
+first use (after you approve the warning); the Offline installer ships
+both engines’ runtimes and data so no download is needed.</td>
 </tr>
 <tr>
 <td>Quality preset</td>
@@ -3228,7 +3229,9 @@ not blocked.</td>
 <tr>
 <td><code>--ocr-engine &lt;name&gt;</code></td>
 <td>OCR engine for <code>--image-text</code>: <code>paddle</code>
-(PaddleSharp, default) or <code>tesseract</code>.</td>
+(PaddleSharp) or <code>tesseract</code>. Default <code>paddle</code> on
+x64/Arm64, <code>tesseract</code> on x86 (PaddleOCR’s runtime is
+x64-only).</td>
 </tr>
 <tr>
 <td><code>--ocr-model &lt;name&gt;</code></td>
