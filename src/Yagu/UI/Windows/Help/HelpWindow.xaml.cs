@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.Web.WebView2.Core;
 using Yagu.Helpers;
 
@@ -19,6 +20,13 @@ public sealed partial class HelpWindow : Window
         _helpPath = helpPath;
         InitializeComponent();
 
+        // Title-bar-less modal: hide the OS caption strip reliably. Setting ExtendsContentIntoTitleBar
+        // directly on the Window guarantees no title bar even if the OverlappedPresenter call below
+        // fails to apply (matches MainWindow/SettingsWindow/ResultStoreTempLocationWindow). A custom
+        // top-right close button (CloseButton) is the close affordance; no SetTitleBar is called, so
+        // all content -- including that button -- stays interactive.
+        ExtendsContentIntoTitleBar = true;
+
         AppTitleText.Text = appTitle;
         HelpPathText.Text = helpPath;
         HelpWebView.Loaded += OnHelpWebViewLoaded;
@@ -27,9 +35,27 @@ public sealed partial class HelpWindow : Window
         WindowForegroundHelper.ConfigureOwnedWindow(hwnd, mainHwnd);
         var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
         var appWindow = AppWindow.GetFromWindowId(windowId);
+        appWindow.Title = Title;
         const int windowWidth = 980;
         const int windowHeight = 720;
         WindowForegroundHelper.CenterWindowOverOwner(appWindow, mainHwnd, windowWidth, windowHeight);
+
+        try
+        {
+            if (appWindow.Presenter is OverlappedPresenter presenter)
+            {
+                presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);
+            }
+        }
+        catch { }
+    }
+
+    private void OnCloseClick(object sender, RoutedEventArgs e) => Close();
+
+    private void OnCloseAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        Close();
     }
 
     public void BringInFrontOfMainWindow(IntPtr mainHwnd)

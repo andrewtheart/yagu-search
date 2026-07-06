@@ -43,6 +43,8 @@ public sealed class SettingsWindowRegressionTests
         Path.Combine(RepoRoot, "src", "Yagu", "App.xaml.cs"));
     private static readonly string HelpWindowSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "Help", "HelpWindow.xaml.cs"));
+    private static readonly string HelpWindowXaml = File.ReadAllText(
+        Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "Help", "HelpWindow.xaml"));
     private static readonly string ResultStoreTempLocationWindowSource = File.ReadAllText(
         Path.Combine(RepoRoot, "src", "Yagu", "ResultStoreTempLocationWindow.cs"));
     private static readonly string MainWindowResultsListScrollSource = File.ReadAllText(
@@ -1306,6 +1308,28 @@ public sealed class SettingsWindowRegressionTests
         Assert.Contains("OpenHelpWindow();", MainWindowTerminalSource);
         Assert.Contains("event.key === 'F1'", TerminalHtml);
         Assert.Contains("type: 'openHelp'", TerminalHtml);
+    }
+
+    [Fact]
+    public void HelpWindow_IsTitleBarLessWithTopRightCloseButton()
+    {
+        // Title-bar-less recipe (matches MainWindow/SettingsWindow/ResultStoreTempLocationWindow):
+        // ExtendsContentIntoTitleBar set directly on the Window PLUS the OverlappedPresenter call hides
+        // the OS caption reliably, and NO SetTitleBar is called so the custom close button stays
+        // interactive (no drag region swallows it).
+        Assert.Contains("ExtendsContentIntoTitleBar = true;", HelpWindowSource);
+        Assert.Contains("presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);", HelpWindowSource);
+        Assert.DoesNotContain("SetTitleBar(", HelpWindowSource);
+
+        // The custom top-right close button and the Escape accelerator both close the window.
+        Assert.Contains("private void OnCloseClick(object sender, RoutedEventArgs e) => Close();", HelpWindowSource);
+        Assert.Contains("private void OnCloseAccelerator(", HelpWindowSource);
+
+        Assert.Contains("x:Name=\"CloseButton\"", HelpWindowXaml);
+        Assert.Contains("Click=\"OnCloseClick\"", HelpWindowXaml);
+        Assert.Contains("Glyph=\"&#xE711;\"", HelpWindowXaml);   // ChromeClose "X", matching the app's own close button
+        Assert.Contains("Key=\"Escape\"", HelpWindowXaml);
+        Assert.Contains("Invoked=\"OnCloseAccelerator\"", HelpWindowXaml);
     }
 
     [Fact]

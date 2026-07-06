@@ -15,6 +15,11 @@
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
+        <!-- Title-bar-less window (no OS caption): Escape closes it, matching the top-right close button. -->
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Key="Escape" Invoked="OnCloseAccelerator" />
+        </Grid.KeyboardAccelerators>
+
         <StackPanel Grid.Column="0" Spacing="12" VerticalAlignment="Top">
             <TextBlock Text="Yagu Help"
                        FontWeight="Bold"
@@ -88,5 +93,23 @@
                 </ScrollViewer>
             </Grid>
         </Border>
+
+        <!-- Title-bar-less close affordance: floats in the top-right corner (no OS caption strip). -->
+        <Button x:Name="CloseButton"
+                Grid.Column="1"
+                Click="OnCloseClick"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Width="36"
+                Height="32"
+                MinWidth="0"
+                Padding="0"
+                Margin="0,-12,-12,0"
+                Canvas.ZIndex="100"
+                CornerRadius="4"
+                Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                ToolTipService.ToolTip="Close (Esc)">
+            <FontIcon Glyph="&#xE711;" FontSize="12" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+        </Button>
     </Grid>
 </Window>
