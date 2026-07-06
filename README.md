@@ -252,6 +252,15 @@ The installed app does not require the .NET SDK, Rust, Visual Studio, Build Tool
 
 For contributors building, testing, or packaging Yagu from this repository:
 
+**One-command setup.** [scripts/install-dev-prerequisites.ps1](scripts/install-dev-prerequisites.ps1) installs every build prerequisite below (Git + Git LFS, the Rust stable toolchain and cross targets, the .NET 10 SDK, the Visual C++ Build Tools, and Inno Setup) directly from their **official sources**. It is idempotent (already-installed tools are skipped) and offers to relaunch elevated for the machine-wide installers:
+
+```powershell
+.\scripts\install-dev-prerequisites.ps1                 # add -IncludeOptional for Everything + WebView2
+.\scripts\install-dev-prerequisites.ps1 -WhatIf         # dry run: report what would be installed
+```
+
+It sets up the command-line toolchain only; to open `Yagu.sln` in the IDE, install Visual Studio 2026 (18.x) separately (see below). The individual requirements are listed here for reference:
+
 - Windows 10 version 1809 / build 17763 or newer.
 - .NET 10 SDK. The repo pins SDK `10.0.107` with `rollForward: latestFeature` in [global.json](global.json).
 - Visual Studio 2022 (17.8 or newer) or the standalone Build Tools, with:
