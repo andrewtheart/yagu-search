@@ -394,6 +394,7 @@ internal static class CliRunner
         if (resolved.UseRegex is { } rx)          o.WriteLine($"  regex          : {rx}");
         if (resolved.CaseSensitive is { } cs)     o.WriteLine($"  case-sensitive : {cs}");
         if (resolved.ExactMatch is { } em)        o.WriteLine($"  exact-match    : {em}");
+        if (resolved.Multiline is { } ml)         o.WriteLine($"  multiline      : {ml}{(resolved.MultilineDotAll == true ? " (dot-all)" : "")}");
         if (resolved.IncludeGlobs is { } inc)     o.WriteLine($"  include        : {string.Join(", ", inc)}");
         if (resolved.ExcludeGlobs is { } exc)     o.WriteLine($"  exclude        : {string.Join(", ", exc)}");
         if (resolved.MinFileSizeBytes is { } mn)  o.WriteLine($"  min-size       : {mn:N0} bytes");
@@ -671,6 +672,7 @@ internal static class CliRunner
         if (resolved.UseRegex is { } rx)          o.WriteLine($"  regex          : {rx}");
         if (resolved.CaseSensitive is { } cs)     o.WriteLine($"  case-sensitive : {cs}");
         if (resolved.ExactMatch is { } em)        o.WriteLine($"  exact-match    : {em}");
+        if (resolved.Multiline is { } ml)         o.WriteLine($"  multiline      : {ml}{(resolved.MultilineDotAll == true ? " (dot-all)" : "")}");
         if (resolved.IncludeGlobs is { } inc)     o.WriteLine($"  include        : {string.Join(", ", inc)}");
         if (resolved.ExcludeGlobs is { } exc)     o.WriteLine($"  exclude        : {string.Join(", ", exc)}");
         if (resolved.MinFileSizeBytes is { } mn)  o.WriteLine($"  min-size       : {mn:N0} bytes");
@@ -3495,6 +3497,8 @@ internal sealed class CliArgs
         if (overlay.CaseSensitive is { } cs && CaseSensitive is null) CaseSensitive = cs;
         if (overlay.UseRegex is { } rx && UseRegex is null) UseRegex = rx;
         if (overlay.ExactMatch is { } em && ExactMatch is null) ExactMatch = em;
+        if (overlay.Multiline is { } ml && Multiline is null) Multiline = ml;
+        if (overlay.MultilineDotAll is { } mld && MultilineDotAll is null) MultilineDotAll = mld;
 
         if (overlay.IncludeGlobs is { } inc && IncludeGlobs.Count == 0)
         {

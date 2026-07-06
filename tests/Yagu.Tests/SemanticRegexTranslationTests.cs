@@ -67,6 +67,8 @@ public sealed class SemanticRegexTranslationTests : IDisposable
         public bool CaseSensitive { get; set; }
         public bool UseRegex { get; set; }
         public bool ExactMatch { get; set; } = true;
+        public bool Multiline { get; set; }
+        public bool MultilineDotAll { get; set; }
         public string IncludeGlobs { get; set; } = string.Empty;
         public string ExcludeGlobs { get; set; } = string.Empty;
         public int IncludeFilterModeIndex { get; set; }
@@ -373,6 +375,148 @@ public sealed class SemanticRegexTranslationTests : IDisposable
         Assert.Contains("REPETITION / COUNT", prompt);
         Assert.Contains("at least two times", prompt);
         Assert.Contains(@"""pattern"":""andrew.*andrew""", prompt);
+    }
+
+    // ---- Cross-line (multiline) translation ----------------------------------
+
+    [Fact]
+    public void Resolve_ModelMultilinePlan_EnablesMultilineRegexAndDropsExactMatch()
+    {
+        // A cross-line plan forces the regex engine on and whole-word off (mirrors the GUI toggle).
+        var plan = new SemanticSearchPlan
+        {
+            Pattern = @"TODO[\s\S]*?FIXME",
+            Multiline = true,
+            SearchMode = "content",
+        };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.True(resolved.Multiline);
+        Assert.True(resolved.UseRegex);
+        Assert.False(resolved.ExactMatch);
+        Assert.Null(resolved.MultilineDotAll);
+        Assert.Equal(@"TODO[\s\S]*?FIXME", resolved.Pattern);
+    }
+
+    [Fact]
+    public void Resolve_MultilineDotAll_ImpliesMultiline()
+    {
+        // dot-all is meaningless without cross-line matching, so it turns multiline on too.
+        var plan = new SemanticSearchPlan { Pattern = @"foo.*bar", MultilineDotAll = true, SearchMode = "content" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, Context());
+
+        Assert.True(resolved.Multiline);
+        Assert.True(resolved.MultilineDotAll);
+        Assert.True(resolved.UseRegex);
+    }
+
+    [Theory]
+    [InlineData("find files where X appears then Y on a later line")]
+    [InlineData("match TODO followed by FIXME across lines")]
+    [InlineData("text spanning multiple lines from BEGIN to END")]
+    [InlineData("a multiline pattern in my logs")]
+    [InlineData("find foo\\nbar in the src folder")] // literal \n escape in the query
+    public void Resolve_DetectsMultilineCueInQuery_EnablesMultiline(string query)
+    {
+        // Even when the (weak) model forgot the flag, an explicit cross-line cue in the ORIGINAL query
+        // turns multiline on as a backstop.
+        var plan = new SemanticSearchPlan { Pattern = @"X[\s\S]*?Y", SearchMode = "content" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = query };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.True(resolved.Multiline);
+        Assert.True(resolved.UseRegex);
+    }
+
+    [Theory]
+    [InlineData("find all png files on C drive")]
+    [InlineData("search for connection refused in the logs")]
+    [InlineData("list files across all my drives")] // "across ... drives" must NOT trigger multiline
+    public void Resolve_NoMultilineIntent_LeavesMultilineNull(string query)
+    {
+        var plan = new SemanticSearchPlan { Pattern = "connection refused", SearchMode = "content" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = query };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Null(resolved.Multiline);       // never forced off — leaves the user's toggle
+        Assert.Null(resolved.MultilineDotAll);
+    }
+
+    [Fact]
+    public void ToOverlay_Multiline_CarriesFlags()
+    {
+        var plan = new SemanticSearchPlan { Pattern = @"a[\s\S]*b", Multiline = true, MultilineDotAll = true, SearchMode = "content" };
+
+        var overlay = SemanticPlanApplier.ToOverlay(SemanticPlanApplier.Resolve(plan, Context()));
+
+        Assert.True(overlay.Multiline);
+        Assert.True(overlay.MultilineDotAll);
+        Assert.True(overlay.UseRegex);
+    }
+
+    [Fact]
+    public void ApplyToTarget_Multiline_SetsTargetFlagsAndRegex()
+    {
+        var plan = new SemanticSearchPlan { Pattern = @"begin[\s\S]*?end", Multiline = true, SearchMode = "content" };
+        var target = new FakeTarget { ExactMatch = true };
+
+        SemanticPlanApplier.ApplyToTarget(plan, Context(), target);
+
+        Assert.True(target.Multiline);
+        Assert.True(target.UseRegex);
+        Assert.False(target.ExactMatch);
+        Assert.Equal(@"begin[\s\S]*?end", target.Query);
+    }
+
+    [Fact]
+    public void BuildExplanation_Multiline_MentionsAcrossLines()
+    {
+        var plain = SemanticPlanApplier.Resolve(
+            new SemanticSearchPlan { Pattern = @"X[\s\S]*?Y", Multiline = true, SearchMode = "content" }, Context());
+        Assert.Contains("across lines", SemanticPlanApplier.BuildExplanation(plain));
+
+        var dotAll = SemanticPlanApplier.Resolve(
+            new SemanticSearchPlan { Pattern = @"X.*Y", Multiline = true, MultilineDotAll = true, SearchMode = "content" }, Context());
+        Assert.Contains("across lines (the dot also matches newlines)", SemanticPlanApplier.BuildExplanation(dotAll));
+    }
+
+    [Theory]
+    [InlineData("multiline search", true)]
+    [InlineData("multi-line pattern", true)]
+    [InlineData("a cross-line match", true)]
+    [InlineData("spanning multiple lines", true)]
+    [InlineData("X on the next line", true)]
+    [InlineData("Y on a following line", true)]
+    [InlineData("find foo\\nbar", true)]        // literal \n escape
+    [InlineData("across newlines", true)]
+    [InlineData("search across all drives", false)]
+    [InlineData("files on one line", false)]
+    [InlineData("ordinary content search", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void DetectMultilinePreference_RecognizesCrossLineCues(string? query, bool expected)
+        => Assert.Equal(expected, SemanticPlanApplier.DetectMultilinePreference(query));
+
+    [Fact]
+    public void SystemPrompt_TeachesMultilineCrossLineGeneration()
+    {
+        string prompt = ReadSystemPrompt();
+
+        // Schema fields for cross-line matching are documented.
+        Assert.Contains("\"multiline\":", prompt);
+        Assert.Contains("\"multilineDotAll\":", prompt);
+
+        // The dedicated cross-line generation rule is present.
+        Assert.Contains("CROSS-LINE (MULTILINE)", prompt);
+        Assert.Contains(@"[\s\S]", prompt);          // the any-char-including-newline building block
+
+        // The multiline examples set the flag and use a cross-line regex (JSON-escaped: backslashes doubled).
+        Assert.Contains(@"""multiline"":true", prompt);
+        Assert.Contains(@"TODO[\\s\\S]*?FIXME", prompt);
     }
 
     private static string ReadSystemPrompt()

@@ -207,9 +207,9 @@ if ($WhatIfPreference) {
 # same release four different version numbers (e.g. x64=2327, x86=2328, arm64=2329, offline=2330).
 # Pin one version for the whole run: bump ONCE here (a fresh release number) unless -KeepVersion is
 # set, then build every variant with -SkipVersionIncrement so they all share this single version.
-$versionFile = Join-Path $repoRoot 'Yagu\Properties\build-version.txt'
+$versionFile = Join-Path $repoRoot 'src\Yagu\Properties\build-version.txt'
 if (-not $KeepVersion) {
-  $appInfoFile = Join-Path $repoRoot 'Yagu\Properties\AppInfo.g.cs'
+  $appInfoFile = Join-Path $repoRoot 'src\Yagu\Properties\AppInfo.g.cs'
   $incrementScript = Join-Path $repoRoot 'scripts\increment-yagu-version.ps1'
   & $incrementScript -VersionFile $versionFile -OutputFile $appInfoFile
 }

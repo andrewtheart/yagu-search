@@ -28,6 +28,8 @@ public sealed class SemanticPlanApplierTests
         public bool CaseSensitive { get; set; }
         public bool UseRegex { get; set; }
         public bool ExactMatch { get; set; } = true;
+        public bool Multiline { get; set; }
+        public bool MultilineDotAll { get; set; }
         public string IncludeGlobs { get; set; } = string.Empty;
         public string ExcludeGlobs { get; set; } = string.Empty;
         public int IncludeFilterModeIndex { get; set; }

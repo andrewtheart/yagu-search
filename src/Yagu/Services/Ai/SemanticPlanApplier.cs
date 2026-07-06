@@ -20,6 +20,8 @@ public interface ISemanticPlanTarget
     bool CaseSensitive { get; set; }
     bool UseRegex { get; set; }
     bool ExactMatch { get; set; }
+    bool Multiline { get; set; }
+    bool MultilineDotAll { get; set; }
     string IncludeGlobs { get; set; }
     string ExcludeGlobs { get; set; }
     int IncludeFilterModeIndex { get; set; }
@@ -54,6 +56,15 @@ public sealed class ResolvedSearchPlan
     public bool? CaseSensitive { get; init; }
     public bool? UseRegex { get; init; }
     public bool? ExactMatch { get; init; }
+
+    /// <summary>Cross-line ("multiline") matching — run the pattern over the whole file so one match
+    /// can span line breaks. Null = single-line (unchanged).</summary>
+    public bool? Multiline { get; init; }
+
+    /// <summary>Dot-all: <c>.</c> also matches newlines. Only meaningful with <see cref="Multiline"/>.
+    /// Null = unchanged.</summary>
+    public bool? MultilineDotAll { get; init; }
+
     public IReadOnlyList<string>? IncludeGlobs { get; init; }
     public IReadOnlyList<string>? ExcludeGlobs { get; init; }
     public long? MinFileSizeBytes { get; init; }
@@ -378,6 +389,23 @@ public static class SemanticPlanApplier
         // path ignores ExactMatch — so this is a safe blanket default.)
         bool? exactMatch = plan.ExactMatch ?? false;
 
+        // Cross-line (multiline) intent: a request that needs ONE match to span DIFFERENT lines
+        // ("X then Y on a later line", "a block from BEGIN to END", "across/spanning lines", or a
+        // literal "\n" escape). Honor the model's flag, treat dot-all as implying multiline, and detect
+        // explicit cues in the original query as a backstop (small models forget). When on, force the
+        // regex engine on and whole-word off — mirroring the GUI Multiline toggle — so a cross-line
+        // pattern is always treated as a regex. Null = leave the user's toggle (never force off).
+        bool multilineOn = plan.Multiline == true
+            || plan.MultilineDotAll == true
+            || DetectMultilinePreference(context.OriginalQuery);
+        bool? multiline = multilineOn ? true : null;
+        bool? multilineDotAll = (multilineOn && plan.MultilineDotAll == true) ? true : null;
+        if (multilineOn)
+        {
+            useRegex = true;
+            exactMatch = false;
+        }
+
         var resolved = new ResolvedSearchPlan
         {
             Directory = directory,
@@ -386,6 +414,8 @@ public static class SemanticPlanApplier
             CaseSensitive = plan.CaseSensitive,
             UseRegex = useRegex,
             ExactMatch = exactMatch,
+            Multiline = multiline,
+            MultilineDotAll = multilineDotAll,
             IncludeGlobs = include.Count > 0 ? include : null,
             ExcludeGlobs = exclude.Count > 0 ? exclude : null,
             MinFileSizeBytes = minSize,
@@ -430,6 +460,8 @@ public static class SemanticPlanApplier
         if (r.CaseSensitive is { } cs) parts.Add($"caseSensitive={cs}");
         if (r.UseRegex is { } rx) parts.Add($"useRegex={rx}");
         if (r.ExactMatch is { } em) parts.Add($"exactMatch={em}");
+        if (r.Multiline is { } ml) parts.Add($"multiline={ml}");
+        if (r.MultilineDotAll is { } mld) parts.Add($"multilineDotAll={mld}");
         if (r.IncludeGlobs is { Count: > 0 } inc) parts.Add($"include=[{string.Join(",", inc)}]");
         if (r.ExcludeGlobs is { Count: > 0 } exc) parts.Add($"exclude=[{string.Join(",", exc)}]");
         if (r.MinFileSizeBytes is { } mn) parts.Add($"minSize={mn}");
@@ -469,6 +501,11 @@ public static class SemanticPlanApplier
         if (resolved.Directory is { } dir) target.Directory = dir;
         if (resolved.Pattern is { } pattern) target.Query = pattern;
         if (resolved.SearchMode is { } mode) target.SearchModeIndex = (int)mode;
+        // Multiline first: on the UI target this fires the view-model's Multiline change handler (which
+        // turns Regex on / Exact match off); the explicit UseRegex/ExactMatch below then settle the
+        // final state deterministically for both targets.
+        if (resolved.Multiline is { } ml) target.Multiline = ml;
+        if (resolved.MultilineDotAll is { } mld) target.MultilineDotAll = mld;
         if (resolved.CaseSensitive is { } cs) target.CaseSensitive = cs;
         if (resolved.UseRegex is { } rx) target.UseRegex = rx;
         if (resolved.ExactMatch is { } em) target.ExactMatch = em;
@@ -559,6 +596,11 @@ public static class SemanticPlanApplier
                 ? $" matching the regular expression {resolved.Pattern}"
                 : $" containing \u201c{resolved.Pattern}\u201d");
         }
+
+        if (resolved.Multiline == true)
+            sb.Append(resolved.MultilineDotAll == true
+                ? " across lines (the dot also matches newlines)"
+                : " across lines");
 
         if (resolved.IncludeGlobs is { Count: > 0 } includes)
             sb.Append(", limited to ").Append(string.Join(", ", includes));
@@ -754,6 +796,8 @@ public static class SemanticPlanApplier
             CaseSensitive = resolved.CaseSensitive,
             UseRegex = resolved.UseRegex,
             ExactMatch = resolved.ExactMatch,
+            Multiline = resolved.Multiline,
+            MultilineDotAll = resolved.MultilineDotAll,
             IncludeGlobs = resolved.IncludeGlobs,
             ExcludeGlobs = resolved.ExcludeGlobs,
             MinFileSizeBytes = resolved.MinFileSizeBytes,
@@ -1326,6 +1370,29 @@ public static class SemanticPlanApplier
         return !HiddenExclusionCueRegex.IsMatch(before);
     }
 
+    // Explicit cross-line (multiline) cues in the query — "multiline"/"multi-line", "cross-line",
+    // "across/over/spanning (multiple) lines/newlines", or "on the next/following/subsequent/later
+    // line". A literal "\n" escape is handled separately in DetectMultilinePreference.
+    private static readonly Regex MultilineCue = new(
+        """multi[\s-]?line|cross[\s-]?line|(?:across|over|span(?:ning|s)?)\s+(?:multiple\s+|several\s+)?(?:lines|line\s*breaks|newlines)|on\s+(?:the|a)\s+(?:next|following|subsequent|later)\s+line""",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Detects whether the ORIGINAL query asks for cross-line (multiline) matching — one match that
+    /// spans line breaks. True when the query names it explicitly ("multiline", "across lines", "on the
+    /// next line", "spanning multiple lines") or types a literal <c>\n</c>/<c>\r\n</c> escape. Used as a
+    /// backstop for the model's <c>multiline</c> flag; false when nothing indicates cross-line intent.
+    /// </summary>
+    internal static bool DetectMultilinePreference(string? query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return false;
+        // A literal "\n"/"\r\n" escape typed in the query strongly implies cross-line intent.
+        if (query.Contains("\\n", StringComparison.Ordinal))
+            return true;
+        return MultilineCue.IsMatch(query);
+    }
+
     // ".gitignore" behavior directive detection. Matches ".gitignore", "gitignore", "git ignore",
     // "git-ignore", and the "gitignored" participle; the leading verb (scanned in the clause BEFORE the
     // token, so the token's own "ignore" is never counted) decides obey vs don't-obey.
@@ -1632,6 +1699,13 @@ public sealed class SemanticSearchOverlay
     public bool? CaseSensitive { get; init; }
     public bool? UseRegex { get; init; }
     public bool? ExactMatch { get; init; }
+
+    /// <summary>Cross-line (multiline) matching. Null when unset.</summary>
+    public bool? Multiline { get; init; }
+
+    /// <summary>Dot-all (<c>.</c> matches newlines); only meaningful with <see cref="Multiline"/>. Null when unset.</summary>
+    public bool? MultilineDotAll { get; init; }
+
     public IReadOnlyList<string>? IncludeGlobs { get; init; }
     public IReadOnlyList<string>? ExcludeGlobs { get; init; }
     public long? MinFileSizeBytes { get; init; }

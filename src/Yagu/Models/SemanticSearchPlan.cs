@@ -41,6 +41,21 @@ public sealed class SemanticSearchPlan
     [JsonPropertyName("exactMatch")]
     public bool? ExactMatch { get; init; }
 
+    /// <summary>Cross-line ("multiline", ripgrep -U) matching: run the pattern over the WHOLE file so a
+    /// single match can span line breaks. Set <c>true</c> when the request needs ONE match to cover text
+    /// on DIFFERENT lines — e.g. "X on one line then Y on a later line", "a block from BEGIN to END",
+    /// "spanning multiple lines". Requires a regex <see cref="Pattern"/> that crosses lines (e.g.
+    /// <c>foo[\s\S]*?bar</c>); the applier turns <see cref="UseRegex"/> on. Null = single-line (default).
+    /// Do NOT set for ordinary same-line searches.</summary>
+    [JsonPropertyName("multiline")]
+    public bool? Multiline { get; init; }
+
+    /// <summary>Only meaningful with <see cref="Multiline"/>: make <c>.</c> also match newlines (dot-all /
+    /// ripgrep --multiline-dotall / inline (?s)) so <c>.*</c> crosses lines. Null = the dot stops at a
+    /// line break.</summary>
+    [JsonPropertyName("multilineDotAll")]
+    public bool? MultilineDotAll { get; init; }
+
     /// <summary>Include filters — extensions or globs, e.g. <c>["*.png"]</c> or
     /// <c>["png","jpg"]</c>.</summary>
     [JsonPropertyName("includeGlobs")]

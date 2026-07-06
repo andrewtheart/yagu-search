@@ -49,7 +49,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = $PSScriptRoot
 $projectPath = Join-Path $repoRoot 'src\Yagu\Yagu.csproj'
-$projectDir = Join-Path $repoRoot 'Yagu'
+$projectDir = Join-Path $repoRoot 'src\Yagu'
 $installerDir = Join-Path $repoRoot 'installer'
 $stagingDir = Join-Path $installerDir 'staging'
 $outputDir = Join-Path $installerDir 'output'
