@@ -39,6 +39,7 @@ public sealed class SettingsServiceExtendedCoverageTests : IDisposable
         {
             LastDirectory = @"C:\test",
             CaseSensitive = true,
+            MultilineSearchDefault = true,
             ContextLines = 5,
         };
         service.Save(settings);
@@ -48,6 +49,9 @@ public sealed class SettingsServiceExtendedCoverageTests : IDisposable
         Assert.Equal(5, loaded.ContextLines);
         // CaseSensitive is [JsonIgnore] so should NOT persist
         Assert.False(loaded.CaseSensitive);
+        // MultilineSearchDefault is [JsonIgnore] too: the search-box multiline toggle is session-only
+        // (not sticky), so it never carries a previously-enabled state across launches/reinstalls.
+        Assert.False(loaded.MultilineSearchDefault);
     }
 
     [Fact]

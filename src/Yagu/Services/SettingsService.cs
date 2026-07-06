@@ -140,10 +140,13 @@ public sealed class AppSettings
     [JsonIgnore] public bool CaseSensitive { get; set; }
     [JsonIgnore] public bool UseRegex { get; set; }
     [JsonIgnore] public bool ExactMatch { get; set; } = true;
-    /// <summary>Persisted default state of the search-box "Match across lines (multiline)" toggle.
-    /// Shipped default false so multiline stays strictly opt-in; a power user can flip it on in
-    /// Settings and the search-box toggle then starts lit each launch.</summary>
-    public bool MultilineSearchDefault { get; set; }
+    /// <summary>Initial state of the search-box "Match across lines (multiline)" toggle. Shipped
+    /// default false so multiline stays strictly opt-in. Like <see cref="CaseSensitive"/> /
+    /// <see cref="UseRegex"/> / <see cref="ExactMatch"/>, this is <c>[JsonIgnore]</c> — session-only,
+    /// NOT persisted: the toggle resets to this default on every launch instead of remembering the
+    /// last-used state, so a reinstall (or restart) never carries a previously-enabled multiline
+    /// toggle forward.</summary>
+    [JsonIgnore] public bool MultilineSearchDefault { get; set; }
     /// <summary>Persisted native multiline engine (Phase 2): 0 = hand-rolled regex::bytes (default),
     /// 1 = grep-searcher. Both produce identical results — a pure performance knob. Global (not
     /// per-search); also settable via the CLI <c>--multiline-engine</c> flag.</summary>

@@ -1000,6 +1000,9 @@ public sealed class MultilineSearchTests : IDisposable
     {
         string src = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "SettingsService.cs"));
         Assert.Contains("public bool MultilineSearchDefault { get; set; }", src);
+        // The multiline toggle default is session-only (not sticky): like CaseSensitive/UseRegex/ExactMatch
+        // it is [JsonIgnore], so it resets each launch instead of remembering the last-used state.
+        Assert.Contains("[JsonIgnore] public bool MultilineSearchDefault { get; set; }", src);
         Assert.Contains("public int MultilineEngine { get; set; }", src);
     }
 

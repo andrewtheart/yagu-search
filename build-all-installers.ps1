@@ -44,7 +44,17 @@
 
 .PARAMETER Push
   After a successful build, stage + commit (exactly as -Commit) and then run git push.
-  Implies the commit step, since there must be a commit to push.
+  Implies the commit step, since there must be a commit to push. After a successful push,
+  a DRAFT GitHub release (tag v<version>) is created via the 'gh' CLI with the freshly built
+  installers attached and auto-generated release notes -- unless -SkipRelease is set. It is a
+  DRAFT (not published) so you review the notes/assets and publish it manually. Re-running the
+  same version refreshes the existing release's assets instead of failing. If 'gh' is missing or
+  unauthenticated, the release step warns (the build + push still succeed) and prints the manual
+  'gh release create' command.
+
+.PARAMETER SkipRelease
+  With -Push, do NOT create/refresh the draft GitHub release after pushing (build + commit + push
+  only). No effect without -Push.
 
 .EXAMPLE
   .\build-all-installers.ps1
@@ -80,7 +90,8 @@ param(
   [switch]$SkipReadmeUpdate,
   [switch]$KeepVersion,
   [switch]$Commit,
-  [switch]$Push
+  [switch]$Push,
+  [switch]$SkipRelease
 )
 
 $ErrorActionPreference = 'Stop'
@@ -198,6 +209,9 @@ if ($WhatIfPreference) {
   }
   if ($Commit -or $Push) {
     Write-Host ("  post-build: git add -A + commit{0}" -f $(if ($Push) { ' + push' } else { '' })) -ForegroundColor Yellow
+    if ($Push -and -not $SkipRelease) {
+      Write-Host "  post-push: gh release create v<version> --draft (built installers attached, auto-generated notes)" -ForegroundColor Yellow
+    }
   }
   return
 }
@@ -338,6 +352,67 @@ if ($Commit -or $Push) {
       & git -C $repoRoot push
       if ($LASTEXITCODE -ne 0) { throw "git push failed (exit $LASTEXITCODE)." }
       Write-Host "Pushed." -ForegroundColor Green
+
+      # --- Publish a DRAFT GitHub release for this version with the built installers attached. ---
+      # Only after a successful push, so HEAD is on the remote and the release tag can point at it.
+      # DRAFT by design: a human reviews the auto-generated notes + assets and publishes manually.
+      # A missing/unauthenticated 'gh' or a failed release only WARNS -- the build + push already
+      # succeeded, so the whole run must not be reported as a failure for a release-step hiccup.
+      if (-not $SkipRelease) {
+        $gh = Get-Command gh -ErrorAction SilentlyContinue
+        if (-not $gh) {
+          Write-Warning ("GitHub release skipped: 'gh' CLI not found on PATH. Install https://cli.github.com/, run 'gh auth login', then: " +
+            "gh release create v$pinnedVersion installer\YaguSetup-$pinnedVersion-*.exe --draft --generate-notes")
+        }
+        else {
+          $releaseAssets = @(Get-ChildItem -LiteralPath $installerDir -Filter "YaguSetup-$pinnedVersion-*.exe" -File -ErrorAction SilentlyContinue)
+          if ($releaseAssets.Count -eq 0) {
+            Write-Warning "GitHub release skipped: no installer\YaguSetup-$pinnedVersion-*.exe found to attach."
+          }
+          else {
+            $tag = "v$pinnedVersion"
+            # Derive owner/repo from origin so gh targets the right repo regardless of cwd
+            # (handles both https://github.com/owner/repo.git and git@github.com:owner/repo.git).
+            $originUrl = (& git -C $repoRoot remote get-url origin 2>$null)
+            $repoArgs = @()
+            $repoSlug = $null
+            if ("$originUrl" -match 'github\.com[:/](?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?/?$') {
+              $repoSlug = "$($Matches.owner)/$($Matches.repo)"
+              $repoArgs = @('--repo', $repoSlug)
+            }
+            $headSha = ("$(& git -C $repoRoot rev-parse HEAD 2>$null)").Trim()
+
+            # Idempotent: if the release/tag already exists (re-run of the same version), refresh its
+            # assets with --clobber instead of failing on 'release create'.
+            & $gh.Source release view $tag @repoArgs *> $null
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "GitHub release $tag already exists - refreshing installer assets..." -ForegroundColor Cyan
+              & $gh.Source release upload $tag @($releaseAssets.FullName) --clobber @repoArgs
+              if ($LASTEXITCODE -ne 0) {
+                Write-Warning "GitHub release asset upload failed (exit $LASTEXITCODE). Build + push still succeeded; attach manually: gh release upload $tag installer\YaguSetup-$pinnedVersion-*.exe --clobber"
+              }
+              else { Write-Host "Refreshed assets on release $tag." -ForegroundColor Green }
+            }
+            else {
+              Write-Host "Creating DRAFT GitHub release $tag with $($releaseAssets.Count) installer(s) attached..." -ForegroundColor Cyan
+              $createArgs = @('release', 'create', $tag,
+                '--draft',
+                '--title', "Yagu $pinnedVersion",
+                '--generate-notes',
+                '--target', $headSha) + @($releaseAssets.FullName) + $repoArgs
+              & $gh.Source @createArgs
+              if ($LASTEXITCODE -ne 0) {
+                Write-Warning ("GitHub release creation failed (exit $LASTEXITCODE). Build + push still succeeded. Ensure 'gh auth login' is done, then run: " +
+                  "gh release create $tag installer\YaguSetup-$pinnedVersion-*.exe --draft --generate-notes")
+              }
+              else {
+                $releasesUrl = if ($repoSlug) { "https://github.com/$repoSlug/releases" } else { "the GitHub Releases page" }
+                Write-Host "Draft release $tag created. Review the notes/assets and publish it at: $releasesUrl" -ForegroundColor Green
+              }
+            }
+          }
+        }
+      }
     }
   }
   finally {
