@@ -44,15 +44,15 @@
   Do not auto-relaunch elevated. Elevated-only installers are then skipped with a warning.
 
 .EXAMPLE
-  .\scripts\install-dev-prerequisites.ps1
+  .\install-dev-prerequisites.ps1
   Installs every missing build prerequisite (auto-elevates for the machine-wide installers).
 
 .EXAMPLE
-  .\scripts\install-dev-prerequisites.ps1 -WhatIf
+  .\install-dev-prerequisites.ps1 -WhatIf
   Reports what WOULD be installed, downloading and changing nothing.
 
 .EXAMPLE
-  .\scripts\install-dev-prerequisites.ps1 -IncludeOptional
+  .\install-dev-prerequisites.ps1 -IncludeOptional
   Also installs voidtools Everything and the WebView2 runtime.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
