@@ -7,13 +7,25 @@ applyTo: "tests/Yagu.Tests/**, tests/Yagu.Benchmarks/**"
 
 Also follow the **Test File Naming Rules** and **Test Run Rules** in
 [copilot-instructions.md](../copilot-instructions.md) (name tests after the class under test;
-default to the iterative `--filter "Category!=Slow&Category!=GPU"` run; don't kill long runs prematurely).
+default to the iterative `--filter "Category!=Slow&Category!=GPU&Category!=Headed"` run; don't kill long runs prematurely).
 
 ## Test categories
 
 - `[Trait("Category", "Slow")]` — perf/UI/large-corpus tests that take minutes (excluded from the iterative run).
 - `[Trait("Category", "GPU")]` — tests that need a GPU + a local Foundry model (e.g. `SemanticEvalGoldenTests`, which
-  is tagged BOTH `Slow` and `GPU`). CI and GPU-less machines exclude them with `--filter "Category!=Slow&Category!=GPU"`.
+  is tagged BOTH `Slow` and `GPU`).
+- `[Trait("Category", "Headed")]` — tests that launch the WinUI app and drive it through UIAutomation
+  (`MultilineGuiRegressionTests`; `MatchNavRegressionTests` is also `Slow`). They **self-gate at runtime**
+  via `HeadedTestEnvironment.CanRun`: **auto-run** on an interactive Windows desktop and **auto-skip** in
+  CI / non-interactive / non-Windows (GitHub Actions, Azure DevOps, GitLab, Jenkins are detected). So a
+  normal `dotnet test` on a dev desktop exercises them; CI runs the same filter and they skip themselves —
+  no `Category!=Headed` exclusion is needed in CI. Add `&Category!=Headed` only for the fast iterative
+  loop, to keep a GUI window from popping up. Run only them with `--filter "Category=Headed"` (interactive
+  Windows desktop, no other Yagu instance running — single-instance would hijack the launch).
+  `MatchNavRegressionTests` additionally keeps a `YAGU_RUN_UI_REGRESSION=1` opt-in on top of the capability
+  gate because it is screenshot-fragile.
+- CI and headless machines use `--filter "Category!=Slow&Category!=GPU"`; headed tests self-skip there.
+  The fast iterative dev loop uses `--filter "Category!=Slow&Category!=GPU&Category!=Headed"`.
 
 ## Two kinds of tests
 

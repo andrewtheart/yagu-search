@@ -60,6 +60,7 @@
     <Compile Include="..\..\src\Yagu\Helpers\EditorSyntaxHighlightingResolver.cs" Link="Source\Helpers\EditorSyntaxHighlightingResolver.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\EncodingDetector.cs" Link="Source\Helpers\EncodingDetector.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\LineTruncator.cs" Link="Source\Helpers\LineTruncator.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\MultilineTextShadow.cs" Link="Source\Helpers\MultilineTextShadow.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\PreviewZoomMath.cs" Link="Source\Helpers\PreviewZoomMath.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\SyntaxHighlighter.cs" Link="Source\Helpers\SyntaxHighlighter.cs" />
     <Compile Include="..\..\src\Yagu\Services\FileLister.cs" Link="Source\Services\FileLister.cs" />
@@ -68,6 +69,7 @@
     <Compile Include="..\..\src\Yagu\Services\CloudFileHelper.cs" Link="Source\Services\CloudFileHelper.cs" />
     <Compile Include="..\..\src\Yagu\Services\FileMetadataCache.cs" Link="Source\Services\FileMetadataCache.cs" />
     <Compile Include="..\..\src\Yagu\Services\SearchService.cs" Link="Source\Services\SearchService.cs" />
+    <Compile Include="..\..\src\Yagu\Services\SearchRegexFactory.cs" Link="Source\Services\SearchRegexFactory.cs" />
     <Compile Include="..\..\src\Yagu\Services\SearchQueryParser.cs" Link="Source\Services\SearchQueryParser.cs" />
     <Compile Include="..\..\src\Yagu\Services\ExcludedExtensionPredictor.cs" Link="Source\Services\ExcludedExtensionPredictor.cs" />
     <Compile Include="..\..\src\Yagu\Services\SettingsService.cs" Link="Source\Services\SettingsService.cs" />

@@ -1121,6 +1121,9 @@ internal static class CliRunner
             CaseSensitive         = caseSensitive,
             UseRegex              = useRegex,
             ExactMatch            = exactMatch,
+            Multiline             = args.Multiline ?? false,
+            MultilineDotAll       = args.MultilineDotAll ?? false,
+            MaxMultilineBytes     = args.MaxMultilineBytes ?? SearchOptions.DefaultMaxMultilineBytes,
             ContextLines          = contextLines,
             SearchMode            = args.SearchMode ?? SearchMode.Both,
             IncludeGlobs          = includeGlobs,
@@ -1192,6 +1195,11 @@ internal static class CliRunner
         bool savingSession = !string.IsNullOrWhiteSpace(args.SaveSessionPath);
         bool needsCollection = exporting || replacing || sorting || grouping || savingSession;
 
+        // Multiline forces the managed path (native is gated off), so the native DirectOutputSink
+        // cannot emit plain CLI output. When not collecting for post-processing, route each streamed
+        // SearchEvent.Match/MatchBatch through a managed GrepStyleWriter as it arrives (§4 hidden gate).
+        bool streamingMultiline = options.Multiline && !needsCollection;
+
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
@@ -1201,8 +1209,9 @@ internal static class CliRunner
         // grep-style-formatted UTF-8 directly from Rust's byte buffers. A single 128 KiB buffered stdout
         // stream is shared by every root (roots are scanned sequentially), coalescing the many tiny
         // per-match writes into block writes like a buffered stdout. Disabled while collecting
-        // results for post-processing (sort/export/replace/group/save-session).
-        Stream? directStream = needsCollection ? null : new BufferedStream(Console.OpenStandardOutput(), 1 << 17);
+        // results for post-processing (sort/export/replace/group/save-session) and in multiline mode
+        // (which streams through the managed writer instead).
+        Stream? directStream = (needsCollection || streamingMultiline) ? null : new BufferedStream(Console.OpenStandardOutput(), 1 << 17);
         foreach (var rootOptions in perRootOptions)
         {
             rootOptions.DirectOutputStream = directStream;
@@ -1211,6 +1220,9 @@ internal static class CliRunner
 
         var progress = vtEnabled ? new ProgressLine(useColor) : null;
         var collectedResults = needsCollection ? new List<SearchResult>() : null;
+        GrepStyleWriter? multilineWriter = streamingMultiline
+            ? new GrepStyleWriter(new StreamWriter(new BufferedStream(Console.OpenStandardOutput(), 1 << 17), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)) { AutoFlush = false }, useColor)
+            : null;
         long filesScanned = 0;
         long bytesScanned = 0;
         DateTime searchStarted = DateTime.UtcNow;
@@ -1248,6 +1260,7 @@ internal static class CliRunner
                         progress?.Dismiss();
                         filesScanned = c.Summary.FilesScanned;
                         bytesScanned = c.Summary.BytesScanned;
+                        multilineWriter?.Flush();
                         WriteCompletionSummary(c.Summary, useColor);
 
                         if (needsCollection && collectedResults != null)
@@ -1301,6 +1314,16 @@ internal static class CliRunner
                     else if (ev is SearchEvent.MatchBatch mb)
                         collectedResults!.AddRange(mb.Results);
                 }
+                else if (multilineWriter != null)
+                {
+                    // Managed streaming direct-output for multiline: write each match as it arrives
+                    // (do NOT buffer to completion — that would defeat streaming at drive scale).
+                    if (ev is SearchEvent.Match m)
+                        multilineWriter.Add(m.Result);
+                    else if (ev is SearchEvent.MatchBatch mb)
+                        foreach (var r in mb.Results)
+                            multilineWriter.Add(r);
+                }
             }
         }
         catch (OperationCanceledException)
@@ -1351,6 +1374,7 @@ internal static class CliRunner
             if (b.IOError > 0)       WriteError($"  I/O errors:               {b.IOError,8:N0}", color);
             if (b.NotFound > 0)      WriteError($"  Not found:                {b.NotFound,8:N0}", color);
             if (b.Encoding > 0)      WriteError($"  Encoding errors:          {b.Encoding,8:N0}", color);
+            if (b.MultilineSkipped > 0) WriteError($"  Multiline size/timeout:   {b.MultilineSkipped,8:N0}", color);
             if (b.Other > 0)         WriteError($"  Other:                    {b.Other,8:N0}", color);
         }
     }
@@ -1760,13 +1784,12 @@ internal static class CliRunner
             : (SearchQueryParser.BuildLiteralRegexPattern(options.Query, options.ExactMatch)
                ?? Regex.Escape(options.Query));
 
-        var regexOptions = RegexOptions.CultureInvariant;
-        if (!options.CaseSensitive) regexOptions |= RegexOptions.IgnoreCase;
-
         Regex regex;
         try
         {
-            regex = new Regex(pattern, regexOptions);
+            // Route through the shared factory so replace mirrors search flags exactly, including
+            // multiline anchors, dot-all, and the multiline-only match-timeout DoS guard.
+            regex = SearchRegexFactory.Build(pattern, options);
         }
         catch (ArgumentException ex)
         {
@@ -1823,7 +1846,19 @@ internal static class CliRunner
                 }
 
                 int replaceCount = 0;
-                var replaced = regex.Replace(original, m => { replaceCount++; return Eval(m); });
+                string replaced;
+                if (options.Multiline)
+                {
+                    // Multiline replace maps each cross-line match span back to the ORIGINAL buffer via
+                    // the LF-shadow offset map and splices in the replacement (§3/§6). We must NOT call
+                    // regex.Replace(original) — the regex ran over the LF shadow, so a `foo$` hit found
+                    // during search would not replace in `foo\r\n`.
+                    replaced = ReplaceMultiline(regex, original, Eval, out replaceCount);
+                }
+                else
+                {
+                    replaced = regex.Replace(original, m => { replaceCount++; return Eval(m); });
+                }
 
                 if (replaceCount == 0) continue;
 
@@ -1867,6 +1902,35 @@ internal static class CliRunner
             WriteError($"  {errors} file(s) had errors.", useColor);
     }
 
+    /// <summary>
+    /// Multiline (cross-line) replace: runs the regex over the LF shadow of <paramref name="original"/>,
+    /// maps each match span back to the original buffer via the sparse offset map, and splices in the
+    /// evaluated replacement. Preserves the original CRLF line terminators outside the matched spans and
+    /// drops zero-width matches (matching the search path). Never calls <c>regex.Replace(original)</c>,
+    /// which would match raw CRLF text rather than the LF shadow the search used.
+    /// </summary>
+    internal static string ReplaceMultiline(Regex regex, string original, Func<Match, string> eval, out int replaceCount)
+    {
+        var shadow = Helpers.MultilineTextShadow.Build(original);
+        var sb = new StringBuilder(original.Length);
+        int lastOrig = 0;
+        int count = 0;
+        foreach (Match m in regex.Matches(shadow.Lf))
+        {
+            if (m.Length == 0) continue; // drop zero-width, matching the multiline search path
+            int origStart = shadow.ToOriginalOffset(m.Index);
+            int origEnd = shadow.ToOriginalOffset(m.Index + m.Length);
+            if (origStart < lastOrig) continue; // defensive: never splice overlapping spans
+            sb.Append(original, lastOrig, origStart - lastOrig);
+            sb.Append(eval(m));
+            lastOrig = origEnd;
+            count++;
+        }
+        sb.Append(original, lastOrig, original.Length - lastOrig);
+        replaceCount = count;
+        return sb.ToString();
+    }
+
     // -----------------------------------------------------------------------
     // Help text
     // -----------------------------------------------------------------------
@@ -1894,6 +1958,13 @@ internal static class CliRunner
                   --search-mode <mode>    both | content | filenames | filename-then-content  (default: both)
                   --exact-match           Match whole words only (default).
                   --no-exact-match        Allow substring matches.
+              -U, --multiline             Match across lines: run the pattern over the whole file so a
+                                          single match can span line breaks (ripgrep -U). Reads whole
+                                          files; slower/heavier — pair with a narrow scope.
+                  --no-multiline          Match within single lines (default).
+                  --multiline-dotall      With --multiline, the dot (.) also matches newlines ((?s)).
+                  --max-multiline-bytes <size>  Skip files larger than this in multiline mode
+                                          (default: 50MB; accepts e.g. 20MB, 1GB).
 
             SEMANTIC SEARCH (local AI):
               -SP,--semantic-pattern <text> Natural-language request that a local on-device model
@@ -2996,8 +3067,10 @@ internal sealed class GrepStyleWriter
         bool sameFile = string.Equals(_currentFile, result.FilePath, StringComparison.OrdinalIgnoreCase);
 
         // Dedup: multiple matches on the same line produce separate SearchResults;
-        // grep-style output prints each line once, so skip any that repeat a line already written.
-        if (sameFile && result.LineNumber > 0 && result.LineNumber == _lastLine)
+        // grep-style output prints each physical line once, so skip any that repeat a line
+        // already written. Bypass this fold ONLY for a true cross-line (multiline) span:
+        // two distinct spans starting on the same line are two occurrences and must both print.
+        if (!result.IsMultilineMatch && sameFile && result.LineNumber > 0 && result.LineNumber == _lastLine)
             return;
 
         TotalMatches++;
@@ -3041,7 +3114,11 @@ internal sealed class GrepStyleWriter
 
         // ---- Match line -------------------------------------------------
         WriteMatch(result.LineNumber, result.MatchLine, result.MatchStartColumn, result.MatchLength);
-        _lastLine         = result.LineNumber;
+        // For a cross-line match, print a marker showing how many additional lines the span covers
+        // (full-span print is Phase 3). After-context is numbered from the END line.
+        if (result.IsMultilineMatch)
+            WriteMultilineSpanMarker(result.LineNumber, result.MatchEndLineNumber!.Value);
+        _lastLine         = result.MatchEndLineNumber ?? result.LineNumber;
         _wroteMatchInFile = true;
 
         // ---- Context after ----------------------------------------------
@@ -3055,6 +3132,15 @@ internal sealed class GrepStyleWriter
     public void Flush() => _out.Flush();
 
     // ---- Private helpers -----------------------------------------------
+
+    private void WriteMultilineSpanMarker(int startLine, int endLine)
+    {
+        int extra = Math.Max(0, endLine - startLine);
+        if (extra == 0) return;
+        // ASCII ellipsis so a non-UTF-8 console codepage doesn't mojibake the marker.
+        string marker = $"    ... (+{extra} line{(extra == 1 ? "" : "s")})";
+        _out.WriteLine(_color ? $"{BoldBlue}{marker}{Reset}" : marker);
+    }
 
     private void WriteMatch(int line, string text, int matchStart, int matchLength)
     {
@@ -3138,6 +3224,9 @@ internal sealed class CliArgs
     public int?             MaxMatchesPerFile { get; private set; }
     public int?             MaxSearchDepth { get; private set; }
     public bool?            ExactMatch { get; private set; }
+    public bool?            Multiline { get; private set; }
+    public bool?            MultilineDotAll { get; private set; }
+    public long?            MaxMultilineBytes { get; private set; }
     public DateTimeOffset?  CreatedAfter { get; private set; }
     public DateTimeOffset?  CreatedBefore { get; private set; }
     public DateTimeOffset?  ModifiedAfter { get; private set; }
@@ -3219,6 +3308,10 @@ internal sealed class CliArgs
             if (Eq(tok, "--no-gitignore-precedence"))        { a.GitignoreTakesPrecedence = false; i++; continue; }
             if (Eq(tok, "--exact-match"))                    { a.ExactMatch = true; i++; continue; }
             if (Eq(tok, "--no-exact-match", "--substring"))  { a.ExactMatch = false; i++; continue; }
+            if (Eq(tok, "--multiline", "-U"))                { a.Multiline = true; i++; continue; }
+            if (Eq(tok, "--no-multiline"))                   { a.Multiline = false; i++; continue; }
+            if (Eq(tok, "--multiline-dotall"))               { a.Multiline = true; a.MultilineDotAll = true; i++; continue; }
+            if (Eq(tok, "--no-multiline-dotall"))            { a.MultilineDotAll = false; i++; continue; }
             if (Eq(tok, "--explain"))                        { a.Explain = true; i++; continue; }
             if (Eq(tok, "--accept-model-download", "--yes-download")) { a.AcceptModelDownload = true; i++; continue; }
             if (Eq(tok, "--include-regex"))                  { a.IncludeFilterModeIndex = 1; i++; continue; }
@@ -3252,6 +3345,8 @@ internal sealed class CliArgs
                 { a.MinFileSizeBytes = ParseFileSize(v); continue; }
             if (TryGetVal(raw, ref i, out v, "--max-filesize"))
                 { a.MaxFileSizeBytes = ParseFileSize(v); continue; }
+            if (TryGetVal(raw, ref i, out v, "--max-multiline-bytes"))
+                { a.MaxMultilineBytes = ParseFileSize(v); continue; }
             if (TryGetVal(raw, ref i, out v, "--search-mode"))
             {
                 a.SearchMode = v.ToLowerInvariant() switch

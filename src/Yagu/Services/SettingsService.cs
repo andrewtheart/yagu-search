@@ -140,6 +140,10 @@ public sealed class AppSettings
     [JsonIgnore] public bool CaseSensitive { get; set; }
     [JsonIgnore] public bool UseRegex { get; set; }
     [JsonIgnore] public bool ExactMatch { get; set; } = true;
+    /// <summary>Persisted default state of the search-box "Match across lines (multiline)" toggle.
+    /// Shipped default false so multiline stays strictly opt-in; a power user can flip it on in
+    /// Settings and the search-box toggle then starts lit each launch.</summary>
+    public bool MultilineSearchDefault { get; set; }
     [JsonIgnore] public bool ObeyGitignore { get; set; }
     public bool GitignoreTakesPrecedence { get; set; } = true;
     // User's saved preference for .gitignore vs Include-filter precedence on conflict.

@@ -79,6 +79,12 @@ public sealed class ContentSearcher
     public const int SkipByExtension = -8;
     public const int SkipCloudOnly   = -10;
 
+    /// <summary>File exceeded <see cref="SearchOptions.MaxMultilineBytes"/> and was skipped (multiline mode).</summary>
+    public const int SkipMultilineTooLarge = -11;
+
+    /// <summary>A per-file multiline scan aborted on <see cref="System.Text.RegularExpressions.RegexMatchTimeoutException"/>.</summary>
+    public const int SkipMultilineTimeout = -12;
+
     private static int LogBinaryAndReturn(string filePath)
     {
         LogService.Instance.Verbose("ContentSearcher", $"Binary detected (native): {filePath}");
@@ -213,6 +219,24 @@ public sealed class ContentSearcher
             {
                 LogService.Instance.Verbose("ContentSearcher", $"Archive header check failed for {filePath}, falling through to normal scan", ex);
             }
+        }
+
+        // Multiline (cross-line) search runs the regex over the whole file buffer, so it cannot use
+        // the per-line native or managed scanners nor the single-literal fast path. It enforces the
+        // dedicated size cap first and always runs the managed whole-file engine (Phase 1). A bare
+        // literal was promoted to an escaped regex upstream, so `regex` is always non-null here.
+        if (options.Multiline)
+        {
+            int mlResult;
+            try
+            {
+                mlResult = await SearchMultilineAsync(filePath, fileLength, regex, options, writer, metadata, cancellationToken).ConfigureAwait(false);
+            }
+            catch (UnauthorizedAccessException ex) { LogService.Instance.Verbose("ContentSearcher", $"Access denied (multiline): {filePath}", ex); return new FileSearchOutcome(SkipAccessDenied, 0); }
+            catch (IOException ex) { LogService.Instance.Verbose("ContentSearcher", $"IO error (multiline): {filePath}", ex); return new FileSearchOutcome(SkipIOError, 0); }
+            catch (DecoderFallbackException ex) { LogService.Instance.Verbose("ContentSearcher", $"Encoding error (multiline): {filePath}", ex); return new FileSearchOutcome(SkipEncoding, 0); }
+            if (watched) FileWatchDiagnostics.Checkpoint(filePath, "EXIT-MULTILINE", totalSw!.ElapsedMilliseconds, $"produced={mlResult}");
+            return new FileSearchOutcome(mlResult, mlResult >= 0 ? fileLength : 0);
         }
 
         // Native (Rust) fast path. Falls back to the managed path on any failure
@@ -355,6 +379,191 @@ public sealed class ContentSearcher
         {
             s_mmfGate.Release();
         }
+    }
+
+    /// <summary>
+    /// Cross-line (multiline) whole-file search: runs the regex over an LF-normalized shadow of the
+    /// whole file so a single match can span line breaks (§6 of the multiline plan). Enforces the
+    /// dedicated size cap first, binary-sniffs before decoding, buffers per-file results and publishes
+    /// only on success (timeout atomicity), and emits span-aware <see cref="SearchResult"/> records
+    /// (start line/col + end line/col). Returns the match count, or a negative Skip code.
+    /// </summary>
+    internal static async Task<int> SearchMultilineAsync(
+        string filePath,
+        long fileLength,
+        Regex? regex,
+        SearchOptions options,
+        ChannelWriter<SearchResult> writer,
+        FileMetadata metadata,
+        CancellationToken cancellationToken)
+    {
+        // Enforce the dedicated cap FIRST — never read multi-GB into a contiguous string.
+        if (options.MaxMultilineBytes > 0 && fileLength > options.MaxMultilineBytes)
+            return SkipMultilineTooLarge;
+
+        // A bare literal is promoted to an escaped regex upstream, so regex is expected non-null.
+        if (regex is null)
+            return 0;
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // ── Read: single 8 KB peek for binary + encoding detection BEFORE decoding, then read fully. ──
+        string original;
+        using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024, FileOptions.SequentialScan | FileOptions.Asynchronous))
+        {
+            var peek = new byte[BinaryDetector.SampleBytes];
+            int peekRead = 0;
+            while (peekRead < peek.Length)
+            {
+                int n = await fs.ReadAsync(peek.AsMemory(peekRead), cancellationToken).ConfigureAwait(false);
+                if (n <= 0) break;
+                peekRead += n;
+            }
+
+            // Binary-sniff BEFORE decoding a (potentially 50 MB) buffer into a UTF-16 string,
+            // so multiline never scans binaries the line path skips.
+            if (options.SkipBinary && peekRead > 0 && BinaryDetector.IsBinary(peek.AsSpan(0, peekRead)))
+            {
+                LogService.Instance.Verbose("ContentSearcher", $"Binary detected (multiline sniff): {filePath}");
+                return SkipBinary;
+            }
+
+            var encoding = EncodingDetector.DetectEncoding(peek.AsSpan(0, Math.Min(peekRead, 4)));
+            fs.Position = 0;
+            using var streamReader = new StreamReader(fs, encoding, detectEncodingFromByteOrderMarks: true);
+            original = await streamReader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        int contextLines = Math.Max(0, options.ContextLines);
+        int matchCap = options.MaxMatchesPerFile > 0 ? options.MaxMatchesPerFile : int.MaxValue;
+        if (options.MaxResults > 0 && options.MaxResults < matchCap)
+            matchCap = options.MaxResults; // bound per-file buffering by min(MaxMatchesPerFile, MaxResults)
+
+        // ── Build the LF shadow (parity-first: scan LF-only bytes) and a line-start table. ──
+        var shadow = MultilineTextShadow.Build(original);
+        string lf = shadow.Lf;
+        var lineStarts = BuildLineStarts(lf);
+
+        // Buffer results and publish only on success. If the regex times out mid-file, discard the
+        // partial results and record a per-file multiline-timeout skip (atomicity).
+        var buffered = new List<SearchResult>();
+        try
+        {
+            foreach (Match m in regex.Matches(lf))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (m.Length == 0) continue; // drop zero-width, matching the line path
+
+                int startOffset = m.Index;
+                int endOffset = m.Index + m.Length;
+                int startLineIdx = LineIndexOf(lineStarts, startOffset);
+                int endLineIdx = LineIndexOf(lineStarts, endOffset);
+
+                int startLineBegin = lineStarts[startLineIdx];
+                int startLineContentEnd = startLineIdx + 1 < lineStarts.Count ? lineStarts[startLineIdx + 1] - 1 : lf.Length;
+                int sourceCol = startOffset - startLineBegin;
+                int firstLineVisibleEnd = Math.Min(endOffset, startLineContentEnd);
+                int firstLineVisibleLen = Math.Max(0, firstLineVisibleEnd - startOffset);
+
+                string startLineRaw = lf.Substring(startLineBegin, startLineContentEnd - startLineBegin);
+                var display = TruncateAroundMatch(startLineRaw, sourceCol, firstLineVisibleLen);
+
+                var before = BuildContextBefore(lf, lineStarts, startLineIdx, contextLines);
+                var after = BuildContextAfter(lf, lineStarts, endLineIdx, contextLines);
+
+                var result = new SearchResult(
+                    FilePath: filePath,
+                    LineNumber: startLineIdx + 1,
+                    MatchLine: display.Text,
+                    MatchStartColumn: display.MatchStart,
+                    MatchLength: firstLineVisibleLen,
+                    ContextBefore: before,
+                    ContextAfter: after)
+                { SourceMatchStartColumn = sourceCol };
+
+                if (endLineIdx > startLineIdx)
+                {
+                    // True cross-line span: carry the end line/col; single-line hits (even during a
+                    // multiline search) leave these null so they render exactly like line mode.
+                    result.MatchEndLineNumber = endLineIdx + 1;
+                    result.MatchEndColumn = endOffset - lineStarts[endLineIdx];
+                }
+
+                buffered.Add(result);
+                if (buffered.Count >= matchCap) break;
+            }
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            LogService.Instance.Warning("ContentSearcher", $"Multiline regex timed out; skipping file: {filePath}");
+            return SkipMultilineTimeout;
+        }
+
+        if (buffered.Count > 0)
+        {
+            FileMetadataCache.Set(filePath, metadata);
+            foreach (var r in buffered)
+                await writer.WriteAsync(r, cancellationToken).ConfigureAwait(false);
+        }
+
+        return buffered.Count;
+    }
+
+    /// <summary>Builds the sorted line-start offsets for an LF-only buffer (index i = start of line i+1).</summary>
+    internal static List<int> BuildLineStarts(string lf)
+    {
+        var starts = new List<int>(Math.Max(1, lf.Length / 40)) { 0 };
+        for (int i = 0; i < lf.Length; i++)
+        {
+            if (lf[i] == '\n')
+                starts.Add(i + 1);
+        }
+        return starts;
+    }
+
+    /// <summary>Returns the 0-based line index containing <paramref name="offset"/> (greatest start ≤ offset).</summary>
+    internal static int LineIndexOf(List<int> lineStarts, int offset)
+    {
+        int lo = 0, hi = lineStarts.Count - 1, ans = 0;
+        while (lo <= hi)
+        {
+            int mid = (lo + hi) >> 1;
+            if (lineStarts[mid] <= offset) { ans = mid; lo = mid + 1; }
+            else hi = mid - 1;
+        }
+        return ans;
+    }
+
+    private static string LineTextAt(string lf, List<int> lineStarts, int lineIdx)
+    {
+        int begin = lineStarts[lineIdx];
+        int end = lineIdx + 1 < lineStarts.Count ? lineStarts[lineIdx + 1] - 1 : lf.Length;
+        return lf.Substring(begin, Math.Max(0, end - begin));
+    }
+
+    private static IReadOnlyList<string> BuildContextBefore(string lf, List<int> lineStarts, int startLineIdx, int contextLines)
+    {
+        if (contextLines == 0) return Array.Empty<string>();
+        int from = Math.Max(0, startLineIdx - contextLines);
+        if (from >= startLineIdx) return Array.Empty<string>();
+        var list = new List<string>(startLineIdx - from);
+        for (int li = from; li < startLineIdx; li++)
+            list.Add(Truncate(LineTextAt(lf, lineStarts, li)));
+        return list;
+    }
+
+    private static IReadOnlyList<string> BuildContextAfter(string lf, List<int> lineStarts, int endLineIdx, int contextLines)
+    {
+        if (contextLines == 0) return Array.Empty<string>();
+        int lastLineIdx = lineStarts.Count - 1;
+        int to = Math.Min(lastLineIdx, endLineIdx + contextLines);
+        if (to <= endLineIdx) return Array.Empty<string>();
+        var list = new List<string>(to - endLineIdx);
+        for (int li = endLineIdx + 1; li <= to; li++)
+            list.Add(Truncate(LineTextAt(lf, lineStarts, li)));
+        return list;
     }
 
     private static async Task<int> SearchLinesAsync(

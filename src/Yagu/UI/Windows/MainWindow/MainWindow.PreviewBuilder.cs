@@ -2876,16 +2876,16 @@ public sealed partial class MainWindow
         }
     }
 
-    private static Regex? BuildHighlightRegex(string query, bool caseSensitive, bool useRegex, bool exactMatch = true)
+    private static Regex? BuildHighlightRegex(string query, bool caseSensitive, bool useRegex, bool exactMatch = true, bool multiline = false, bool multilineDotAll = false)
     {
         if (string.IsNullOrEmpty(query)) return null;
         try
         {
-            var options = RegexOptions.Compiled | RegexOptions.CultureInvariant;
-            if (!caseSensitive) options |= RegexOptions.IgnoreCase;
             string? pattern = useRegex ? query : SearchQueryParser.BuildLiteralRegexPattern(query, exactMatch);
             if (string.IsNullOrEmpty(pattern)) return null;
-            return new Regex(pattern, options);
+            // Route through the shared factory so search, replace, and highlight can never disagree
+            // on flags (multiline anchors, dot-all, and the multiline-only match timeout).
+            return SearchRegexFactory.Build(pattern, caseSensitive, multiline, multilineDotAll);
         }
         catch (Exception ex)
         {
@@ -2904,8 +2904,8 @@ public sealed partial class MainWindow
     /// </summary>
     private Regex? BuildSearchHighlightRegex()
         => string.IsNullOrEmpty(ViewModel.LastSearchPattern)
-            ? BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch)
-            : BuildHighlightRegex(ViewModel.LastSearchPattern, ViewModel.LastSearchCaseSensitive, ViewModel.LastSearchUseRegex, ViewModel.LastSearchExactMatch);
+            ? BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch, ViewModel.Multiline, ViewModel.MultilineDotAll)
+            : BuildHighlightRegex(ViewModel.LastSearchPattern, ViewModel.LastSearchCaseSensitive, ViewModel.LastSearchUseRegex, ViewModel.LastSearchExactMatch, ViewModel.LastSearchMultiline, ViewModel.LastSearchMultilineDotAll);
 
     private SolidColorBrush s_matchGutterBrush = new(Windows.UI.Color.FromArgb(255, 156, 220, 254));
 

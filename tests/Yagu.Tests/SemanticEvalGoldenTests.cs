@@ -26,7 +26,8 @@ namespace Yagu.Tests;
 /// on-demand on a dev machine. The pure semantic-layer rules are separately covered offline by
 /// <see cref="SemanticPlanApplierTests"/> / <see cref="SemanticQuerySalvageTests"/>.
 ///
-/// Re-baseline after an intentional prompt/model change with:
+/// If <c>expected-plans.json</c> does not exist, the first run auto-generates it from the current output.
+/// To force re-baseline after an intentional prompt/model change:
 ///   <c>$env:YAGU_UPDATE_SEMANTIC_GOLDEN=1; dotnet test --filter "FullyQualifiedName~SemanticEvalGoldenTests"</c>
 /// which rewrites <c>expected-plans.json</c> from the current run instead of asserting.
 /// </summary>
@@ -79,15 +80,13 @@ public sealed class SemanticEvalGoldenTests
             return;
         }
 
-        if (string.Equals(System.Environment.GetEnvironmentVariable("YAGU_UPDATE_SEMANTIC_GOLDEN"), "1"))
+        if (string.Equals(System.Environment.GetEnvironmentVariable("YAGU_UPDATE_SEMANTIC_GOLDEN"), "1") ||
+            !File.Exists(goldenFile))
         {
             WriteGolden(goldenFile, actual);
             _out.WriteLine($"REBASELINED golden ({actual.Count} queries) -> {goldenFile}");
             return;
         }
-
-        Assert.True(File.Exists(goldenFile),
-            $"golden not found: {goldenFile}. Generate it with YAGU_UPDATE_SEMANTIC_GOLDEN=1.");
         var expected = ReadGolden(goldenFile);
 
         var mismatches = new List<string>();

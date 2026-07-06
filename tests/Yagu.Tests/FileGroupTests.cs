@@ -118,6 +118,30 @@ public class FileGroupTests
     }
 
     [Fact]
+    public void MultilineResult_ContextTrim_AccountsForSpanEndLine()
+    {
+        var group = new FileGroup(@"D:\ml.txt");
+        group.IsExpanded = true;
+
+        // A cross-line match on lines 2..4 (after-context numbered from the END line 4),
+        // followed by a later single-line match on line 8.
+        var multi = new SearchResult(
+            FilePath: @"D:\ml.txt", LineNumber: 2, MatchLine: "START",
+            MatchStartColumn: 0, MatchLength: 5,
+            ContextBefore: Array.Empty<string>(), ContextAfter: new[] { "l5", "l6" })
+        { MatchEndLineNumber = 4, MatchEndColumn = 3 };
+        group.Add(multi);
+        group.Add(MakeResult(@"D:\ml.txt", 8));
+
+        var first = group.VisibleResults[0];
+        Assert.Equal(2, first.LineNumber);
+        Assert.Equal(4, first.MatchEndLineNumber);
+        // Trailing context is numbered from the END line (4): lines 5 and 6 — not from line 2,
+        // and not repeating any line owned by the next (line-8) match.
+        Assert.Equal(new[] { 5, 6 }, first.NumberedAfter.Select(c => c.LineNum).ToArray());
+    }
+
+    [Fact]
     public void VisibleResults_PagesAtPageSize()
     {
         var group = new FileGroup(@"D:\file.txt");

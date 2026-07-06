@@ -131,15 +131,19 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             // The previous row's trailing context must stop before this match's line.
             int prevCeiling = item.LineNumber;
             _trimPrevResult.SetContextTrim(_trimPrevFloor, prevCeiling);
-            int prevAfterMax = Math.Min(_trimPrevResult.LineNumber + _trimPrevResult.ContextAfter.Count, prevCeiling - 1);
-            _lastVisibleLine = Math.Max(_lastVisibleLine, Math.Max(_trimPrevResult.LineNumber, prevAfterMax));
+            // A cross-line (multiline) match occupies lines Start..End; its after-context is numbered
+            // from the END line, so the last visible line accounts for the span end (single-line
+            // results have MatchEndLineNumber null, so this reduces to LineNumber).
+            int prevEndLine = _trimPrevResult.MatchEndLineNumber ?? _trimPrevResult.LineNumber;
+            int prevAfterMax = Math.Min(prevEndLine + _trimPrevResult.ContextAfter.Count, prevCeiling - 1);
+            _lastVisibleLine = Math.Max(_lastVisibleLine, Math.Max(prevEndLine, prevAfterMax));
         }
 
         int floor = _lastVisibleLine;
         // Ceiling is finalized to the next match's line when the following row registers; until then
         // the (currently last) row shows its full trailing context.
         item.SetContextTrim(floor, int.MaxValue);
-        _lastVisibleLine = Math.Max(_lastVisibleLine, item.LineNumber);
+        _lastVisibleLine = Math.Max(_lastVisibleLine, item.MatchEndLineNumber ?? item.LineNumber);
         _trimPrevResult = item;
         _trimPrevFloor = floor;
     }

@@ -184,6 +184,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         CaseSensitive = _settings.CaseSensitive;
         UseRegex = _settings.UseRegex;
         ExactMatch = _settings.ExactMatch;
+        Multiline = _settings.MultilineSearchDefault;
         ContextLines = _settings.ContextLines;
         PreviewContextLines = _settings.PreviewContextLines;
         ObeyGitignore = _settings.ObeyGitignore;
@@ -450,6 +451,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty] public partial bool UseRegex { get; set; }
     [ObservableProperty] public partial bool ExactMatch { get; set; } = true;
 
+    /// <summary>When true, the query regex runs over the whole file so a single match can span line
+    /// breaks (ripgrep <c>-U</c>). Strictly opt-in; initialized from <see cref="SettingsService"/>.</summary>
+    [ObservableProperty] public partial bool Multiline { get; set; }
+
+    /// <summary>When true and <see cref="Multiline"/> is on, <c>.</c> also matches newlines (dot-all).</summary>
+    [ObservableProperty] public partial bool MultilineDotAll { get; set; }
+
     /// <summary>The pattern + flags the MOST RECENT search actually ran with, captured at search
     /// start. For a semantic search these are the model's RESOLVED literal pattern and flags — not
     /// the natural-language box text (which stays in <see cref="Query"/> for display) nor the user
@@ -459,6 +467,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     public bool LastSearchCaseSensitive { get; private set; }
     public bool LastSearchUseRegex { get; private set; }
     public bool LastSearchExactMatch { get; private set; } = true;
+    public bool LastSearchMultiline { get; private set; }
+    public bool LastSearchMultilineDotAll { get; private set; }
 
     public Microsoft.UI.Xaml.Visibility HasQueryText =>
         string.IsNullOrEmpty(Query) ? Microsoft.UI.Xaml.Visibility.Collapsed : Microsoft.UI.Xaml.Visibility.Visible;
@@ -2833,6 +2843,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 CaseSensitive = CaseSensitive,
                 UseRegex = UseRegex,
                 ExactMatch = ExactMatch,
+                Multiline = Multiline,
+                MultilineDotAll = MultilineDotAll,
                 ContextLines = ContextLines,
                 SearchMode = (SearchMode)SearchModeIndex,
                 IncludeGlobs = SplitFilterPatterns(IncludeGlobs, IncludeFilterMode),
@@ -2893,6 +2905,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             LastSearchCaseSensitive = CaseSensitive;
             LastSearchUseRegex = UseRegex;
             LastSearchExactMatch = ExactMatch;
+            LastSearchMultiline = Multiline;
+            LastSearchMultilineDotAll = MultilineDotAll;
 
             // A semantic plan's resolved settings stay applied to this view-model so they are VISIBLE in
             // Advanced Options (the user wanted to see what the AI search applied). They are NOT written
@@ -3187,6 +3201,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             LastSearchCaseSensitive = CaseSensitive;
             LastSearchUseRegex = false;
             LastSearchExactMatch = false;
+            LastSearchMultiline = false;
+            LastSearchMultilineDotAll = false;
 
             var result = new SearchResult(
                 FilePath: filePath,
@@ -4334,6 +4350,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.CaseSensitive = d is null ? CaseSensitive : d.CaseSensitive;
         _settings.UseRegex = d is null ? UseRegex : d.UseRegex;
         _settings.ExactMatch = d is null ? ExactMatch : d.ExactMatch;
+        _settings.MultilineSearchDefault = Multiline;
         _settings.ContextLines = ContextLines;
         _settings.PreviewContextLines = PreviewContextLines;
         _settings.ObeyGitignore = d is null ? ObeyGitignore : d.ObeyGitignore;

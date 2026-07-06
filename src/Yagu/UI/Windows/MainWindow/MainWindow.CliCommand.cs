@@ -119,6 +119,10 @@ public sealed partial class MainWindow
             parts.Add(ViewModel.CaseSensitive ? "--case-sensitive" : "--ignore-case");
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.ExactMatch == setting.ExactMatch))
             parts.Add(ViewModel.ExactMatch ? "--exact-match" : "--no-exact-match");
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.Multiline == setting.MultilineSearchDefault))
+            parts.Add(ViewModel.Multiline ? "--multiline" : "--no-multiline");
+        if (ViewModel.Multiline && ViewModel.MultilineDotAll)
+            parts.Add("--multiline-dotall");
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => Math.Max(0, ViewModel.ContextLines) == Math.Max(0, setting.ContextLines)))
             AddValue(parts, "--context", Math.Max(0, ViewModel.ContextLines).ToString(CultureInfo.InvariantCulture), quote: false);
 
