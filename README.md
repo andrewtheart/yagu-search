@@ -259,7 +259,7 @@ For contributors building, testing, or packaging Yagu from this repository:
 .\install-dev-prerequisites.ps1 -WhatIf      # dry run: report what would be installed
 ```
 
-It sets up the command-line toolchain only; to open `Yagu.sln` in the IDE, install Visual Studio 2026 (18.x) separately (see below). The individual requirements are listed here for reference:
+It sets up the command-line toolchain, which is all you need to build, test, and debug Yagu from **VS Code** (or any editor) using the dotnet CLI. A full IDE is optional: to open `Yagu.sln` in the Visual Studio IDE instead, install Visual Studio 2026 (18.x) separately (see below). The individual requirements are listed here for reference:
 
 - Windows 10 version 1809 / build 17763 or newer.
 - .NET 10 SDK. The repo pins SDK `10.0.107` with `rollForward: latestFeature` in [global.json](global.json).
@@ -267,7 +267,7 @@ It sets up the command-line toolchain only; to open `Yagu.sln` in the IDE, insta
   - The **Desktop development with C++** workload. Native AOT publishing invokes the MSVC compiler and linker, so this is required for normal builds, not just for the installer. Installing this workload also pulls in the Windows SDK.
   - The Windows SDK and WinUI / Windows App SDK components, because the main app is an unpackaged WinUI 3 application.
   - The test project avoids WinUI dependencies and can run on a normal Windows .NET SDK installation.
-  - **To open and develop `Yagu.sln` in the Visual Studio IDE, you must use Visual Studio 2026 (18.x) — not Visual Studio 2022.** .NET 10 projects do not load in the Visual Studio 2022 (17.x) IDE, which reports `The SDK 'Microsoft.NET.Sdk' specified could not be found` for every project. The Visual Studio 2022 Build Tools / MSVC C++ toolchain listed above is still fine for command-line `dotnet build`, publishing, and the Native AOT link step; the IDE version only matters when you open the solution in Visual Studio itself.
+  - **You do not need a full IDE — VS Code (or any editor) plus the .NET CLI is enough to build, test, and debug Yagu.** If you do prefer an IDE and want to open and develop `Yagu.sln` in Visual Studio, you must use Visual Studio 2026 (18.x) — not Visual Studio 2022. .NET 10 projects do not load in the Visual Studio 2022 (17.x) IDE, which reports `The SDK 'Microsoft.NET.Sdk' specified could not be found` for every project. The Visual Studio 2022 Build Tools / MSVC C++ toolchain listed above is still fine for command-line `dotnet build`, publishing, and the Native AOT link step; the IDE version only matters when you open the solution in Visual Studio itself.
 - C++ build tools for the target CPU architecture you build or publish. The host-architecture tools come with the C++ workload, but cross-architecture targets need their own components:
   - **arm64:** the **MSVC v143 - VS 2022 C++ ARM64/ARM64EC build tools (Latest)** individual component (Visual Studio Installer → *Individual components*, under the Desktop development with C++ workload). This is required to compile and link both the Native AOT app and the Rust `yagu_core.dll` for `win-arm64`; building the arm64 target or installer without it fails at the link step.
   - **x86:** the 32-bit C++ build tools, which the Desktop development with C++ workload includes by default.
