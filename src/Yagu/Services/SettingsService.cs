@@ -140,6 +140,14 @@ public sealed class AppSettings
     [JsonIgnore] public bool CaseSensitive { get; set; }
     [JsonIgnore] public bool UseRegex { get; set; }
     [JsonIgnore] public bool ExactMatch { get; set; } = true;
+    /// <summary>Persisted default state of the search-box "Match across lines (multiline)" toggle.
+    /// Shipped default false so multiline stays strictly opt-in; a power user can flip it on in
+    /// Settings and the search-box toggle then starts lit each launch.</summary>
+    public bool MultilineSearchDefault { get; set; }
+    /// <summary>Persisted native multiline engine (Phase 2): 0 = hand-rolled regex::bytes (default),
+    /// 1 = grep-searcher. Both produce identical results — a pure performance knob. Global (not
+    /// per-search); also settable via the CLI <c>--multiline-engine</c> flag.</summary>
+    public int MultilineEngine { get; set; }
     [JsonIgnore] public bool ObeyGitignore { get; set; }
     public bool GitignoreTakesPrecedence { get; set; } = true;
     // User's saved preference for .gitignore vs Include-filter precedence on conflict.
@@ -535,6 +543,13 @@ public sealed class AppSettings
     /// natural-language Traditional query to AI (Semantic) search. When set, that suggestion modal is
     /// never shown again, regardless of whether the user accepted or declined the switch that time.</summary>
     public bool SemanticSuggestionDismissed { get; set; }
+
+    /// <summary>True once the user ticked "Don't warn me again" on the prompt that appears when a
+    /// Traditional query contains a literal "\n" escape while Multiline search is off, asking whether to
+    /// switch to Multiline (and therefore Regex). When set, that prompt is never shown again, regardless
+    /// of the choice made that time. Resettable from Settings → Developer Options → Reminders and
+    /// Warnings.</summary>
+    public bool MultilineNewlineSuggestionDismissed { get; set; }
 
     /// <summary>Catalog variant ids (or aliases, as a fallback when no variant id is known) for which
     /// the user ticked "Don't show this warning again for this model" on the slow-AI-interpretation

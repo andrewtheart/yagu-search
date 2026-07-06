@@ -39,6 +39,16 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     private int _evictedStubCount;
 
     /// <summary>
+    /// Sparse span sidecar for cross-line (multiline, Phase 1b) evicted stubs, keyed by stub
+    /// add-order index (which equals decode order). Null unless a multiline stub is added, so the
+    /// overwhelmingly common single-line eviction path keeps its exact varint byte layout with
+    /// zero size regression. Populated from a multiline <see cref="SearchResult"/> at stub time
+    /// and re-applied when the stub is materialized (<see cref="MaterializeEvictedStubs"/>) or
+    /// snapshotted (<see cref="AppendPreviewSnapshotFromEvictedStubs"/>).
+    /// </summary>
+    private Dictionary<int, (int EndLine, int EndColumn)>? _evictedStubSpans;
+
+    /// <summary>
     /// Optional per-file hard cap on stored matches. Default <see cref="int.MaxValue"/>
     /// (effectively unlimited). When set to a finite value, matches beyond the cap are
     /// dropped and counted in <see cref="HiddenMatchCount"/>. Bound from
@@ -131,15 +141,19 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             // The previous row's trailing context must stop before this match's line.
             int prevCeiling = item.LineNumber;
             _trimPrevResult.SetContextTrim(_trimPrevFloor, prevCeiling);
-            int prevAfterMax = Math.Min(_trimPrevResult.LineNumber + _trimPrevResult.ContextAfter.Count, prevCeiling - 1);
-            _lastVisibleLine = Math.Max(_lastVisibleLine, Math.Max(_trimPrevResult.LineNumber, prevAfterMax));
+            // A cross-line (multiline) match occupies lines Start..End; its after-context is numbered
+            // from the END line, so the last visible line accounts for the span end (single-line
+            // results have MatchEndLineNumber null, so this reduces to LineNumber).
+            int prevEndLine = _trimPrevResult.MatchEndLineNumber ?? _trimPrevResult.LineNumber;
+            int prevAfterMax = Math.Min(prevEndLine + _trimPrevResult.ContextAfter.Count, prevCeiling - 1);
+            _lastVisibleLine = Math.Max(_lastVisibleLine, Math.Max(prevEndLine, prevAfterMax));
         }
 
         int floor = _lastVisibleLine;
         // Ceiling is finalized to the next match's line when the following row registers; until then
         // the (currently last) row shows its full trailing context.
         item.SetContextTrim(floor, int.MaxValue);
-        _lastVisibleLine = Math.Max(_lastVisibleLine, item.LineNumber);
+        _lastVisibleLine = Math.Max(_lastVisibleLine, item.MatchEndLineNumber ?? item.LineNumber);
         _trimPrevResult = item;
         _trimPrevFloor = floor;
     }
@@ -205,6 +219,11 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             // The SearchResult is recreated lazily via MaterializeEvictedStubs() on expand.
             if (item.IsEvicted)
             {
+                // Phase 1b: preserve a cross-line span through the compact stub. The sidecar is
+                // keyed by the stub's add-order index (== _evictedStubCount before AddEvictedStub
+                // increments it), so a single-line stub adds nothing to the sidecar or the stream.
+                if (item.MatchEndLineNumber is int stubEndLine)
+                    (_evictedStubSpans ??= [])[_evictedStubCount] = (stubEndLine, item.MatchEndColumn ?? 0);
                 AddEvictedStub(new EvictedStub(item.LineNumber, item.MatchStartColumn, item.MatchLength, item.SourceMatchStartColumn, item.DiskOffset));
                 _evictedOnlyCount++;
                 int totalStub = Items.Count + _evictedOnlyCount;
@@ -480,10 +499,12 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     {
         var pages = _evictedStubPages;
         var pageLengths = _evictedStubPageLengths;
+        var spans = _evictedStubSpans;
         int materialized = _evictedStubCount;
         if (pages is null || pageLengths is null || materialized == 0) return;
         _evictedStubPages = null;
         _evictedStubPageLengths = null;
+        _evictedStubSpans = null;
         _nextEvictedStubPageBytes = MinEvictedStubPageBytes;
         _evictedStubPageOffset = 0;
         _evictedStubCount = 0;
@@ -491,6 +512,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             list.EnsureCapacity(list.Count + materialized);
 
         int remaining = materialized;
+        int stubIndex = 0;
         for (int pageIndex = 0; pageIndex < pages.Count && remaining > 0; pageIndex++)
         {
             var page = pages[pageIndex].AsSpan(0, pageLengths[pageIndex]);
@@ -501,6 +523,12 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
                 var result = s.DiskOffset == SearchResult.SourceBackedOffset
                     ? SearchResult.CreateSourceBacked(FilePath, s.LineNumber, s.MatchStartColumn, s.MatchLength, s.SourceMatchStartColumn)
                     : SearchResult.CreatePreEvicted(FilePath, s.LineNumber, s.MatchStartColumn, s.MatchLength, s.DiskOffset, s.SourceMatchStartColumn);
+                if (spans is not null && spans.TryGetValue(stubIndex, out var span))
+                {
+                    result.MatchEndLineNumber = span.EndLine;
+                    result.MatchEndColumn = span.EndColumn;
+                }
+                stubIndex++;
                 ApplySelectionIntent(result);
                 Items.Add(result);
                 remaining--;
@@ -528,6 +556,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
         _visibleSkipped = 0;
         _evictedStubPages = null;
         _evictedStubPageLengths = null;
+        _evictedStubSpans = null;
         _nextEvictedStubPageBytes = MinEvictedStubPageBytes;
         _evictedStubPageOffset = 0;
         _evictedStubCount = 0;
@@ -911,10 +940,12 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
     {
         var pages = _evictedStubPages;
         var pageLengths = _evictedStubPageLengths;
+        var spans = _evictedStubSpans;
         if (pages is null || pageLengths is null || _evictedStubCount == 0)
             return;
 
         int remaining = _evictedStubCount;
+        int stubIndex = 0;
         for (int pageIndex = 0; pageIndex < pages.Count && remaining > 0 && results.Count < maxResults; pageIndex++)
         {
             var page = pages[pageIndex].AsSpan(0, pageLengths[pageIndex]);
@@ -922,6 +953,7 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
             while (remaining > 0 && offset < page.Length && results.Count < maxResults)
             {
                 var stub = ReadEvictedStub(page, ref offset);
+                int currentIndex = stubIndex++;
                 remaining--;
                 if (skipFileNameMatches && stub.LineNumber == 0)
                     continue;
@@ -940,6 +972,11 @@ public sealed class FileGroup : ObservableCollection<SearchResult>
                         stub.MatchLength,
                         stub.DiskOffset,
                         stub.SourceMatchStartColumn);
+                if (spans is not null && spans.TryGetValue(currentIndex, out var span))
+                {
+                    result.MatchEndLineNumber = span.EndLine;
+                    result.MatchEndColumn = span.EndColumn;
+                }
                 ApplySelectionIntent(result);
                 results.Add(result);
             }

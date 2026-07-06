@@ -119,6 +119,14 @@ public sealed partial class MainWindow
             parts.Add(ViewModel.CaseSensitive ? "--case-sensitive" : "--ignore-case");
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.ExactMatch == setting.ExactMatch))
             parts.Add(ViewModel.ExactMatch ? "--exact-match" : "--no-exact-match");
+        if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => ViewModel.Multiline == setting.MultilineSearchDefault))
+            parts.Add(ViewModel.Multiline ? "--multiline" : "--no-multiline");
+        if (ViewModel.Multiline && ViewModel.MultilineDotAll)
+            parts.Add("--multiline-dotall");
+        // Multiline engine is a global Setting (not a per-search toggle). Emit it only when
+        // multiline is on and the non-default (grep) engine is selected.
+        if (ViewModel.Multiline && settings.MultilineEngine == 1)
+            AddValue(parts, "--multiline-engine", "grep", quote: false);
         if (ShouldIncludeSavedSettingOption(includeSavedSettingOptions, settings, setting => Math.Max(0, ViewModel.ContextLines) == Math.Max(0, setting.ContextLines)))
             AddValue(parts, "--context", Math.Max(0, ViewModel.ContextLines).ToString(CultureInfo.InvariantCulture), quote: false);
 

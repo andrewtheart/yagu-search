@@ -51,6 +51,161 @@ public sealed class ReportExportServiceTests : IDisposable
         Assert.Contains("</details>", html);
     }
 
+    // ── Multiline (cross-line) span export ──────────────────────────
+
+    [Fact]
+    public async Task WriteJsonReportAsync_EmitsMultilineSpanFieldsAndOmitsForSingleLine()
+    {
+        var mlPath = Path.Combine(_root, "ml.txt");
+        var multi = new SearchResult(mlPath, 2, "foo", 0, 3, ["one"], ["four"])
+        {
+            SourceMatchStartColumn = 0,
+            MatchEndLineNumber = 3,
+            MatchEndColumn = 3,
+        };
+        var singlePath = Path.Combine(_root, "single.txt");
+        var single = new SearchResult(singlePath, 5, "bar", 0, 3, [], []);
+
+        using var writer = new StringWriter();
+        await ReportExportService.WriteJsonReportAsync(
+            writer,
+            "foo\\nbar",
+            [new HtmlReportExportService.FileMatchGroup(mlPath, "ml.txt", [multi]),
+             new HtmlReportExportService.FileMatchGroup(singlePath, "single.txt", [single])],
+            new HtmlReportExportService.SearchStats(DateTime.UtcNow, TimeSpan.Zero, 2, 0),
+            new ReportExportOptions { Format = ReportFormat.Json, IncludeContextLines = true, ContextLineCount = 1, IncludeMatchMarkers = false });
+
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var results = doc.RootElement.GetProperty("results").EnumerateArray().ToArray();
+        Assert.Equal(2, results.Length);
+
+        var mlEl = results.First(r => r.GetProperty("fileName").GetString() == "ml.txt");
+        Assert.Equal(2, mlEl.GetProperty("lineNumber").GetInt32());
+        Assert.Equal(3, mlEl.GetProperty("matchEndLine").GetInt32());
+        Assert.Equal(3, mlEl.GetProperty("matchEndColumn").GetInt32());
+
+        var singleEl = results.First(r => r.GetProperty("fileName").GetString() == "single.txt");
+        Assert.False(singleEl.TryGetProperty("matchEndLine", out _));   // omitted for single-line
+        Assert.False(singleEl.TryGetProperty("matchEndColumn", out _));
+    }
+
+    [Fact]
+    public async Task WriteMultiFileReportAsync_EmitsMultilineSpanMarkerAndAfterContextFromEndLine()
+    {
+        var filePath = Path.Combine(_root, "mlhtml.txt");
+        var multi = new SearchResult(filePath, 2, "START", 0, 5, ["before"], ["afterA", "afterB"])
+        {
+            SourceMatchStartColumn = 0,
+            MatchEndLineNumber = 4,
+            MatchEndColumn = 3,
+        };
+        var group = new HtmlReportExportService.FileMatchGroup(filePath, "mlhtml.txt", [multi]);
+
+        using var writer = new StringWriter();
+        await HtmlReportExportService.WriteMultiFileReportAsync(
+            writer,
+            "START",
+            [group],
+            new HtmlReportExportService.SearchStats(DateTime.UtcNow, TimeSpan.FromSeconds(1), 1, 0));
+        var html = writer.ToString();
+
+        // Cross-line span marker row (endLine 4 - startLine 2 = 2 extra lines).
+        Assert.Contains("\u2026 (+2 lines)", html);
+        // After-context is numbered from the END line (4), so the first after row is line 5.
+        Assert.Contains("<td class=\"ln\">5</td>", html);
+    }
+
+    [Fact]
+    public async Task WriteJsonReportAsync_MultilineAfterContext_NumbersFromEndLineViaSource()
+    {
+        var filePath = Path.Combine(_root, "mlsrc.txt");
+        await File.WriteAllTextAsync(filePath, "l1\nl2\nl3\nl4\nl5\nl6");
+        // Match spans lines 2..3 with no captured after-context, so ResolveContextAfter loads the
+        // source file and reads from the END line (3): lines l4, l5.
+        var multi = new SearchResult(filePath, 2, "l2", 0, 2, [], [])
+        {
+            SourceMatchStartColumn = 0,
+            MatchEndLineNumber = 3,
+            MatchEndColumn = 2,
+        };
+
+        using var writer = new StringWriter();
+        await ReportExportService.WriteJsonReportAsync(
+            writer,
+            "l2[\\s\\S]*l3",
+            [new HtmlReportExportService.FileMatchGroup(filePath, "mlsrc.txt", [multi])],
+            new HtmlReportExportService.SearchStats(DateTime.UtcNow, TimeSpan.Zero, 1, 0),
+            new ReportExportOptions { Format = ReportFormat.Json, IncludeContextLines = true, ContextLineCount = 2, IncludeMatchMarkers = false });
+
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var result = doc.RootElement.GetProperty("results").EnumerateArray().Single();
+        var after = result.GetProperty("contextAfter").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Equal(new[] { "l4", "l5" }, after);
+    }
+
+    [Fact]
+    public async Task WriteCsvReportAsync_EmitsMultilineSpanColumns()
+    {
+        var mlPath = Path.Combine(_root, "ml.txt");
+        var multi = new SearchResult(mlPath, 2, "foo", 0, 3, [], [])
+        {
+            SourceMatchStartColumn = 0,
+            MatchEndLineNumber = 3,
+            MatchEndColumn = 3,
+        };
+        var singlePath = Path.Combine(_root, "single.txt");
+        var single = new SearchResult(singlePath, 5, "bar", 0, 3, [], []);
+
+        using var writer = new StringWriter();
+        await ReportExportService.WriteCsvReportAsync(
+            writer,
+            "foo\\nbar",
+            [new HtmlReportExportService.FileMatchGroup(mlPath, "ml.txt", [multi]),
+             new HtmlReportExportService.FileMatchGroup(singlePath, "single.txt", [single])],
+            new ReportExportOptions { Format = ReportFormat.Csv, IncludeContextLines = false, IncludeMatchMarkers = false });
+
+        var lines = writer.ToString().Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Length > 0).ToArray();
+        var headers = lines[0].Split(',');
+        int endLineIdx = Array.IndexOf(headers, "MatchEndLine");
+        int endColIdx = Array.IndexOf(headers, "MatchEndColumn");
+        Assert.True(endLineIdx >= 0 && endColIdx >= 0, "CSV header must include MatchEndLine/MatchEndColumn columns.");
+
+        var mlRow = lines.First(l => l.Contains("ml.txt")).Split(',');
+        Assert.Equal("3", mlRow[endLineIdx]);
+        Assert.Equal("3", mlRow[endColIdx]);
+
+        var singleRow = lines.First(l => l.Contains("single.txt")).Split(',');
+        Assert.Equal("", singleRow[endLineIdx]);   // empty for single-line
+        Assert.Equal("", singleRow[endColIdx]);
+    }
+
+    [Fact]
+    public async Task WriteMultiFileReportAsync_EmitsSpanMarkerAndNumbersAfterContextFromEndLine()
+    {
+        var mlPath = Path.Combine(_root, "ml.txt");
+        var multi = new SearchResult(mlPath, 2, "foo", 0, 3, ["one"], ["four"])
+        {
+            SourceMatchStartColumn = 0,
+            MatchEndLineNumber = 3,
+            MatchEndColumn = 3,
+        };
+        var group = new HtmlReportExportService.FileMatchGroup(mlPath, "ml.txt", [multi]);
+
+        using var writer = new StringWriter();
+        await HtmlReportExportService.WriteMultiFileReportAsync(
+            writer,
+            "foo\\nbar",
+            [group],
+            new HtmlReportExportService.SearchStats(DateTime.UtcNow, TimeSpan.FromSeconds(1), 1, 0));
+
+        var html = writer.ToString();
+        Assert.Contains("(+1 line)", html);   // cross-line span marker row
+        // before-context "one" numbered at line 1 (LineNumber 2 - 1 before-line)
+        Assert.Contains("<tr class=\"ctx\"><td class=\"ln\">1</td><td>one</td></tr>", html);
+        // after-context "four" numbered from the END line (3) + 1 = line 4
+        Assert.Contains("<tr class=\"ctx\"><td class=\"ln\">4</td><td>four</td></tr>", html);
+    }
+
     [Fact]
     public async Task ReportWriters_OmitGeneratedPreviewPaginationNotices()
     {

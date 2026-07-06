@@ -781,9 +781,13 @@ public sealed partial class MainWindow
 
                 bool isMatchLine = isFileNameOnlyPreview || lineNum == r.LineNumber;
                 _sectionMatchNavs.TryGetValue(section, out var sn);
-                AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, isFileNameOnlyPreview ? null : rx, truncate: !isFileNameOnlyPreview && truncatePreviewLines,
+                // Full-span (Phase 3) multiline: color each spanned line via its forced column range,
+                // rendered untruncated so the columns map 1:1 (single-line results yield null → unchanged).
+                var forcedSpan = isFileNameOnlyPreview ? null : ComputeMultilineLineSpan(r, lineNum, line?.Length ?? 0);
+                AddPreviewLineParagraphs(section, line, lineNum, isMatchLine, r, isFileNameOnlyPreview ? null : rx, truncate: !isFileNameOnlyPreview && truncatePreviewLines && forcedSpan is null,
                     isMatchLine && !isFileNameOnlyPreview ? _matchParagraphs : null, sn, out int addedParagraphs,
-                    maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks));
+                    maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks),
+                    forcedSpan: forcedSpan);
                 parasBuilt += addedParagraphs;
             }
 
@@ -864,9 +868,15 @@ public sealed partial class MainWindow
             if (distinctMatchLines.Length == 1)
             {
                 int matchLineNumber = distinctMatchLines[0];
-                int start = Math.Max(0, matchLineNumber - 1 - previewLines);
-                int end = Math.Min(allLines.Length - 1, matchLineNumber - 1 + previewLines);
                 var matchResult = results.First(result => result.LineNumber == matchLineNumber);
+                // Full-span (Phase 3) multiline: render the whole cross-line span N..M (not just the
+                // window around the start line N) plus context on both ends, and color each spanned
+                // line via its own forced column range — a per-line regex can never match a
+                // cross-line pattern, so the shared rx-based highlighting leaves the span uncolored.
+                bool multilineMatch = matchResult.IsMultilineMatch;
+                int spanEndLine = matchResult.MatchEndLineNumber ?? matchLineNumber;
+                int start = Math.Max(0, matchLineNumber - 1 - previewLines);
+                int end = Math.Min(allLines.Length - 1, spanEndLine - 1 + previewLines);
                 _sectionMatchNavs.TryGetValue(section, out var singleLineSectionNav);
 
                 for (int i = start; i <= end; i++)
@@ -876,8 +886,9 @@ public sealed partial class MainWindow
 
                     int lineNum = i + 1;
                     bool isMatchLine = lineNum == matchLineNumber;
+                    bool inSpan = multilineMatch && lineNum >= matchLineNumber && lineNum <= spanEndLine;
                     int addedParagraphs;
-                    if (isMatchLine)
+                    if (isMatchLine && !multilineMatch)
                     {
                         AddPreviewLineParagraphsAroundResult(
                             section,
@@ -892,6 +903,25 @@ public sealed partial class MainWindow
                             truncate: truncatePreviewLines,
                             targetOnlyMatchEntry: true,
                             maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks));
+                    }
+                    else if (inSpan)
+                    {
+                        // Spanned line: render untruncated with forced-span coloring. The start line
+                        // also registers the navigable match entry (anchored at N); body/end lines are
+                        // colored but not separately navigable.
+                        AddPreviewLineParagraphs(
+                            section,
+                            allLines[i],
+                            lineNum,
+                            isMatchLine,
+                            matchResult,
+                            rx,
+                            truncate: false,
+                            isMatchLine ? _matchParagraphs : null,
+                            singleLineSectionNav,
+                            out addedParagraphs,
+                            maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks),
+                            forcedSpan: ComputeMultilineLineSpan(matchResult, lineNum, allLines[i].Length));
                     }
                     else
                     {
@@ -925,11 +955,38 @@ public sealed partial class MainWindow
             else
             {
 
+            // Full-span (Phase 3) multiline: collect cross-line spans so body/end lines (which are not
+            // any result's start line, so matchByLine misses them) still get colored, and so ranges
+            // extend past the start line to the span end.
+            var multilineSpans = cappedResults
+                .Where(result => result.IsMultilineMatch && result.MatchEndLineNumber is int)
+                .Select(result => (result, endLine: result.MatchEndLineNumber!.Value))
+                .ToList();
+            (int start, int end)? SpanForLine(int lineNumber, int lineLength)
+            {
+                foreach (var (result, endLine) in multilineSpans)
+                {
+                    if (lineNumber >= result.LineNumber && lineNumber <= endLine)
+                    {
+                        var span = ComputeMultilineLineSpan(result, lineNumber, lineLength);
+                        if (span is not null)
+                            return span;
+                    }
+                }
+                return null;
+            }
+
             var ranges = new List<(int start, int end)>();
             foreach (var lineNum in cappedResults.Select(r => r.LineNumber).Distinct().OrderBy(n => n))
             {
                 int s = Math.Max(0, lineNum - 1 - previewLines);
-                int e = Math.Min(allLines.Length - 1, lineNum - 1 + previewLines);
+                // Extend to the span end for a multiline match starting on this line.
+                int spanEnd = cappedResults
+                    .Where(r => r.LineNumber == lineNum)
+                    .Select(r => r.MatchEndLineNumber ?? lineNum)
+                    .DefaultIfEmpty(lineNum)
+                    .Max();
+                int e = Math.Min(allLines.Length - 1, spanEnd - 1 + previewLines);
                 ranges.Add((s, e));
             }
             var merged = new List<(int start, int end)>();
@@ -962,8 +1019,10 @@ public sealed partial class MainWindow
                     bool isMatchLine = matchByLine.TryGetValue(lineNum, out var matchResult);
                     matchResult ??= cappedResults[0];
                     _sectionMatchNavs.TryGetValue(section, out var sn);
-                    AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatchLine, matchResult, rx, truncate: truncatePreviewLines, _matchParagraphs, sn, out int addedParagraphs,
-                        maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks));
+                    var forcedSpan = SpanForLine(lineNum, allLines[i].Length);
+                    AddPreviewLineParagraphs(section, allLines[i], lineNum, isMatchLine, matchResult, rx, truncate: truncatePreviewLines && forcedSpan is null, _matchParagraphs, sn, out int addedParagraphs,
+                        maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks),
+                        forcedSpan: forcedSpan);
                     lastRenderedLine1 = lineNum;
                     parasBuilt += addedParagraphs;
                     parasSinceYield += addedParagraphs;
@@ -1499,8 +1558,13 @@ public sealed partial class MainWindow
             }
             else
             {
+                // For a cross-line (multiline) match, extend the window to cover the whole span
+                // N..M plus context on both ends so full-span (Phase 3) highlighting has every
+                // spanned line available. Single-line results (MatchEndLineNumber null) reduce to
+                // matchLineNum, i.e. the previous behavior exactly.
+                int spanEndLine = r.MatchEndLineNumber ?? matchLineNum;
                 startLine = Math.Max(0, matchIdx - previewLines);
-                endLine = Math.Min(allLines.Length - 1, matchIdx + previewLines);
+                endLine = Math.Min(allLines.Length - 1, (spanEndLine - 1) + previewLines);
             }
             for (int i = startLine; i <= endLine; i++)
             {
@@ -1589,7 +1653,10 @@ public sealed partial class MainWindow
         foreach (var (line, lineNum) in lines)
         {
             bool isMatchLine = isFileNameOnlyPreview || lineNum == r.LineNumber;
-            AddPreviewLineParagraphs(PreviewBlock, line, lineNum, isMatchLine, r, rx, truncate: truncatePreviewLines, null, null, out int addedParagraphs);
+            // Full-span (Phase 3) multiline: color each spanned line via its forced column range and
+            // render it untruncated so the columns map 1:1 (single-line results yield null → unchanged).
+            var forcedSpan = ComputeMultilineLineSpan(r, lineNum, line?.Length ?? 0);
+            AddPreviewLineParagraphs(PreviewBlock, line, lineNum, isMatchLine, r, rx, truncate: truncatePreviewLines && forcedSpan is null, null, null, out int addedParagraphs, forcedSpan: forcedSpan);
             lineCount += addedParagraphs;
         }
         singleSw.Stop();
@@ -2876,16 +2943,16 @@ public sealed partial class MainWindow
         }
     }
 
-    private static Regex? BuildHighlightRegex(string query, bool caseSensitive, bool useRegex, bool exactMatch = true)
+    private static Regex? BuildHighlightRegex(string query, bool caseSensitive, bool useRegex, bool exactMatch = true, bool multiline = false, bool multilineDotAll = false)
     {
         if (string.IsNullOrEmpty(query)) return null;
         try
         {
-            var options = RegexOptions.Compiled | RegexOptions.CultureInvariant;
-            if (!caseSensitive) options |= RegexOptions.IgnoreCase;
             string? pattern = useRegex ? query : SearchQueryParser.BuildLiteralRegexPattern(query, exactMatch);
             if (string.IsNullOrEmpty(pattern)) return null;
-            return new Regex(pattern, options);
+            // Route through the shared factory so search, replace, and highlight can never disagree
+            // on flags (multiline anchors, dot-all, and the multiline-only match timeout).
+            return SearchRegexFactory.Build(pattern, caseSensitive, multiline, multilineDotAll);
         }
         catch (Exception ex)
         {
@@ -2904,8 +2971,8 @@ public sealed partial class MainWindow
     /// </summary>
     private Regex? BuildSearchHighlightRegex()
         => string.IsNullOrEmpty(ViewModel.LastSearchPattern)
-            ? BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch)
-            : BuildHighlightRegex(ViewModel.LastSearchPattern, ViewModel.LastSearchCaseSensitive, ViewModel.LastSearchUseRegex, ViewModel.LastSearchExactMatch);
+            ? BuildHighlightRegex(ViewModel.Query, ViewModel.CaseSensitive, ViewModel.UseRegex, ViewModel.ExactMatch, ViewModel.Multiline, ViewModel.MultilineDotAll)
+            : BuildHighlightRegex(ViewModel.LastSearchPattern, ViewModel.LastSearchCaseSensitive, ViewModel.LastSearchUseRegex, ViewModel.LastSearchExactMatch, ViewModel.LastSearchMultiline, ViewModel.LastSearchMultilineDotAll);
 
     private SolidColorBrush s_matchGutterBrush = new(Windows.UI.Color.FromArgb(255, 156, 220, 254));
 
@@ -3152,6 +3219,24 @@ public sealed partial class MainWindow
             yield return PreviewBlock;
     }
 
+    /// <summary>
+    /// Computes the half-open source-column range to highlight on <paramref name="lineNum"/> when it
+    /// falls inside <paramref name="result"/>'s cross-line (multiline) span, or null when the result
+    /// is single-line, the line is outside the span, or the range is empty. Drives full-span
+    /// (Phase 3) multiline highlighting where a per-line regex can never match a cross-line pattern.
+    /// </summary>
+    private static (int start, int end)? ComputeMultilineLineSpan(SearchResult result, int lineNum, int lineLength)
+    {
+        if (!result.IsMultilineMatch || result.MatchEndLineNumber is not int endLine)
+            return null;
+        int startCol = result.SourceMatchStartColumn >= 0 ? result.SourceMatchStartColumn : result.MatchStartColumn;
+        int endCol = result.MatchEndColumn ?? lineLength;
+        return MultilinePreviewSpan.TryGetLineSpan(
+            lineNum, lineLength, result.LineNumber, startCol, endLine, endCol, out int s, out int e)
+            ? (s, e)
+            : null;
+    }
+
     private Paragraph AddPreviewLineParagraphs(
         RichTextBlock section,
         string? line,
@@ -3163,13 +3248,23 @@ public sealed partial class MainWindow
         List<(RichTextBlock block, Paragraph para, int matchInPara)>? matchParagraphs,
         SectionMatchNav? sectionNav,
         out int paragraphsAdded,
-        int? maxParagraphs = null)
+        int? maxParagraphs = null,
+        (int start, int end)? forcedSpan = null)
     {
         line ??= string.Empty;
         var window = truncate
             ? (isMatchLine ? TruncatePreviewLineAroundResult(line, result, rx) : TruncatePreviewLineWindow(line, rx))
             : CreatePreviewLineWindow(line, 0, line.Length);
         var expansionState = CreatePreviewTruncatedLineState(window, line, lineNum, isMatchLine, result, rx);
+
+        // A forced multiline span is expressed in full-line columns and only maps cleanly when the
+        // whole line renders as ONE layout segment (no 4096-char splitting shifting the offsets) and
+        // untruncated (so display col == source col). Otherwise skip forced coloring — the line still
+        // renders, just without the cross-line highlight, rather than mis-coloring a wrong column.
+        bool singleSegment = window.Text.Length <= GetEffectiveSegmentSize();
+        (int start, int end)? effectiveForcedSpan = (singleSegment && window.SourceStart == 0 && window.SourceEnd >= line.Length)
+            ? forcedSpan
+            : null;
 
         _sectionGutterBlocks.TryGetValue(section, out var gutterBlock);
 
@@ -3183,7 +3278,7 @@ public sealed partial class MainWindow
                 break;
 
             bool isContinuation = firstParagraph is not null;
-            var para = MakePreviewParagraph(segment, lineNum, isMatchLine, result, rx, truncate: false, continuationGutter: isContinuation, gutterBlock: gutterBlock, truncationState: isContinuation ? null : expansionState);
+            var para = MakePreviewParagraph(segment, lineNum, isMatchLine, result, rx, truncate: false, continuationGutter: isContinuation, gutterBlock: gutterBlock, truncationState: isContinuation ? null : expansionState, forcedSpan: isContinuation ? null : effectiveForcedSpan);
             section.Blocks.Add(para);
             firstParagraph ??= para;
             paragraphsAdded++;
@@ -3986,7 +4081,7 @@ public sealed partial class MainWindow
         return new string(' ', leftSpaces) + token + new string(' ', rightSpaces);
     }
 
-    private Paragraph MakePreviewParagraph(string line, int lineNum, bool isMatchLine, SearchResult r, Regex? rx, bool truncate = true, bool continuationGutter = false, RichTextBlock? gutterBlock = null, PreviewTruncatedLineState? truncationState = null, HashSet<int>? matchOrdinalsToColor = null)
+    private Paragraph MakePreviewParagraph(string line, int lineNum, bool isMatchLine, SearchResult r, Regex? rx, bool truncate = true, bool continuationGutter = false, RichTextBlock? gutterBlock = null, PreviewTruncatedLineState? truncationState = null, HashSet<int>? matchOrdinalsToColor = null, (int start, int end)? forcedSpan = null)
     {
         line ??= string.Empty;
         if (truncate)
@@ -4034,12 +4129,12 @@ public sealed partial class MainWindow
         if (truncationState is not null)
             truncationState.ContentInlineStart = para.Inlines.Count;
 
-        AddPreviewTextRuns(para, line, isMatchLine, rx, truncationState, matchOrdinalsToColor);
+        AddPreviewTextRuns(para, line, isMatchLine, rx, truncationState, matchOrdinalsToColor, forcedSpan);
 
         return para;
     }
 
-    private void AddPreviewTextRuns(Paragraph para, string line, bool isMatchLine, Regex? rx, PreviewTruncatedLineState? truncationState, HashSet<int>? matchOrdinalsToColor = null)
+    private void AddPreviewTextRuns(Paragraph para, string line, bool isMatchLine, Regex? rx, PreviewTruncatedLineState? truncationState, HashSet<int>? matchOrdinalsToColor = null, (int start, int end)? forcedSpan = null)
     {
         bool hasPrefixEllipsis = truncationState is not null
             && truncationState.SourceStart > 0
@@ -4054,15 +4149,54 @@ public sealed partial class MainWindow
         if (hasPrefixEllipsis)
             para.Inlines.Add(CreatePreviewShowMoreInline(para, truncationState!, PreviewShowMoreEdge.Prefix));
 
+        // A forced multiline span maps to full-line columns; only apply it when the rendered text is
+        // the untruncated line (no ellipsis trimming shifting the offsets). Multiline-span lines are
+        // rendered untruncated by the caller, so this holds in practice.
+        (int start, int end)? spanForThisText = (forcedSpan is { } fsp && !hasPrefixEllipsis && !hasSuffixEllipsis)
+            ? fsp
+            : null;
+
         if (end > start)
-            AddPreviewTextSpanRuns(para, line[start..end], isMatchLine, rx, matchOrdinalsToColor);
+            AddPreviewTextSpanRuns(para, line[start..end], isMatchLine, rx, matchOrdinalsToColor, spanForThisText);
 
         if (hasSuffixEllipsis)
             para.Inlines.Add(CreatePreviewShowMoreInline(para, truncationState!, PreviewShowMoreEdge.Suffix));
     }
 
-    private void AddPreviewTextSpanRuns(Paragraph para, string text, bool isMatchLine, Regex? rx, HashSet<int>? matchOrdinalsToColor = null)
+    private void AddPreviewTextSpanRuns(Paragraph para, string text, bool isMatchLine, Regex? rx, HashSet<int>? matchOrdinalsToColor = null, (int start, int end)? forcedSpan = null)
     {
+        // Full-span (Phase 3) multiline highlighting: a cross-line pattern never matches within a
+        // single rendered line, so rx.Matches(text) below finds nothing on the start/body/end lines
+        // of the span. When the caller has already computed the exact column range to highlight on
+        // THIS line (from the result's span metadata), color it directly instead of re-matching.
+        if (forcedSpan is (int forcedStart, int forcedEnd))
+        {
+            int fs = Math.Clamp(forcedStart, 0, text.Length);
+            int fe = Math.Clamp(forcedEnd, fs, text.Length);
+            if (fe > fs)
+            {
+                if (fs > 0)
+                {
+                    var pre = new Run { Text = text[..fs] };
+                    pre.Foreground = isMatchLine ? _matchLineBrush : s_contextTextBrush;
+                    para.Inlines.Add(pre);
+                }
+                var spanHit = new Run { Text = text[fs..fe] };
+                s_previewSearchMatchRuns.AddOrUpdate(spanHit, new object());
+                spanHit.FontWeight = Microsoft.UI.Text.FontWeights.Bold;
+                spanHit.Foreground = _matchTextBrush;
+                para.Inlines.Add(spanHit);
+                if (fe < text.Length)
+                {
+                    var post = new Run { Text = text[fe..] };
+                    post.Foreground = isMatchLine ? _matchLineBrush : s_contextTextBrush;
+                    para.Inlines.Add(post);
+                }
+                return;
+            }
+            // Empty forced span (clamped away) — fall through to the normal rendering below.
+        }
+
         // Keep match-colored text tied to actual search-result rows added from
         // the results list. Context lines may contain the query text, but they
         // should not look like selected/registered matches in the preview.

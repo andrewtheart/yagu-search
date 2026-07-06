@@ -190,6 +190,7 @@
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
                                         <ToggleButton Grid.Column="0" IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
                                                       AutomationProperties.AutomationId="MatchLineLocationButton"
@@ -208,6 +209,13 @@
                                                       FontWeight="SemiBold" />
                                         </ToggleButton>
                                         <RichTextBlock Grid.Column="1" TextTrimming="CharacterEllipsis" FontFamily="Consolas" FontSize="12" IsTextSelectionEnabled="False" Loaded="OnMatchLineLoaded" VerticalAlignment="Center" />
+                                        <!-- Phase 1 cross-line (multiline) span marker: "… (+N lines)". Empty (zero-width) for single-line matches. -->
+                                        <TextBlock Grid.Column="2"
+                                                   Text="{x:Bind MultilineSpanLabel, Mode=OneWay}"
+                                                   FontFamily="Consolas" FontSize="11" FontStyle="Italic"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                   VerticalAlignment="Center" Margin="6,0,2,0"
+                                                   ToolTipService.ToolTip="This match spans multiple lines" />
                                     </Grid>
                                     <ItemsControl ItemsSource="{x:Bind NumberedAfter, Mode=OneWay}">
                                         <ItemsControl.ItemTemplate>
@@ -449,15 +457,15 @@
                         <!-- Style the inner TextBox so long queries wrap and fill the tall box
                              instead of staying on a single top line. AcceptsReturn stays false so
                              Enter still submits the search. The right padding reserves room for the
-                             overlaid InlineSearchToggles (Case/Regex/Exact, ~88px + 36px margin) and
-                             the QueryClearButton (32px + 4px margin) so wrapped text never flows
-                             underneath those controls. -->
+                             overlaid InlineSearchToggles (Case/Regex/Multiline/Exact, ~116px + 36px
+                             margin) and the QueryClearButton (32px + 4px margin) so wrapped text never
+                             flows underneath those controls. -->
                         <AutoSuggestBox.TextBoxStyle>
                             <Style TargetType="TextBox" BasedOn="{StaticResource AutoSuggestBoxTextBoxStyle}">
                                 <Setter Property="TextWrapping" Value="Wrap" />
                                 <Setter Property="VerticalContentAlignment" Value="Top" />
                                 <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
-                                <Setter Property="Padding" Value="10,6,128,6" />
+                                <Setter Property="Padding" Value="10,6,158,6" />
                             </Style>
                         </AutoSuggestBox.TextBoxStyle>
                     </AutoSuggestBox>
@@ -477,15 +485,23 @@
                         </ToggleButton>
                         <ToggleButton x:Name="RegexToggle"
                                       IsChecked="{x:Bind ViewModel.UseRegex, Mode=TwoWay}"
-                                      ToolTipService.ToolTip="Use Regular Expression (Alt+R)"
+                                      ToolTipService.ToolTip="Use Regular Expression (Alt+R). This will be enabled if Multiline is enabled"
                                       Padding="4,2" MinWidth="0" MinHeight="0"
                                       Width="28" Height="24" FontSize="12"
                                       VerticalAlignment="Center">
                             <TextBlock Text=".*" FontSize="12" FontFamily="Consolas" />
                         </ToggleButton>
+                        <ToggleButton x:Name="MultilineToggle"
+                                      IsChecked="{x:Bind ViewModel.Multiline, Mode=TwoWay}"
+                                      ToolTipService.ToolTip="Match Across Lines / Multiline — run the query over the whole file so a match can span line breaks. Slower &amp; heavier; best with a narrow scope. (Alt+M)"
+                                      Padding="4,2" MinWidth="0" MinHeight="0"
+                                      Width="28" Height="24" FontSize="12"
+                                      VerticalAlignment="Center">
+                            <TextBlock Text="\n" FontSize="12" FontFamily="Consolas" />
+                        </ToggleButton>
                         <ToggleButton x:Name="ExactMatchToggle"
                                       IsChecked="{x:Bind ViewModel.ExactMatch, Mode=TwoWay}"
-                                      ToolTipService.ToolTip="Exact Match — on: treat the whole query as one term. Off: split on spaces and match any term. (Alt+E)"
+                                      ToolTipService.ToolTip="Exact Match — on: treat the whole query as one term. Off: split on spaces and match any term. (Alt+E). Ignored while Multiline is on"
                                       Padding="4,2" MinWidth="0" MinHeight="0"
                                       Width="28" Height="24" FontSize="12"
                                       VerticalAlignment="Center">
@@ -719,6 +735,19 @@
                                                     <ComboBoxItem Content="File name, then content"
                                                                   ToolTipService.ToolTip="First filter by file name, then search contents of matching files" />
                                                 </ComboBox>
+                                            </StackPanel>
+
+                                            <StackPanel Spacing="6">
+                                                <CheckBox x:Name="MultilineAdvancedToggle"
+                                                          Content="Match across lines (multiline)"
+                                                          IsChecked="{x:Bind ViewModel.Multiline, Mode=TwoWay}"
+                                                          ToolTipService.ToolTip="Run the query over the whole file so a single match can span line breaks (ripgrep -U). Reads whole files, is slower and heavier, and is best paired with a narrower scope than a whole drive." />
+                                                <CheckBox x:Name="MultilineDotAllToggle"
+                                                          Content="&#8226; . matches newlines"
+                                                          Margin="24,0,0,0"
+                                                          IsEnabled="{x:Bind ViewModel.Multiline, Mode=OneWay}"
+                                                          IsChecked="{x:Bind ViewModel.MultilineDotAll, Mode=TwoWay}"
+                                                          ToolTipService.ToolTip="When on, the dot (.) also matches newline characters (ripgrep --multiline-dotall / inline (?s))." />
                                             </StackPanel>
 
                                             <StackPanel Spacing="6">

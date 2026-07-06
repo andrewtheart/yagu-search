@@ -118,7 +118,7 @@ if (-not $SkipTraining) {
     Write-Host "       RUSTFLAGS=$env:RUSTFLAGS" -ForegroundColor DarkGray
     Push-Location $RustCoreDir
     try {
-        cargo build --release
+        cargo build --release --features grep_crates
         if ($LASTEXITCODE -ne 0) { throw "Phase 1 cargo build failed." }
     } finally { Pop-Location }
     $env:RUSTFLAGS = $null
@@ -193,7 +193,7 @@ Write-Host "[pgo] phase 2: cargo build --release (PGO-optimized)" -ForegroundCol
 Write-Host "       RUSTFLAGS=$env:RUSTFLAGS" -ForegroundColor DarkGray
 Push-Location $RustCoreDir
 try {
-    cargo build --release
+    cargo build --release --features grep_crates
     if ($LASTEXITCODE -ne 0) { throw "Phase 2 cargo build failed." }
 } finally { Pop-Location }
 $env:RUSTFLAGS = $null

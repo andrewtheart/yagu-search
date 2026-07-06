@@ -3549,6 +3549,31 @@ public sealed partial class SettingsWindow : Window
                 TextWrapping = TextWrapping.Wrap,
             });
 
+            var resetMultilineNewlinePrompt = new Button
+            {
+                Content = "Reset multiline search prompt",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetMultilineNewlinePrompt.Click += async (_, _) =>
+            {
+                await _viewModel.ResetMultilineNewlineSuggestionAsync();
+                MarkSettingsDirty(requireValueChanges: false);
+                resetMultilineNewlinePrompt.Content = "Multiline search prompt reset";
+                resetMultilineNewlinePrompt.IsEnabled = false;
+            };
+            RegisterDefaultResetButton(resetMultilineNewlinePrompt,
+                () => !_viewModel.MultilineNewlineSuggestionDismissed);
+            remindersGroup.Children.Add(resetMultilineNewlinePrompt);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Re-enables the prompt that offers to switch on Multiline search when your query contains a literal \u201c\\n\u201d escape, after you chose Don't warn me again.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
             var resetFirstTimeIntroTips = new Button
             {
                 Content = "Reset first-time introductory tooltips",

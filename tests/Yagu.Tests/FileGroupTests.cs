@@ -118,6 +118,118 @@ public class FileGroupTests
     }
 
     [Fact]
+    public void MultilineResult_ContextTrim_AccountsForSpanEndLine()
+    {
+        var group = new FileGroup(@"D:\ml.txt");
+        group.IsExpanded = true;
+
+        // A cross-line match on lines 2..4 (after-context numbered from the END line 4),
+        // followed by a later single-line match on line 8.
+        var multi = new SearchResult(
+            FilePath: @"D:\ml.txt", LineNumber: 2, MatchLine: "START",
+            MatchStartColumn: 0, MatchLength: 5,
+            ContextBefore: Array.Empty<string>(), ContextAfter: new[] { "l5", "l6" })
+        { MatchEndLineNumber = 4, MatchEndColumn = 3 };
+        group.Add(multi);
+        group.Add(MakeResult(@"D:\ml.txt", 8));
+
+        var first = group.VisibleResults[0];
+        Assert.Equal(2, first.LineNumber);
+        Assert.Equal(4, first.MatchEndLineNumber);
+        // Trailing context is numbered from the END line (4): lines 5 and 6 — not from line 2,
+        // and not repeating any line owned by the next (line-8) match.
+        Assert.Equal(new[] { 5, 6 }, first.NumberedAfter.Select(c => c.LineNum).ToArray());
+    }
+
+    [Fact]
+    public void MultilineResult_SurvivesStubMaterialization_WithSpanIntact()
+    {
+        // Phase 1b: a pre-evicted cross-line match added to a collapsed group is compacted into a
+        // stub (its SearchResult is dropped). Materializing the stub must restore the span from the
+        // per-group sidecar, while an interleaved single-line stub stays single-line.
+        var group = new FileGroup(@"D:\ml.txt"); // collapsed by default
+
+        var multi = SearchResult.CreatePreEvicted(@"D:\ml.txt", lineNumber: 2, matchStartColumn: 0, matchLength: 5, diskOffset: 100L);
+        multi.MatchEndLineNumber = 4;
+        multi.MatchEndColumn = 3;
+        Assert.True(multi.IsEvicted);
+        group.Add(multi); // collapsed + evicted => stub path records span in the sidecar
+
+        var single = SearchResult.CreatePreEvicted(@"D:\ml.txt", lineNumber: 9, matchStartColumn: 0, matchLength: 1, diskOffset: 200L);
+        group.Add(single);
+
+        group.MaterializeEvictedStubs();
+
+        var results = group.ToList();
+        var mlResult = results.Single(r => r.LineNumber == 2);
+        Assert.True(mlResult.IsMultilineMatch);
+        Assert.Equal(4, mlResult.MatchEndLineNumber);
+        Assert.Equal(3, mlResult.MatchEndColumn);
+
+        var slResult = results.Single(r => r.LineNumber == 9);
+        Assert.False(slResult.IsMultilineMatch);
+        Assert.Null(slResult.MatchEndLineNumber);
+    }
+
+    [Fact]
+    public void MultilineResult_PreviewSnapshotFromStub_CarriesSpan()
+    {
+        // Phase 1b: the non-destructive preview snapshot rebuilt from evicted stubs must also
+        // re-apply the cross-line span so a collapsed multiline match previews correctly.
+        var group = new FileGroup(@"D:\ml.txt"); // collapsed by default
+
+        var single = SearchResult.CreatePreEvicted(@"D:\ml.txt", lineNumber: 1, matchStartColumn: 0, matchLength: 1, diskOffset: 50L);
+        group.Add(single);
+
+        var multi = SearchResult.CreatePreEvicted(@"D:\ml.txt", lineNumber: 6, matchStartColumn: 0, matchLength: 4, diskOffset: 150L);
+        multi.MatchEndLineNumber = 8;
+        multi.MatchEndColumn = 2;
+        group.Add(multi);
+
+        var snapshot = group.GetPreviewSnapshot(maxResults: 10);
+
+        var mlResult = snapshot.Single(r => r.LineNumber == 6);
+        Assert.True(mlResult.IsMultilineMatch);
+        Assert.Equal(8, mlResult.MatchEndLineNumber);
+        Assert.Equal(2, mlResult.MatchEndColumn);
+        Assert.False(snapshot.Single(r => r.LineNumber == 1).IsMultilineMatch);
+    }
+
+    [Fact]
+    public void MultilineResult_MultipleStubs_AllSpansRestored_IncludingNullEndColumn()
+    {
+        // Exercises the sidecar's reuse arm (a second multiline stub in the same group hits
+        // `_evictedStubSpans ??= []` non-null) and a multiline result whose MatchEndColumn is
+        // null (the `?? 0` null arm) so the stored end column defaults to 0.
+        var group = new FileGroup(@"D:\ml.txt"); // collapsed
+
+        var a = SearchResult.CreatePreEvicted(@"D:\ml.txt", lineNumber: 2, matchStartColumn: 0, matchLength: 5, diskOffset: 10L);
+        a.MatchEndLineNumber = 4;
+        a.MatchEndColumn = 3;
+        group.Add(a); // first multiline stub allocates the sidecar
+
+        group.Add(SearchResult.CreatePreEvicted(@"D:\ml.txt", lineNumber: 6, matchStartColumn: 0, matchLength: 1, diskOffset: 20L));
+
+        var b = SearchResult.CreatePreEvicted(@"D:\ml.txt", lineNumber: 8, matchStartColumn: 0, matchLength: 2, diskOffset: 30L);
+        b.MatchEndLineNumber = 9; // MatchEndColumn deliberately left null => stored as 0
+        group.Add(b); // second multiline stub reuses the sidecar
+
+        group.MaterializeEvictedStubs();
+        var results = group.ToList();
+
+        var ra = results.Single(r => r.LineNumber == 2);
+        Assert.Equal(4, ra.MatchEndLineNumber);
+        Assert.Equal(3, ra.MatchEndColumn);
+
+        var rb = results.Single(r => r.LineNumber == 8);
+        Assert.True(rb.IsMultilineMatch);
+        Assert.Equal(9, rb.MatchEndLineNumber);
+        Assert.Equal(0, rb.MatchEndColumn); // null end column defaulted to 0 at stub time
+
+        Assert.Null(results.Single(r => r.LineNumber == 6).MatchEndLineNumber);
+    }
+
+    [Fact]
     public void VisibleResults_PagesAtPageSize()
     {
         var group = new FileGroup(@"D:\file.txt");

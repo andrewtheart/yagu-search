@@ -285,6 +285,73 @@ public sealed partial class MainWindow
         return (panel, dontRemind);
     }
 
+    /// <summary>
+    /// When the current Traditional-mode query contains a literal "\n" escape while Multiline search is
+    /// off, offers a one-time switch to Multiline (which also enables Regex) so the escape matches a real
+    /// line break. Accepting switches Multiline on for this run; either choice can be made permanent via
+    /// "Don't warn me again". A no-op when Multiline is already on, the query has no "\n", the search is
+    /// Semantic, or the prompt was dismissed.
+    /// </summary>
+    private async Task MaybeOfferMultilineSuggestionAsync()
+    {
+        if (!ViewModel.ShouldOfferMultilineSuggestion(ViewModel.Query))
+            return;
+        // Don't stack on top of another owned modal.
+        if (YaguDialog.HasOpenOwnedWindow(_hwnd))
+            return;
+
+        var (content, dontWarn) = BuildMultilineSuggestionContent();
+        var result = await YaguDialog.ShowAsync(
+            _hwnd,
+            new YaguDialogOptions
+            {
+                Title = "This looks like a multiline search",
+                TitleGlyph = "\uE8A1",
+                Content = content,
+                PrimaryButtonText = "Switch to Multiline",
+                CloseButtonText = "Search as-is",
+                DefaultButton = YaguDialogDefaultButton.Primary,
+                RequestedTheme = RootGrid.ActualTheme,
+                ShowTitleBar = false,
+                Width = 560,
+                Height = 340,
+            });
+
+        await ViewModel.ApplyMultilineSuggestionAsync(
+            switchToMultiline: result == YaguDialogResult.Primary,
+            dontRemind: dontWarn.IsChecked == true);
+    }
+
+    /// <summary>Body of the multiline-suggestion prompt: an explanation plus a "Don't warn me again"
+    /// checkbox (returned so the caller can read its state after the dialog closes).</summary>
+    private static (FrameworkElement Content, CheckBox DontWarn) BuildMultilineSuggestionContent()
+    {
+        var panel = new StackPanel { Spacing = 12 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Your search contains a \u201c\\n\u201d escape, which only matches a real line break when "
+                 + "Multiline search is on. Multiline also turns on Regex so the escape is interpreted.",
+            TextWrapping = TextWrapping.WrapWholeWords,
+            FontSize = 14,
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Switch to Multiline to match across lines, or search as-is to match the two characters "
+                 + "\u201c\\n\u201d literally.",
+            TextWrapping = TextWrapping.WrapWholeWords,
+            FontSize = 13,
+            Opacity = 0.85,
+        });
+
+        var dontWarn = new CheckBox
+        {
+            Content = "Don't warn me again",
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        panel.Children.Add(dontWarn);
+        return (panel, dontWarn);
+    }
+
     private void OnSelectTraditionalMode(object sender, RoutedEventArgs e)
     {
         ViewModel.IsSemanticQueryMode = false;

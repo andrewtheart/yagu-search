@@ -192,6 +192,7 @@ This README is the entry point for new contributors.
 
 - Fast recursive text search across a directory and all subdirectories, with streaming results while the scan is still running.
 - Literal, exact-match, and .NET regex search, with optional case-sensitive matching.
+- Multiline (cross-line) search: an opt-in mode that runs the regex over the whole file so a single match can span line breaks (like ripgrep `-U`), including a dot-all option, with a size cap that skips oversized files rather than degrading to line search. Accelerated by the native engine, with two interchangeable backends (a hand-rolled scan and ripgrep's grep-searcher) selectable as a performance knob.
 - Search modes for content plus file names, content only, file names only, or file-name-gated content search.
 - Semantic search (local, on-device AI): describe a search in plain English and a small instruct model running locally through Microsoft Foundry Local translates it into concrete Yagu options — directory, include/exclude filters, dates, sizes, search mode, and result sorting/grouping — with no query ever leaving the machine.
 - Advanced include/exclude filters with glob/path or regex modes, `.gitignore` support (with a configurable `.gitignore`-vs-include-filter precedence preference), skip-extension lists, a hidden-files search toggle, optional binary-file inclusion, size/date filters, maximum search depth, and a warning when a query targets a file extension your current filters would exclude.
@@ -338,12 +339,38 @@ dotnet test tests/Yagu.Tests/Yagu.Tests.csproj -c Release --filter NativeParityT
 
 ### Run UI Automation Tests
 
-Most tests run without extra setup, but the match-navigation UI regression test is opt-in because it launches Yagu, drives the desktop UI through UI Automation, and captures screenshots. It requires Windows in an interactive desktop session, a Debug build of the app, and `YAGU_RUN_UI_REGRESSION=1`. Without that variable, the test exits early with a skipped message.
+GUI tests that launch Yagu and drive its desktop UI through UI Automation are tagged
+`[Trait("Category","Headed")]` and **self-detect their environment** (`HeadedTestEnvironment`): they
+**auto-run** on an interactive Windows desktop and **auto-skip** in CI / non-interactive / non-Windows
+sessions (GitHub Actions is detected and skipped), so a normal `dotnet test` on a dev box exercises
+them while CI never launches a GUI. Build a Debug app so the auto-run has something to drive (if it's
+missing, the test skips):
 
 ```powershell
 dotnet build src/Yagu/Yagu.csproj -c Debug
+dotnet test tests/Yagu.Tests/Yagu.Tests.csproj -c Debug -p:RustProfile=profiling
+```
+
+To run only the GUI tests, filter to the category (interactive Windows desktop, no other Yagu instance
+running — single-instance would hijack the launch):
+
+```powershell
+dotnet test tests/Yagu.Tests/Yagu.Tests.csproj -c Debug --filter "Category=Headed"
+```
+
+`MultilineGuiRegressionTests` (the multiline toggle checks) auto-runs on a capable desktop. The
+screenshot-fragile `MatchNavRegressionTests` keeps an extra opt-in on top of the capability gate —
+`YAGU_RUN_UI_REGRESSION=1`:
+
+```powershell
 $env:YAGU_RUN_UI_REGRESSION = '1'
 dotnet test tests/Yagu.Tests/Yagu.Tests.csproj -c Release --filter MatchNavRegressionTests
+```
+
+The headless/CI run needs no special exclusion — headed tests self-skip there:
+
+```powershell
+dotnet test tests/Yagu.Tests/Yagu.Tests.csproj -c Release --filter "Category!=Slow&Category!=GPU"
 ```
 
 ### Run Coverage

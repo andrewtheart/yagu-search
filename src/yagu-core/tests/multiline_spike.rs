@@ -281,6 +281,9 @@ fn line_opts() -> ScanOptions {
         skip_binary: false,
         ascii_case_only: false,
         metadata_only: false,
+        multi_line: false,
+        multi_line_dotall: false,
+        multiline_engine: 0,
     }
 }
 

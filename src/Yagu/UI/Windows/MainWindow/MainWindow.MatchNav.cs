@@ -1460,6 +1460,11 @@ public sealed partial class MainWindow
                 }
             }
 
+            // Cross-line (multiline) match: also box the matched portion on every OTHER spanned line
+            // (body lines in full, the end line up to its end column) so the active-match overlay reads
+            // as one match that crosses line breaks — not just a lone box on the start line.
+            TryAddMultilineSpanActiveMarkers(block, targetPara, markerHeight, viewportTop, viewportBottom, viewportWidth, charWidth, markerTopDelta);
+
             ActiveMatchOverlay.Visibility = Visibility.Visible;
             TryShowPreviewMatchIntroTip();
             LogWordWrapOverlayDiagnostic(
@@ -1510,6 +1515,106 @@ public sealed partial class MainWindow
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// For a cross-line (multiline) active match, boxes the matched portion on every spanned line
+    /// OTHER than the start line (which the primary marker already boxes): body lines in full and the
+    /// end line up to its end column. Reuses the extra-word-marker mechanism so a cross-line match
+    /// renders as a connected series of red boxes down the lines it spans. The box geometry is derived
+    /// directly from the match's span columns (via text pointers), so it does not depend on the gold
+    /// coloring having been applied. No-op for single-line matches; off-screen span lines are skipped.
+    /// </summary>
+    private void TryAddMultilineSpanActiveMarkers(
+        RichTextBlock block,
+        Paragraph startPara,
+        double markerHeight,
+        double viewportTop,
+        double viewportBottom,
+        double viewportWidth,
+        double charWidth,
+        double markerTopDelta)
+    {
+        if (!s_paragraphPrimaryResults.TryGetValue(startPara, out var boxed)
+            || boxed is not SearchResult result
+            || !result.IsMultilineMatch
+            || result.MatchEndLineNumber is not int endLine)
+        {
+            return;
+        }
+
+        int startLine = result.LineNumber;
+        if (endLine <= startLine)
+            return;
+
+        int added = 0;
+        foreach (var childBlock in block.Blocks)
+        {
+            if (childBlock is not Paragraph para || ReferenceEquals(para, startPara))
+                continue;
+            if (s_paragraphIsContinuation.TryGetValue(para, out _))
+                continue; // continuation segment of a long line — no gutter/whole-line semantics
+            if (!TryGetPreviewParagraphLineNumber(para, out int lineNumber)
+                || lineNumber <= startLine
+                || lineNumber > endLine)
+            {
+                continue;
+            }
+
+            // Resolve the display-column window to box on this line: body lines (whole content) or
+            // the end line (content start up to the end column). The gutter prefix (present only on
+            // the inline-gutter PreviewBlock; section blocks keep the gutter in a separate block)
+            // shifts the display index.
+            int gutterLength = TryGetParagraphInlineGutterLength(para, out int g) ? g : 0;
+            int totalRunLength = para.Inlines.OfType<Run>().Sum(r => r.Text?.Length ?? 0);
+            int contentLength = Math.Max(0, totalRunLength - gutterLength);
+            int spanEndColumn = lineNumber == endLine
+                ? Math.Clamp(result.MatchEndColumn ?? contentLength, 0, contentLength)
+                : contentLength;
+            if (spanEndColumn <= 0)
+                continue;
+
+            var startPointer = GetPreviewParagraphTextPointerAtIndex(para, gutterLength);
+            var endPointer = GetPreviewParagraphTextPointerAtIndex(para, gutterLength + spanEndColumn);
+            if (startPointer is null || endPointer is null)
+                continue;
+
+            var startRect = startPointer.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Forward);
+            if (!IsUsableTextRect(startRect))
+                continue;
+            var startPoint = TransformRunRectToOverlay(block, para, startRect);
+            double height = Math.Max(12, startRect.Height);
+            double top = startPoint.Y + markerTopDelta;
+            if (top + height <= viewportTop || top >= viewportBottom)
+                continue; // vertically off-screen — skip
+
+            double width;
+            var endRect = endPointer.GetCharacterRect(Microsoft.UI.Xaml.Documents.LogicalDirection.Backward);
+            if (IsUsableTextRect(endRect) && Math.Abs(endRect.Y - startRect.Y) <= Math.Max(4, height * 0.6))
+            {
+                var endPoint = TransformRunRectToOverlay(block, para, endRect);
+                width = Math.Max(2, endPoint.X - startPoint.X);
+            }
+            else
+            {
+                width = Math.Max(2, spanEndColumn * charWidth);
+            }
+
+            double left = Math.Max(0, startPoint.X);
+            double right = Math.Min(viewportWidth, startPoint.X + width);
+            double visibleWidth = right - left;
+            if (visibleWidth <= 0)
+                continue;
+
+            var marker = CreateActiveMatchWordMarker();
+            ApplyActiveMatchMarkerRect(marker, new Windows.Foundation.Rect(left, top, visibleWidth, height));
+            _activeMatchExtraWordMarkers.Add(marker);
+            ActiveMatchOverlay.Children.Add(marker);
+            added++;
+        }
+
+        if (added > 0 && LogService.Instance.IsVerboseEnabled)
+            LogService.Instance.Verbose("MatchNav", $"ActiveOverlay: multiline span markers added={added}, span=[{startLine}..{endLine}]");
     }
 
     private static bool IsUsableTextRect(Windows.Foundation.Rect rect)

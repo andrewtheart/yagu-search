@@ -199,6 +199,39 @@ public sealed class PerformanceBenchmarkTests : IDisposable
     }
 
     [Fact]
+    public async Task Multiline_RegexEngine_Throughput()
+    {
+        // Opt-in cross-line throughput on the default hand-rolled regex::bytes engine. The pattern
+        // spans a line boundary ("patterns" at line end -> "line" at the next line start), so it
+        // exercises the whole-buffer scan + span mapping, not the per-line path.
+        var metrics = await RunTimedSearchAsync(
+            scenarioName: "MultilineRegexEngine",
+            query: @"patterns[\s\S]*?line",
+            useRegex: true,
+            caseSensitive: false,
+            multiline: true,
+            multilineEngine: MultilineEngineKind.Regex);
+
+        AssertMinimumThroughput(metrics, "MultilineRegexEngine");
+    }
+
+    [Fact]
+    public async Task Multiline_GrepEngine_Throughput()
+    {
+        // Same cross-line workload on the grep-searcher backend, for a head-to-head throughput
+        // comparison with the default engine (both produce identical results).
+        var metrics = await RunTimedSearchAsync(
+            scenarioName: "MultilineGrepEngine",
+            query: @"patterns[\s\S]*?line",
+            useRegex: true,
+            caseSensitive: false,
+            multiline: true,
+            multilineEngine: MultilineEngineKind.Grep);
+
+        AssertMinimumThroughput(metrics, "MultilineGrepEngine");
+    }
+
+    [Fact]
     public async Task NoMatchSearch_Throughput()
     {
         // Worst-case: scans every byte of every file, produces zero results.
@@ -552,6 +585,8 @@ public sealed class PerformanceBenchmarkTests : IDisposable
         int maxResults = 0,
         int maxDegreeOfParallelism = 0,
         bool skipBinary = true,
+        bool multiline = false,
+        MultilineEngineKind multilineEngine = MultilineEngineKind.Regex,
         string? overrideDirectory = null)
     {
         // Force managed backend so the test works without Everything installed.
@@ -619,6 +654,9 @@ public sealed class PerformanceBenchmarkTests : IDisposable
                 MaxMatchesPerFile = 0,
                 SkipBinary = skipBinary,
                 MaxDegreeOfParallelism = maxDegreeOfParallelism,
+                Multiline = multiline,
+                MultilineEngine = multilineEngine,
+                MaxMultilineBytes = SearchOptions.DefaultMaxMultilineBytes,
             };
 
             var svc = new SearchService();

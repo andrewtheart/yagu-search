@@ -184,6 +184,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         CaseSensitive = _settings.CaseSensitive;
         UseRegex = _settings.UseRegex;
         ExactMatch = _settings.ExactMatch;
+        Multiline = _settings.MultilineSearchDefault;
         ContextLines = _settings.ContextLines;
         PreviewContextLines = _settings.PreviewContextLines;
         ObeyGitignore = _settings.ObeyGitignore;
@@ -450,6 +451,26 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     [ObservableProperty] public partial bool UseRegex { get; set; }
     [ObservableProperty] public partial bool ExactMatch { get; set; } = true;
 
+    /// <summary>When true, the query regex runs over the whole file so a single match can span line
+    /// breaks (ripgrep <c>-U</c>). Strictly opt-in; initialized from <see cref="SettingsService"/>.</summary>
+    [ObservableProperty] public partial bool Multiline { get; set; }
+
+    /// <summary>When true and <see cref="Multiline"/> is on, <c>.</c> also matches newlines (dot-all).</summary>
+    [ObservableProperty] public partial bool MultilineDotAll { get; set; }
+
+    /// <summary>
+    /// The regex toggle follows the multiline toggle: cross-line matching is only meaningful in regex
+    /// mode (a plain literal is split on whitespace — newlines included — so it can never span a line
+    /// break). Turning Multiline ON enables Regex; turning Multiline OFF disables Regex. Exact-match
+    /// (whole-word) is the inverse: it is a single-token concept that regex overrides anyway, so it is
+    /// unchecked while Multiline is on and restored when Multiline turns off.
+    /// </summary>
+    partial void OnMultilineChanged(bool value)
+    {
+        UseRegex = value;
+        ExactMatch = !value;
+    }
+
     /// <summary>The pattern + flags the MOST RECENT search actually ran with, captured at search
     /// start. For a semantic search these are the model's RESOLVED literal pattern and flags — not
     /// the natural-language box text (which stays in <see cref="Query"/> for display) nor the user
@@ -459,6 +480,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     public bool LastSearchCaseSensitive { get; private set; }
     public bool LastSearchUseRegex { get; private set; }
     public bool LastSearchExactMatch { get; private set; } = true;
+    public bool LastSearchMultiline { get; private set; }
+    public bool LastSearchMultilineDotAll { get; private set; }
 
     public Microsoft.UI.Xaml.Visibility HasQueryText =>
         string.IsNullOrEmpty(Query) ? Microsoft.UI.Xaml.Visibility.Collapsed : Microsoft.UI.Xaml.Visibility.Visible;
@@ -2708,6 +2731,48 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
     }
 
     /// <summary>
+    /// True when an interactive Traditional-mode submit should first offer to switch on Multiline search
+    /// because <paramref name="query"/> contains a literal "\n" escape (the two characters backslash-n),
+    /// which only matches a real line break once Multiline — and therefore Regex — is on. Gated on
+    /// Multiline being off, the user not having ticked "Don't warn me again", and the query actually
+    /// containing the escape. A no-op in Semantic mode, where the query is natural language.
+    /// </summary>
+    public bool ShouldOfferMultilineSuggestion(string? query) =>
+        IsTraditionalQueryMode
+        && !Multiline
+        && !_settings.MultilineNewlineSuggestionDismissed
+        && !string.IsNullOrEmpty(query)
+        && query.Contains("\\n", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Records the outcome of the "this looks like a multiline search" suggestion. When
+    /// <paramref name="switchToMultiline"/> is true, Multiline is enabled for this run — which also turns
+    /// on Regex and turns off Exact match via <see cref="OnMultilineChanged"/> — so the "\n" escape is
+    /// interpreted as a line break; when <paramref name="dontRemind"/> is true the prompt is suppressed
+    /// permanently. The settings are persisted so the choice survives a restart.
+    /// </summary>
+    public async Task ApplyMultilineSuggestionAsync(bool switchToMultiline, bool dontRemind)
+    {
+        if (dontRemind)
+            _settings.MultilineNewlineSuggestionDismissed = true;
+        if (switchToMultiline)
+            Multiline = true;
+        await PersistSettingsAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>Whether the literal-"\n" multiline prompt has been dismissed via "Don't warn me again".
+    /// Exposed so the Developer Options reset button can reflect the current state.</summary>
+    public bool MultilineNewlineSuggestionDismissed => _settings.MultilineNewlineSuggestionDismissed;
+
+    /// <summary>Re-enables the literal-"\n" multiline suggestion prompt after the user dismissed it
+    /// (Developer Options → Reminders and Warnings reset). Persists so the reset survives a restart.</summary>
+    public async Task ResetMultilineNewlineSuggestionAsync()
+    {
+        _settings.MultilineNewlineSuggestionDismissed = false;
+        await PersistSettingsAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>
     /// Resolves the directory roots a search will target. When the <see cref="Directory"/> box has a
     /// value, that single directory is used; when it is empty the user is asking to "search all
     /// drives", so every eligible drive root is returned (fixed always; network/removable/cloud per
@@ -2833,6 +2898,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 CaseSensitive = CaseSensitive,
                 UseRegex = UseRegex,
                 ExactMatch = ExactMatch,
+                Multiline = Multiline,
+                MultilineDotAll = MultilineDotAll,
+                MultilineEngine = (MultilineEngineKind)_settings.MultilineEngine,
                 ContextLines = ContextLines,
                 SearchMode = (SearchMode)SearchModeIndex,
                 IncludeGlobs = SplitFilterPatterns(IncludeGlobs, IncludeFilterMode),
@@ -2893,6 +2961,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             LastSearchCaseSensitive = CaseSensitive;
             LastSearchUseRegex = UseRegex;
             LastSearchExactMatch = ExactMatch;
+            LastSearchMultiline = Multiline;
+            LastSearchMultilineDotAll = MultilineDotAll;
 
             // A semantic plan's resolved settings stay applied to this view-model so they are VISIBLE in
             // Advanced Options (the user wanted to see what the AI search applied). They are NOT written
@@ -3187,6 +3257,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
             LastSearchCaseSensitive = CaseSensitive;
             LastSearchUseRegex = false;
             LastSearchExactMatch = false;
+            LastSearchMultiline = false;
+            LastSearchMultilineDotAll = false;
 
             var result = new SearchResult(
                 FilePath: filePath,
@@ -4334,6 +4406,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.CaseSensitive = d is null ? CaseSensitive : d.CaseSensitive;
         _settings.UseRegex = d is null ? UseRegex : d.UseRegex;
         _settings.ExactMatch = d is null ? ExactMatch : d.ExactMatch;
+        _settings.MultilineSearchDefault = Multiline;
         _settings.ContextLines = ContextLines;
         _settings.PreviewContextLines = PreviewContextLines;
         _settings.ObeyGitignore = d is null ? ObeyGitignore : d.ObeyGitignore;

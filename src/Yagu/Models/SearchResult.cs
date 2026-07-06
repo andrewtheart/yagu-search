@@ -41,6 +41,39 @@ public sealed record SearchResult(
     public IReadOnlyList<string> ContextAfter { get; internal set; } = ContextAfter;
     internal int SourceMatchStartColumn { get; set; } = MatchStartColumn;
 
+    /// <summary>
+    /// End line (1-based) of a cross-line (multiline) match, or null for a single-line match.
+    /// When non-null the match spans from <see cref="LineNumber"/> to this line inclusive.
+    /// </summary>
+    public int? MatchEndLineNumber { get; internal set; }
+
+    /// <summary>
+    /// End column (0-based, exclusive, UTF-16 source column) on <see cref="MatchEndLineNumber"/>
+    /// for a cross-line match, or null for a single-line match. Same column space as
+    /// <see cref="SourceMatchStartColumn"/>.
+    /// </summary>
+    public int? MatchEndColumn { get; internal set; }
+
+    /// <summary>True when this result is a cross-line (multiline) span (i.e. carries an end line).</summary>
+    public bool IsMultilineMatch => MatchEndLineNumber is not null;
+
+    /// <summary>
+    /// Compact results-row label for a cross-line (multiline) match indicating how many additional
+    /// lines the span covers (e.g. <c>… (+2 lines)</c>), or empty for a single-line match. This is the
+    /// Phase 1 "start line + marker" rendering; full cross-line highlighting is a later phase. Returns
+    /// a plain string (no WinUI types) so an empty value renders as a zero-width row element.
+    /// </summary>
+    public string MultilineSpanLabel
+    {
+        get
+        {
+            if (MatchEndLineNumber is not int endLine || endLine <= LineNumber)
+                return string.Empty;
+            int extra = endLine - LineNumber;
+            return string.Create(CultureInfo.InvariantCulture, $"\u2026 (+{extra} line{(extra == 1 ? "" : "s")})");
+        }
+    }
+
     private const int ShortPreviewLength = 120;
     private ShortPreviewInfo? _shortPreview;
 
@@ -85,7 +118,13 @@ public sealed record SearchResult(
     internal bool IsEvicting => DiskOffset == EvictingOffset;
 
     internal bool TryBeginEviction()
-        => Interlocked.CompareExchange(ref _diskOffset, EvictingOffset, InMemoryOffset) == InMemoryOffset;
+    {
+        // Phase 1b: cross-line (multiline) matches evict like any other result. Their span
+        // metadata (MatchEndLineNumber/MatchEndColumn) survives eviction — it stays on the
+        // retained SearchResult across the ResultStore disk round-trip, and is threaded
+        // through the compact stub path via FileGroup's span sidecar (MaterializeEvictedStubs).
+        return Interlocked.CompareExchange(ref _diskOffset, EvictingOffset, InMemoryOffset) == InMemoryOffset;
+    }
 
     /// <summary>
     /// Creates a SearchResult that is already evicted to disk at <paramref name="diskOffset"/>.
@@ -363,7 +402,9 @@ public sealed record SearchResult(
     {
         get
         {
-            int startLine = LineNumber + 1;
+            // After-context is numbered from the END line of the match (for a single-line
+            // match MatchEndLineNumber is null, so this is LineNumber + 1 as before).
+            int startLine = (MatchEndLineNumber ?? LineNumber) + 1;
             int floor = _contextFloorLineExclusive;
             int ceiling = _contextCeilingLineExclusive;
             var list = new List<ContextLine>(ContextAfter.Count);

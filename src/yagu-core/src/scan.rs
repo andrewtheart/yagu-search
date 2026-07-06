@@ -68,6 +68,19 @@ pub struct ScanOptions {
     /// scanner skips display-line windowing and reports source_match_start as a
     /// UTF-8 byte offset; consumers can convert only the visible hydrated rows.
     pub metadata_only: bool,
+    /// When true, run the whole-buffer cross-line (multiline) engine instead of
+    /// the per-line scan: the regex runs over the entire LF-normalized file so a
+    /// single match can span line breaks (ripgrep `-U`). Default `false` keeps
+    /// the untouched per-line hot path.
+    pub multi_line: bool,
+    /// When true (and `multi_line` is true), `.` matches `\n` (ripgrep
+    /// `--multiline-dotall` / inline `(?s)`). Ignored unless `multi_line`.
+    pub multi_line_dotall: bool,
+    /// Selects the multiline backend: `0` = hand-rolled `regex::bytes`
+    /// whole-buffer scan (default), `1` = vendored grep-searcher (feature
+    /// `grep_crates`). Resolved once per file, never in a hot loop. Ignored
+    /// unless `multi_line`.
+    pub multiline_engine: u8,
 }
 
 const MAX_EMITTED_LINE_BYTES: usize = 4096;
@@ -87,7 +100,7 @@ const TRUNCATION_MARKER: &[u8] = b"\xE2\x80\xA6";
 /// when a result is materialized — keeping the native hot loop free of
 /// per-match column work (the `u32::MAX` "not provided" sentinel is emitted).
 #[inline]
-fn needs_eager_source_col(line: &[u8], options: &ScanOptions) -> bool {
+pub(crate) fn needs_eager_source_col(line: &[u8], options: &ScanOptions) -> bool {
     options.metadata_only || line.len() > MAX_EMITTED_LINE_BYTES
 }
 
@@ -1103,6 +1116,9 @@ mod tests {
             skip_binary: true,
             ascii_case_only: false,
             metadata_only: false,
+            multi_line: false,
+            multi_line_dotall: false,
+            multiline_engine: 0,
         }
     }
 

@@ -630,4 +630,109 @@ public class SessionFileServiceTests
 
         Assert.Equal(now, header.SavedUtc);
     }
+
+    // ─── Phase 1b: cross-line (multiline) span persistence (schema v2) ──────
+
+    [Fact]
+    public async Task WriteAndRead_MultilineSpan_RoundtripsAsV2()
+    {
+        var multi = new SearchResult(@"C:\code\ml.cs", 10, "START", 0, 5,
+            ContextBefore: [], ContextAfter: ["after"])
+        { MatchEndLineNumber = 12, MatchEndColumn = 4 };
+        var single = MakeResult(1);
+
+        using var ms = new MemoryStream();
+        await SessionFileService.WriteAsync(ms, "START", @"C:\code", MakeStats(), [multi, single]);
+
+        ms.Position = 0;
+        var read = new List<SearchResult>();
+        var header = await SessionFileService.ReadAsync(
+            ms, _ => { }, batch => { read.AddRange(batch); return Task.CompletedTask; });
+
+        Assert.Equal("yagu-session/v2", header.SchemaVersion);
+        Assert.Equal(SessionFileService.SchemaVersion, header.SchemaVersion);
+
+        var mlRead = read.Single(r => r.LineNumber == 10);
+        Assert.True(mlRead.IsMultilineMatch);
+        Assert.Equal(12, mlRead.MatchEndLineNumber);
+        Assert.Equal(4, mlRead.MatchEndColumn);
+
+        var slRead = read.Single(r => r.FilePath == single.FilePath);
+        Assert.False(slRead.IsMultilineMatch);
+        Assert.Null(slRead.MatchEndLineNumber);
+        Assert.Null(slRead.MatchEndColumn);
+    }
+
+    [Fact]
+    public async Task WriteAndRead_MultilineSpanWithZeroEndColumn_Roundtrips()
+    {
+        var multi = new SearchResult(@"C:\ml.cs", 3, "x", 0, 1, [], [])
+        { MatchEndLineNumber = 5, MatchEndColumn = 0 };
+
+        using var ms = new MemoryStream();
+        await SessionFileService.WriteAsync(ms, "q", @"C:\", MakeStats(), [multi]);
+
+        ms.Position = 0;
+        var read = new List<SearchResult>();
+        await SessionFileService.ReadAsync(ms, _ => { }, b => { read.AddRange(b); return Task.CompletedTask; });
+
+        Assert.True(read[0].IsMultilineMatch);
+        Assert.Equal(5, read[0].MatchEndLineNumber);
+        Assert.Equal(0, read[0].MatchEndColumn);
+    }
+
+    [Fact]
+    public async Task WriteAndRead_MultilineWithNullEndColumn_WritesZero()
+    {
+        // A multiline result (MatchEndLineNumber set) with a null MatchEndColumn exercises the
+        // write-side `?? 0`: mec is persisted as 0 and reads back as a concrete 0.
+        var multi = new SearchResult(@"C:\ml.cs", 3, "x", 0, 1, [], [])
+        { MatchEndLineNumber = 6 };
+        Assert.True(multi.IsMultilineMatch);
+        Assert.Null(multi.MatchEndColumn);
+
+        using var ms = new MemoryStream();
+        await SessionFileService.WriteAsync(ms, "q", @"C:\", MakeStats(), [multi]);
+
+        ms.Position = 0;
+        var read = new List<SearchResult>();
+        await SessionFileService.ReadAsync(ms, _ => { }, b => { read.AddRange(b); return Task.CompletedTask; });
+
+        Assert.True(read[0].IsMultilineMatch);
+        Assert.Equal(6, read[0].MatchEndLineNumber);
+        Assert.Equal(0, read[0].MatchEndColumn);
+    }
+
+    [Fact]
+    public async Task ReadAsync_V1SchemaWithoutSpanFields_LoadsAsSingleLine()
+    {
+        // A v1 file (no mel/mec) is still readable and loads as a single-line result.
+        var json = """{"schema":"yagu-session/v1","savedUtc":"2025-01-01T00:00:00Z","query":"q","searchRoot":"C:\\x","stats":{"startedUtc":"2025-01-01T00:00:00Z","elapsedMs":0,"filesScanned":0,"bytesScanned":0,"matchesFound":1},"resultCount":1,"results":[{"f":"C:\\a.txt","ln":3,"ml":"x","mc":0,"sc":0,"mlen":1,"b":[],"a":[]}]}"""u8.ToArray();
+        using var ms = new MemoryStream(json);
+        SessionFileService.SessionHeader? captured = null;
+        var read = new List<SearchResult>();
+        var header = await SessionFileService.ReadAsync(
+            ms, h => captured = h, b => { read.AddRange(b); return Task.CompletedTask; });
+
+        Assert.Equal("yagu-session/v1", header.SchemaVersion);
+        Assert.Single(read);
+        Assert.False(read[0].IsMultilineMatch);
+        Assert.Null(read[0].MatchEndLineNumber);
+        Assert.Null(read[0].MatchEndColumn);
+    }
+
+    [Fact]
+    public async Task ReadAsync_V2ResultWithMelButMissingMec_DefaultsEndColumnToZero()
+    {
+        // A malformed v2 result carrying "mel" without "mec" still yields a multiline match (mec => 0).
+        var json = """{"schema":"yagu-session/v2","savedUtc":"2025-01-01T00:00:00Z","query":"q","searchRoot":"C:\\x","stats":{"startedUtc":"2025-01-01T00:00:00Z","elapsedMs":0,"filesScanned":0,"bytesScanned":0,"matchesFound":1},"resultCount":1,"results":[{"f":"C:\\a.txt","ln":2,"ml":"x","mc":0,"sc":0,"mlen":1,"mel":4,"b":[],"a":[]}]}"""u8.ToArray();
+        using var ms = new MemoryStream(json);
+        var read = new List<SearchResult>();
+        await SessionFileService.ReadAsync(ms, _ => { }, b => { read.AddRange(b); return Task.CompletedTask; });
+
+        Assert.Single(read);
+        Assert.True(read[0].IsMultilineMatch);
+        Assert.Equal(4, read[0].MatchEndLineNumber);
+        Assert.Equal(0, read[0].MatchEndColumn);
+    }
 }

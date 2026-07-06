@@ -44,9 +44,11 @@ jobs:
         run: dotnet build Yagu.sln -c Release --no-restore
 
       # Exclude Slow + GPU tests: they need a GPU + local Foundry model (SemanticEvalGoldenTests is
-      # tagged both Category=Slow and Category=GPU), or are timing/UI-sensitive perf regression guards
-      # (ContentSearchPerformanceRegressionTests, MatchNavRegressionTests) that are unreliable on shared
-      # CI runners. They run on-demand on a dev machine. The BenchmarkDotNet smoke job covers throughput.
+      # tagged both Category=Slow and Category=GPU), or are timing/large-corpus perf regression guards
+      # unreliable on shared CI runners. The headed UIAutomation GUI tests (Category=Headed) are NOT
+      # filtered out here — they self-detect the CI environment via HeadedTestEnvironment and skip at
+      # runtime (GITHUB_ACTIONS/non-interactive), so they auto-run on dev desktops but never in CI.
+      # They run on-demand on a dev machine; the BenchmarkDotNet smoke job covers throughput.
       - name: Test
         run: dotnet test tests/Yagu.Tests/Yagu.Tests.csproj -c Release --no-build --filter "Category!=Slow&Category!=GPU" --logger "trx;LogFileName=test-results.trx"
 

@@ -192,9 +192,7 @@ public sealed class SearchService
         string? regexError = null;
         if (options.UseRegex)
         {
-            RegexOptions regexOpts = RegexOptions.Compiled | RegexOptions.CultureInvariant;
-            if (!options.CaseSensitive) regexOpts |= RegexOptions.IgnoreCase;
-            try { regex = new Regex(options.Query, regexOpts); }
+            try { regex = SearchRegexFactory.Build(options.Query, options); }
             catch (ArgumentException ex) { regexError = $"Invalid regex: {ex.Message}"; LogService.Instance.Warning("SearchService", regexError); }
         }
         else
@@ -212,18 +210,22 @@ public sealed class SearchService
                 // run it through the regex path so the native and managed scanners
                 // agree. "async" matches the word "async" but not "asynchronously".
                 string wordPattern = SearchQueryParser.BuildLiteralRegexPattern(options.Query, exactMatch: true)!;
-                RegexOptions regexOpts = RegexOptions.Compiled | RegexOptions.CultureInvariant;
-                if (!options.CaseSensitive) regexOpts |= RegexOptions.IgnoreCase;
-                regex = new Regex(wordPattern, regexOpts);
+                regex = SearchRegexFactory.Build(wordPattern, options);
                 patternOptions = CopyOptions(options, query: wordPattern, useRegex: true);
             }
             else if (literalTerms.Count > 1)
             {
                 string alternation = SearchQueryParser.BuildLiteralAlternation(literalTerms);
-                RegexOptions regexOpts = RegexOptions.Compiled | RegexOptions.CultureInvariant;
-                if (!options.CaseSensitive) regexOpts |= RegexOptions.IgnoreCase;
-                regex = new Regex(alternation, regexOpts);
+                regex = SearchRegexFactory.Build(alternation, options);
                 patternOptions = CopyOptions(options, query: alternation, useRegex: true);
+            }
+            else if (options.Multiline)
+            {
+                // Multiline: a bare literal must be PROMOTED to an escaped regex and run through
+                // the multiline engine, or it silently falls back to line matching (§4/§11).
+                string literalPattern = Regex.Escape(literalTerms[0]);
+                regex = SearchRegexFactory.Build(literalPattern, options);
+                patternOptions = CopyOptions(options, query: literalPattern, useRegex: true);
             }
             else
             {
@@ -410,6 +412,7 @@ public sealed class SearchService
         int skipSizeFiltered = 0;
         int skipCloudOnly = 0;
         int skipOcrCache = 0;
+        int skipMultiline = 0; // multiline over-cap + per-file timeout + unsupported-surface skips
         // Fresh provider-liveness decisions per search (a provider may have been
         // installed/uninstalled/signed-out since the last run).
         CloudFileHelper.ResetProviderCache();
@@ -463,7 +466,8 @@ public sealed class SearchService
                 CurrentEarlySkips() + Volatile.Read(ref skipSizeFiltered),
                 Volatile.Read(ref skipGlobExcluded) + Volatile.Read(ref skipOcrCache),
                 _fileLister.GitignoreSkipped,
-                CurrentCloudOnlySkips());
+                CurrentCloudOnlySkips(),
+                Volatile.Read(ref skipMultiline));
             int currentTotalMatches;
             int currentFilesWithMatches;
             unsafe
@@ -513,11 +517,10 @@ public sealed class SearchService
                 earlySkips + discoverySizeSkips,
                 skipGlobExcluded + Volatile.Read(ref skipOcrCache),
                 _fileLister.GitignoreSkipped,
-                CurrentCloudOnlySkips());
-
+                CurrentCloudOnlySkips(),
+                skipMultiline);
             return new SearchSummary(
-                TotalFiles: totalFiles,
-                FilesScanned: CurrentFilesProcessed(),
+                TotalFiles: totalFiles,                FilesScanned: CurrentFilesProcessed(),
                 FilesSkipped: totalSkipped,
                 FilesWithMatches: filesWithMatches,
                 TotalMatches: totalMatches,
@@ -895,13 +898,26 @@ public sealed class SearchService
                 try
                 {
                     imageOcr?.Start();
-                    bool nativeAvailable = Native.NativeSearcher.IsAvailable;
-                    int parallelism = options.MaxDegreeOfParallelism > 0
-                        ? options.MaxDegreeOfParallelism
-                        : nativeAvailable
-                            ? Math.Max(1, Math.Min(64, Environment.ProcessorCount * 2))
-                            : Math.Max(1, Math.Min(16, Environment.ProcessorCount));
-                    LogService.Instance.Info("SearchService", $"Content scan parallelism = {parallelism}");
+                    bool nativeAvailable = Native.NativeSearcher.IsAvailable && !options.Multiline;
+                    int parallelism;
+                    if (options.Multiline)
+                    {
+                        // Multiline holds whole files in memory (≈2× the UTF-16 blowup: original
+                        // decoded string + LF shadow copy), so it MUST run at a dedicated, lower,
+                        // memory-derived degree (~2–4) — never the line path's up-to-64-way — and
+                        // independently of whether the native engine is available (§9).
+                        parallelism = SearchOptions.ResolveMultilineParallelism(
+                            Environment.ProcessorCount, GetAvailablePhysicalMemoryBytes(), options.MaxMultilineBytes);
+                    }
+                    else
+                    {
+                        parallelism = options.MaxDegreeOfParallelism > 0
+                            ? options.MaxDegreeOfParallelism
+                            : nativeAvailable
+                                ? Math.Max(1, Math.Min(64, Environment.ProcessorCount * 2))
+                                : Math.Max(1, Math.Min(16, Environment.ProcessorCount));
+                    }
+                    LogService.Instance.Info("SearchService", $"Content scan parallelism = {parallelism}{(options.Multiline ? " (multiline)" : "")}");
 
                     // Pre-compute the degraded options once so we don't allocate a new
                     // SearchOptions per file inside the hot loop.
@@ -1276,7 +1292,7 @@ public sealed class SearchService
                         // ── Per-file managed fallback ──
                         // Used when the native engine is unavailable.
                         ThreadLocal<Native.NativeSession?>? sessionPool = null;
-                        if (Native.NativeSearcher.IsAvailable)
+                        if (Native.NativeSearcher.IsAvailable && !options.Multiline)
                         {
                             sessionPool = new ThreadLocal<Native.NativeSession?>(
                                 () => Native.NativeSearcher.CreateSession(patternOptions.Query, patternOptions),
@@ -1333,6 +1349,10 @@ public sealed class SearchService
                                     case ContentSearcher.SkipEncoding: Interlocked.Increment(ref skipEncoding); break;
                                     case ContentSearcher.SkipByExtension: Interlocked.Increment(ref skipByExtension); break;
                                     case ContentSearcher.SkipCloudOnly: Interlocked.Increment(ref skipCloudOnly); break;
+                                    case ContentSearcher.SkipMultilineTooLarge:
+                                    case ContentSearcher.SkipMultilineTimeout:
+                                        Interlocked.Increment(ref skipMultiline);
+                                        break;
                                     default: Interlocked.Increment(ref skipOther); break;
                                 }
                             }
@@ -1801,6 +1821,10 @@ public sealed class SearchService
             CaseSensitive = options.CaseSensitive,
             UseRegex = useRegex ?? options.UseRegex,
             ExactMatch = options.ExactMatch,
+            Multiline = options.Multiline,
+            MultilineDotAll = options.MultilineDotAll,
+            MaxMultilineBytes = options.MaxMultilineBytes,
+            MultilineEngine = options.MultilineEngine,
             ContextLines = contextLines ?? options.ContextLines,
             SearchMode = options.SearchMode,
             IncludeGlobs = options.IncludeGlobs,
@@ -2056,6 +2080,23 @@ public sealed class SearchService
         // payloads move to the disk-backed ResultStore.
         long quarter = (long)(totalPhysicalBytes / 4);
         return Math.Clamp(quarter, AutoProcessMemoryCapFloor, AutoProcessMemoryCapCeiling);
+    }
+
+    /// <summary>
+    /// Returns currently-available physical memory in bytes (Win32 <c>ullAvailPhys</c>), or a
+    /// conservative 2 GB fallback if the query fails. Used to size the dedicated multiline
+    /// file-concurrency degree so whole-file buffering stays within the RAM budget.
+    /// </summary>
+    internal static long GetAvailablePhysicalMemoryBytes()
+    {
+        try
+        {
+            var status = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
+            if (GlobalMemoryStatusEx(ref status))
+                return (long)status.ullAvailPhys;
+        }
+        catch { }
+        return 2L * 1024 * 1024 * 1024;
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]

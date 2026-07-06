@@ -25,6 +25,19 @@ public enum FilterPatternMode
 }
 
 /// <summary>
+/// Native multiline (cross-line) search backend selector (Phase 2, plan §5). Both engines scan the
+/// identical LF-normalized buffer and produce identical results, so this is a pure performance knob
+/// (only meaningful under <see cref="SearchOptions.Multiline"/> and when the native engine is loaded).
+/// </summary>
+public enum MultilineEngineKind
+{
+    /// <summary>Default: hand-rolled <c>regex::bytes</c> whole-buffer scan (spike-measured ~1.7× faster).</summary>
+    Regex = 0,
+    /// <summary>Alternate: ripgrep's vendored grep-searcher. Byte-identical results.</summary>
+    Grep = 1,
+}
+
+/// <summary>
 /// Configuration for a single search invocation.
 /// </summary>
 public sealed class SearchOptions
@@ -36,6 +49,40 @@ public sealed class SearchOptions
     public bool ExactMatch { get; init; } = true;
     public int ContextLines { get; init; } = 3;
     public SearchMode SearchMode { get; init; } = SearchMode.Both;
+
+    /// <summary>
+    /// When true, the query regex runs over the whole file buffer so a single match can span
+    /// line breaks (ripgrep <c>-U</c> / <c>--multiline</c>). Strictly opt-in: default false.
+    /// Multiline reads whole files into memory, runs at a lower parallelism, and skips files
+    /// larger than <see cref="MaxMultilineBytes"/>. Distinct from <c>RegexOptions.Multiline</c>
+    /// anchor semantics — this flag makes matches cross physical lines.
+    /// </summary>
+    public bool Multiline { get; init; }
+
+    /// <summary>
+    /// When true and <see cref="Multiline"/> is on, <c>.</c> also matches newlines
+    /// (ripgrep <c>--multiline-dotall</c> / inline <c>(?s)</c>). Only meaningful under multiline.
+    /// </summary>
+    public bool MultilineDotAll { get; init; }
+
+    /// <summary>
+    /// Dedicated size cap (in raw file bytes) for multiline search. Files larger than this are
+    /// skipped and counted (never degraded to line mode). Default 50 MB. The same value and the
+    /// same measure (raw file bytes) are consumed identically by the managed and native paths so
+    /// both skip the exact same files.
+    /// </summary>
+    public long MaxMultilineBytes { get; init; } = DefaultMaxMultilineBytes;
+
+    /// <summary>Default multiline size cap: 50 MB.</summary>
+    public const long DefaultMaxMultilineBytes = 50 * 1024 * 1024;
+
+    /// <summary>
+    /// Selects the native multiline backend (Phase 2): <see cref="MultilineEngineKind.Regex"/> (default,
+    /// hand-rolled whole-buffer scan) or <see cref="MultilineEngineKind.Grep"/> (ripgrep's grep-searcher).
+    /// Both produce identical results — a pure performance knob. Only meaningful under
+    /// <see cref="Multiline"/> and when the native engine is available.
+    /// </summary>
+    public MultilineEngineKind MultilineEngine { get; init; } = MultilineEngineKind.Regex;
 
     /// <summary>Comma-separated extensions or globs (e.g. "ts,js" or "*.ts,*.js").</summary>
     public IReadOnlyList<string> IncludeGlobs { get; init; } = [];
@@ -126,6 +173,31 @@ public sealed class SearchOptions
             4 => cores,
             _ => 0,
         };
+    }
+
+    /// <summary>
+    /// Resolves the dedicated multiline file-concurrency degree. Multiline holds whole files in
+    /// memory (managed footprint ≈ 2× the UTF-16 blowup: original decoded string + LF shadow copy),
+    /// so it MUST run at a much lower parallelism than the line path's up-to-64-way concurrency and
+    /// independently of whether the native engine is available. The degree is memory-derived:
+    /// available RAM ÷ (size cap × UTF-16 blowup × 2), clamped to a small range (default ~2–4).
+    /// Pure function for testability.
+    /// </summary>
+    /// <param name="processorCount">Logical processor count (upper bound for the degree).</param>
+    /// <param name="availableBytes">Available physical memory in bytes.</param>
+    /// <param name="maxMultilineBytes">Per-file multiline size cap in raw bytes.</param>
+    public static int ResolveMultilineParallelism(int processorCount, long availableBytes, long maxMultilineBytes)
+    {
+        int cores = Math.Max(1, processorCount);
+        long cap = maxMultilineBytes > 0 ? maxMultilineBytes : 50 * 1024 * 1024;
+        // UTF-16 blowup (≤2× file bytes) × 2 managed copies (original + LF shadow) ≈ 4× the cap.
+        long perFileBudget = cap * 4;
+        int memoryDerived = availableBytes > 0
+            ? (int)Math.Max(1, availableBytes / Math.Max(1, perFileBudget))
+            : 2;
+        // Cap between 2 and 4 (and never exceed the core count), matching the plan's ~2–4 default.
+        int degree = Math.Clamp(memoryDerived, 2, 4);
+        return Math.Max(1, Math.Min(degree, cores));
     }
 
     /// <summary>

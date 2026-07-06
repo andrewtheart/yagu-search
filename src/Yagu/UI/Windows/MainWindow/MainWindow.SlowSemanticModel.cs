@@ -27,6 +27,10 @@ public sealed partial class MainWindow
         // If the user accepts, IsSemanticQueryMode flips to true below and this submit runs as Semantic.
         await MaybeOfferSemanticSuggestionAsync();
 
+        // Then, if the query is still Traditional and contains a literal "\n" escape while Multiline is
+        // off, offer to switch Multiline (and Regex) on so the escape matches a real line break.
+        await MaybeOfferMultilineSuggestionAsync();
+
         if (_slowSemanticWatchActive || !ViewModel.IsSemanticQueryMode || !ViewModel.SemanticSearchAvailable)
         {
             await ViewModel.SubmitSearchAsync(RunPreSearchWarningGatesAsync);

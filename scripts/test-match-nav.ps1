@@ -329,6 +329,16 @@ Write-Host "[1] Launching Yagu..."
 # The exe name does not exist, so EditorLauncher.Open fails silently (no window, no dialog).
 $env:YAGU_EDITOR_COMMAND = 'yagu-ui-test-noop-editor --goto "{file}:{line}"'
 $yaguExe = "C:\src\Yagu\src\Yagu\bin\Debug\net10.0-windows10.0.19041.0\Yagu.exe"
+
+# Kill any leftover dev-build Yagu instance first. The app is single-instance, so a stale instance
+# (e.g. left running by a previous or failed run) would HIJACK this launch — the new process forwards
+# its command line to the existing instance and exits, and we'd drive the wrong window with the wrong
+# search. Only dev (bin-path) builds are targeted, never an installed app the user may have open.
+Get-Process Yagu -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -like '*\Yagu\bin\*' } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 500
+
 $proc = Start-Process -FilePath $yaguExe `
     -ArgumentList "--dir `"$Directory`" --query `"$Query`" --window-mode traditional" `
     -PassThru
@@ -517,12 +527,21 @@ if ($resultsList) {
         # so that once we know the cutoff Name we can recover its rect/CY for
         # the shift-click target without scrolling back.
         $cbByName = @{}
-        try {
-            if ([void]$seenNames.Add($first.Element.Current.Name)) {
-                $orderedNames.Add($first.Element.Current.Name)
-                $cbByName[$first.Element.Current.Name] = $first
-            }
-        } catch { }
+        # Seed the ordered list with ALL checkboxes currently onscreen at the top of the list (not
+        # just the first). For a small, non-scrollable result list the scroll loop below breaks
+        # immediately, so this seed is the only chance to record them — without it $orderedNames
+        # stays empty and the cutoff lookup below dereferences a null key. (The previous code used
+        # `if ([void]$seenNames.Add(...))`, whose [void] cast makes the condition always false, so
+        # even the first checkbox was never recorded.)
+        foreach ($cb in $firstCheckboxes) {
+            try {
+                $n = $cb.Element.Current.Name
+                if ($n) {
+                    if ($seenNames.Add($n)) { $orderedNames.Add($n) }
+                    $cbByName[$n] = $cb
+                }
+            } catch { }
+        }
 
         while ($scrollIter -lt $maxScrollIter) {
             if ($seenNames.Count -ge $targetItems) {
@@ -560,7 +579,7 @@ if ($resultsList) {
         $cutoffIdx = [Math]::Min($targetItems - 1, $orderedNames.Count - 1)
         if ($cutoffIdx -lt 0) { $cutoffIdx = 0 }
         $cutoffName = $orderedNames[$cutoffIdx]
-        if ($cbByName.ContainsKey($cutoffName)) {
+        if ($cutoffName -and $cbByName.ContainsKey($cutoffName)) {
             $lastCb = $cbByName[$cutoffName]
         }
 
@@ -838,6 +857,12 @@ for ($i = 1; $i -le $MatchIterations; $i++) {
 
 Write-Host ""
 Write-Host "=== Test complete. Screenshots saved to: $ScreenshotDir ==="
+
+# Close the instance we launched so a passing run leaves no stray Yagu window behind (and can't
+# hijack a subsequent run). Only the dev-build (bin-path) instance is targeted, never an installed app.
+Get-Process Yagu -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -like '*\Yagu\bin\*' } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
 Write-Host "Review the screenshots to verify match is always centered in the viewport."
 
 # Don't kill the app - leave it open for manual inspection

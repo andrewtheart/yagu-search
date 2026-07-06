@@ -30,6 +30,11 @@ internal static partial class NativeSearcher
         public ulong MaxResults;
         public ulong MaxFileSize;
         public byte SkipHidden;
+        // Multiline (cross-line, ripgrep -U) fields — ABI v6. Default 0 keeps
+        // the per-line path. Native multiline wiring lands in a later Phase 2 slice.
+        public byte MultiLine;
+        public byte MultiLineDotAll;
+        public byte MultilineEngine;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -94,6 +99,49 @@ internal static partial class NativeSearcher
         QgOptions* options,
         int* cancelFlag,
         delegate* unmanaged[Cdecl]<void*, QgMatchView*, int> onMatch,
+        void* onMatchCtx,
+        int* outStatus,
+        byte** outErrorMsg,
+        nuint* outErrorMsgLen);
+
+    /// <summary>
+    /// Span-carrying sibling of <see cref="QgMatchView"/> for the multiline
+    /// (cross-line) engine. The leading fields are byte-identical to
+    /// <see cref="QgMatchView"/> (so the single-line decode is reused for the
+    /// START/display line); <see cref="EndLine"/>/<see cref="EndCol"/> carry the
+    /// true span end. <see cref="EndCol"/> is a precomputed UTF-16 column on the
+    /// end line (Rust computes it — the record ships only the start line's bytes).
+    /// Layout is pinned by <c>qg_multiline_match_view_abi_layout_is_stable</c> in
+    /// yagu-core (size 104, align 8).
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct QgMultilineMatchView
+    {
+        public ulong LineNumber;
+        public uint MatchStart;
+        public uint SourceMatchStart;
+        public uint MatchLen;
+        public byte* LinePtr;
+        public nuint LineLen;
+        public byte* CtxBeforePtr;
+        public nuint CtxBeforeBytes;
+        public uint CtxBeforeCount;
+        public byte* CtxAfterPtr;
+        public nuint CtxAfterBytes;
+        public uint CtxAfterCount;
+        public ulong EndLine;
+        public uint EndCol;
+    }
+
+    [LibraryImport(DllName, EntryPoint = "qg_search_file_stream_multiline")]
+    private static unsafe partial int QgSearchFileStreamMultiline(
+        char* pathUtf16,
+        nuint pathLen,
+        byte* patternUtf8,
+        nuint patternLen,
+        QgOptions* options,
+        int* cancelFlag,
+        delegate* unmanaged[Cdecl]<void*, QgMultilineMatchView*, int> onMatch,
         void* onMatchCtx,
         int* outStatus,
         byte** outErrorMsg,
@@ -187,7 +235,7 @@ internal static partial class NativeSearcher
 
         try
         {
-            return QgAbiVersion() == 5;
+            return QgAbiVersion() == 6;
         }
         catch (DllNotFoundException) { LogService.Instance.Info("NativeSearcher", "yagu_core.dll not found"); return false; }
         catch (BadImageFormatException ex) { LogService.Instance.Warning("NativeSearcher", "yagu_core.dll bad image format", ex); return false; }
@@ -226,6 +274,45 @@ internal static partial class NativeSearcher
             MaxResults = EffectivePerFileCap(options),
             MaxFileSize = options.MaxFileSizeBytes > 0 ? (ulong)options.MaxFileSizeBytes : 0UL,
             SkipHidden = (byte)(options.SearchHiddenFiles ? 0 : 1),
+            // Native multiline is gated off in Phase 2 slice 1 (the C# gate forces
+            // managed for Multiline searches), so these stay 0 until the native
+            // whole-buffer engine is FFI-wired. Keeping the fields marshalled here
+            // ensures the QgOptions layout matches the Rust ABI v6 struct.
+            MultiLine = 0,
+            MultiLineDotAll = 0,
+            MultilineEngine = 0,
+        };
+    }
+
+    /// <summary>
+    /// Builds <see cref="QgOptions"/> for the native whole-buffer multiline
+    /// engine (<see cref="SearchFileStreamMultiline"/>). Sets the multiline flags
+    /// and — critically — carries the dedicated multiline size cap
+    /// (<see cref="SearchOptions.MaxMultilineBytes"/>) as <c>MaxFileSize</c>, so
+    /// the native path skips the EXACT same over-cap files the managed Phase-1
+    /// path does (parity-critical, plan §9).
+    /// </summary>
+    private static QgOptions CreateMultilineOptions(SearchOptions options)
+    {
+        uint contextLineCount = NativeContextLineCount(options);
+        return new QgOptions
+        {
+            CaseSensitive = (byte)(options.CaseSensitive ? 1 : 0),
+            UseRegex = (byte)(options.UseRegex ? 1 : 0),
+            SkipBinary = (byte)(options.SkipBinary ? 1 : 0),
+            OmitLineBytes = 0,
+            ContextBefore = contextLineCount,
+            ContextAfter = contextLineCount,
+            MaxResults = EffectivePerFileCap(options),
+            // The multiline cap is measured in raw file bytes, identical to the
+            // managed path's MaxMultilineBytes check.
+            MaxFileSize = options.MaxMultilineBytes > 0 ? (ulong)options.MaxMultilineBytes : 0UL,
+            SkipHidden = (byte)(options.SearchHiddenFiles ? 0 : 1),
+            MultiLine = 1,
+            MultiLineDotAll = (byte)(options.MultilineDotAll ? 1 : 0),
+            // 0 = hand-rolled regex::bytes (default), 1 = grep-searcher. Both engines are
+            // compiled into the DLL (grep_crates feature); the selection is a runtime switch.
+            MultilineEngine = (byte)options.MultilineEngine,
         };
     }
 
@@ -360,6 +447,93 @@ internal static partial class NativeSearcher
             {
                 var handle = GCHandle.FromIntPtr((IntPtr)ctx);
                 if (handle.Target is IStreamingSink sink)
+                {
+                    sink.CapturedException = ex;
+                }
+            }
+            catch { /* swallow */ }
+            return 1;
+        }
+    }
+
+    /// <summary>
+    /// Native whole-buffer multiline (cross-line) search of a single file — the
+    /// Phase 2 engine. Mirrors <see cref="SearchFileStream"/> but drives the
+    /// span-carrying <see cref="QgMultilineMatchView"/> callback. Returns the
+    /// final native status (StatusOk / StatusInvalidRegex for lookaround /
+    /// StatusTooLarge for over-cap / etc.). The pattern is the raw query; a
+    /// literal is escaped into the regex engine on the Rust side.
+    /// </summary>
+    public static unsafe int SearchFileStreamMultiline(
+        string filePath,
+        string pattern,
+        SearchOptions options,
+        int* cancelFlag,
+        IMultilineStreamingSink sink)
+    {
+        if (!IsAvailable) return StatusOpenFailed;
+
+        var ffiOptions = CreateMultilineOptions(options);
+        var patternBytes = Encoding.UTF8.GetBytes(pattern);
+        var handle = GCHandle.Alloc(sink, GCHandleType.Normal);
+        int status = StatusOk;
+        byte* errMsg = null;
+        nuint errMsgLen = 0;
+        try
+        {
+            fixed (char* pPath = filePath)
+            fixed (byte* pPattern = patternBytes)
+            {
+                _ = QgSearchFileStreamMultiline(
+                    pPath, (nuint)filePath.Length,
+                    pPattern, (nuint)patternBytes.Length,
+                    &ffiOptions,
+                    cancelFlag,
+                    &OnMultilineMatchTrampoline,
+                    (void*)GCHandle.ToIntPtr(handle),
+                    &status,
+                    &errMsg,
+                    &errMsgLen);
+            }
+
+            if (sink.CapturedException is { } ex)
+            {
+                throw new InvalidOperationException("Multiline streaming sink threw inside native callback", ex);
+            }
+
+            if (status == StatusInvalidRegex && errMsg != null && errMsgLen > 0)
+            {
+                sink.ErrorMessage = Encoding.UTF8.GetString(errMsg, (int)errMsgLen);
+            }
+
+            return status;
+        }
+        finally
+        {
+            if (errMsg != null) QgFreeBuffer(errMsg, errMsgLen);
+            handle.Free();
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static unsafe int OnMultilineMatchTrampoline(void* ctx, QgMultilineMatchView* m)
+    {
+        // Must NOT throw — UnmanagedCallersOnly forbids managed exceptions across the FFI boundary.
+        try
+        {
+            var handle = GCHandle.FromIntPtr((IntPtr)ctx);
+            if (handle.Target is IMultilineStreamingSink sink)
+            {
+                return sink.OnMultilineMatch(m);
+            }
+            return 1; // stop
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                var handle = GCHandle.FromIntPtr((IntPtr)ctx);
+                if (handle.Target is IMultilineStreamingSink sink)
                 {
                     sink.CapturedException = ex;
                 }
@@ -696,6 +870,18 @@ internal sealed class NativeSession : IDisposable
 internal interface IStreamingSink
 {
     unsafe int OnMatch(NativeSearcher.QgMatchView* m);
+    Exception? CapturedException { get; set; }
+    string? ErrorMessage { get; set; }
+}
+
+/// <summary>
+/// Receives streaming cross-line (multiline) matches from the native engine.
+/// Like <see cref="IStreamingSink"/> but each view carries the true span end.
+/// Implementations must copy pointer-backed data before returning.
+/// </summary>
+internal interface IMultilineStreamingSink
+{
+    unsafe int OnMultilineMatch(NativeSearcher.QgMultilineMatchView* m);
     Exception? CapturedException { get; set; }
     string? ErrorMessage { get; set; }
 }

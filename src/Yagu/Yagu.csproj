@@ -294,6 +294,10 @@
     <RustProfile Condition="'$(RustProfile)' == ''">release</RustProfile>
     <RustCargoProfileArgs Condition="'$(RustProfile)' == 'release'">--release</RustCargoProfileArgs>
     <RustCargoProfileArgs Condition="'$(RustCargoProfileArgs)' == ''">--profile $(RustProfile)</RustCargoProfileArgs>
+    <!-- Compile BOTH multiline engines into the DLL (default hand-rolled regex::bytes +
+         the grep-searcher alternate). The engine is a runtime switch (the multiline-engine
+         option), so grep_crates must be built in even though the default engine does not use it. -->
+    <RustCargoFeatureArgs Condition="'$(RustCargoFeatureArgs)' == ''">--features grep_crates</RustCargoFeatureArgs>
     <RustCoreDir>$(MSBuildThisFileDirectory)..\yagu-core\</RustCoreDir>
     <!-- Cross-compile the Rust core to match the .NET RuntimeIdentifier. With no RID
          (plain build) cargo targets the host and writes to target\<profile>\; with a
@@ -321,7 +325,7 @@
           WorkingDirectory="$(RustCoreDir)"
           IgnoreExitCode="true"
           ContinueOnError="WarnAndContinue" />
-    <Exec Command="&quot;$(CargoExe)&quot; build $(RustCargoTargetArgs) $(RustCargoProfileArgs) --quiet"
+    <Exec Command="&quot;$(CargoExe)&quot; build $(RustCargoTargetArgs) $(RustCargoProfileArgs) $(RustCargoFeatureArgs) --quiet"
           WorkingDirectory="$(RustCoreDir)"
           ConsoleToMSBuild="true"
           IgnoreStandardErrorWarningFormat="true"

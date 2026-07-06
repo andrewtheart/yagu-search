@@ -2149,7 +2149,7 @@ public sealed class PreviewCoreRegressionTests
 
         // The method grows over time; size the window to comfortably reach its tail
         // (RegisterSectionOverflow sits ~13.3k chars past the signature).
-        string highlight = ExtractMethodWindow(MainWindowSource, "BuildHighlightSectionAsync", 14000);
+        string highlight = ExtractMethodWindow(MainWindowSource, "BuildHighlightSectionAsync", 17000);
         Assert.Contains("MaxMatchesPerSection", highlight);
         Assert.Contains("MaxPreviewBlocksPerSection", highlight);
         Assert.Contains("cappedResults", highlight);
@@ -2336,17 +2336,17 @@ public sealed class PreviewCoreRegressionTests
             "return Math.Min(configuredLength, GetPreviewShowMoreMaxWindowLength());");
         Assert.Contains("LogPreviewShowMoreDiagnostics(\"BuildHighlightSection\")", previewBuilder);
 
-        string addParagraphs = ExtractMethodWindow(previewBuilder, "AddPreviewLineParagraphs", window: 2600);
+        string addParagraphs = ExtractMethodWindow(previewBuilder, "AddPreviewLineParagraphs", window: 3400);
         AssertContainsInOrder(addParagraphs,
             "TruncatePreviewLineAroundResult(line, result, rx) : TruncatePreviewLineWindow(line, rx)",
             "CreatePreviewTruncatedLineState(window, line, lineNum, isMatchLine, result, rx)",
             "truncationState: isContinuation ? null : expansionState");
 
-        string textRuns = ExtractMethodWindow(previewBuilder, "AddPreviewTextRuns", window: 2600);
+        string textRuns = ExtractMethodWindow(previewBuilder, "AddPreviewTextRuns", window: 3200);
         AssertContainsInOrder(textRuns,
             "line.StartsWith(LineTruncator.Ellipsis, StringComparison.Ordinal)",
             "CreatePreviewShowMoreInline(para, truncationState!, PreviewShowMoreEdge.Prefix)",
-            "AddPreviewTextSpanRuns(para, line[start..end], isMatchLine, rx, matchOrdinalsToColor)",
+            "AddPreviewTextSpanRuns(para, line[start..end], isMatchLine, rx, matchOrdinalsToColor, spanForThisText)",
             "CreatePreviewShowMoreInline(para, truncationState!, PreviewShowMoreEdge.Suffix)");
 
         string inline = ExtractMethodWindow(previewBuilder, "CreatePreviewShowMoreInline", window: 2600);
@@ -2551,7 +2551,7 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("int matchStart = r.IsEvicted ? r.ShortPreviewMatchStart : r.MatchStartColumn;", matchLineLoaded);
         Assert.Contains("HighlightInline(para, r.MatchLine, matchStart, r.MatchLength);", matchLineLoaded);
 
-        string textRuns = ExtractMethodWindow(MainWindowSource, "AddPreviewTextSpanRuns", window: 2600);
+        string textRuns = ExtractMethodWindow(MainWindowSource, "AddPreviewTextSpanRuns", window: 4400);
         Assert.Contains("s_previewSearchMatchRuns.AddOrUpdate(hit, new object());", textRuns);
         Assert.Contains("bool useMatchColor = isMatchLine && (matchOrdinalsToColor is null || matchOrdinalsToColor.Contains(matchOrdinal));", textRuns);
         Assert.Contains("hit.Foreground = _matchTextBrush;", textRuns);
@@ -2576,6 +2576,73 @@ public sealed class PreviewCoreRegressionTests
 
         string selection = ExtractMethodWindow(MainWindowSource, "EnsureCheckedMatchInPreviewAsync", window: 3400);
         Assert.Contains("ApplyMatchColorToParagraphMatch(paragraph, matchInPara);", selection);
+    }
+
+    [Fact]
+    public void MultilinePreview_HighlightsFullCrossLineSpan()
+    {
+        string previewBuilder = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.PreviewBuilder.cs"));
+
+        // The per-line span geometry is delegated to the pure, unit-tested helper.
+        string computeSpan = ExtractMethodWindow(previewBuilder, "ComputeMultilineLineSpan", window: 1200);
+        Assert.Contains("if (!result.IsMultilineMatch || result.MatchEndLineNumber is not int endLine)", computeSpan);
+        Assert.Contains("MultilinePreviewSpan.TryGetLineSpan(", computeSpan);
+
+        // The forced-span branch colors the computed columns directly (a per-line regex can never
+        // match a cross-line pattern), registering the run so it is navigable/boxable.
+        string textSpanRuns = ExtractMethodWindow(previewBuilder, "AddPreviewTextSpanRuns", window: 1600);
+        AssertContainsInOrder(textSpanRuns,
+            "if (forcedSpan is (int forcedStart, int forcedEnd))",
+            "s_previewSearchMatchRuns.AddOrUpdate(spanHit, new object());",
+            "spanHit.FontWeight = Microsoft.UI.Text.FontWeights.Bold;",
+            "spanHit.Foreground = _matchTextBrush;");
+
+        // Forced coloring only applies when the whole line renders as ONE untruncated segment so the
+        // full-line columns map 1:1 to the rendered text.
+        string addParagraphs = ExtractMethodWindow(previewBuilder, "AddPreviewLineParagraphs", window: 3000);
+        Assert.Contains("bool singleSegment = window.Text.Length <= GetEffectiveSegmentSize();", addParagraphs);
+        Assert.Contains("window.SourceStart == 0 && window.SourceEnd >= line.Length", addParagraphs);
+        Assert.Contains("forcedSpan: isContinuation ? null : effectiveForcedSpan", addParagraphs);
+
+        // The line window extends to the span END line so every spanned line is available to color.
+        string getPreviewLines = ExtractMethodWindow(previewBuilder, "GetPreviewLines", window: 2400);
+        Assert.Contains("int spanEndLine = r.MatchEndLineNumber ?? matchLineNum;", getPreviewLines);
+        Assert.Contains("endLine = Math.Min(allLines.Length - 1, (spanEndLine - 1) + previewLines);", getPreviewLines);
+
+        // The single-match highlight branch renders the full span and colors each line via forcedSpan.
+        string highlight = ExtractMethodWindow(previewBuilder, "BuildHighlightSectionAsync", window: 17000);
+        Assert.Contains("bool multilineMatch = matchResult.IsMultilineMatch;", highlight);
+        Assert.Contains("int spanEndLine = matchResult.MatchEndLineNumber ?? matchLineNumber;", highlight);
+        Assert.Contains("forcedSpan: ComputeMultilineLineSpan(matchResult, lineNum, allLines[i].Length)", highlight);
+        // The multi-range branch colors body/end lines that are not any result's start line.
+        Assert.Contains("(int start, int end)? SpanForLine(int lineNumber, int lineLength)", highlight);
+        Assert.Contains("var forcedSpan = SpanForLine(lineNum, allLines[i].Length);", highlight);
+    }
+
+    [Fact]
+    public void MultilinePreview_ActiveMatchOverlayBoxesEverySpannedLine()
+    {
+        string matchNav = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.MatchNav.cs"));
+
+        // The active-match overlay must box the matched portion on EVERY spanned line of a cross-line
+        // match (not just the start line), reusing the extra-word-marker mechanism.
+        string overlay = ExtractMethodWindow(matchNav, "TryUpdateActiveMatchOverlayFromActualRun", window: 23200);
+        Assert.Contains("TryAddMultilineSpanActiveMarkers(block, targetPara, markerHeight, viewportTop, viewportBottom, viewportWidth, charWidth, markerTopDelta)", overlay);
+
+        string spanMarkers = ExtractMethodWindow(matchNav, "TryAddMultilineSpanActiveMarkers", window: 4600);
+        // Only cross-line matches, and only the OTHER spanned lines (start line handled by the primary marker).
+        Assert.Contains("!result.IsMultilineMatch", spanMarkers);
+        Assert.Contains("result.MatchEndLineNumber is not int endLine", spanMarkers);
+        Assert.Contains("ReferenceEquals(para, startPara)", spanMarkers);
+        Assert.Contains("lineNumber <= startLine", spanMarkers);
+        Assert.Contains("lineNumber > endLine", spanMarkers);
+        // Geometry is derived from the span's end column (not from a registered gold run), so the box
+        // appears even if the line rendered without forced-span coloring.
+        Assert.Contains("result.MatchEndColumn ?? contentLength", spanMarkers);
+        Assert.Contains("GetPreviewParagraphTextPointerAtIndex(para, gutterLength + spanEndColumn)", spanMarkers);
+        Assert.Contains("_activeMatchExtraWordMarkers.Add(marker);", spanMarkers);
+        // Off-screen spanned lines are skipped gracefully.
+        Assert.Contains("top + height <= viewportTop || top >= viewportBottom", spanMarkers);
     }
 
     [Fact]
@@ -2702,7 +2769,7 @@ public sealed class PreviewCoreRegressionTests
             "using stored match context",
             "allLines = null;");
 
-        string getPreviewLines = ExtractMethodWindow(MainWindowSource, "GetPreviewLines", window: 1600);
+        string getPreviewLines = ExtractMethodWindow(MainWindowSource, "GetPreviewLines", window: 2400);
         Assert.Contains("if (fullFile && allLines is { Length: > 0 })", getPreviewLines);
         Assert.Contains("allLines is { Length: > 0 } && matchLineNum >= 1 && matchLineNum <= allLines.Length", getPreviewLines);
         Assert.DoesNotContain("if (matchIdx >= allLines.Length) matchIdx = allLines.Length - 1;", getPreviewLines);

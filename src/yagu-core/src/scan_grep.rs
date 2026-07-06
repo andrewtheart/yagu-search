@@ -139,6 +139,158 @@ where
     session.scan(bytes, options, || false, emit)
 }
 
+/// Whole-buffer cross-line (multiline) scan built on ripgrep's `grep-searcher`
+/// (the ALTERNATE Phase 2 engine, `multiline_engine == 1`, plan §5). It scans
+/// the SAME LF-normalized buffer and feeds every match's absolute byte-span
+/// through the SHARED [`crate::scan_multiline::map_match_to_record`], so it emits
+/// records byte-identical to the default hand-rolled engine — the A/B
+/// correctness oracle. Yagu's own `looks_binary` classifies text/binary (not
+/// grep's `BinaryDetection`), and context is computed from the line table (not
+/// grep's context callbacks), so the two engines can never diverge.
+pub fn scan_multiline_grep<C, E>(
+    bytes: &[u8],
+    pattern: &str,
+    options: &ScanOptions,
+    mut should_cancel: C,
+    emit: E,
+) -> Result<usize, ScanError>
+where
+    C: FnMut() -> bool,
+    E: FnMut(crate::scan_multiline::MultilineMatchRecord) -> bool,
+{
+    // Binary sniff on RAW bytes with Yagu's classifier (parity with the default
+    // engine), then scan the LF-normalized buffer.
+    if options.skip_binary && crate::scan::looks_binary(bytes) {
+        return Err(ScanError::BinarySkipped);
+    }
+    if should_cancel() {
+        return Ok(0);
+    }
+
+    let lf = crate::scan_multiline::normalize_to_lf(bytes);
+    let hay: &[u8] = lf.as_ref();
+    let line_starts = crate::scan_multiline::build_line_starts(hay);
+
+    let final_pattern = if options.use_regex {
+        pattern.to_owned()
+    } else {
+        regex::escape(pattern)
+    };
+    // NOTE: no `.line_terminator(..)` on the matcher — that would forbid matching
+    // across `\n` (it is what the single-line GrepSession sets). Multiline needs
+    // the matcher free to span line breaks.
+    let matcher = RegexMatcherBuilder::new()
+        .case_insensitive(!options.case_sensitive)
+        .case_smart(false)
+        .multi_line(true)
+        .dot_matches_new_line(options.multi_line_dotall)
+        .build(&final_pattern)
+        .map_err(|e| ScanError::InvalidRegex(e.to_string()))?;
+
+    let mut searcher = SearcherBuilder::new()
+        .multi_line(true)
+        .line_number(false) // line numbers come from the shared line table
+        .binary_detection(BinaryDetection::none())
+        .build();
+
+    let mut sink = MlSpanSink {
+        matcher: &matcher,
+        hay,
+        line_starts: &line_starts,
+        options,
+        start_cur: crate::scan_multiline::LineColCursor::new(),
+        end_cur: crate::scan_multiline::LineColCursor::new(),
+        emit,
+        should_cancel,
+        emitted: 0,
+        max_results: options.max_results,
+    };
+
+    searcher
+        .search_slice(&matcher, hay, &mut sink)
+        .map_err(|e| ScanError::Io(std::io::Error::other(e.to_string())))?;
+
+    Ok(sink.emitted)
+}
+
+/// Span sink for [`scan_multiline_grep`]. Each `SinkMatch` block is re-scanned
+/// with the matcher (grep-searcher gives block bounds, not per-match spans in
+/// multiline mode); each match's absolute byte-span is mapped by the shared
+/// [`crate::scan_multiline::map_match_to_record`]. Zero-width matches are dropped
+/// to match the default engine.
+struct MlSpanSink<'a, C, E>
+where
+    C: FnMut() -> bool,
+    E: FnMut(crate::scan_multiline::MultilineMatchRecord) -> bool,
+{
+    matcher: &'a RegexMatcher,
+    hay: &'a [u8],
+    line_starts: &'a [usize],
+    options: &'a ScanOptions,
+    start_cur: crate::scan_multiline::LineColCursor,
+    end_cur: crate::scan_multiline::LineColCursor,
+    emit: E,
+    should_cancel: C,
+    emitted: usize,
+    max_results: usize,
+}
+
+impl<C, E> Sink for MlSpanSink<'_, C, E>
+where
+    C: FnMut() -> bool,
+    E: FnMut(crate::scan_multiline::MultilineMatchRecord) -> bool,
+{
+    type Error = SinkAbort;
+
+    fn matched(
+        &mut self,
+        _searcher: &Searcher,
+        sink_match: &SinkMatch<'_>,
+    ) -> Result<bool, Self::Error> {
+        if (self.should_cancel)() {
+            return Ok(false);
+        }
+
+        let block = sink_match.bytes();
+        let block_abs = sink_match.absolute_byte_offset() as usize;
+
+        // Collect the block's match ranges first (the matcher borrow must end
+        // before we take the mutable self borrows in map_match_to_record).
+        let mut ranges: Vec<Match> = Vec::new();
+        self.matcher
+            .find_iter(block, |mat| {
+                ranges.push(mat);
+                true
+            })
+            .map_err(|_| SinkAbort)?;
+
+        for mat in ranges {
+            if mat.start() == mat.end() {
+                continue; // drop zero-width, matching the default engine
+            }
+            let abs_start = block_abs + mat.start();
+            let abs_end = block_abs + mat.end();
+            let rec = crate::scan_multiline::map_match_to_record(
+                self.hay,
+                self.line_starts,
+                abs_start,
+                abs_end,
+                &mut self.start_cur,
+                &mut self.end_cur,
+                self.options,
+            );
+            self.emitted += 1;
+            if !(self.emit)(rec) {
+                return Ok(false);
+            }
+            if self.max_results != 0 && self.emitted >= self.max_results {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+}
+
 /// Adapter between ripgrep's event-based searcher and Yagu's match-record
 /// shape. It keeps before-context in a ring, delays records that still need
 /// after-context, and emits only when a match is complete.
@@ -369,6 +521,9 @@ mod tests {
             skip_binary: false,
             ascii_case_only: false,
             metadata_only: false,
+            multi_line: false,
+            multi_line_dotall: false,
+            multiline_engine: 0,
         }
     }
 
@@ -529,3 +684,98 @@ mod tests {
         assert_eq!(total, 4);
     }
 }
+
+/// A/B correctness oracle (plan §5): the grep-searcher multiline engine
+/// (`scan_multiline_grep`) MUST emit records byte-identical to the default
+/// hand-rolled engine (`scan_multiline`) — they scan the same LF buffer and
+/// share the span mapper, so any divergence is a bug.
+#[cfg(test)]
+mod ml_ab_tests {
+    use crate::scan::ScanOptions;
+    use crate::scan_grep::scan_multiline_grep;
+    use crate::scan_multiline::{scan_multiline, MultilineMatchRecord};
+
+    fn opts(dotall: bool) -> ScanOptions {
+        ScanOptions {
+            case_sensitive: true,
+            use_regex: true,
+            context_before: 0,
+            context_after: 0,
+            max_results: 0,
+            skip_binary: false,
+            ascii_case_only: false,
+            metadata_only: false,
+            multi_line: true,
+            multi_line_dotall: dotall,
+            multiline_engine: 0,
+        }
+    }
+
+    fn hand_rolled(bytes: &[u8], pattern: &str, o: &ScanOptions) -> Vec<MultilineMatchRecord> {
+        let mut recs = Vec::new();
+        scan_multiline(bytes, pattern, o, || false, |r| {
+            recs.push(r);
+            true
+        })
+        .unwrap();
+        recs
+    }
+
+    fn grep(bytes: &[u8], pattern: &str, o: &ScanOptions) -> Vec<MultilineMatchRecord> {
+        let mut recs = Vec::new();
+        scan_multiline_grep(bytes, pattern, o, || false, |r| {
+            recs.push(r);
+            true
+        })
+        .unwrap();
+        recs
+    }
+
+    #[test]
+    fn ab_oracle_engines_emit_identical_records() {
+        // (bytes, pattern, dotall)
+        let cases: &[(&[u8], &str, bool)] = &[
+            (b"xx foo\nbar yy\nzz\n", "foo.bar", true),          // cross-line dotall
+            (b"foo\r\nbar\r\n", "foo$", false),                  // CRLF, $ excludes '\r'
+            (b"foo\r\nbar\r\n", "foo\\nbar", false),             // CRLF cross-line span
+            (b"end\nmiddle\nend\n", "end$", false),              // multiline $ anchor (2 hits)
+            (b"A1\nB A2\nB tail\n", "A[\\s\\S]*?B", false),      // lazy cross-line (2 hits)
+            (b"foo foo foo\n", "foo", false),                    // multi-match same line
+            ("cafe\u{0301} foo\nbar\n".as_bytes(), "foo.bar", true), // non-ASCII start line
+            (b"no match here\n", "zzz", false),                  // no match
+            (b"line1\nSTART x\ny END\nafter\n", "START[\\s\\S]*?END", true), // span + tail
+        ];
+        for (bytes, pattern, dotall) in cases {
+            let o = opts(*dotall);
+            assert_eq!(
+                hand_rolled(bytes, pattern, &o),
+                grep(bytes, pattern, &o),
+                "engines diverge on pattern {pattern:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ab_oracle_with_context_agrees() {
+        let bytes = b"before1\nbefore2\nSTARTa\naEND\nafter1\nafter2\n";
+        let mut o = opts(true);
+        o.context_before = 2;
+        o.context_after = 2;
+        assert_eq!(
+            hand_rolled(bytes, "START[\\s\\S]*?END", &o),
+            grep(bytes, "START[\\s\\S]*?END", &o),
+        );
+    }
+
+    #[test]
+    fn ab_oracle_max_results_agrees() {
+        let bytes = b"m\nm\nm\nm\nm\n";
+        let mut o = opts(false);
+        o.max_results = 3;
+        let a = hand_rolled(bytes, "m", &o);
+        let b = grep(bytes, "m", &o);
+        assert_eq!(a.len(), 3);
+        assert_eq!(a, b);
+    }
+}
+

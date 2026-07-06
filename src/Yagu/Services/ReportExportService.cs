@@ -104,6 +104,10 @@ public static class ReportExportService
                 jsonWriter.WriteString("matchLine", matchLine);
                 jsonWriter.WriteNumber("matchStart", result.MatchStartColumn);
                 jsonWriter.WriteNumber("matchLength", result.MatchLength);
+                if (result.MatchEndLineNumber is int endLine)
+                    jsonWriter.WriteNumber("matchEndLine", endLine);
+                if (result.MatchEndColumn is int endCol)
+                    jsonWriter.WriteNumber("matchEndColumn", endCol);
 
                 if (options.IncludeContextLines && options.ContextLineCount > 0)
                 {
@@ -158,6 +162,8 @@ public static class ReportExportService
         headers.Add("MatchLine");
         headers.Add("MatchStart");
         headers.Add("MatchLength");
+        headers.Add("MatchEndLine");
+        headers.Add("MatchEndColumn");
         if (includeContext)
         {
             headers.Add("ContextBefore");
@@ -205,6 +211,8 @@ public static class ReportExportService
                 fields.Add(CsvEscape(matchLine));
                 fields.Add(result.MatchStartColumn.ToString(CultureInfo.InvariantCulture));
                 fields.Add(result.MatchLength.ToString(CultureInfo.InvariantCulture));
+                fields.Add(result.MatchEndLineNumber?.ToString(CultureInfo.InvariantCulture) ?? "");
+                fields.Add(result.MatchEndColumn?.ToString(CultureInfo.InvariantCulture) ?? "");
 
                 if (includeContext)
                 {
@@ -261,7 +269,9 @@ public static class ReportExportService
         if (captured.Count >= maxLines || sourceContext is null)
             return captured;
 
-        var fromSource = sourceContext.GetAfter(result.LineNumber, maxLines);
+        // After-context is numbered from the END line of the match (for a single-line result
+        // MatchEndLineNumber is null, so this is LineNumber — the existing behavior).
+        var fromSource = sourceContext.GetAfter(result.MatchEndLineNumber ?? result.LineNumber, maxLines);
         return fromSource.Count > captured.Count ? fromSource : captured;
     }
 

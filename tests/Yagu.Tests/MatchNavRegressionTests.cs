@@ -18,11 +18,14 @@ namespace Yagu.Tests;
 ///
 /// This test is heavy: it actually launches the WinUI 3 desktop app, drives
 /// the UI via UIAutomation, and takes full-screen screenshots. It must run
-/// on Windows in an interactive session. To enable it, set the env var
+/// on Windows in an interactive session. It is tagged <c>Headed</c> (requires an
+/// interactive desktop, so excluded from default headless/CI runs) and <c>Slow</c>.
+/// Because it is also screenshot-fragile it keeps an extra opt-in: set the env var
 /// <c>YAGU_RUN_UI_REGRESSION=1</c>. Without that, the test exits early with
 /// a "skipped" message so CI runs that lack a desktop session don't fail.
 /// </summary>
 [Trait("Category", "Slow")]
+[Trait("Category", "Headed")]
 public sealed class MatchNavRegressionTests
 {
     private const int MinRedPixelsPerMatch = 100;
@@ -37,16 +40,19 @@ public sealed class MatchNavRegressionTests
     [Fact]
     public void MatchNav_AllScreenshotsContainHighlight()
     {
-        if (!OperatingSystem.IsWindows())
+        if (!HeadedTestEnvironment.CanRun)
         {
-            _output.WriteLine("Skipped: UI regression test requires Windows.");
+            _output.WriteLine($"Skipped: {HeadedTestEnvironment.SkipReason}");
             return;
         }
 
+        // Extra opt-in on top of the headed-capability gate: this test is screenshot-fragile (it fails
+        // if any other Yagu instance is running, and depends on exact highlight pixels), so it is not
+        // auto-run even on a capable desktop — a dev must set YAGU_RUN_UI_REGRESSION=1 deliberately.
         var optIn = Environment.GetEnvironmentVariable("YAGU_RUN_UI_REGRESSION");
         if (string.IsNullOrEmpty(optIn) || optIn == "0")
         {
-            _output.WriteLine("Skipped: set YAGU_RUN_UI_REGRESSION=1 to run the UI regression test.");
+            _output.WriteLine("Skipped: set YAGU_RUN_UI_REGRESSION=1 to run the screenshot-fragile match-nav UI test.");
             return;
         }
 
@@ -58,9 +64,9 @@ public sealed class MatchNavRegressionTests
         Assert.True(File.Exists(redCountScript), $"Missing red-count script: {redCountScript}");
 
         var yaguExe = Path.Combine(
-            solutionRoot, "Yagu", "bin", "Debug", "net10.0-windows10.0.19041.0", "Yagu.exe");
+            solutionRoot, "src", "Yagu", "bin", "Debug", "net10.0-windows10.0.19041.0", "Yagu.exe");
         Assert.True(File.Exists(yaguExe),
-            $"Yagu Debug build not found at {yaguExe}. Run 'dotnet build Yagu/Yagu.csproj -c Debug' first.");
+            $"Yagu Debug build not found at {yaguExe}. Run 'dotnet build src/Yagu/Yagu.csproj -c Debug' first.");
 
         // Random per-run screenshot directory under TestResults so concurrent runs
         // don't collide and old screenshots don't pollute the red-pixel scan.
@@ -70,13 +76,26 @@ public sealed class MatchNavRegressionTests
         Directory.CreateDirectory(screenshotDir);
         _output.WriteLine($"Screenshot dir: {screenshotDir}");
 
+        // Drive a SMALL, DETERMINISTIC corpus instead of the old default (all of C:\ for "a", which
+        // produced tens of millions of matches over minutes, so the match-nav panel was never ready
+        // when the script looked for the Next-match button). A handful of files with a known term
+        // makes the search finish in well under a second and the match-nav flow reliable.
+        // The term is deliberately long (14 chars) so the active-match highlight band is comfortably
+        // above the MinRedPixelsPerMatch floor — a short term like "needle" renders only ~97 px.
+        const string query = "yagumatchtoken";
+        var corpusDir = Path.Combine(solutionRoot, "TestResults", "MatchNavCorpus", runId);
+        Directory.CreateDirectory(corpusDir);
+        CreateMatchNavCorpus(corpusDir, query);
+        _output.WriteLine($"Corpus dir: {corpusDir}");
+
         try
         {
-            // Step 1: drive the UI and capture screenshots.
+            // Step 1: drive the UI and capture screenshots against the deterministic corpus.
             RunPowerShellScript(
                 navScript,
-                $"-ScreenshotDir \"{screenshotDir}\"",
-                timeout: TimeSpan.FromMinutes(15));
+                $"-Directory \"{corpusDir}\" -Query \"{query}\" -ScreenshotDir \"{screenshotDir}\" " +
+                "-SearchWaitSeconds 4 -MatchIterations 24",
+                timeout: TimeSpan.FromMinutes(5));
 
             // Step 2: red-pixel scan over 03-match-*.png. Use Threshold = MinRedPixelsPerMatch - 1
             // so the script only emits rows for screenshots whose count is BELOW the floor;
@@ -125,6 +144,11 @@ public sealed class MatchNavRegressionTests
         {
             _output.WriteLine($"Test failed; screenshot dir preserved at {screenshotDir} for inspection.");
             throw;
+        }
+        finally
+        {
+            // The corpus is disposable — always clean it up (screenshots are kept for diagnosis).
+            try { Directory.Delete(corpusDir, recursive: true); } catch { /* best-effort */ }
         }
     }
 
@@ -208,6 +232,27 @@ public sealed class MatchNavRegressionTests
                 failures.Add((redCount, pathPart));
         }
         return failures;
+    }
+
+    // Builds a small, deterministic corpus so the match-nav UI flow is fast and reliable: four files
+    // each with eight lines containing the query term (32 matches total), giving plenty to navigate
+    // through and screenshot the active-match highlight for, without depending on a huge live search.
+    private static void CreateMatchNavCorpus(string dir, string query)
+    {
+        for (int f = 1; f <= 4; f++)
+        {
+            var sb = new System.Text.StringBuilder();
+            for (int ln = 1; ln <= 24; ln++)
+            {
+                sb.AppendLine(ln % 3 == 0
+                    ? $"L{ln}: the {query} appears clearly here on line {ln} of file {f}."
+                    : $"L{ln}: filler line {ln} of file {f} with no target term.");
+            }
+            File.WriteAllText(
+                Path.Combine(dir, $"match-corpus-{f}.txt"),
+                sb.ToString(),
+                new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
     }
 
     private static string FindSolutionRoot()

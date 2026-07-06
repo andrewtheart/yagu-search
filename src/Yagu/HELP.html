@@ -287,8 +287,8 @@ not change the pin.</li>
 </ul></li>
 <li>Enter the search query in the search box.</li>
 <li>Choose search options: <strong>Case sensitive</strong> (Alt+C),
-<strong>Regex</strong> (Alt+R), <strong>Exact match</strong>
-(Alt+E).</li>
+<strong>Regex</strong> (Alt+R), <strong>Multiline</strong> (Alt+M),
+<strong>Exact match</strong> (Alt+E).</li>
 <li>Click <strong>Search</strong> or press <strong>Enter</strong> in the
 search box.</li>
 <li>Results stream in while the search runs. Click a result or match
@@ -331,8 +331,8 @@ option toggles.</td>
 </tr>
 <tr>
 <td>Options row</td>
-<td>Quick toggles for Regex, Case, Exact match, and the Advanced Options
-expander.</td>
+<td>Quick toggles for Regex, Case, Multiline, Exact match, and the
+Advanced Options expander.</td>
 </tr>
 <tr>
 <td>Results pane (left)</td>
@@ -430,6 +430,13 @@ quotes are allowed
 reported before scanning.</td>
 </tr>
 <tr>
+<td>Multiline</td>
+<td>Alt+M</td>
+<td>Match across lines: runs the query over the whole file so a single
+match can span line breaks (like ripgrep <code>-U</code>). Strictly
+opt-in and off by default.</td>
+</tr>
+<tr>
 <td>Exact match</td>
 <td>Alt+E</td>
 <td>Matches whole words only (word boundaries around the query).</td>
@@ -450,6 +457,29 @@ row.</td>
 <p>Literal searches are faster than regex. Use regex when you need
 pattern matching, anchors, alternation, groups, or character
 classes.</p>
+<h3 id="match-across-lines-multiline">Match across lines
+(multiline)</h3>
+<p>By default a match must fit on one physical line. Turn on
+<strong>Multiline</strong> (the <code>\n</code> toggle in the search
+box, Alt+M, or the checkbox in Advanced Options → Search) to let a
+single regex match span line breaks — for example
+<code>foo[\s\S]*?bar</code> matches a <code>foo</code> on one line and a
+<code>bar</code> several lines later. In Advanced Options a sub-option,
+<strong><code>.</code> matches newlines</strong>, additionally lets the
+dot match newline characters (dot-all).</p>
+<p>Multiline reads whole files into memory, runs at a lower concurrency,
+and is slower than the default line search — pair it with a narrower
+scope than a whole drive. Files larger than the multiline size cap (50
+MB by default) are skipped and reported, never silently line-searched.
+Cross-line matches in the results show the start line plus a
+<code>… (+N lines)</code> marker; full cross-line highlighting in the
+preview is not yet available. The default state of the toggle can be set
+in Settings.</p>
+<p>Multiline runs on the native engine (with the managed engine as a
+fallback for lookaround patterns). Two interchangeable native backends
+are available and give identical results — a hand-rolled scan (default)
+and ripgrep’s grep-searcher — selectable as a global performance knob in
+Settings or via the CLI <code>--multiline-engine</code> flag.</p>
 <hr />
 <h2 id="semantic-search-local-ai">Semantic Search (Local AI)</h2>
 <p>The <strong>Search</strong> button has a <strong>chevron</strong> on
@@ -2294,6 +2324,10 @@ editing, or adding shell redirection before running the command.</p>
 <td>Toggle regex.</td>
 </tr>
 <tr>
+<td><strong>Alt+M</strong></td>
+<td>Toggle match across lines (multiline).</td>
+</tr>
+<tr>
 <td><strong>Alt+E</strong></td>
 <td>Toggle exact match.</td>
 </tr>
@@ -2964,6 +2998,32 @@ integration:</p>
 <tr>
 <td><code>--no-exact-match</code></td>
 <td>Allow substring matches.</td>
+</tr>
+<tr>
+<td><code>-U</code>, <code>--multiline</code></td>
+<td>Match across lines: run the pattern over the whole file so a match
+can span line breaks (ripgrep <code>-U</code>). Reads whole files;
+slower/heavier — pair with a narrow scope.</td>
+</tr>
+<tr>
+<td><code>--no-multiline</code></td>
+<td>Match within single lines (default).</td>
+</tr>
+<tr>
+<td><code>--multiline-dotall</code></td>
+<td>With <code>--multiline</code>, the dot (<code>.</code>) also matches
+newlines (<code>(?s)</code>).</td>
+</tr>
+<tr>
+<td><code>--max-multiline-bytes &lt;size&gt;</code></td>
+<td>Skip files larger than this in multiline mode (default: 50MB;
+accepts e.g. <code>20MB</code>, <code>1GB</code>).</td>
+</tr>
+<tr>
+<td><code>--multiline-engine &lt;e&gt;</code></td>
+<td>Native multiline backend: <code>regex</code> (default) or
+<code>grep</code>. Both give identical results — a performance knob
+(implies <code>--multiline</code>).</td>
 </tr>
 </tbody>
 </table>

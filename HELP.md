@@ -13,7 +13,7 @@ Yagu is a fast Windows search app for finding text, regex matches, or file names
    - Use the Windows Explorer context menu: right-click a folder → **Search with Yagu**.
    - Click the **★ pin** to the left of Browse to keep the current folder as the startup default so it is pre-filled the next time Yagu opens. By default the box starts empty (which searches all drives); click the pin again to unpin and clear the saved folder. Pinning snapshots the folder when you click it — changing the box afterward does not change the pin.
 3. Enter the search query in the search box.
-4. Choose search options: **Case sensitive** (Alt+C), **Regex** (Alt+R), **Exact match** (Alt+E).
+4. Choose search options: **Case sensitive** (Alt+C), **Regex** (Alt+R), **Multiline** (Alt+M), **Exact match** (Alt+E).
 5. Click **Search** or press **Enter** in the search box.
 6. Results stream in while the search runs. Click a result or match line to preview it.
 7. Use Open, Edit, Copy, or Export actions to work with the results.
@@ -29,7 +29,7 @@ The main screen has six working areas:
 | Title bar | App title, Help button (F1), Settings gear, and window mode pin. |
 | Directory bar | The folder to search, with auto-complete, a pin (★) to keep the current folder as the startup default, Browse, and recent history. |
 | Search bar | Query entry with history (Down arrow), Search/Cancel (F5), and option toggles. |
-| Options row | Quick toggles for Regex, Case, Exact match, and the Advanced Options expander. |
+| Options row | Quick toggles for Regex, Case, Multiline, Exact match, and the Advanced Options expander. |
 | Results pane (left) | Matching files and lines with sorting, grouping, filtering, selection, copy, and export. |
 | Preview pane (right) | Match preview, full-file view, built-in editor, match navigation, and export. |
 
@@ -60,11 +60,31 @@ Use the search mode dropdown to decide what the query matches:
 | --- | --- | --- |
 | Case sensitive | Alt+C | Requires exact casing. Leave off for case-insensitive search. |
 | Regex | Alt+R | Treats the query as a .NET regular expression. Invalid regexes are reported before scanning. |
+| Multiline | Alt+M | Match across lines: runs the query over the whole file so a single match can span line breaks (like ripgrep `-U`). Strictly opt-in and off by default. |
 | Exact match | Alt+E | Matches whole words only (word boundaries around the query). |
 | Context | — | Number of lines before and after each match stored with each result row. |
 | Preview context | — | Number of surrounding lines shown in the preview pane. |
 
 Literal searches are faster than regex. Use regex when you need pattern matching, anchors, alternation, groups, or character classes.
+
+### Match across lines (multiline)
+
+By default a match must fit on one physical line. Turn on **Multiline** (the `\n` toggle in the
+search box, Alt+M, or the checkbox in Advanced Options → Search) to let a single regex match span
+line breaks — for example `foo[\s\S]*?bar` matches a `foo` on one line and a `bar` several lines
+later. In Advanced Options a sub-option, **`.` matches newlines**, additionally lets the dot match
+newline characters (dot-all).
+
+Multiline reads whole files into memory, runs at a lower concurrency, and is slower than the default
+line search — pair it with a narrower scope than a whole drive. Files larger than the multiline size
+cap (50 MB by default) are skipped and reported, never silently line-searched. Cross-line matches in
+the results show the start line plus a `… (+N lines)` marker; full cross-line highlighting in the
+preview is not yet available. The default state of the toggle can be set in Settings.
+
+Multiline runs on the native engine (with the managed engine as a fallback for lookaround patterns).
+Two interchangeable native backends are available and give identical results — a hand-rolled scan
+(default) and ripgrep's grep-searcher — selectable as a global performance knob in Settings or via
+the CLI `--multiline-engine` flag.
 
 ---
 
@@ -602,6 +622,7 @@ When using generated CLI commands, **Send command to terminal** first verifies t
 | **Ctrl+Click** Next/Prev | Bulk match jump (configurable step size). |
 | **Alt+C** | Toggle case sensitive. |
 | **Alt+R** | Toggle regex. |
+| **Alt+M** | Toggle match across lines (multiline). |
 | **Alt+E** | Toggle exact match. |
 | **Double-click** (preview match) | Open built-in editor at that line. |
 
@@ -978,6 +999,11 @@ Yagu.exe --cli --directory <path> PATTERN [OPTIONS]
 | `--search-mode <mode>` | `both`, `content`, `filenames`, `filename-then-content`. |
 | `--exact-match` | Match whole words only (default). |
 | `--no-exact-match` | Allow substring matches. |
+| `-U`, `--multiline` | Match across lines: run the pattern over the whole file so a match can span line breaks (ripgrep `-U`). Reads whole files; slower/heavier — pair with a narrow scope. |
+| `--no-multiline` | Match within single lines (default). |
+| `--multiline-dotall` | With `--multiline`, the dot (`.`) also matches newlines (`(?s)`). |
+| `--max-multiline-bytes <size>` | Skip files larger than this in multiline mode (default: 50MB; accepts e.g. `20MB`, `1GB`). |
+| `--multiline-engine <e>` | Native multiline backend: `regex` (default) or `grep`. Both give identical results — a performance knob (implies `--multiline`). |
 
 ### Semantic Search (local AI)
 

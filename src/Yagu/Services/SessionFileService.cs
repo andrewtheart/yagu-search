@@ -14,7 +14,17 @@ namespace Yagu.Services;
 public static class SessionFileService
 {
     public const string FileExtension = ".yagu-session";
-    public const string SchemaVersion = "yagu-session/v1";
+
+    /// <summary>
+    /// Current schema version written by this build. v2 (Phase 1b) adds optional per-result
+    /// cross-line span fields (<c>mel</c>/<c>mec</c>); a v1 file (no span fields) loads as
+    /// single-line, and a v2 file with no multiline results is byte-compatible with v1 apart
+    /// from this version string. Readers accept every version in <see cref="ReadableSchemaVersions"/>.
+    /// </summary>
+    public const string SchemaVersion = "yagu-session/v2";
+
+    /// <summary>Schema versions this build knows how to read. Newer/unknown versions are refused.</summary>
+    private static readonly string[] ReadableSchemaVersions = ["yagu-session/v1", "yagu-session/v2"];
 
     private const int ResultBatchSize = 1024;
 
@@ -190,6 +200,14 @@ public static class SessionFileService
         writer.WriteNumber("sc", r.SourceMatchStartColumn);
         writer.WriteNumber("mlen", r.MatchLength);
 
+        // Phase 1b: persist the cross-line span only for multiline matches, so single-line
+        // sessions stay compact and byte-compatible with v1 apart from the schema string.
+        if (r.MatchEndLineNumber is int matchEndLine)
+        {
+            writer.WriteNumber("mel", matchEndLine);
+            writer.WriteNumber("mec", r.MatchEndColumn ?? 0);
+        }
+
         WriteStringArray(writer, "b", r.ContextBefore);
         WriteStringArray(writer, "a", r.ContextAfter);
 
@@ -243,9 +261,9 @@ public static class SessionFileService
         if (string.IsNullOrEmpty(schema) || !schema.StartsWith("yagu-session/", StringComparison.Ordinal))
             throw new InvalidDataException($"Not a Yagu session file (schema='{schema}').");
 
-        // We only know how to read v1 today. Newer versions: fail loudly.
-        if (!string.Equals(schema, SchemaVersion, StringComparison.Ordinal))
-            throw new InvalidDataException($"Unsupported session schema '{schema}' (this build understands '{SchemaVersion}').");
+        // We understand v1 and v2 (see ReadableSchemaVersions). Newer versions: fail loudly.
+        if (Array.IndexOf(ReadableSchemaVersions, schema) < 0)
+            throw new InvalidDataException($"Unsupported session schema '{schema}' (this build understands {string.Join(", ", ReadableSchemaVersions)}).");
 
         DateTime savedUtc = root.TryGetProperty("savedUtc", out var su) && DateTime.TryParse(su.GetString(), null, DateTimeStyles.RoundtripKind, out var savedParsed)
             ? savedParsed : DateTime.UtcNow;
@@ -322,11 +340,18 @@ public static class SessionFileService
         int sourceMatchStart = el.TryGetProperty("sc", out var sc) && sc.TryGetInt32(out var scv) ? scv : matchStart;
         int matchLength = el.TryGetProperty("mlen", out var mlen) && mlen.TryGetInt32(out var mlenv) ? mlenv : 0;
 
+        // Phase 1b: optional cross-line span. Absent (v1, or a single-line v2 result) => null => single-line.
+        // The writer always pairs mel+mec, so a present mel implies a concrete end column (default 0).
+        int? matchEndLine = el.TryGetProperty("mel", out var melEl) && melEl.TryGetInt32(out var melv) ? melv : null;
+        int? matchEndColumn = matchEndLine is null
+            ? null
+            : (el.TryGetProperty("mec", out var mecEl) && mecEl.TryGetInt32(out var mecv) ? mecv : 0);
+
         var contextBefore = ReadStringArray(el, "b");
         var contextAfter = ReadStringArray(el, "a");
 
         return new SearchResult(filePath, lineNumber, matchLine, matchStart, matchLength, contextBefore, contextAfter)
-        { SourceMatchStartColumn = sourceMatchStart };
+        { SourceMatchStartColumn = sourceMatchStart, MatchEndLineNumber = matchEndLine, MatchEndColumn = matchEndColumn };
     }
 
     private static string[] ReadStringArray(JsonElement parent, string name)

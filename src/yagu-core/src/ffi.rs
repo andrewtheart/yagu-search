@@ -82,6 +82,14 @@ pub struct QgOptions {
     /// from the metadata the scanner already fetches per file (free), avoiding the
     /// pathologically slow Everything `!attrib:h` predicate on unindexed attributes.
     pub skip_hidden: c_uchar,
+    /// Non-zero runs the whole-buffer cross-line (multiline) engine instead of the
+    /// per-line scan (ripgrep `-U`). Zero (default) keeps the untouched per-line path.
+    pub multi_line: c_uchar,
+    /// Non-zero (with `multi_line`) makes `.` match `\n` (ripgrep `--multiline-dotall`).
+    pub multi_line_dotall: c_uchar,
+    /// Multiline backend selector: 0 = hand-rolled `regex::bytes` (default),
+    /// 1 = grep-searcher. Ignored unless `multi_line`.
+    pub multiline_engine: c_uchar,
 }
 
 #[repr(C)]
@@ -268,6 +276,44 @@ fn open_file_for_scan(
     // advanced during the probe.
     let mmap = try_mmap(&file).map_err(|_| STATUS_OPEN_FAILED)?;
     Ok(FileBytes::Mapped(mmap))
+}
+
+/// Read a whole file into an owned buffer for the multiline whole-buffer scan,
+/// bounded by `max_file_size` (the multiline size cap — plan §9). Unlike
+/// [`open_file_for_scan`] this NEVER memory-maps: `heap_limit` cannot bound an
+/// mmap and an mmap SIGBUS on mid-scan truncation aborts the `panic = "abort"`
+/// host (plan §5). An 8 KB probe short-circuits obvious binaries before reading
+/// a (capped) file in full, mirroring the managed multiline peek; the scanner's
+/// own `looks_binary` still runs on the raw bytes as the authority.
+fn read_file_owned_capped(
+    path: &str,
+    max_file_size: u64,
+    skip_binary: bool,
+) -> Result<Vec<u8>, c_int> {
+    use std::io::Seek;
+    let mut file = open_for_scan(path).map_err(|_| STATUS_OPEN_FAILED)?;
+    let file_size = try_metadata(&file).map_err(|_| STATUS_OPEN_FAILED)?.len();
+    if max_file_size != 0 && file_size > max_file_size {
+        return Err(STATUS_TOO_LARGE);
+    }
+    if file_size == 0 {
+        return Ok(Vec::new());
+    }
+    if skip_binary {
+        let mut probe = [0u8; BINARY_PROBE_BYTES];
+        let probe_len = std::cmp::min(file_size as usize, BINARY_PROBE_BYTES);
+        let n = file
+            .read(&mut probe[..probe_len])
+            .map_err(|_| STATUS_OPEN_FAILED)?;
+        if looks_binary(&probe[..n]) {
+            return Err(STATUS_BINARY_SKIPPED);
+        }
+        file.seek(std::io::SeekFrom::Start(0))
+            .map_err(|_| STATUS_OPEN_FAILED)?;
+    }
+    let mut buf: Vec<u8> = Vec::with_capacity(file_size as usize);
+    file.read_to_end(&mut buf).map_err(|_| STATUS_OPEN_FAILED)?;
+    Ok(buf)
 }
 
 /// Borrowed view of file bytes returned by [`open_file_for_scan_into`]. The
@@ -474,6 +520,9 @@ pub unsafe extern "C" fn qg_search_file(
             opts_in.case_sensitive != 0,
         ),
         metadata_only: opts_in.omit_line_bytes != 0,
+        multi_line: opts_in.multi_line != 0,
+        multi_line_dotall: opts_in.multi_line_dotall != 0,
+        multiline_engine: opts_in.multiline_engine,
     };
 
     // Open + size check + (probe/read/mmap).
@@ -608,7 +657,7 @@ pub unsafe extern "C" fn qg_free_result(result: *mut QgResult) {
 /// ABI/version probe used by the C# loader to confirm the DLL is the one we built.
 #[no_mangle]
 pub extern "C" fn qg_abi_version() -> c_uint {
-    5
+    6
 }
 
 // ---------------------------------------------------------------------------
@@ -640,6 +689,37 @@ pub struct QgMatchView {
 
 /// Callback returns 0 to continue, non-zero to stop scanning early.
 pub type QgMatchCallback = unsafe extern "C" fn(ctx: *mut c_void, m: *const QgMatchView) -> c_int;
+
+/// Span-carrying sibling of [`QgMatchView`] for the multiline (cross-line)
+/// engine. The leading fields are byte-identical to `QgMatchView` so the C#
+/// reader reuses the single-line decode for the START/display line; the two
+/// appended fields carry the true span END. `end_col` is a **precomputed
+/// UTF-16 column** on the end line — the record ships only the start line's
+/// bytes, so C# cannot convert an end byte-offset that lives on another line
+/// (plan §3). `end_line == line_number` marks a single-line hit found during a
+/// multiline search (the C# reader nulls the span in that case).
+#[repr(C)]
+pub struct QgMultilineMatchView {
+    pub line_number: c_ulonglong,
+    pub match_start: c_uint,
+    pub source_match_start: c_uint,
+    pub match_len: c_uint,
+    pub line_ptr: *const u8,
+    pub line_len: usize,
+    pub ctx_before_ptr: *const u8,
+    pub ctx_before_bytes: usize,
+    pub ctx_before_count: c_uint,
+    pub ctx_after_ptr: *const u8,
+    pub ctx_after_bytes: usize,
+    pub ctx_after_count: c_uint,
+    /// 1-based END line of the span.
+    pub end_line: c_ulonglong,
+    /// UTF-16 column of the match end (exclusive) on the END line.
+    pub end_col: c_uint,
+}
+
+pub type QgMultilineMatchCallback =
+    unsafe extern "C" fn(ctx: *mut c_void, m: *const QgMultilineMatchView) -> c_int;
 
 /// Pack a slice-of-slices view (used by the streaming scan path) into the
 /// packed `[u32 len][bytes...]` wire format consumed by the .NET host.
@@ -739,6 +819,9 @@ pub unsafe extern "C" fn qg_search_file_stream(
             opts_in.case_sensitive != 0,
         ),
         metadata_only: opts_in.omit_line_bytes != 0,
+        multi_line: opts_in.multi_line != 0,
+        multi_line_dotall: opts_in.multi_line_dotall != 0,
+        multiline_engine: opts_in.multiline_engine,
     };
 
     let file_bytes = match open_file_for_scan(&path, opts_in.max_file_size, scan_opts.skip_binary) {
@@ -817,6 +900,218 @@ pub unsafe extern "C" fn qg_search_file_stream(
         let cb_result = on_match(on_match_ctx, &qg_view as *const QgMatchView);
         cb_result == 0
     });
+
+    match scan_result {
+        Ok(_) => set_status(STATUS_OK),
+        Err(e) => {
+            let status = scan_error_to_status(&e);
+            write_scan_error_msg(e, out_error_msg, out_error_msg_len);
+            set_status(status)
+        }
+    }
+}
+
+/// Streaming cross-line (multiline) search — the Phase 2 native whole-buffer
+/// engine (plan §5). Mirrors [`qg_search_file_stream`] but runs the regex over
+/// the entire LF-normalized file so a match can span line breaks, emitting a
+/// span-carrying [`QgMultilineMatchView`] per match. `options.max_file_size`
+/// MUST carry the multiline size cap; over-cap files return
+/// [`STATUS_TOO_LARGE`] (the C# side tallies them, identical to the managed
+/// path). Lookaround/backreferences -> [`STATUS_INVALID_REGEX`] -> managed
+/// whole-file fallback (plan §6). No per-line cancellation poll exists for a
+/// whole-buffer scan; the flag is checked before the scan and after each
+/// yielded match, and the size cap bounds the largest uninterruptible unit
+/// (plan §10).
+///
+/// ROUTING (plan §4 slice 4): this per-file streaming entry point is the ONLY
+/// multiline FFI path. The other match-emitting paths — packed `qg_search_file`,
+/// `qg_session_scan_paths_parallel_ex` (arena), and `qg_create_streaming_scanner`
+/// (persistent arena) — stay single-line-only, because the C# gate routes every
+/// multiline search through the per-file `ContentSearcher` path and never creates
+/// a native session/streaming-scanner for `Multiline`. They therefore need no
+/// multiline variant, and their single-line records stay byte-unchanged (pinned
+/// by `search_file_single_line_packed_record_is_byte_stable`).
+///
+/// # Safety
+/// Same contract as [`qg_search_file_stream`].
+#[no_mangle]
+pub unsafe extern "C" fn qg_search_file_stream_multiline(
+    path_utf16: *const c_ushort,
+    path_len: usize,
+    pattern_utf8: *const u8,
+    pattern_len: usize,
+    options: *const QgOptions,
+    cancel_flag: *const i32,
+    on_match: QgMultilineMatchCallback,
+    on_match_ctx: *mut c_void,
+    out_status: *mut c_int,
+    out_error_msg: *mut *mut u8,
+    out_error_msg_len: *mut usize,
+) -> c_int {
+    if !out_status.is_null() {
+        *out_status = STATUS_OK;
+    }
+    if !out_error_msg.is_null() {
+        *out_error_msg = std::ptr::null_mut();
+    }
+    if !out_error_msg_len.is_null() {
+        *out_error_msg_len = 0;
+    }
+
+    let set_status = |code: c_int| {
+        if !out_status.is_null() {
+            *out_status = code;
+        }
+        code
+    };
+
+    if path_utf16.is_null() || options.is_null() {
+        return set_status(STATUS_INVALID_PATH);
+    }
+
+    let path_slice = std::slice::from_raw_parts(path_utf16, path_len);
+    let path = match String::from_utf16(path_slice) {
+        Ok(s) => s,
+        Err(_) => return set_status(STATUS_INVALID_PATH),
+    };
+
+    let pattern_slice = if pattern_utf8.is_null() {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(pattern_utf8, pattern_len)
+    };
+    let pattern = match std::str::from_utf8(pattern_slice) {
+        Ok(s) => s,
+        Err(_) => return set_status(STATUS_INVALID_PATH),
+    };
+
+    let opts_in = &*options;
+    let scan_opts = ScanOptions {
+        case_sensitive: opts_in.case_sensitive != 0,
+        use_regex: opts_in.use_regex != 0,
+        context_before: opts_in.context_before as usize,
+        context_after: opts_in.context_after as usize,
+        max_results: opts_in.max_results as usize,
+        skip_binary: opts_in.skip_binary != 0,
+        // Literals are escaped into the regex engine for multiline; the ASCII
+        // literal fast path (line-only) does not apply here.
+        ascii_case_only: false,
+        metadata_only: opts_in.omit_line_bytes != 0,
+        multi_line: true,
+        multi_line_dotall: opts_in.multi_line_dotall != 0,
+        multiline_engine: opts_in.multiline_engine,
+    };
+
+    // Build the matcher first so an invalid regex (lookaround) is reported
+    // before any file I/O — C# then runs the managed whole-file engine.
+    let re = match crate::scan_multiline::build_multiline_regex(pattern, &scan_opts) {
+        Ok(r) => r,
+        Err(e) => {
+            let status = scan_error_to_status(&e);
+            write_scan_error_msg(e, out_error_msg, out_error_msg_len);
+            return set_status(status);
+        }
+    };
+
+    let bytes = match read_file_owned_capped(&path, opts_in.max_file_size, scan_opts.skip_binary) {
+        Ok(b) => b,
+        Err(status) => return set_status(status),
+    };
+
+    let cancel_atomic: Option<&AtomicI32> = if cancel_flag.is_null() {
+        None
+    } else {
+        debug_assert!(
+            (cancel_flag as usize).is_multiple_of(std::mem::align_of::<AtomicI32>()),
+            "cancel_flag must be 4-byte aligned"
+        );
+        Some(&*(cancel_flag as *const AtomicI32))
+    };
+
+    let mut before_buf: Vec<u8> = Vec::new();
+    let mut after_buf: Vec<u8> = Vec::new();
+
+    let cancel_check = || match cancel_atomic {
+        Some(flag) => flag.load(Ordering::Relaxed) != 0,
+        None => false,
+    };
+
+    let emit = |rec: crate::scan_multiline::MultilineMatchRecord| {
+            if let Some(flag) = cancel_atomic {
+                if flag.load(Ordering::Relaxed) != 0 {
+                    return false;
+                }
+            }
+
+            if opts_in.omit_line_bytes != 0 {
+                before_buf.clear();
+                after_buf.clear();
+            } else {
+                let before_refs: Vec<&[u8]> =
+                    rec.context_before.iter().map(|v| v.as_slice()).collect();
+                let after_refs: Vec<&[u8]> =
+                    rec.context_after.iter().map(|v| v.as_slice()).collect();
+                pack_lines_borrowed(&before_refs, &mut before_buf);
+                pack_lines_borrowed(&after_refs, &mut after_buf);
+            }
+
+            let view = QgMultilineMatchView {
+                line_number: rec.line_number,
+                match_start: rec.match_start,
+                source_match_start: rec.source_match_start,
+                match_len: rec.match_len,
+                line_ptr: if opts_in.omit_line_bytes != 0 {
+                    std::ptr::null()
+                } else {
+                    rec.line.as_ptr()
+                },
+                line_len: if opts_in.omit_line_bytes != 0 { 0 } else { rec.line.len() },
+                ctx_before_ptr: if before_buf.is_empty() {
+                    std::ptr::null()
+                } else {
+                    before_buf.as_ptr()
+                },
+                ctx_before_bytes: before_buf.len(),
+                ctx_before_count: if opts_in.omit_line_bytes != 0 {
+                    0
+                } else {
+                    rec.context_before.len() as c_uint
+                },
+                ctx_after_ptr: if after_buf.is_empty() {
+                    std::ptr::null()
+                } else {
+                    after_buf.as_ptr()
+                },
+                ctx_after_bytes: after_buf.len(),
+                ctx_after_count: if opts_in.omit_line_bytes != 0 {
+                    0
+                } else {
+                    rec.context_after.len() as c_uint
+                },
+                end_line: rec.end_line,
+                end_col: rec.end_col,
+            };
+
+            on_match(on_match_ctx, &view as *const QgMultilineMatchView) == 0
+    };
+
+    // Engine dispatch (plan §5): 1 = grep-searcher (when compiled in), else the
+    // default hand-rolled regex::bytes scan. Both engines scan the identical
+    // LF buffer and emit byte-identical records (A/B correctness oracle).
+    let scan_result = {
+        #[cfg(feature = "grep_crates")]
+        {
+            if opts_in.multiline_engine == 1 {
+                crate::scan_grep::scan_multiline_grep(&bytes, pattern, &scan_opts, cancel_check, emit)
+            } else {
+                crate::scan_multiline::scan_multiline_bytes(&bytes, &re, &scan_opts, cancel_check, emit)
+            }
+        }
+        #[cfg(not(feature = "grep_crates"))]
+        {
+            crate::scan_multiline::scan_multiline_bytes(&bytes, &re, &scan_opts, cancel_check, emit)
+        }
+    };
 
     match scan_result {
         Ok(_) => set_status(STATUS_OK),
@@ -911,6 +1206,9 @@ pub unsafe extern "C" fn qg_create_session(
             opts_in.case_sensitive != 0,
         ),
         metadata_only: opts_in.omit_line_bytes != 0,
+        multi_line: opts_in.multi_line != 0,
+        multi_line_dotall: opts_in.multi_line_dotall != 0,
+        multiline_engine: opts_in.multiline_engine,
     };
 
     let matcher = match crate::scan::build_matcher(pattern, &scan_opts) {
@@ -2005,6 +2303,9 @@ mod tests {
             max_results: 0,
             max_file_size: 0,
             skip_hidden: 0,
+            multi_line: 0,
+            multi_line_dotall: 0,
+            multiline_engine: 0,
         }
     }
 
@@ -2020,8 +2321,33 @@ mod tests {
 
     // ---- qg_abi_version ----
     #[test]
-    fn abi_version_returns_4() {
-        assert_eq!(qg_abi_version(), 5);
+    fn abi_version_returns_6() {
+        assert_eq!(qg_abi_version(), 6);
+    }
+
+    // ---- QgOptions ABI layout ----
+    // A size-only check misses field-offset/padding mistakes (a reordered or
+    // mis-typed field can keep the total size but shift a field the C# mirror
+    // reads). Pin both the total size and every field offset so the
+    // `#[repr(C)]` layout can't silently drift from the C# `QgOptions` mirror.
+    #[test]
+    fn qg_options_abi_layout_is_stable() {
+        use std::mem::offset_of;
+        assert_eq!(offset_of!(QgOptions, case_sensitive), 0);
+        assert_eq!(offset_of!(QgOptions, use_regex), 1);
+        assert_eq!(offset_of!(QgOptions, skip_binary), 2);
+        assert_eq!(offset_of!(QgOptions, omit_line_bytes), 3);
+        assert_eq!(offset_of!(QgOptions, context_before), 4);
+        assert_eq!(offset_of!(QgOptions, context_after), 8);
+        assert_eq!(offset_of!(QgOptions, max_results), 16);
+        assert_eq!(offset_of!(QgOptions, max_file_size), 24);
+        assert_eq!(offset_of!(QgOptions, skip_hidden), 32);
+        assert_eq!(offset_of!(QgOptions, multi_line), 33);
+        assert_eq!(offset_of!(QgOptions, multi_line_dotall), 34);
+        assert_eq!(offset_of!(QgOptions, multiline_engine), 35);
+        // 8-byte alignment (max_results/max_file_size are u64) rounds 36 -> 40.
+        assert_eq!(std::mem::size_of::<QgOptions>(), 40);
+        assert_eq!(std::mem::align_of::<QgOptions>(), 8);
     }
 
     // ---- pack_lines_borrowed ----
@@ -2459,6 +2785,53 @@ mod tests {
         }
     }
 
+    // GOLDEN (regression guard, plan §4 slice 4): the single-line packed record
+    // layout MUST stay byte-identical across Phase 2. Multiline is emitted by a
+    // SEPARATE record (`QgMultilineMatchView`) on a SEPARATE FFI function, so the
+    // hot single-line record is never widened. If this test fails, the packed
+    // wire format drifted — a forbidden hot-path regression.
+    #[test]
+    fn search_file_single_line_packed_record_is_byte_stable() {
+        unsafe {
+            let (_dir, path_str) = temp_file("golden.txt", b"foo\n");
+            let mut result = std::mem::zeroed::<QgResult>();
+            let opts = default_opts(); // case-insensitive literal, no context
+            let path = to_utf16(&path_str);
+            let pattern = b"foo";
+            let ret = qg_search_file(
+                path.as_ptr(),
+                path.len(),
+                pattern.as_ptr(),
+                pattern.len(),
+                &opts,
+                std::ptr::null(),
+                &mut result,
+            );
+            assert_eq!(ret, STATUS_OK);
+            assert_eq!(result.match_count, 1);
+            let buf = std::slice::from_raw_parts(result.buffer, result.buffer_len);
+            // Packed layout: u32 match_count header, then per record:
+            //   u64 line_number | u32 match_start | u32 source_match_start | u32 match_len
+            //   | u32 line_len + bytes | u32 ctx_before_count | u32 ctx_after_count.
+            // On a short ASCII line source_match_start is the u32::MAX "deferred" sentinel.
+            let expected: Vec<u8> = {
+                let mut v = Vec::new();
+                v.extend_from_slice(&1u32.to_le_bytes()); // match_count header
+                v.extend_from_slice(&1u64.to_le_bytes()); // line_number
+                v.extend_from_slice(&0u32.to_le_bytes()); // match_start
+                v.extend_from_slice(&u32::MAX.to_le_bytes()); // source_match_start (deferred)
+                v.extend_from_slice(&3u32.to_le_bytes()); // match_len
+                v.extend_from_slice(&3u32.to_le_bytes()); // line_len
+                v.extend_from_slice(b"foo"); // line bytes
+                v.extend_from_slice(&0u32.to_le_bytes()); // ctx_before_count
+                v.extend_from_slice(&0u32.to_le_bytes()); // ctx_after_count
+                v
+            };
+            assert_eq!(buf, expected.as_slice());
+            qg_free_result(&mut result);
+        }
+    }
+
     #[test]
     fn search_file_with_context() {
         unsafe {
@@ -2530,6 +2903,196 @@ mod tests {
         let counter = &mut *(ctx as *mut u32);
         *counter += 1;
         1 // stop
+    }
+
+    // ---- qg_search_file_stream_multiline ----
+    #[derive(Default)]
+    struct MlCollector {
+        /// (line_number, end_line, end_col, match_start, source_match_start, line)
+        recs: Vec<(u64, u64, u32, u32, u32, String)>,
+        stop_after: Option<usize>,
+    }
+
+    unsafe extern "C" fn ml_collect_callback(
+        ctx: *mut c_void,
+        m: *const QgMultilineMatchView,
+    ) -> c_int {
+        let col = &mut *(ctx as *mut MlCollector);
+        let v = &*m;
+        let line = if v.line_ptr.is_null() || v.line_len == 0 {
+            String::new()
+        } else {
+            let s = std::slice::from_raw_parts(v.line_ptr, v.line_len);
+            String::from_utf8_lossy(s).into_owned()
+        };
+        col.recs.push((
+            v.line_number,
+            v.end_line,
+            v.end_col,
+            v.match_start,
+            v.source_match_start,
+            line,
+        ));
+        if let Some(n) = col.stop_after {
+            if col.recs.len() >= n {
+                return 1; // stop
+            }
+        }
+        0
+    }
+
+    fn run_ml_stream(path_str: &str, pattern: &[u8], mut opts: QgOptions) -> (c_int, MlCollector) {
+        opts.multi_line = 1;
+        unsafe {
+            let mut status: c_int = 0;
+            let path = to_utf16(path_str);
+            let mut col = MlCollector::default();
+            let ret = qg_search_file_stream_multiline(
+                path.as_ptr(),
+                path.len(),
+                pattern.as_ptr(),
+                pattern.len(),
+                &opts,
+                std::ptr::null(),
+                ml_collect_callback,
+                &mut col as *mut MlCollector as *mut c_void,
+                &mut status,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            (ret, col)
+        }
+    }
+
+    #[test]
+    fn multiline_stream_cross_line_match() {
+        let (_dir, path_str) = temp_file("ml_cross.txt", b"xx foo\nbar yy\nzz\n");
+        let mut opts = default_opts();
+        opts.use_regex = 1;
+        opts.multi_line_dotall = 1;
+        let (ret, col) = run_ml_stream(&path_str, b"foo.bar", opts);
+        assert_eq!(ret, STATUS_OK);
+        assert_eq!(col.recs.len(), 1);
+        let (line_number, end_line, end_col, match_start, _src, line) = &col.recs[0];
+        assert_eq!(*line_number, 1);
+        assert_eq!(*end_line, 2);
+        assert_eq!(*end_col, 3);
+        assert_eq!(*match_start, 3); // "foo" at byte 3 of "xx foo"
+        assert_eq!(line, "xx foo"); // display line is the START line only
+    }
+
+    #[test]
+    fn multiline_stream_crlf_dollar_excludes_cr() {
+        let (_dir, path_str) = temp_file("ml_crlf.txt", b"foo\r\nbar\r\n");
+        let mut opts = default_opts();
+        opts.use_regex = 1;
+        let (ret, col) = run_ml_stream(&path_str, b"foo$", opts);
+        assert_eq!(ret, STATUS_OK);
+        assert_eq!(col.recs.len(), 1);
+        assert_eq!(col.recs[0].5, "foo"); // no trailing '\r'
+    }
+
+    #[test]
+    fn multiline_stream_literal_escaped() {
+        let (_dir, path_str) = temp_file("ml_lit.txt", b"a.b a+b\n");
+        let opts = default_opts(); // use_regex = 0 -> literal escaped
+        let (ret, col) = run_ml_stream(&path_str, b"a.b", opts);
+        assert_eq!(ret, STATUS_OK);
+        assert_eq!(col.recs.len(), 1);
+        assert_eq!(col.recs[0].3, 0); // matches "a.b" at col 0, not "a+b"
+    }
+
+    #[test]
+    fn multiline_stream_invalid_regex_falls_through() {
+        let (_dir, path_str) = temp_file("ml_bad.txt", b"ab\n");
+        let mut opts = default_opts();
+        opts.use_regex = 1;
+        let (ret, col) = run_ml_stream(&path_str, b"(?<=a)b", opts);
+        assert_eq!(ret, STATUS_INVALID_REGEX);
+        assert!(col.recs.is_empty());
+    }
+
+    #[test]
+    fn multiline_stream_too_large_skips() {
+        let (_dir, path_str) = temp_file("ml_big.txt", b"foobar foobar\n");
+        let mut opts = default_opts();
+        opts.max_file_size = 4; // file is larger -> TOO_LARGE
+        let (ret, col) = run_ml_stream(&path_str, b"foobar", opts);
+        assert_eq!(ret, STATUS_TOO_LARGE);
+        assert!(col.recs.is_empty());
+    }
+
+    #[test]
+    fn multiline_stream_callback_stops_early() {
+        let (_dir, path_str) = temp_file("ml_stop.txt", b"m\nm\nm\nm\n");
+        let mut opts = default_opts();
+        opts.use_regex = 1;
+        opts.multi_line = 1;
+        unsafe {
+            let mut status: c_int = 0;
+            let path = to_utf16(&path_str);
+            let pattern = b"m";
+            let mut col = MlCollector {
+                stop_after: Some(2),
+                ..Default::default()
+            };
+            let ret = qg_search_file_stream_multiline(
+                path.as_ptr(),
+                path.len(),
+                pattern.as_ptr(),
+                pattern.len(),
+                &opts,
+                std::ptr::null(),
+                ml_collect_callback,
+                &mut col as *mut MlCollector as *mut c_void,
+                &mut status,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            assert_eq!(ret, STATUS_OK);
+            assert_eq!(col.recs.len(), 2); // stopped after the second emit
+        }
+    }
+
+    #[cfg(feature = "grep_crates")]
+    #[test]
+    fn multiline_stream_grep_engine_finds_matches() {
+        // multiline_engine == 1 routes to the grep-searcher backend (compiled in via
+        // the grep_crates feature); it must find the same cross-line match.
+        let (_dir, path_str) = temp_file("ml_grep.txt", b"xx foo\nbar yy\n");
+        let mut opts = default_opts();
+        opts.use_regex = 1;
+        opts.multi_line_dotall = 1;
+        opts.multiline_engine = 1;
+        let (ret, col) = run_ml_stream(&path_str, b"foo.bar", opts);
+        assert_eq!(ret, STATUS_OK);
+        assert_eq!(col.recs.len(), 1);
+        assert_eq!(col.recs[0].0, 1); // line_number
+        assert_eq!(col.recs[0].1, 2); // end_line
+    }
+
+    #[test]
+    fn qg_multiline_match_view_abi_layout_is_stable() {
+        use std::mem::offset_of;
+        assert_eq!(offset_of!(QgMultilineMatchView, line_number), 0);
+        assert_eq!(offset_of!(QgMultilineMatchView, match_start), 8);
+        assert_eq!(offset_of!(QgMultilineMatchView, source_match_start), 12);
+        assert_eq!(offset_of!(QgMultilineMatchView, match_len), 16);
+        // line_ptr is 8-aligned -> padding at 20..24.
+        assert_eq!(offset_of!(QgMultilineMatchView, line_ptr), 24);
+        assert_eq!(offset_of!(QgMultilineMatchView, line_len), 32);
+        assert_eq!(offset_of!(QgMultilineMatchView, ctx_before_ptr), 40);
+        assert_eq!(offset_of!(QgMultilineMatchView, ctx_before_bytes), 48);
+        assert_eq!(offset_of!(QgMultilineMatchView, ctx_before_count), 56);
+        // ctx_after_ptr is 8-aligned -> padding at 60..64.
+        assert_eq!(offset_of!(QgMultilineMatchView, ctx_after_ptr), 64);
+        assert_eq!(offset_of!(QgMultilineMatchView, ctx_after_bytes), 72);
+        assert_eq!(offset_of!(QgMultilineMatchView, ctx_after_count), 80);
+        // end_line is 8-aligned -> padding at 84..88.
+        assert_eq!(offset_of!(QgMultilineMatchView, end_line), 88);
+        assert_eq!(offset_of!(QgMultilineMatchView, end_col), 96);
+        assert_eq!(std::mem::size_of::<QgMultilineMatchView>(), 104);
+        assert_eq!(std::mem::align_of::<QgMultilineMatchView>(), 8);
     }
 
     #[test]

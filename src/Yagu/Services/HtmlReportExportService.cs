@@ -138,12 +138,22 @@ public static class HtmlReportExportService
             string matchHtml = BuildHighlightedMatchHtml(result.MatchLine, result.MatchStartColumn, result.MatchLength);
             await w.WriteLineAsync($"<tr class=\"match\"><td class=\"ln\">{result.LineNumber}</td><td>{matchHtml}</td></tr>").ConfigureAwait(false);
 
+            // A cross-line (multiline) match spans start..end; show a marker row and number the
+            // after-context from the END line (single-line results leave MatchEndLineNumber null).
+            if (result.MatchEndLineNumber is int endLine && endLine > result.LineNumber)
+            {
+                int extra = endLine - result.LineNumber;
+                string marker = $"\u2026 (+{extra} line{(extra == 1 ? "" : "s")})";
+                await w.WriteLineAsync($"<tr class=\"ctx\"><td class=\"ln\"></td><td>{WebUtility.HtmlEncode(marker)}</td></tr>").ConfigureAwait(false);
+            }
+
+            int afterStart = (result.MatchEndLineNumber ?? result.LineNumber) + 1;
             for (int i = 0; i < result.ContextAfter.Count; i++)
             {
                 if (ReportExportService.IsGeneratedPreviewNoticeLine(result.ContextAfter[i]))
                     continue;
 
-                int ln = result.LineNumber + 1 + i;
+                int ln = afterStart + i;
                 await w.WriteLineAsync($"<tr class=\"ctx\"><td class=\"ln\">{ln}</td><td>{WebUtility.HtmlEncode(result.ContextAfter[i])}</td></tr>").ConfigureAwait(false);
             }
         }

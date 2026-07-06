@@ -46,6 +46,38 @@ public class SearchServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Multiline_BareLiteral_PromotedToRegexAndMatches()
+    {
+        // A bare literal (UseRegex=false) under Multiline must be promoted to an escaped regex and
+        // run through the whole-file multiline engine, exercising the SearchService multiline gate
+        // and the memory-derived multiline-parallelism resolution.
+        Write("ml.txt", "hello foobar world\nsecond line");
+
+        var svc = new SearchService();
+        var opts = new SearchOptions
+        {
+            Directory = _root,
+            Query = "foobar",
+            UseRegex = false,
+            ExactMatch = false,
+            Multiline = true,
+            MaxResults = 0,
+        };
+
+        int matches = 0;
+        await foreach (var evt in svc.SearchAsync(opts, default))
+        {
+            switch (evt)
+            {
+                case SearchEvent.Match: matches++; break;
+                case SearchEvent.MatchBatch mb: matches += mb.Results.Count; break;
+            }
+        }
+
+        Assert.Equal(1, matches);
+    }
+
+    [Fact]
     public async Task EndToEnd_FindsMatchesAcrossFiles()
     {
         Write("a.txt", "foo\nbar\nfoo");

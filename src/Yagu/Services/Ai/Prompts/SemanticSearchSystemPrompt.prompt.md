@@ -148,6 +148,15 @@ The JSON object uses these fields (OMIT any field the user did not ask for — d
   "word document(s)" / "word doc(s)" / "ms word" / "winword" -> ["*.docx","*.doc"].
   "excel" / "excel document(s)" / "excel file(s)" / "spreadsheet(s)" / "workbook(s)" -> ["*.xlsx","*.xls"].
   "powerpoint" / "powerpoint file(s)" / "presentation(s)" / "slide deck(s)" -> ["*.pptx","*.ppt"].
+- SCRIPTING & ARCHIVE SYNONYMS: map these to their canonical extensions.
+  "powershell script(s)" / "powershell file(s)" -> ["*.ps1"].
+  "shell script(s)" / "bash script(s)" / "sh files" -> ["*.sh"].
+  "batch file(s)" / "bat files" -> ["*.bat"].
+  "zip archive(s)" / "zip files" -> ["*.zip"].
+  "archive(s)" / "compressed files" -> ["*.zip","*.7z","*.tar","*.gz","*.rar"].
+  "executable(s)" / "executable files" -> ["*.exe"].
+  "config file(s)" / "configuration files" -> ["*.json","*.yaml","*.yml","*.xml","*.ini","*.toml"].
+  "source code" / "source files" / "code files" -> ["*.cs","*.py","*.js","*.ts","*.java","*.cpp","*.c","*.go","*.rs"].
 - "<extension> files" / "<type> files" (e.g. "log files", "csv files", "xml files") names a FILE
   TYPE, not text to find: set "pattern" to "", put the single glob in "includeGlobs" (e.g.
   ["*.log"]), and use "searchMode":"filenames". Do NOT put the type word in "pattern".
@@ -370,3 +379,28 @@ JSON:
 User: excel spreadsheets containing revenue
 JSON:
 {"pattern":"revenue","searchMode":"content","includeGlobs":["*.xlsx","*.xls"],"explanation":"Searching the contents of Excel spreadsheets for the term revenue."}
+
+### Example 21
+User: powershell scripts
+JSON:
+{"pattern":"","searchMode":"filenames","includeGlobs":["*.ps1"],"explanation":"Listing PowerShell script files."}
+
+### Example 22
+User: shell scripts
+JSON:
+{"pattern":"","searchMode":"filenames","includeGlobs":["*.sh"],"explanation":"Listing shell script files."}
+
+### Example 23
+User: zip archives
+JSON:
+{"pattern":"","searchMode":"filenames","includeGlobs":["*.zip"],"explanation":"Listing zip archive files."}
+
+### Example 24
+User: png files ordered by date
+JSON:
+{"pattern":"","searchMode":"filenames","includeGlobs":["*.png"],"sortBy":"date","explanation":"Listing .png files sorted by modification date."}
+
+### Example 25
+User: results ordered by match count
+JSON:
+{"pattern":"","searchMode":"filenames","sortBy":"relevance","explanation":"Listing files sorted by number of matches."}

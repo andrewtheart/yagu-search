@@ -6,6 +6,7 @@
 
 pub mod ffi;
 pub mod scan;
+pub mod scan_multiline;
 
 #[cfg(feature = "grep_crates")]
 pub mod scan_grep;
