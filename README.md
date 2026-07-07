@@ -318,6 +318,14 @@ dotnet build Yagu.sln -c Release
 dotnet build Yagu.sln -c Release -p:BuildRustCore=false
 ```
 
+### Native AOT Is Publish-Only
+
+`PublishAot=true` in [src/Yagu/Yagu.csproj](src/Yagu/Yagu.csproj) only takes effect on **`dotnet publish`** — the ILC native compiler and the trim/AOT analyzers run only when publishing. A plain `dotnet build` (both `Debug` and `Release`) is ordinary JIT, so **AOT-hostile code (`dynamic`, `Activator.CreateInstance`, unbounded reflection) compiles and runs fine in a dev build but can break in the shipped installer**, which is an AOT publish. To validate AOT safety before shipping a change, publish self-contained and check the log for trim/AOT warnings (`IL2xxx` / `IL3xxx`):
+
+```powershell
+dotnet publish src/Yagu/Yagu.csproj -c Release -r win-x64 --self-contained -p:BuildInstallerOnPublish=false
+```
+
 ### Run The App
 
 ```powershell
@@ -337,6 +345,11 @@ dotnet run -c Release --project src/Yagu -- --window-mode traditional
 dotnet test tests/Yagu.Tests/Yagu.Tests.csproj
 dotnet test tests/Yagu.Tests/Yagu.Tests.csproj -c Release
 ```
+
+Two gotchas worth knowing:
+
+- Run tests from a **non-elevated** shell — an elevated terminal can cache admin state and fail the `FileLister` "not elevated" admin-path tests.
+- If native-parity or search-engine coverage numbers look wrong, rebuild the native DLL first. `Yagu.Tests` copies the `RustProfile=profiling` build of `yagu_core.dll`, which can go **ABI-stale** after Rust changes; when it does, `NativeSearcher.IsAvailable` becomes false and search silently falls back to the managed scanner (so native-path tests cover nothing). Refresh it with `cargo build --profile profiling --manifest-path src/yagu-core/Cargo.toml`.
 
 ### Run Focused .NET Tests
 

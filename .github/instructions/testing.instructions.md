@@ -68,6 +68,21 @@ Don't chase 100% branch coverage on genuinely-unreachable defensive code (enum-e
 arms, compound null-guards, `_suppressNotification` guards) — those need dead-branch refactors, not
 contrived/flaky tests.
 
+## Native fast path in tests
+
+Search-engine unit and parity tests exercise the native `yagu_core.dll`. `Yagu.Tests` copies the
+`RustProfile=profiling` build of that DLL, which can go **ABI-stale** after Rust changes: when its
+`qg_abi_version()` no longer matches the C# expectation, `NativeSearcher.IsAvailable` is **false**, the
+search falls back to the managed scanner, and native-path tests silently cover nothing (parity
+comparisons become meaningless). If native coverage/parity looks wrong, rebuild it first:
+
+```powershell
+cargo build --profile profiling --manifest-path src/yagu-core/Cargo.toml
+```
+
+Also run the fast suite from a **non-elevated** shell — an elevated terminal caches admin state and
+fails the `FileLister` "not elevated" admin-path tests.
+
 ## Benchmarks
 
 The `[Trait("Category","Slow")]` throughput `[Fact]`s live in **Yagu.Benchmarks**, not Yagu.Tests.
