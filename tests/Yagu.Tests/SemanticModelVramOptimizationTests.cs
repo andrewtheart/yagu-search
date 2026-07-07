@@ -51,6 +51,17 @@ public sealed class SemanticModelVramOptimizationTests
     }
 
     [Fact]
+    public void UnloadCurrentModel_IsExposedOnInterfaceAndImplementedByTranslator()
+    {
+        string iface = Read("Yagu", "Services", "Ai", "ISemanticQueryTranslator.cs");
+        string translator = Read("Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs");
+
+        // On-demand eviction the qualification sweep uses to keep only one candidate model resident.
+        Assert.Contains("Task UnloadCurrentModelAsync(CancellationToken cancellationToken);", iface);
+        Assert.Contains("public Task UnloadCurrentModelAsync(CancellationToken cancellationToken) => UnloadLoadedModelAfterUseAsync();", translator);
+    }
+
+    [Fact]
     public void Translator_ClampsContextWindowBeforeLoadingToSaveVram()
     {
         string translator = Read("Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs");

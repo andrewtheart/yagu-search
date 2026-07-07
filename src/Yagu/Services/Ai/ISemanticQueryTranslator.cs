@@ -78,6 +78,14 @@ public interface ISemanticQueryTranslator
     /// the currently loaded model — the unload happens after the next translation completes.</summary>
     void SetUnloadAfterUse(bool unloadAfterUse);
 
+    /// <summary>Unloads the currently loaded model from memory (freeing GPU VRAM / system RAM) on demand
+    /// and drops the cached references so the next translation reloads it. Unlike <see cref="SetModelOverride"/>
+    /// — which only drops Yagu's references but leaves the model resident in Foundry Local — this actively
+    /// evicts it via the SDK. Best-effort and never throws. Used by the first-run qualification sweep to
+    /// keep only ONE candidate model resident at a time, so probing a ladder of models cannot pile them
+    /// up in memory and OOM ("bad allocation").</summary>
+    Task UnloadCurrentModelAsync(CancellationToken cancellationToken);
+
     /// <summary>Clears the cached Foundry model catalog and drops the loaded model so the next selection
     /// re-queries Foundry Local. Use to pick up models downloaded/updated out of band and to re-resolve
     /// the current model. Cheap and synchronous; the actual re-query happens on next use.</summary>

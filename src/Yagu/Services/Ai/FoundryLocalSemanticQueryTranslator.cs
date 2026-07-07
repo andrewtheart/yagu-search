@@ -162,6 +162,12 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         // No reload needed: the flag only changes what happens AFTER the next translation finishes.
     }
 
+    /// <summary>Unloads the currently loaded model on demand (freeing its memory) and drops the cached
+    /// references so the next translation reloads it. Reuses the best-effort after-use unload path (SDK
+    /// <c>IModel.UnloadAsync</c> + reference drop), so it never throws. The qualification sweep calls this
+    /// between candidates to keep only one model resident at a time.</summary>
+    public Task UnloadCurrentModelAsync(CancellationToken cancellationToken) => UnloadLoadedModelAfterUseAsync();
+
     /// <summary>The execution devices this machine can actually run, per Yagu's capability detector.
     /// CPU is always present; GPU/NPU only when detected. Passed to the model selector so a build for an
     /// absent accelerator is never chosen (it could load via DirectML yet crash during inference).</summary>

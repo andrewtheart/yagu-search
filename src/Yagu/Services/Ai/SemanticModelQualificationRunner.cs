@@ -173,6 +173,14 @@ public sealed class SemanticModelQualificationRunner
 
             if (!string.Equals(preparedAlias, alias, StringComparison.OrdinalIgnoreCase))
             {
+                // Evict the previously-probed candidate from memory BEFORE loading the next one so only a
+                // single model is ever resident. Foundry Local does not evict on load — models accumulate —
+                // so walking a ladder of candidates would otherwise pile them up and OOM ("bad allocation").
+                // Best-effort and never throws; done before SetModelOverride below (which drops Yagu's
+                // reference to the loaded model, after which it could no longer be unloaded).
+                if (preparedAlias is not null)
+                    await _translator.UnloadCurrentModelAsync(token).ConfigureAwait(false);
+
                 progress?.Report(new SemanticQualificationProgress
                 {
                     Stage = SemanticQualificationStage.PreparingCandidate,

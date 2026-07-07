@@ -92,6 +92,47 @@ public sealed class SemanticModelQualificationRunnerTests
     }
 
     [Fact]
+    public async Task RunAsync_UnloadsEachCandidateBeforePreparingTheNext()
+    {
+        // A fails accuracy so the sweep advances to B. Only one model may be resident at a time, so the
+        // runner must evict A from memory BEFORE preparing B (Foundry Local does not evict on load, so
+        // otherwise probing a ladder of models would accumulate them and OOM with "bad allocation").
+        var translator = new FakeTranslator
+        {
+            Options = { Option("A", recommended: true), Option("B") },
+            TranslateBehavior = (alias, _) => alias == "B" ? PngPlan() : EmptyPlan(),
+        };
+        var runner = new SemanticModelQualificationRunner(translator);
+
+        var result = await runner.RunAsync(new[] { RequiresPngGlob() }, Thresholds, progress: null, CancellationToken.None);
+
+        Assert.Equal("B", result.QualifiedModelAlias);
+        // A (the intermediate candidate) is evicted exactly once, and that eviction happens while A is
+        // still the resident model (before B is prepared). The qualified final model B is left resident
+        // for immediate use, so the sweep never unloads it.
+        Assert.Equal(new[] { "A" }, translator.Unloaded);
+        Assert.Equal(new[] { "A", "B" }, translator.Prepared);
+    }
+
+    [Fact]
+    public async Task RunAsync_SingleQualifyingCandidate_IsNeverUnloaded()
+    {
+        // The very first candidate qualifies, so there is no "next" to make room for — the runner must not
+        // evict the one model it just qualified (the user should be able to use it immediately).
+        var translator = new FakeTranslator
+        {
+            Options = { Option("A", recommended: true), Option("B") },
+            TranslateBehavior = (_, _) => PngPlan(),
+        };
+        var runner = new SemanticModelQualificationRunner(translator);
+
+        var result = await runner.RunAsync(new[] { RequiresPngGlob() }, Thresholds, progress: null, CancellationToken.None);
+
+        Assert.Equal("A", result.QualifiedModelAlias);
+        Assert.Empty(translator.Unloaded);
+    }
+
+    [Fact]
     public async Task RunAsync_TranslateThrows_AbandonsCandidateAsCrash_AndTriesNext()
     {
         var translator = new FakeTranslator
@@ -421,6 +462,10 @@ public sealed class SemanticModelQualificationRunnerTests
         public List<SemanticModelOption> Options { get; } = new();
         public List<string> Prepared { get; } = new();
 
+        /// <summary>Aliases explicitly evicted between candidates via <see cref="UnloadCurrentModelAsync"/>,
+        /// in order — the previous candidate each time the sweep advances to the next.</summary>
+        public List<string> Unloaded { get; } = new();
+
         /// <summary>Aliases warmed via the runner's untimed warmup inference, in order. One entry per
         /// prepared candidate.</summary>
         public List<string> Warmed { get; } = new();
@@ -507,6 +552,15 @@ public sealed class SemanticModelQualificationRunnerTests
         public void SetAvailableAccelerators(bool hasGpu, bool hasNpu) { }
         public void SetGpuMemoryBytes(long dedicatedVideoMemoryBytes) { }
         public void SetUnloadAfterUse(bool unloadAfterUse) { }
+
+        // Records the model resident at unload time (the previous candidate — SetModelOverride for the next
+        // has not run yet), so tests can assert the sweep evicts each candidate before preparing the next.
+        public Task UnloadCurrentModelAsync(CancellationToken cancellationToken)
+        {
+            Unloaded.Add(_currentOverride ?? "");
+            return Task.CompletedTask;
+        }
+
         public void RefreshCatalog() { }
     }
 }
