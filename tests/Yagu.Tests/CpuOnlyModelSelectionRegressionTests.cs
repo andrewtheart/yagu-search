@@ -58,6 +58,9 @@ public sealed class CpuOnlyModelSelectionRegressionTests
         Assert.Contains("public void SetAvailableAccelerators(bool hasGpu, bool hasNpu)", source);
         Assert.Contains("private HashSet<DeviceType> AvailableDevices()", source);
         Assert.Contains("var set = new HashSet<DeviceType> { DeviceType.CPU };", source);
+        // The GPU build is offered ONLY when the GPU can actually run a model. An integrated GPU (no
+        // dedicated VRAM) crashes on the ONNX WebGPU/DirectML path, so it is excluded and falls back to CPU.
+        Assert.Contains("if (GpuInferencePolicy.CanUseGpuForInference(_hasGpu, _gpuMemoryBytes)) set.Add(DeviceType.GPU);", source);
         // Both selection call sites (translate path + prepare path) pass the available devices AND the
         // CPU-only memory budget.
         Assert.Contains("FoundryModelSelector.SelectAsync(catalog, _preferredAlias, _deviceOrder, AvailableDevices(), AvailableMemoryBudgetMb(), cancellationToken)", source);
@@ -91,9 +94,10 @@ public sealed class CpuOnlyModelSelectionRegressionTests
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs"));
 
         // The budget applies only to CPU inference (null on accelerated machines, where the model runs
-        // in device memory), and reads available physical RAM.
+        // in device memory), and reads available physical RAM. An integrated GPU is treated as CPU-only
+        // here (it is excluded from inference), so it correctly GETS the RAM budget.
         Assert.Contains("private int? AvailableMemoryBudgetMb()", source);
-        Assert.Contains("if (_hasGpu || _hasNpu) return null;", source);
+        Assert.Contains("if (GpuInferencePolicy.CanUseGpuForInference(_hasGpu, _gpuMemoryBytes) || _hasNpu) return null;", source);
         Assert.Contains("GlobalMemoryStatusEx(ref status)", source);
         Assert.Contains("status.ullAvailPhys", source);
     }
@@ -112,7 +116,9 @@ public sealed class CpuOnlyModelSelectionRegressionTests
         string cli = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
         Assert.Contains("_semanticTranslator.SetAvailableAccelerators(_semanticHasGpu, _semanticHasNpu);", vm);
-        Assert.Contains("translator.SetAvailableAccelerators(cliHasGpu, cliHasNpu);", cli);
+        // CLI centralizes detection in one helper that both semantic entry points invoke.
+        Assert.Contains("translator.SetAvailableAccelerators(hasGpu, hasNpu);", cli);
+        Assert.Contains("ApplyDetectedAccelerators(translator);", cli);
     }
 
     [Fact]
@@ -137,7 +143,7 @@ public sealed class CpuOnlyModelSelectionRegressionTests
 
         // GUI + CLI feed detected dedicated VRAM to the translator.
         Assert.Contains("_semanticTranslator.SetGpuMemoryBytes(SafeDetectGpuMemoryBytes());", vm);
-        Assert.Contains("translator.SetGpuMemoryBytes(cliGpuMemoryBytes);", cli);
+        Assert.Contains("translator.SetGpuMemoryBytes(gpuMemoryBytes);", cli);
     }
 
     [Fact]

@@ -89,6 +89,38 @@ public sealed class PreviewCoreRegressionTests
     }
 
     [Fact]
+    public void ExportCommands_UseWin32SaveDialogInsteadOfWinAppSdkFileSavePicker()
+    {
+        // The WinAppSDK FileSavePicker routes through a broker that can silently fail to come to
+        // the foreground while a search is still flooding the UI thread — the disabled owner window
+        // then looks frozen and the Save dialog never appears. Export commands must use the robust
+        // Win32 Common Item Dialog, which parents to the owner HWND and shows reliably in that state.
+        string helper = ExtractMethodWindow(MainWindowSource, "PickExportFilePath", 1200);
+        Assert.Contains("private string? PickExportFilePath(", helper);
+        Assert.Contains("Helpers.Win32FileDialog.Save(hwnd, title, suggestedFileName, defaultExtension, filters)", helper);
+
+        string exportLines = ExtractMethodWindow(MainWindowSource, "OnExportSelectedLines", 2000);
+        Assert.Contains("string? path = PickExportFilePath(", exportLines);
+        Assert.Contains("await File.WriteAllTextAsync(path, sb.ToString())", exportLines);
+        Assert.DoesNotContain("FileSavePicker", exportLines);
+        Assert.DoesNotContain("PickSaveFileAsync", exportLines);
+
+        string exportReport = ExtractMethodWindow(MainWindowSource, "OnExportHtmlReport", 3200);
+        Assert.Contains("string? path = PickExportFilePath(", exportReport);
+        Assert.Contains("new FileStream(path, FileMode.Create", exportReport);
+        Assert.DoesNotContain("FileSavePicker", exportReport);
+        Assert.DoesNotContain("PickSaveFileAsync", exportReport);
+
+        string textExport = ExtractMethodWindow(MainWindowSource, "PickTextExportFilePath", 400);
+        Assert.Contains("private string? PickTextExportFilePath(", textExport);
+        Assert.Contains("=> PickExportFilePath(", textExport);
+
+        // No export/save path may fall back to the picker anywhere in MainWindow's save flow.
+        Assert.DoesNotContain("PickTextExportFileAsync", MainWindowSource);
+        Assert.DoesNotContain("FileIO.WriteTextAsync", MainWindowSource);
+    }
+
+    [Fact]
     public void LauncherMode_RetainsCardSpacingWithoutExtraWindowBottomSpace()
     {
         string searchCard = ExtractXamlWindow("<!-- Search controls card -->", 600);
@@ -2148,8 +2180,8 @@ public sealed class PreviewCoreRegressionTests
         Assert.Contains("PreviewSectionsPanel.Children.Insert", prepend);
 
         // The method grows over time; size the window to comfortably reach its tail
-        // (RegisterSectionOverflow sits ~13.3k chars past the signature).
-        string highlight = ExtractMethodWindow(MainWindowSource, "BuildHighlightSectionAsync", 17000);
+        // (RegisterSectionOverflow sits ~15.3k chars past the signature).
+        string highlight = ExtractMethodWindow(MainWindowSource, "BuildHighlightSectionAsync", 19000);
         Assert.Contains("MaxMatchesPerSection", highlight);
         Assert.Contains("MaxPreviewBlocksPerSection", highlight);
         Assert.Contains("cappedResults", highlight);
@@ -2287,9 +2319,7 @@ public sealed class PreviewCoreRegressionTests
         string overlay = ExtractMethodWindow(MainWindowSource, "UpdateSectionNavOverlay", window: 1000);
         AssertContainsInOrder(overlay,
             "int total = GetSectionMatchTotal(_activeSectionNav);",
-            "int displayIndex = Math.Clamp(_activeSectionNav.CurrentIndex + 1, 1, total);",
-            "string matchWord = total == 1 ? \"match\" : \"matches\";",
-            "SectionNavLabel.Text = $\"Occurrence {displayIndex:N0}/{total:N0} ({total:N0} {matchWord} in file)\";");
+            "SectionNavLabel.Text = MatchNavMath.FormatSectionOccurrenceLabel(_activeSectionNav.CurrentIndex, total);");
 
         string mainWindowXaml = File.ReadAllText(Path.Combine(RepoRoot, "src", "Yagu", "UI", "Windows", "MainWindow", "MainWindow.xaml"));
         Assert.Contains("Current occurrence and total matches in the active preview file.", mainWindowXaml);
@@ -2617,6 +2647,23 @@ public sealed class PreviewCoreRegressionTests
         // The multi-range branch colors body/end lines that are not any result's start line.
         Assert.Contains("(int start, int end)? SpanForLine(int lineNumber, int lineLength)", highlight);
         Assert.Contains("var forcedSpan = SpanForLine(lineNum, allLines[i].Length);", highlight);
+
+        // The stored-context branch (on-disk file couldn't be re-read, allLines == null) must ALSO
+        // apply forced-span coloring for cross-line matches — otherwise the matched columns render
+        // uncolored because a per-line regex can never match a `a\nb` pattern within one line.
+        // The start line uses stored DISPLAY-space columns (its text is the possibly-truncated
+        // MatchLine); body/end lines use the source-column span against their full stored text.
+        AssertContainsInOrder(highlight,
+            "var storedMultilineResults = cappedResults",
+            ".Where(result => result.IsMultilineMatch && result.MatchEndLineNumber is int)",
+            "(int start, int end)? StoredSpanForLine(int lineNumber, string lineTextForLine)",
+            "if (lineNumber == result.LineNumber)",
+            "int s = Math.Max(0, result.MatchStartColumn);",
+            "int e = s + Math.Max(0, result.MatchLength);",
+            "var span = ComputeMultilineLineSpan(result, lineNumber, lineTextForLine.Length);",
+            "var forcedSpan = StoredSpanForLine(lineNum, lineText[lineNum]);",
+            "truncate: truncatePreviewLines && forcedSpan is null,",
+            "forcedSpan: forcedSpan);");
     }
 
     [Fact]

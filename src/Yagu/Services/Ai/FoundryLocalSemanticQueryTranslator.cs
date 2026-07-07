@@ -17,6 +17,11 @@ namespace Yagu.Services.Ai;
 public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslator, IAsyncDisposable
 {
     private const string PromptResourceName = "Yagu.Services.Ai.Prompts.SemanticSearchSystemPrompt.prompt.md";
+    private const string SmallPromptResourceName = "Yagu.Services.Ai.Prompts.SemanticSearchSystemPromptSmall.prompt.md";
+    /// <summary>Env var that, when set to 1/true, loads the condensed <see cref="SmallPromptResourceName"/>
+    /// instead of the full prompt — far fewer tokens so the prefill is fast on a slow CPU-only machine.
+    /// Experimental toggle for measuring CPU inference latency with a smaller prompt.</summary>
+    private const string SmallPromptEnvVar = "YAGU_SEMANTIC_SMALL_PROMPT";
     private const string LogSource = "Semantic.Translator";
 
     /// <summary>Below this available-RAM budget (MB) on a CPU-only machine, <see cref="BuildSystemPrompt"/>
@@ -163,7 +168,11 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     private HashSet<DeviceType> AvailableDevices()
     {
         var set = new HashSet<DeviceType> { DeviceType.CPU };
-        if (_hasGpu) set.Add(DeviceType.GPU);
+        // Only offer the GPU build when the GPU can actually RUN a model. An integrated GPU (no dedicated
+        // VRAM) crashes with a native 0xC0000409 on the ONNX Runtime WebGPU/DirectML path on the FIRST
+        // inference regardless of model size (confirmed on an Intel UHD iGPU with both a 3.7 GB and a ~1 GB
+        // GPU build), so it must fall back to the CPU build. See GpuInferencePolicy.
+        if (GpuInferencePolicy.CanUseGpuForInference(_hasGpu, _gpuMemoryBytes)) set.Add(DeviceType.GPU);
         if (_hasNpu) set.Add(DeviceType.NPU);
         return set;
     }
@@ -177,7 +186,11 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     /// </summary>
     private int? AvailableMemoryBudgetMb()
     {
-        if (_hasGpu || _hasNpu) return null;
+        // Apply the system-RAM budget only when inference will run on the CPU. A usable (dedicated-VRAM)
+        // GPU or an NPU keeps the model in its own memory, so a RAM budget would wrongly exclude it; but an
+        // INTEGRATED GPU is excluded from inference (it crashes — see GpuInferencePolicy) and therefore runs
+        // on the CPU, so it MUST get the RAM budget so a too-large CPU build isn't auto-selected and OOMs.
+        if (GpuInferencePolicy.CanUseGpuForInference(_hasGpu, _gpuMemoryBytes) || _hasNpu) return null;
         try
         {
             var status = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
@@ -470,7 +483,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             // request…" forever. The Foundry Local runtime occasionally hangs mid-generation (the call
             // never returns), so cap it with a timeout linked to the user's cancellation token. Reasoning
             // models get a longer budget because their <think> trace legitimately takes much longer.
-            TimeSpan inferenceTimeout = _selectedModelIsReasoning ? ReasoningInferenceTimeout : InferenceTimeout;
+            TimeSpan inferenceTimeout = ResolveInferenceTimeout(_selectedModelIsReasoning);
             using var inferenceCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             inferenceCts.CancelAfter(inferenceTimeout);
             try
@@ -820,6 +833,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                     SizeBytes = sizeMb is > 0 ? sizeMb.Value * 1024L * 1024L : null,
                     IsRecommended = isRecommended,
                     IsBelowRecommended = !isRecommended && rank > recommendedRank,
+                    IsPreferredFamily = rank != int.MaxValue,
                     IsCached = isCached,
                     DeviceLabel = DeviceLabelOf(FoundryModelSelector.ResolveVariantDevice(variant)),
                     ExceedsAvailableMemory = memBudgetMb is { } budget && sizeMb is { } sz && !ModelMemoryBudget.Fits(sz, budget),
@@ -1047,13 +1061,36 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     private static string LoadSystemPromptTemplate()
     {
         var asm = typeof(FoundryLocalSemanticQueryTranslator).Assembly;
-        using Stream? stream = asm.GetManifestResourceStream(PromptResourceName);
+        // Opt-in condensed prompt (fewer tokens => faster prefill on slow CPU-only machines).
+        bool useSmall = IsEnvFlagSet(SmallPromptEnvVar);
+        string resourceName = useSmall ? SmallPromptResourceName : PromptResourceName;
+        using Stream? stream = asm.GetManifestResourceStream(resourceName);
         if (stream is null)
-            throw new InvalidOperationException($"Embedded prompt resource '{PromptResourceName}' was not found.");
+            throw new InvalidOperationException($"Embedded prompt resource '{resourceName}' was not found.");
         using var reader = new StreamReader(stream);
         // The prompt is a VS Code ".prompt.md" with editor-only YAML front matter; strip it so the
         // model receives only the live prompt body.
         return SemanticPromptText.StripFrontMatter(reader.ReadToEnd());
+    }
+
+    /// <summary>True when an environment variable is set to "1" or "true" (case-insensitive).</summary>
+    private static bool IsEnvFlagSet(string name)
+    {
+        string? v = Environment.GetEnvironmentVariable(name);
+        return v is not null &&
+            (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Effective inference watchdog timeout. Honors the <c>YAGU_SEMANTIC_INFERENCE_TIMEOUT_S</c>
+    /// env var (whole seconds &gt; 0) as a diagnostic override for measuring slow CPU-only latency that
+    /// would otherwise trip the default watchdog; falls back to the default (longer for reasoning models)
+    /// when unset or invalid.</summary>
+    private static TimeSpan ResolveInferenceTimeout(bool isReasoning)
+    {
+        string? v = Environment.GetEnvironmentVariable("YAGU_SEMANTIC_INFERENCE_TIMEOUT_S");
+        if (v is not null && int.TryParse(v, out int secs) && secs > 0)
+            return TimeSpan.FromSeconds(secs);
+        return isReasoning ? ReasoningInferenceTimeout : InferenceTimeout;
     }
 
     public async ValueTask DisposeAsync()

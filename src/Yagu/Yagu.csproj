@@ -192,6 +192,11 @@
     <EmbeddedResource Include="Services\Ai\Prompts\SemanticSearchSystemPrompt.prompt.md">
       <LogicalName>Yagu.Services.Ai.Prompts.SemanticSearchSystemPrompt.prompt.md</LogicalName>
     </EmbeddedResource>
+    <!-- Condensed variant used when YAGU_SEMANTIC_SMALL_PROMPT is set (fast prompt prefill on slow
+         CPU-only machines). Same schema/rules, far fewer tokens; loaded the same way. -->
+    <EmbeddedResource Include="Services\Ai\Prompts\SemanticSearchSystemPromptSmall.prompt.md">
+      <LogicalName>Yagu.Services.Ai.Prompts.SemanticSearchSystemPromptSmall.prompt.md</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <ItemGroup>

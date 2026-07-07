@@ -114,6 +114,13 @@ public sealed class SemanticModelOption
     /// results — the UI flags these with a warning.</summary>
     public bool IsBelowRecommended { get; init; }
 
+    /// <summary>True when this model's family appears in the static preference list (a known-good family
+    /// with a fixed rank); false for a "novel" family the preference list has never seen — e.g. a newly
+    /// released model. The first-run qualification sweep reserves a probe slot for a novel family so a
+    /// brand-new (potentially superior) model is never permanently pinned below the candidate cap by the
+    /// static ranking.</summary>
+    public bool IsPreferredFamily { get; init; }
+
     /// <summary>True when the model is already downloaded on this machine.</summary>
     public bool IsCached { get; init; }
 

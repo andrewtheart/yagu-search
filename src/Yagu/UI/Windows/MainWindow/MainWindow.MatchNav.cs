@@ -2625,7 +2625,7 @@ public sealed partial class MainWindow
     }
 
     private int GetStableMatchNavFileCount(int deferredFiles)
-        => _previewTotalFileCount > 0 ? _previewTotalFileCount : MatchNavFileCount + deferredFiles;
+        => MatchNavMath.StableFileCount(_previewTotalFileCount, MatchNavFileCount, deferredFiles);
 
     private int GetSectionMatchTotal(SectionMatchNav sectionNav)
     {
@@ -2693,7 +2693,7 @@ public sealed partial class MainWindow
         var (deferredFiles, _) = GetDeferredCounts();
         int totalMatches = GetStableMatchNavTotal();
         int fileCount = GetStableMatchNavFileCount(deferredFiles);
-        return $"Occurrence {index + 1:N0}/{totalMatches:N0} ({fileCount:N0} file{(fileCount != 1 ? "s" : "")})";
+        return MatchNavMath.FormatOccurrenceLabel(index, totalMatches, fileCount);
     }
 
     private void UpdateMatchNavPanel()
@@ -2704,19 +2704,7 @@ public sealed partial class MainWindow
             MatchNavPanel.Visibility = Visibility.Visible;
             bool hadActiveHighlight = _activeMatchHighlight is not null;
             var activeIndex = FindActiveMatchIndex();
-            if (activeIndex >= 0)
-                _currentMatchIndex = activeIndex;
-            else if (_matchParagraphs.Count > 0)
-            {
-                if (_currentMatchIndex < 0)
-                    _currentMatchIndex = 0;
-                else if (_currentMatchIndex >= _matchParagraphs.Count)
-                    _currentMatchIndex = _matchParagraphs.Count - 1;
-            }
-            else if (_currentMatchIndex < 0)
-            {
-                _currentMatchIndex = 0;
-            }
+            _currentMatchIndex = MatchNavMath.ResolveCurrentIndex(activeIndex, _currentMatchIndex, _matchParagraphs.Count);
 
             MatchNavLabel.Text = FormatMatchNavLabel(_currentMatchIndex);
 
@@ -3105,9 +3093,7 @@ public sealed partial class MainWindow
             return;
         }
         SectionNavOverlay.Visibility = Visibility.Visible;
-        int displayIndex = Math.Clamp(_activeSectionNav.CurrentIndex + 1, 1, total);
-        string matchWord = total == 1 ? "match" : "matches";
-        SectionNavLabel.Text = $"Occurrence {displayIndex:N0}/{total:N0} ({total:N0} {matchWord} in file)";
+        SectionNavLabel.Text = MatchNavMath.FormatSectionOccurrenceLabel(_activeSectionNav.CurrentIndex, total);
     }
 
     private void OnSectionNavNext(object sender, RoutedEventArgs e)
@@ -3171,8 +3157,8 @@ public sealed partial class MainWindow
     {
         if (sn.Matches.Count == 0) return;
         Paragraph? previousPara = sn.CurrentIndex >= 0 && sn.CurrentIndex < sn.Matches.Count ? sn.Matches[sn.CurrentIndex].para : null;
-        bool wrappedToEnd = sn.CurrentIndex <= 0;
-        sn.CurrentIndex = (sn.CurrentIndex - 1 + sn.Matches.Count) % sn.Matches.Count;
+        var (prevIndex, wrappedToEnd) = MatchNavMath.PrevIndexWithWrap(sn.CurrentIndex, sn.Matches.Count);
+        sn.CurrentIndex = prevIndex;
         _activeSectionNav = sn;
         HighlightActiveExpander();
         UpdateSectionNavOverlay();

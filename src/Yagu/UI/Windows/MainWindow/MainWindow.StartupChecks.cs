@@ -51,6 +51,7 @@ public sealed partial class MainWindow
         await CheckFirstRunContextMenuAsync();
         await ShowFontContrastWarningIfNeededAsync();
         await ShowCpuSemanticWarningIfNeededAsync();
+        await OfferSemanticModelQualificationIfNeededAsync();
 
         if (_autoSearchOnLoad)
         {

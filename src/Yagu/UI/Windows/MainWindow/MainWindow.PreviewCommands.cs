@@ -1820,14 +1820,13 @@ public sealed partial class MainWindow
 
         try
         {
-            var file = await PickTextExportFileAsync("Yagu_Selected_File_Paths").ConfigureAwait(true);
-            if (file is null) return;
+            var path = PickTextExportFilePath("Yagu_Selected_File_Paths");
+            if (path is null) return;
 
-            await using var stream = await file.OpenStreamForWriteAsync().ConfigureAwait(true);
-            stream.SetLength(0);
+            await using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 128 * 1024, useAsync: true);
             using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), bufferSize: 128 * 1024, leaveOpen: false);
             await SelectedFileExportService.WritePathListAsync(paths, writer).ConfigureAwait(true);
-            ViewModel.StatusText = $"Saved {paths.Count:N0} selected file path(s) to {file.Path}.";
+            ViewModel.StatusText = $"Saved {paths.Count:N0} selected file path(s) to {path}.";
         }
         catch (Exception ex)
         {
@@ -1843,14 +1842,13 @@ public sealed partial class MainWindow
 
         try
         {
-            var file = await PickTextExportFileAsync("Yagu_Selected_Files_With_Content").ConfigureAwait(true);
-            if (file is null) return;
+            var path = PickTextExportFilePath("Yagu_Selected_Files_With_Content");
+            if (path is null) return;
 
-            await using var stream = await file.OpenStreamForWriteAsync().ConfigureAwait(true);
-            stream.SetLength(0);
+            await using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 128 * 1024, useAsync: true);
             using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), bufferSize: 128 * 1024, leaveOpen: false);
             await SelectedFileExportService.WriteFilesWithContentAsync(paths, writer).ConfigureAwait(true);
-            ViewModel.StatusText = $"Saved {paths.Count:N0} selected file(s) with content to {file.Path}.";
+            ViewModel.StatusText = $"Saved {paths.Count:N0} selected file(s) with content to {path}.";
         }
         catch (Exception ex)
         {
@@ -1873,18 +1871,39 @@ public sealed partial class MainWindow
         return ViewModel.ResultGroups.Where(g => g.AllSelected).ToList();
     }
 
-    private async Task<Windows.Storage.StorageFile?> PickTextExportFileAsync(string suggestedFileName)
+    /// <summary>
+    /// Shows a robust "Save As" dialog for export commands and returns the chosen full path
+    /// (or null if cancelled / the dialog could not be shown). Uses the Win32 Common Item Dialog
+    /// rather than the WinAppSDK <c>FileSavePicker</c>: the picker routes through a broker that can
+    /// silently fail to come to the foreground — leaving the disabled owner window looking frozen —
+    /// especially while a search is still running and flooding the UI thread. The Win32 dialog
+    /// parents to the owner HWND and shows reliably in that state (and works elevated too).
+    /// </summary>
+    private string? PickExportFilePath(
+        string title,
+        string suggestedFileName,
+        string defaultExtension,
+        (string Name, string Spec)[] filters)
     {
-        var picker = new Windows.Storage.Pickers.FileSavePicker();
-        picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
-        picker.FileTypeChoices.Add("Text File", new List<string> { ".txt" });
-        picker.SuggestedFileName = suggestedFileName;
-
-        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
-
-        return await picker.PickSaveFileAsync();
+        var hwnd = GetMainWindowHandle();
+        try
+        {
+            return Helpers.Win32FileDialog.Save(hwnd, title, suggestedFileName, defaultExtension, filters);
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("MainWindow", "Win32 Save dialog failed for export.", ex);
+            ViewModel.ErrorText = $"Could not open the Save dialog: {ex.Message}";
+            return null;
+        }
     }
+
+    private string? PickTextExportFilePath(string suggestedFileName)
+        => PickExportFilePath(
+            "Export",
+            suggestedFileName,
+            "txt",
+            new[] { ("Text File", "*.txt") });
 
     private void OnCopyPreviewFilePath(object sender, RoutedEventArgs e)
     {
@@ -2047,20 +2066,19 @@ public sealed partial class MainWindow
             selected = new List<SearchResult> { single };
         if (selected.Count == 0) return;
 
-        var picker = new Windows.Storage.Pickers.FileSavePicker();
-        picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
-        picker.FileTypeChoices.Add("Text File", new List<string> { ".txt" });
-        picker.FileTypeChoices.Add("CSV File", new List<string> { ".csv" });
-        picker.SuggestedFileName = "Yagu_Export";
-
-        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
-
-        var file = await picker.PickSaveFileAsync();
-        if (file is null) return;
+        string? path = PickExportFilePath(
+            "Export Selected Matches",
+            "Yagu_Export",
+            "txt",
+            new[]
+            {
+                ("Text File", "*.txt"),
+                ("CSV File", "*.csv"),
+            });
+        if (path is null) return;
 
         var sb = new StringBuilder();
-        string ext = Path.GetExtension(file.Name).ToLowerInvariant();
+        string ext = Path.GetExtension(path).ToLowerInvariant();
         if (ext == ".csv")
         {
             sb.AppendLine("\"File\",\"Line\",\"Match\"");
@@ -2076,7 +2094,16 @@ public sealed partial class MainWindow
                 sb.AppendLine(CultureInfo.InvariantCulture, $"{r.FilePath}:{r.LineNumber}: {r.MatchLine}");
         }
 
-        await Windows.Storage.FileIO.WriteTextAsync(file, sb.ToString());
+        try
+        {
+            await File.WriteAllTextAsync(path, sb.ToString()).ConfigureAwait(true);
+            ViewModel.StatusText = $"Exported {selected.Count:N0} selected match(es) to {path}.";
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warning("MainWindow", "Could not export selected matches", ex);
+            ViewModel.StatusText = $"Could not export selected matches: {ex.Message}";
+        }
     }
 
     private async void OnExportHtmlReport(object sender, RoutedEventArgs e)
@@ -2093,30 +2120,20 @@ public sealed partial class MainWindow
         var exportOptions = await ReportExportDialog.ShowAsync(_hwnd, ViewModel.ContextLines);
         if (exportOptions is null) return;
 
-        // Pick file extension based on format
-        var picker = new Windows.Storage.Pickers.FileSavePicker();
-        picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
-        switch (exportOptions.Format)
+        // Pick file extension based on format.
+        (string filterName, string ext) = exportOptions.Format switch
         {
-            case Services.ReportFormat.Json:
-                picker.FileTypeChoices.Add("JSON File", new List<string> { ".json" });
-                picker.SuggestedFileName = "Yagu_Report";
-                break;
-            case Services.ReportFormat.Csv:
-                picker.FileTypeChoices.Add("CSV File", new List<string> { ".csv" });
-                picker.SuggestedFileName = "Yagu_Report";
-                break;
-            default:
-                picker.FileTypeChoices.Add("HTML File", new List<string> { ".html" });
-                picker.SuggestedFileName = "Yagu_Report";
-                break;
-        }
+            Services.ReportFormat.Json => ("JSON File", "json"),
+            Services.ReportFormat.Csv => ("CSV File", "csv"),
+            _ => ("HTML File", "html"),
+        };
 
-        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
-
-        var file = await picker.PickSaveFileAsync();
-        if (file is null) return;
+        string? path = PickExportFilePath(
+            "Export Report",
+            "Yagu_Report",
+            ext,
+            new[] { (filterName, "*." + ext) });
+        if (path is null) return;
 
         // Hydrate all results before writing
         foreach (var group in groups)
@@ -2125,8 +2142,7 @@ public sealed partial class MainWindow
 
         int totalMatches = groups.Sum(g => g.Results.Count);
 
-        await using var stream = await file.OpenStreamForWriteAsync().ConfigureAwait(true);
-        stream.SetLength(0);
+        await using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 64 * 1024, useAsync: true);
         using var w = new StreamWriter(stream, new UTF8Encoding(false), bufferSize: 64 * 1024, leaveOpen: false);
 
         var stats = new HtmlReportExportService.SearchStats(
@@ -2150,7 +2166,7 @@ public sealed partial class MainWindow
 
         var formatName = exportOptions.Format.ToString().ToUpperInvariant();
         DispatcherQueue.TryEnqueue(() =>
-            ViewModel.StatusText = $"Exported {formatName} report ({groups.Count:N0} files, {totalMatches:N0} matches) to {file.Path}");
+            ViewModel.StatusText = $"Exported {formatName} report ({groups.Count:N0} files, {totalMatches:N0} matches) to {path}");
     }
 
     private static string BuildHighlightedMatchHtml(string line, int matchStart, int matchLength)

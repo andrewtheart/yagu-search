@@ -2542,6 +2542,102 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         await PersistSettingsAsync().ConfigureAwait(true);
     }
 
+    // ── First-run AI-model qualification ──
+
+    /// <summary>True when the one-time first-run AI-model qualification should be offered: AI (Semantic)
+    /// search is available/enabled and the sweep has not been run yet.</summary>
+    public bool ShouldOfferSemanticModelQualification =>
+        SemanticModelQualificationCoordinator.ShouldOffer(_settings, SemanticSearchAvailable);
+
+    /// <summary>
+    /// Runs the first-run model-qualification sweep against this machine: enumerates the runnable models,
+    /// probes each with a mix of simple and complex queries (<see cref="SemanticProbeSet.Default"/>), and
+    /// returns the qualified model (if any), a best-effort fallback, and per-candidate reports. The user's
+    /// chosen <paramref name="thresholds"/> decide how long to wait for a model to load and how slow a
+    /// query may be before a candidate is abandoned. The sweep may download models and run inference, so
+    /// it can take minutes — honor <paramref name="cancellationToken"/> so the user can cancel. Probing is
+    /// in-process for now; a crashy model that faults with a managed exception is abandoned, but a hard
+    /// native abort still ends the app until the out-of-process worker lands.
+    /// </summary>
+    public async Task<ModelQualificationResult> RunSemanticModelQualificationAsync(
+        ModelQualificationThresholds thresholds,
+        IProgress<SemanticQualificationProgress>? progress, CancellationToken cancellationToken)
+    {
+        if (_semanticTranslator is null || !_semanticTranslator.IsAvailable)
+            throw new InvalidOperationException("Semantic search is not available on this machine.");
+
+        var runner = new SemanticModelQualificationRunner(
+            _semanticTranslator,
+            defaultDirectory: null,
+            directoryExists: System.IO.Directory.Exists,
+            maxCandidates: SemanticModelQualificationRunner.DefaultMaxCandidates);
+        return await runner.RunAsync(SemanticProbeSet.Default, thresholds, progress, cancellationToken).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Folds a finished qualification sweep into settings and, when the user accepts a model, selects it
+    /// live and persists it. Pass the user's override as <paramref name="chosenAlias"/>; null accepts the
+    /// sweep's recommendation. Marks the one-time check complete either way.
+    /// </summary>
+    public async Task ApplySemanticModelQualificationAsync(
+        ModelQualificationResult result, bool accepted, string? chosenAlias = null)
+    {
+        SemanticModelQualificationCoordinator.ApplyResult(_settings, result, accepted, chosenAlias);
+
+        // Reflect the (possibly new) effective model in the UI + translator.
+        SemanticModelAlias = _settings.SemanticModelAlias;
+        _semanticTranslator?.SetModelOverride(
+            string.IsNullOrWhiteSpace(_settings.SemanticModelAlias) ? null : _settings.SemanticModelAlias);
+        OnPropertyChanged(nameof(CurrentSemanticModelDisplay));
+        await PersistSettingsAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>Marks the first-run model check as declined (so it is not re-offered) without selecting a
+    /// model. Use for an explicit "skip"; a plain "not now" should leave settings untouched so the offer
+    /// returns next launch.</summary>
+    public async Task DeclineSemanticModelQualificationAsync()
+    {
+        SemanticModelQualificationCoordinator.MarkDeclined(_settings);
+        await PersistSettingsAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>The user refused the first-run model check. Because AI (Semantic) search needs a model
+    /// that was validated on this PC to be reliable, turn the feature OFF and mark the one-time check
+    /// complete so re-enabling it later (from Settings) does not re-offer the sweep. The user can opt back
+    /// in and pick a model themselves — at their own risk — from the AI settings tab.</summary>
+    public async Task DeclineAndDisableSemanticSearchAsync()
+    {
+        // Mark the check complete first so the persist triggered by the toggle below already carries it.
+        SemanticModelQualificationCoordinator.MarkDeclined(_settings);
+        // Turning the toggle off persists SemanticSearchEnabled=false and disables the translator live.
+        SemanticSearchAvailable = false;
+        await PersistSettingsAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>True once the first-run model check has run (or was declined) or a model has been recorded,
+    /// i.e. there is qualification state that <see cref="ResetSemanticModelQualificationAsync"/> would
+    /// clear. Used to enable/disable the Developer Options "reset" button.</summary>
+    public bool HasSemanticModelQualificationState =>
+        _settings.SemanticModelQualificationCompleted
+        || !string.IsNullOrEmpty(_settings.SemanticQualifiedModelAlias)
+        || !string.IsNullOrEmpty(_settings.SemanticModelAlias);
+
+    /// <summary>Developer action: clear the first-run AI-model qualification back to a fresh-install state
+    /// and re-enable AI (Semantic) search, so the model check is offered again on the next startup. Forgets
+    /// the recommended and selected model so the re-run starts from the automatic pick.</summary>
+    public async Task ResetSemanticModelQualificationAsync()
+    {
+        SemanticModelQualificationCoordinator.Reset(_settings);
+        // Re-enable AI search so ShouldOfferSemanticModelQualification returns true on the next launch.
+        SemanticSearchAvailable = true;
+        // Drop any live model override so the re-run sweep starts from the automatic pick.
+        SemanticModelAlias = string.Empty;
+        _semanticTranslator?.SetModelOverride(null);
+        OnPropertyChanged(nameof(CurrentSemanticModelDisplay));
+        OnPropertyChanged(nameof(HasSemanticModelQualificationState));
+        await PersistSettingsAsync().ConfigureAwait(true);
+    }
+
     /// <summary>Records that the user approved the one-time OCR component download. Sets the in-process
     /// gate (so concurrent OCR inits proceed) and persists the consent so the warning is shown at most
     /// once across sessions.</summary>

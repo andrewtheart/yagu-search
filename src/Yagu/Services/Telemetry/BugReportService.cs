@@ -101,7 +101,7 @@ public sealed class BugReportService
     {
         try
         {
-            var detector = new GpuNpuCapabilityDetector();
+            ISemanticCapabilityDetector detector = new GpuNpuCapabilityDetector();
             string gpu = string.Join("; ", detector.GetGpuDescriptions());
             string npu = string.Join("; ", detector.GetNpuDescriptions());
             return (gpu, npu);

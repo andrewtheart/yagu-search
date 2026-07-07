@@ -524,6 +524,17 @@ public sealed class AppSettings
     /// fall back to the default order when parsed.</summary>
     public string SemanticDevicePreferenceOrder { get; set; } = "GPU,NPU,CPU";
 
+    // ── First-run AI-model qualification ──
+    /// <summary>True once the first-run AI-model qualification sweep has finished (whether or not any
+    /// model cleared the bar, and regardless of whether the user accepted the suggestion). Gates the
+    /// one-time first-run model check so it is not re-offered on every switch into Semantic mode.</summary>
+    public bool SemanticModelQualificationCompleted { get; set; }
+    /// <summary>The model alias the first-run qualification sweep recommended (the first candidate that
+    /// cleared the accuracy/latency bar, or the best-effort fallback when none did). Empty until the
+    /// sweep runs. Informational: the effective model is still <see cref="SemanticModelAlias"/>, which
+    /// the first-run flow sets to this value when the user accepts the suggestion.</summary>
+    public string SemanticQualifiedModelAlias { get; set; } = string.Empty;
+
     // ── Foundry model update alerts ──
     /// <summary>When true (default), Yagu checks the Foundry Local catalog about once a day and shows a
     /// one-time modal when a new, updated, or variant text-chat model becomes available. Only runs for

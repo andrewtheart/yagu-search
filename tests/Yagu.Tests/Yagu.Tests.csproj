@@ -60,6 +60,7 @@
     <Compile Include="..\..\src\Yagu\Helpers\EditorSyntaxHighlightingResolver.cs" Link="Source\Helpers\EditorSyntaxHighlightingResolver.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\EncodingDetector.cs" Link="Source\Helpers\EncodingDetector.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\LineTruncator.cs" Link="Source\Helpers\LineTruncator.cs" />
+    <Compile Include="..\..\src\Yagu\Helpers\MatchNavMath.cs" Link="Source\Helpers\MatchNavMath.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\MultilineTextShadow.cs" Link="Source\Helpers\MultilineTextShadow.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\MultilinePreviewSpan.cs" Link="Source\Helpers\MultilinePreviewSpan.cs" />
     <Compile Include="..\..\src\Yagu\Helpers\PreviewZoomMath.cs" Link="Source\Helpers\PreviewZoomMath.cs" />
@@ -137,6 +138,14 @@
     <Compile Include="..\..\src\Yagu\Services\Ai\ModelContextBudget.cs" Link="Source\Services\Ai\ModelContextBudget.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ai\GenAiConfigReader.cs" Link="Source\Services\Ai\GenAiConfigReader.cs" />
     <Compile Include="..\..\src\Yagu\Services\Ai\HighAccuracyModelPolicy.cs" Link="Source\Services\Ai\HighAccuracyModelPolicy.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\GpuInferencePolicy.cs" Link="Source\Services\Ai\GpuInferencePolicy.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\SemanticProbe.cs" Link="Source\Services\Ai\SemanticProbe.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\SemanticProbeScorer.cs" Link="Source\Services\Ai\SemanticProbeScorer.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\ModelQualificationThresholds.cs" Link="Source\Services\Ai\ModelQualificationThresholds.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\ModelQualificationPolicy.cs" Link="Source\Services\Ai\ModelQualificationPolicy.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\ModelQualification.cs" Link="Source\Services\Ai\ModelQualification.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\SemanticModelQualificationRunner.cs" Link="Source\Services\Ai\SemanticModelQualificationRunner.cs" />
+    <Compile Include="..\..\src\Yagu\Services\Ai\SemanticModelQualificationCoordinator.cs" Link="Source\Services\Ai\SemanticModelQualificationCoordinator.cs" />
   </ItemGroup>
 
   <!-- Copy the Rust cdylib next to the test assembly so the native fast-path

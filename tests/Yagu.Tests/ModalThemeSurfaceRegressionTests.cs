@@ -26,6 +26,7 @@ public sealed class ModalThemeSurfaceRegressionTests
     [Theory]
     [InlineData("UI/Windows/YaguDialog.cs")]
     [InlineData("UI/Windows/SemanticModelDownloadDialog.cs")]
+    [InlineData("UI/Windows/SemanticModelQualificationDialog.cs")]
     [InlineData("UI/Windows/AdminProtectedPathsDialog.cs")]
     [InlineData("ResultStoreTempLocationWindow.cs")]
     public void DialogSurfaces_UseThemedHelper_NotAppResourceBackground(string relativePath)

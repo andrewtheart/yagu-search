@@ -25,6 +25,15 @@ public interface ISemanticCapabilityDetector
     /// or 0 when unknown/none. Used to decide whether the machine can auto-run a larger, more accurate
     /// model (e.g. phi-4 14B) instead of the small default.</summary>
     long GetMaxDedicatedGpuMemoryBytes();
+
+    /// <summary>Best-effort human-readable names of the real (non-software) GPUs present, e.g.
+    /// "NVIDIA GeForce RTX 4070". Empty when none are detected or the registry is unreadable. For
+    /// user-reviewed diagnostics (bug reports) only; never sent on the silent telemetry channel.</summary>
+    IReadOnlyList<string> GetGpuDescriptions();
+
+    /// <summary>Best-effort human-readable names of the NPUs / compute accelerators present, e.g.
+    /// "Intel(R) AI Boost". Empty when none are detected. For user-reviewed diagnostics only.</summary>
+    IReadOnlyList<string> GetNpuDescriptions();
 }
 
 /// <summary>
@@ -44,8 +53,12 @@ public sealed class GpuNpuCapabilityDetector : ISemanticCapabilityDetector
     private const string ComputeAcceleratorClassKey =
         @"SYSTEM\CurrentControlSet\Control\Class\{f01a9d53-3ff6-48d2-9f97-c8a7004be10c}";
 
-    // Windows software/basic/remote fallback adapters that are NOT real accelerators even though
-    // they appear in the display class.
+    // Windows software/basic/remote fallback adapters (including the generic inbox VGA driver), plus
+    // virtual GPUs presented by hypervisors, that are NOT real inference accelerators even though they
+    // appear in the display class. The generic-VGA and hypervisor ones (VMware/VirtualBox/QEMU-QXL/
+    // Parsec/Citrix) enumerate on the PCI bus with real-looking device IDs, so the physical-bus check
+    // alone cannot exclude them — they are rejected by driver-description name. Matched as
+    // case-insensitive substrings (see IsHardwareAccelerator).
     private static readonly string[] SoftwareAdapterMarkers =
     [
         "Microsoft Basic Render Driver",
@@ -53,12 +66,27 @@ public sealed class GpuNpuCapabilityDetector : ISemanticCapabilityDetector
         "Microsoft Remote Display Adapter",
         "Microsoft Hyper-V Video",
         "Remote Desktop",
+        "Standard VGA Graphics Adapter",
+        "VMware SVGA",
+        "VirtualBox Graphics Adapter",
+        "Red Hat QXL",
+        "Parsec Virtual Display Adapter",
+        "Citrix Indirect Display Adapter",
     ];
 
     /// <summary>A single device-class instance's identifying values, as read from the registry.</summary>
     public readonly record struct DeviceClassEntry(string DriverDesc, string MatchingDeviceId, long DedicatedMemoryBytes = 0);
 
     private readonly Func<string, IEnumerable<DeviceClassEntry>> _readDeviceClass;
+
+    // Hardware is fixed for a process's lifetime, yet the public queries (HasGpu, HasNpu,
+    // HasAcceleratedHardware, GetMaxDedicatedGpuMemoryBytes, and the bug-report descriptions) each
+    // re-walk a device class — HasAcceleratedHardware alone re-reads both. Memoize each class's
+    // materialized enumeration so the registry is read at most once per class per detector and every
+    // query observes one consistent hardware snapshot. Populated under a lock for thread safety.
+    private readonly Dictionary<string, IReadOnlyList<DeviceClassEntry>> _classCache =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _cacheLock = new();
 
     /// <summary>Production constructor: enumerates real device-class instances from the registry.</summary>
     public GpuNpuCapabilityDetector() : this(ReadDeviceClassFromRegistry) { }
@@ -92,11 +120,28 @@ public sealed class GpuNpuCapabilityDetector : ISemanticCapabilityDetector
 
     private bool HasHardwareDeviceInClass(string classKeyPath)
     {
-        foreach (DeviceClassEntry entry in _readDeviceClass(classKeyPath))
+        foreach (DeviceClassEntry entry in ReadClass(classKeyPath))
             if (IsHardwareAccelerator(entry.DriverDesc, entry.MatchingDeviceId))
                 return true;
 
         return false;
+    }
+
+    /// <summary>Returns a class's device-instance entries, invoking the (registry-backed) reader at
+    /// most once per class and caching the materialized result. A reader failure is not cached, so
+    /// each public method's own try/catch still governs the conservative "not accelerated" fallback.</summary>
+    private IReadOnlyList<DeviceClassEntry> ReadClass(string classKeyPath)
+    {
+        lock (_cacheLock)
+        {
+            if (_classCache.TryGetValue(classKeyPath, out IReadOnlyList<DeviceClassEntry>? cached))
+                return cached;
+
+            // Materialize eagerly so a lazy reader isn't re-enumerated by later queries.
+            var entries = new List<DeviceClassEntry>(_readDeviceClass(classKeyPath));
+            _classCache[classKeyPath] = entries;
+            return entries;
+        }
     }
 
     /// <summary>True when a real (non-software) GPU sits in the display-adapter class.</summary>
@@ -130,7 +175,7 @@ public sealed class GpuNpuCapabilityDetector : ISemanticCapabilityDetector
         try
         {
             long max = 0;
-            foreach (DeviceClassEntry entry in _readDeviceClass(DisplayClassKey))
+            foreach (DeviceClassEntry entry in ReadClass(DisplayClassKey))
             {
                 if (!IsHardwareAccelerator(entry.DriverDesc, entry.MatchingDeviceId)) continue;
                 if (entry.DedicatedMemoryBytes > max) max = entry.DedicatedMemoryBytes;
@@ -158,7 +203,7 @@ public sealed class GpuNpuCapabilityDetector : ISemanticCapabilityDetector
         try
         {
             var names = new List<string>();
-            foreach (DeviceClassEntry entry in _readDeviceClass(classKeyPath))
+            foreach (DeviceClassEntry entry in ReadClass(classKeyPath))
             {
                 if (string.IsNullOrEmpty(entry.DriverDesc))
                     continue;
@@ -225,7 +270,9 @@ public sealed class GpuNpuCapabilityDetector : ISemanticCapabilityDetector
     /// <summary>
     /// Pure classification used by the detector (and unit tests): a real hardware accelerator sits
     /// on a physical bus (PCI/ACPI) and is not one of Windows' software/basic/remote fallback
-    /// adapters. Virtual/software adapters enumerate on ROOT\ or SWD\ buses and are rejected.
+    /// adapters. Purely virtual/software adapters enumerate on ROOT\ or SWD\ buses and are rejected
+    /// by bus; hypervisor virtual GPUs (VMware/VirtualBox/QEMU-QXL/…) do sit on the PCI bus, so they
+    /// are additionally rejected by driver-description name via <see cref="SoftwareAdapterMarkers"/>.
     /// </summary>
     public static bool IsHardwareAccelerator(string driverDesc, string matchingDeviceId)
     {

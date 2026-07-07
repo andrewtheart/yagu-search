@@ -42,6 +42,7 @@ public sealed partial class SettingsWindow : Window
     private bool _settingDirtyTrackingEnabled;
     private bool _settingsContentBuilt;
     private int? _pendingSelectTabIndex;
+    private string? _pendingSelectTabHeader;
     private bool _cleanHasShownFileDrawerIntroTip;
     private bool _cleanHasShownFileDrawerLineNumberIntroTip;
     private bool _cleanHasShownPreviewMatchIntroTip;
@@ -345,6 +346,25 @@ public sealed partial class SettingsWindow : Window
         SettingsContent.Children.Clear();
         if (index < _tabPages.Count)
             AddSettingsContentChild(_tabPages[index]);
+    }
+
+    /// <summary>Navigate to a tab by its header text (case-insensitive). Because tabs are sorted
+    /// alphabetically after building, callers that only know a tab's name (e.g. "AI") should use this
+    /// instead of a hard-coded index. Safe to call before the deferred settings content is built.</summary>
+    public void SelectTabByHeader(string header)
+    {
+        if (string.IsNullOrWhiteSpace(header))
+            return;
+
+        if (!_settingsContentBuilt)
+        {
+            _pendingSelectTabHeader = header;
+            return;
+        }
+
+        int index = _tabHeaders.FindIndex(h => string.Equals(h, header, StringComparison.OrdinalIgnoreCase));
+        if (index >= 0)
+            SelectTab(index);
     }
 
     private async void OnSaveClick(object sender, RoutedEventArgs e)
@@ -737,6 +757,16 @@ public sealed partial class SettingsWindow : Window
 
         int selectedIndex = _pendingSelectTabIndex.GetValueOrDefault(0);
         _pendingSelectTabIndex = null;
+        // A pending header request wins over a stale index: tabs are sorted alphabetically after they are
+        // built, so the caller (who only knows the tab's name, e.g. "AI") can't supply a stable index.
+        if (_pendingSelectTabHeader is { } pendingHeader)
+        {
+            _pendingSelectTabHeader = null;
+            int headerIndex = _tabHeaders.FindIndex(h => string.Equals(h, pendingHeader, StringComparison.OrdinalIgnoreCase));
+            if (headerIndex >= 0)
+                selectedIndex = headerIndex;
+        }
+
         if (selectedIndex < 0 || selectedIndex >= TabList.Items.Count)
             selectedIndex = 0;
 
@@ -3618,6 +3648,31 @@ public sealed partial class SettingsWindow : Window
             remindersGroup.Children.Add(new TextBlock
             {
                 Text = "Shows the explanatory dialog again the next time you close Yagu while \u201cDock to system tray when closed\u201d is enabled.",
+                FontSize = 11,
+                Opacity = 0.6,
+                TextWrapping = TextWrapping.Wrap,
+            });
+
+            var resetSemanticModelCheck = new Button
+            {
+                Content = "Reset AI model check (re-prompt on startup)",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            resetSemanticModelCheck.Click += async (_, _) =>
+            {
+                await _viewModel.ResetSemanticModelQualificationAsync();
+                MarkSettingsDirty(requireValueChanges: false);
+                RefreshDefaultResetButtons();
+                resetSemanticModelCheck.Content = "AI model check reset";
+            };
+            RegisterDefaultResetButton(resetSemanticModelCheck,
+                () => !_viewModel.HasSemanticModelQualificationState);
+            remindersGroup.Children.Add(resetSemanticModelCheck);
+            remindersGroup.Children.Add(new TextBlock
+            {
+                Text = "Re-runs the first-run AI (Semantic) model check on the next startup: clears the recorded result, forgets the selected model, and re-enables AI search so Yagu offers to test which models fit this PC again.",
                 FontSize = 11,
                 Opacity = 0.6,
                 TextWrapping = TextWrapping.Wrap,

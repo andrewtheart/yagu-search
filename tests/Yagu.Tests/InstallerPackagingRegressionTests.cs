@@ -68,6 +68,29 @@ public sealed class InstallerPackagingRegressionTests
     }
 
     [Fact]
+    public void Uninstaller_PromptsToKeepOrDeleteUserSettingsFile()
+    {
+        string root = FindRepoRoot();
+        string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+
+        // Interactive uninstall asks whether to keep the per-user settings file; the prompt targets
+        // the exact %APPDATA%\Yagu\settings.json that SettingsService uses.
+        Assert.Contains("procedure MaybeRemoveUserSettings();", inno);
+        Assert.Contains(@"ExpandConstant('{userappdata}\Yagu\settings.json')", inno);
+        Assert.Contains("Do you want to keep your Yagu settings and preferences?", inno);
+        Assert.Contains("mbConfirmation, MB_YESNO) = IDNO then", inno);
+
+        // Default is to KEEP: silent uninstalls never prompt/delete, and only an explicit "No"
+        // removes the file (folder removed only if it becomes empty, preserving logs/other data).
+        Assert.Contains("if UninstallSilent() then", inno);
+        Assert.Contains("DeleteFile(SettingsFile);", inno);
+        Assert.Contains(@"RemoveDir(ExpandConstant('{userappdata}\Yagu'));", inno);
+
+        // The prompt is wired into the post-uninstall step alongside the registry cleanup.
+        Assert.Contains("MaybeRemoveUserSettings();", inno);
+    }
+
+    [Fact]
     public void Installer_AbortsWhenSmartAppControlIsEnforcing()
     {
         string root = FindRepoRoot();

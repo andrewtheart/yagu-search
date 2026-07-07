@@ -121,7 +121,9 @@ public sealed class MatchNavOverlayRegressionTests
     public void GetStableMatchNavFileCount_PrefersRegisteredTotalElseFallsBackToRenderedPlusDeferred()
     {
         string count = Method("GetStableMatchNavFileCount", 200);
-        Assert.Contains("_previewTotalFileCount > 0 ? _previewTotalFileCount : MatchNavFileCount + deferredFiles", count);
+        // The registered-total-vs-rendered+deferred arithmetic lives in the unit-tested
+        // MatchNavMath.StableFileCount helper; the WinUI method just delegates to it.
+        Assert.Contains("MatchNavMath.StableFileCount(_previewTotalFileCount, MatchNavFileCount, deferredFiles)", count);
     }
 
     // ── Per-section match-navigation overlay handlers ────────────────────────────

@@ -379,6 +379,35 @@ public class SettingsServiceNewFieldTests
     }
 
     [Fact]
+    public void SemanticModelQualificationFields_DefaultToNotCompletedEmptyAlias()
+    {
+        var s = new AppSettings();
+        Assert.False(s.SemanticModelQualificationCompleted);
+        Assert.Equal(string.Empty, s.SemanticQualifiedModelAlias);
+    }
+
+    [Fact]
+    public void RoundTrip_SemanticModelQualificationFields()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "qg-semantic-qual-" + Guid.NewGuid() + ".json");
+        try
+        {
+            var svc = new SettingsService(tmp);
+            var s = new AppSettings
+            {
+                SemanticModelQualificationCompleted = true,
+                SemanticQualifiedModelAlias = "phi-4-mini",
+            };
+            svc.Save(s);
+
+            var loaded = svc.Load();
+            Assert.True(loaded.SemanticModelQualificationCompleted);
+            Assert.Equal("phi-4-mini", loaded.SemanticQualifiedModelAlias);
+        }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    [Fact]
     public void RoundTrip_PreviewEditorGutterColor()
     {
         var tmp = Path.Combine(Path.GetTempPath(), "qg-editor-gutter-" + Guid.NewGuid() + ".json");

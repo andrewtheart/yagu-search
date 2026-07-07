@@ -264,6 +264,35 @@ begin
   end;
 end;
 
+{ Yagu keeps its settings in %APPDATA%\Yagu\settings.json (separate from the installed program
+  files in the app install folder). Uninstall does NOT remove per-user app data by default, so on an
+  interactive uninstall we ask whether to keep it. The default is to KEEP: a silent/automated
+  uninstall never prompts and never deletes settings, and only an explicit "No" removes the file.
+  Logs and any other files in the folder are left untouched -- we delete only settings.json, then
+  remove the Yagu app-data folder if (and only if) it is now empty. }
+procedure MaybeRemoveUserSettings();
+var
+  SettingsFile: String;
+begin
+  if UninstallSilent() then
+    exit;
+
+  SettingsFile := ExpandConstant('{userappdata}\Yagu\settings.json');
+  if not FileExists(SettingsFile) then
+    exit;
+
+  if MsgBox(
+       'Do you want to keep your Yagu settings and preferences?' + #13#10#13#10 +
+       'Choose Yes to keep them (useful if you plan to reinstall Yagu later), or No to permanently ' +
+       'delete your settings file:' + #13#10 + SettingsFile,
+       mbConfirmation, MB_YESNO) = IDNO then
+  begin
+    DeleteFile(SettingsFile);
+    { Best-effort tidy-up: removes the folder only when empty, so logs/other data are preserved. }
+    RemoveDir(ExpandConstant('{userappdata}\Yagu'));
+  end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usPostUninstall then
@@ -272,5 +301,8 @@ begin
     RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\Directory\shell\Yagu');
     RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\Directory\Background\shell\Yagu');
     RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Yagu');
+
+    // Offer to remove the user's settings file (kept by default).
+    MaybeRemoveUserSettings();
   end;
 end;

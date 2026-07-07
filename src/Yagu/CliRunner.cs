@@ -162,6 +162,28 @@ internal static class CliRunner
     // -----------------------------------------------------------------------
 
     /// <summary>
+    /// Detects GPU/NPU accelerators (and dedicated VRAM) and tells <paramref name="translator"/> about
+    /// them, so model auto-selection matches the GUI: never select a GPU/NPU model build on a machine
+    /// that lacks one (a DirectML "generic-gpu" build can load yet crash during inference on CPU-only
+    /// hardware). Detection failure falls back to CPU-only, the safe choice.
+    /// </summary>
+    private static void ApplyDetectedAccelerators(FoundryLocalSemanticQueryTranslator translator)
+    {
+        bool hasGpu = false, hasNpu = false;
+        long gpuMemoryBytes = 0;
+        try
+        {
+            var capability = new GpuNpuCapabilityDetector();
+            hasGpu = capability.HasGpu();
+            hasNpu = capability.HasNpu();
+            gpuMemoryBytes = capability.GetMaxDedicatedGpuMemoryBytes();
+        }
+        catch { /* CPU-only fallback */ }
+        translator.SetAvailableAccelerators(hasGpu, hasNpu);
+        translator.SetGpuMemoryBytes(gpuMemoryBytes);
+    }
+
+    /// <summary>
     /// Runs the local model to translate <see cref="CliArgs.SemanticPattern"/> into concrete search
     /// flags and folds them into <paramref name="args"/>. Returns <c>Stop=true</c> when the caller
     /// should return <c>Code</c> immediately (a failure, or an <c>--explain</c> dry-run); otherwise
@@ -182,14 +204,7 @@ internal static class CliRunner
 
         await using var translator = new FoundryLocalSemanticQueryTranslator(enabled: true, modelOverrideAlias: modelAlias);
 
-        // Match the GUI: never select a GPU/NPU model build on a machine that lacks one (a DirectML
-        // "generic-gpu" build can load yet crash during inference on CPU-only hardware). Detection
-        // failure falls back to CPU-only, the safe choice.
-        bool cliHasGpu = false, cliHasNpu = false;
-        long cliGpuMemoryBytes = 0;
-        try { var capability = new GpuNpuCapabilityDetector(); cliHasGpu = capability.HasGpu(); cliHasNpu = capability.HasNpu(); cliGpuMemoryBytes = capability.GetMaxDedicatedGpuMemoryBytes(); } catch { /* CPU-only fallback */ }
-        translator.SetAvailableAccelerators(cliHasGpu, cliHasNpu);
-        translator.SetGpuMemoryBytes(cliGpuMemoryBytes);
+        ApplyDetectedAccelerators(translator);
 
         var context = new SemanticTranslationContext
         {
@@ -322,12 +337,7 @@ internal static class CliRunner
 
         await using var translator = new FoundryLocalSemanticQueryTranslator(enabled: true, modelOverrideAlias: modelAlias);
 
-        // Match the GUI/CLI: never pick a GPU/NPU build on hardware that lacks one.
-        bool cliHasGpu = false, cliHasNpu = false;
-        long cliGpuMemoryBytes = 0;
-        try { var capability = new GpuNpuCapabilityDetector(); cliHasGpu = capability.HasGpu(); cliHasNpu = capability.HasNpu(); cliGpuMemoryBytes = capability.GetMaxDedicatedGpuMemoryBytes(); } catch { /* CPU-only fallback */ }
-        translator.SetAvailableAccelerators(cliHasGpu, cliHasNpu);
-        translator.SetGpuMemoryBytes(cliGpuMemoryBytes);
+        ApplyDetectedAccelerators(translator);
 
         string? lastProgress = null;
         var progress = new Progress<SemanticTranslationProgress>(p =>

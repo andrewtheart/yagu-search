@@ -40,6 +40,7 @@ public sealed class SemanticCapabilityDetectorTests
     [InlineData("Microsoft Basic Display Adapter", "ROOT\\DISPLAY")]
     [InlineData("Microsoft Remote Display Adapter", "SWD\\RemoteDisplay")]
     [InlineData("Microsoft Hyper-V Video", "ROOT\\VID")]
+    [InlineData("Standard VGA Graphics Adapter", "PCI\\VEN_0000&DEV_0000")]
     public void IsHardwareAccelerator_FalseForSoftwareAndVirtualAdapters(string driverDesc, string matchingDeviceId)
     {
         Assert.False(GpuNpuCapabilityDetector.IsHardwareAccelerator(driverDesc, matchingDeviceId));
@@ -58,6 +59,20 @@ public sealed class SemanticCapabilityDetectorTests
         // A software fallback driver bound to a PCI stub must still be rejected by name.
         Assert.False(GpuNpuCapabilityDetector.IsHardwareAccelerator(
             "Microsoft Basic Display Adapter", "PCI\\VEN_0000&DEV_0000"));
+    }
+
+    [Theory]
+    [InlineData("VMware SVGA 3D", "PCI\\VEN_15AD&DEV_0405")]
+    [InlineData("Oracle VirtualBox Graphics Adapter", "PCI\\VEN_80EE&DEV_BEEF")]
+    [InlineData("VirtualBox Graphics Adapter (WDDM)", "PCI\\VEN_80EE&DEV_BEEF")]
+    [InlineData("Red Hat QXL controller", "PCI\\VEN_1B36&DEV_0100")]
+    [InlineData("Parsec Virtual Display Adapter", "PCI\\VEN_0000&DEV_0000")]
+    [InlineData("Citrix Indirect Display Adapter", "PCI\\VEN_5853&DEV_0001")]
+    public void IsHardwareAccelerator_RejectsHypervisorVirtualGpusOnPciBus(string driverDesc, string matchingDeviceId)
+    {
+        // Guest GPUs presented by hypervisors sit on the PCI bus with real-looking IDs, so they pass
+        // the physical-bus check and must be excluded by driver-description name instead.
+        Assert.False(GpuNpuCapabilityDetector.IsHardwareAccelerator(driverDesc, matchingDeviceId));
     }
 
     [Fact]
@@ -192,6 +207,91 @@ public sealed class SemanticCapabilityDetectorTests
         var detector = new GpuNpuCapabilityDetector(
             _ => throw new InvalidOperationException("registry unreadable"));
         Assert.Equal(0, detector.GetMaxDedicatedGpuMemoryBytes());
+    }
+
+    // ── Human-readable adapter descriptions (bug-report diagnostics) ──
+
+    [Fact]
+    public void GetGpuDescriptions_ReturnsRealGpuNames_ExcludingSoftwareEmptyAndDuplicates()
+    {
+        var detector = DetectorWith(
+            display:
+            [
+                new("NVIDIA GeForce RTX 4070", "PCI\\VEN_10DE&DEV_2786"),
+                new("  NVIDIA GeForce RTX 4070  ", "PCI\\VEN_10DE&DEV_2786"), // dup after trim: excluded
+                new("Intel(R) UHD Graphics", "PCI\\VEN_8086&DEV_9A60"),
+                new("Microsoft Basic Render Driver", "ROOT\\BasicRender"),    // software: excluded
+                new("", "PCI\\VEN_1002&DEV_744C"),                             // empty desc: skipped
+            ],
+            compute: []);
+
+        Assert.Equal(new[] { "NVIDIA GeForce RTX 4070", "Intel(R) UHD Graphics" }, detector.GetGpuDescriptions());
+    }
+
+    [Fact]
+    public void GetNpuDescriptions_ReflectsComputeClassOnly()
+    {
+        var detector = DetectorWith(
+            display: [new("NVIDIA GeForce RTX 4070", "PCI\\VEN_10DE&DEV_2786")],
+            compute: [new("Intel(R) AI Boost", "ACPI\\NPU0000")]);
+
+        Assert.Equal(new[] { "Intel(R) AI Boost" }, detector.GetNpuDescriptions());
+        Assert.Equal(new[] { "NVIDIA GeForce RTX 4070" }, detector.GetGpuDescriptions());
+    }
+
+    [Fact]
+    public void GetDescriptions_EmptyWhenReaderThrows()
+    {
+        var detector = new GpuNpuCapabilityDetector(
+            _ => throw new InvalidOperationException("registry unreadable"));
+        Assert.Empty(detector.GetGpuDescriptions());
+        Assert.Empty(detector.GetNpuDescriptions());
+    }
+
+    [Fact]
+    public void Interface_ExposesDescriptionsForDiagnostics()
+    {
+        // Descriptions are part of the detector's public contract (used by bug reports), so they must
+        // be reachable through the ISemanticCapabilityDetector seam, not only the concrete type.
+        ISemanticCapabilityDetector detector = DetectorWith(
+            display: [new("AMD Radeon RX 7900", "PCI\\VEN_1002&DEV_744C")],
+            compute: [new("Intel(R) AI Boost", "ACPI\\NPU0000")]);
+
+        Assert.Equal(new[] { "AMD Radeon RX 7900" }, detector.GetGpuDescriptions());
+        Assert.Equal(new[] { "Intel(R) AI Boost" }, detector.GetNpuDescriptions());
+    }
+
+    [Fact]
+    public void ReadsEachDeviceClassAtMostOnce_AcrossRepeatedQueries()
+    {
+        // Hardware is fixed for a process's lifetime, so the detector must memoize each device
+        // class instead of re-walking the registry on every query (HasGpu/HasNpu/HasAccelerated/
+        // GetMaxDedicatedGpuMemoryBytes/descriptions would otherwise read the display class 4×).
+        var readCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var detector = new GpuNpuCapabilityDetector(classKeyPath =>
+        {
+            readCounts[classKeyPath] = readCounts.TryGetValue(classKeyPath, out int n) ? n + 1 : 1;
+            if (classKeyPath.Contains(DisplayGuid, StringComparison.OrdinalIgnoreCase))
+                return new GpuNpuCapabilityDetector.DeviceClassEntry[]
+                {
+                    new("NVIDIA GeForce RTX 4070", "PCI\\VEN_10DE&DEV_2786", 24L * 1024 * 1024 * 1024),
+                };
+            return new GpuNpuCapabilityDetector.DeviceClassEntry[]
+            {
+                new("Some NPU", "ACPI\\NPU0000"),
+            };
+        });
+
+        // Exercise every query path that walks a device class.
+        _ = detector.HasGpu();
+        _ = detector.HasNpu();
+        _ = detector.HasAcceleratedHardware();
+        _ = detector.GetMaxDedicatedGpuMemoryBytes();
+        _ = detector.GetGpuDescriptions();
+        _ = detector.GetNpuDescriptions();
+
+        Assert.Equal(2, readCounts.Count); // only the display + compute classes
+        Assert.All(readCounts.Values, count => Assert.Equal(1, count));
     }
 
     [Fact]

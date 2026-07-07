@@ -545,9 +545,13 @@ public sealed partial class MainWindow
     /// </summary>
     private void OnInputSuggestionListOpenChanged(DependencyObject sender, DependencyProperty dp)
     {
+        // Force the list shut while any owned modal is up. YaguDialog modals are covered by
+        // HasOpenOwnedWindow; non-YaguDialog owned windows (the AI-model qualification / font-contrast
+        // dialogs) hold the list shut by parking the suppression tick, so honor that too — otherwise
+        // the windowed suggestion popup floats above the modal.
         if (sender is AutoSuggestBox box
             && box.IsSuggestionListOpen
-            && YaguDialog.HasOpenOwnedWindow(_hwnd))
+            && (YaguDialog.HasOpenOwnedWindow(_hwnd) || Environment.TickCount64 < _suppressQuerySuggestionsUntilTick))
         {
             box.IsSuggestionListOpen = false;
         }

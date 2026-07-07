@@ -59,9 +59,11 @@ function Test-PaddleModelsPresent([string]$dir) {
   $haveDet = $false; $haveRec = $false; $haveCls = $false
   foreach ($sub in (Get-ChildItem -Directory -Path $dir -ErrorAction SilentlyContinue)) {
     if (-not (Test-Path (Join-Path $sub.FullName 'inference.pdiparams'))) { continue }
-    if ($sub.Name -like '*_det') { $haveDet = $true }
-    elseif ($sub.Name -like '*_rec') { $haveRec = $true }
-    elseif ($sub.Name -like '*_cls') { $haveCls = $true }
+    # Match by containment so both the older PP-OCRv4 (`*_det`) and current PP-OCRv5
+    # (`*_det_infer`) model folder naming conventions are recognized.
+    if ($sub.Name -like '*_det*') { $haveDet = $true }
+    elseif ($sub.Name -like '*_rec*') { $haveRec = $true }
+    elseif ($sub.Name -like '*_cls*') { $haveCls = $true }
   }
   return $haveDet -and $haveRec -and $haveCls
 }

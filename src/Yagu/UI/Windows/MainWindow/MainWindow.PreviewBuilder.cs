@@ -1067,6 +1067,40 @@ public sealed partial class MainWindow
             }
 
             _sectionMatchNavs.TryGetValue(section, out var sn);
+
+            // Full-span (Phase 3) multiline: a cross-line pattern (e.g. `a\nb`) never matches within a
+            // single rendered line, so the shared rx leaves the spanned lines uncolored. When we render
+            // from stored context (the on-disk file couldn't be re-read), color each spanned line from
+            // the result's span metadata — the start line uses its stored display-space match columns
+            // (its text is the possibly-truncated MatchLine), while body/end lines use the source-column
+            // span against their full stored text.
+            var storedMultilineResults = cappedResults
+                .Where(result => result.IsMultilineMatch && result.MatchEndLineNumber is int)
+                .ToList();
+            (int start, int end)? StoredSpanForLine(int lineNumber, string lineTextForLine)
+            {
+                foreach (var result in storedMultilineResults)
+                {
+                    int endLine = result.MatchEndLineNumber!.Value;
+                    if (lineNumber < result.LineNumber || lineNumber > endLine)
+                        continue;
+                    if (lineNumber == result.LineNumber)
+                    {
+                        int s = Math.Max(0, result.MatchStartColumn);
+                        int e = s + Math.Max(0, result.MatchLength);
+                        if (e > s)
+                            return (s, e);
+                    }
+                    else
+                    {
+                        var span = ComputeMultilineLineSpan(result, lineNumber, lineTextForLine.Length);
+                        if (span is not null)
+                            return span;
+                    }
+                }
+                return null;
+            }
+
             var renderedLineSet = new HashSet<int>();
             int previousLineNum = 0;
             bool firstLine = true;
@@ -1081,9 +1115,12 @@ public sealed partial class MainWindow
 
                 bool isMatchLine = matchResultByLine.TryGetValue(lineNum, out var matchResult);
                 matchResult ??= cappedResults[0];
-                AddPreviewLineParagraphs(section, lineText[lineNum], lineNum, isMatchLine, matchResult, rx, truncate: truncatePreviewLines,
+                var forcedSpan = StoredSpanForLine(lineNum, lineText[lineNum]);
+                AddPreviewLineParagraphs(section, lineText[lineNum], lineNum, isMatchLine, matchResult, rx,
+                    truncate: truncatePreviewLines && forcedSpan is null,
                     isMatchLine ? _matchParagraphs : null, sn, out int addedParagraphs,
-                    maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks));
+                    maxParagraphs: maxBlocks - (section.Blocks.Count - startingBlocks),
+                    forcedSpan: forcedSpan);
                 renderedLineSet.Add(lineNum);
                 lastRenderedLine1 = lineNum;
                 previousLineNum = lineNum;
