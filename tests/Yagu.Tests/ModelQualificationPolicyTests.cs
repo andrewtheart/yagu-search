@@ -37,6 +37,7 @@ public sealed class ModelQualificationPolicyTests
     [InlineData(0.0)]
     [InlineData(0.5)]
     [InlineData(0.74)]
+    [InlineData(0.91)]
     public void Evaluate_BelowMinAccuracy_Fails(double accuracy)
     {
         var v = ModelQualificationPolicy.Evaluate(accuracy, crashed: false, latencyViolation: null);

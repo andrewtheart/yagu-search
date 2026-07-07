@@ -12,7 +12,7 @@ public sealed class SemanticProbeSetTests
     [Fact]
     public void Default_IsSmallEnoughForAFastSweep()
     {
-        Assert.InRange(SemanticProbeSet.Default.Count, 4, 10);
+        Assert.InRange(SemanticProbeSet.Default.Count, 4, 16);
     }
 
     [Fact]
@@ -31,7 +31,16 @@ public sealed class SemanticProbeSetTests
                 p.ExpectedSearchMode is not null ||
                 p.ExpectedIncludeGlob is not null ||
                 p.ExpectedPatternContains is not null ||
-                p.ExpectedHasDateFilter is not null;
+                p.ExpectedHasDateFilter is not null ||
+                p.ExpectedSearchHidden is not null ||
+                p.ExpectedExcludeGlobContains is not null ||
+                p.ExpectedSearchInsideArchives is not null ||
+                p.ExpectedSearchImageText is not null ||
+                p.ExpectedUseRegex is not null ||
+                p.ExpectedExactMatch is not null ||
+                p.ExpectedMultiline is not null ||
+                p.ExpectedObeyGitignore is not null ||
+                p.ExpectedHasCreatedBefore is not null;
             Assert.True(hasExpectation, $"Probe '{p.Query}' has no expectations to score against.");
         }
     }
@@ -47,5 +56,20 @@ public sealed class SemanticProbeSetTests
     {
         var distinct = SemanticProbeSet.Default.Select(p => p.Query).Distinct().Count();
         Assert.Equal(SemanticProbeSet.Default.Count, distinct);
+    }
+
+    [Fact]
+    public void Default_ExercisesTheSettingsMutationSurface()
+    {
+        var set = SemanticProbeSet.Default;
+        Assert.Contains(set, p => p.ExpectedSearchHidden is not null);
+        Assert.Contains(set, p => p.ExpectedExcludeGlobContains is not null);
+        Assert.Contains(set, p => p.ExpectedSearchInsideArchives is not null);
+        Assert.Contains(set, p => p.ExpectedSearchImageText is not null);
+        Assert.Contains(set, p => p.ExpectedUseRegex is not null);
+        Assert.Contains(set, p => p.ExpectedExactMatch is not null);
+        Assert.Contains(set, p => p.ExpectedMultiline is not null);
+        Assert.Contains(set, p => p.ExpectedObeyGitignore is not null);
+        Assert.Contains(set, p => p.ExpectedHasCreatedBefore is not null);
     }
 }

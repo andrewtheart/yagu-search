@@ -45,10 +45,10 @@ public sealed class SemanticEvalGoldenTests
     /// (<c>model</c>, <c>summary</c>) and order-sensitive noise are intentionally excluded.</summary>
     private static readonly string[] ComparedFields =
     {
-        "directory", "pattern", "search-mode", "regex", "case-sensitive", "exact-match",
+        "directory", "pattern", "search-mode", "regex", "case-sensitive", "exact-match", "multiline",
         "include", "exclude", "min-size", "max-size",
         "created-after", "created-before", "modified-after", "modified-before",
-        "sort", "group", "hidden", "archives", "binary", "image-text", "error",
+        "sort", "group", "hidden", "archives", "binary", "image-text", "obey-gitignore", "error",
     };
 
     [Fact]

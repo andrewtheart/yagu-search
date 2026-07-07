@@ -303,3 +303,9 @@ docx files containing invoice modified this year ordered by name
 source files under src containing TODO but not FIXME sorted by recency
 images larger than 200kb containing text about invoices created this month
 config files with passwords modified in the last 90 days not hidden
+find START on one line and END on a later line
+regex matching START then END spanning multiple lines
+a block from BEGIN to END across multiple lines
+javascript files but not inside node_modules
+python files but not in the venv folder
+typescript files excluding the node_modules folder

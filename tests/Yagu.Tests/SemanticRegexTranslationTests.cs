@@ -446,6 +446,100 @@ public sealed class SemanticRegexTranslationTests : IDisposable
         Assert.Null(resolved.MultilineDotAll);
     }
 
+    // ---- Cross-line anchor synthesis (real regex, not just the flag) ----------
+
+    [Fact]
+    public void Resolve_CrossLineQuery_SynthesizesTwoAnchorRegexFromQuery()
+    {
+        // The real phi-4-mini failure: it echoes the sentence as the "pattern" instead of a cross-line
+        // regex. With a multiline cue in the query, synthesize A[\s\S]*?B from the anchors so the search
+        // actually finds the span across lines.
+        const string query = "regex matching START then END spanning multiple lines";
+        var plan = new SemanticSearchPlan { Pattern = query, SearchMode = "content" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = query };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.True(resolved.Multiline);
+        Assert.True(resolved.UseRegex);
+        Assert.Equal(@"START[\s\S]*?END", resolved.Pattern);
+    }
+
+    [Fact]
+    public void Resolve_CrossLineLineToLineQuery_SynthesizesAnchors()
+    {
+        const string query = "find START on one line and END on a later line";
+        var plan = new SemanticSearchPlan { Pattern = query, SearchMode = "content" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = query };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal(@"START[\s\S]*?END", resolved.Pattern);
+        Assert.True(resolved.Multiline);
+    }
+
+    [Fact]
+    public void Resolve_CrossLineFromToQuery_SynthesizesAnchors()
+    {
+        const string query = "a block from BEGIN to END across multiple lines";
+        var plan = new SemanticSearchPlan { Pattern = query, SearchMode = "content" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = query };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal(@"BEGIN[\s\S]*?END", resolved.Pattern);
+        Assert.True(resolved.Multiline);
+    }
+
+    [Fact]
+    public void Resolve_CrossLineDegeneratePattern_SynthesizesAndClearsUnusableWarning()
+    {
+        // A degenerate model pattern is dropped (with the "unusable pattern" warning) and the sentence
+        // fallback fills in; the cross-line synth then replaces it with a real regex AND clears the now
+        // stale warning.
+        const string query = "regex matching START then END spanning multiple lines";
+        var plan = new SemanticSearchPlan { Pattern = @"\w*\w*\w*\w*", SearchMode = "content" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = query };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal(@"START[\s\S]*?END", resolved.Pattern);
+        Assert.DoesNotContain(resolved.Warnings, w => w.Contains("unusable search pattern", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Resolve_CrossLineQuery_KeepsModelPatternWhenAlreadyCrossLineRegex()
+    {
+        // If the model DID produce a usable cross-line regex, don't clobber it.
+        const string query = "TODO then FIXME spanning multiple lines";
+        var plan = new SemanticSearchPlan { Pattern = @"TODO[\s\S]*?FIXME", SearchMode = "content" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = query };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal(@"TODO[\s\S]*?FIXME", resolved.Pattern);
+    }
+
+    [Theory]
+    [InlineData("regex matching START then END spanning multiple lines", "START", "END")]
+    [InlineData("find START on one line and END on a later line", "START", "END")]
+    [InlineData("a block from BEGIN to END across multiple lines", "BEGIN", "END")]
+    [InlineData("foo followed by bar across lines", "foo", "bar")]
+    public void TryExtractCrossLineAnchors_ExtractsBothAnchors(string query, string expectedA, string expectedB)
+    {
+        Assert.True(SemanticPlanApplier.TryExtractCrossLineAnchors(query, out string a, out string b));
+        Assert.Equal(expectedA, a);
+        Assert.Equal(expectedB, b);
+    }
+
+    [Theory]
+    [InlineData("just a normal sentence")]
+    [InlineData("across multiple lines")]  // a cue but no anchors
+    [InlineData("")]
+    [InlineData(null)]
+    public void TryExtractCrossLineAnchors_ReturnsFalseWithoutTwoAnchors(string? query)
+        => Assert.False(SemanticPlanApplier.TryExtractCrossLineAnchors(query, out _, out _));
+
     [Fact]
     public void ToOverlay_Multiline_CarriesFlags()
     {

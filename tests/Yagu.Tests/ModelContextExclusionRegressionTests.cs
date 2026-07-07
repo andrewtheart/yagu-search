@@ -56,6 +56,20 @@ public sealed class ModelContextExclusionRegressionTests
     }
 
     [Fact]
+    public void Prompt_RequiresJsonOnlyOutputAndForbidsCopyingExampleTerms()
+    {
+        string prompt = File.ReadAllText(Path.Combine(
+            RepoRoot(), "src", "Yagu", "Services", "Ai", "Prompts", "SemanticSearchSystemPrompt.prompt.md"));
+        // Small models otherwise emit prose or copy an example verbatim (the multiline probe made phi-4-mini
+        // reproduce the "init...shutdown" example instead of the user's START/END) rather than a JSON object.
+        // These rules force JSON-only output built from the USER'S words, and array-typed glob fields.
+        Assert.Contains("the VERY FIRST character of your reply MUST be", prompt);
+        Assert.Contains("NEVER mention an example by number", prompt);
+        Assert.Contains("Build \"pattern\" and the globs from the USER'S OWN words", prompt);
+        Assert.Contains("ALWAYS arrays of strings", prompt);
+    }
+
+    [Fact]
     public void Translator_ResolvesCacheLocationForContextChecks()
     {
         string src = Translator();

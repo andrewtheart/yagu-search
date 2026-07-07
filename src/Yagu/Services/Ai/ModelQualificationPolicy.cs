@@ -20,9 +20,11 @@ public readonly record struct LatencyViolation(int LatencyMs, int LimitMs, Seman
 /// </summary>
 public static class ModelQualificationPolicy
 {
-    /// <summary>Minimum fraction of probes a model must answer correctly (0..1). At 0.75, a 6-probe set
-    /// tolerates at most one miss.</summary>
-    public const double MinAccuracy = 0.75;
+    /// <summary>Minimum fraction of probes a model must answer correctly (0..1). At 0.92 the model must
+    /// be near-perfect: over the current probe set (~14 probes) it tolerates exactly one miss
+    /// (13/14 ≈ 93% passes, 12/14 ≈ 86% fails), so only a model that handles essentially every probed
+    /// mutation qualifies as the strong recommendation; anything short falls back to the best-effort pick.</summary>
+    public const double MinAccuracy = 0.92;
 
     /// <summary>Evaluates a candidate from its aggregate probe outcome and the user-chosen limits.</summary>
     /// <param name="accuracy">Fraction of probes answered correctly (0..1).</param>

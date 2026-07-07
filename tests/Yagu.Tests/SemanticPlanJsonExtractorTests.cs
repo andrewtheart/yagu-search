@@ -351,4 +351,60 @@ public sealed class SemanticPlanJsonExtractorTests
         const string raw = "{\"pattern\":\"*.txt\"}";
         Assert.Equal(raw, SemanticPlanJsonExtractor.StripReasoningTrace(raw));
     }
+
+    [Fact]
+    public void TryParsePlan_ScalarStringGlobField_CoercedToSingleElementList()
+    {
+        // The "search every file including gitignored ones" failure: phi-4-mini emitted a BARE STRING
+        // for includeGlobs ("*" instead of ["*"]), which previously threw "could not be converted to
+        // List<String>" and nuked the whole plan. The tolerant converter must wrap it into a one-item
+        // list so the plan still parses.
+        const string raw = "{\"searchMode\":\"both\",\"includeGlobs\":\"*.cs\",\"obeyGitignore\":false}";
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(raw, out SemanticSearchPlan? plan, out string? error), error);
+        Assert.NotNull(plan);
+        Assert.Equal(new[] { "*.cs" }, plan!.IncludeGlobs!);
+        Assert.False(plan.ObeyGitignore);
+    }
+
+    [Fact]
+    public void TryParsePlan_ArrayGlobField_ParsedAsList()
+    {
+        // The normal, well-formed array shape must still bind to a list unchanged.
+        const string raw = "{\"includeGlobs\":[\"*.png\",\"*.jpg\"],\"excludeGlobs\":[\"node_modules\"]}";
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(raw, out SemanticSearchPlan? plan, out _));
+        Assert.Equal(new[] { "*.png", "*.jpg" }, plan!.IncludeGlobs!);
+        Assert.Equal(new[] { "node_modules" }, plan.ExcludeGlobs!);
+    }
+
+    [Fact]
+    public void TryParsePlan_NonStringGlobField_IgnoredNotFatal()
+    {
+        // A garbage shape (bool/number/object) for a glob field must be dropped to null rather than
+        // failing the whole parse, so the rest of the plan still applies.
+        const string raw = "{\"pattern\":\"error\",\"searchMode\":\"content\",\"includeGlobs\":true}";
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(raw, out SemanticSearchPlan? plan, out string? error), error);
+        Assert.NotNull(plan);
+        Assert.Equal("error", plan!.Pattern);
+        Assert.Null(plan.IncludeGlobs);
+    }
+
+    [Fact]
+    public void TryParsePlan_ArrayGlobFieldWithNonStringElements_SkipsThem()
+    {
+        // Mixed array: keep the string entries and skip the numeric junk instead of throwing.
+        const string raw = "{\"includeGlobs\":[\"*.md\",7,\"*.txt\"]}";
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(raw, out SemanticSearchPlan? plan, out _));
+        Assert.Equal(new[] { "*.md", "*.txt" }, plan!.IncludeGlobs!);
+    }
+
+    [Fact]
+    public void TryParsePlan_EmptyStringGlobField_IsNull()
+    {
+        // A blank scalar carries no filter — coerce it to null, not to a [""] list that would match
+        // nothing downstream.
+        const string raw = "{\"pattern\":\"todo\",\"includeGlobs\":\"\"}";
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(raw, out SemanticSearchPlan? plan, out _));
+        Assert.Equal("todo", plan!.Pattern);
+        Assert.Null(plan.IncludeGlobs);
+    }
 }

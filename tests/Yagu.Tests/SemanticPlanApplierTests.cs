@@ -204,6 +204,64 @@ public sealed class SemanticPlanApplierTests
     }
 
     [Fact]
+    public void Resolve_ExactPhraseQuery_ForcesExactMatchAndPinsQuotedPattern()
+    {
+        // "the exact phrase X" is the one intent that wants whole-query matching; phi-4-mini leaves
+        // exactMatch=false (and often picks regex), so detect it from the query and force it, pinning
+        // the pattern to the quoted literal.
+        var plan = new SemanticSearchPlan { Pattern = "static", SearchMode = "content", UseRegex = true };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "the exact phrase \"public static void\"" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.True(resolved.ExactMatch);
+        Assert.Equal("public static void", resolved.Pattern);
+        Assert.False(resolved.UseRegex);
+    }
+
+    [Fact]
+    public void Resolve_ExactPhraseUnquoted_ForcesExactMatchKeepsModelPattern()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "connection refused", SearchMode = "content" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "the exact phrase connection refused" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.True(resolved.ExactMatch);
+        Assert.Equal("connection refused", resolved.Pattern);
+    }
+
+    [Theory]
+    [InlineData("the exact phrase \"public static void\"", true)]
+    [InlineData("find the exact match hello", true)]
+    [InlineData("search verbatim for foo bar", true)]
+    [InlineData("word for word: to be or not", true)]
+    [InlineData("exactly \"a b c\"", true)]
+    [InlineData("files containing async", false)]
+    [InlineData("the phrase hello", false)]     // "the phrase" alone is not an exact cue
+    [InlineData("exactly 3 days ago", false)]   // "exactly" without a quote must not fire
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void DetectExactMatchPreference_RecognizesExactPhraseCues(string? query, bool expected)
+        => Assert.Equal(expected, SemanticPlanApplier.DetectExactMatchPreference(query));
+
+    [Theory]
+    [InlineData("the exact phrase \"public static void\"", "public static void")]
+    [InlineData("search for 'hello world'", "hello world")]
+    public void TryExtractQuotedPhrase_ReturnsQuotedContent(string query, string expected)
+    {
+        Assert.True(SemanticPlanApplier.TryExtractQuotedPhrase(query, out string phrase));
+        Assert.Equal(expected, phrase);
+    }
+
+    [Theory]
+    [InlineData("no quotes here")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void TryExtractQuotedPhrase_ReturnsFalseWhenNoQuotedSpan(string? query)
+        => Assert.False(SemanticPlanApplier.TryExtractQuotedPhrase(query, out _));
+
+    [Fact]
     public void ApplyToTarget_PatternWithoutExactMatch_ForcesTargetToSubstring()
     {
         // Regression: a target whose ExactMatch toggle is left at the whole-word default (true) must

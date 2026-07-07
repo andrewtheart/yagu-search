@@ -48,6 +48,47 @@ public sealed class SemanticProbe
     /// <summary>When true, the plan MUST set at least one created/modified after/before date filter.
     /// Null to not assert.</summary>
     public bool? ExpectedHasDateFilter { get; init; }
+
+    /// <summary>Expected "Search hidden files" toggle on the resolved plan
+    /// (<see cref="ResolvedSearchPlan.SearchHiddenFiles"/>): <c>true</c> to require it enabled
+    /// ("hidden files", "show hidden"), <c>false</c> to require it disabled ("no hidden files").
+    /// Null to not assert. Yagu resolves this deterministically from the query text, so it verifies
+    /// the end-to-end hidden-files pipeline (the toggle, never an exclude glob) rather than model
+    /// reasoning.</summary>
+    public bool? ExpectedSearchHidden { get; init; }
+
+    /// <summary>A substring that MUST appear (case-insensitively) within at least one resolved exclude
+    /// glob, e.g. <c>node_modules</c>. A substring — not exact — match because models phrase folder
+    /// excludes many ways (<c>node_modules</c>, <c>**/node_modules/**</c>, …). Null to not assert.</summary>
+    public string? ExpectedExcludeGlobContains { get; init; }
+
+    /// <summary>Expected "Search inside archives" toggle (<see cref="ResolvedSearchPlan.SearchInsideArchives"/>).
+    /// Null to not assert. Yagu enables it deterministically when the plan targets archive extensions.</summary>
+    public bool? ExpectedSearchInsideArchives { get; init; }
+
+    /// <summary>Expected "Search image text (OCR)" toggle (<see cref="ResolvedSearchPlan.SearchImageText"/>).
+    /// Null to not assert. Yagu enables it deterministically for a content term scoped to image types.</summary>
+    public bool? ExpectedSearchImageText { get; init; }
+
+    /// <summary>Expected regex-mode toggle (<see cref="ResolvedSearchPlan.UseRegex"/>). Null to not assert.
+    /// Model-driven — a good model sets it when the query names a regex/regular expression.</summary>
+    public bool? ExpectedUseRegex { get; init; }
+
+    /// <summary>Expected exact-match (literal) toggle (<see cref="ResolvedSearchPlan.ExactMatch"/>). Null to
+    /// not assert. Model-driven — a good model sets it for "the exact phrase …".</summary>
+    public bool? ExpectedExactMatch { get; init; }
+
+    /// <summary>Expected cross-line (multiline) toggle (<see cref="ResolvedSearchPlan.Multiline"/>). Null to
+    /// not assert. Yagu resolves it deterministically from cross-line phrasing ("on the next line").</summary>
+    public bool? ExpectedMultiline { get; init; }
+
+    /// <summary>Expected "Obey .gitignore" toggle (<see cref="ResolvedSearchPlan.ObeyGitignore"/>). Null to
+    /// not assert. Yagu resolves it deterministically from obey/ignore phrasing.</summary>
+    public bool? ExpectedObeyGitignore { get; init; }
+
+    /// <summary>When true, the plan MUST set a created-before date filter
+    /// (<see cref="ResolvedSearchPlan.CreatedBeforeDate"/>). Null to not assert.</summary>
+    public bool? ExpectedHasCreatedBefore { get; init; }
 }
 
 /// <summary>
@@ -104,6 +145,79 @@ public static class SemanticProbeSet
             Query = "files modified in the last 7 days",
             Complexity = SemanticProbeComplexity.Complex,
             ExpectedHasDateFilter = true,
+        },
+
+        // ── Complex: a settings toggle ("Search hidden files") combined with a content term ──────
+        // Yagu controls hidden files via its toggle, never an exclude glob; this probe checks the
+        // model still extracts the content term while the plan flips the hidden-files toggle on.
+        new SemanticProbe
+        {
+            Query = "hidden files containing TODO",
+            Complexity = SemanticProbeComplexity.Complex,
+            ExpectedSearchMode = SearchMode.Content,
+            ExpectedPatternContains = "TODO",
+            ExpectedSearchHidden = true,
+        },
+
+        // ── Complex: broader settings-surface coverage — each probe exercises one search toggle that
+        //    the model (or Yagu's deterministic salvage) must set on the resolved plan. Kept as a
+        //    representative one-per-mutation set so the sweep still finishes in a bounded time. ──────
+
+        // Exclude glob: include one file type while excluding a folder (model must emit an exclude token).
+        new SemanticProbe
+        {
+            Query = "javascript files but not inside node_modules",
+            Complexity = SemanticProbeComplexity.Complex,
+            ExpectedIncludeGlob = "*.js",
+            ExpectedExcludeGlobContains = "node_modules",
+        },
+        // Search inside archives: content that lives inside a zip-family container.
+        new SemanticProbe
+        {
+            Query = "search inside zip files for the word password",
+            Complexity = SemanticProbeComplexity.Complex,
+            ExpectedSearchMode = SearchMode.Content,
+            ExpectedPatternContains = "password",
+            ExpectedSearchInsideArchives = true,
+        },
+        // Image text (OCR): a content term scoped to an image type must enable OCR.
+        new SemanticProbe
+        {
+            Query = "find the word invoice inside png images",
+            Complexity = SemanticProbeComplexity.Complex,
+            ExpectedSearchMode = SearchMode.Content,
+            ExpectedPatternContains = "invoice",
+            ExpectedSearchImageText = true,
+        },
+        // Regex + cross-line (multiline) matching in one request.
+        new SemanticProbe
+        {
+            Query = "regex matching START then END spanning multiple lines",
+            Complexity = SemanticProbeComplexity.Complex,
+            ExpectedUseRegex = true,
+            ExpectedMultiline = true,
+        },
+        // Exact-match (literal) phrase.
+        new SemanticProbe
+        {
+            Query = "the exact phrase \"public static void\"",
+            Complexity = SemanticProbeComplexity.Complex,
+            ExpectedPatternContains = "public static void",
+            ExpectedExactMatch = true,
+        },
+        // .gitignore behavior toggle: including gitignored files means "do not obey .gitignore".
+        new SemanticProbe
+        {
+            Query = "search every file including gitignored ones",
+            Complexity = SemanticProbeComplexity.Complex,
+            ExpectedObeyGitignore = false,
+        },
+        // Created-before date filter.
+        new SemanticProbe
+        {
+            Query = "files created before 2020",
+            Complexity = SemanticProbeComplexity.Complex,
+            ExpectedHasCreatedBefore = true,
         },
     ];
 }

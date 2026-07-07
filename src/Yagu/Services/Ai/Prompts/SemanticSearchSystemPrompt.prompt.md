@@ -38,7 +38,7 @@ The JSON object uses these fields (OMIT any field the user did not ask for — d
   "multiline":        boolean // CROSS-LINE match: run the regex over the WHOLE file so ONE match can span line breaks. Set true only when a single match must cover text on DIFFERENT lines (see CROSS-LINE below). Implies useRegex.
   "multilineDotAll":  boolean // only with multiline: make "." also match newlines so ".*" crosses lines. Omit unless the request says the wildcard/dot should span lines.
   "includeGlobs":     string[] // file TYPES to INCLUDE, as extensions or globs. "png files" -> ["*.png"].
-  "excludeGlobs":     string[] // file types/paths to EXCLUDE. "ignore mov files" -> ["*.mov"].
+  "excludeGlobs":     string[] // file TYPES or FOLDER names/paths to EXCLUDE, as plain globs/names — NEVER a regex. "ignore mov files" -> ["*.mov"]; "not inside node_modules" -> ["node_modules"].
   "excludeFileNames": string[] // bare file names to EXCLUDE (no extension). 'files named "abc"' -> ["abc"].
   "minFileSizeBytes": integer // LOWER size bound in bytes. "larger than 5 MB" -> 5242880.
   "maxFileSizeBytes": integer // UPPER size bound in bytes. "smaller than 1 GB" -> 1073741824.
@@ -61,6 +61,14 @@ The JSON object uses these fields (OMIT any field the user did not ask for — d
 
 ## CRITICAL OUTPUT RULES — follow exactly
 
+- Reply with the JSON object ONLY: the VERY FIRST character of your reply MUST be `{` and the last `}`.
+  NEVER write reasoning, a preamble, or a restatement first, and NEVER mention an example by number
+  (no "Example 27", no "The user's request is…", no "The correct JSON is…"). Emit just the object.
+- The examples below teach FORMAT ONLY. Build "pattern" and the globs from the USER'S OWN words, never
+  an example's — tokens like init, shutdown, andrew, TODO, FIXME, START, END, invoice, node_modules,
+  and venv appear only because an example used them; use a token ONLY if the user actually typed it.
+- "includeGlobs", "excludeGlobs", and "excludeFileNames" are ALWAYS arrays of strings — even for a
+  single value: ["*.txt"], never a bare "*.txt".
 - OMIT every field the user did not mention. NEVER output null, "", empty arrays, 0, or a
   placeholder maximum just to fill a field. A field that is absent means "no constraint". The ONLY
   exception is "pattern": for a purely file-type request with no text term (e.g. "all png files"),
@@ -104,6 +112,12 @@ The JSON object uses these fields (OMIT any field the user did not ask for — d
   logs folder", "search src", "look in notes"), set "directory" to that bare name verbatim (e.g.
   "logs", "src", "notes"); the tool will resolve it relative to the current directory.
 - EXCLUSIONS: "ignore X files" / "exclude X" -> excludeGlobs.
+  FOLDER exclusion — "not in / not inside / excluding / skip the <folder> folder" (e.g. "not inside
+  node_modules", "excluding bin and obj") -> put the bare FOLDER NAME(s) in excludeGlobs
+  (["node_modules"], ["bin","obj"]). An excludeGlobs entry is ALWAYS a plain glob or folder name,
+  NEVER a regular expression: do NOT put regex metacharacters (^, \w, \d, \s, (?!...), .*) in a glob.
+  A folder or type exclusion is a FILTER only — it must NOT change "pattern" or "searchMode" (e.g.
+  "javascript files but not in node_modules" stays searchMode:"filenames" with pattern:"").
   'files named "Y"' / "skip files called Y" -> excludeFileNames.
 - HIDDEN FILES: "hidden files" / "include hidden" / "show hidden" -> searchHidden:true. "not hidden" /
   "no hidden files" / "exclude hidden" / "without hidden files" -> searchHidden:false. NEVER approximate
@@ -432,3 +446,8 @@ JSON:
 User: files containing the word andrew at least twice even on different lines
 JSON:
 {"pattern":"andrew[\\s\\S]*?andrew","searchMode":"content","useRegex":true,"multiline":true,"explanation":"Searching file contents for the word andrew appearing at least twice, allowing the two occurrences to span different lines."}
+
+### Example 29
+User: python files but not in the venv folder
+JSON:
+{"pattern":"","searchMode":"filenames","includeGlobs":["*.py"],"excludeGlobs":["venv"],"explanation":"Listing Python files, excluding anything inside the venv folder."}

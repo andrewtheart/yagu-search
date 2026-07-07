@@ -124,7 +124,7 @@ public sealed class ModelQualificationTests
     [Fact]
     public async Task QualifyAsync_NoneQualify_ReportsBestEffortByAccuracy()
     {
-        // "half" passes 2/3 (below the 75% bar); "quarter" passes 1/3.
+        // "half" passes 2/3 (below the accuracy bar); "quarter" passes 1/3.
         var runner = Runner((alias, probe) =>
         {
             bool pass = alias switch

@@ -59,15 +59,18 @@ public sealed class SemanticSearchPlan
     /// <summary>Include filters — extensions or globs, e.g. <c>["*.png"]</c> or
     /// <c>["png","jpg"]</c>.</summary>
     [JsonPropertyName("includeGlobs")]
+    [JsonConverter(typeof(TolerantStringListConverter))]
     public List<string>? IncludeGlobs { get; init; }
 
     /// <summary>Exclude filters — extensions or globs, e.g. <c>["*.mov"]</c>.</summary>
     [JsonPropertyName("excludeGlobs")]
+    [JsonConverter(typeof(TolerantStringListConverter))]
     public List<string>? ExcludeGlobs { get; init; }
 
     /// <summary>Bare file names (without extension) to exclude, e.g. <c>["abc"]</c>. The
     /// applier converts these into exclude globs like <c>abc.*</c> / <c>*abc*</c>.</summary>
     [JsonPropertyName("excludeFileNames")]
+    [JsonConverter(typeof(TolerantStringListConverter))]
     public List<string>? ExcludeFileNames { get; init; }
 
     [JsonPropertyName("minFileSizeBytes")]
@@ -139,6 +142,68 @@ public sealed class SemanticSearchPlan
     /// the user so the mapping is transparent. Not applied to the search.</summary>
     [JsonPropertyName("explanation")]
     public string? Explanation { get; init; }
+}
+
+/// <summary>
+/// Deserializes a JSON string-list field tolerantly, so one malformed field from a small on-device
+/// model never fails the WHOLE plan parse. Accepts a proper array (<c>["a","b"]</c>), a SINGLE bare
+/// string (<c>"a"</c> -&gt; <c>["a"]</c>) — a common small-model mistake for a list field — and returns
+/// <c>null</c> for any other shape (bool/number/object/null) or an empty result. Non-string array
+/// elements are skipped. Writing always emits a normal string array.
+/// </summary>
+internal sealed class TolerantStringListConverter : JsonConverter<List<string>?>
+{
+    public override List<string>? Read(ref Utf8JsonReader reader, System.Type typeToConvert, JsonSerializerOptions options)
+    {
+        switch (reader.TokenType)
+        {
+            case JsonTokenType.Null:
+                return null;
+
+            case JsonTokenType.String:
+            {
+                string? single = reader.GetString();
+                return string.IsNullOrWhiteSpace(single) ? null : [single];
+            }
+
+            case JsonTokenType.StartArray:
+            {
+                var list = new List<string>();
+                while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+                {
+                    if (reader.TokenType == JsonTokenType.String)
+                    {
+                        string? s = reader.GetString();
+                        if (!string.IsNullOrWhiteSpace(s)) list.Add(s);
+                    }
+                    else
+                    {
+                        reader.Skip(); // ignore a non-string element instead of failing the parse
+                    }
+                }
+                return list.Count > 0 ? list : null;
+            }
+
+            default:
+                // A shape we cannot use for a string list (bool/number/object). Consume it and treat the
+                // field as absent rather than throwing, so it does not nuke the whole plan.
+                reader.Skip();
+                return null;
+        }
+    }
+
+    public override void Write(Utf8JsonWriter writer, List<string>? value, JsonSerializerOptions options)
+    {
+        if (value is null)
+        {
+            writer.WriteNullValue();
+            return;
+        }
+        writer.WriteStartArray();
+        foreach (string s in value)
+            writer.WriteStringValue(s);
+        writer.WriteEndArray();
+    }
 }
 
 /// <summary>

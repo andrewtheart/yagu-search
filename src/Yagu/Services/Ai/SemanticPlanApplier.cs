@@ -386,8 +386,23 @@ public static class SemanticPlanApplier
         // for "a" would compile to the whole-word regex \ba\b and match nothing inside words like
         // "BANANA". Default a model-translated search to substring matching; the model can still opt
         // into whole-word by emitting exactMatch=true. (Harmless when UseRegex is set — the regex
-        // path ignores ExactMatch — so this is a safe blanket default.)
-        bool? exactMatch = plan.ExactMatch ?? false;
+        // path ignores ExactMatch — so this is a safe blanket default.) The ONE exception is an
+        // explicit exact-phrase request ("the exact phrase X", verbatim, word-for-word), which wants
+        // whole-query matching: detect it from the query (phi-4-mini leaves exactMatch=false and often
+        // picks regex instead), force regex OFF (a literal phrase, and the regex path ignores
+        // ExactMatch), and when the phrase is quoted pin the pattern to the quoted literal.
+        bool? exactMatch;
+        if (DetectExactMatchPreference(context.OriginalQuery))
+        {
+            exactMatch = true;
+            useRegex = false;
+            if (TryExtractQuotedPhrase(context.OriginalQuery, out string exactPhrase))
+                pattern = exactPhrase;
+        }
+        else
+        {
+            exactMatch = plan.ExactMatch ?? false;
+        }
 
         // Cross-line (multiline) intent: a request that needs ONE match to span DIFFERENT lines
         // ("X then Y on a later line", "a block from BEGIN to END", "across/spanning lines", or a
@@ -404,6 +419,16 @@ public static class SemanticPlanApplier
         {
             useRegex = true;
             exactMatch = false;
+            // The model rarely produces a working cross-line regex — it echoes the query as the
+            // "pattern" or emits a degenerate one we already dropped (leaving the sentence fallback).
+            // When the query names two anchors ("X then Y", "from BEGIN to END", "X on one line ... Y
+            // on a later line"), synthesize A[\s\S]*?B so the search actually finds the span; skip when
+            // the current pattern is already an explicit cross-line regex (the model got it right).
+            if (TryBuildCrossLinePattern(context.OriginalQuery, pattern, out string crossLinePattern))
+            {
+                pattern = crossLinePattern;
+                warnings.Remove("Ignored an unusable search pattern produced by the AI model.");
+            }
         }
 
         var resolved = new ResolvedSearchPlan
@@ -1391,6 +1416,128 @@ public static class SemanticPlanApplier
         if (query.Contains("\\n", StringComparison.Ordinal))
             return true;
         return MultilineCue.IsMatch(query);
+    }
+
+    // ---- exact-phrase + cross-line anchor synthesis --------------------------
+
+    // A quoted span (straight or curly quotes) — used to pin an exact phrase to the user's literal text.
+    private static readonly Regex QuotedPhrase = new(
+        "[\"'\u201C\u2018]([^\"'\u201C\u2018\u201D\u2019]+)[\"'\u201D\u2019]",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    // Explicit exact/verbatim phrase cue: "the exact phrase X", "exact match/wording/words/text",
+    // "verbatim", "word for word", or "exactly \"...\"". Deliberately conservative — "exactly" only
+    // counts when immediately followed by a quote (so "exactly 3 days ago" does NOT match).
+    private static readonly Regex ExactPhraseCue = new(
+        "\\bexact\\s+(?:phrase|match(?:es)?|wording|words?|text|string|quote|spelling)\\b" +
+        "|\\bverbatim\\b|\\bword[-\\s]for[-\\s]word\\b|\\bexactly\\s+[\"'\u201C\u2018]",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// True when the ORIGINAL query explicitly asks for an EXACT / verbatim phrase ("the exact phrase
+    /// X", "word for word", "exactly ..."), which means whole-query matching rather than the substring
+    /// default. Small models leave exactMatch=false (or pick regex), so this drives it deterministically.
+    /// False when nothing signals exact-phrase intent.
+    /// </summary>
+    internal static bool DetectExactMatchPreference(string? query)
+        => !string.IsNullOrWhiteSpace(query) && ExactPhraseCue.IsMatch(query);
+
+    /// <summary>Extracts the first quoted span (straight or curly quotes) from the query, so an exact
+    /// phrase is pinned to the user's literal text rather than the model's paraphrase.</summary>
+    internal static bool TryExtractQuotedPhrase(string? query, out string phrase)
+    {
+        phrase = "";
+        if (string.IsNullOrWhiteSpace(query))
+            return false;
+        var m = QuotedPhrase.Match(query);
+        if (!m.Success)
+            return false;
+        phrase = m.Groups[1].Value.Trim();
+        return phrase.Length > 0;
+    }
+
+    // Filler words dropped from the front of an extracted anchor ("the word init" -> "init").
+    private const string AnchorLeadIn =
+        @"(?:the\s+|a\s+|an\s+|word\s+|words\s+|text\s+|phrase\s+|string\s+|literal\s+)*";
+
+    // "from X to Y" / "between X and Y".
+    private static readonly Regex FromToAnchors = new(
+        @"\b(?:from|between)\s+" + AnchorLeadIn + @"(?<a>\S+?)\s+(?:to|and|through|until|up\s+to)\s+" +
+        AnchorLeadIn + @"(?<b>\S+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    // "X on one line ... Y on a later line".
+    private static readonly Regex LineToLineAnchors = new(
+        @"(?<a>\S+)\s+on\s+(?:one|a|the\s+first|its\s+own|the\s+same)\s+line\b.*?\b" + AnchorLeadIn +
+        @"(?<b>\S+)\s+on\s+(?:a\s+)?(?:later|next|another|different|separate|second|following|subsequent)\s+line\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline);
+
+    // "X then Y" / "X followed by Y" / "X and then Y".
+    private static readonly Regex ThenAnchors = new(
+        @"(?<a>\S+)\s+(?:then|followed\s+by|and\s+then)\s+" + AnchorLeadIn + @"(?<b>\S+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex[] CrossLineAnchorRegexes = { LineToLineAnchors, FromToAnchors, ThenAnchors };
+
+    // A pattern that already contains an explicit cross-line construct: [\s\S] / [\S\s] / (?s) / \n / \r.
+    private static readonly Regex CrossLineRegexConstruct = new(
+        @"\[\\[sS]\\[sS]\]|\(\?s\)|\\[nr]",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    // Cue words that are never real anchors.
+    private static readonly HashSet<string> CrossLineStopAnchors = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "line", "lines", "newline", "newlines", "multiple", "several", "different", "separate",
+        "another", "the", "a", "an", "and", "then", "word", "text", "phrase", "across", "spanning",
+        "over", "next", "later", "following", "subsequent", "one", "same", "block", "on",
+    };
+
+    /// <summary>
+    /// Builds a real cross-line regex <c>A[\s\S]*?B</c> from the two anchors named in the query when the
+    /// current pattern is not already a usable cross-line regex. Returns false (leaving the caller's
+    /// pattern) when the model already produced one, or the anchors can't be extracted.
+    /// </summary>
+    internal static bool TryBuildCrossLinePattern(string? query, string? currentPattern, out string pattern)
+    {
+        pattern = "";
+        if (currentPattern is not null && CrossLineRegexConstruct.IsMatch(currentPattern))
+            return false;
+        if (!TryExtractCrossLineAnchors(query, out string a, out string b))
+            return false;
+        pattern = Regex.Escape(a) + @"[\s\S]*?" + Regex.Escape(b);
+        return true;
+    }
+
+    /// <summary>Extracts the two literal anchors of a cross-line request ("X then Y", "from X to Y",
+    /// "X on one line ... Y on a later line"). Cue words are rejected so the anchors are real terms.</summary>
+    internal static bool TryExtractCrossLineAnchors(string? query, out string a, out string b)
+    {
+        a = b = "";
+        if (string.IsNullOrWhiteSpace(query))
+            return false;
+        foreach (var rx in CrossLineAnchorRegexes)
+        {
+            var m = rx.Match(query);
+            if (!m.Success)
+                continue;
+            string ca = CleanAnchor(m.Groups["a"].Value);
+            string cb = CleanAnchor(m.Groups["b"].Value);
+            if (ca.Length == 0 || cb.Length == 0 ||
+                CrossLineStopAnchors.Contains(ca) || CrossLineStopAnchors.Contains(cb))
+                continue;
+            a = ca;
+            b = cb;
+            return true;
+        }
+        return false;
+    }
+
+    private static string CleanAnchor(string token)
+    {
+        if (string.IsNullOrEmpty(token))
+            return "";
+        string t = token.Trim().Trim('"', '\'', '\u201C', '\u201D', '\u2018', '\u2019');
+        return t.Trim('.', ',', ';', ':', '!', '?', '(', ')');
     }
 
     // ".gitignore" behavior directive detection. Matches ".gitignore", "gitignore", "git ignore",

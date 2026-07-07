@@ -33,6 +33,33 @@ public static class SemanticProbeScorer
         if (probe.ExpectedHasDateFilter is true && !HasAnyDateFilter(plan))
             return false;
 
+        if (probe.ExpectedSearchHidden is { } hidden && plan.SearchHiddenFiles != hidden)
+            return false;
+
+        if (probe.ExpectedExcludeGlobContains is { } exSub && !ContainsGlobSubstring(plan.ExcludeGlobs, exSub))
+            return false;
+
+        if (probe.ExpectedSearchInsideArchives is { } arch && plan.SearchInsideArchives != arch)
+            return false;
+
+        if (probe.ExpectedSearchImageText is { } ocr && plan.SearchImageText != ocr)
+            return false;
+
+        if (probe.ExpectedUseRegex is { } rx && plan.UseRegex != rx)
+            return false;
+
+        if (probe.ExpectedExactMatch is { } exact && plan.ExactMatch != exact)
+            return false;
+
+        if (probe.ExpectedMultiline is { } ml && plan.Multiline != ml)
+            return false;
+
+        if (probe.ExpectedObeyGitignore is { } gi && plan.ObeyGitignore != gi)
+            return false;
+
+        if (probe.ExpectedHasCreatedBefore is true && plan.CreatedBeforeDate is null)
+            return false;
+
         return true;
     }
 
@@ -60,6 +87,16 @@ public static class SemanticProbeScorer
             return false;
         foreach (var g in globs)
             if (string.Equals(g, expected, StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
+
+    private static bool ContainsGlobSubstring(IReadOnlyList<string>? globs, string needle)
+    {
+        if (globs is null)
+            return false;
+        foreach (var g in globs)
+            if (g is not null && g.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0)
                 return true;
         return false;
     }
