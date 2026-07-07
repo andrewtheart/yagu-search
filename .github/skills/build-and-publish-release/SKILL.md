@@ -1,6 +1,6 @@
 ---
 name: build-and-publish-release
-description: "Build all Yagu installers (tri-arch + offline) and publish a GitHub release. Use when: build the installers, build all installers, cut a release, publish a release, ship a release, make a release, release Yagu, publish Yagu, build-all-installers, tri-arch installer, offline installer, draft GitHub release, repackage the installer."
+description: "Publish a Yagu GitHub release — bump the version, build all installers, commit, push, and create a draft GitHub release. Use when: cut a release, publish a release, ship a release, make a release, release Yagu, publish Yagu, build-all-installers -push, draft GitHub release, gh release, upload installers to GitHub, tag a version. For building installers WITHOUT publishing (local/QA, single-arch, offline, repackage), use the build-installers skill instead."
 ---
 
 # Build & Publish a Yagu Release
@@ -9,7 +9,8 @@ Yagu ships as **tri-architecture + offline** self-contained Native AOT installer
 Setup and distributed via **GitHub Releases**. The detailed packaging conventions (staging, LFS,
 Windows App Runtime, version churn) live in
 `.github/instructions/installer-packaging.instructions.md`; this skill is the on-demand **build +
-publish runbook**.
+publish runbook**. To only **build** installers (no commit/push/release), use the **`build-installers`**
+skill.
 
 ## One command: build → commit → push → draft release
 
