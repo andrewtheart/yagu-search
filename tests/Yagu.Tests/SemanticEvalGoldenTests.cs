@@ -168,7 +168,12 @@ public sealed class SemanticEvalGoldenTests
         {
             // Drain stdout concurrently so a large batch output can't deadlock the pipe while we wait.
             Task<string> readTask = p.StandardOutput.ReadToEndAsync();
-            if (!p.WaitForExit(90 * 60 * 1000)) // generous: the full set can take many minutes on a busy GPU
+            // Cap the wait so a wedged run can't hang the suite forever. Default 90 min; override via
+            // YAGU_SEMANTIC_GOLDEN_TIMEOUT_MIN for slower hardware or a larger fixture.
+            int timeoutMinutes = 90;
+            if (int.TryParse(System.Environment.GetEnvironmentVariable("YAGU_SEMANTIC_GOLDEN_TIMEOUT_MIN"), out int overrideMinutes) && overrideMinutes > 0)
+                timeoutMinutes = overrideMinutes;
+            if (!p.WaitForExit(timeoutMinutes * 60 * 1000))
                 TryKillTree(p);                  // wedged past the cap — kill the tree (which closes stdout)
             return readTask.GetAwaiter().GetResult();
         }

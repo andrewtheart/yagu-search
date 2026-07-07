@@ -254,6 +254,18 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
 
     private static IEnumerable<string> CacheRootCandidates()
     {
+        // Foundry Local's ACTUAL cache dir, which the user can relocate to another drive. It is the
+        // authoritative source (foundry.config.json's cacheDirectoryPath) and MUST come first: when the
+        // cache is customized, the model LOADS from here, so the context-fit guard and the VRAM clamp
+        // must target THIS copy — not the default guess below, which would silently miss it and leave the
+        // model loaded with its full (e.g. 128K) window reserving many extra GB of VRAM and host RAM.
+        string? configured = ReadFoundryConfiguredCacheDir();
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            yield return configured;                         // models live directly under it: <dir>\Microsoft\...
+            yield return Path.Combine(configured, "models");  // ...or a nested models\ layout
+        }
+
         string? env = Environment.GetEnvironmentVariable("FOUNDRY_CACHE_DIR");
         if (!string.IsNullOrWhiteSpace(env))
         {
@@ -263,6 +275,33 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (!string.IsNullOrWhiteSpace(profile))
             yield return Path.Combine(profile, "." + FoundryAppName, "cache", "models");
+    }
+
+    /// <summary>
+    /// Reads Foundry Local's persisted model-cache directory from
+    /// <c>%USERPROFILE%\.foundry\foundry.config.json</c> (<c>cacheDirectoryPath</c>). This is where the
+    /// SDK records a user-relocated cache (e.g. moved to a second drive); without reading it Yagu would
+    /// only guess the default location and clamp the WRONG copy while the runtime loads the real one at
+    /// its full window. Best-effort: returns null when the file is absent, malformed, or unreadable.
+    /// </summary>
+    private static string? ReadFoundryConfiguredCacheDir()
+    {
+        try
+        {
+            string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrWhiteSpace(profile)) return null;
+            string configPath = Path.Combine(profile, ".foundry", "foundry.config.json");
+            if (!File.Exists(configPath)) return null;
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(configPath));
+            if (doc.RootElement.TryGetProperty("cacheDirectoryPath", out System.Text.Json.JsonElement el) &&
+                el.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                string? dir = el.GetString();
+                return string.IsNullOrWhiteSpace(dir) ? null : dir;
+            }
+        }
+        catch { /* best-effort: malformed/inaccessible config falls back to the default candidates */ }
+        return null;
     }
 
     /// <summary>
@@ -368,59 +407,82 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     {
         if (isReasoning) return;
 
-        string? modelDir = await ResolveModelDirectoryAsync(model, cancellationToken).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(modelDir)) return;
+        // Clamp EVERY on-disk copy of this variant, not just one: Foundry may keep the model in a
+        // relocated cache (e.g. a second drive) that GetPathAsync doesn't reliably report, and the copy
+        // the runtime actually loads is the one whose window governs reserved VRAM. Missing it leaves the
+        // model at its full window (up to 128K), reserving ~16 GB of KV cache plus gigabytes of host RAM.
+        IReadOnlyCollection<string> modelDirs = await ResolveModelDirectoriesAsync(model, cancellationToken).ConfigureAwait(false);
+        if (modelDirs.Count == 0) return;
 
-        try
+        int totalPatched = 0;
+        int applied = ModelContextBudget.OptimizedContextTokens;
+        foreach (string dir in modelDirs)
         {
-            int patched = GenAiConfigReader.TryClampContextWindow(
-                modelDir, ModelContextBudget.OptimizedContextTokens, out int applied);
-            if (patched > 0)
-                LogService.Instance.Info(LogSource,
-                    $"Clamped context window of '{model.Alias ?? model.Id}' to {applied} tokens " +
-                    $"({patched} config file(s)) to reduce reserved VRAM; translation quality is unaffected.");
+            try
+            {
+                totalPatched += GenAiConfigReader.TryClampContextWindow(
+                    dir, ModelContextBudget.OptimizedContextTokens, out applied);
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Warning(LogSource,
+                    $"Could not clamp context window for '{model.Alias ?? model.Id}' at {dir}; loading with its original window.", ex);
+            }
         }
-        catch (Exception ex)
-        {
-            LogService.Instance.Warning(LogSource,
-                $"Could not clamp context window for '{model.Alias ?? model.Id}'; loading with its original window.", ex);
-        }
+        if (totalPatched > 0)
+            LogService.Instance.Info(LogSource,
+                $"Clamped context window of '{model.Alias ?? model.Id}' to {applied} tokens " +
+                $"({totalPatched} config file(s) across {modelDirs.Count} cached copy/copies) to reduce reserved VRAM; translation quality is unaffected.");
     }
 
-    /// <summary>Resolves the on-disk directory of a downloaded model, preferring the SDK's
-    /// <see cref="IModel.GetPathAsync"/> (robust to a custom Foundry model dir such as a secondary drive)
-    /// and falling back to the resolved Foundry cache root + variant folder. Returns null when neither
-    /// yields an existing directory.</summary>
-    private async Task<string?> ResolveModelDirectoryAsync(IModel model, CancellationToken cancellationToken)
+    /// <summary>Resolves ALL on-disk directories of a downloaded model's variant: the SDK's
+    /// <see cref="IModel.GetPathAsync"/> result plus every matching variant folder under each known cache
+    /// root (including a relocated Foundry cache). Returning all copies makes the clamp robust to a custom
+    /// Foundry model dir on another drive that GetPathAsync may not report, so whichever copy the runtime
+    /// loads is clamped. Empty when nothing is found.</summary>
+    private async Task<IReadOnlyCollection<string>> ResolveModelDirectoriesAsync(IModel model, CancellationToken cancellationToken)
     {
+        var dirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
             string? path = await model.GetPathAsync(cancellationToken).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(path))
             {
-                if (Directory.Exists(path)) return path;
-                string? dir = Path.GetDirectoryName(path);
-                if (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir)) return dir;
+                if (Directory.Exists(path)) dirs.Add(path);
+                else
+                {
+                    string? dir = Path.GetDirectoryName(path);
+                    if (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir)) dirs.Add(dir);
+                }
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            LogService.Instance.Verbose(LogSource, $"GetPathAsync failed for '{model.Alias ?? model.Id}': {ex.Message}; using cache-root fallback.");
+            LogService.Instance.Verbose(LogSource, $"GetPathAsync failed for '{model.Alias ?? model.Id}': {ex.Message}; using cache-root enumeration.");
         }
 
         string? id = model.Id;
-        if (string.IsNullOrWhiteSpace(_cacheLocation) || string.IsNullOrWhiteSpace(id)) return null;
-        try
+        if (!string.IsNullOrWhiteSpace(id))
         {
             string folder = GenAiConfigReader.VariantFolderName(id);
-            return folder.Length == 0
-                ? null
-                : Directory.EnumerateDirectories(_cacheLocation, folder, SearchOption.AllDirectories).FirstOrDefault();
+            if (folder.Length > 0)
+            {
+                foreach (string root in CacheRootCandidates())
+                {
+                    try
+                    {
+                        if (!Directory.Exists(root)) continue;
+                        foreach (string dir in Directory.EnumerateDirectories(root, folder, SearchOption.AllDirectories))
+                            dirs.Add(dir);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        // skip an inaccessible cache root
+                    }
+                }
+            }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return null;
-        }
+        return dirs;
     }
 
     public void RefreshCatalog()

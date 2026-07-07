@@ -82,6 +82,26 @@ public sealed class SemanticModelVramOptimizationTests
     }
 
     [Fact]
+    public void Translator_DiscoversRelocatedFoundryCacheAndClampsEveryCopy()
+    {
+        string translator = Read("Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs");
+
+        // Foundry Local's cache can be moved to another drive; its real location lives in
+        // %USERPROFILE%\.foundry\foundry.config.json (cacheDirectoryPath). Yagu MUST read it so the clamp
+        // and the context-fit guard target the copy the runtime actually loads — otherwise the model loads
+        // at its full (e.g. 128K) window and reserves ~16 GB of KV cache plus gigabytes of host RAM.
+        Assert.Contains("private static string? ReadFoundryConfiguredCacheDir()", translator);
+        Assert.Contains("\".foundry\", \"foundry.config.json\"", translator);
+        Assert.Contains("cacheDirectoryPath", translator);
+        Assert.Contains("ReadFoundryConfiguredCacheDir();", translator);
+
+        // The clamp shrinks EVERY on-disk copy of the variant (not just one), so a relocated copy that
+        // GetPathAsync misses is still clamped.
+        Assert.Contains("private async Task<IReadOnlyCollection<string>> ResolveModelDirectoriesAsync(", translator);
+        Assert.Contains("foreach (string dir in modelDirs)", translator);
+    }
+
+    [Fact]
     public void ViewModel_MirrorsUnloadSettingToTranslatorAndPersists()
     {
         string vm = Read("Yagu", "ViewModels", "MainViewModel.cs");
