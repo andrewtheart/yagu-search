@@ -768,7 +768,8 @@ public sealed class SemanticModelQualificationRunner
     }
 
     /// <summary>Enumerates candidate aliases (recommended first, de-duplicated), capped by
-    /// <c>maxCandidates</c>. Returns empty when the translator lists no runnable models.</summary>
+    /// <c>maxCandidates</c>, then reordered so a family's smaller/faster variant is tried before its
+    /// larger sibling. Returns empty when the translator lists no runnable models.</summary>
     private async Task<IReadOnlyList<string>> EnumerateCandidatesAsync(
         IProgress<SemanticQualificationProgress>? progress,
         CancellationToken cancellationToken)
@@ -850,6 +851,17 @@ public sealed class SemanticModelQualificationRunner
             ordered = capped;
         }
 
+        // Within a family (one alias is a '-'-delimited prefix of another, e.g. "phi-4" and
+        // "phi-4-mini"), try the SMALLER variant first: a mini that clears the same probes runs faster,
+        // and since the sweep stops at the first qualifier, ordering it ahead of its larger sibling lets
+        // the faster model win when both are accurate. Done AFTER the cap so it only REORDERS — never
+        // changes — the set of probed candidates. Cross-family order (recommended-first, then rank) is kept.
+        var sizeByAlias = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        foreach (var sizeOption in options)
+            if (!string.IsNullOrWhiteSpace(sizeOption.Alias))
+                sizeByAlias[sizeOption.Alias] = sizeOption.SizeBytes ?? 0;
+        ReorderSmallerFamilyVariantsFirst(ordered, sizeByAlias);
+
         return ordered;
     }
 
@@ -860,6 +872,80 @@ public sealed class SemanticModelQualificationRunner
     /// ladder because they can never be auto-selected and only slow the sweep down.</summary>
     internal static bool IsReasoningAlias(string? alias) =>
         !string.IsNullOrWhiteSpace(alias) && alias.Contains("reasoning", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Reorders the ladder so that, within a model family (one alias is a '-'-delimited prefix
+    /// of another — e.g. <c>phi-4</c> and <c>phi-4-mini</c>), the SMALLER-download variant is tried
+    /// first. The sweep stops at the first qualifier, so ordering a faster mini ahead of its larger
+    /// sibling makes the faster model win when both clear the probes. Each family is emitted at the
+    /// position of its earliest-ranked member, so cross-family order (recommended-first, then rank) is
+    /// preserved.</summary>
+    internal static void ReorderSmallerFamilyVariantsFirst(List<string> ordered, IReadOnlyDictionary<string, long> sizeByAlias)
+    {
+        if (ordered.Count < 2)
+            return;
+
+        // Family key for each slot = the earliest ladder alias it shares a family with (else itself).
+        var familyOf = new string[ordered.Count];
+        for (int i = 0; i < ordered.Count; i++)
+        {
+            familyOf[i] = ordered[i];
+            for (int j = 0; j < i; j++)
+            {
+                if (AreSameFamily(ordered[j], ordered[i]))
+                {
+                    familyOf[i] = familyOf[j];
+                    break;
+                }
+            }
+        }
+
+        long SizeKey(string alias)
+        {
+            long size = sizeByAlias.TryGetValue(alias, out var v) ? v : 0;
+            return size <= 0 ? long.MaxValue : size; // unknown size = sort last (prefer a known small one)
+        }
+
+        var result = new List<string>(ordered.Count);
+        var emitted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < ordered.Count; i++)
+        {
+            string family = familyOf[i];
+            if (!emitted.Add(family))
+                continue; // this family was already emitted at its first-appearance slot
+
+            var members = new List<int>();
+            for (int k = 0; k < ordered.Count; k++)
+                if (string.Equals(familyOf[k], family, StringComparison.OrdinalIgnoreCase))
+                    members.Add(k);
+
+            // Smallest known download first; an unknown size sorts last; original order breaks ties.
+            members.Sort((a, b) =>
+            {
+                int c = SizeKey(ordered[a]).CompareTo(SizeKey(ordered[b]));
+                return c != 0 ? c : a.CompareTo(b);
+            });
+            foreach (int m in members)
+                result.Add(ordered[m]);
+        }
+
+        ordered.Clear();
+        ordered.AddRange(result);
+    }
+
+    /// <summary>Two aliases are the same model family when one is a '-'-delimited prefix of the other
+    /// (e.g. <c>phi-4</c> and <c>phi-4-mini</c>). Case-insensitive; identical aliases are the same
+    /// family. Distinct same-length aliases (e.g. <c>qwen2.5-0.5b</c> / <c>qwen2.5-1.5b</c>) count as
+    /// different families since neither is a '-'-delimited prefix of the other.</summary>
+    internal static bool AreSameFamily(string a, string b)
+    {
+        if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b))
+            return false;
+        if (a.Length == b.Length)
+            return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+        string shorter = a.Length < b.Length ? a : b;
+        string longer = a.Length < b.Length ? b : a;
+        return longer.StartsWith(shorter + "-", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static int IndexOf(IReadOnlyList<string> list, string value)
     {

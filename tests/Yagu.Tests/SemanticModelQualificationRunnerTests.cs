@@ -28,8 +28,8 @@ public sealed class SemanticModelQualificationRunnerTests
     private static SemanticProbe RequiresPngGlob(string query = "find things") =>
         new() { Query = query, Complexity = SemanticProbeComplexity.Simple, ExpectedIncludeGlob = "*.png" };
 
-    private static SemanticModelOption Option(string alias, bool recommended = false, bool preferred = false) =>
-        new() { Alias = alias, DisplayName = alias, IsRecommended = recommended, IsPreferredFamily = preferred };
+    private static SemanticModelOption Option(string alias, bool recommended = false, bool preferred = false, long sizeBytes = 0) =>
+        new() { Alias = alias, DisplayName = alias, IsRecommended = recommended, IsPreferredFamily = preferred, SizeBytes = sizeBytes == 0 ? null : sizeBytes };
 
     private static SemanticTranslationResult PngPlan() =>
         SemanticTranslationResult.Ok(new SemanticSearchPlan { IncludeGlobs = new List<string> { "*.png" } });
@@ -105,6 +105,92 @@ public sealed class SemanticModelQualificationRunnerTests
         Assert.False(SemanticModelQualificationRunner.IsReasoningAlias("phi-4-mini"));
         Assert.False(SemanticModelQualificationRunner.IsReasoningAlias("phi-3.5-mini"));
         Assert.False(SemanticModelQualificationRunner.IsReasoningAlias(null));
+    }
+
+    [Fact]
+    public async Task RunAsync_TriesSmallerSameFamilyVariantFirst_AndPrefersIt()
+    {
+        // phi-4 (recommended, large) and phi-4-mini (smaller) both pass every probe. The smaller sibling
+        // is tried first, qualifies, and — because the sweep stops at the first qualifier — becomes the
+        // pick, so the faster model wins and the larger sibling is never probed.
+        var translator = new FakeTranslator
+        {
+            Options =
+            {
+                Option("phi-4", recommended: true, sizeBytes: 9_000_000_000),
+                Option("phi-4-mini", sizeBytes: 4_800_000_000),
+            },
+            TranslateBehavior = (_, _) => PngPlan(),
+        };
+        var runner = new SemanticModelQualificationRunner(translator);
+
+        var result = await runner.RunAsync(new[] { RequiresPngGlob() }, Thresholds, progress: null, CancellationToken.None);
+
+        Assert.Equal("phi-4-mini", result.QualifiedModelAlias);
+        Assert.Equal(new[] { "phi-4-mini" }, translator.Prepared); // the larger sibling was never probed
+    }
+
+    [Fact]
+    public async Task RunAsync_SmallerSiblingFailsAccuracy_FallsBackToLargerRecommended()
+    {
+        // The smaller sibling is tried first but does not clear the bar; the larger recommended model is
+        // then probed and qualifies.
+        var translator = new FakeTranslator
+        {
+            Options =
+            {
+                Option("phi-4", recommended: true, sizeBytes: 9_000_000_000),
+                Option("phi-4-mini", sizeBytes: 4_800_000_000),
+            },
+            TranslateBehavior = (alias, _) => alias == "phi-4" ? PngPlan() : EmptyPlan(),
+        };
+        var runner = new SemanticModelQualificationRunner(translator);
+
+        var result = await runner.RunAsync(new[] { RequiresPngGlob() }, Thresholds, progress: null, CancellationToken.None);
+
+        Assert.Equal("phi-4", result.QualifiedModelAlias);
+        Assert.Equal(new[] { "phi-4-mini", "phi-4" }, result.Reports.Select(r => r.ModelAlias).ToArray());
+    }
+
+    [Theory]
+    [InlineData("phi-4", "phi-4-mini", true)]
+    [InlineData("phi-4-mini", "phi-4", true)]
+    [InlineData("phi-3.5", "phi-3.5-mini", true)]
+    [InlineData("phi-4", "phi-4", true)]
+    [InlineData("phi-4", "phi-3.5-mini", false)]
+    [InlineData("phi-4-mini", "phi-3.5-mini", false)]
+    [InlineData("qwen2.5-0.5b", "qwen2.5-1.5b", false)] // same length, neither is a prefix of the other
+    public void AreSameFamily_DetectsHyphenDelimitedPrefixVariants(string a, string b, bool expected)
+    {
+        Assert.Equal(expected, SemanticModelQualificationRunner.AreSameFamily(a, b));
+    }
+
+    [Fact]
+    public void ReorderSmallerFamilyVariantsFirst_PutsSmallerVariantBeforeLarger_KeepingCrossFamilyOrder()
+    {
+        var ladder = new List<string> { "phi-4", "phi-4-mini", "phi-3.5-mini", "qwen2.5-1.5b" };
+        var sizes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["phi-4"] = 9_000_000_000,
+            ["phi-4-mini"] = 4_800_000_000,
+            ["phi-3.5-mini"] = 2_530_000_000,
+            ["qwen2.5-1.5b"] = 1_780_000_000,
+        };
+
+        SemanticModelQualificationRunner.ReorderSmallerFamilyVariantsFirst(ladder, sizes);
+
+        // The phi-4 family is emitted at its first slot, smaller-first; the single-member families keep
+        // their relative order.
+        Assert.Equal(new[] { "phi-4-mini", "phi-4", "phi-3.5-mini", "qwen2.5-1.5b" }, ladder);
+    }
+
+    [Fact]
+    public void ReorderSmallerFamilyVariantsFirst_NoFamilies_LeavesOrderUnchanged()
+    {
+        var ladder = new List<string> { "A", "B", "C" };
+        SemanticModelQualificationRunner.ReorderSmallerFamilyVariantsFirst(
+            ladder, new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase));
+        Assert.Equal(new[] { "A", "B", "C" }, ladder);
     }
 
     [Fact]

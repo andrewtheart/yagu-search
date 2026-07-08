@@ -238,7 +238,7 @@ internal sealed class SemanticModelQualificationDialog : Window
             "the check. Yagu tests the models that fit this PC with a few sample searches and recommends the " +
             "fastest one that answers accurately. Everything runs on your PC.";
 
-        var panel = new StackPanel { Spacing = 16 };
+        var panel = new StackPanel { Spacing = 20 };
         _modelLoadBox = BuildThresholdInput(
             panel, "Max time to load a model (seconds)",
             ModelQualificationThresholds.DefaultModelLoadMaxMs / 1000);
@@ -320,7 +320,7 @@ internal sealed class SemanticModelQualificationDialog : Window
         _subtitleText.Text = "Yagu is asking each AI model that fits this PC a few sample searches and watching how " +
             "it answers, to pick the fastest one that's accurate. Everything runs on your PC.";
 
-        _chatLog = new StackPanel { Spacing = 10 };
+        _chatLog = new StackPanel { Spacing = 14 };
         _chatScroll = new ScrollViewer
         {
             Content = _chatLog,
@@ -332,7 +332,7 @@ internal sealed class SemanticModelQualificationDialog : Window
         // Persistent per-model progress (always visible, above the scrolling transcript).
         _modelProgressText = new TextBlock { FontSize = 12, Opacity = 0.8, TextWrapping = TextWrapping.NoWrap };
         _modelProgressBar = new ProgressBar { Minimum = 0, Maximum = 100, Value = 0, IsIndeterminate = false };
-        var progressPanel = new StackPanel { Spacing = 4, Margin = new Thickness(0, 0, 0, 8) };
+        var progressPanel = new StackPanel { Spacing = 6, Margin = new Thickness(0, 2, 0, 16) };
         progressPanel.Children.Add(_modelProgressText);
         progressPanel.Children.Add(_modelProgressBar);
 
@@ -416,7 +416,7 @@ internal sealed class SemanticModelQualificationDialog : Window
         {
             Orientation = Orientation.Horizontal,
             Spacing = 8,
-            Margin = new Thickness(0, 8, 0, 0),
+            Margin = new Thickness(0, 14, 0, 2),
             HorizontalAlignment = HorizontalAlignment.Center,
         };
         row.Children.Add(new FontIcon { Glyph = "\uE99A", FontSize = 15, VerticalAlignment = VerticalAlignment.Center });
@@ -690,7 +690,7 @@ internal sealed class SemanticModelQualificationDialog : Window
             ? $"“{suggestion}” passed the accuracy and speed checks on this PC. Use it, or pick another model."
             : $"No model fully cleared the bar on this PC. “{suggestion}” did best. Use it, or pick another model.";
 
-        var list = new StackPanel { Spacing = 8 };
+        var list = new StackPanel { Spacing = 12 };
         foreach (var report in _result.Reports)
             list.Children.Add(BuildReportRow(report, isSuggestion: string.Equals(report.ModelAlias, suggestion, StringComparison.OrdinalIgnoreCase)));
 
@@ -716,7 +716,7 @@ internal sealed class SemanticModelQualificationDialog : Window
         _subtitleText.Text = "Yagu tested the AI models that fit this PC, but none returned usable results within your " +
             "time limits.";
 
-        var panel = new StackPanel { Spacing = 12, VerticalAlignment = VerticalAlignment.Center };
+        var panel = new StackPanel { Spacing = 14, VerticalAlignment = VerticalAlignment.Center };
         panel.Children.Add(new TextBlock
         {
             Text = "AI (Semantic) search has been turned off and Yagu will use Traditional (literal) search instead, " +
