@@ -205,6 +205,22 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
             return OcrResult.Fail("OCR worker (Yagu.OcrWorker.exe) is not installed.");
         }
 
+        // SECURITY: in a signed, shipped build, refuse to launch a worker that is not signed by the
+        // same publisher as Yagu itself. This blocks an attacker who plants or tampers a worker exe
+        // (via the YAGU_OCR_WORKER path override or by writing to the install dir) from running code
+        // inside the signed app's process tree. In unsigned local/dev builds the host is unsigned, so
+        // the check is a no-op and the freshly-built (unsigned) worker launches normally. The
+        // _hasWorkerPathOverride seam is the internal test/diagnostics constructor only (never set by
+        // the production factory), so exempting it does not weaken the shipped app.
+        if (!_hasWorkerPathOverride
+            && !AuthenticodeVerifier.IsWorkerTrustedForHost(workerPath, out string trustFailure))
+        {
+            LogService.Instance.Warning(
+                LogSource,
+                $"Refusing to launch OCR worker \"{workerPath}\": {trustFailure}. Image-text search is unavailable.");
+            return OcrResult.Fail("OCR worker failed signature verification.");
+        }
+
         // Warn (and require consent) before initiating any external download. When the assets are
         // already present — bundled by the OCR-bundled installer or downloaded on a previous run —
         // no prompt is shown and the worker runs offline.

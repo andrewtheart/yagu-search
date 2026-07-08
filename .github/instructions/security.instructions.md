@@ -1,6 +1,6 @@
 ---
 description: "Yagu security invariants — verify Authenticode before running downloaded installers, keep telemetry offline-by-default with build-time secret injection, sanitize Function inputs, and constant-time token compare. Use when: editing AuthenticodeVerifier, downloading and running an installer elevated (runas), Everything Search installer, TelemetryConfig, TelemetryScrubber, telemetry token/secret, telemetry.local.props, the TelemetryFunction, bugreport correlationId, blob path, SanitizeCorrelationId, FixedTimeEquals, Zip Slip, SecurityAuditRegressionTests."
-applyTo: "src/Yagu/Services/AuthenticodeVerifier.cs, src/Yagu/Services/Telemetry/**, src/cloud/Yagu.TelemetryFunction/**, src/Yagu/UI/Windows/MainWindow/MainWindow.StartupChecks.cs, src/Yagu/CliRunner.cs"
+applyTo: "src/Yagu/Services/AuthenticodeVerifier.cs, src/Yagu/Services/Telemetry/**, src/cloud/Yagu.TelemetryFunction/**, src/Yagu/UI/Windows/MainWindow/MainWindow.StartupChecks.cs, src/Yagu/CliRunner.cs, src/Yagu/Services/Ocr/WorkerOcrEngine.cs, src/Yagu/Services/Ai/Worker/WorkerSemanticQueryTranslator.cs"
 ---
 
 # Yagu — Security Invariants
@@ -16,6 +16,29 @@ file on failure (OWASP A08). `AuthenticodeVerifier` wraps `WinVerifyTrust`
 (`WINTRUST_ACTION_GENERIC_VERIFY_V2`, whole-chain revocation) plus a subject-publisher check and
 **fails safe** (any exception ⇒ untrusted). It is linked into `Yagu.Tests` via `<Compile Include>`.
 Never add a new "download an EXE and run it" path without this gate.
+
+## Out-of-process workers are loaded only from the install dir and signature-verified
+
+The OCR (`Yagu.OcrWorker.exe`) and semantic (`Yagu.SemanticWorker.exe`) workers are child processes
+that the app launches and talks to over private (anonymous) stdio pipes. Two invariants keep a
+planted/tampered worker from running inside the (signed) app's process tree:
+
+- **Never probe a per-user-writable path for the worker exe.** `WorkerOcrEngine.ResolveWorkerPath` and
+  `WorkerSemanticQueryTranslator.ResolveWorkerPath` resolve only the explicit `YAGU_*_WORKER` override
+  (dev/test) → the beside-app install dir (`ocr-worker\` / `semantic-worker\`). Do **not** re-add a
+  `%LOCALAPPDATA%`-style fallback: a signed app auto-executing an exe from a user-writable location is
+  a binary-planting vector.
+- **Verify the worker's signature before launch, gated on the host.** Before `Process.Start`, both
+  proxies call `AuthenticodeVerifier.IsWorkerTrustedForHost(path, out _)`, which is a **no-op when the
+  host (Yagu.exe) is itself unsigned** (local dev builds → unsigned worker launches fine) but, in a
+  signed shipped build, **requires the worker to carry a valid Authenticode signature from the same
+  publisher as the host** (else refuse). This closes the env-override + tampered-install-dir vectors
+  in production without breaking the unsigned dev inner loop. The OCR check is skipped only for the
+  internal `_hasWorkerPathOverride` test constructor (never set by the production factory).
+
+Pinned by `SecurityAuditRegressionTests` (`IsWorkerTrustedForHost_*`, `AuthenticodeVerifier_WorkerCheck_*`,
+`OcrWorker_/SemanticWorker_VerifiesSignatureBeforeLaunch`) and `WorkerOcrEngineTests`
+(`ResolveWorkerPath_ProbesOverrideThenBesideApp_AndNeverAUserWritablePath`).
 
 ## Telemetry ships offline-by-default; secrets are build-time-injected, never committed
 

@@ -228,6 +228,16 @@ public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IA
             return false;
         }
 
+        // SECURITY: in a signed, shipped build, refuse to launch a worker that is not signed by the
+        // same publisher as Yagu itself. This blocks a planted or tampered worker (via the
+        // YAGU_SEMANTIC_WORKER path override or a writable install dir) from running inside the signed
+        // app's process tree. In unsigned local/dev builds the host is unsigned, so this is a no-op.
+        if (!AuthenticodeVerifier.IsWorkerTrustedForHost(exe, out string trustFailure))
+        {
+            LogService.Instance.Warning(LogSource, $"refusing to launch semantic worker \"{exe}\": {trustFailure}.");
+            return false;
+        }
+
         var psi = new ProcessStartInfo
         {
             FileName = exe,

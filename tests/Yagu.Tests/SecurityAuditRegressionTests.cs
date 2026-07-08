@@ -66,6 +66,39 @@ public sealed class SecurityAuditRegressionTests
         }
     }
 
+    [Fact]
+    public void IsWorkerTrustedForHost_NeverThrows_AndReasonMatchesOutcome()
+    {
+        // Contract, independent of whether the test host is signed: allow => empty reason;
+        // reject => a non-empty explanation. The method must never throw.
+        string bogus = Path.Combine(Path.GetTempPath(), $"yagu-noworker-{Guid.NewGuid():N}.exe");
+
+        bool allowed = AuthenticodeVerifier.IsWorkerTrustedForHost(bogus, out string reason);
+
+        if (allowed)
+            Assert.True(string.IsNullOrEmpty(reason));
+        else
+            Assert.False(string.IsNullOrWhiteSpace(reason));
+    }
+
+    [Fact]
+    public void IsWorkerTrustedForHost_IsGatedOnHostSignature()
+    {
+        // When the host (this test process) is itself Authenticode-signed, enforcement is active and a
+        // missing/unsigned worker must be rejected (fail-safe). On an unsigned dev host there is no
+        // publisher identity to bind to, so the worker is allowed — the no-op dev path.
+        string bogus = Path.Combine(Path.GetTempPath(), $"yagu-noworker-{Guid.NewGuid():N}.exe");
+        bool hostSigned = !string.IsNullOrEmpty(Environment.ProcessPath)
+            && AuthenticodeVerifier.IsTrustedPublisher(Environment.ProcessPath!, null, out _);
+
+        bool allowed = AuthenticodeVerifier.IsWorkerTrustedForHost(bogus, out _);
+
+        if (hostSigned)
+            Assert.False(allowed);
+        else
+            Assert.True(allowed);
+    }
+
     // ── AuthenticodeVerifier: source-pin the security-critical policy flags ────────────────────────
 
     [Fact]
@@ -81,6 +114,52 @@ public sealed class SecurityAuditRegressionTests
         Assert.Contains("WTD_STATEACTION_CLOSE", source);
         // WINTRUST_ACTION_GENERIC_VERIFY_V2 policy GUID.
         Assert.Contains("00AAC56B-CD44-11d0-8CC2-00C04FC295EE", source);
+    }
+
+    [Fact]
+    public void AuthenticodeVerifier_WorkerCheck_IsHostGatedAndSamePublisher()
+    {
+        string source = File.ReadAllText(
+            Path.Combine(FindRepoRoot(), "src", "Yagu", "Services", "AuthenticodeVerifier.cs"));
+
+        // The check is gated on the HOST's own signature, so unsigned dev builds skip enforcement.
+        Assert.Contains("public static bool IsWorkerTrustedForHost", source);
+        Assert.Contains("Environment.ProcessPath", source);
+        Assert.Contains("HostSignerSubject", source);
+        // A signed host requires the worker to be signed by the SAME publisher.
+        Assert.Contains("does not match host publisher", source);
+    }
+
+    // ── Out-of-process workers must be signature-verified BEFORE they are launched ───────────────
+
+    [Fact]
+    public void OcrWorker_VerifiesSignatureBeforeLaunch()
+    {
+        string source = File.ReadAllText(Path.Combine(
+            FindRepoRoot(), "src", "Yagu", "Services", "Ocr", "WorkerOcrEngine.cs"));
+
+        AssertWorkerVerifiedBeforeStart(source, "process.Start()");
+    }
+
+    [Fact]
+    public void SemanticWorker_VerifiesSignatureBeforeLaunch()
+    {
+        string source = File.ReadAllText(Path.Combine(
+            FindRepoRoot(), "src", "Yagu", "Services", "Ai", "Worker", "WorkerSemanticQueryTranslator.cs"));
+
+        AssertWorkerVerifiedBeforeStart(source, "proc.Start()");
+    }
+
+    private static void AssertWorkerVerifiedBeforeStart(string source, string startCall)
+    {
+        int verifyIndex = source.IndexOf(
+            "AuthenticodeVerifier.IsWorkerTrustedForHost", StringComparison.Ordinal);
+        int startIndex = source.IndexOf(startCall, StringComparison.Ordinal);
+
+        Assert.True(verifyIndex >= 0, "Worker launch site must call AuthenticodeVerifier.IsWorkerTrustedForHost.");
+        Assert.True(startIndex >= 0, $"Worker launch site must call {startCall}.");
+        Assert.True(verifyIndex < startIndex,
+            "The signature check must run BEFORE the worker process is started.");
     }
 
     // ── Installer execution sites must verify the signature BEFORE elevating ───────────────────────

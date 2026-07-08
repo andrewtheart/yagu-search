@@ -24,6 +24,11 @@ internal static class AuthenticodeVerifier
     private const uint WTD_REVOCATION_CHECK_CHAIN = 0x00000040;
     private const int ERROR_SUCCESS = 0;
 
+    // The host executable's Authenticode signer subject, computed once per process. Null means the
+    // host is not validly signed (a local dev/test build) or its subject could not be read — in which
+    // case worker signature enforcement is skipped so unsigned dev builds keep working.
+    private static readonly Lazy<string?> HostSignerSubject = new(ReadHostSignerSubject);
+
     [StructLayout(LayoutKind.Sequential)]
     private struct WINTRUST_FILE_INFO
     {
@@ -91,6 +96,53 @@ internal static class AuthenticodeVerifier
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Returns true when it is safe to launch <paramref name="workerPath"/> as a child of the current
+    /// process. If the host executable is not itself Authenticode-signed — the normal case for local
+    /// dev/test builds — enforcement is skipped and the worker is allowed (there is no publisher
+    /// identity to bind to). In a signed, shipped build the worker MUST carry a valid Authenticode
+    /// signature from the SAME publisher as the host; otherwise it is rejected, so a planted or
+    /// tampered worker (delivered via a <c>YAGU_*_WORKER</c> path override or a writable install
+    /// directory) cannot run inside the signed app's process tree (OWASP A08:2021 software integrity).
+    /// </summary>
+    public static bool IsWorkerTrustedForHost(string workerPath, out string failureReason)
+    {
+        failureReason = string.Empty;
+
+        string? hostSubject = HostSignerSubject.Value;
+        if (string.IsNullOrEmpty(hostSubject))
+        {
+            // Host is unsigned (local dev/test build) — no publisher identity to enforce, allow it.
+            return true;
+        }
+
+        if (!IsTrustedPublisher(workerPath, null, out failureReason))
+            return false;
+
+        string? workerSubject = TryGetSignerSubject(workerPath);
+        if (string.IsNullOrEmpty(workerSubject))
+        {
+            failureReason = "worker signer certificate could not be read";
+            return false;
+        }
+
+        if (!string.Equals(hostSubject, workerSubject, StringComparison.OrdinalIgnoreCase))
+        {
+            failureReason = $"worker publisher '{workerSubject}' does not match host publisher '{hostSubject}'";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static string? ReadHostSignerSubject()
+    {
+        string? hostPath = Environment.ProcessPath;
+        if (string.IsNullOrEmpty(hostPath) || !IsTrustedPublisher(hostPath, null, out _))
+            return null;
+        return TryGetSignerSubject(hostPath);
     }
 
     private static bool IsSignatureTrusted(string filePath, out string failureReason)
