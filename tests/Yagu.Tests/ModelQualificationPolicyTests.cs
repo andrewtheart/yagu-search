@@ -36,13 +36,21 @@ public sealed class ModelQualificationPolicyTests
     [Theory]
     [InlineData(0.0)]
     [InlineData(0.5)]
-    [InlineData(0.74)]
-    [InlineData(0.91)]
+    [InlineData(0.85)]
+    [InlineData(16.0 / 17.0)]
     public void Evaluate_BelowMinAccuracy_Fails(double accuracy)
     {
         var v = ModelQualificationPolicy.Evaluate(accuracy, crashed: false, latencyViolation: null);
         Assert.False(v.Passed);
         Assert.Contains("accuracy", v.Reason, System.StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Evaluate_RequiresPerfectScore_AnyMissFails()
+    {
+        // Policy intent: 100% required — a full pass (17/17) qualifies, a single miss (16/17) does not.
+        Assert.True(ModelQualificationPolicy.Evaluate(1.0, crashed: false, latencyViolation: null).Passed);
+        Assert.False(ModelQualificationPolicy.Evaluate(16.0 / 17.0, crashed: false, latencyViolation: null).Passed);
     }
 
     [Fact]

@@ -419,8 +419,10 @@ internal sealed class SemanticModelDownloadDialog : Window
     {
         if (_selected is null) return;
 
-        // Recommended pick is stored as "auto" (empty) so Yagu keeps choosing the best model.
-        string? aliasToStore = _selected.IsRecommended ? string.Empty : _selected.Alias;
+        // An explicit pick is PINNED as an override, even when it is the recommended model, so the user's
+        // choice sticks and is shown as the current model. The Settings "Use recommended (automatic)"
+        // button is the way back to automatic selection.
+        string? aliasToStore = _selected.Alias;
 
         ShowDownloadingState();
         var progress = new Progress<SemanticTranslationProgress>(OnProgress);

@@ -33,6 +33,9 @@ public static class SemanticProbeScorer
         if (probe.ExpectedHasDateFilter is true && !HasAnyDateFilter(plan))
             return false;
 
+        if (probe.ExpectedHasSizeFilter is true && !HasAnySizeFilter(plan))
+            return false;
+
         if (probe.ExpectedSearchHidden is { } hidden && plan.SearchHiddenFiles != hidden)
             return false;
 
@@ -106,4 +109,8 @@ public static class SemanticProbeScorer
         plan.CreatedBeforeDate is not null ||
         plan.ModifiedAfterDate is not null ||
         plan.ModifiedBeforeDate is not null;
+
+    private static bool HasAnySizeFilter(ResolvedSearchPlan plan) =>
+        plan.MinFileSizeBytes is not null ||
+        plan.MaxFileSizeBytes is not null;
 }

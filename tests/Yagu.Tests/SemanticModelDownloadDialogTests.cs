@@ -25,6 +25,20 @@ public sealed class SemanticModelDownloadDialogTests
         Assert.DoesNotContain("uses a small AI model that runs entirely on your PC", src);
     }
 
+    [Fact]
+    public void StartDownload_PinsExplicitlySelectedModel_EvenWhenRecommended()
+    {
+        string src = File.ReadAllText(
+            Path.Combine(Root, "src", "Yagu", "UI", "Windows", "SemanticModelDownloadDialog.cs"));
+
+        // An explicit pick must PIN that model as an override so it persists and shows as the current
+        // model, even when the recommended model is selected. Previously the recommended pick was
+        // collapsed to "auto" (empty), so selecting it did not stick and the current-model label showed
+        // the last-loaded model instead.
+        Assert.Contains("string? aliasToStore = _selected.Alias;", src);
+        Assert.DoesNotContain("_selected.IsRecommended ? string.Empty : _selected.Alias", src);
+    }
+
     private static string Root => FindRepoRoot();
 
     private static string FindRepoRoot()

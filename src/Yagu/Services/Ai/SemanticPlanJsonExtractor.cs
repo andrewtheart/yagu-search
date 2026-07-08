@@ -95,6 +95,15 @@ internal static class SemanticPlanJsonExtractor
         text = StripReasoningTrace(text);
         if (string.IsNullOrWhiteSpace(text)) return null;
 
+        // Strong instruct models (e.g. phi-4 14B) faithfully mimic the COMMENTED schema example in the
+        // system prompt, emitting JSONC — a `// …` comment after every field (sometimes fenced as
+        // ```jsonc). Comments are NOT valid JSON, so the gatekeeper JsonDocument.Parse calls below reject
+        // the whole object and the trailing-field repair salvages only `{"pattern":""}` (an empty plan).
+        // Strip line/block comments first — honoring string state so a `//` inside a value (a URL, a
+        // regex, the explanation) is preserved — so the model's correct interpretation survives.
+        text = StripJsonComments(text);
+        if (string.IsNullOrWhiteSpace(text)) return null;
+
         int start = text.IndexOf('{');
         if (start < 0) return null;
 
@@ -174,6 +183,63 @@ internal static class SemanticPlanJsonExtractor
             result = result[..openOnly];
 
         return result;
+    }
+
+    /// <summary>Removes JSONC-style comments — <c>// line</c> comments (to end of line) and
+    /// <c>/* block */</c> comments (spanning lines) — that a model appends when it mirrors the commented
+    /// schema example in the system prompt. Scanning tracks JSON string state, so a <c>//</c> or
+    /// <c>/*</c> that appears INSIDE a string value (a URL like <c>http://…</c>, a regex, the
+    /// explanation) is left untouched. Newlines are preserved so line numbers/structure stay intact.
+    /// Without this, comments make <see cref="System.Text.Json"/> reject the whole object and the plan
+    /// is lost. A no-op when the text contains no comment markers.</summary>
+    internal static string StripJsonComments(string text)
+    {
+        if (string.IsNullOrEmpty(text) ||
+            (text.IndexOf("//", StringComparison.Ordinal) < 0 && text.IndexOf("/*", StringComparison.Ordinal) < 0))
+        {
+            return text;
+        }
+
+        var sb = new StringBuilder(text.Length);
+        bool inString = false;
+        bool escaped = false;
+        int i = 0;
+        while (i < text.Length)
+        {
+            char c = text[i];
+            if (inString)
+            {
+                sb.Append(c);
+                if (escaped) escaped = false;
+                else if (c == '\\') escaped = true;
+                else if (c == '"') inString = false;
+                i++;
+                continue;
+            }
+
+            // Line comment: drop from `//` to just before the end of the line (the newline is kept).
+            if (c == '/' && i + 1 < text.Length && text[i + 1] == '/')
+            {
+                i += 2;
+                while (i < text.Length && text[i] != '\n' && text[i] != '\r') i++;
+                continue;
+            }
+
+            // Block comment: drop `/* … */`. If it is never closed (truncated), drop the remainder.
+            if (c == '/' && i + 1 < text.Length && text[i + 1] == '*')
+            {
+                i += 2;
+                while (i + 1 < text.Length && !(text[i] == '*' && text[i + 1] == '/')) i++;
+                i = (i + 1 < text.Length) ? i + 2 : text.Length;
+                continue;
+            }
+
+            if (c == '"') inString = true;
+            sb.Append(c);
+            i++;
+        }
+
+        return sb.ToString();
     }
 
     /// <summary>Scans from <paramref name="start"/> and returns the first brace-balanced object, or

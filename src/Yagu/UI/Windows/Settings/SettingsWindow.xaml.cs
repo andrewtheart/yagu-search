@@ -3949,6 +3949,54 @@ public sealed partial class SettingsWindow : Window
             dependentControls.Add(chooseModel);
             dependentControls.Add(resetModel);
 
+            // ── Re-run model probe ──
+            var probeRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 0) };
+            var rerunProbe = new Button { Content = "Re-run model probe\u2026" };
+            rerunProbe.Click += async (_, _) =>
+            {
+                rerunProbe.IsEnabled = false;
+                try
+                {
+                    var theme = (Content as FrameworkElement)?.ActualTheme ?? ElementTheme.Default;
+                    var result = await SemanticModelQualificationDialog.ShowAsync(
+                        _settingsHwnd,
+                        theme,
+                        (thresholds, progress, token) => _viewModel.RunSemanticModelQualificationAsync(thresholds, progress, token));
+
+                    if (result.Cancelled)
+                        return; // User cancelled the sweep; leave settings untouched.
+
+                    if (result.SwitchToTraditional)
+                    {
+                        // The user chose "switch to Traditional" from the no-usable-model notice: honor it.
+                        await _viewModel.DeclineAndDisableSemanticSearchAsync();
+                    }
+                    else if (result.Accepted && result.Result is not null)
+                    {
+                        await _viewModel.ApplySemanticModelQualificationAsync(result.Result, accepted: true, result.ChosenAlias);
+                    }
+                    else if (result.Result is not null)
+                    {
+                        // Finished but skipped: record the recommendation without switching models.
+                        await _viewModel.ApplySemanticModelQualificationAsync(result.Result, accepted: false);
+                    }
+
+                    // Reflect any model/enabled change back into the tab.
+                    enableToggle.IsOn = _viewModel.SemanticSearchAvailable;
+                    modelValue.Text = _viewModel.CurrentSemanticModelDisplay;
+                    try { modelValue.Text = await _viewModel.ResolveCurrentSemanticModelDisplayAsync(null, CancellationToken.None); }
+                    catch { /* leave whatever is shown */ }
+                }
+                finally
+                {
+                    rerunProbe.IsEnabled = _viewModel.SemanticSearchAvailable;
+                }
+            };
+            probeRow.Children.Add(rerunProbe);
+            modelGroup.Children.Add(probeRow);
+            modelGroup.Children.Add(new TextBlock { Text = "Re-test the AI models that fit this PC with a mix of sample searches and pick the fastest one that answers accurately \u2014 the same check Yagu runs on first setup. Handy after downloading new models or changing hardware.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            dependentControls.Add(rerunProbe);
+
             // ── Refresh Foundry cache ──
             var refreshRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 0) };
             var refreshCache = new Button { Content = "Refresh Foundry cache" };

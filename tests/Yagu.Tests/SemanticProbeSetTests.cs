@@ -12,7 +12,7 @@ public sealed class SemanticProbeSetTests
     [Fact]
     public void Default_IsSmallEnoughForAFastSweep()
     {
-        Assert.InRange(SemanticProbeSet.Default.Count, 4, 16);
+        Assert.InRange(SemanticProbeSet.Default.Count, 4, 20);
     }
 
     [Fact]
@@ -32,6 +32,7 @@ public sealed class SemanticProbeSetTests
                 p.ExpectedIncludeGlob is not null ||
                 p.ExpectedPatternContains is not null ||
                 p.ExpectedHasDateFilter is not null ||
+                p.ExpectedHasSizeFilter is not null ||
                 p.ExpectedSearchHidden is not null ||
                 p.ExpectedExcludeGlobContains is not null ||
                 p.ExpectedSearchInsideArchives is not null ||
@@ -71,5 +72,6 @@ public sealed class SemanticProbeSetTests
         Assert.Contains(set, p => p.ExpectedMultiline is not null);
         Assert.Contains(set, p => p.ExpectedObeyGitignore is not null);
         Assert.Contains(set, p => p.ExpectedHasCreatedBefore is not null);
+        Assert.Contains(set, p => p.ExpectedHasSizeFilter is not null);
     }
 }

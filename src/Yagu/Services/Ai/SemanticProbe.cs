@@ -49,6 +49,11 @@ public sealed class SemanticProbe
     /// Null to not assert.</summary>
     public bool? ExpectedHasDateFilter { get; init; }
 
+    /// <summary>When true, the plan MUST set at least one file-size bound
+    /// (<see cref="ResolvedSearchPlan.MinFileSizeBytes"/> or <see cref="ResolvedSearchPlan.MaxFileSizeBytes"/>).
+    /// Null to not assert.</summary>
+    public bool? ExpectedHasSizeFilter { get; init; }
+
     /// <summary>Expected "Search hidden files" toggle on the resolved plan
     /// (<see cref="ResolvedSearchPlan.SearchHiddenFiles"/>): <c>true</c> to require it enabled
     /// ("hidden files", "show hidden"), <c>false</c> to require it disabled ("no hidden files").
@@ -218,6 +223,39 @@ public static class SemanticProbeSet
             Query = "files created before 2020",
             Complexity = SemanticProbeComplexity.Complex,
             ExpectedHasCreatedBefore = true,
+        },
+
+        // ── Complex: file type + name-negation — the model MUST keep the positive type filter (*.png)
+        //    even when the request adds a "without X in the name" exclusion. Small models tend to latch
+        //    onto the negation and DROP the type filter entirely (observed: phi-4-mini emits an exclude
+        //    for the letter but no *.png include, so the search never restricts to png). This probe
+        //    guards that regression; the exclusion itself is intentionally NOT asserted (models phrase
+        //    it many ways) so the check stays robust and targets the dropped-type-filter bug. ──────────
+        new SemanticProbe
+        {
+            Query = "all png file on C: without \"a\" in their name",
+            Complexity = SemanticProbeComplexity.Complex,
+            ExpectedSearchMode = SearchMode.FileNames,
+            ExpectedIncludeGlob = "*.png",
+        },
+
+        // ── Common everyday queries the recommended model must also handle. ──────────────────────
+        // Size filter: a bare size constraint must set a min/max file-size bound (Yagu supports this;
+        // small models also tend to emit arithmetic like 10*1024*1024 which the extractor folds).
+        new SemanticProbe
+        {
+            Query = "files larger than 10 MB",
+            Complexity = SemanticProbeComplexity.Complex,
+            ExpectedHasSizeFilter = true,
+        },
+        // Filename-substring search (NOT an extension): "named X" must search FILE NAMES for the term X,
+        // distinct from the extension-glob and content-term probes above.
+        new SemanticProbe
+        {
+            Query = "files named budget",
+            Complexity = SemanticProbeComplexity.Simple,
+            ExpectedSearchMode = SearchMode.FileNames,
+            ExpectedPatternContains = "budget",
         },
     ];
 }

@@ -407,4 +407,74 @@ public sealed class SemanticPlanJsonExtractorTests
         Assert.Equal("todo", plan!.Pattern);
         Assert.Null(plan.IncludeGlobs);
     }
+
+    [Fact]
+    public void TryParsePlan_Phi4JsoncCommentedOutput_KeepsAllFields()
+    {
+        // The verbatim phi-4 (14B) "all png files" output from the installed app's log: it mirrored
+        // the COMMENTED schema example in the system prompt and emitted JSONC — a ```jsonc fence plus
+        // a `// …` comment on every field. Comments are not valid JSON, so this previously collapsed
+        // to an empty plan (the trailing-field repair salvaged only {"pattern":""}) → 0% probe score,
+        // even though the interpretation (*.png, filenames) is correct. The comment strip must let all
+        // structured fields survive.
+        const string raw =
+            "```jsonc\n" +
+            "{\n" +
+            "  \"pattern\": \"\", // no specific text term to search for inside files\n" +
+            "  \"searchMode\": \"filenames\", // only file names are relevant, no content search\n" +
+            "  \"includeGlobs\": [\"*.png\"], // only include files with the .png extension\n" +
+            "  \"explanation\": \"Listing all files with the .png extension, matching only by file name.\" // brief explanation\n" +
+            "}\n" +
+            "```";
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(raw, out SemanticSearchPlan? plan, out string? error), error);
+        Assert.NotNull(plan);
+        Assert.Equal("filenames", plan!.SearchMode);
+        Assert.Equal(new[] { "*.png" }, plan.IncludeGlobs!);
+        Assert.Equal("Listing all files with the .png extension, matching only by file name.", plan.Explanation);
+    }
+
+    [Fact]
+    public void StripJsonComments_MarkerInsideStringValue_IsPreserved()
+    {
+        // A `//` (or `/*`) that appears INSIDE a string value — a URL, a regex, the explanation — must
+        // NOT be treated as a comment, or the value would be truncated.
+        const string raw = "{\"pattern\":\"https://example.com/*\",\"explanation\":\"match // and /* literally\"}";
+        Assert.Equal(raw, SemanticPlanJsonExtractor.StripJsonComments(raw));
+
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(raw, out SemanticSearchPlan? plan, out _));
+        Assert.Equal("https://example.com/*", plan!.Pattern);
+        Assert.Equal("match // and /* literally", plan.Explanation);
+    }
+
+    [Fact]
+    public void StripJsonComments_BlockComment_IsRemoved()
+    {
+        // JSONC block comments (/* … */), including across lines, must be stripped so the object parses.
+        const string raw = "{\"pattern\":\"*.log\" /* the extension */,\n/* leading */ \"searchMode\":\"filenames\"}";
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(raw, out SemanticSearchPlan? plan, out string? error), error);
+        Assert.Equal("*.log", plan!.Pattern);
+        Assert.Equal("filenames", plan.SearchMode);
+    }
+
+    [Fact]
+    public void StripJsonComments_NoComments_ReturnedUnchanged()
+    {
+        const string raw = "{\"pattern\":\"*.txt\",\"searchMode\":\"filenames\"}";
+        Assert.Equal(raw, SemanticPlanJsonExtractor.StripJsonComments(raw));
+    }
+
+    [Fact]
+    public void TryParsePlan_CommentedFieldWithQuoteAndTrailingComma_ParsesFully()
+    {
+        // A line comment that itself contains a double-quote would corrupt the brace-balancer's string
+        // tracking if it were not stripped first; a trailing comma before '}' must also be tolerated.
+        const string raw =
+            "{\n" +
+            "  \"searchMode\": \"content\", // search the \"contents\" of files\n" +
+            "  \"pattern\": \"error\",\n" +
+            "}";
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(raw, out SemanticSearchPlan? plan, out string? error), error);
+        Assert.Equal("content", plan!.SearchMode);
+        Assert.Equal("error", plan.Pattern);
+    }
 }

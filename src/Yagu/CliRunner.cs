@@ -490,28 +490,31 @@ internal static class CliRunner
 
         var recommended = options.FirstOrDefault(o => o.IsRecommended) ?? options[0];
 
-        bool chosenIsRecommended;
         string chosenAlias;
+        bool pinChoice; // an explicit interactive pick is pinned; auto-accept keeps tracking the best model
         if (!interactive)
         {
-            // --accept-model-download on a non-interactive console: take the recommended pick.
-            chosenIsRecommended = true;
+            // --accept-model-download on a non-interactive console: take the recommended pick and keep
+            // AUTOMATIC tracking (the user did not choose a specific model).
+            pinChoice = false;
             chosenAlias = recommended.Alias;
             WriteError($"Auto-accepting the recommended model: {recommended.DisplayName} ({FormatModelSize(recommended.SizeBytes)}).");
         }
         else
         {
+            // An explicit interactive pick is PINNED as an override, even when it is the recommended model
+            // (use --semantic-model, or the Settings "Use recommended (automatic)" button, to go back to auto).
             var pick = PromptForModelChoice(options, recommended);
             if (pick is null) return SemanticModelSetup.Declined;
-            chosenIsRecommended = pick.IsRecommended;
+            pinChoice = true;
             chosenAlias = pick.Alias;
         }
 
         try
         {
-            // A null alias tells the translator to use the recommended/auto pick, matching the GUI so
-            // Yagu keeps tracking the best model for this machine.
-            await translator.PrepareModelAsync(chosenIsRecommended ? null : chosenAlias, progress, ct).ConfigureAwait(false);
+            // Pin the interactive pick (load exactly that alias); auto-accept passes null so the translator
+            // tracks the best model for this machine.
+            await translator.PrepareModelAsync(pinChoice ? chosenAlias : null, progress, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -519,7 +522,7 @@ internal static class CliRunner
             return SemanticModelSetup.Failed;
         }
 
-        PersistSemanticModelChoice(chosenIsRecommended ? string.Empty : chosenAlias);
+        PersistSemanticModelChoice(pinChoice ? chosenAlias : string.Empty);
         settings.SemanticModelDownloaded = true;
         return SemanticModelSetup.Ready;
     }

@@ -92,6 +92,11 @@ internal sealed class SemanticModelQualificationDialog : Window
     private bool _openAiSettings;
     private bool _completed;
 
+    /// <summary><see cref="Environment.TickCount64"/> before which a <see cref="Cancel"/> click is ignored,
+    /// so the second click of an accidental double-click that STARTED the sweep can't immediately cancel
+    /// it (the primary button is replaced by "Cancel" at the same spot). 0 = no suppression.</summary>
+    private long _suppressCancelUntilTick;
+
     private SemanticModelQualificationDialog(IntPtr ownerHwnd, ElementTheme theme, RunDelegate run)
     {
         _ownerHwnd = ownerHwnd;
@@ -272,6 +277,22 @@ internal sealed class SemanticModelQualificationDialog : Window
             SimpleQueryMaxMs = SecondsToMs(_simpleQueryBox, ModelQualificationThresholds.DefaultSimpleQueryMaxMs),
             ComplexQueryMaxMs = SecondsToMs(_complexQueryBox, ModelQualificationThresholds.DefaultComplexQueryMaxMs),
         };
+        StartSweepGuarded();
+    }
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDoubleClickTime();
+
+    /// <summary>Starts (or restarts) the sweep from a footer button while guarding against an accidental
+    /// double-click. Starting the sweep replaces the clicked primary button ("Run"/"Try again") with a
+    /// "Cancel" button at the same spot, so the second click of a double-click would otherwise land on
+    /// "Cancel" and close the dialog. We suppress <see cref="Cancel"/> for the system double-click
+    /// interval after starting, which reliably swallows that second click regardless of dispatcher
+    /// timing (a deliberate cancel a moment later still works).</summary>
+    private void StartSweepGuarded()
+    {
+        uint doubleClickMs = GetDoubleClickTime();
+        _suppressCancelUntilTick = Environment.TickCount64 + (doubleClickMs > 0 ? doubleClickMs : 500);
         _ = RunSweepAsync();
     }
 
@@ -367,7 +388,7 @@ internal sealed class SemanticModelQualificationDialog : Window
         _bodyHost.Child = panel;
 
         _footer.Children.Clear();
-        AddFooterButton("Try again", accent: false, () => { _result = null; _ = RunSweepAsync(); });
+        AddFooterButton("Try again", accent: false, () => { _result = null; StartSweepGuarded(); });
         _primaryButton = AddFooterButton("Use Traditional search", accent: true, UseTraditional);
     }
 
@@ -387,7 +408,7 @@ internal sealed class SemanticModelQualificationDialog : Window
 
         _footer.Children.Clear();
         AddFooterButton("Use Traditional search", accent: false, UseTraditional);
-        AddFooterButton("Try again", accent: true, () => { _result = null; _ = RunSweepAsync(); });
+        AddFooterButton("Try again", accent: true, () => { _result = null; StartSweepGuarded(); });
     }
 
     private Border BuildReportRow(CandidateQualificationReport report, bool isSuggestion)
@@ -550,6 +571,10 @@ internal sealed class SemanticModelQualificationDialog : Window
 
     private void Cancel()
     {
+        // Swallow the second click of an accidental double-click that just started the sweep, so it does
+        // not close the dialog (the primary button was replaced by this "Cancel"; see StartSweepGuarded).
+        if (Environment.TickCount64 < _suppressCancelUntilTick)
+            return;
         _cancelled = true;
         Complete();
     }

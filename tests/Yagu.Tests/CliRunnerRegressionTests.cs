@@ -275,10 +275,10 @@ public sealed class CliRunnerRegressionTests
     {
         string source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Yagu", "CliRunner.cs"));
 
-        // Recommended pick is stored as an empty alias (auto) and the downloaded flag is set,
-        // mirroring the GUI so later runs (CLI or GUI) skip the prompt.
+        // An explicit interactive pick is PINNED (stored as its alias); the non-interactive auto-accept
+        // path stores empty (auto). Either way the downloaded flag is set so later runs skip the prompt.
         AssertContainsInOrder(source,
-            "PersistSemanticModelChoice(chosenIsRecommended ? string.Empty : chosenAlias);",
+            "PersistSemanticModelChoice(pinChoice ? chosenAlias : string.Empty);",
             "settings.SemanticModelDownloaded = true;");
         AssertContainsInOrder(source,
             "private static void PersistSemanticModelChoice(string aliasToPersist)",

@@ -148,6 +148,24 @@ public sealed class SemanticModelQualificationFlowTests
     }
 
     [Fact]
+    public void Dialog_GuardsAgainstDoubleClickStartingSweep()
+    {
+        string src = ReadAppFile(Path.Combine("UI", "Windows", "SemanticModelQualificationDialog.cs"));
+
+        // A double-click on "Run" must not close the dialog by landing on the "Cancel" button that
+        // replaces it. Starting the sweep suppresses Cancel for the system double-click interval, so the
+        // buffered second click is swallowed regardless of dispatcher timing.
+        Assert.Contains("private void StartSweepGuarded()", src);
+        Assert.Contains("_suppressCancelUntilTick = Environment.TickCount64 + (doubleClickMs > 0 ? doubleClickMs : 500);", src);
+        Assert.Contains("GetDoubleClickTime()", src);
+        // Cancel honors the suppression window.
+        Assert.Contains("if (Environment.TickCount64 < _suppressCancelUntilTick)", src);
+        // Both the config "Run" and the "Try again" buttons route through the guard.
+        Assert.Contains("StartSweepGuarded();", src);
+        Assert.Contains("{ _result = null; StartSweepGuarded(); }", src);
+    }
+
+    [Fact]
     public void Dialog_ResultScreenOffersAcceptSkipAndPicksSuggestion()
     {
         string src = ReadAppFile(Path.Combine("UI", "Windows", "SemanticModelQualificationDialog.cs"));
@@ -229,6 +247,23 @@ public sealed class SemanticModelQualificationFlowTests
     }
 
     [Fact]
+    public void ViewModel_RunSuspendsUnloadAfterUseSoProbesMeasureWarmLatency()
+    {
+        string src = ReadAppFile(Path.Combine("ViewModels", "MainViewModel.cs"));
+
+        // The sweep must keep the model resident across a candidate's probes; otherwise "release after
+        // each search" reloads the model inside every timed probe and disqualifies large models on latency.
+        int method = src.IndexOf("public async Task<ModelQualificationResult> RunSemanticModelQualificationAsync(", StringComparison.Ordinal);
+        Assert.True(method >= 0);
+        int restore = src.IndexOf("_semanticTranslator.SetUnloadAfterUse(restoreUnloadAfterUse);", method, StringComparison.Ordinal);
+        int suppress = src.IndexOf("_semanticTranslator.SetUnloadAfterUse(false);", method, StringComparison.Ordinal);
+        Assert.True(suppress >= 0, "The sweep should disable unload-after-use before running.");
+        Assert.True(restore > suppress, "The user's unload-after-use setting must be restored after the sweep.");
+        Assert.Contains("bool restoreUnloadAfterUse = _settings.SemanticUnloadModelAfterUse;", src);
+        Assert.Contains("await _semanticTranslator.UnloadCurrentModelAsync(CancellationToken.None)", src);
+    }
+
+    [Fact]
     public void ViewModel_ApplyPersistsAndSelectsModelLive()
     {
         string src = ReadAppFile(Path.Combine("ViewModels", "MainViewModel.cs"));
@@ -283,6 +318,21 @@ public sealed class SemanticModelQualificationFlowTests
         Assert.Contains("Content = \"Reset AI model check (re-prompt on startup)\"", src);
         Assert.Contains("await _viewModel.ResetSemanticModelQualificationAsync();", src);
         Assert.Contains("() => !_viewModel.HasSemanticModelQualificationState", src);
+    }
+
+    [Fact]
+    public void Settings_ModelSectionHasReRunProbeButton()
+    {
+        string src = ReadAppFile(Path.Combine("UI", "Windows", "Settings", "SettingsWindow.xaml.cs"));
+
+        // A "Re-run model probe" button in the AI → Model section runs the same qualification sweep the
+        // first-run flow uses and routes each outcome the same way.
+        Assert.Contains("Content = \"Re-run model probe\\u2026\"", src);
+        Assert.Contains("SemanticModelQualificationDialog.ShowAsync(", src);
+        Assert.Contains("_viewModel.RunSemanticModelQualificationAsync(thresholds, progress, token)", src);
+        Assert.Contains("_viewModel.ApplySemanticModelQualificationAsync(result.Result, accepted: true, result.ChosenAlias)", src);
+        Assert.Contains("_viewModel.ApplySemanticModelQualificationAsync(result.Result, accepted: false)", src);
+        Assert.Contains("await _viewModel.DeclineAndDisableSemanticSearchAsync();", src);
     }
 
     [Fact]

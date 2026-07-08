@@ -2566,12 +2566,35 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         if (_semanticTranslator is null || !_semanticTranslator.IsAvailable)
             throw new InvalidOperationException("Semantic search is not available on this machine.");
 
-        var runner = new SemanticModelQualificationRunner(
-            _semanticTranslator,
-            defaultDirectory: null,
-            directoryExists: System.IO.Directory.Exists,
-            maxCandidates: SemanticModelQualificationRunner.DefaultMaxCandidates);
-        return await runner.RunAsync(SemanticProbeSet.Default, thresholds, progress, cancellationToken).ConfigureAwait(true);
+        // The runner prepares each candidate once and warms it up so every TIMED probe measures steady-
+        // state inference latency. The "release model from memory after each search" setting (ON by
+        // default) defeats that: it unloads the model after EVERY inference, so each timed probe reloads
+        // the model from scratch inside its own timed window (~5-6s for a 14B model like phi-4), inflating
+        // per-probe latency past the per-query limit and disqualifying otherwise-accurate large models as
+        // "too slow". Keep each candidate's model resident across its probes for the sweep — the runner
+        // already unloads the previous candidate before loading the next, so only one model is ever
+        // resident — then restore the user's setting (and free VRAM) afterwards.
+        bool restoreUnloadAfterUse = _settings.SemanticUnloadModelAfterUse;
+        _semanticTranslator.SetUnloadAfterUse(false);
+        try
+        {
+            var runner = new SemanticModelQualificationRunner(
+                _semanticTranslator,
+                defaultDirectory: null,
+                directoryExists: System.IO.Directory.Exists,
+                maxCandidates: SemanticModelQualificationRunner.DefaultMaxCandidates);
+            return await runner.RunAsync(SemanticProbeSet.Default, thresholds, progress, cancellationToken).ConfigureAwait(true);
+        }
+        finally
+        {
+            _semanticTranslator.SetUnloadAfterUse(restoreUnloadAfterUse);
+            if (restoreUnloadAfterUse)
+            {
+                // The user wants the model released when idle; the sweep left one resident. Free it.
+                try { await _semanticTranslator.UnloadCurrentModelAsync(CancellationToken.None).ConfigureAwait(true); }
+                catch { /* best-effort: freeing VRAM must never fail the sweep result */ }
+            }
+        }
     }
 
     /// <summary>

@@ -22,7 +22,9 @@ public sealed class SemanticProbeScorerTests
         bool? useRegex = null,
         bool? exactMatch = null,
         bool? multiline = null,
-        bool? obeyGitignore = null) =>
+        bool? obeyGitignore = null,
+        long? minSize = null,
+        long? maxSize = null) =>
         new()
         {
             SearchMode = mode,
@@ -38,6 +40,8 @@ public sealed class SemanticProbeScorerTests
             ExactMatch = exactMatch,
             Multiline = multiline,
             ObeyGitignore = obeyGitignore,
+            MinFileSizeBytes = minSize,
+            MaxFileSizeBytes = maxSize,
         };
 
     [Fact]
@@ -142,6 +146,20 @@ public sealed class SemanticProbeScorerTests
         };
         Assert.True(SemanticProbeScorer.Passes(probe, Plan(modifiedAfter: DateTimeOffset.Now.AddDays(-7))));
         Assert.True(SemanticProbeScorer.Passes(probe, Plan(createdBefore: DateTimeOffset.Now)));
+        Assert.False(SemanticProbeScorer.Passes(probe, Plan()));
+    }
+
+    [Fact]
+    public void Passes_SizeQuery_RequiresAnySizeFilter()
+    {
+        var probe = new SemanticProbe
+        {
+            Query = "files larger than 10 MB",
+            Complexity = SemanticProbeComplexity.Complex,
+            ExpectedHasSizeFilter = true,
+        };
+        Assert.True(SemanticProbeScorer.Passes(probe, Plan(minSize: 10_485_760)));
+        Assert.True(SemanticProbeScorer.Passes(probe, Plan(maxSize: 1024)));
         Assert.False(SemanticProbeScorer.Passes(probe, Plan()));
     }
 
