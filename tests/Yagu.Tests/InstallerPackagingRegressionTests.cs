@@ -91,6 +91,36 @@ public sealed class InstallerPackagingRegressionTests
     }
 
     [Fact]
+    public void Installer_KillsRunningYaguProcessesBeforeInstallAndUninstall()
+    {
+        string root = FindRepoRoot();
+        string inno = File.ReadAllText(Path.Combine(root, "installer", "yagu-installer.iss"));
+
+        // One helper force-terminates the app PLUS both out-of-process workers so no file is locked
+        // while setup writes (install) or deletes (uninstall) them. "/T" also takes the worker subtree.
+        Assert.Contains("procedure KillYaguProcesses();", inno);
+        Assert.Contains(@"ExpandConstant('{sys}\taskkill.exe')", inno);
+        Assert.Contains("'/F /T /IM Yagu.exe'", inno);
+        Assert.Contains("'/F /IM Yagu.SemanticWorker.exe'", inno);
+        Assert.Contains("'/F /IM Yagu.OcrWorker.exe'", inno);
+
+        // Install path: PrepareToInstall runs before any files are written (and before the Restart
+        // Manager scan). Uninstall path: InitializeUninstall runs before any files are removed.
+        Assert.Contains("function PrepareToInstall(var NeedsRestart: Boolean): String;", inno);
+        Assert.Contains("function InitializeUninstall(): Boolean;", inno);
+
+        // The killer is defined before both hooks (Pascal requires top-down definition) and called by each
+        // (definition header + one call per hook => at least three occurrences of "KillYaguProcesses();").
+        int killerDef = inno.IndexOf("procedure KillYaguProcesses();", System.StringComparison.Ordinal);
+        int prepare = inno.IndexOf("function PrepareToInstall(", System.StringComparison.Ordinal);
+        int uninit = inno.IndexOf("function InitializeUninstall(", System.StringComparison.Ordinal);
+        Assert.True(killerDef >= 0 && prepare > killerDef && uninit > killerDef,
+            "KillYaguProcesses must be defined before the install/uninstall hooks that call it.");
+        int occurrences = System.Text.RegularExpressions.Regex.Matches(inno, @"KillYaguProcesses\(\);").Count;
+        Assert.True(occurrences >= 3, $"expected KillYaguProcesses called from both hooks, found {occurrences} occurrence(s).");
+    }
+
+    [Fact]
     public void Installer_AbortsWhenSmartAppControlIsEnforcing()
     {
         string root = FindRepoRoot();

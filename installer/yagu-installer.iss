@@ -253,6 +253,31 @@ begin
   Exec(Installer, '/silent /install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
+{ Force-terminate any running Yagu process -- the main app plus its out-of-process workers -- so their
+  executables/DLLs are not locked while setup copies (install) or deletes (uninstall) files. Runs on
+  BOTH install (PrepareToInstall, before any files are written) and uninstall (InitializeUninstall).
+  Best-effort: taskkill returns a non-zero code when no matching process is running, which is expected
+  and ignored. "/T" also terminates child processes (the workers); the workers are killed explicitly
+  too in case one was orphaned from its parent. }
+procedure KillYaguProcesses();
+var
+  ResultCode: Integer;
+begin
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM Yagu.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM Yagu.SemanticWorker.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM Yagu.OcrWorker.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+{ Called after the user clicks Install but before any files are written (also runs for silent
+  installs). Close any running Yagu -- e.g. installing an update over a running copy -- so its files
+  are never locked. Runs before the CloseApplications/Restart Manager scan, so no "please close"
+  prompt appears. Returning '' proceeds with the install. }
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  KillYaguProcesses();
+  Result := '';
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
@@ -262,6 +287,14 @@ begin
     ApplyLogLevelOverride();
     InstallWebView2Runtime();
   end;
+end;
+
+{ Runs at the very start of uninstall, before any files are removed. Force-close any running Yagu so
+  its executable/DLLs are not locked while the uninstaller deletes them. Returning True proceeds. }
+function InitializeUninstall(): Boolean;
+begin
+  KillYaguProcesses();
+  Result := True;
 end;
 
 { Yagu keeps its settings in %APPDATA%\Yagu\settings.json (separate from the installed program
