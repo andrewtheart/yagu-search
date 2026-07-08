@@ -62,6 +62,33 @@ public sealed class SemanticModelVramOptimizationTests
     }
 
     [Fact]
+    public void Translator_SerializesTeardownAgainstInFlightNativeOps()
+    {
+        // ROOT-CAUSE FIX for the deterministic onnxruntime-genai 0xc0000005 use-after-free: the Foundry
+        // SDK does not guard IModel.UnloadAsync() against an in-flight native load/inference, so a managed-
+        // "cancelled" but still-running (wedged) native op gets its model freed underneath it → crash. The
+        // translator now tracks the last native op and makes every unload await it (bounded) before freeing;
+        // a wedged op that won't drain SKIPS the unload and leaves the model resident (freed on process exit).
+        string translator = Read("Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs");
+
+        // Tracking field + bounded drain gate.
+        Assert.Contains("private volatile Task _lastNativeModelOp", translator);
+        Assert.Contains("private void TrackNativeModelOp(Task op)", translator);
+        Assert.Contains("private async Task<bool> TryDrainNativeModelOpAsync()", translator);
+        Assert.Contains("await Task.WhenAny(op, Task.Delay(UnloadDrainTimeout))", translator);
+
+        // Every native op is tracked so the drain can wait on it (inference, load, streaming).
+        Assert.Contains("TrackNativeModelOp(inferenceTask)", translator);
+        Assert.Contains("TrackNativeModelOp(loadTask)", translator);
+        Assert.Contains("TrackNativeModelOp(streamTask)", translator);
+
+        // Both unload paths gate on the drain and SKIP (leave resident) rather than free under a running op.
+        int drainCalls = System.Text.RegularExpressions.Regex.Matches(translator, @"TryDrainNativeModelOpAsync\(\)").Count;
+        Assert.True(drainCalls >= 3, $"expected the drain guard at both unload sites plus its definition, found {drainCalls}");
+        Assert.Contains("Skipping unload", translator);
+    }
+
+    [Fact]
     public void Translator_ClampsContextWindowBeforeLoadingToSaveVram()
     {
         string translator = Read("Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs");
@@ -76,7 +103,7 @@ public sealed class SemanticModelVramOptimizationTests
         // Ordering: EnsureModelContextFits (checks the window is big enough) then the clamp, then load.
         int fits = translator.IndexOf("EnsureModelContextFits(model);", System.StringComparison.Ordinal);
         int clamp = translator.IndexOf("await ClampModelContextWindowAsync(", System.StringComparison.Ordinal);
-        int load = translator.IndexOf("await model.LoadAsync(", System.StringComparison.Ordinal);
+        int load = translator.IndexOf("model.LoadAsync(", System.StringComparison.Ordinal);
         Assert.True(fits >= 0 && clamp > fits && load > clamp,
             $"Expected EnsureModelContextFits < ClampModelContextWindowAsync < LoadAsync (fits={fits}, clamp={clamp}, load={load}).");
     }

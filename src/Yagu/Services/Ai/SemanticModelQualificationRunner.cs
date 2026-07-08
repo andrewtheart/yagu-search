@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -18,8 +19,36 @@ public enum SemanticQualificationStage
     /// <summary>Running a probe query against the current candidate.</summary>
     Probing,
 
+    /// <summary>A streamed output delta arrived for the probe currently being answered. Carries the
+    /// incremental text in <see cref="SemanticQualificationProgress.TokenDelta"/> so a live chat
+    /// transcript can grow the assistant's response token-by-token.</summary>
+    ProbeToken,
+
+    /// <summary>A probe finished. Carries the pass/fail verdict, the reason it failed (if any), and the
+    /// measured latency so the transcript can stamp the answer with a ✓/✗ status.</summary>
+    ProbeCompleted,
+
     /// <summary>The sweep finished.</summary>
     Done,
+}
+
+/// <summary>Why a single probe did not pass, for display in the qualification transcript.</summary>
+public enum SemanticProbeFailureReason
+{
+    /// <summary>The probe passed — not a failure.</summary>
+    None,
+
+    /// <summary>The model produced no usable/parseable plan (empty or garbage output).</summary>
+    NoAnswer,
+
+    /// <summary>The model answered but the plan did not match what the probe expected.</summary>
+    Inaccurate,
+
+    /// <summary>The model exceeded the user's per-query time limit for the probe's complexity.</summary>
+    TooSlow,
+
+    /// <summary>The model crashed / failed to load while answering the probe.</summary>
+    Crashed,
 }
 
 /// <summary>Progress update for a running model-qualification sweep, suitable for direct display.</summary>
@@ -42,6 +71,28 @@ public sealed class SemanticQualificationProgress
     /// <summary>Total number of probes per candidate, when known.</summary>
     public int ProbeCount { get; init; }
 
+    /// <summary>The natural-language probe query being sent to the model (on <see cref="SemanticQualificationStage.Probing"/>
+    /// and <see cref="SemanticQualificationStage.ProbeCompleted"/>). Null for a candidate that failed to
+    /// load before any probe ran.</summary>
+    public string? ProbeQuery { get; init; }
+
+    /// <summary>An incremental chunk of the model's streamed output (on <see cref="SemanticQualificationStage.ProbeToken"/>).</summary>
+    public string? TokenDelta { get; init; }
+
+    /// <summary>On <see cref="SemanticQualificationStage.ProbeCompleted"/>, whether the probe passed.</summary>
+    public bool ProbePassed { get; init; }
+
+    /// <summary>On <see cref="SemanticQualificationStage.ProbeCompleted"/>, true when the probe PASSED but
+    /// answered slower than its hard per-query limit (within the grace band) — shown as a "slow" warning
+    /// rather than a failure.</summary>
+    public bool ProbeSlowWarning { get; init; }
+
+    /// <summary>On <see cref="SemanticQualificationStage.ProbeCompleted"/>, why the probe failed (if it did).</summary>
+    public SemanticProbeFailureReason FailureReason { get; init; }
+
+    /// <summary>On <see cref="SemanticQualificationStage.ProbeCompleted"/>, the measured probe latency in ms.</summary>
+    public int LatencyMs { get; init; }
+
     /// <summary>Human-readable one-line status suitable for direct display.</summary>
     public string Message => Stage switch
     {
@@ -54,6 +105,11 @@ public sealed class SemanticQualificationProgress
             ProbeCount > 0
                 ? $"Testing {CandidateAlias} — query {ProbeIndex}/{ProbeCount}…"
                 : $"Testing {CandidateAlias}…",
+        SemanticQualificationStage.ProbeToken => $"Testing {CandidateAlias}…",
+        SemanticQualificationStage.ProbeCompleted =>
+            ProbePassed
+                ? $"{CandidateAlias} answered query {ProbeIndex}/{ProbeCount} correctly."
+                : $"{CandidateAlias} failed query {ProbeIndex}/{ProbeCount}.",
         SemanticQualificationStage.Done => "Model check complete.",
         _ => "Working…",
     };
@@ -86,6 +142,54 @@ public sealed class SemanticModelQualificationRunner
     /// before we give up waiting and treat it as a wedged, over-limit query.</summary>
     private const int QueryTimeoutBackstopGraceMs = 500;
 
+    /// <summary>How many times a WEDGED timed probe is retried before the candidate is abandoned. A wedge
+    /// is a native inference that ignored the cancellation token and blew the deadline — an INTERMITTENT
+    /// stall (transient GPU/VRAM pressure), so the exact same query usually answers in a few seconds on the
+    /// next attempt. Retrying once keeps a single transient wedge from disqualifying an otherwise-correct
+    /// model (e.g. phi-4, which answers every probe correctly in ~5s but occasionally wedges one to 30-48s).
+    /// The retry only runs AFTER the wedged native op has drained (see <see cref="DrainWedgedInferenceAsync"/>)
+    /// so it never runs two concurrent inferences on one onnxruntime model. A probe that HONORS the deadline
+    /// (honestly too slow, not wedged) is NOT retried.</summary>
+    private const int WedgeRetryCount = 1;
+
+    /// <summary>Upper bound (ms) on how long the sweep waits for a wedged native inference to finally drain
+    /// before issuing a retry. Chosen above the translator's ~45s inference watchdog so an ordinary wedge
+    /// (which returns when that watchdog fires) drains and the retry can proceed; a wedge that outlives even
+    /// this is treated as hard-hung and the candidate is abandoned (leak + observe) as before.</summary>
+    private const int WedgeDrainBudgetMs = 50_000;
+
+    /// <summary>Classification of one timed inference attempt (see <see cref="TimedAttempt"/>).</summary>
+    private enum TimedAttemptStatus
+    {
+        /// <summary>The model returned a result within the deadline (may still be a wrong/unparseable plan).</summary>
+        Answered,
+
+        /// <summary>The model HONORED the deadline's cancellation and stopped — an honestly too-slow answer,
+        /// not a transient wedge, so it is not retried.</summary>
+        HonoredDeadline,
+
+        /// <summary>The inference threw a non-cancellation exception.</summary>
+        Faulted,
+
+        /// <summary>The inference blew the deadline AND ignored cancellation (a wedged native op still
+        /// running). Carries the live task + CTS so the caller can drain it before a retry, or leak+observe
+        /// it on abandon.</summary>
+        Wedged,
+    }
+
+    /// <summary>The outcome of one timed inference attempt. A <see cref="TimedAttemptStatus.Wedged"/> attempt
+    /// carries the still-running native task and its linked CTS (undisposed) so the caller can drain it
+    /// before a retry or leak+observe it on abandon; every other status has already disposed its CTS.</summary>
+    private readonly struct TimedAttempt
+    {
+        public TimedAttemptStatus Status { get; init; }
+        public SemanticTranslationResult? Result { get; init; }
+        public int LatencyMs { get; init; }
+        public Task<SemanticTranslationResult>? WedgedTask { get; init; }
+        public CancellationTokenSource? WedgedCts { get; init; }
+    }
+
+
     /// <summary>Default cap on how many candidates the first-run sweep probes. The ladder is ordered
     /// best-first (the hardware-recommended model, then the known-good preferred families by rank), so
     /// the models most likely to qualify sit at the top. A machine's Foundry catalog can list dozens of
@@ -103,11 +207,18 @@ public sealed class SemanticModelQualificationRunner
     /// measure warm (steady-state) latency \u2014 which is what the user actually experiences.</summary>
     public const string WarmupQuery = "list files modified in the last day";
 
+    /// <summary>Default time (ms) a FAILED probe (too slow / inaccurate / crashed) is held visible before
+    /// the sweep advances, so the qualification dialog can show the user WHY a step failed before moving
+    /// on to the next model. The engine default is 0 (no pacing — unit tests run at full speed); the
+    /// interactive caller (the first-run dialog) opts into <see cref="DefaultFailedProbeHoldMs"/>.</summary>
+    public const int DefaultFailedProbeHoldMs = 2000;
+
     private readonly ISemanticQueryTranslator _translator;
     private readonly string? _defaultDirectory;
     private readonly Func<DateTimeOffset> _now;
     private readonly Func<string, bool>? _directoryExists;
     private readonly int _maxCandidates;
+    private readonly int _failedProbeHoldMs;
 
     /// <param name="translator">The live translator to qualify models through.</param>
     /// <param name="defaultDirectory">Directory used to resolve probe plans that name no location.</param>
@@ -115,18 +226,22 @@ public sealed class SemanticModelQualificationRunner
     /// <param name="directoryExists">Optional probe used to reject a hallucinated directory in a plan.</param>
     /// <param name="maxCandidates">Caps how many candidates are tried (0 = no cap). The sweep stops early
     /// once a candidate qualifies regardless of this cap.</param>
+    /// <param name="failedProbeHoldMs">How long (ms) to hold a failed probe visible before advancing, so a
+    /// live UI can show the failure. 0 (default) = no pause, for fast unit tests.</param>
     public SemanticModelQualificationRunner(
         ISemanticQueryTranslator translator,
         string? defaultDirectory = null,
         Func<DateTimeOffset>? nowProvider = null,
         Func<string, bool>? directoryExists = null,
-        int maxCandidates = 0)
+        int maxCandidates = 0,
+        int failedProbeHoldMs = 0)
     {
         _translator = translator ?? throw new ArgumentNullException(nameof(translator));
         _defaultDirectory = defaultDirectory;
         _now = nowProvider ?? (() => DateTimeOffset.Now);
         _directoryExists = directoryExists;
         _maxCandidates = maxCandidates < 0 ? 0 : maxCandidates;
+        _failedProbeHoldMs = failedProbeHoldMs < 0 ? 0 : failedProbeHoldMs;
     }
 
     /// <summary>
@@ -167,9 +282,76 @@ public sealed class SemanticModelQualificationRunner
         // Prepare each candidate at most once (download/load is not counted toward probe latency).
         string? preparedAlias = null;
 
+        // Classifies why a probe did not pass, for the transcript's ✗ chip.
+        static SemanticProbeFailureReason ClassifyFailure(ProbeOutcome outcome, bool passed, int queryLimitMs)
+        {
+            if (passed) return SemanticProbeFailureReason.None;
+            if (outcome.Crashed) return SemanticProbeFailureReason.Crashed;
+            if (!outcome.Completed)
+                return queryLimitMs > 0 && outcome.LatencyMs > queryLimitMs
+                    ? SemanticProbeFailureReason.TooSlow
+                    : SemanticProbeFailureReason.NoAnswer;
+            return SemanticProbeFailureReason.Inaccurate; // parseable plan, but it didn't match the probe
+        }
+
+        // Reports a probe's pass/fail verdict, then — when it FAILED — holds it visible for the configured
+        // pause so a live UI can show the user why before the sweep advances. Returns the same outcome so
+        // the qualification driver's abandon logic is unchanged.
+        async Task<ProbeOutcome> CompleteProbeAsync(
+            ProbeOutcome outcome, SemanticProbe probe, string alias, int candidateIndex, int queryLimitMs, CancellationToken token)
+        {
+            bool passed = outcome.Completed && SemanticProbeScorer.Passes(probe, outcome.Plan);
+            // A correct-but-slow probe (answered over the hard limit but within the tolerance band, so it
+            // wasn't cancelled) still PASSES, flagged as a warning.
+            bool slowWarning = passed && queryLimitMs > 0 && outcome.LatencyMs > queryLimitMs;
+            SemanticProbeFailureReason reason = ClassifyFailure(outcome, passed, queryLimitMs);
+            Yagu.Services.LogService.Instance.Info(
+                "Semantic.Probe",
+                $"[{alias}] probe {IndexOf(probes, probe) + 1}/{probeCount} '{probe.Query}' -> " +
+                $"{(passed ? (slowWarning ? "PASS(slow)" : "PASS") : "FAIL:" + reason)} ({outcome.LatencyMs} ms, limit {queryLimitMs} ms).");
+            progress?.Report(new SemanticQualificationProgress
+            {
+                Stage = SemanticQualificationStage.ProbeCompleted,
+                CandidateAlias = alias,
+                CandidateIndex = candidateIndex,
+                CandidateCount = candidateCount,
+                ProbeIndex = IndexOf(probes, probe) + 1,
+                ProbeCount = probeCount,
+                ProbeQuery = probe.Query,
+                ProbePassed = passed,
+                ProbeSlowWarning = slowWarning,
+                FailureReason = reason,
+                LatencyMs = outcome.LatencyMs,
+            });
+            if (!passed && _failedProbeHoldMs > 0)
+                await Task.Delay(_failedProbeHoldMs, token).ConfigureAwait(false);
+            return outcome;
+        }
+
+        // A candidate that never loaded is shown as a failed step (no query) and held the same way.
+        async Task<ProbeOutcome> CompleteLoadFailureAsync(string alias, int candidateIndex, CancellationToken token)
+        {
+            Yagu.Services.LogService.Instance.Info("Semantic.Probe", $"[{alias}] failed to load — skipping candidate.");
+            progress?.Report(new SemanticQualificationProgress
+            {
+                Stage = SemanticQualificationStage.ProbeCompleted,
+                CandidateAlias = alias,
+                CandidateIndex = candidateIndex,
+                CandidateCount = candidateCount,
+                ProbeCount = probeCount,
+                ProbePassed = false,
+                FailureReason = SemanticProbeFailureReason.Crashed,
+                LatencyMs = 0,
+            });
+            if (_failedProbeHoldMs > 0)
+                await Task.Delay(_failedProbeHoldMs, token).ConfigureAwait(false);
+            return ProbeOutcome.Crash();
+        }
+
         async Task<ProbeOutcome> ProbeRunner(string alias, SemanticProbe probe, CancellationToken token)
         {
             int candidateIndex = IndexOf(candidates, alias) + 1;
+            int probeNumber = IndexOf(probes, probe) + 1;
 
             if (!string.Equals(preparedAlias, alias, StringComparison.OrdinalIgnoreCase))
             {
@@ -220,7 +402,7 @@ public sealed class SemanticModelQualificationRunner
                                     loadCts.Cancel();
                                 loadLeaked = true;
                                 ObserveAndDisposeInBackground(loadTask, loadCts);
-                                return ProbeOutcome.Crash();
+                                return await CompleteLoadFailureAsync(alias, candidateIndex, token).ConfigureAwait(false);
                             }
                         }
 
@@ -241,12 +423,12 @@ public sealed class SemanticModelQualificationRunner
                 {
                     // Loading exceeded the user's model-load time limit — abandon this candidate as if it
                     // had crashed so the driver moves on to the next one.
-                    return ProbeOutcome.Crash();
+                    return await CompleteLoadFailureAsync(alias, candidateIndex, token).ConfigureAwait(false);
                 }
                 catch (Exception)
                 {
                     // Could not load this candidate at all — treat it as a crash so the driver abandons it.
-                    return ProbeOutcome.Crash();
+                    return await CompleteLoadFailureAsync(alias, candidateIndex, token).ConfigureAwait(false);
                 }
 
                 // Absorb the model's one-time cold-start cost with a single untimed warmup inference so the
@@ -262,8 +444,9 @@ public sealed class SemanticModelQualificationRunner
                 CandidateAlias = alias,
                 CandidateIndex = candidateIndex,
                 CandidateCount = candidateCount,
-                ProbeIndex = IndexOf(probes, probe) + 1,
+                ProbeIndex = probeNumber,
                 ProbeCount = probeCount,
+                ProbeQuery = probe.Query,
             });
 
             var context = new SemanticTranslationContext
@@ -283,81 +466,175 @@ public sealed class SemanticModelQualificationRunner
             // Task.Delay backstop so the sweep advances even when the inference ignores cancellation.
             // Either way an over-limit query is reported as too slow, abandoning the candidate.
             int queryLimitMs = thresholds.QueryMaxMs(probe.Complexity);
+            // The inference is allowed to run to the limit PLUS the grace band: a correct answer that lands
+            // in [limit, limit+tolerance] still passes (flagged "slow"), so the deadline that cancels /
+            // backstops the query is the tolerant one. CompleteProbeAsync still gets the HARD limit so it
+            // can tell a fast pass from a slow-but-accepted one.
+            int deadlineMs = queryLimitMs > 0 ? queryLimitMs + thresholds.LatencyToleranceMs : 0;
 
-            var stopwatch = Stopwatch.StartNew();
-            var queryCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-            bool leaked = false;
-            try
+            // One timed inference attempt: races the RELIABLE non-streaming translation against the user's
+            // deadline + grace and classifies the outcome. The SDK's token-streaming API intermittently
+            // STALLS (a back-to-back / post-switch CompleteChatStreamingAsync can never yield a token), which
+            // would falsely disqualify a model that answers the same query in a few seconds non-streaming; so
+            // the sweep uses TranslateAsync and the transcript's "streamed" answer is a UI-only reveal of the
+            // completed response. A WEDGE (backstop tripped because the native inference ignored the
+            // cancellation token) hands the still-running task + CTS back for draining/retry; every other
+            // status owns and disposes its CTS here.
+            async Task<TimedAttempt> RunTimedAttemptAsync()
             {
-                if (queryLimitMs > 0)
-                    queryCts.CancelAfter(queryLimitMs);
-
-                Task<SemanticTranslationResult> translateTask =
-                    _translator.TranslateAsync(probe.Query, context, null, queryCts.Token);
-
-                if (queryLimitMs > 0 && !translateTask.IsCompleted)
-                {
-                    Task backstop = Task.Delay(queryLimitMs + QueryTimeoutBackstopGraceMs, token);
-                    if (await Task.WhenAny(translateTask, backstop).ConfigureAwait(false) == backstop)
-                    {
-                        // The sweep itself may have been cancelled while we waited.
-                        token.ThrowIfCancellationRequested();
-
-                        // The inference blew past the user's limit (and, if wedged, ignored the
-                        // cancellation token). Ask it to stop, stop waiting on it, and report the query as
-                        // too slow so the driver abandons this candidate. A leaked wedged task is observed
-                        // and its linked CTS disposed once it finally returns.
-                        stopwatch.Stop();
-                        if (!queryCts.IsCancellationRequested)
-                            queryCts.Cancel();
-                        leaked = true;
-                        ObserveAndDisposeInBackground(translateTask, queryCts);
-                        return ProbeOutcome.Miss(Math.Max((int)stopwatch.ElapsedMilliseconds, queryLimitMs + 1));
-                    }
-                }
-
-                SemanticTranslationResult result;
+                var sw = Stopwatch.StartNew();
+                var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+                bool wedgedOut = false;
                 try
                 {
-                    result = await translateTask.ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (token.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (OperationCanceledException)
-                {
-                    // Our per-query watchdog cancelled the inference (the model honored the deadline) —
-                    // report it as too slow so the candidate is abandoned.
-                    stopwatch.Stop();
-                    return ProbeOutcome.Miss(Math.Max((int)stopwatch.ElapsedMilliseconds, queryLimitMs + 1));
-                }
-                catch (Exception)
-                {
-                    stopwatch.Stop();
-                    return ProbeOutcome.Crash((int)stopwatch.ElapsedMilliseconds);
-                }
-                stopwatch.Stop();
+                    if (deadlineMs > 0)
+                        attemptCts.CancelAfter(deadlineMs);
 
-                int latencyMs = (int)stopwatch.ElapsedMilliseconds;
-                if (!result.Success || result.Plan is null)
-                {
-                    return ProbeOutcome.Miss(latencyMs);
-                }
+                    Task<SemanticTranslationResult> translateTask =
+                        _translator.TranslateAsync(probe.Query, context, null, attemptCts.Token);
 
-                ResolvedSearchPlan resolved = SemanticPlanApplier.Resolve(result.Plan, context);
-                return ProbeOutcome.Answered(resolved, latencyMs);
+                    if (deadlineMs > 0 && !translateTask.IsCompleted)
+                    {
+                        Task backstop = Task.Delay(deadlineMs + QueryTimeoutBackstopGraceMs, token);
+                        if (await Task.WhenAny(translateTask, backstop).ConfigureAwait(false) == backstop)
+                        {
+                            // The sweep itself may have been cancelled while we waited.
+                            token.ThrowIfCancellationRequested();
+
+                            // Over the limit + grace AND ignored cancellation: a wedged native op. Ask it to
+                            // stop and hand the live task back so the caller can drain it before a retry.
+                            sw.Stop();
+                            if (!attemptCts.IsCancellationRequested)
+                                attemptCts.Cancel();
+                            wedgedOut = true;
+                            return new TimedAttempt
+                            {
+                                Status = TimedAttemptStatus.Wedged,
+                                LatencyMs = Math.Max((int)sw.ElapsedMilliseconds, deadlineMs + 1),
+                                WedgedTask = translateTask,
+                                WedgedCts = attemptCts,
+                            };
+                        }
+                    }
+
+                    try
+                    {
+                        SemanticTranslationResult result = await translateTask.ConfigureAwait(false);
+                        sw.Stop();
+                        return new TimedAttempt
+                        {
+                            Status = TimedAttemptStatus.Answered,
+                            Result = result,
+                            LatencyMs = (int)sw.ElapsedMilliseconds,
+                        };
+                    }
+                    catch (OperationCanceledException) when (token.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Our per-query watchdog cancelled the inference (the model HONORED the deadline) —
+                        // an honestly too-slow answer, not a transient wedge, so it is not retried.
+                        sw.Stop();
+                        return new TimedAttempt
+                        {
+                            Status = TimedAttemptStatus.HonoredDeadline,
+                            LatencyMs = Math.Max((int)sw.ElapsedMilliseconds, deadlineMs + 1),
+                        };
+                    }
+                    catch (Exception)
+                    {
+                        sw.Stop();
+                        return new TimedAttempt { Status = TimedAttemptStatus.Faulted, LatencyMs = (int)sw.ElapsedMilliseconds };
+                    }
+                }
+                finally
+                {
+                    if (!wedgedOut)
+                        attemptCts.Dispose();
+                }
             }
-            finally
+
+            TimedAttempt attempt = await RunTimedAttemptAsync().ConfigureAwait(false);
+
+            // A WEDGE is INTERMITTENT — the same query, run again, usually completes in a few seconds. Rather
+            // than disqualify an otherwise-correct model on ONE transient stall, retry the probe once.
+            // CRITICAL: the wedged native op is still running (it ignored cancellation), so we must let it
+            // DRAIN before issuing the retry — starting a second inference on the same onnxruntime model while
+            // the first is still executing runs two concurrent native ops and can crash. If the wedged op does
+            // not drain within the bounded budget it is treated as hard-hung: leak+observe it and abandon the
+            // candidate as too slow, exactly as before.
+            for (int retriesLeft = WedgeRetryCount; attempt.Status == TimedAttemptStatus.Wedged && retriesLeft > 0; retriesLeft--)
             {
-                if (!leaked)
-                    queryCts.Dispose();
+                if (!await DrainWedgedInferenceAsync(attempt.WedgedTask!, attempt.WedgedCts!, token).ConfigureAwait(false))
+                    break; // hard-hung — keep the wedged attempt and fall through to abandon it below
+
+                attempt = await RunTimedAttemptAsync().ConfigureAwait(false);
+            }
+
+            switch (attempt.Status)
+            {
+                case TimedAttemptStatus.Wedged:
+                    // Still wedged after the retry budget (or hard-hung): leak the stuck native op (observed +
+                    // its CTS disposed when it finally returns) and report the query as too slow.
+                    ObserveAndDisposeInBackground(attempt.WedgedTask!, attempt.WedgedCts!);
+                    return await CompleteProbeAsync(
+                        ProbeOutcome.Miss(attempt.LatencyMs), probe, alias, candidateIndex, queryLimitMs, token).ConfigureAwait(false);
+
+                case TimedAttemptStatus.HonoredDeadline:
+                    return await CompleteProbeAsync(
+                        ProbeOutcome.Miss(attempt.LatencyMs), probe, alias, candidateIndex, queryLimitMs, token).ConfigureAwait(false);
+
+                case TimedAttemptStatus.Faulted:
+                    return await CompleteProbeAsync(
+                        ProbeOutcome.Crash(attempt.LatencyMs), probe, alias, candidateIndex, queryLimitMs, token).ConfigureAwait(false);
+
+                default: // Answered
+                {
+                    SemanticTranslationResult result = attempt.Result!;
+
+                    // Reveal the model's finished answer in the transcript (the dialog animates it as a
+                    // typewriter reveal, so it still looks streamed without the SDK streaming stall risk).
+                    if (progress is not null && !string.IsNullOrEmpty(result.RawModelOutput))
+                        progress.Report(new SemanticQualificationProgress
+                        {
+                            Stage = SemanticQualificationStage.ProbeToken,
+                            CandidateAlias = alias,
+                            CandidateIndex = candidateIndex,
+                            CandidateCount = candidateCount,
+                            ProbeIndex = probeNumber,
+                            ProbeCount = probeCount,
+                            TokenDelta = result.RawModelOutput,
+                        });
+
+                    if (!result.Success || result.Plan is null)
+                        return await CompleteProbeAsync(
+                            ProbeOutcome.Miss(attempt.LatencyMs), probe, alias, candidateIndex, queryLimitMs, token).ConfigureAwait(false);
+
+                    ResolvedSearchPlan resolved = SemanticPlanApplier.Resolve(result.Plan, context);
+                    return await CompleteProbeAsync(
+                        ProbeOutcome.Answered(resolved, attempt.LatencyMs), probe, alias, candidateIndex, queryLimitMs, token).ConfigureAwait(false);
+                }
             }
         }
 
         ModelQualificationResult qualification = await ModelQualification
             .QualifyAsync(candidates, probes, thresholds, ProbeRunner, cancellationToken)
             .ConfigureAwait(false);
+
+        foreach (var r in qualification.Reports)
+        {
+            Yagu.Services.LogService.Instance.Info(
+                "Semantic.Probe",
+                $"Candidate '{r.ModelAlias}': verdict={(r.Verdict.Passed ? "QUALIFIED" : "REJECTED")} ({r.Verdict.Reason}), " +
+                $"accuracy={r.EffectiveAccuracy * 100:0}% ({r.Probes.Count(p => p.Passed)}/{r.ScoredProbeCount} answered, {r.Probes.Count} of {probes.Count} run), " +
+                $"median={r.MedianLatencyMs} ms, max={r.MaxLatencyMs} ms, crashed={r.Crashed}.");
+        }
+        Yagu.Services.LogService.Instance.Info(
+            "Semantic.Probe",
+            $"Sweep complete: qualified='{qualification.QualifiedModelAlias ?? "<none>"}', " +
+            $"bestEffort='{qualification.BestEffortModelAlias ?? "<none>"}'.");
 
         progress?.Report(new SemanticQualificationProgress { Stage = SemanticQualificationStage.Done });
         return qualification;
@@ -376,6 +653,30 @@ public sealed class SemanticModelQualificationRunner
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
+
+    /// <summary>
+    /// Awaits a wedged inference until it finally returns (drains), bounded by <see cref="WedgeDrainBudgetMs"/>,
+    /// so the native model is idle again BEFORE a retry issues a fresh inference — starting a second inference
+    /// on the same onnxruntime model while the first is still executing runs two concurrent native ops and can
+    /// crash. Returns true once the wedged op drained (its CTS disposed here); false if it is still hung after
+    /// the budget (hard-wedged), in which case the caller leaks + observes it. Only overall-sweep cancellation
+    /// propagates.
+    /// </summary>
+    private static async Task<bool> DrainWedgedInferenceAsync(
+        Task<SemanticTranslationResult> wedgedTask, CancellationTokenSource wedgedCts, CancellationToken token)
+    {
+        Task drainBackstop = Task.Delay(WedgeDrainBudgetMs, token);
+        if (await Task.WhenAny(wedgedTask, drainBackstop).ConfigureAwait(false) == drainBackstop)
+        {
+            // The sweep itself may have been cancelled while we waited.
+            token.ThrowIfCancellationRequested();
+            return false; // still hung after the drain budget — hard-wedged
+        }
+
+        _ = wedgedTask.Exception; // the task has completed; observe any fault so it does not resurface
+        wedgedCts.Dispose();
+        return true;
+    }
 
     /// <summary>
     /// Runs a single UNTIMED warmup translation (<see cref="WarmupQuery"/>) against a freshly-prepared
@@ -474,7 +775,16 @@ public sealed class SemanticModelQualificationRunner
 
         void Consider(SemanticModelOption option)
         {
-            if (string.IsNullOrWhiteSpace(option.Alias) || !seen.Add(option.Alias))
+            if (string.IsNullOrWhiteSpace(option.Alias))
+                return;
+            // Reasoning / chain-of-thought models can NEVER be auto-selected (their <think> traces break
+            // the strict-JSON contract — see FoundryModelSelector.IsAutoSelectable), so probing them is pure
+            // wasted time: every probe blows the per-query limit and then WEDGES (the native inference keeps
+            // running long past the deadline), dragging the sweep out for minutes, yet the model could never
+            // be the one chosen. Keep them off the candidate ladder entirely.
+            if (IsReasoningAlias(option.Alias))
+                return;
+            if (!seen.Add(option.Alias))
                 return;
             ordered.Add(option.Alias);
             if (!option.IsPreferredFamily)
@@ -522,6 +832,14 @@ public sealed class SemanticModelQualificationRunner
 
         return ordered;
     }
+
+    /// <summary>Whether <paramref name="alias"/> names a reasoning / chain-of-thought model (e.g.
+    /// <c>phi-4-mini-reasoning</c>). Mirrors <c>FoundryModelSelector.IsReasoningAlias</c> as a
+    /// self-contained string check so this runner — which is compiled into the test assembly — takes no
+    /// compile dependency on the Foundry-coupled selector. Such models are excluded from the qualification
+    /// ladder because they can never be auto-selected and only slow the sweep down.</summary>
+    internal static bool IsReasoningAlias(string? alias) =>
+        !string.IsNullOrWhiteSpace(alias) && alias.Contains("reasoning", StringComparison.OrdinalIgnoreCase);
 
     private static int IndexOf(IReadOnlyList<string> list, string value)
     {

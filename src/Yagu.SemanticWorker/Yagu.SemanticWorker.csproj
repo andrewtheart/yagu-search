@@ -1,0 +1,91 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Yagu.SemanticWorker is the OUT-OF-PROCESS host for the Foundry Local semantic-search translator.
+
+    Why it exists:
+      The Foundry Local SDK (Microsoft.AI.Foundry.Local.*) can FAIL-FAST the whole host process on
+      internal faults that are outside our control and uncatchable in-process — e.g. an unhandled
+      ObjectDisposedException thrown on a ThreadPool thread from its EP-registration progress callback
+      (github.com/microsoft/Foundry-Local #867), or the onnxruntime-genai use-after-free access
+      violation (0xc0000005) when a model is unloaded while a native op is still in flight. Running the
+      SDK in THIS separate process means such a crash kills the worker, not Yagu; the in-app proxy
+      (WorkerSemanticQueryTranslator) detects the exit and surfaces a clean failure / restarts the
+      worker. Yagu.exe stays alive.
+
+    How it's built:
+      This worker is NOT referenced by Yagu.csproj (a <ProjectReference> would drag the non-AOT Foundry
+      native stack into Yagu's Native-AOT publish graph). Instead Yagu.csproj builds it as an isolated
+      child `dotnet publish` process and copies the output into <app>\semantic-worker\ — the same
+      pattern used for Yagu.OcrWorker. It reuses the translator by SOURCE-LINKING the exact compile
+      closure of FoundryLocalSemanticQueryTranslator (13 files, none WinUI-coupled) and embedding the
+      same prompt resources, so there is a single source of truth for the translator.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Yagu.SemanticWorker</RootNamespace>
+    <AssemblyName>Yagu.SemanticWorker</AssemblyName>
+    <!-- Foundry Local's native runtime (onnxruntime-genai + execution providers) is win-x64; the worker
+         is always built/published for win-x64 (it runs under emulation on arm64, like the OCR worker). -->
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <!-- This worker intentionally does NOT use Native AOT (that's the whole point of isolating it). -->
+    <PublishAot>false</PublishAot>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- The translator condenses/strips prompt text and reads registry/memory; invariant globalization
+         keeps its number/date formatting deterministic and drops ICU. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Source-linked files carry their own doc comments; don't fail on CS1591 in this host. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <!-- WinML flavor: allow the unpackaged Windows App SDK bootstrapper to auto-initialize. -->
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <WindowsPackageType>None</WindowsPackageType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The Foundry Local SDK + its WinML runtime (same versions the main app uses). Betalgo.Ranul.OpenAI
+         comes transitively. -->
+    <PackageReference Include="Microsoft.AI.Foundry.Local.WinML" Version="1.2.3" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.ML" Version="2.1.1" />
+  </ItemGroup>
+
+  <!--
+    SOURCE-LINKED translator compile closure (single source of truth — these files also compile into
+    Yagu.dll). This is the exact transitive closure of FoundryLocalSemanticQueryTranslator; none of these
+    files reference WinUI / Microsoft.UI.* so they compile cleanly in this plain console host.
+  -->
+  <ItemGroup>
+    <Compile Include="..\Yagu\Services\LogService.cs" Link="Linked\LogService.cs" />
+    <Compile Include="..\Yagu\Services\Ai\ISemanticQueryTranslator.cs" Link="Linked\ISemanticQueryTranslator.cs" />
+    <Compile Include="..\Yagu\Models\SemanticSearchPlan.cs" Link="Linked\SemanticSearchPlan.cs" />
+    <Compile Include="..\Yagu\Services\Ai\FoundryLoggerAdapter.cs" Link="Linked\FoundryLoggerAdapter.cs" />
+    <Compile Include="..\Yagu\Services\Ai\ModelContextBudget.cs" Link="Linked\ModelContextBudget.cs" />
+    <Compile Include="..\Yagu\Services\Ai\ModelMemoryBudget.cs" Link="Linked\ModelMemoryBudget.cs" />
+    <Compile Include="..\Yagu\Services\Ai\GpuInferencePolicy.cs" Link="Linked\GpuInferencePolicy.cs" />
+    <Compile Include="..\Yagu\Services\Ai\HighAccuracyModelPolicy.cs" Link="Linked\HighAccuracyModelPolicy.cs" />
+    <Compile Include="..\Yagu\Services\Ai\GenAiConfigReader.cs" Link="Linked\GenAiConfigReader.cs" />
+    <Compile Include="..\Yagu\Services\Ai\SemanticPromptText.cs" Link="Linked\SemanticPromptText.cs" />
+    <Compile Include="..\Yagu\Services\Ai\SemanticPlanJsonExtractor.cs" Link="Linked\SemanticPlanJsonExtractor.cs" />
+    <Compile Include="..\Yagu\Services\Ai\FoundryModelSelector.cs" Link="Linked\FoundryModelSelector.cs" />
+    <Compile Include="..\Yagu\Services\Ai\FoundryLocalSemanticQueryTranslator.cs" Link="Linked\FoundryLocalSemanticQueryTranslator.cs" />
+    <!-- Shared wire protocol (also compiled into Yagu.dll for the proxy). -->
+    <Compile Include="..\Yagu\Services\Ai\Worker\SemanticWorkerProtocol.cs" Link="Linked\SemanticWorkerProtocol.cs" />
+  </ItemGroup>
+
+  <!--
+    The translator loads these prompts via Assembly.GetManifestResourceStream with HARD-CODED logical
+    names, so the worker must embed them under the SAME logical names it uses in the main app.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\Yagu\Services\Ai\Prompts\SemanticSearchSystemPrompt.prompt.md">
+      <LogicalName>Yagu.Services.Ai.Prompts.SemanticSearchSystemPrompt.prompt.md</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\Yagu\Services\Ai\Prompts\SemanticSearchSystemPromptSmall.prompt.md">
+      <LogicalName>Yagu.Services.Ai.Prompts.SemanticSearchSystemPromptSmall.prompt.md</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+</Project>

@@ -58,8 +58,8 @@ internal sealed class SemanticModelQualificationDialog : Window
         ModelQualificationThresholds thresholds,
         IProgress<SemanticQualificationProgress>? progress, CancellationToken cancellationToken);
 
-    private const int DialogWidth = 600;
-    private const int DialogHeight = 580;
+    private const int DialogWidth = 760;
+    private const int DialogHeight = 720;
 
     private static readonly HashSet<SemanticModelQualificationDialog> OpenWindows = new();
 
@@ -215,8 +215,19 @@ internal sealed class SemanticModelQualificationDialog : Window
 
     // ── States ────────────────────────────────────────────────────────────────────────────────
 
-    private ProgressBar? _progressBar;
-    private TextBlock? _progressText;
+    // Live chat transcript shown while the sweep runs (see ShowRunningState / OnProgress).
+    private ScrollViewer? _chatScroll;
+    private StackPanel? _chatLog;
+    private TextBlock? _streamingAssistantText;   // assistant bubble currently streaming a response
+    private StackPanel? _streamingAssistantStack; // its container, so a status chip can be appended
+    private TextBlock? _modelProgressText;         // persistent "phi-4 — 3 / 17 tests · 18%" line
+    private ProgressBar? _modelProgressBar;        // determinate per-model progress (0-100)
+
+    // Typewriter reveal of the (non-streaming) answer: buffered text drained a few chars per frame.
+    private const int RevealCharsPerTick = 12;
+    private readonly System.Text.StringBuilder _revealBuffer = new();
+    private DispatcherTimer? _revealTimer;
+    private SemanticQualificationProgress? _pendingChipVerdict;
 
     /// <summary>First screen: the user picks how long to wait for a model to load and how slow a simple /
     /// complex query may be before a candidate is abandoned, then clicks "Run" to start the sweep.</summary>
@@ -306,23 +317,362 @@ internal sealed class SemanticModelQualificationDialog : Window
     private void ShowRunningState(string message)
     {
         _titleText.Text = "Checking AI models";
-        _subtitleText.Text = "Yagu is testing the AI models that fit this PC with a few sample searches to pick the " +
-            "fastest one that answers accurately. This runs entirely on your PC and may take a few minutes " +
-            "(models are downloaded once).";
+        _subtitleText.Text = "Yagu is asking each AI model that fits this PC a few sample searches and watching how " +
+            "it answers, to pick the fastest one that's accurate. Everything runs on your PC.";
 
-        var panel = new StackPanel { Spacing = 14, VerticalAlignment = VerticalAlignment.Center };
-        _progressBar = new ProgressBar { IsIndeterminate = true, Minimum = 0, Maximum = 100 };
-        _progressText = new TextBlock { Text = message, Opacity = 0.85, TextWrapping = TextWrapping.Wrap };
-        panel.Children.Add(_progressText);
-        panel.Children.Add(_progressBar);
-        _bodyHost.Child = panel;
+        _chatLog = new StackPanel { Spacing = 10 };
+        _chatScroll = new ScrollViewer
+        {
+            Content = _chatLog,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalAlignment = VerticalAlignment.Stretch,
+        };
+
+        // Persistent per-model progress (always visible, above the scrolling transcript).
+        _modelProgressText = new TextBlock { FontSize = 12, Opacity = 0.8, TextWrapping = TextWrapping.NoWrap };
+        _modelProgressBar = new ProgressBar { Minimum = 0, Maximum = 100, Value = 0, IsIndeterminate = false };
+        var progressPanel = new StackPanel { Spacing = 4, Margin = new Thickness(0, 0, 0, 8) };
+        progressPanel.Children.Add(_modelProgressText);
+        progressPanel.Children.Add(_modelProgressBar);
+
+        var bodyGrid = new Grid();
+        bodyGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        bodyGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        Grid.SetRow(progressPanel, 0);
+        bodyGrid.Children.Add(progressPanel);
+        Grid.SetRow(_chatScroll, 1);
+        bodyGrid.Children.Add(_chatScroll);
+        _bodyHost.Child = bodyGrid;
+
+        _streamingAssistantText = null;
+        _streamingAssistantStack = null;
+
+        if (!string.IsNullOrWhiteSpace(message))
+            AddSystemMessage(message);
 
         _footer.Children.Clear();
         AddFooterButton("Cancel", accent: false, Cancel);
     }
 
+    // ── Chat transcript ───────────────────────────────────────────────────────────────────────
+
+    /// <summary>Drives the live chat transcript from the sweep's progress stream: model headers and
+    /// status lines as system messages, each probe query as a right-aligned "user" bubble, and the
+    /// model's streamed answer as a left-aligned "assistant" bubble that grows token-by-token and is
+    /// stamped with a ✓/✗ verdict when the probe completes.</summary>
+    private void OnProgress(SemanticQualificationProgress p)
+    {
+        if (_chatLog is null) return;
+        switch (p.Stage)
+        {
+            case SemanticQualificationStage.EnumeratingCandidates:
+                AddSystemMessage("Finding AI models that fit this PC…");
+                break;
+            case SemanticQualificationStage.PreparingCandidate:
+                _streamingAssistantText = null;
+                _streamingAssistantStack = null;
+                AddModelHeader(p.CandidateAlias, p.CandidateIndex, p.CandidateCount);
+                UpdateModelProgress(p.CandidateAlias, 0, p.ProbeCount);
+                AddSystemMessage($"Loading {p.CandidateAlias}…");
+                break;
+            case SemanticQualificationStage.Probing:
+                AddUserBubble(p.ProbeQuery, p.ProbeIndex, p.ProbeCount);
+                StartAssistantBubble();
+                break;
+            case SemanticQualificationStage.ProbeToken:
+                AppendAssistantToken(p.TokenDelta);
+                break;
+            case SemanticQualificationStage.ProbeCompleted:
+                UpdateModelProgress(p.CandidateAlias, p.ProbeIndex, p.ProbeCount);
+                FinishAssistantBubble(p);
+                break;
+            case SemanticQualificationStage.Done:
+                break;
+        }
+    }
+
+    private void AddSystemMessage(string text)
+    {
+        if (_chatLog is null) return;
+        _chatLog.Children.Add(new TextBlock
+        {
+            Text = text,
+            FontSize = 12,
+            Opacity = 0.6,
+            FontStyle = Windows.UI.Text.FontStyle.Italic,
+            TextWrapping = TextWrapping.Wrap,
+            TextAlignment = TextAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, 2, 0, 2),
+        });
+        ScrollTranscriptToEnd();
+    }
+
+    private void AddModelHeader(string? alias, int index, int count)
+    {
+        if (_chatLog is null) return;
+        var row = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Margin = new Thickness(0, 8, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        row.Children.Add(new FontIcon { Glyph = "\uE99A", FontSize = 15, VerticalAlignment = VerticalAlignment.Center });
+        string suffix = count > 0 ? $"  ({index}/{count})" : string.Empty;
+        row.Children.Add(new TextBlock
+        {
+            Text = $"{alias}{suffix}",
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        _chatLog.Children.Add(row);
+        ScrollTranscriptToEnd();
+    }
+
+    private void UpdateModelProgress(string? alias, int completed, int total)
+    {
+        if (_modelProgressText is null || _modelProgressBar is null) return;
+        if (total > 0)
+        {
+            int pct = (int)Math.Round(completed * 100.0 / total);
+            _modelProgressText.Text = $"{alias} — {completed} / {total} tests · {pct}%";
+            _modelProgressBar.Value = pct;
+        }
+        else
+        {
+            _modelProgressText.Text = alias is null ? string.Empty : $"{alias}…";
+            _modelProgressBar.Value = 0;
+        }
+    }
+
+    private void AddUserBubble(string? text, int probeIndex, int probeCount)
+    {
+        if (_chatLog is null) return;
+        if (probeCount > 0)
+            _chatLog.Children.Add(new TextBlock
+            {
+                Text = $"Test {probeIndex} of {probeCount}",
+                FontSize = 10.5,
+                Opacity = 0.5,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Margin = new Thickness(0, 4, 2, 0),
+            });
+        _chatLog.Children.Add(new Border
+        {
+            Background = ResourceBrush("AccentFillColorDefaultBrush", ColorHelper.FromArgb(0xFF, 0x4C, 0x8B, 0xF5)),
+            CornerRadius = new CornerRadius(10, 10, 2, 10),
+            Padding = new Thickness(12, 8, 12, 8),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            MaxWidth = 520,
+            Margin = new Thickness(48, 0, 0, 0),
+            Child = new TextBlock
+            {
+                Text = text ?? string.Empty,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)),
+            },
+        });
+        ScrollTranscriptToEnd();
+    }
+
+    private void StartAssistantBubble()
+    {
+        if (_chatLog is null) return;
+        FlushReveal(); // safety: finalize any leftover reveal from a prior bubble before starting a new one
+        _streamingAssistantStack = new StackPanel { Spacing = 6 };
+        _streamingAssistantText = new TextBlock
+        {
+            Text = string.Empty,
+            TextWrapping = TextWrapping.Wrap,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 12.5,
+            Opacity = 0.92,
+        };
+        _streamingAssistantStack.Children.Add(_streamingAssistantText);
+        _chatLog.Children.Add(new Border
+        {
+            Background = ResourceBrush("LayerFillColorDefaultBrush", ColorHelper.FromArgb(0x14, 0xFF, 0xFF, 0xFF)),
+            BorderBrush = ResourceBrush("ControlElevationBorderBrush", ColorHelper.FromArgb(0x40, 0xFF, 0xFF, 0xFF)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(10, 10, 10, 2),
+            Padding = new Thickness(12, 8, 12, 8),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            MaxWidth = 470,
+            Margin = new Thickness(0, 0, 48, 0),
+            Child = _streamingAssistantStack,
+        });
+        ScrollTranscriptToEnd();
+    }
+
+    // The model's answer arrives as one chunk (the sweep uses reliable non-streaming inference), but we
+    // reveal it a few characters per frame so it still reads as a live "typed" response — a purely UI
+    // animation driven by a dispatcher timer, so it can never stall the way SDK token-streaming does.
+    private void AppendAssistantToken(string? delta)
+    {
+        if (_streamingAssistantText is null || string.IsNullOrEmpty(delta)) return;
+        _revealBuffer.Append(delta);
+        if (_revealTimer is null)
+        {
+            _revealTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+            _revealTimer.Tick += (_, _) => RevealTick();
+            _revealTimer.Start();
+        }
+    }
+
+    private void RevealTick()
+    {
+        if (_streamingAssistantText is null || _revealBuffer.Length == 0)
+        {
+            StopRevealTimer();
+            if (_revealBuffer.Length == 0 && _pendingChipVerdict is not null)
+                CompleteAssistantBubble();
+            return;
+        }
+        int n = Math.Min(RevealCharsPerTick, _revealBuffer.Length);
+        _streamingAssistantText.Text += _revealBuffer.ToString(0, n);
+        _revealBuffer.Remove(0, n);
+        ScrollTranscriptToEnd(updateLayout: false);
+        if (_revealBuffer.Length == 0)
+        {
+            StopRevealTimer();
+            if (_pendingChipVerdict is not null)
+                CompleteAssistantBubble();
+        }
+    }
+
+    private void FlushReveal()
+    {
+        StopRevealTimer();
+        if (_streamingAssistantText is not null && _revealBuffer.Length > 0)
+            _streamingAssistantText.Text += _revealBuffer.ToString();
+        _revealBuffer.Clear();
+    }
+
+    private void StopRevealTimer()
+    {
+        _revealTimer?.Stop();
+        _revealTimer = null;
+    }
+
+    private void FinishAssistantBubble(SemanticQualificationProgress p)
+    {
+        // A candidate that never loaded reports completion with no query and no assistant bubble.
+        if (_streamingAssistantStack is null)
+        {
+            if (p.ProbeQuery is null)
+                AddSystemFailure(p.CandidateAlias);
+            return;
+        }
+
+        // Defer the ✓/✗ verdict chip until the typewriter reveal of the answer finishes, so the verdict
+        // isn't stamped on a half-shown response. If nothing is left to reveal, finalize immediately.
+        _pendingChipVerdict = p;
+        if (_revealTimer is null || _revealBuffer.Length == 0)
+            CompleteAssistantBubble();
+    }
+
+    private void CompleteAssistantBubble()
+    {
+        if (_streamingAssistantStack is null || _pendingChipVerdict is null) return;
+        FlushReveal();
+        if (_streamingAssistantText is { Text.Length: 0 } empty)
+            empty.Text = "(no answer)";
+        _streamingAssistantStack.Children.Add(BuildStatusChip(_pendingChipVerdict));
+        _streamingAssistantText = null;
+        _streamingAssistantStack = null;
+        _pendingChipVerdict = null;
+        ScrollTranscriptToEnd();
+    }
+
+    private void AddSystemFailure(string? alias)
+    {
+        if (_chatLog is null) return;
+        var red = ColorHelper.FromArgb(0xFF, 0xE0, 0x5A, 0x4F);
+        _chatLog.Children.Add(new Border
+        {
+            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x22, red.R, red.G, red.B)),
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(10, 5, 10, 5),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, 2, 0, 2),
+            Child = new TextBlock
+            {
+                Text = $"\u2717 {alias} couldn't load — skipping.",
+                FontSize = 12,
+                Foreground = new SolidColorBrush(red),
+                TextWrapping = TextWrapping.Wrap,
+            },
+        });
+        ScrollTranscriptToEnd();
+    }
+
+    private static Border BuildStatusChip(SemanticQualificationProgress p)
+    {
+        Windows.UI.Color color;
+        string label;
+        if (p.ProbePassed)
+        {
+            if (p.ProbeSlowWarning)
+            {
+                color = ColorHelper.FromArgb(0xFF, 0xE0, 0xA5, 0x2E); // amber
+                label = $"\u26A0 passed (slow) · {FormatSeconds(p.LatencyMs)}";
+            }
+            else
+            {
+                color = ColorHelper.FromArgb(0xFF, 0x3F, 0xB9, 0x50); // green
+                label = $"\u2713 passed · {FormatSeconds(p.LatencyMs)}";
+            }
+        }
+        else
+        {
+            color = ColorHelper.FromArgb(0xFF, 0xE0, 0x5A, 0x4F); // red
+            label = "\u2717 " + FailureText(p);
+        }
+        return new Border
+        {
+            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x33, color.R, color.G, color.B)),
+            BorderBrush = new SolidColorBrush(color),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(8, 1, 8, 2),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Child = new TextBlock
+            {
+                Text = label,
+                FontSize = 11,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(color),
+            },
+        };
+    }
+
+    private static string FailureText(SemanticQualificationProgress p) => p.FailureReason switch
+    {
+        SemanticProbeFailureReason.TooSlow => $"too slow ({FormatSeconds(p.LatencyMs)})",
+        SemanticProbeFailureReason.Inaccurate => "wrong answer",
+        SemanticProbeFailureReason.NoAnswer => "no usable answer",
+        SemanticProbeFailureReason.Crashed => "couldn't run",
+        _ => "failed",
+    };
+
+    private static string FormatSeconds(int ms)
+    {
+        if (ms <= 0) return "0.0s";
+        return string.Create(CultureInfo.InvariantCulture, $"{ms / 1000d:0.0}s");
+    }
+
+    private void ScrollTranscriptToEnd(bool updateLayout = true)
+    {
+        if (_chatScroll is null) return;
+        if (updateLayout) _chatScroll.UpdateLayout();
+        _chatScroll.ChangeView(null, double.MaxValue, null, disableAnimation: true);
+    }
+
     private void ShowResultState()
     {
+        StopRevealTimer();
         if (_result is null) return;
 
         string? suggestion = SemanticModelQualificationCoordinator.Suggestion(_result);
@@ -449,7 +799,7 @@ internal sealed class SemanticModelQualificationDialog : Window
 
         var detailParts = new List<string>
         {
-            string.Create(CultureInfo.InvariantCulture, $"{report.Accuracy * 100:0}% accurate"),
+            string.Create(CultureInfo.InvariantCulture, $"{report.EffectiveAccuracy * 100:0}% accurate"),
             FormatLatency(report.MedianLatencyMs),
         };
         if (report.Crashed)
@@ -520,12 +870,6 @@ internal sealed class SemanticModelQualificationDialog : Window
             if (!_cts.IsCancellationRequested)
                 ShowErrorState($"The model check couldn't complete: {ex.Message}");
         }
-    }
-
-    private void OnProgress(SemanticQualificationProgress p)
-    {
-        if (_progressText is null) return;
-        _progressText.Text = p.Message;
     }
 
     // ── Footer buttons ────────────────────────────────────────────────────────────────────────
@@ -631,6 +975,7 @@ internal sealed class SemanticModelQualificationDialog : Window
     private void OnClosed(object sender, WindowEventArgs args)
     {
         OpenWindows.Remove(this);
+        StopRevealTimer();
         try { _cts.Cancel(); } catch { }
         _cts.Dispose();
 

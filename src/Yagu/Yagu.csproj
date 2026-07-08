@@ -501,4 +501,60 @@
           SkipUnchangedFiles="true" />
   </Target>
 
+  <!--
+    Out-of-process SEMANTIC worker (Yagu.SemanticWorker) build + bundle.
+
+    AI (semantic) search runs the Foundry Local SDK in a SEPARATE process (Yagu.SemanticWorker.exe)
+    because the SDK can FAIL-FAST the whole host on internal faults that are uncatchable in-process
+    (an ObjectDisposedException thrown on a ThreadPool progress callback during EP registration —
+    github.com/microsoft/Foundry-Local #867 — or the onnxruntime-genai use-after-free access
+    violation on model unload). Running it out-of-process means such a crash kills the worker, not
+    Yagu; WorkerSemanticQueryTranslator detects the exit and recovers.
+
+    Same isolation rules as the OCR worker: NO <ProjectReference> (would drag the non-AOT Foundry
+    native stack into Yagu's Native-AOT publish graph); built as an ISOLATED child `dotnet publish`
+    process (an in-proc <MSBuild> task corrupts the WinUI XAML markup compiler); output copied into
+    <app>\semantic-worker\, the location WorkerSemanticQueryTranslator.ResolveWorkerPath probes.
+    Published self-contained win-x64 so it carries its own .NET runtime (Yagu.exe is self-contained
+    AOT and provides no shared runtime) and its win-x64 Foundry native stack.
+
+    Set -p:BuildSemanticWorker=false to skip (managed-only iteration when semantic search isn't needed).
+  -->
+  <PropertyGroup>
+    <BuildSemanticWorker Condition="'$(BuildSemanticWorker)' == ''">true</BuildSemanticWorker>
+    <SemanticWorkerProject>$(MSBuildThisFileDirectory)..\Yagu.SemanticWorker\Yagu.SemanticWorker.csproj</SemanticWorkerProject>
+    <SemanticWorkerOutDir>$(MSBuildThisFileDirectory)..\Yagu.SemanticWorker\bin\$(Configuration)\net10.0-windows10.0.19041.0\win-x64\publish\</SemanticWorkerOutDir>
+  </PropertyGroup>
+
+  <Target Name="BuildSemanticWorker"
+          BeforeTargets="BeforeBuild"
+          Condition="'$(BuildSemanticWorker)' == 'true' And '$(DesignTimeBuild)' != 'true' And Exists('$(SemanticWorkerProject)')">
+    <Exec Command="dotnet publish &quot;$(SemanticWorkerProject)&quot; -c $(Configuration) -r win-x64 --self-contained true --nologo -v quiet"
+          ContinueOnError="WarnAndContinue" />
+    <Warning Condition="!Exists('$(SemanticWorkerOutDir)Yagu.SemanticWorker.exe')"
+             Text="Yagu.SemanticWorker did not publish to $(SemanticWorkerOutDir)Yagu.SemanticWorker.exe; AI (semantic) search will be unavailable. Build Yagu.SemanticWorker manually, or pass -p:BuildSemanticWorker=false to silence this warning." />
+  </Target>
+
+  <Target Name="CopySemanticWorkerToOutput"
+          AfterTargets="Build"
+          Condition="'$(BuildSemanticWorker)' == 'true' And '$(DesignTimeBuild)' != 'true' And Exists('$(SemanticWorkerOutDir)Yagu.SemanticWorker.exe')">
+    <ItemGroup>
+      <_YaguSemanticWorkerFiles Include="$(SemanticWorkerOutDir)**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_YaguSemanticWorkerFiles)"
+          DestinationFiles="@(_YaguSemanticWorkerFiles->'$(OutDir)semantic-worker\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CopySemanticWorkerToPublish"
+          AfterTargets="Publish"
+          Condition="'$(BuildSemanticWorker)' == 'true' And '$(DesignTimeBuild)' != 'true' And Exists('$(SemanticWorkerOutDir)Yagu.SemanticWorker.exe')">
+    <ItemGroup>
+      <_YaguSemanticWorkerPublishFiles Include="$(SemanticWorkerOutDir)**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_YaguSemanticWorkerPublishFiles)"
+          DestinationFiles="@(_YaguSemanticWorkerPublishFiles->'$(PublishDir)semantic-worker\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>

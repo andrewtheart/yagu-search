@@ -28,6 +28,20 @@ public interface ISemanticQueryTranslator
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// Translates like <see cref="TranslateAsync"/>, but streams the model's raw output to
+    /// <paramref name="onToken"/> one delta at a time as it is generated. This is a SEPARATE inference
+    /// path used only by the first-run model-qualification dialog to drive its live "chat" transcript;
+    /// the normal search path uses <see cref="TranslateAsync"/> and is unaffected. When
+    /// <paramref name="onToken"/> is null this behaves like a single-shot translation. Honors
+    /// <paramref name="cancellationToken"/> throughout.
+    /// </summary>
+    Task<SemanticTranslationResult> TranslateStreamingAsync(
+        string naturalLanguageQuery,
+        SemanticTranslationContext context,
+        Action<string>? onToken,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Enumerates the locally-runnable chat models for the current hardware, ranked, with the
     /// recommended pick flagged. The first call may download execution providers and query the
     /// catalog (reported via <paramref name="progress"/>). Returns an empty list when the feature

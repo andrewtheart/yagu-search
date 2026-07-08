@@ -103,8 +103,9 @@ public sealed class ModelQualificationTests
             if (alias == "slowpoke")
             {
                 slowpokeProbeCalls++;
-                // The first probe blows the user's per-query limit; the rest would be fast + correct.
-                int latency = probe == P1 ? Thresholds.SimpleQueryMaxMs + 1 : 1_000;
+                // The first probe blows the per-query limit BY MORE THAN the tolerance band; the rest
+                // would be fast + correct.
+                int latency = probe == P1 ? Thresholds.SimpleQueryMaxMs + Thresholds.LatencyToleranceMs + 1 : 1_000;
                 return ProbeOutcome.Answered(PassingPlan(probe), latency);
             }
             return ProbeOutcome.Answered(PassingPlan(probe), 1_000);
@@ -119,6 +120,24 @@ public sealed class ModelQualificationTests
         Assert.Equal(1, slowpokeProbeCalls);
         Assert.Single(slow.Probes);
         Assert.Contains("limit", slow.Verdict.Reason, System.StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task QualifyAsync_ProbeWithinLatencyTolerance_StillQualifies()
+    {
+        // A probe answers correctly but a hair OVER its hard limit — still within the +tolerance grace
+        // band, so it is kept (a "slow pass") and the candidate is NOT abandoned; it qualifies.
+        var runner = Runner((alias, probe) =>
+        {
+            int latency = probe == P1 ? Thresholds.SimpleQueryMaxMs + 1 : 1_000;
+            return ProbeOutcome.Answered(PassingPlan(probe), latency);
+        });
+
+        var result = await ModelQualification.QualifyAsync(["borderline"], Probes, Thresholds, runner);
+
+        Assert.Equal("borderline", result.QualifiedModelAlias);
+        Assert.True(result.Reports[0].Verdict.Passed);
+        Assert.Equal(3, result.Reports[0].Probes.Count); // all probes ran; not abandoned on the slow one
     }
 
     [Fact]
@@ -170,7 +189,7 @@ public sealed class ModelQualificationTests
             })
             .ToList();
 
-        int overLimit = Thresholds.SimpleQueryMaxMs + 1;
+        int overLimit = Thresholds.SimpleQueryMaxMs + Thresholds.LatencyToleranceMs + 1;
 
         var runner = Runner((alias, probe) =>
         {
@@ -202,6 +221,32 @@ public sealed class ModelQualificationTests
     }
 
     [Fact]
+    public async Task QualifyAsync_WedgedProbe_ExcludedFromEffectiveAccuracy_NotCountedAsWrongAnswer()
+    {
+        // Mirrors the real phi-4 case: the model answers the first probe correctly and in time, then
+        // WEDGES on the second query (no usable answer, far over the limit) and is abandoned as too slow.
+        // The wedge is a SPEED failure — captured by the verdict — not a wrong answer, so effective accuracy
+        // must read 100% (1/1 answered), NOT the diluted full-set accuracy (1/3) that made a known-accurate
+        // model look ~6% "accurate".
+        int wedged = Thresholds.SimpleQueryMaxMs + Thresholds.LatencyToleranceMs + 5_000;
+        var runner = Runner((alias, probe) =>
+            probe == P1
+                ? ProbeOutcome.Answered(PassingPlan(probe), 1_000)  // correct, in time
+                : ProbeOutcome.Miss(wedged));                       // wedge: no answer, over limit
+
+        var result = await ModelQualification.QualifyAsync(["phi-like"], Probes, Thresholds, runner);
+
+        var report = result.Reports[0];
+        Assert.False(report.Verdict.Passed);
+        Assert.Contains("limit", report.Verdict.Reason, System.StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, report.Probes.Count);           // ran P1 + the wedge, then abandoned
+        Assert.Equal(1, report.ScoredProbeCount);        // the wedge probe is not scored on accuracy
+        Assert.Equal(1.0, report.EffectiveAccuracy, 3);  // answered every probe it was fairly scored on
+        Assert.Equal(1.0 / 3.0, report.Accuracy, 3);     // full-set accuracy stays diluted (policy metric)
+        Assert.Equal("phi-like", result.BestEffortModelAlias);
+    }
+
+    [Fact]
     public async Task QualifyAsync_AllCandidatesCrash_BestEffortIsNull()
     {
         var runner = Runner((alias, probe) => ProbeOutcome.Crash());
@@ -216,7 +261,9 @@ public sealed class ModelQualificationTests
     [Fact]
     public async Task QualifyAsync_TooSlow_FailsEvenWhenAccurate()
     {
-        int slow = Thresholds.SimpleQueryMaxMs + 5_000;
+        // Clearly past the per-query limit AND the +tolerance grace band, so it is a genuine latency
+        // violation (not a within-grace slow pass) and the candidate is abandoned on the first probe.
+        int slow = Thresholds.SimpleQueryMaxMs + Thresholds.LatencyToleranceMs + 5_000;
         var runner = Runner((alias, probe) => ProbeOutcome.Answered(PassingPlan(probe), slow));
 
         var result = await ModelQualification.QualifyAsync(["accurate-but-slow"], Probes, Thresholds, runner);

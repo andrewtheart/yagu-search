@@ -53,12 +53,20 @@ public sealed class CandidateQualificationReport
     /// never changes a verdict.</summary>
     public required double Accuracy { get; init; }
 
-    /// <summary>Fraction of the probes ACTUALLY RUN that the model answered correctly (passed / probes-run).
-    /// Unlike <see cref="Accuracy"/>, it does not dilute a candidate that was abandoned early on a crash or
-    /// latency violation with probes it never got to attempt, so a fast candidate cut off after a couple of
-    /// correct probes is not unfairly out-ranked by a slow-but-complete one. Used only to rank the
-    /// best-effort fallback.</summary>
+    /// <summary>Fraction of the probes the model was fairly SCORED ON that it answered correctly
+    /// (passed / <see cref="ScoredProbeCount"/>). Unlike <see cref="Accuracy"/> it does not dilute a
+    /// candidate abandoned early with probes it never reached, and — critically — it does NOT count the
+    /// single probe that abandoned the candidate by TIMING OUT (a wedged / too-slow query) or CRASHING with
+    /// no usable answer: that is a speed/stability failure (already the disqualifying verdict), not a WRONG
+    /// answer. A wrong answer or an in-budget no-output miss still counts. This is the accuracy shown to the
+    /// user and used to rank the best-effort fallback, so a model that answered every completed probe
+    /// correctly but wedged on one query reads as 100% accurate + "too slow", not a misleading ~6%.</summary>
     public required double EffectiveAccuracy { get; init; }
+
+    /// <summary>Number of probes the model was fairly scored on for answer quality — the denominator of
+    /// <see cref="EffectiveAccuracy"/>. Equals the probes actually run minus a single timeout/crash probe
+    /// that produced no usable answer.</summary>
+    public required int ScoredProbeCount { get; init; }
 
     public required int MedianLatencyMs { get; init; }
     public required int MaxLatencyMs { get; init; }
@@ -185,22 +193,31 @@ public static class ModelQualification
             }
 
             int limit = thresholds.QueryMaxMs(probe.Complexity);
-            if (outcome.LatencyMs > limit)
+            if (outcome.LatencyMs > limit + thresholds.LatencyToleranceMs)
             {
-                // A single probe blew the user's per-query limit for its complexity, so this candidate can
-                // never clear the bar no matter how the remaining probes score. Abandon it now rather than
-                // paying for more probes that can each take minutes on a weak CPU. The violation carries
-                // the true (too-slow) reason for Evaluate.
+                // A single probe blew the user's per-query limit for its complexity BY MORE THAN the grace
+                // band, so this candidate can never clear the bar no matter how the remaining probes score.
+                // Abandon it now rather than paying for more probes that can each take minutes on a weak
+                // CPU. A probe within the tolerance band is instead kept (it scored correctly, just slowly)
+                // and surfaced as a "slow" warning by the runner. The violation carries the true (too-slow)
+                // reason for Evaluate.
                 latencyViolation = new LatencyViolation(outcome.LatencyMs, limit, probe.Complexity);
                 break;
             }
         }
 
         double accuracy = probes.Count == 0 ? 0.0 : (double)passed / probes.Count;
-        // Best-effort ranking uses accuracy over the probes actually RUN (results.Count), so a candidate
-        // abandoned early on a crash/latency violation is judged on what it attempted, not penalised for
-        // probes it never reached. results.Count == probes.Count for any candidate that ran to completion.
-        double effectiveAccuracy = results.Count == 0 ? 0.0 : (double)passed / results.Count;
+        // Effective accuracy scores ANSWER QUALITY over the probes the model was fairly judged on. It
+        // excludes (a) probes it never reached (a candidate abandoned early is judged on what it attempted)
+        // and (b) the single probe that abandoned it by TIMING OUT (wedged / too-slow) or CRASHING with no
+        // usable answer — that is a speed/stability failure, captured by the verdict, not a wrong answer.
+        // A wrong answer or an in-budget no-output miss still counts (they had their fair chance in time).
+        // Without (b), a fast, correct model cut off by one wedged query reads as a near-0% "accurate"
+        // score even though every answer it actually produced was right.
+        bool abandonProbeHadNoAnswer =
+            (crashed || latencyViolation is not null) && results.Count > 0 && !results[^1].Completed;
+        int scoredProbes = abandonProbeHadNoAnswer ? results.Count - 1 : results.Count;
+        double effectiveAccuracy = scoredProbes <= 0 ? 0.0 : (double)passed / scoredProbes;
         int median = Median(completedLatencies);
         var verdict = ModelQualificationPolicy.Evaluate(accuracy, crashed, latencyViolation);
 
@@ -209,6 +226,7 @@ public static class ModelQualification
             ModelAlias = alias,
             Accuracy = accuracy,
             EffectiveAccuracy = effectiveAccuracy,
+            ScoredProbeCount = scoredProbes,
             MedianLatencyMs = median,
             MaxLatencyMs = maxLatency,
             Crashed = crashed,

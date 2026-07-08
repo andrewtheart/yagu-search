@@ -73,6 +73,41 @@ public sealed class SemanticModelQualificationRunnerTests
     }
 
     [Fact]
+    public async Task RunAsync_ExcludesReasoningModelsFromTheCandidateLadder()
+    {
+        // Reasoning / chain-of-thought models (alias contains "reasoning") can never be auto-selected, and
+        // probing them just drags the sweep out for minutes (every probe times out then wedges). They must
+        // be kept off the ladder entirely — even when one is flagged "recommended" by the catalog.
+        var translator = new FakeTranslator
+        {
+            Options =
+            {
+                Option("phi-4-mini-reasoning", recommended: true),
+                Option("phi-4-reasoning"),
+                Option("phi-3.5-mini"),
+            },
+            TranslateBehavior = (_, _) => EmptyPlan(), // all fail, so every ELIGIBLE candidate is probed
+        };
+        var runner = new SemanticModelQualificationRunner(translator);
+
+        var result = await runner.RunAsync(new[] { RequiresPngGlob() }, Thresholds, progress: null, CancellationToken.None);
+
+        // Only the non-reasoning candidate was probed; the two reasoning models were never on the ladder.
+        Assert.Equal(new[] { "phi-3.5-mini" }, result.Reports.Select(r => r.ModelAlias).ToArray());
+        Assert.DoesNotContain(result.Reports, r => SemanticModelQualificationRunner.IsReasoningAlias(r.ModelAlias));
+    }
+
+    [Fact]
+    public void IsReasoningAlias_MatchesReasoningModelsCaseInsensitively()
+    {
+        Assert.True(SemanticModelQualificationRunner.IsReasoningAlias("phi-4-mini-reasoning"));
+        Assert.True(SemanticModelQualificationRunner.IsReasoningAlias("Phi-4-Reasoning-cuda-gpu:3"));
+        Assert.False(SemanticModelQualificationRunner.IsReasoningAlias("phi-4-mini"));
+        Assert.False(SemanticModelQualificationRunner.IsReasoningAlias("phi-3.5-mini"));
+        Assert.False(SemanticModelQualificationRunner.IsReasoningAlias(null));
+    }
+
+    [Fact]
     public async Task RunAsync_FirstCandidateFailsAccuracy_SecondQualifies()
     {
         var translator = new FakeTranslator
@@ -251,7 +286,7 @@ public sealed class SemanticModelQualificationRunnerTests
         };
         var runner = new SemanticModelQualificationRunner(translator);
         // Tiny per-query limits so the wedged candidate trips the backstop quickly.
-        var thresholds = ModelQualificationThresholds.Default with { SimpleQueryMaxMs = 50, ComplexQueryMaxMs = 50 };
+        var thresholds = ModelQualificationThresholds.Default with { SimpleQueryMaxMs = 50, ComplexQueryMaxMs = 50, LatencyToleranceMs = 0 };
 
         var result = await runner.RunAsync(new[] { RequiresPngGlob() }, thresholds, progress: null, CancellationToken.None);
 
@@ -261,6 +296,38 @@ public sealed class SemanticModelQualificationRunnerTests
         var wedged = result.Reports.Single(r => r.ModelAlias == "wedged");
         Assert.False(wedged.Crashed);
         Assert.False(wedged.Verdict.Passed);
+        // A wedge gets ONE bounded retry before abandonment (the retry also wedged here), so the one probe
+        // ran twice — never an infinite loop.
+        Assert.Equal(2, translator.TranslateCallsByAlias["wedged"]);
+    }
+
+    [Fact]
+    public async Task RunAsync_ProbeWedgesOnceThenAnswers_RetriesAndQualifies()
+    {
+        // A wedge is INTERMITTENT: the first attempt at a probe stalls past the deadline while ignoring
+        // cancellation, but the SAME query answers correctly on the very next attempt (as observed with
+        // phi-4, which answers every probe in ~5s yet occasionally wedges one to 30-48s). The runner must
+        // drain the stuck op and RETRY the probe rather than disqualify an otherwise-correct model.
+        int calls = 0;
+        var translator = new FakeTranslator
+        {
+            Options = { Option("flaky", recommended: true) },
+            // The first timed inference wedges (2s, ignores cancellation → backstopped); the retry is fast.
+            TranslateDelayProvider = _ => calls++ == 0 ? TimeSpan.FromSeconds(2) : TimeSpan.Zero,
+            TranslateHonorsCancellation = false,
+            TranslateBehavior = (_, _) => PngPlan(),
+        };
+        var runner = new SemanticModelQualificationRunner(translator);
+        // Tiny per-query limit so the 2s first attempt trips the backstop and is treated as wedged.
+        var thresholds = ModelQualificationThresholds.Default with { SimpleQueryMaxMs = 50, ComplexQueryMaxMs = 50, LatencyToleranceMs = 0 };
+
+        var result = await runner.RunAsync(new[] { RequiresPngGlob() }, thresholds, progress: null, CancellationToken.None);
+
+        // The transient wedge did NOT disqualify the model — the retry answered correctly and it qualified.
+        Assert.Equal("flaky", result.QualifiedModelAlias);
+        Assert.True(result.Reports.Single().Verdict.Passed);
+        // Exactly two timed inferences for the one probe: the wedge + the successful retry.
+        Assert.Equal(2, translator.TranslateCallsByAlias["flaky"]);
     }
 
     [Fact]
@@ -276,7 +343,7 @@ public sealed class SemanticModelQualificationRunnerTests
             TranslateBehavior = (alias, _) => alias == "B" ? PngPlan() : EmptyPlan(),
         };
         var runner = new SemanticModelQualificationRunner(translator);
-        var thresholds = ModelQualificationThresholds.Default with { SimpleQueryMaxMs = 50, ComplexQueryMaxMs = 50 };
+        var thresholds = ModelQualificationThresholds.Default with { SimpleQueryMaxMs = 50, ComplexQueryMaxMs = 50, LatencyToleranceMs = 0 };
 
         var result = await runner.RunAsync(new[] { RequiresPngGlob() }, thresholds, progress: null, CancellationToken.None);
 
@@ -468,6 +535,164 @@ public sealed class SemanticModelQualificationRunnerTests
     }
 
     [Fact]
+    public async Task RunAsync_UsesReliableNonStreamingTranslationForProbes()
+    {
+        var translator = new FakeTranslator
+        {
+            Options = { Option("A", recommended: true) },
+            TranslateBehavior = (_, _) => EmptyPlan(),
+        };
+        var runner = new SemanticModelQualificationRunner(translator);
+
+        await runner.RunAsync(new[] { PassAnything(), PassAnything() }, Thresholds, progress: null, CancellationToken.None);
+
+        // The prober scores through the RELIABLE non-streaming path (TranslateAsync). The SDK's token-
+        // streaming API intermittently STALLS (a call can hang without yielding a token until the deadline,
+        // falsely disqualifying a fast model), so it is deliberately NOT used for the scored inference.
+        Assert.Equal(2, translator.TranslateCallsByAlias["A"]);
+        Assert.False(translator.StreamingCallsByAlias.ContainsKey("A"));
+    }
+
+    [Fact]
+    public async Task RunAsync_ReportsProbeQueryModelResponseAndVerdict()
+    {
+        var translator = new FakeTranslator
+        {
+            Options = { Option("A", recommended: true) },
+            TranslateBehavior = (_, _) => SemanticTranslationResult.Ok(new SemanticSearchPlan(), "MODEL-RAW-OUTPUT"),
+        };
+        var runner = new SemanticModelQualificationRunner(translator);
+        var sink = new SyncProgress<SemanticQualificationProgress>();
+
+        await runner.RunAsync(new[] { PassAnything("find png files") }, Thresholds, sink, CancellationToken.None);
+
+        var probing = sink.Items.Single(p => p.Stage == SemanticQualificationStage.Probing);
+        Assert.Equal("find png files", probing.ProbeQuery);
+
+        // The completed model answer is surfaced as a ProbeToken so the transcript can reveal it.
+        Assert.Contains(sink.Items, p =>
+            p.Stage == SemanticQualificationStage.ProbeToken && p.TokenDelta == "MODEL-RAW-OUTPUT");
+
+        var completed = sink.Items.Single(p => p.Stage == SemanticQualificationStage.ProbeCompleted);
+        Assert.True(completed.ProbePassed);
+        Assert.Equal(SemanticProbeFailureReason.None, completed.FailureReason);
+        Assert.Equal("find png files", completed.ProbeQuery);
+    }
+
+    [Fact]
+    public async Task RunAsync_ProbeCompleted_ClassifiesInaccurateAnswer()
+    {
+        var translator = new FakeTranslator
+        {
+            Options = { Option("A", recommended: true) },
+            TranslateBehavior = (_, _) => EmptyPlan(), // parses, but has no *.png glob
+        };
+        var runner = new SemanticModelQualificationRunner(translator);
+        var sink = new SyncProgress<SemanticQualificationProgress>();
+
+        await runner.RunAsync(new[] { RequiresPngGlob() }, Thresholds, sink, CancellationToken.None);
+
+        var completed = sink.Items.Single(p => p.Stage == SemanticQualificationStage.ProbeCompleted);
+        Assert.False(completed.ProbePassed);
+        Assert.Equal(SemanticProbeFailureReason.Inaccurate, completed.FailureReason);
+    }
+
+    [Fact]
+    public async Task RunAsync_ProbeCompleted_ClassifiesCrashedAndTooSlow()
+    {
+        // Crash: the inference throws.
+        var crasher = new FakeTranslator
+        {
+            Options = { Option("A", recommended: true), Option("B") },
+            TranslateBehavior = (alias, _) => alias == "A" ? throw new InvalidOperationException("boom") : PngPlan(),
+        };
+        var crashSink = new SyncProgress<SemanticQualificationProgress>();
+        await new SemanticModelQualificationRunner(crasher)
+            .RunAsync(new[] { RequiresPngGlob() }, Thresholds, crashSink, CancellationToken.None);
+        Assert.Contains(crashSink.Items, p =>
+            p.Stage == SemanticQualificationStage.ProbeCompleted
+            && p.CandidateAlias == "A" && p.FailureReason == SemanticProbeFailureReason.Crashed);
+
+        // Too slow: the inference honors cancellation but blows the tiny per-query limit.
+        var slow = new FakeTranslator
+        {
+            Options = { Option("A", recommended: true), Option("B") },
+            TranslateDelayProvider = alias => alias == "A" ? TimeSpan.FromSeconds(5) : TimeSpan.Zero,
+            TranslateHonorsCancellation = true,
+            TranslateBehavior = (alias, _) => alias == "B" ? PngPlan() : EmptyPlan(),
+        };
+        var slowSink = new SyncProgress<SemanticQualificationProgress>();
+        var thresholds = ModelQualificationThresholds.Default with { SimpleQueryMaxMs = 50, ComplexQueryMaxMs = 50, LatencyToleranceMs = 0 };
+        await new SemanticModelQualificationRunner(slow)
+            .RunAsync(new[] { RequiresPngGlob() }, thresholds, slowSink, CancellationToken.None);
+        Assert.Contains(slowSink.Items, p =>
+            p.Stage == SemanticQualificationStage.ProbeCompleted
+            && p.CandidateAlias == "A" && p.FailureReason == SemanticProbeFailureReason.TooSlow);
+    }
+
+    [Fact]
+    public async Task RunAsync_FailedProbe_HoldsVisibleBeforeAdvancing()
+    {
+        // A single candidate that answers but fails accuracy. With a positive failed-probe hold, the sweep
+        // must pause on that failure so a UI can show it — the whole run takes at least the hold.
+        var translator = new FakeTranslator
+        {
+            Options = { Option("A", recommended: true) },
+            TranslateBehavior = (_, _) => EmptyPlan(),
+        };
+        var runner = new SemanticModelQualificationRunner(translator, failedProbeHoldMs: 250);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await runner.RunAsync(new[] { RequiresPngGlob() }, Thresholds, progress: null, CancellationToken.None);
+        sw.Stop();
+
+        Assert.True(sw.ElapsedMilliseconds >= 200, $"expected the failed-probe hold to delay the sweep, elapsed={sw.ElapsedMilliseconds}ms");
+    }
+
+    [Fact]
+    public async Task RunAsync_PassingProbes_DoNotHold()
+    {
+        // A passing probe must NOT incur the failed-probe hold, even when the hold is large.
+        var translator = new FakeTranslator
+        {
+            Options = { Option("A", recommended: true) },
+            TranslateBehavior = (_, _) => PngPlan(),
+        };
+        var runner = new SemanticModelQualificationRunner(translator, failedProbeHoldMs: 5000);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await runner.RunAsync(new[] { RequiresPngGlob() }, Thresholds, progress: null, CancellationToken.None);
+        sw.Stop();
+
+        Assert.True(sw.ElapsedMilliseconds < 2000, $"a passing sweep must not pause; elapsed={sw.ElapsedMilliseconds}ms");
+    }
+
+    [Fact]
+    public async Task RunAsync_SlowButAccurateProbe_PassesWithWarning()
+    {
+        // The model answers correctly but a little over the HARD limit (yet within the tolerance band): it
+        // must PASS — flagged as a slow warning — rather than fail the candidate.
+        var translator = new FakeTranslator
+        {
+            Options = { Option("A", recommended: true) },
+            TranslateDelayProvider = _ => TimeSpan.FromMilliseconds(120),
+            TranslateHonorsCancellation = true,
+            TranslateBehavior = (_, _) => PngPlan(),
+        };
+        var runner = new SemanticModelQualificationRunner(translator);
+        // Hard limit 50 ms (probe takes ~120 ms → over the limit) but a 5 s tolerance keeps it a pass.
+        var thresholds = ModelQualificationThresholds.Default with { SimpleQueryMaxMs = 50, ComplexQueryMaxMs = 50, LatencyToleranceMs = 5_000 };
+        var sink = new SyncProgress<SemanticQualificationProgress>();
+
+        await runner.RunAsync(new[] { RequiresPngGlob() }, thresholds, sink, CancellationToken.None);
+
+        var completed = sink.Items.Single(p => p.Stage == SemanticQualificationStage.ProbeCompleted);
+        Assert.True(completed.ProbePassed);
+        Assert.True(completed.ProbeSlowWarning);
+        Assert.Equal(SemanticProbeFailureReason.None, completed.FailureReason);
+    }
+
+    [Fact]
     public async Task RunAsync_AlreadyCanceled_Throws()
     {
         var translator = new FakeTranslator
@@ -483,6 +708,20 @@ public sealed class SemanticModelQualificationRunnerTests
             () => runner.RunAsync(new[] { PassAnything() }, Thresholds, progress: null, cts.Token));
     }
 
+    /// <summary>Captures progress reports synchronously as the runner emits them. The runner calls
+    /// <see cref="IProgress{T}.Report"/> inline (unlike a <see cref="Progress{T}"/> sink, which marshals
+    /// asynchronously), so every report is present by the time the sweep completes — no dispatcher drain.</summary>
+    private sealed class SyncProgress<T> : IProgress<T>
+    {
+        private readonly object _gate = new();
+        public List<T> Items { get; } = new();
+        public void Report(T value)
+        {
+            lock (_gate)
+                Items.Add(value);
+        }
+    }
+
     private sealed class FakeTranslator : ISemanticQueryTranslator
     {
         public List<SemanticModelOption> Options { get; } = new();
@@ -496,6 +735,14 @@ public sealed class SemanticModelQualificationRunnerTests
         /// prepared candidate.</summary>
         public List<string> Warmed { get; } = new();
         public Dictionary<string, int> TranslateCallsByAlias { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Per-alias count of STREAMING translate calls — the runner drives timed probes through
+        /// <see cref="TranslateStreamingAsync"/>, so this should mirror the timed-probe count.</summary>
+        public Dictionary<string, int> StreamingCallsByAlias { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The text emitted to the streaming token sink, one entry per streamed probe.</summary>
+        public List<string> StreamedTokens { get; } = new();
+
         public Func<string, string, SemanticTranslationResult>? TranslateBehavior { get; init; }
         public Func<string, Task>? PrepareBehavior { get; init; }
 
@@ -573,6 +820,46 @@ public sealed class SemanticModelQualificationRunnerTests
             // Like the real async translator, a throwing behavior faults the returned task (it never
             // throws synchronously), so the runner observes it on await.
             return TranslateBehavior?.Invoke(alias, naturalLanguageQuery) ?? EmptyPlanResult();
+        }
+
+        public async Task<SemanticTranslationResult> TranslateStreamingAsync(
+            string naturalLanguageQuery, SemanticTranslationContext context,
+            Action<string>? onToken, CancellationToken cancellationToken)
+        {
+            string alias = _currentOverride ?? "";
+
+            // The runner warms via TranslateAsync (not this streaming path); mirror the warmup no-op
+            // defensively so a stray warmup query can't inflate the timed-probe counts.
+            if (naturalLanguageQuery == SemanticModelQualificationRunner.WarmupQuery)
+            {
+                Warmed.Add(alias);
+                if (WarmupThrows)
+                    throw new InvalidOperationException("warmup boom");
+                return EmptyPlanResult();
+            }
+
+            TranslateCallsByAlias[alias] = TranslateCallsByAlias.GetValueOrDefault(alias) + 1;
+            StreamingCallsByAlias[alias] = StreamingCallsByAlias.GetValueOrDefault(alias) + 1;
+
+            TimeSpan delay = TranslateDelayProvider?.Invoke(alias) ?? TimeSpan.Zero;
+            if (delay > TimeSpan.Zero)
+            {
+                await Task.Delay(delay, TranslateHonorsCancellation ? cancellationToken : CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+
+            SemanticTranslationResult result = TranslateBehavior?.Invoke(alias, naturalLanguageQuery) ?? EmptyPlanResult();
+
+            // Emit the model output as a streamed delta so the runner surfaces ProbeToken progress; a real
+            // model always streams something, so fall back to the query text when there's no raw output.
+            string streamed = !string.IsNullOrEmpty(result.RawModelOutput) ? result.RawModelOutput : naturalLanguageQuery;
+            if (onToken is not null && !string.IsNullOrEmpty(streamed))
+            {
+                onToken(streamed);
+                StreamedTokens.Add(streamed);
+            }
+
+            return result;
         }
 
         private static SemanticTranslationResult EmptyPlanResult() =>

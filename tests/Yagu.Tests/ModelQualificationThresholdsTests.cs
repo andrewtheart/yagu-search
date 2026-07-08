@@ -12,9 +12,10 @@ public sealed class ModelQualificationThresholdsTests
     public void Default_UsesDocumentedLimits()
     {
         var t = ModelQualificationThresholds.Default;
-        Assert.Equal(60_000, t.ModelLoadMaxMs);
-        Assert.Equal(15_000, t.SimpleQueryMaxMs);
+        Assert.Equal(20_000, t.ModelLoadMaxMs);
+        Assert.Equal(20_000, t.SimpleQueryMaxMs);
         Assert.Equal(25_000, t.ComplexQueryMaxMs);
+        Assert.Equal(5_000, t.LatencyToleranceMs);
     }
 
     [Fact]
@@ -39,6 +40,6 @@ public sealed class ModelQualificationThresholdsTests
         var t = ModelQualificationThresholds.Default with { ModelLoadMaxMs = 5_000 };
         Assert.Equal(5_000, t.ModelLoadMaxMs);
         // Unchanged fields keep the defaults.
-        Assert.Equal(15_000, t.SimpleQueryMaxMs);
+        Assert.Equal(20_000, t.SimpleQueryMaxMs);
     }
 }

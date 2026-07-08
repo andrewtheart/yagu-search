@@ -72,6 +72,39 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     private IModel? _model;
     private bool _initialized;
 
+    // ── Teardown serialization (prevents the onnxruntime-genai 0xc0000005 use-after-free) ─────────────
+    // Foundry Local / onnxruntime-genai does NOT guard IModel.UnloadAsync() against an in-flight native
+    // LOAD or INFERENCE. A managed-"cancelled" inference can keep running natively for tens of seconds (a
+    // "wedge"); freeing the model while that native op is still executing faults with a use-after-free
+    // access violation (observed: 0xc0000005 at a fixed offset on every crash). So we record the most
+    // recent still-running native op and make every unload AWAIT it (bounded) before freeing the model.
+    // A wedged op that won't drain SKIPS the unload and leaves the model resident — a leaked model is
+    // reclaimed on process exit, which is vastly preferable to a native crash.
+    private volatile Task _lastNativeModelOp = Task.CompletedTask;
+
+    /// <summary>Max time an unload waits for an in-flight native model op to finish before giving up and
+    /// leaving the model resident. Sized above the SDK's own inference watchdog so an ordinarily-slow op
+    /// drains and the model unloads cleanly; only a hard wedge (an op ignoring even the SDK watchdog)
+    /// causes the unload to be skipped.</summary>
+    private static readonly TimeSpan UnloadDrainTimeout = TimeSpan.FromSeconds(50);
+
+    /// <summary>Records a just-started native model operation (load/inference) so a later unload waits for
+    /// it to finish before freeing the model.</summary>
+    private void TrackNativeModelOp(Task op) => _lastNativeModelOp = op;
+
+    /// <summary>Waits (bounded by <see cref="UnloadDrainTimeout"/>) for the last-started native model op to
+    /// complete. Returns true when it has finished (safe to free the model) or false when it is still in
+    /// flight (wedged) — in which case the caller MUST NOT unload, to avoid the use-after-free crash.</summary>
+    private async Task<bool> TryDrainNativeModelOpAsync()
+    {
+        Task op = _lastNativeModelOp;
+        if (op.IsCompleted) return true;
+        LogService.Instance.Info(LogSource,
+            "Waiting for an in-flight native model operation to finish before unloading (teardown serialization).");
+        Task finished = await Task.WhenAny(op, Task.Delay(UnloadDrainTimeout)).ConfigureAwait(false);
+        return ReferenceEquals(finished, op);
+    }
+
     /// <summary>Foundry's on-disk model cache root, resolved once during catalog init. Used to read a
     /// downloaded variant's <c>genai_config.json</c> so its context window can be checked against
     /// <see cref="ModelContextBudget"/> (the SDK does not expose context length through catalog metadata,
@@ -378,6 +411,18 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
         }
 
         if (model is null) return;
+
+        // SERIALIZE TEARDOWN: never free the model while a native op is still running on it (the SDK does
+        // not guard this → onnxruntime-genai use-after-free crash). Wait bounded for the op to drain; if it
+        // is wedged and won't finish, SKIP the unload and leave the model resident (reclaimed on process exit).
+        if (!await TryDrainNativeModelOpAsync().ConfigureAwait(false))
+        {
+            LogService.Instance.Warning(LogSource,
+                $"Skipping unload of '{model.Alias ?? model.Id}': a native model operation is still in flight " +
+                "(wedged inference/load). Freeing it now would crash onnxruntime-genai; it stays resident until the app exits.");
+            return;
+        }
+
         try
         {
             var stopwatch = Stopwatch.StartNew();
@@ -566,7 +611,9 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                     $"Sending chat completion (model={SelectedModelAlias ?? "<unknown>"}, systemPromptChars={systemPrompt.Length}, " +
                     $"userQueryChars={trimmedQuery.Length}, watchdogTimeout={inferenceTimeout.TotalSeconds:F0}s).");
 
-                var response = await chat.CompleteChatAsync(messages, inferenceCts.Token).ConfigureAwait(false);
+                var inferenceTask = chat.CompleteChatAsync(messages, inferenceCts.Token);
+                TrackNativeModelOp(inferenceTask); // so a later unload waits for this native op to drain
+                var response = await inferenceTask.ConfigureAwait(false);
                 raw = response?.Choices?.FirstOrDefault()?.Message?.Content ?? string.Empty;
                 inferenceStopwatch.Stop();
                 log.Info(LogSource,
@@ -616,6 +663,125 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                 $"Translation succeeded in {totalStopwatch.ElapsedMilliseconds} ms (model={SelectedModelAlias ?? "<unknown>"}).");
             if (log.IsVerboseEnabled)
                 log.Verbose(LogSource, $"Parsed plan: {DescribePlan(plan!)}");
+
+            return SemanticTranslationResult.Ok(plan!, raw);
+        }
+        finally
+        {
+            if (_unloadAfterUse)
+                await UnloadLoadedModelAfterUseAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Streaming sibling of <see cref="TranslateAsync"/> used ONLY by the first-run model-qualification
+    /// dialog to drive its live chat transcript. It is deliberately a SEPARATE inference path so the
+    /// normal (non-streaming) search path stays untouched: it invokes <paramref name="onToken"/> for each
+    /// generated delta, accumulates the raw output, then parses it exactly like the non-streaming path.
+    /// Shares the read-only setup/parse helpers (client init, prompt, watchdog, unload-after-use) with
+    /// <see cref="TranslateAsync"/>.
+    /// </summary>
+    public async Task<SemanticTranslationResult> TranslateStreamingAsync(
+        string naturalLanguageQuery,
+        SemanticTranslationContext context,
+        Action<string>? onToken,
+        CancellationToken cancellationToken)
+    {
+        if (!_enabled)
+            return SemanticTranslationResult.Fail("Semantic search is disabled in settings.");
+        if (string.IsNullOrWhiteSpace(naturalLanguageQuery))
+            return SemanticTranslationResult.Fail("Enter a request to translate.");
+
+        context ??= new SemanticTranslationContext();
+
+        var log = LogService.Instance;
+        string trimmedQuery = naturalLanguageQuery.Trim();
+        log.Info(LogSource, $"Streaming translation requested (queryLength={trimmedQuery.Length}).");
+
+        OpenAIChatClient chat;
+        try
+        {
+            chat = await EnsureChatClientAsync(null, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            log.Warning(LogSource, "Could not start the local AI model (streaming).", ex);
+            return SemanticTranslationResult.Fail($"Could not start the local AI model: {ex.Message}");
+        }
+
+        // As in TranslateAsync, release the model after use (freeing VRAM) when that setting is on —
+        // regardless of how the streamed inference finishes.
+        try
+        {
+            string raw;
+            var inferenceStopwatch = Stopwatch.StartNew();
+
+            TimeSpan inferenceTimeout = ResolveInferenceTimeout(_selectedModelIsReasoning);
+            using var inferenceCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            inferenceCts.CancelAfter(inferenceTimeout);
+            try
+            {
+                string systemPrompt = BuildSystemPrompt(context);
+                var messages = new List<ChatMessage>
+                {
+                    ChatMessage.FromSystem(systemPrompt),
+                    ChatMessage.FromUser(trimmedQuery),
+                };
+                log.Verbose(LogSource,
+                    $"Sending STREAMING chat completion (model={SelectedModelAlias ?? "<unknown>"}, systemPromptChars={systemPrompt.Length}, " +
+                    $"userQueryChars={trimmedQuery.Length}, watchdogTimeout={inferenceTimeout.TotalSeconds:F0}s).");
+
+                var builder = new System.Text.StringBuilder();
+                // Consume the stream as a single tracked task so a later unload waits for this native op.
+                async Task ConsumeStreamAsync()
+                {
+                    await foreach (var chunk in chat
+                        .CompleteChatStreamingAsync(messages, inferenceCts.Token)
+                        .ConfigureAwait(false))
+                    {
+                        string? delta = chunk?.Choices?.FirstOrDefault()?.Delta?.Content;
+                        if (string.IsNullOrEmpty(delta))
+                            continue;
+                        builder.Append(delta);
+                        onToken?.Invoke(delta);
+                    }
+                }
+                var streamTask = ConsumeStreamAsync();
+                TrackNativeModelOp(streamTask);
+                await streamTask.ConfigureAwait(false);
+
+                raw = builder.ToString();
+                inferenceStopwatch.Stop();
+                log.Info(LogSource,
+                    $"Model streamed a response in {inferenceStopwatch.ElapsedMilliseconds} ms (model={SelectedModelAlias ?? "<unknown>"}, responseChars={raw.Length}).");
+            }
+            catch (OperationCanceledException) when (inferenceCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                inferenceStopwatch.Stop();
+                log.Warning(LogSource,
+                    $"Streaming inference watchdog fired after {inferenceTimeout.TotalSeconds:F0}s (model={SelectedModelAlias ?? "<unknown>"}).");
+                return SemanticTranslationResult.Fail(
+                    $"The local AI model did not respond within {inferenceTimeout.TotalSeconds:F0} seconds.");
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                log.Warning(LogSource, $"The local AI model failed to stream a response (model={SelectedModelAlias ?? "<unknown>"}).", ex);
+                return SemanticTranslationResult.Fail($"The local AI model failed to respond: {ex.Message}");
+            }
+
+            if (string.IsNullOrWhiteSpace(raw))
+                return SemanticTranslationResult.Fail("The local AI model returned an empty response.", raw);
+
+            if (!TryParsePlan(raw, out var plan, out var parseError))
+                return SemanticTranslationResult.Fail(parseError ?? "Could not understand the model output.", raw);
 
             return SemanticTranslationResult.Ok(plan!, raw);
         }
@@ -714,7 +880,9 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             });
             log.Info(LogSource, $"Loading model '{model.Alias}'.");
             var loadStopwatch = Stopwatch.StartNew();
-            await model.LoadAsync(cancellationToken).ConfigureAwait(false);
+            var loadTask = model.LoadAsync(cancellationToken);
+            TrackNativeModelOp(loadTask); // so a later unload waits for this native load to drain
+            await loadTask.ConfigureAwait(false);
             loadStopwatch.Stop();
             log.Info(LogSource, $"Model '{model.Alias}' loaded in {loadStopwatch.ElapsedMilliseconds} ms.");
 
@@ -723,7 +891,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             ConfigureChatSettings(chat, isReasoning);
             log.Verbose(LogSource, isReasoning
                 ? "Chat client configured for a REASONING model (temperature=0.7, topP=0.95, maxTokens=8192, no repetition penalty; <think> trace is stripped before parsing)."
-                : "Chat client configured for deterministic JSON (temperature=0, topP=1, maxTokens=512, frequencyPenalty=0.6, presencePenalty=0.3).");
+                : $"Chat client configured for deterministic JSON (temperature=0, topP=1, maxTokens={MaxOutputTokens}, frequencyPenalty=0.6, presencePenalty=0.3).");
 
             _model = model;
             _chatClient = chat;
@@ -980,8 +1148,18 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                 !string.Equals(_model.Alias, model.Alias, StringComparison.OrdinalIgnoreCase))
             {
                 log.Info(LogSource, $"Switching loaded model from '{_model.Alias}' to '{model.Alias}'.");
-                try { await _model.UnloadAsync().ConfigureAwait(false); }
-                catch (Exception ex) { log.Verbose(LogSource, $"Unloading previous model '{_model.Alias}' failed.", ex); }
+                // SERIALIZE TEARDOWN: only free the previous model once any native op on it has drained,
+                // else onnxruntime-genai faults (use-after-free). A wedged op skips the unload (leak).
+                if (await TryDrainNativeModelOpAsync().ConfigureAwait(false))
+                {
+                    try { await _model.UnloadAsync().ConfigureAwait(false); }
+                    catch (Exception ex) { log.Verbose(LogSource, $"Unloading previous model '{_model.Alias}' failed.", ex); }
+                }
+                else
+                {
+                    log.Warning(LogSource,
+                        $"Skipping unload of previous model '{_model.Alias}': a native op is still in flight; leaving it resident to avoid a crash.");
+                }
                 _model = null;
                 _chatClient = null;
                 _initialized = false;

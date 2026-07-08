@@ -152,8 +152,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
         // Semantic search (Foundry Local). The translator is cheap to construct; it only downloads
         // the execution provider/model lazily on first use. A caller may inject a fake for testing.
+        // The GUI drives Foundry OUT-OF-PROCESS via WorkerSemanticQueryTranslator so an SDK fail-fast
+        // (the ObjectDisposedException EP-registration race / the onnxruntime-genai use-after-free)
+        // kills the worker, not Yagu; the proxy surfaces a clean failure and respawns on next use.
         _semanticTranslator = semanticTranslator
-            ?? new FoundryLocalSemanticQueryTranslator(_settings.SemanticSearchEnabled, _settings.SemanticModelAlias);
+            ?? new Yagu.Services.Ai.Worker.WorkerSemanticQueryTranslator(_settings.SemanticSearchEnabled, _settings.SemanticModelAlias, _settings.SemanticDevicePreferenceOrder);
         _capabilityDetector = capabilityDetector ?? new GpuNpuCapabilityDetector();
         SemanticSearchAvailable = _settings.SemanticSearchEnabled;
         SemanticHardwareAccelerated = SafeDetectAcceleratedHardware();
@@ -2582,7 +2585,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
                 _semanticTranslator,
                 defaultDirectory: null,
                 directoryExists: System.IO.Directory.Exists,
-                maxCandidates: SemanticModelQualificationRunner.DefaultMaxCandidates);
+                maxCandidates: SemanticModelQualificationRunner.DefaultMaxCandidates,
+                failedProbeHoldMs: SemanticModelQualificationRunner.DefaultFailedProbeHoldMs);
             return await runner.RunAsync(SemanticProbeSet.Default, thresholds, progress, cancellationToken).ConfigureAwait(true);
         }
         finally

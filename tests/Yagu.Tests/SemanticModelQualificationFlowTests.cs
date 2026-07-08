@@ -128,6 +128,42 @@ public sealed class SemanticModelQualificationFlowTests
     }
 
     [Fact]
+    public void Dialog_ShowsLiveChatTranscriptWhileSweeping()
+    {
+        string src = ReadAppFile(Path.Combine("UI", "Windows", "SemanticModelQualificationDialog.cs"));
+
+        // The running state is a scrollable chat transcript with a persistent per-model progress bar.
+        Assert.Contains("_chatLog = new StackPanel", src);
+        Assert.Contains("_chatScroll = new ScrollViewer", src);
+        Assert.Contains("_modelProgressBar = new ProgressBar", src);
+        Assert.Contains("UpdateModelProgress(", src);
+        Assert.Contains("/ {total} tests", src); // "phi-4 — 3 / 17 tests · 18%"
+
+        // OnProgress renders each stage: the probe query (with a "Test N of M" label) as a user bubble,
+        // the answer revealed into the assistant bubble, and a pass/fail chip on completion.
+        Assert.Contains("case SemanticQualificationStage.Probing:", src);
+        Assert.Contains("AddUserBubble(p.ProbeQuery, p.ProbeIndex, p.ProbeCount);", src);
+        Assert.Contains("$\"Test {probeIndex} of {probeCount}\"", src);
+        Assert.Contains("StartAssistantBubble();", src);
+        Assert.Contains("case SemanticQualificationStage.ProbeToken:", src);
+        Assert.Contains("AppendAssistantToken(p.TokenDelta);", src);
+        Assert.Contains("case SemanticQualificationStage.ProbeCompleted:", src);
+        Assert.Contains("FinishAssistantBubble(p);", src);
+
+        // The assistant answer is revealed with a UI-only typewriter timer (the sweep now uses reliable
+        // non-streaming inference, so the reveal can't stall the way SDK token-streaming did), then the
+        // bubble is stamped with a ✓ / ⚠ (slow) / ✗ verdict once the reveal finishes.
+        Assert.Contains("_revealBuffer.Append(delta);", src);
+        Assert.Contains("new DispatcherTimer", src);
+        Assert.Contains("_pendingChipVerdict", src);
+        Assert.Contains("BuildStatusChip(", src);
+        Assert.Contains("passed (slow)", src); // within-tolerance slow-pass warning chip
+        Assert.Contains("SemanticProbeFailureReason.TooSlow =>", src);
+        // The transcript follows the newest content.
+        Assert.Contains("ScrollTranscriptToEnd", src);
+    }
+
+    [Fact]
     public void Dialog_ShowsThresholdConfigBeforeSweep()
     {
         string src = ReadAppFile(Path.Combine("UI", "Windows", "SemanticModelQualificationDialog.cs"));
@@ -244,6 +280,16 @@ public sealed class SemanticModelQualificationFlowTests
         // machine's entire Foundry catalog (dozens of models) when none of the top picks qualifies.
         Assert.Contains("maxCandidates: SemanticModelQualificationRunner.DefaultMaxCandidates", src);
         Assert.Contains("runner.RunAsync(SemanticProbeSet.Default, thresholds, progress, cancellationToken)", src);
+    }
+
+    [Fact]
+    public void ViewModel_RunPacesFailedProbesForTheChatTranscript()
+    {
+        string src = ReadAppFile(Path.Combine("ViewModels", "MainViewModel.cs"));
+
+        // The interactive first-run sweep opts into the failed-probe hold so the qualification dialog can
+        // show WHY a step failed for a couple of seconds before advancing to the next model.
+        Assert.Contains("failedProbeHoldMs: SemanticModelQualificationRunner.DefaultFailedProbeHoldMs", src);
     }
 
     [Fact]
