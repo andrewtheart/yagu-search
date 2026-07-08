@@ -193,11 +193,45 @@ public sealed class SemanticModelQualificationRunner
                 try
                 {
                     _translator.SetModelOverride(alias);
-                    using var loadCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-                    if (thresholds.ModelLoadMaxMs > 0)
-                        loadCts.CancelAfter(thresholds.ModelLoadMaxMs);
-                    await _translator.PrepareModelAsync(alias, null, loadCts.Token).ConfigureAwait(false);
-                    preparedAlias = alias;
+                    var loadCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    bool loadLeaked = false;
+                    try
+                    {
+                        if (thresholds.ModelLoadMaxMs > 0)
+                            loadCts.CancelAfter(thresholds.ModelLoadMaxMs);
+
+                        Task loadTask = _translator.PrepareModelAsync(alias, null, loadCts.Token);
+
+                        // A wedged NATIVE load can ignore the cancellation token entirely and never return —
+                        // the same failure class as a wedged inference (Foundry Local's load_model has been
+                        // observed to hang intermittently when switching off a large resident model). So the
+                        // CancelAfter above is not enough on its own. Race the load against a Task.Delay
+                        // backstop so the sweep ABANDONS this candidate instead of hanging forever on the
+                        // first probe. A leaked wedged load is observed and its linked CTS disposed once it
+                        // finally returns.
+                        if (thresholds.ModelLoadMaxMs > 0 && !loadTask.IsCompleted)
+                        {
+                            Task backstop = Task.Delay(thresholds.ModelLoadMaxMs + QueryTimeoutBackstopGraceMs, token);
+                            if (await Task.WhenAny(loadTask, backstop).ConfigureAwait(false) == backstop)
+                            {
+                                // The sweep itself may have been cancelled while we waited.
+                                token.ThrowIfCancellationRequested();
+                                if (!loadCts.IsCancellationRequested)
+                                    loadCts.Cancel();
+                                loadLeaked = true;
+                                ObserveAndDisposeInBackground(loadTask, loadCts);
+                                return ProbeOutcome.Crash();
+                            }
+                        }
+
+                        await loadTask.ConfigureAwait(false);
+                        preparedAlias = alias;
+                    }
+                    finally
+                    {
+                        if (!loadLeaked)
+                            loadCts.Dispose();
+                    }
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
                 {

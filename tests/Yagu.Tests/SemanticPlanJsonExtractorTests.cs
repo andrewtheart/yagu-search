@@ -477,4 +477,51 @@ public sealed class SemanticPlanJsonExtractorTests
         Assert.Equal("content", plan!.SearchMode);
         Assert.Equal("error", plan.Pattern);
     }
+
+    [Fact]
+    public void StripJsonComments_EmptyString_ReturnedUnchanged()
+    {
+        // The IsNullOrEmpty fast-path (nothing to strip).
+        Assert.Equal(string.Empty, SemanticPlanJsonExtractor.StripJsonComments(string.Empty));
+    }
+
+    [Fact]
+    public void StripJsonComments_EscapedQuoteInStringValue_PreservedAndCommentStripped()
+    {
+        // A backslash-escaped quote inside a string value must NOT end the string (so the trailing // is
+        // still recognized as a real comment). Exercises the escape-tracking branch of the scanner.
+        string stripped = SemanticPlanJsonExtractor.StripJsonComments("{\"pattern\":\"a\\\"b\"} // trailing");
+        Assert.Equal("{\"pattern\":\"a\\\"b\"} ", stripped);
+
+        Assert.True(SemanticPlanJsonExtractor.TryParsePlan(stripped, out SemanticSearchPlan? plan, out _));
+        Assert.Equal("a\"b", plan!.Pattern);
+    }
+
+    [Fact]
+    public void StripJsonComments_LineCommentTerminatedByCarriageReturn_KeepsRestOfLine()
+    {
+        // A '\r' (not just '\n') must end a line comment, and the newline chars are preserved.
+        Assert.Equal("{} \r\nkept", SemanticPlanJsonExtractor.StripJsonComments("{} // note\r\nkept"));
+    }
+
+    [Fact]
+    public void StripJsonComments_LineCommentAtEndOfText_IsDropped()
+    {
+        // A line comment that runs to the end of the input (no trailing newline) is dropped entirely.
+        Assert.Equal("{} ", SemanticPlanJsonExtractor.StripJsonComments("{} // end of file"));
+    }
+
+    [Fact]
+    public void StripJsonComments_BlockCommentContainingAsterisks_IsRemoved()
+    {
+        // A '*' that is not immediately followed by '/' must not end the block comment early.
+        Assert.Equal("{}  x", SemanticPlanJsonExtractor.StripJsonComments("{} /* a * b */ x"));
+    }
+
+    [Fact]
+    public void StripJsonComments_UnterminatedBlockComment_DropsRemainder()
+    {
+        // A block comment that is never closed (truncated output) drops everything to the end.
+        Assert.Equal("{\"a\":1} ", SemanticPlanJsonExtractor.StripJsonComments("{\"a\":1} /* never closed"));
+    }
 }

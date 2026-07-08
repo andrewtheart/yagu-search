@@ -211,6 +211,32 @@ public sealed class SemanticModelQualificationRunnerTests
     }
 
     [Fact]
+    public async Task RunAsync_ModelLoadWedgesIgnoringCancellation_AbandonsCandidateAsCrash_AndTriesNext()
+    {
+        var translator = new FakeTranslator
+        {
+            Options = { Option("wedged-loader", recommended: true), Option("B") },
+            // "wedged-loader" hangs on LOAD far past the tiny load limit AND ignores the cancellation token
+            // (like a real wedged native load_model — observed intermittently when switching off a large
+            // resident model). The CancelAfter alone can't cut it off; the runner's LOAD backstop must, so
+            // the sweep advances instead of hanging forever on the first probe. "B" loads instantly.
+            PrepareDelayProvider = alias => alias == "wedged-loader" ? TimeSpan.FromSeconds(2) : TimeSpan.Zero,
+            PrepareHonorsCancellation = false,
+            TranslateBehavior = (alias, _) => alias == "B" ? PngPlan() : EmptyPlan(),
+        };
+        var runner = new SemanticModelQualificationRunner(translator);
+        // Tiny load limit so the wedged load trips the backstop quickly.
+        var thresholds = ModelQualificationThresholds.Default with { ModelLoadMaxMs = 50 };
+
+        var result = await runner.RunAsync(new[] { RequiresPngGlob() }, thresholds, progress: null, CancellationToken.None);
+
+        // The wedged-loading candidate is abandoned as if it crashed; the next candidate qualifies.
+        Assert.Equal("B", result.QualifiedModelAlias);
+        var wedged = result.Reports.Single(r => r.ModelAlias == "wedged-loader");
+        Assert.True(wedged.Crashed);
+    }
+
+    [Fact]
     public async Task RunAsync_QueryWedgesIgnoringCancellation_AbandonsAsTooSlow_AndTriesNext()
     {
         var translator = new FakeTranslator
@@ -490,6 +516,12 @@ public sealed class SemanticModelQualificationRunnerTests
         /// off by the runner's hard backstop rather than by cancellation.</summary>
         public bool TranslateHonorsCancellation { get; init; }
 
+        /// <summary>When false, the prepare/load delay ignores the cancellation token — modelling a wedged
+        /// native model load (Foundry Local <c>load_model</c>) that never returns and must be cut off by
+        /// the runner's LOAD backstop rather than by cancellation. Defaults true so the existing
+        /// load-timeout test (which relies on cancellation) is unaffected.</summary>
+        public bool PrepareHonorsCancellation { get; init; } = true;
+
         private string? _currentOverride;
 
         public bool IsAvailable => true;
@@ -505,7 +537,7 @@ public sealed class SemanticModelQualificationRunnerTests
             Prepared.Add(modelAlias ?? "");
             TimeSpan delay = PrepareDelayProvider?.Invoke(modelAlias ?? "") ?? TimeSpan.Zero;
             if (delay > TimeSpan.Zero)
-                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(delay, PrepareHonorsCancellation ? cancellationToken : CancellationToken.None).ConfigureAwait(false);
             if (PrepareBehavior is not null)
                 await PrepareBehavior(modelAlias ?? "").ConfigureAwait(false);
         }
