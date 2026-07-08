@@ -178,6 +178,153 @@ public sealed class SemanticPlanApplierTests
         Assert.Null(resolved.UseRegex); // not overridden by synthesis
     }
 
+    // ---- name-term → pattern salvage (probe "files named budget") ----------
+
+    [Fact]
+    public void Resolve_FilesNamedTerm_ModelMatchAllPattern_ForcesNamedTermAsFilenamePattern()
+    {
+        // phi-4 answered "files named budget" with a match-all pattern, dropping the named term.
+        var plan = new SemanticSearchPlan { Pattern = ".*", SearchMode = "filenames" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "files named budget" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal("budget", resolved.Pattern);
+        Assert.Equal(SearchMode.FileNames, resolved.SearchMode);
+        Assert.False(resolved.UseRegex);
+    }
+
+    [Fact]
+    public void Resolve_FilesNamedTerm_ModelNullPattern_ForcesNamedTerm()
+    {
+        var plan = new SemanticSearchPlan { Pattern = null };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "find files named invoice" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal("invoice", resolved.Pattern);
+        Assert.Equal(SearchMode.FileNames, resolved.SearchMode);
+    }
+
+    [Fact]
+    public void Resolve_FilesNamedTerm_ModelAlreadyCarriesTerm_IsPreserved()
+    {
+        // A model that already put the named term in the pattern must not be clobbered.
+        var plan = new SemanticSearchPlan { Pattern = "budget", SearchMode = "filenames" };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "files named budget" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal("budget", resolved.Pattern);
+    }
+
+    [Fact]
+    public void Resolve_NamedQuotedPhrase_UsesQuotedTerm()
+    {
+        var plan = new SemanticSearchPlan { Pattern = "." };
+        var ctx = new SemanticTranslationContext { Now = Now, OriginalQuery = "files named \"annual budget\"" };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Equal("annual budget", resolved.Pattern);
+        Assert.Equal(SearchMode.FileNames, resolved.SearchMode);
+    }
+
+    [Theory]
+    [InlineData("files named budget", "budget")]
+    [InlineData("show me the file called invoice", "invoice")]
+    [InlineData("files whose name is report", "report")]
+    [InlineData("files with the name summary", "summary")]
+    [InlineData("documents named \"Q3 review\"", "Q3 review")]
+    public void TryExtractNameTerm_RecognizesNamedPhrasings(string query, string expected)
+    {
+        Assert.True(SemanticPlanApplier.TryExtractNameTerm(query, out string term));
+        Assert.Equal(expected, term);
+    }
+
+    [Theory]
+    [InlineData("all png files")]
+    [InlineData("files containing budget")]
+    [InlineData("files named after the project")]
+    [InlineData(null)]
+    [InlineData("")]
+    public void TryExtractNameTerm_ReturnsFalseWhenNoNamedTerm(string? query)
+    {
+        Assert.False(SemanticPlanApplier.TryExtractNameTerm(query, out string term));
+        Assert.Equal(string.Empty, term);
+    }
+
+    [Theory]
+    [InlineData(".", true)]
+    [InlineData(".*", true)]
+    [InlineData("*", true)]
+    [InlineData("*.*", true)]
+    [InlineData("budget", false)]
+    [InlineData("async", false)]
+    public void IsMatchAllPattern_FlagsOnlyMatchEverythingTokens(string pattern, bool expected)
+    {
+        Assert.Equal(expected, SemanticPlanApplier.IsMatchAllPattern(pattern));
+    }
+
+    // ---- keep type filter on name-negation (probe "png without a in name") -
+
+    [Fact]
+    public void Resolve_PngWithoutLetterInName_KeepsPngIncludeGlob()
+    {
+        // phi-4-mini dropped *.png on this compound query, emitting only a name filter/exclude.
+        var plan = new SemanticSearchPlan
+        {
+            Pattern = ".*a.*",
+            SearchMode = "filenames",
+            ExcludeGlobs = new() { "*a*" },
+            UseRegex = true,
+        };
+        var ctx = new SemanticTranslationContext
+        {
+            Now = Now,
+            OriginalQuery = "all png file on C: without \"a\" in their name",
+        };
+
+        var resolved = SemanticPlanApplier.Resolve(plan, ctx);
+
+        Assert.Contains("*.png", resolved.IncludeGlobs);
+        Assert.Equal(SearchMode.FileNames, resolved.SearchMode);
+    }
+
+    [Fact]
+    public void ApplyTypeFilterForNameNegation_NoNegation_IsNoOp()
+    {
+        // "png files" without a name-negation: leave the include list to the model.
+        var include = new List<string>();
+        SemanticPlanApplier.ApplyTypeFilterForNameNegation(include, "all png files");
+        Assert.Empty(include);
+    }
+
+    [Fact]
+    public void ApplyTypeFilterForNameNegation_NameNegationWithKnownType_ForcesGlob()
+    {
+        var include = new List<string>();
+        SemanticPlanApplier.ApplyTypeFilterForNameNegation(include, "png files without \"a\" in their name");
+        Assert.Contains("*.png", include);
+    }
+
+    [Fact]
+    public void ApplyTypeFilterForNameNegation_ModelKeptGlob_NoDuplicate()
+    {
+        var include = new List<string> { "*.png" };
+        SemanticPlanApplier.ApplyTypeFilterForNameNegation(include, "png files without a in the name");
+        Assert.Equal(new[] { "*.png" }, include);
+    }
+
+    [Fact]
+    public void ApplyTypeFilterForNameNegation_CategoryNoun_IsNoOp()
+    {
+        // "image" is a category noun, not a known extension, so no glob is forced.
+        var include = new List<string>();
+        SemanticPlanApplier.ApplyTypeFilterForNameNegation(include, "image files without a in their name");
+        Assert.Empty(include);
+    }
+
     // ---- exact-match (whole-word) default ----------------------------------
 
     [Fact]

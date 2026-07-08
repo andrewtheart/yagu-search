@@ -294,21 +294,39 @@ public sealed class SemanticModelQualificationRunner
             return SemanticProbeFailureReason.Inaccurate; // parseable plan, but it didn't match the probe
         }
 
+        // Collapses a raw model response to a single bounded log line (the raw JSON can contain newlines).
+        static string TruncateForLog(string? s)
+        {
+            const int max = 2000;
+            if (string.IsNullOrWhiteSpace(s)) return "(none)";
+            string t = s.Trim().ReplaceLineEndings(" ");
+            return t.Length <= max ? t : t[..max] + "... (truncated)";
+        }
+
         // Reports a probe's pass/fail verdict, then — when it FAILED — holds it visible for the configured
         // pause so a live UI can show the user why before the sweep advances. Returns the same outcome so
         // the qualification driver's abandon logic is unchanged.
         async Task<ProbeOutcome> CompleteProbeAsync(
-            ProbeOutcome outcome, SemanticProbe probe, string alias, int candidateIndex, int queryLimitMs, CancellationToken token)
+            ProbeOutcome outcome, SemanticProbe probe, string alias, int candidateIndex, int queryLimitMs, CancellationToken token,
+            string? rawModelOutput = null)
         {
             bool passed = outcome.Completed && SemanticProbeScorer.Passes(probe, outcome.Plan);
             // A correct-but-slow probe (answered over the hard limit but within the tolerance band, so it
             // wasn't cancelled) still PASSES, flagged as a warning.
             bool slowWarning = passed && queryLimitMs > 0 && outcome.LatencyMs > queryLimitMs;
             SemanticProbeFailureReason reason = ClassifyFailure(outcome, passed, queryLimitMs);
+            int probeNumber = IndexOf(probes, probe) + 1;
             Yagu.Services.LogService.Instance.Info(
                 "Semantic.Probe",
-                $"[{alias}] probe {IndexOf(probes, probe) + 1}/{probeCount} '{probe.Query}' -> " +
+                $"[{alias}] probe {probeNumber}/{probeCount} '{probe.Query}' -> " +
                 $"{(passed ? (slowWarning ? "PASS(slow)" : "PASS") : "FAIL:" + reason)} ({outcome.LatencyMs} ms, limit {queryLimitMs} ms).");
+            // On failure, also log the RAW model output (not just the resolved plan, which SemanticPlanApplier
+            // already logs at VRB) so a genuine model error can be told apart from a plan-applier mapping gap.
+            // "(none)" when the model produced no answer (wedge / timeout / crash).
+            if (!passed)
+                Yagu.Services.LogService.Instance.Info(
+                    "Semantic.Probe",
+                    $"[{alias}] probe {probeNumber} raw model output: {TruncateForLog(rawModelOutput)}");
             progress?.Report(new SemanticQualificationProgress
             {
                 Stage = SemanticQualificationStage.ProbeCompleted,
@@ -610,11 +628,13 @@ public sealed class SemanticModelQualificationRunner
 
                     if (!result.Success || result.Plan is null)
                         return await CompleteProbeAsync(
-                            ProbeOutcome.Miss(attempt.LatencyMs), probe, alias, candidateIndex, queryLimitMs, token).ConfigureAwait(false);
+                            ProbeOutcome.Miss(attempt.LatencyMs), probe, alias, candidateIndex, queryLimitMs, token,
+                            result.RawModelOutput).ConfigureAwait(false);
 
                     ResolvedSearchPlan resolved = SemanticPlanApplier.Resolve(result.Plan, context);
                     return await CompleteProbeAsync(
-                        ProbeOutcome.Answered(resolved, attempt.LatencyMs), probe, alias, candidateIndex, queryLimitMs, token).ConfigureAwait(false);
+                        ProbeOutcome.Answered(resolved, attempt.LatencyMs), probe, alias, candidateIndex, queryLimitMs, token,
+                        result.RawModelOutput).ConfigureAwait(false);
                 }
             }
         }

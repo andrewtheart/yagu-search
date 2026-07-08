@@ -181,6 +181,14 @@ public static class SemanticPlanApplier
         // states a literal ".ext", drive the filter from the query, not the model's guess.
         var explicitExtensions = ApplyExplicitExtensionGlobs(include, context.OriginalQuery);
 
+        // Keep the positive file-TYPE filter when the query pairs it with a NAME negation
+        // ("all png files without 'a' in their name"). Small models latch onto the negation and DROP
+        // the type include — phi-4-mini emitted {pattern:".*a.*", excludeGlobs:["*a*"]} with no *.png.
+        // When the ORIGINAL query names a known type word AND contains a name-negation cue, force the
+        // type's include glob back. Gated on the negation so ordinary "png files" / "text inside png
+        // images" (which the model handles) are untouched.
+        ApplyTypeFilterForNameNegation(include, context.OriginalQuery);
+
         // "hidden file(s)" / "not hidden files" controls the Advanced Options "Search hidden files"
         // toggle, NOT an exclude glob. Detect the intent from the ORIGINAL query (independent of the
         // model's guess) and, when present, drop the dotfile/hidden-exclusion glob the model emits to
@@ -310,6 +318,24 @@ public static class SemanticPlanApplier
         {
             pattern = null;
             mode = Models.SearchMode.FileNames;
+        }
+
+        // A "named X" / "called X" request is a FILENAME-substring search: the pattern should be the
+        // named term in FileNames mode. Small models mishandle it — phi-4 emitted a match-all pattern
+        // (".*") for "files named budget", losing the term entirely. When the ORIGINAL query names a
+        // file and the model produced no term that carries it (null, a match-all token, or a glob-shaped
+        // token), force the named term as a literal filename pattern. A model pattern that already
+        // contains the term is left alone.
+        if (TryExtractNameTerm(context.OriginalQuery, out string namedTerm))
+        {
+            bool patternCarriesTerm = pattern is not null
+                && pattern.IndexOf(namedTerm, StringComparison.OrdinalIgnoreCase) >= 0;
+            if (!patternCarriesTerm && (pattern is null || IsMatchAllPattern(pattern) || LooksLikeGlobToken(pattern)))
+            {
+                pattern = namedTerm;
+                useRegex = false;
+                mode = Models.SearchMode.FileNames;
+            }
         }
 
         // Finding TEXT inside image files requires OCR ("Search image text"). A request like
@@ -1199,6 +1225,46 @@ public static class SemanticPlanApplier
         return (IReadOnlyList<string>?)forced ?? [];
     }
 
+    // A name-negation cue: "... without/no/not/excluding ... (file) name(s)". Requires the word "name"
+    // so it does NOT fire on unrelated negations ("not modified today", "not in hidden folders"). The
+    // token gap is bounded so it stays within a single clause.
+    private static readonly Regex NameNegationCue = new(
+        @"\b(?:without|no|not|excluding|don'?t|doesn'?t|does\s+not|do\s+not)\b(?:\s+\S+){0,6}?\s+\b(?:file\s*)?names?\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    // A BARE file-type word followed by a file noun ("png files", "jpg images"). Distinct from the
+    // dotted ExplicitExtensionRegex; the captured word is validated against known extensions so
+    // category nouns ("text files", "image files") never force a glob.
+    private static readonly Regex BareTypeWordRegex = new(
+        @"(?<![\w.])([A-Za-z0-9]{1,8})\s+(?:files?|images?|photos?|pictures?|documents?|docs?)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static bool IsKnownFileTypeWord(string ext) =>
+        KnownFileExtensions.Default.Contains(ext) ||
+        Yagu.Services.Ocr.ImageOcrSupport.DefaultImageExtensions.Contains(ext);
+
+    /// <summary>
+    /// Restores the positive file-TYPE include glob a small model drops when the query pairs a type
+    /// with a NAME negation ("all png files without 'a' in their name" — phi-4-mini emitted no *.png).
+    /// No-op unless the ORIGINAL query contains a name-negation cue AND names a known type word; then
+    /// the type's <c>*.ext</c> glob is added when the model omitted it. Ordinary "png files" queries
+    /// (no negation) are untouched, so the model's own — usually correct — filter is preserved.
+    /// </summary>
+    internal static void ApplyTypeFilterForNameNegation(List<string> include, string? originalQuery)
+    {
+        if (string.IsNullOrWhiteSpace(originalQuery) || !NameNegationCue.IsMatch(originalQuery))
+            return;
+
+        foreach (Match m in BareTypeWordRegex.Matches(originalQuery))
+        {
+            string ext = m.Groups[1].Value.ToLowerInvariant();
+            if (!IsKnownFileTypeWord(ext))
+                continue;
+            if (!include.Any(g => GlobHasBareExtension(g, ext)))
+                include.Add("*." + ext);
+        }
+    }
+
     /// <summary>True when <paramref name="pattern"/> looks like a glob/extension token rather than a
     /// real content search term — i.e. it contains a wildcard or is a bare <c>.ext</c>. Internal so the
     /// empty/bare-<c>.ext</c> branches can be unit-tested directly (it is only reached from
@@ -1209,6 +1275,47 @@ public static class SemanticPlanApplier
         if (s.Length == 0) return false;
         if (s.IndexOfAny(['*', '?']) >= 0) return true;
         return s[0] == '.' && s.Length > 1 && s.AsSpan(1).IndexOfAnyExcept(BareExtensionChars) < 0;
+    }
+
+    // "named X" / "called X" / "with the name X" / "whose file name is X" -> the named term (the
+    // quoted span when quoted, else the following word). An optional leading "the" is skipped.
+    private static readonly Regex NamedFileTermRegex = new(
+        @"\b(?:named|called|(?:file\s*)?name[ds]?\s+(?:is|of|=|:)|with\s+(?:the\s+)?name|whose\s+(?:file\s*)?name\s+is)\s+(?:the\s+)?(?:""([^""]+)""|'([^']+)'|([A-Za-z0-9_.\-]+))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    // Words that are not a real file-name term ("named after the project", "called the report").
+    private static readonly HashSet<string> NameTermStopWords =
+        new(StringComparer.OrdinalIgnoreCase) { "after", "like", "the", "a", "an", "as", "with", "of" };
+
+    /// <summary>
+    /// Extracts the file-name term from a "named X" / "called X" filename request (the quoted span when
+    /// quoted, else the following word). Returns false when no such phrasing is present or the term is a
+    /// stop-word. Used to repair a model that answered a filename-substring request with a match-all
+    /// pattern instead of the named term.
+    /// </summary>
+    internal static bool TryExtractNameTerm(string? query, out string term)
+    {
+        term = string.Empty;
+        if (string.IsNullOrWhiteSpace(query))
+            return false;
+        Match m = NamedFileTermRegex.Match(query);
+        if (!m.Success)
+            return false;
+        string captured = (m.Groups[1].Success ? m.Groups[1].Value
+                         : m.Groups[2].Success ? m.Groups[2].Value
+                         : m.Groups[3].Value).Trim();
+        if (captured.Length == 0 || NameTermStopWords.Contains(captured))
+            return false;
+        term = captured;
+        return true;
+    }
+
+    /// <summary>True when <paramref name="pattern"/> is a match-everything token (".", ".*", "*", …)
+    /// rather than a real search term.</summary>
+    internal static bool IsMatchAllPattern(string pattern)
+    {
+        string s = pattern.Trim();
+        return s is "." or ".*" or ".+" or "*" or "*.*" or "^.*$" or "^.+$" or "(?s).*";
     }
 
     /// <summary>No natural-language-derived search term or regex is anywhere near this long.</summary>
