@@ -156,7 +156,7 @@ internal sealed class SemanticModelQualificationDialog : Window
         _root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // body
         _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });   // footer
 
-        var header = new StackPanel { Spacing = 6 };
+        var header = new StackPanel { Spacing = 16 };
         _titleText = new TextBlock
         {
             Text = "Checking AI models",
@@ -332,7 +332,7 @@ internal sealed class SemanticModelQualificationDialog : Window
         // Persistent per-model progress (always visible, above the scrolling transcript).
         _modelProgressText = new TextBlock { FontSize = 12, Opacity = 0.8, TextWrapping = TextWrapping.NoWrap };
         _modelProgressBar = new ProgressBar { Minimum = 0, Maximum = 100, Value = 0, IsIndeterminate = false };
-        var progressPanel = new StackPanel { Spacing = 6, Margin = new Thickness(0, 2, 0, 16) };
+        var progressPanel = new StackPanel { Spacing = 6, Margin = new Thickness(0, 2, 0, 30) };
         progressPanel.Children.Add(_modelProgressText);
         progressPanel.Children.Add(_modelProgressBar);
 
