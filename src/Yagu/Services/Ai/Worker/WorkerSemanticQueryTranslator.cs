@@ -22,12 +22,22 @@ public sealed class SemanticWorkerException(string message) : Exception(message)
 /// failure (or an empty model list) and respawns the worker on the next use, replaying the current config.
 /// This type is AOT-safe (source-gen JSON only) so it can live in the Native-AOT main app.
 /// </summary>
-public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IAsyncDisposable
+public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, ISemanticHostController, IAsyncDisposable
 {
     private const string LogSource = "Semantic.WorkerProxy";
     private const string WorkerEnvVar = "YAGU_SEMANTIC_WORKER";
     private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
     private static readonly TimeSpan ReadyTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>How long <see cref="ResetHostAsync"/> waits after the killed worker has fully exited before
+    /// it lets the next worker spawn. Killing a worker that had a model resident on the GPU and IMMEDIATELY
+    /// spawning a fresh one that re-registers the CUDA/DirectML execution provider crashes the fresh worker
+    /// mid-init (observed: it exits code -1 during "Ensuring hardware execution providers") because the GPU
+    /// driver / Foundry Local runtime is still tearing down the dead worker's device context. This settle
+    /// gives that teardown time to finish so the next worker inits cleanly. Held under the spawn lock, so
+    /// the next spawn is serialized behind it.</summary>
+    private static readonly TimeSpan HostResetGpuSettle = TimeSpan.FromSeconds(3);
+
     private static int _missingWorkerLogged;
 
     private readonly SemaphoreSlim _spawnLock = new(1, 1);
@@ -195,6 +205,54 @@ public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IA
     }
 
     public void RefreshCatalog() => SendConfig(SemanticWorkerProtocol.Ops.RefreshCatalog);
+
+    // ── ISemanticHostController: hard host reset ─────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Kills the current worker process (entire tree) so ALL of its GPU/VRAM allocations are reclaimed by
+    /// the OS, then clears the local handles so the next <see cref="SendRequestAsync"/> respawns a fresh
+    /// worker and replays the config (<see cref="ReplayConfigAsync"/>). This is the reliable way to clear a
+    /// wedged native inference or the Foundry Local model-switch stall — an in-process unload leaves the
+    /// same host process (and its stuck native thread / not-fully-released VRAM) in place, whereas process
+    /// teardown is unconditional. Best-effort: only a cancelled <paramref name="cancellationToken"/> throws.
+    /// </remarks>
+    public async Task ResetHostAsync(CancellationToken cancellationToken)
+    {
+        if (_disposed) return;
+
+        await _spawnLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            Process? proc = _proc;
+            // Detach first so the Exited handler (which fires when we kill it) doesn't race our teardown,
+            // then fail any in-flight requests so their awaiters unblock immediately.
+            _proc = null;
+            _stdin = null;
+            FaultAllPending(new SemanticWorkerException("the semantic worker was reset for a clean model load"));
+
+            if (proc is null)
+                return; // nothing was running — the next request spawns a fresh worker
+
+            if (!proc.HasExited)
+            {
+                LogService.Instance.Info(LogSource,
+                    $"resetting semantic worker (pid {SafeId(proc)}) — killing it so the next model loads into a clean host.");
+                TryKill(proc);
+            }
+
+            // Wait for the process to fully exit, then let the GPU driver / Foundry Local runtime reclaim
+            // the prior model's device context before the NEXT worker (spawned by the following request)
+            // re-registers execution providers. Without this settle, a back-to-back respawn crashes the
+            // fresh worker mid-EP-init. Held under the spawn lock, so the next SpawnAsync waits behind it.
+            await WaitForExitAsync(proc).ConfigureAwait(false);
+            await Task.Delay(HostResetGpuSettle, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _spawnLock.Release();
+        }
+    }
 
     // ── Worker lifecycle ─────────────────────────────────────────────────────────────────────────
 

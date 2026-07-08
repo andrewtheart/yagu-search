@@ -112,6 +112,31 @@ public interface ISemanticQueryTranslator
     string? CurrentModelKey { get; }
 }
 
+/// <summary>
+/// Optional capability implemented by a translator whose model runs in a SEPARATE host process (the
+/// out-of-process semantic worker): it can hard-RESET that host — terminating the worker so all of its
+/// GPU/VRAM allocations are reclaimed by the OS on process teardown, and the next translation/prepare
+/// spawns a clean one that replays the current config.
+/// </summary>
+/// <remarks>
+/// This is a STRONGER reset than <see cref="ISemanticQueryTranslator.UnloadCurrentModelAsync"/> (an
+/// in-process model eviction that keeps the same host process). The Foundry Local / onnxruntime-genai
+/// native stack has been observed to WEDGE the first inference after an in-process model SWITCH
+/// (unload model A → load model B in the same host → B's first inference hangs forever, producing no
+/// output and spinning the CPU); only a fresh host process reliably clears that state. The first-run
+/// model-qualification sweep uses this so every candidate loads into a clean host — a switch can no
+/// longer wedge it — and to reclaim a wedged host immediately instead of leaking a high-CPU zombie.
+/// A translator that runs the model in-process (or a unit-test fake) may leave this unimplemented; the
+/// sweep then falls back to <see cref="ISemanticQueryTranslator.UnloadCurrentModelAsync"/>.
+/// </remarks>
+public interface ISemanticHostController
+{
+    /// <summary>Tears down the out-of-process host (if any) so the next translation/prepare spawns a
+    /// fresh one, replaying the current config. Best-effort; never throws except to honor a cancelled
+    /// <paramref name="cancellationToken"/>.</summary>
+    Task ResetHostAsync(CancellationToken cancellationToken);
+}
+
 /// <summary>A locally-runnable model the user can choose for semantic translation.</summary>
 public sealed class SemanticModelOption
 {

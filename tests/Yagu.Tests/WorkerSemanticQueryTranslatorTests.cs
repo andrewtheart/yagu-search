@@ -32,9 +32,30 @@ public sealed class WorkerSemanticQueryTranslatorTests
     public void Proxy_ImplementsTranslatorInterfaceAndIsAsyncDisposable()
     {
         string src = Proxy();
-        Assert.Contains("public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, IAsyncDisposable", src);
+        Assert.Contains("public sealed class WorkerSemanticQueryTranslator : ISemanticQueryTranslator, ISemanticHostController, IAsyncDisposable", src);
         // Same 3-arg ctor shape as the in-process translator, so MainViewModel wiring is a drop-in swap.
         Assert.Contains("public WorkerSemanticQueryTranslator(bool enabled, string? modelOverrideAlias = null, string? devicePreferenceOrder = null)", src);
+    }
+
+    [Fact]
+    public void Proxy_ResetHostKillsTheWorkerSoTheNextModelLoadsClean()
+    {
+        string src = Proxy();
+        // ISemanticHostController.ResetHostAsync hard-kills the current worker (entire tree) and clears the
+        // handles so the next request respawns a fresh host — the reliable way to clear the Foundry Local
+        // model-switch wedge (an in-process unload leaves the stuck native thread / not-fully-freed VRAM).
+        Assert.Contains("public async Task ResetHostAsync(CancellationToken cancellationToken)", src);
+        // It detaches the process reference before killing (so the Exited handler doesn't race), fails any
+        // in-flight requests, and kills the process tree via the shared helper.
+        Assert.Contains("_proc = null;", src);
+        Assert.Contains("TryKill(proc);", src);
+        // The kill helper terminates the whole tree so a child (Foundry Local runtime) can't be orphaned.
+        Assert.Contains("p.Kill(entireProcessTree: true)", src);
+        // After killing it WAITS for full process exit and then settles, so the GPU driver reclaims the dead
+        // worker's CUDA/DirectML context before the next worker re-registers execution providers — a
+        // back-to-back respawn otherwise crashes the fresh worker mid-EP-init. Held under the spawn lock.
+        Assert.Contains("await WaitForExitAsync(proc).ConfigureAwait(false);", src);
+        Assert.Contains("await Task.Delay(HostResetGpuSettle, cancellationToken).ConfigureAwait(false);", src);
     }
 
     [Fact]

@@ -285,6 +285,13 @@ public sealed class SemanticModelQualificationRunner
         // Prepare each candidate at most once (download/load is not counted toward probe latency).
         string? preparedAlias = null;
 
+        // True once ANY candidate has touched the model host (loaded a model, or even just attempted a
+        // load that wedged/failed). The next candidate must then hard-RESET the host before loading so it
+        // starts clean — see the reset in ProbeRunner's candidate-switch block. Distinct from preparedAlias
+        // (which tracks only a SUCCESSFUL load): a candidate whose load wedged leaves preparedAlias null but
+        // still dirtied the host, and the following candidate must not inherit that stuck host.
+        bool hostMayBeDirty = false;
+
         // Classifies why a probe did not pass, for the transcript's ✗ chip.
         static SemanticProbeFailureReason ClassifyFailure(ProbeOutcome outcome, bool passed, int queryLimitMs)
         {
@@ -376,13 +383,28 @@ public sealed class SemanticModelQualificationRunner
 
             if (!string.Equals(preparedAlias, alias, StringComparison.OrdinalIgnoreCase))
             {
-                // Evict the previously-probed candidate from memory BEFORE loading the next one so only a
-                // single model is ever resident. Foundry Local does not evict on load — models accumulate —
-                // so walking a ladder of candidates would otherwise pile them up and OOM ("bad allocation").
-                // Best-effort and never throws; done before SetModelOverride below (which drops Yagu's
-                // reference to the loaded model, after which it could no longer be unloaded).
-                if (preparedAlias is not null)
-                    await _translator.UnloadCurrentModelAsync(token).ConfigureAwait(false);
+                // Give the next candidate a CLEAN host. Foundry Local does not evict on load (models
+                // accumulate → OOM), and — worse — its native stack WEDGES the first inference after an
+                // in-process model SWITCH (unload A → load B in the same worker → B's first inference hangs
+                // forever with no output, pegging the CPU; the exact stall that froze the first-run sweep).
+                // So when the translator runs the model in a separate host process, hard-RESET that host
+                // (kill the worker) before loading the next candidate: OS process teardown reclaims all of
+                // the prior model's VRAM and the fresh worker has never loaded another model, so B loads
+                // clean and cannot inherit the switch wedge — nor a stuck load_model from a candidate whose
+                // OWN load wedged. A translator with no separate host (in-process, or a unit-test fake)
+                // falls back to an in-process unload, which at least prevents the OOM. Reset only when a
+                // prior candidate dirtied the host; the very first candidate loads into the (clean)
+                // catalog-listing host. Done before SetModelOverride below (which drops Yagu's reference).
+                if (hostMayBeDirty)
+                {
+                    if (_translator is ISemanticHostController hostController)
+                        await hostController.ResetHostAsync(token).ConfigureAwait(false);
+                    else
+                        await _translator.UnloadCurrentModelAsync(token).ConfigureAwait(false);
+                }
+                // About to load into this host — the next candidate must reset it, whether this load
+                // succeeds, wedges, or fails.
+                hostMayBeDirty = true;
 
                 progress?.Report(new SemanticQualificationProgress
                 {
@@ -597,8 +619,20 @@ public sealed class SemanticModelQualificationRunner
             switch (attempt.Status)
             {
                 case TimedAttemptStatus.Wedged:
-                    // Still wedged after the retry budget (or hard-hung): leak the stuck native op (observed +
-                    // its CTS disposed when it finally returns) and report the query as too slow.
+                    // Still wedged after the retry budget (or hard-hung). When the model runs in a separate
+                    // host, KILL that host now so its stuck native op and VRAM are reclaimed immediately
+                    // instead of leaking a high-CPU zombie worker (the multi-GB, pegged-CPU process seen when
+                    // the sweep froze). Resetting the host also unblocks the leaked translate (its worker
+                    // exits, so the request fails fast) before it is observed below; and it covers a wedge on
+                    // the LAST candidate, where no subsequent candidate would otherwise reset the host.
+                    if (_translator is ISemanticHostController wedgedHostController)
+                    {
+                        await wedgedHostController.ResetHostAsync(token).ConfigureAwait(false);
+                        // Host is now fresh; the next candidate need not reset it again.
+                        hostMayBeDirty = false;
+                    }
+                    // Still wedged after the retry budget (or hard-hung): observe the leaked native op (its
+                    // CTS is disposed when it finally returns) and report the query as too slow.
                     ObserveAndDisposeInBackground(attempt.WedgedTask!, attempt.WedgedCts!);
                     return await CompleteProbeAsync(
                         ProbeOutcome.Miss(attempt.LatencyMs), probe, alias, candidateIndex, queryLimitMs, token).ConfigureAwait(false);

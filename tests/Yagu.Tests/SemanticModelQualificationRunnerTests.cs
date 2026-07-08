@@ -217,11 +217,12 @@ public sealed class SemanticModelQualificationRunnerTests
     }
 
     [Fact]
-    public async Task RunAsync_UnloadsEachCandidateBeforePreparingTheNext()
+    public async Task RunAsync_ResetsHostBeforePreparingTheNextCandidate()
     {
-        // A fails accuracy so the sweep advances to B. Only one model may be resident at a time, so the
-        // runner must evict A from memory BEFORE preparing B (Foundry Local does not evict on load, so
-        // otherwise probing a ladder of models would accumulate them and OOM with "bad allocation").
+        // A fails accuracy so the sweep advances to B. Each candidate must load into a CLEAN host: an
+        // in-process model switch (unload A → load B in the same worker) wedges B's first inference in the
+        // Foundry Local native stack, and models also accumulate → OOM. So the runner hard-RESETS the host
+        // (kills the worker) before preparing B; a fresh worker never loaded A, so B loads clean.
         var translator = new FakeTranslator
         {
             Options = { Option("A", recommended: true), Option("B") },
@@ -232,19 +233,20 @@ public sealed class SemanticModelQualificationRunnerTests
         var result = await runner.RunAsync(new[] { RequiresPngGlob() }, Thresholds, progress: null, CancellationToken.None);
 
         Assert.Equal("B", result.QualifiedModelAlias);
-        // A (the intermediate candidate) is evicted exactly once, and that eviction happens while A is
-        // still the resident model (before B is prepared). The qualified final model B is left resident
-        // for immediate use, so the sweep never unloads it.
-        Assert.Equal(new[] { "A" }, translator.Unloaded);
+        // The host is reset exactly once — while A is still resident, before B is prepared. The first
+        // candidate (A) loads into the clean catalog-listing host, so it is not reset. The production path
+        // is the host reset, not the in-process unload, so Unloaded stays empty.
+        Assert.Equal(new[] { "A" }, translator.HostResets);
+        Assert.Empty(translator.Unloaded);
         Assert.Equal(new[] { "A", "B" }, translator.Prepared);
     }
 
     [Fact]
-    public async Task RunAsync_ProbesBothQualifiers_EvictsTheEarlierAndLeavesTheLastResident()
+    public async Task RunAsync_ProbesBothQualifiers_ResetsTheHostBetweenThem()
     {
-        // Both candidates pass. The sweep probes both for the comparison list; only one model may be
-        // resident at a time, so the earlier one (A) is evicted before the next (B) is prepared, and the
-        // last-probed (B) is left resident. A still wins the recommendation on the latency tie.
+        // Both candidates pass. The sweep probes both for the comparison list; each loads into a clean
+        // host, so the runner resets the host after A before preparing B. A still wins the recommendation
+        // on the latency tie.
         var translator = new FakeTranslator
         {
             Options = { Option("A", recommended: true), Option("B") },
@@ -256,7 +258,8 @@ public sealed class SemanticModelQualificationRunnerTests
 
         Assert.Equal("A", result.QualifiedModelAlias); // tie on latency → earlier (higher-ranked)
         Assert.Equal(new[] { "A", "B" }, translator.Prepared);
-        Assert.Equal(new[] { "A" }, translator.Unloaded);
+        Assert.Equal(new[] { "A" }, translator.HostResets);
+        Assert.Empty(translator.Unloaded);
     }
 
     [Fact]
@@ -361,6 +364,10 @@ public sealed class SemanticModelQualificationRunnerTests
         Assert.Equal("B", result.QualifiedModelAlias);
         var wedged = result.Reports.Single(r => r.ModelAlias == "wedged-loader");
         Assert.True(wedged.Crashed);
+        // A candidate whose LOAD wedged leaves the host stuck in load_model; the runner must reset it
+        // before preparing the next candidate so B does not queue behind the hung load and cascade-fail.
+        // (The failed load still marked the host dirty even though it never became "prepared".)
+        Assert.Equal(new[] { "wedged-loader" }, translator.HostResets);
     }
 
     [Fact]
@@ -391,6 +398,11 @@ public sealed class SemanticModelQualificationRunnerTests
         // A wedge gets ONE bounded retry before abandonment (the retry also wedged here), so the one probe
         // ran twice — never an infinite loop.
         Assert.Equal(2, translator.TranslateCallsByAlias["wedged"]);
+        // A persistent wedge means the host is left with a stuck, high-CPU native op — so the runner
+        // hard-RESETS the host (kills the worker) to reclaim it immediately, rather than leaking a zombie.
+        // The reset registers once, against the wedged model; the next candidate then loads into the clean
+        // host without a second (redundant) reset.
+        Assert.Equal(new[] { "wedged" }, translator.HostResets);
     }
 
     [Fact]
@@ -814,14 +826,27 @@ public sealed class SemanticModelQualificationRunnerTests
         }
     }
 
-    private sealed class FakeTranslator : ISemanticQueryTranslator
+    private sealed class FakeTranslator : ISemanticQueryTranslator, ISemanticHostController
     {
         public List<SemanticModelOption> Options { get; } = new();
         public List<string> Prepared { get; } = new();
 
         /// <summary>Aliases explicitly evicted between candidates via <see cref="UnloadCurrentModelAsync"/>,
-        /// in order — the previous candidate each time the sweep advances to the next.</summary>
+        /// in order — the previous candidate each time the sweep advances to the next. Only used by the
+        /// runner's IN-PROCESS fallback; because this fake implements <see cref="ISemanticHostController"/>
+        /// the sweep hard-resets the host instead, recording into <see cref="HostResets"/>.</summary>
         public List<string> Unloaded { get; } = new();
+
+        /// <summary>Aliases resident when the runner hard-RESET the model host (killed the worker) before
+        /// loading the next candidate — or to reclaim a wedged host. This is the production eviction path
+        /// (the worker proxy implements <see cref="ISemanticHostController"/>). A reset only registers when a
+        /// host was actually alive, mirroring the real proxy (which no-ops when the worker is already dead).</summary>
+        public List<string> HostResets { get; } = new();
+
+        /// <summary>Whether a worker "exists" — set when the fake lists models or prepares a model, cleared
+        /// on a host reset. Lets <see cref="ResetHostAsync"/> record at most one reset per live host, exactly
+        /// like the real proxy which only kills a running worker.</summary>
+        private bool _hostAlive;
 
         /// <summary>Aliases warmed via the runner's untimed warmup inference, in order. One entry per
         /// prepared candidate.</summary>
@@ -867,12 +892,16 @@ public sealed class SemanticModelQualificationRunnerTests
         public string? CurrentModelKey => _currentOverride;
 
         public Task<IReadOnlyList<SemanticModelOption>> ListModelOptionsAsync(
-            IProgress<SemanticTranslationProgress>? progress, CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<SemanticModelOption>>(Options);
+            IProgress<SemanticTranslationProgress>? progress, CancellationToken cancellationToken)
+        {
+            _hostAlive = true; // listing the catalog spawns/uses a worker
+            return Task.FromResult<IReadOnlyList<SemanticModelOption>>(Options);
+        }
 
         public async Task PrepareModelAsync(
             string? modelAlias, IProgress<SemanticTranslationProgress>? progress, CancellationToken cancellationToken)
         {
+            _hostAlive = true; // preparing a model spawns/uses a worker
             Prepared.Add(modelAlias ?? "");
             TimeSpan delay = PrepareDelayProvider?.Invoke(modelAlias ?? "") ?? TimeSpan.Zero;
             if (delay > TimeSpan.Zero)
@@ -969,6 +998,18 @@ public sealed class SemanticModelQualificationRunnerTests
         public Task UnloadCurrentModelAsync(CancellationToken cancellationToken)
         {
             Unloaded.Add(_currentOverride ?? "");
+            return Task.CompletedTask;
+        }
+
+        // Hard host reset (kills the worker in production). Records the resident alias and marks the host
+        // dead so a redundant follow-up reset — like the real proxy — is a no-op that records nothing.
+        public Task ResetHostAsync(CancellationToken cancellationToken)
+        {
+            if (_hostAlive)
+            {
+                HostResets.Add(_currentOverride ?? "");
+                _hostAlive = false;
+            }
             return Task.CompletedTask;
         }
 
