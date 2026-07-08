@@ -26,9 +26,11 @@ because the native OCR stack (paddle_inference / OpenCvSharpExtern) is **not** N
   `CopyOcrWorkerToPublish` into `<app>\ocr-worker\`. **Build it as a child `dotnet build` `<Exec>`,
   never an in-proc `<MSBuild>` task** — the in-proc task corrupts the WinUI XAML markup compiler
   (`WMC1509`/`WMC9999`, cascading into bogus `CS0103`). Opt out with `-p:BuildOcrWorker=false`.
-- Probe order (`WorkerOcrEngine.ResolveWorkerPath`): env `YAGU_OCR_WORKER` →
-  `%LOCALAPPDATA%\Yagu\ocr-runtime\worker\Yagu.OcrWorker.exe` → beside-app `ocr-worker\`. Re-probed
-  each search, so a redeployed worker is picked up on the next search without restarting the app.
+- Probe order (`WorkerOcrEngine.ResolveWorkerPath`): env `YAGU_OCR_WORKER` → beside-app `ocr-worker\`.
+  Re-probed each search, so a redeployed worker is picked up on the next search without restarting the
+  app. **SECURITY:** never probe a per-user-writable path (e.g. `%LOCALAPPDATA%`) for the worker exe —
+  a signed app auto-launching a planted exe from there is a binary-planting vector. Load only from the
+  ACL-protected install dir (or the explicit env override), matching the semantic worker.
 
 ## Engines & quality knobs
 

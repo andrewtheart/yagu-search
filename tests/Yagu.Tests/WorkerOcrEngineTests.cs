@@ -505,13 +505,18 @@ public sealed class WorkerOcrEngineProtocolSourceTests
     }
 
     [Fact]
-    public void ResolveWorkerPath_ProbesOverrideThenProvisionedThenBesideApp()
+    public void ResolveWorkerPath_ProbesOverrideThenBesideApp_AndNeverAUserWritablePath()
     {
+        // SECURITY (binary planting): the worker must be loaded only from an explicit override or the
+        // app's own install directory, NEVER from a per-user-writable path such as %LOCALAPPDATA%.
+        // Auto-executing a planted exe from a user-writable location would let non-admin malware run
+        // inside Yagu's process tree.
         AssertContainsInOrder(Source,
             "if (_hasWorkerPathOverride)",
             "Environment.GetEnvironmentVariable(WorkerPathEnvVar)",
-            "\"Yagu\", \"ocr-runtime\", \"worker\", \"Yagu.OcrWorker.exe\"",
             "\"ocr-worker\", \"Yagu.OcrWorker.exe\"");
+        Assert.DoesNotContain("\"ocr-runtime\", \"worker\"", Source);
+        Assert.DoesNotContain("SpecialFolder.LocalApplicationData", Source);
     }
 
     private static void AssertContainsInOrder(string haystack, params string[] needles)

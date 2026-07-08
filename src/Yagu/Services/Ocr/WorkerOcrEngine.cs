@@ -432,13 +432,13 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
             return File.Exists(overridePath) ? overridePath : null;
         }
 
-        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        string provisioned = Path.Combine(localAppData, "Yagu", "ocr-runtime", "worker", "Yagu.OcrWorker.exe");
-        if (File.Exists(provisioned))
-        {
-            return provisioned;
-        }
-
+        // SECURITY (binary planting): load the worker ONLY from the app's own install directory. We
+        // deliberately do NOT probe a per-user-writable location such as %LOCALAPPDATA%. A signed app
+        // that auto-executes an .exe from a predictable user-writable path lets any user-level process
+        // (non-admin malware) plant a malicious "Yagu.OcrWorker.exe" there and have it run inside Yagu's
+        // process tree on the next image search — a trust-laundering / persistence vector. The install
+        // directory is protected by its own ACLs; an attacker able to write there could already replace
+        // Yagu.exe itself, so it is no weaker than the app's own trust boundary.
         string besideApp = Path.Combine(AppContext.BaseDirectory, "ocr-worker", "Yagu.OcrWorker.exe");
         if (File.Exists(besideApp))
         {
@@ -460,14 +460,12 @@ public abstract class WorkerOcrEngine : IOcrEngine, IAsyncDisposable, IDisposabl
             return;
         }
 
-        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        string provisioned = Path.Combine(localAppData, "Yagu", "ocr-runtime", "worker", "Yagu.OcrWorker.exe");
         string besideApp = Path.Combine(AppContext.BaseDirectory, "ocr-worker", "Yagu.OcrWorker.exe");
         LogService.Instance.Warning(
             LogSource,
             "Image-text (OCR) search is unavailable: Yagu.OcrWorker.exe was not found, so image files " +
             "cannot be scanned and OCR searches will return no matches. Probed: " + WorkerPathEnvVar +
-            " environment variable, \"" + provisioned + "\", \"" + besideApp + "\".");
+            " environment variable and \"" + besideApp + "\".");
     }
 
     public void Dispose()
