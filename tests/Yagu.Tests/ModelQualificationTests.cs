@@ -46,15 +46,32 @@ public sealed class ModelQualificationTests
         (alias, probe, _) => Task.FromResult(f(alias, probe));
 
     [Fact]
-    public async Task QualifyAsync_FirstCandidatePasses_StopsEarly()
+    public async Task QualifyAsync_ProbesAllCandidates_AndRecommendsFastestQualifier()
     {
+        // Both models clear the bar; the sweep probes BOTH (for the comparison list) and recommends the
+        // faster one (lower median latency) — e.g. a mini that is just as accurate but quicker.
+        var runner = Runner((alias, probe) =>
+            ProbeOutcome.Answered(PassingPlan(probe), alias == "fast-mini" ? 1_000 : 5_000));
+
+        var result = await ModelQualification.QualifyAsync(["slow-large", "fast-mini"], Probes, Thresholds, runner);
+
+        Assert.Equal("fast-mini", result.QualifiedModelAlias);
+        Assert.True(result.AnyQualified);
+        Assert.Equal(2, result.Reports.Count); // both probed — did not stop at the first pass
+        Assert.All(result.Reports, r => Assert.True(r.Verdict.Passed));
+    }
+
+    [Fact]
+    public async Task QualifyAsync_QualifiersTieOnLatency_RecommendsTheEarlierCandidate()
+    {
+        // Same latency → prefer the earlier (higher-ranked) candidate; the ladder already puts the
+        // smaller/faster variant first within a family.
         var runner = Runner((alias, probe) => ProbeOutcome.Answered(PassingPlan(probe), 1_000));
 
-        var result = await ModelQualification.QualifyAsync(["phi-4-mini", "qwen2.5-1.5b"], Probes, Thresholds, runner);
+        var result = await ModelQualification.QualifyAsync(["phi-4-mini", "phi-4"], Probes, Thresholds, runner);
 
         Assert.Equal("phi-4-mini", result.QualifiedModelAlias);
-        Assert.True(result.AnyQualified);
-        Assert.Single(result.Reports); // did not bother probing the second candidate
+        Assert.Equal(2, result.Reports.Count);
     }
 
     [Fact]

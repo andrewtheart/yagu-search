@@ -11,9 +11,10 @@ namespace Yagu.Tests;
 
 /// <summary>
 /// Orchestration tests for <see cref="SemanticModelQualificationRunner"/> driven by an in-memory fake
-/// <see cref="ISemanticQueryTranslator"/>. These verify candidate ordering, stop-on-first-pass,
-/// prepare-once-per-candidate, crash abandonment, best-effort selection, the candidate cap and the
-/// empty-catalog path — independent of any real model.
+/// <see cref="ISemanticQueryTranslator"/>. These verify candidate ordering (incl. smaller-family-variant
+/// first), probing every candidate for the comparison list, prepare-once-per-candidate, crash
+/// abandonment, best-effort selection, the candidate cap and the empty-catalog path — independent of any
+/// real model.
 /// </summary>
 public sealed class SemanticModelQualificationRunnerTests
 {
@@ -38,8 +39,10 @@ public sealed class SemanticModelQualificationRunnerTests
         SemanticTranslationResult.Ok(new SemanticSearchPlan());
 
     [Fact]
-    public async Task RunAsync_FirstRecommendedCandidatePasses_QualifiesItAndStops()
+    public async Task RunAsync_ProbesAllCandidatesForTheComparisonList_EvenAfterOnePasses()
     {
+        // All candidates pass. The sweep no longer stops at the first pass — it probes every candidate so
+        // the result presents a full comparison list; the earliest (fastest on a latency tie) is recommended.
         var translator = new FakeTranslator
         {
             Options = { Option("A", recommended: true), Option("B"), Option("C") },
@@ -51,8 +54,8 @@ public sealed class SemanticModelQualificationRunnerTests
 
         Assert.True(result.AnyQualified);
         Assert.Equal("A", result.QualifiedModelAlias);
-        Assert.Single(result.Reports);
-        Assert.Equal(new[] { "A" }, translator.Prepared);
+        Assert.Equal(new[] { "A", "B", "C" }, result.Reports.Select(r => r.ModelAlias).ToArray());
+        Assert.Equal(new[] { "A", "B", "C" }, translator.Prepared);
     }
 
     [Fact]
@@ -110,9 +113,9 @@ public sealed class SemanticModelQualificationRunnerTests
     [Fact]
     public async Task RunAsync_TriesSmallerSameFamilyVariantFirst_AndPrefersIt()
     {
-        // phi-4 (recommended, large) and phi-4-mini (smaller) both pass every probe. The smaller sibling
-        // is tried first, qualifies, and — because the sweep stops at the first qualifier — becomes the
-        // pick, so the faster model wins and the larger sibling is never probed.
+        // phi-4 (recommended, large) and phi-4-mini (smaller) both pass. The smaller sibling is probed
+        // FIRST (family reorder); the larger sibling is ALSO probed so it stays in the comparison list. On
+        // the latency tie the earlier one — the faster mini — is the recommendation.
         var translator = new FakeTranslator
         {
             Options =
@@ -127,7 +130,8 @@ public sealed class SemanticModelQualificationRunnerTests
         var result = await runner.RunAsync(new[] { RequiresPngGlob() }, Thresholds, progress: null, CancellationToken.None);
 
         Assert.Equal("phi-4-mini", result.QualifiedModelAlias);
-        Assert.Equal(new[] { "phi-4-mini" }, translator.Prepared); // the larger sibling was never probed
+        Assert.Equal(new[] { "phi-4-mini", "phi-4" }, translator.Prepared); // mini first, then the full version
+        Assert.Equal(new[] { "phi-4-mini", "phi-4" }, result.Reports.Select(r => r.ModelAlias).ToArray());
     }
 
     [Fact]
@@ -236,10 +240,11 @@ public sealed class SemanticModelQualificationRunnerTests
     }
 
     [Fact]
-    public async Task RunAsync_SingleQualifyingCandidate_IsNeverUnloaded()
+    public async Task RunAsync_ProbesBothQualifiers_EvictsTheEarlierAndLeavesTheLastResident()
     {
-        // The very first candidate qualifies, so there is no "next" to make room for — the runner must not
-        // evict the one model it just qualified (the user should be able to use it immediately).
+        // Both candidates pass. The sweep probes both for the comparison list; only one model may be
+        // resident at a time, so the earlier one (A) is evicted before the next (B) is prepared, and the
+        // last-probed (B) is left resident. A still wins the recommendation on the latency tie.
         var translator = new FakeTranslator
         {
             Options = { Option("A", recommended: true), Option("B") },
@@ -249,8 +254,9 @@ public sealed class SemanticModelQualificationRunnerTests
 
         var result = await runner.RunAsync(new[] { RequiresPngGlob() }, Thresholds, progress: null, CancellationToken.None);
 
-        Assert.Equal("A", result.QualifiedModelAlias);
-        Assert.Empty(translator.Unloaded);
+        Assert.Equal("A", result.QualifiedModelAlias); // tie on latency → earlier (higher-ranked)
+        Assert.Equal(new[] { "A", "B" }, translator.Prepared);
+        Assert.Equal(new[] { "A" }, translator.Unloaded);
     }
 
     [Fact]

@@ -104,7 +104,12 @@ public sealed class ModelQualificationResult
 public static class ModelQualification
 {
     /// <summary>
-    /// Qualifies models in <paramref name="candidateAliases"/> order, stopping at the first that passes.
+    /// Probes every candidate in <paramref name="candidateAliases"/> order (up to the caller's cap) to
+    /// build a full comparison list, then recommends the FASTEST model that clears the bar. It does not
+    /// stop at the first qualifier: a smaller sibling that also passes every probe (e.g. phi-4-mini after
+    /// phi-4) is preferred because it runs faster, and the larger sibling stays in the list as an
+    /// alternative the user can still pick. When nothing qualifies, the best-effort fallback is the
+    /// most-accurate model over the probes it actually ran.
     /// </summary>
     /// <param name="candidateAliases">Ordered candidate model aliases (best-first).</param>
     /// <param name="probes">The probe set to run against each candidate.</param>
@@ -127,8 +132,12 @@ public static class ModelQualification
         ArgumentNullException.ThrowIfNull(probeRunner);
 
         var reports = new List<CandidateQualificationReport>(candidateAliases.Count);
-        string? qualified = null;
 
+        // Probe EVERY candidate (up to the caller's cap) rather than stopping at the first that passes, so
+        // the result presents a full comparison list and — when several clear the bar — the FASTEST one
+        // can be recommended. Probing the larger sibling of a qualifying mini keeps it in the list as an
+        // alternative the user can still choose. (Per-candidate crash / too-slow abandonment still applies
+        // inside ProbeCandidateAsync.)
         foreach (var alias in candidateAliases)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -136,17 +145,20 @@ public static class ModelQualification
             var report = await ProbeCandidateAsync(alias, probes, thresholds, probeRunner, cancellationToken)
                 .ConfigureAwait(false);
             reports.Add(report);
+        }
 
-            if (report.Verdict.Passed)
-            {
-                qualified = alias;
-                break;
-            }
+        // Recommend the fastest qualifying model (lowest median latency); a latency tie favors the earlier
+        // (higher-ranked) candidate, which the ladder already orders smaller/faster-first within a family.
+        CandidateQualificationReport? best = null;
+        foreach (var r in reports)
+        {
+            if (r.Verdict.Passed && (best is null || r.MedianLatencyMs < best.MedianLatencyMs))
+                best = r;
         }
 
         return new ModelQualificationResult
         {
-            QualifiedModelAlias = qualified,
+            QualifiedModelAlias = best?.ModelAlias,
             BestEffortModelAlias = SelectBestEffort(reports),
             Reports = reports,
         };

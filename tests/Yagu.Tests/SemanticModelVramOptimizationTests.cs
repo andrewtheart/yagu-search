@@ -109,6 +109,28 @@ public sealed class SemanticModelVramOptimizationTests
     }
 
     [Fact]
+    public void Translator_SettlesVramAfterUnloadBeforeTheNextLoad()
+    {
+        // Switch-wedge mitigation: after unloading a model, WDDM lags before reclaiming its VRAM, and
+        // loading the next model (then its first inference) onto a still-near-full card wedges onnxruntime-
+        // genai. The translator marks a settle-pending on unload and waits VramSettleAfterUnload before the
+        // NEXT load — only on a switch, never the cold first load.
+        string translator = Read("Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs");
+
+        Assert.Contains("private static readonly TimeSpan VramSettleAfterUnload", translator);
+        Assert.Contains("private volatile bool _vramSettlePending;", translator);
+        Assert.Contains("_vramSettlePending = true;", translator);  // set right after UnloadAsync
+        Assert.Contains("await Task.Delay(VramSettleAfterUnload, cancellationToken)", translator);
+        Assert.Contains("_vramSettlePending = false;", translator); // cleared so it fires once per switch
+
+        // The settle delay is paid BEFORE LoadAsync.
+        int settle = translator.IndexOf("await Task.Delay(VramSettleAfterUnload", System.StringComparison.Ordinal);
+        int load = translator.IndexOf("model.LoadAsync(", System.StringComparison.Ordinal);
+        Assert.True(settle >= 0 && load > settle,
+            $"Expected the VRAM settle delay before LoadAsync (settle={settle}, load={load}).");
+    }
+
+    [Fact]
     public void Translator_DiscoversRelocatedFoundryCacheAndClampsEveryCopy()
     {
         string translator = Read("Yagu", "Services", "Ai", "FoundryLocalSemanticQueryTranslator.cs");

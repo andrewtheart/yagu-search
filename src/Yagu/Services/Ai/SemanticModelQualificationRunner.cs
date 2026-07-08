@@ -196,7 +196,9 @@ public sealed class SemanticModelQualificationRunner
     /// runnable models (28 was observed), and probing every one — each a download + load + full probe
     /// set — is needlessly slow when none of the top picks qualifies: the exotic tail is neither
     /// preferred nor likely to beat the best-effort fallback already found. Callers pass this as
-    /// <c>maxCandidates</c>; the sweep still stops early the moment a candidate qualifies.</summary>
+    /// <c>maxCandidates</c>; the sweep probes every candidate up to this cap (it does NOT stop at the
+    /// first qualifier) so the result offers a full comparison list and can recommend the fastest of
+    /// several that pass.</summary>
     public const int DefaultMaxCandidates = 5;
 
     /// <summary>Neutral, representative query used to warm a freshly-loaded model ONCE (untimed) before the
@@ -224,8 +226,9 @@ public sealed class SemanticModelQualificationRunner
     /// <param name="defaultDirectory">Directory used to resolve probe plans that name no location.</param>
     /// <param name="nowProvider">Clock used to resolve relative dates in probes (defaults to <see cref="DateTimeOffset.Now"/>).</param>
     /// <param name="directoryExists">Optional probe used to reject a hallucinated directory in a plan.</param>
-    /// <param name="maxCandidates">Caps how many candidates are tried (0 = no cap). The sweep stops early
-    /// once a candidate qualifies regardless of this cap.</param>
+    /// <param name="maxCandidates">Caps how many candidates are tried (0 = no cap). The sweep probes
+    /// every candidate up to this cap to build the comparison list; it does not stop at the first that
+    /// qualifies.</param>
     /// <param name="failedProbeHoldMs">How long (ms) to hold a failed probe visible before advancing, so a
     /// live UI can show the failure. 0 (default) = no pause, for fast unit tests.</param>
     public SemanticModelQualificationRunner(

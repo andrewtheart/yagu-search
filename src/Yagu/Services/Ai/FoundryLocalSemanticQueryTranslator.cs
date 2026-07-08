@@ -88,6 +88,19 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
     /// causes the unload to be skipped.</summary>
     private static readonly TimeSpan UnloadDrainTimeout = TimeSpan.FromSeconds(50);
 
+    // ── VRAM settle on a model switch ─────────────────────────────────────────────────────────────────
+    // After a large model is unloaded, WDDM can lag before it actually RECLAIMS the freed VRAM. Loading
+    // the next model — and running its first inference — while the card is still near-full has been
+    // observed to WEDGE onnxruntime-genai (the first inference never returns; e.g. loading phi-4 onto a
+    // 24 GB card immediately after unloading phi-4-mini during the qualification sweep). Waiting this long
+    // after an unload, BEFORE the next load, lets the VRAM settle so the incoming model loads into freed
+    // memory. Only applied on a switch (after an unload), never on the cold first load.
+    private static readonly TimeSpan VramSettleAfterUnload = TimeSpan.FromMilliseconds(2500);
+
+    /// <summary>Set when a model is unloaded; consumed (once) by the next load, which first waits
+    /// <see cref="VramSettleAfterUnload"/> for the card's VRAM to be reclaimed.</summary>
+    private volatile bool _vramSettlePending;
+
     /// <summary>Records a just-started native model operation (load/inference) so a later unload waits for
     /// it to finish before freeing the model.</summary>
     private void TrackNativeModelOp(Task op) => _lastNativeModelOp = op;
@@ -428,6 +441,7 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
             var stopwatch = Stopwatch.StartNew();
             await model.UnloadAsync().ConfigureAwait(false);
             stopwatch.Stop();
+            _vramSettlePending = true; // let WDDM reclaim this model's VRAM before the next load
             LogService.Instance.Info(LogSource,
                 $"Unloaded model '{model.Alias ?? model.Id}' from memory after use in {stopwatch.ElapsedMilliseconds} ms (freed VRAM).");
         }
@@ -879,6 +893,16 @@ public sealed class FoundryLocalSemanticQueryTranslator : ISemanticQueryTranslat
                 Detail = model.Alias,
             });
             log.Info(LogSource, $"Loading model '{model.Alias}'.");
+            // VRAM SETTLE: if a model was just unloaded, wait for WDDM to reclaim its VRAM before loading
+            // this one, so the incoming model isn't loaded onto a still-near-full card — which has been
+            // observed to wedge onnxruntime-genai's first inference on a model switch.
+            if (_vramSettlePending)
+            {
+                _vramSettlePending = false;
+                log.Verbose(LogSource,
+                    $"Waiting {VramSettleAfterUnload.TotalMilliseconds:0} ms for VRAM to settle after the previous unload before loading '{model.Alias}'.");
+                await Task.Delay(VramSettleAfterUnload, cancellationToken).ConfigureAwait(false);
+            }
             var loadStopwatch = Stopwatch.StartNew();
             var loadTask = model.LoadAsync(cancellationToken);
             TrackNativeModelOp(loadTask); // so a later unload waits for this native load to drain
