@@ -3596,6 +3596,53 @@ public sealed class PreviewCoreRegressionTests
             "return;");
     }
 
+    [Fact]
+    public void TextControlBox_ManyLongLinesUseMultiLineHorizontalVirtualization()
+    {
+        // A file with MANY very long lines (e.g. a JSONL chat log) is NOT the single-giant-line case the
+        // wrapped virtualization handles. In NoWrap the editor must slice EVERY visible line to the
+        // horizontal window instead of laying out the multi-megabyte join of all visible lines every frame
+        // (that per-frame O(total-visible-chars) layout is the scroll-stutter cause).
+        string textRenderer = ReadTextControlBoxSource("Core", "Renderer", "TextRenderer.cs");
+        string selectionRenderer = ReadTextControlBoxSource("Core", "Renderer", "SelectionRenderer.cs");
+
+        // The slice window + per-line prefix mapping machinery exists.
+        Assert.Contains("private bool ShouldHorizontallySlice(", textRenderer);
+        Assert.Contains("private string BuildHorizontallySlicedText(", textRenderer);
+        Assert.Contains("public int GetRenderedLayoutIndexForDocument(", textRenderer);
+        Assert.Contains("_renderedLineSlicePrefix", textRenderer);
+        Assert.Contains("public int HorizontalSliceLength", textRenderer);
+
+        // Only pathological files (a very long visible line) take the slice path; a file without any line
+        // over the threshold keeps the normal, untouched render path (and its well-tested caret/selection).
+        string shouldSlice = ExtractMethodWindow(textRenderer, "ShouldHorizontallySlice", window: 2000);
+        AssertContainsInOrder(shouldSlice,
+            "maxLen <= HorizontalVirtualizationThreshold",
+            "return false;");
+
+        // Draw builds ONLY the sliced text for the multi-line long case (never the full join).
+        string draw = ExtractMethodWindow(textRenderer, "Draw", window: 18000);
+        AssertContainsInOrder(draw,
+            "ShouldHorizontallySlice(canvasText, out hSliceStart, out hSliceLen)",
+            "RenderedText = BuildHorizontallySlicedText(hSliceStart, hSliceLen);",
+            "IsHorizontallyVirtualized = true;");
+
+        // Selection maps both endpoints through the per-line prefix offsets, not cumulative full-line
+        // lengths (which would over-count because the rendered prior lines are sliced).
+        string selection = ExtractMethodWindow(selectionRenderer, "DrawSelection", window: 9000);
+        AssertContainsInOrder(selection,
+            "else if (textRenderer.IsHorizontallyVirtualized)",
+            "textRenderer.GetRenderedLayoutIndexForDocument(startLine, characterPosStart)",
+            "textRenderer.GetRenderedLayoutIndexForDocument(endLine, characterPosEnd)");
+
+        // The current-line (caret / hit-test) layout is sliced at the SAME origin (HorizontalSliceStart) so
+        // the caret's rendered index and pixel offset line up.
+        string currentLine = ExtractMethodWindow(textRenderer, "UpdateCurrentLineTextLayout", window: 3000);
+        AssertContainsInOrder(currentLine,
+            "IsHorizontallyVirtualized && !IsWordWrapEnabled && HorizontalSliceLength > 0",
+            "Math.Min(HorizontalSliceStart, lineText.Length)");
+    }
+
     private static SearchResult CreateResult(string filePath, int lineNumber) =>
         new(filePath, lineNumber, $"line {lineNumber} test", 5, 4, Array.Empty<string>(), Array.Empty<string>());
 

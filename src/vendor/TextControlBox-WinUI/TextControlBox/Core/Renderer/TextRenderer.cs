@@ -69,6 +69,16 @@ internal class TextRenderer
     public int HorizontalSliceStart { get; private set; }
     /// <summary>True when horizontal virtualization is active (lines were sliced for perf).</summary>
     public bool IsHorizontallyVirtualized { get; private set; }
+    /// <summary>Max chars kept per line by the horizontal slice (the slice window width). 0 when not sliced.
+    /// Every rendered line is sliced to the SAME window [HorizontalSliceStart, HorizontalSliceStart+HorizontalSliceLength),
+    /// so a uniform pixel offset re-aligns the sliced text to document coordinates and the caret/selection
+    /// index mapping is a simple per-line clamp plus a prefix sum (see <see cref="_renderedLineSlicePrefix"/>).</summary>
+    public int HorizontalSliceLength { get; private set; }
+    /// <summary>Cumulative rendered-layout character offset of each rendered line when horizontally sliced:
+    /// entry k is the offset of the k-th rendered line (ordinal from <see cref="NumberOfStartLine"/>) inside
+    /// <see cref="DrawnTextLayout"/>, accounting for each prior line's SLICED length plus a newline. Lets
+    /// selection map a document (line,char) to a multi-line rendered index in O(1). Rebuilt each slice.</summary>
+    private readonly List<int> _renderedLineSlicePrefix = new();
     /// <summary>Cached measured width of a single character in the current font (monospace assumption).</summary>
     private float _cachedCharWidth;
     internal float CachedCharWidth => _cachedCharWidth > 0 ? _cachedCharWidth : Math.Max(1, zoomManager.ZoomedFontSize * 0.6f);
@@ -211,18 +221,15 @@ internal class TextRenderer
 
         string lineText = textManager.GetLineText(cursorManager.LineNumber) + "|";
 
-        // Apply same horizontal slicing for cursor layout to avoid creating a huge layout
-        if (IsHorizontallyVirtualized && !IsWordWrapEnabled && lineText.Length > HorizontalVirtualizationThreshold)
+        // Slice the current line to the SAME horizontal window as the main text (see Draw). This layout
+        // backs the caret and click hit-testing, so it MUST start at HorizontalSliceStart: the caret's
+        // rendered index is (documentChar - HorizontalSliceStart) and the caret x adds HorizontalSlicePixelOffset
+        // (= HorizontalSliceStart * charWidth). A window computed independently here would misplace the caret.
+        if (IsHorizontallyVirtualized && !IsWordWrapEnabled && HorizontalSliceLength > 0)
         {
-            float charWidth = _cachedCharWidth > 0 ? _cachedCharWidth : Math.Max(1, zoomManager.ZoomedFontSize * 0.6f);
-            float viewportWidth = (float)canvasText.Size.Width;
-            float hScroll = (float)scrollManager.HorizontalScroll;
-            int visibleStartChar = Math.Max(0, (int)(hScroll / charWidth) - 200);
-            int visibleChars = (int)(viewportWidth / charWidth) + 400;
-            int bufferChars = visibleChars * 3;
-            int sliceStart = Math.Max(0, visibleStartChar - bufferChars);
-            int sliceEnd = Math.Min(lineText.Length, visibleStartChar + visibleChars + bufferChars);
-            lineText = lineText[sliceStart..sliceEnd];
+            int sliceStart = Math.Min(HorizontalSliceStart, lineText.Length);
+            int len = Math.Min(HorizontalSliceLength, lineText.Length - sliceStart);
+            lineText = len > 0 ? lineText.Substring(sliceStart, len) : string.Empty;
         }
 
         var layoutSize = IsWordWrapEnabled
@@ -297,9 +304,11 @@ internal class TextRenderer
     {
         if (!IsVirtualizedWrappedLine || lineIndex != NumberOfStartLine || VirtualizedLineCharsPerRow <= 0)
         {
-            // Account for horizontal virtualization slice offset
+            // Account for horizontal virtualization slice offset. Every rendered line is sliced to the same
+            // window, so the per-line rendered index is the document position minus the slice start, clamped
+            // to this line's sliced length (a line shorter than the window contributes fewer chars).
             if (IsHorizontallyVirtualized)
-                return characterPosition - HorizontalSliceStart;
+                return Math.Clamp(characterPosition - HorizontalSliceStart, 0, SlicedLineLength(lineIndex));
             return characterPosition;
         }
 
@@ -320,9 +329,10 @@ internal class TextRenderer
     {
         if (!IsVirtualizedWrappedLine || lineIndex != NumberOfStartLine || VirtualizedLineCharsPerRow <= 0)
         {
-            // Account for horizontal virtualization slice offset
+            // Account for horizontal virtualization slice offset (per-line: renderedIndex is within the
+            // current line's sliced layout), clamped to the document line length.
             if (IsHorizontallyVirtualized)
-                return renderedIndex + HorizontalSliceStart;
+                return Math.Clamp(renderedIndex + HorizontalSliceStart, 0, textManager.GetLineLength(lineIndex));
             return renderedIndex;
         }
 
@@ -331,6 +341,116 @@ internal class TextRenderer
         int column = Math.Clamp(renderedIndex % rowStride, 0, VirtualizedLineCharsPerRow);
         int characterPosition = VirtualizedLineSliceStart + row * VirtualizedLineCharsPerRow + column;
         return Math.Clamp(characterPosition, 0, textManager.GetLineLength(lineIndex));
+    }
+
+    // ── Multi-line horizontal virtualization (non-wrap, many very long lines) ─────────────────────
+
+    /// <summary>Number of characters line <paramref name="lineIndex"/> contributes to the current
+    /// horizontal slice: its length past <see cref="HorizontalSliceStart"/>, capped at the slice window
+    /// width. 0 when the line ends before the window (nothing of it is visible at this scroll position).</summary>
+    private int SlicedLineLength(int lineIndex)
+    {
+        if (HorizontalSliceLength <= 0 || lineIndex < 0 || lineIndex >= textManager.LinesCount)
+            return 0;
+        int full = textManager.GetLineLength(lineIndex);
+        return Math.Clamp(full - HorizontalSliceStart, 0, HorizontalSliceLength);
+    }
+
+    /// <summary>Maps a document position (line, char) to its character index inside the multi-line
+    /// horizontally-sliced <see cref="DrawnTextLayout"/>, using the per-line prefix offsets built by
+    /// <see cref="BuildHorizontallySlicedText"/>. Returns -1 when the line is outside the rendered range.
+    /// Used by selection rendering, which spans multiple rendered lines.</summary>
+    public int GetRenderedLayoutIndexForDocument(int lineIndex, int characterPosition)
+    {
+        int ordinal = lineIndex - NumberOfStartLine;
+        if (ordinal < 0 || ordinal >= _renderedLineSlicePrefix.Count)
+            return -1;
+        int inLine = Math.Clamp(characterPosition - HorizontalSliceStart, 0, SlicedLineLength(lineIndex));
+        return _renderedLineSlicePrefix[ordinal] + inLine;
+    }
+
+    /// <summary>Decides whether to horizontally virtualize the current (non-wrap) frame and, if so, the
+    /// slice window [<paramref name="sliceStart"/>, sliceStart+<paramref name="sliceLen"/>). Only triggers
+    /// when at least one visible line exceeds <see cref="HorizontalVirtualizationThreshold"/>, so files
+    /// without a pathologically long line keep the normal (untouched) render path. Reuses the previous
+    /// window while the viewport stays inside the buffered safe zone so small horizontal scrolls don't
+    /// re-slice.</summary>
+    private bool ShouldHorizontallySlice(CanvasControl canvasText, out int sliceStart, out int sliceLen)
+    {
+        sliceStart = 0;
+        sliceLen = 0;
+        if (IsWordWrapEnabled || NumberOfRenderedLines <= 0)
+            return false;
+
+        int end = Math.Min(NumberOfStartLine + NumberOfRenderedLines, textManager.LinesCount);
+        int maxLen = 0;
+        for (int i = NumberOfStartLine; i < end; i++)
+        {
+            int len = textManager.GetLineLength(i);
+            if (len > maxLen)
+                maxLen = len;
+        }
+        if (maxLen <= HorizontalVirtualizationThreshold)
+            return false;
+
+        float charWidth = CachedCharWidth;
+        float viewportWidth = (float)canvasText.Size.Width;
+        float hScroll = (float)scrollManager.HorizontalScroll;
+        int visibleStartChar = Math.Max(0, (int)(hScroll / charWidth) - 50);
+        int visibleEndChar = visibleStartChar + (int)(viewportWidth / charWidth) + 100;
+
+        // Reuse the current window while the viewport is still inside its buffered safe zone.
+        if (IsHorizontallyVirtualized && HorizontalSliceLength > 0
+            && visibleStartChar >= _hSliceVisibleStart && visibleEndChar <= _hSliceVisibleEnd)
+        {
+            sliceStart = HorizontalSliceStart;
+            sliceLen = HorizontalSliceLength;
+            return true;
+        }
+
+        int visibleChars = Math.Max(1, visibleEndChar - visibleStartChar);
+        int bufferChars = visibleChars * 3;
+        sliceStart = Math.Max(0, visibleStartChar - bufferChars);
+        sliceLen = visibleChars + (bufferChars * 2);
+        _hSliceVisibleStart = visibleStartChar;
+        _hSliceVisibleEnd = visibleEndChar + bufferChars; // inner safe zone
+        return true;
+    }
+
+    /// <summary>Builds the visible text with every line sliced to the same horizontal window, joined with
+    /// the newline character, and (re)builds <see cref="_renderedLineSlicePrefix"/> so document positions
+    /// can be mapped back into the resulting layout. Never materializes the full (multi-megabyte) line text.</summary>
+    private string BuildHorizontallySlicedText(int sliceStart, int sliceLen)
+    {
+        _renderedLineSlicePrefix.Clear();
+        string newline = textManager.NewLineCharacter;
+        int newlineLen = newline.Length;
+        int end = Math.Min(NumberOfStartLine + NumberOfRenderedLines, textManager.LinesCount);
+
+        int capacity = Math.Min(Math.Max(1, NumberOfRenderedLines) * (sliceLen + newlineLen), 1 << 21);
+        var builder = new StringBuilder(capacity);
+        int offset = 0;
+        bool first = true;
+        for (int i = NumberOfStartLine; i < end; i++)
+        {
+            if (!first)
+            {
+                builder.Append(newline);
+                offset += newlineLen;
+            }
+            first = false;
+
+            _renderedLineSlicePrefix.Add(offset); // rendered-layout offset of this line's text start
+
+            string lineText = textManager.GetLineText(i);
+            if (lineText.Length > sliceStart)
+            {
+                int len = Math.Min(sliceLen, lineText.Length - sliceStart);
+                builder.Append(lineText, sliceStart, len);
+                offset += len;
+            }
+        }
+        return builder.ToString();
     }
 
     public void EnsureWrapMetrics(CanvasControl canvasText)
@@ -735,52 +855,43 @@ internal class TextRenderer
 
         UpdateRenderedLineRange(canvasText);
         ResetVirtualizedWrappedLineState();
-        LineSliceResult renderTextData = IsWordWrapEnabled
-            && NumberOfRenderedLines == 1
-            && ShouldVirtualizeWrappedLine(NumberOfStartLine)
-                ? BuildVirtualizedWrappedLineRenderData(canvasText, NumberOfStartLine)
-                : textManager.GetLinesForRendering(NumberOfStartLine, NumberOfRenderedLines);
-        RenderedText = renderTextData.Text;
 
-        // ── Horizontal virtualization: slice very long lines to visible window ──
-        if (!IsWordWrapEnabled && RenderedText.Length > HorizontalVirtualizationThreshold && NumberOfRenderedLines == 1)
+        // Decide horizontal virtualization BEFORE materializing the visible text. Joining many very long
+        // lines (megabytes) into one string every frame — then laying it out — is the actual scroll-stutter
+        // cost on files like JSONL logs (hundreds of 50k+ char lines). When any visible line is very long we
+        // build ONLY the sliced text (a few KB) instead of the full join, and record a per-line prefix so
+        // the caret/selection can still map document positions into the sliced multi-line layout.
+        int hSliceStart = 0, hSliceLen = 0;
+        bool horizontallySlice = !IsWordWrapEnabled
+            && ShouldHorizontallySlice(canvasText, out hSliceStart, out hSliceLen);
+        LineSliceResult renderTextData;
+        if (IsWordWrapEnabled && NumberOfRenderedLines == 1 && ShouldVirtualizeWrappedLine(NumberOfStartLine))
         {
-            float charWidth = _cachedCharWidth > 0 ? _cachedCharWidth : Math.Max(1, zoomManager.ZoomedFontSize * 0.6f);
-            float viewportWidth = (float)canvasText.Size.Width;
-            float hScroll = (float)scrollManager.HorizontalScroll;
-
-            int visibleStartChar = Math.Max(0, (int)(hScroll / charWidth) - 50);
-            int visibleEndChar = visibleStartChar + (int)(viewportWidth / charWidth) + 100;
-
-            // Only re-slice if current viewport falls outside the previously cached slice
-            if (IsHorizontallyVirtualized
-                && visibleStartChar >= _hSliceVisibleStart && visibleEndChar <= _hSliceVisibleEnd
-                && OldRenderedText != null && !NeedsUpdateTextLayout)
-            {
-                // Reuse existing slice — just set flags and continue
-                RenderedText = OldRenderedText;
-                // HorizontalSliceStart is still valid from last slice
-            }
-            else
-            {
-                // Compute new slice with generous buffer for smooth scrolling
-                int visibleChars = visibleEndChar - visibleStartChar;
-                int bufferChars = visibleChars * 3;
-                int sliceStart = Math.Max(0, visibleStartChar - bufferChars);
-                int sliceEnd = Math.Min(RenderedText.Length, visibleEndChar + bufferChars);
-
-                RenderedText = RenderedText[sliceStart..sliceEnd];
-                HorizontalSliceStart = sliceStart;
-                IsHorizontallyVirtualized = true;
-                _hSliceVisibleStart = visibleStartChar;
-                _hSliceVisibleEnd = visibleEndChar + bufferChars; // inner safe zone
-                NeedsUpdateTextLayout = true; // force layout recreation for new slice
-            }
+            renderTextData = BuildVirtualizedWrappedLineRenderData(canvasText, NumberOfStartLine);
+            RenderedText = renderTextData.Text;
+            IsHorizontallyVirtualized = false;
+            HorizontalSliceStart = 0;
+            HorizontalSliceLength = 0;
+            _hSliceVisibleStart = 0;
+            _hSliceVisibleEnd = 0;
+        }
+        else if (horizontallySlice)
+        {
+            RenderedText = BuildHorizontallySlicedText(hSliceStart, hSliceLen);
+            HorizontalSliceStart = hSliceStart;
+            HorizontalSliceLength = hSliceLen;
+            IsHorizontallyVirtualized = true;
+            // Empty per-line span: syntax highlighting is skipped for a sliced layout (its char offsets
+            // would shift), mirroring the wrapped-line virtualization path.
+            renderTextData = new LineSliceResult(RenderedText, ReadOnlySpan<string>.Empty);
         }
         else
         {
+            renderTextData = textManager.GetLinesForRendering(NumberOfStartLine, NumberOfRenderedLines);
+            RenderedText = renderTextData.Text;
             IsHorizontallyVirtualized = false;
             HorizontalSliceStart = 0;
+            HorizontalSliceLength = 0;
             _hSliceVisibleStart = 0;
             _hSliceVisibleEnd = 0;
         }
