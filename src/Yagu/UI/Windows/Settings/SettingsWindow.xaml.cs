@@ -2534,16 +2534,40 @@ public sealed partial class SettingsWindow : Window
             pathTypeGroup.Children.Add(resetBinaryExt);
             pathTypeGroup.Children.Add(new TextBlock { Text = "These populate the Binary ext dropdown shown beside Skip Extensions when Search binary is enabled. Use this for compiled binary and build artifact extensions that should remain skipped even during binary search.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
-            var excludedExtToggle = new ToggleSwitch
+            var excludedExtLabel = new TextBlock
             {
-                IsOn = !_viewModel.SuppressExcludedExtensionWarnings,
-                OnContent = "Warn when a search targets an excluded file type",
-                OffContent = "Warn when a search targets an excluded file type",
-                Margin = new Thickness(0, 8, 0, 0),
+                Text = "When a search targets an excluded file type:",
+                Margin = new Thickness(0, 8, 0, 2),
+                FontSize = 12,
+                Opacity = 0.9,
             };
-            excludedExtToggle.Toggled += (_, _) => _viewModel.SuppressExcludedExtensionWarnings = !excludedExtToggle.IsOn;
-            pathTypeGroup.Children.Add(excludedExtToggle);
-            pathTypeGroup.Children.Add(new TextBlock { Text = "When enabled, Yagu warns before searching if your query names a file whose extension is currently excluded by the Skip or Binary extension lists or an Include/Exclude filter, so those files would not appear in results.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
+            pathTypeGroup.Children.Add(excludedExtLabel);
+            var excludedExtChoice = new ComboBox { MinWidth = 320, HorizontalAlignment = HorizontalAlignment.Left };
+            excludedExtChoice.Items.Add("Ask me each time (recommended)");
+            excludedExtChoice.Items.Add("Always include the excluded file type");
+            excludedExtChoice.Items.Add("Always search without it");
+            excludedExtChoice.SelectedIndex = !_viewModel.SuppressExcludedExtensionWarnings
+                ? 0
+                : (_viewModel.IncludeExcludedExtensionByDefault ? 1 : 2);
+            excludedExtChoice.SelectionChanged += (_, _) =>
+            {
+                switch (excludedExtChoice.SelectedIndex)
+                {
+                    case 1:
+                        _viewModel.SuppressExcludedExtensionWarnings = true;
+                        _viewModel.IncludeExcludedExtensionByDefault = true;
+                        break;
+                    case 2:
+                        _viewModel.SuppressExcludedExtensionWarnings = true;
+                        _viewModel.IncludeExcludedExtensionByDefault = false;
+                        break;
+                    default:
+                        _viewModel.SuppressExcludedExtensionWarnings = false;
+                        break;
+                }
+            };
+            pathTypeGroup.Children.Add(excludedExtChoice);
+            pathTypeGroup.Children.Add(new TextBlock { Text = "Yagu warns before searching if your query names a file whose extension is currently excluded by the Skip or Binary extension lists or an Include/Exclude filter, so those files would not appear in results. Choose to be asked each time, to always include the excluded type, or to always search without it.", FontSize = 11, Opacity = 0.6, TextWrapping = TextWrapping.Wrap });
 
             var archiveExtLabel = NextSearchLabel("Archive extensions (semicolon-separated, no dots):");
             archiveExtLabel.Margin = new Thickness(0, 4, 0, 0);

@@ -350,6 +350,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         SuppressAdminWarning = _settings.SuppressAdminWarning;
         SuppressEverythingNotRunningPrompt = _settings.SuppressEverythingNotRunningPrompt;
         SuppressExcludedExtensionWarnings = _settings.SuppressExcludedExtensionWarnings;
+        IncludeExcludedExtensionByDefault = _settings.IncludeExcludedExtensionByDefault;
         SuppressFontContrastWarnings = _settings.SuppressFontContrastWarnings;
         FontContrastReminderAfterUtc = _settings.FontContrastReminderAfterUtc;
         ExcludeAdminProtectedPaths = _settings.ExcludeAdminProtectedPaths;
@@ -1312,6 +1313,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
     [ObservableProperty] public partial bool SuppressFontContrastWarnings { get; set; }
     [ObservableProperty] public partial bool SuppressExcludedExtensionWarnings { get; set; }
+
+    /// <summary>When the excluded-file-type warning is suppressed, whether to automatically INCLUDE the
+    /// excluded type in the search (true) or search WITHOUT it (false). Set from the warning dialog's
+    /// "Always do this" choice and from Settings. Only meaningful while <see cref="SuppressExcludedExtensionWarnings"/>
+    /// is true.</summary>
+    [ObservableProperty] public partial bool IncludeExcludedExtensionByDefault { get; set; }
 
     private bool _suppressEverythingNotRunningPrompt;
     public bool SuppressEverythingNotRunningPrompt
@@ -4693,6 +4700,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
         _settings.SuppressAdminWarning = SuppressAdminWarning;
         _settings.SuppressEverythingNotRunningPrompt = SuppressEverythingNotRunningPrompt;
         _settings.SuppressExcludedExtensionWarnings = SuppressExcludedExtensionWarnings;
+        _settings.IncludeExcludedExtensionByDefault = IncludeExcludedExtensionByDefault;
         _settings.SuppressFontContrastWarnings = SuppressFontContrastWarnings;
         _settings.FontContrastReminderAfterUtc = FontContrastReminderAfterUtc;
         _settings.ExcludeAdminProtectedPaths = ExcludeAdminProtectedPaths;
@@ -5084,12 +5092,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable, ISema
 
     /// <summary>
     /// Returns the predicted excluded-extension warning for the current query and advanced options, or
-    /// null when there is nothing to warn about. Suppressed when the user opted out, in Semantic mode,
-    /// or when the query does not name a file whose extension is currently excluded.
+    /// null when there is nothing to warn about (the query does not name a file whose extension is
+    /// currently excluded). Does NOT consider <see cref="SuppressExcludedExtensionWarnings"/> — the caller
+    /// decides whether to SHOW the warning or silently apply the remembered default action
+    /// (<see cref="IncludeExcludedExtensionByDefault"/>), both of which still need this warning's data.
     /// </summary>
     internal ExcludedExtensionWarning? TryGetExcludedExtensionWarning()
     {
-        if (SuppressExcludedExtensionWarnings) return null;
         // Note: this runs AFTER semantic translation (via the SubmitSearchAsync gate), so in Semantic
         // mode Query/IncludeGlobs already reflect the model's resolved plan (e.g. include glob *.exe).
 

@@ -372,6 +372,12 @@ public sealed class AppSettings
     /// <summary>When true, do not warn before searching when the query names a file whose extension is
     /// currently excluded by Skip/Binary extensions or an Include/Exclude filter.</summary>
     public bool SuppressExcludedExtensionWarnings { get; set; }
+    /// <summary>The default action taken for an excluded file type when the warning is suppressed
+    /// (<see cref="SuppressExcludedExtensionWarnings"/> is true): true = automatically include the type in
+    /// the search (as if "Include &amp; search" were clicked each time); false = search without it. Only
+    /// meaningful when the warning is suppressed; ignored while the warning is shown. Defaults to false so
+    /// existing "don't warn" users keep the previous behavior (searching without the excluded type).</summary>
+    public bool IncludeExcludedExtensionByDefault { get; set; }
     /// <summary>When true, do not show theme/font contrast warnings.</summary>
     public bool SuppressFontContrastWarnings { get; set; }
     /// <summary>UTC time before which theme/font contrast warnings are snoozed.</summary>

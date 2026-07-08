@@ -60,7 +60,7 @@ public sealed class ExcludedExtensionWarningWiringTests
     }
 
     [Fact]
-    public void WarningModal_IsTitlelessWithTwoActionsAndDontWarnCheckbox()
+    public void WarningModal_IsTitlelessWithTwoActionsAndRemembersTheChosenAction()
     {
         int start = AdminSettingsSource.IndexOf("CheckExcludedExtensionAndWarnAsync", StringComparison.Ordinal);
         Assert.True(start >= 0, "Expected CheckExcludedExtensionAndWarnAsync in MainWindow.AdminSettings.cs");
@@ -73,24 +73,40 @@ public sealed class ExcludedExtensionWarningWiringTests
         // No Cancel button — the modal only offers the two proceed actions.
         Assert.Contains("CloseButtonText = null", method);
         Assert.DoesNotContain("CloseButtonText = \"Cancel\"", method);
-        Assert.Contains("Don't warn me again about excluded file types", method);
-        // Secondary applies the fix; the don't-warn checkbox persists suppression.
-        Assert.Contains("IncludeExtensionForSearchAsync(warning)", method);
+        // The checkbox now REMEMBERS the chosen button (clearer than the old ambiguous "Don't warn me again").
+        Assert.Contains("don't ask again for excluded file types", method);
+        Assert.DoesNotContain("Don't warn me again about excluded file types", method);
+        // A saved "Always do this" preference is applied without showing the dialog (include vs. search-without).
+        Assert.Contains("if (ViewModel.SuppressExcludedExtensionWarnings)", method);
+        Assert.Contains("if (ViewModel.IncludeExcludedExtensionByDefault)", method);
+        // Remembering the Primary button = always include; the Secondary = always search without.
+        Assert.Contains("IncludeExcludedExtensionByDefault = true", method);
+        Assert.Contains("IncludeExcludedExtensionByDefault = false", method);
         Assert.Contains("SuppressExcludedExtensionWarnings = true", method);
+        Assert.Contains("IncludeExtensionForSearchAsync(warning)", method);
     }
 
     [Fact]
-    public void ViewModel_TryGetWarning_GuardsSuppressionAndCallsPredictor()
+    public void ViewModel_TryGetWarning_DoesNotGateOnSuppression_AndCallsPredictor()
     {
         int start = MainViewModelSource.IndexOf("internal ExcludedExtensionWarning? TryGetExcludedExtensionWarning()", StringComparison.Ordinal);
         Assert.True(start >= 0, "Expected TryGetExcludedExtensionWarning in MainViewModel.cs");
         string method = Slice(MainViewModelSource, start, 1400);
 
-        Assert.Contains("if (SuppressExcludedExtensionWarnings) return null;", method);
+        // Suppression is NO LONGER gated here — the caller (CheckExcludedExtensionAndWarnAsync) needs this
+        // warning's data even when suppressed, to apply the remembered default (which may be "always include").
+        Assert.DoesNotContain("if (SuppressExcludedExtensionWarnings) return null;", method);
         Assert.Contains("ExcludedExtensionPredictor.Predict(", method);
         // Semantic mode is NOT short-circuited here: the gate runs the check post-translation, when
         // Query/IncludeGlobs already reflect the model's resolved plan.
         Assert.DoesNotContain("if (IsSemanticQueryMode) return null;", method);
+    }
+
+    [Fact]
+    public void ViewModel_LoadsAndSaves_IncludeExcludedExtensionByDefault()
+    {
+        Assert.Contains("IncludeExcludedExtensionByDefault = _settings.IncludeExcludedExtensionByDefault;", MainViewModelSource);
+        Assert.Contains("_settings.IncludeExcludedExtensionByDefault = IncludeExcludedExtensionByDefault;", MainViewModelSource);
     }
 
     [Fact]
@@ -130,9 +146,14 @@ public sealed class ExcludedExtensionWarningWiringTests
     }
 
     [Fact]
-    public void Settings_ExposesExcludedExtensionToggleAndSemanticHistoryLimit()
+    public void Settings_ExposesExcludedExtensionChoiceAndSemanticHistoryLimit()
     {
-        Assert.Contains("_viewModel.SuppressExcludedExtensionWarnings = !excludedExtToggle.IsOn", SettingsWindowSource);
+        // Settings offers the 3-way choice (ask / always include / always search without), driving the
+        // same two settings the warning dialog remembers.
+        Assert.Contains("Always include the excluded file type", SettingsWindowSource);
+        Assert.Contains("Always search without it", SettingsWindowSource);
+        Assert.Contains("_viewModel.IncludeExcludedExtensionByDefault = true", SettingsWindowSource);
+        Assert.Contains("_viewModel.SuppressExcludedExtensionWarnings = true", SettingsWindowSource);
         Assert.Contains("_viewModel.MaxSemanticRecentItems", SettingsWindowSource);
     }
 

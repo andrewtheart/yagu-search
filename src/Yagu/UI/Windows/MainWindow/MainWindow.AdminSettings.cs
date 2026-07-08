@@ -351,6 +351,16 @@ public sealed partial class MainWindow
         if (warning is null) return true;
 
         string ext = warning.Extension;
+
+        // Honor a saved "Always do this" preference — skip the dialog and silently apply the remembered
+        // action: either include the excluded type for this search, or search without it.
+        if (ViewModel.SuppressExcludedExtensionWarnings)
+        {
+            if (ViewModel.IncludeExcludedExtensionByDefault)
+                await ViewModel.IncludeExtensionForSearchAsync(warning);
+            return true;
+        }
+
         string sources = DescribeExclusionReasons(warning.Reasons);
 
         var contentPanel = new StackPanel { Spacing = 12, MinWidth = 360 };
@@ -362,14 +372,26 @@ public sealed partial class MainWindow
 
         contentPanel.Children.Add(new TextBlock
         {
-            Text = $"Choose \"Include .{ext} & search\" to stop excluding this file type, or search anyway to continue without it.",
+            Text = $"Choose \"Include .{ext} & search\" to include this file type in this search, or \"Search anyway\" to continue without it.",
             TextWrapping = TextWrapping.Wrap,
             FontSize = 12,
             Opacity = 0.8,
         });
 
-        var dontWarnAgain = new CheckBox { Content = "Don't warn me again about excluded file types" };
-        contentPanel.Children.Add(dontWarnAgain);
+        // Clarifies exactly what checking the box does (the previous "Don't warn me again" wording did not
+        // say whether excluded types would be included or not next time): it REMEMBERS the button you click
+        // as a permanent default and stops asking.
+        var alwaysDoThis = new CheckBox { Content = "Always do this \u2014 don't ask again for excluded file types" };
+        contentPanel.Children.Add(alwaysDoThis);
+        contentPanel.Children.Add(new TextBlock
+        {
+            Text = "Yagu will remember the button you click and apply it automatically next time: it will either " +
+                   "always include the excluded file type in matching searches, or always search without it. " +
+                   "You can change this any time in Settings \u2192 Search.",
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 11,
+            Opacity = 0.6,
+        });
 
         var result = await YaguDialog.ShowAsync(
             _hwnd,
@@ -385,31 +407,41 @@ public sealed partial class MainWindow
                 RequestedTheme = RootGrid.ActualTheme,
                 ShowTitleBar = false,
                 Width = 600,
-                Height = 340,
-                MaxContentHeight = 230,
+                Height = 380,
+                MaxContentHeight = 280,
             });
 
-        bool dontWarn = dontWarnAgain.IsChecked == true;
-        if (dontWarn)
-            ViewModel.SuppressExcludedExtensionWarnings = true;
+        bool remember = alwaysDoThis.IsChecked == true;
 
         if (result == YaguDialogResult.Close)
         {
-            // Dismissed without choosing (Esc / window close) — cancel the search rather than run one
-            // that would not find the file. Still persist the suppress preference if the user set it.
-            if (dontWarn) await ViewModel.PersistSettingsAsync();
+            // Dismissed without choosing an action (Esc / window close) — cancel the search rather than
+            // run one that would not find the file. Nothing is remembered (no button was clicked).
             return false;
         }
 
         if (result == YaguDialogResult.Secondary)
         {
-            // "Search anyway" — run the search without un-excluding the type.
-            if (dontWarn) await ViewModel.PersistSettingsAsync();
+            // "Search anyway" — run the search without un-excluding the type. If "Always do this" is
+            // checked, remember it: future matching searches skip the dialog and search WITHOUT the type.
+            if (remember)
+            {
+                ViewModel.SuppressExcludedExtensionWarnings = true;
+                ViewModel.IncludeExcludedExtensionByDefault = false;
+                await ViewModel.PersistSettingsAsync();
+            }
             return true;
         }
 
-        // Primary: include the extension for THIS search only (no settings are changed); Advanced
-        // Options are reset to the saved defaults when the search finishes.
+        // Primary: include the extension for THIS search only (no settings are changed by the fix itself;
+        // Advanced Options are reset to the saved defaults when the search finishes). If "Always do this"
+        // is checked, remember it: future matching searches skip the dialog and auto-include the type.
+        if (remember)
+        {
+            ViewModel.SuppressExcludedExtensionWarnings = true;
+            ViewModel.IncludeExcludedExtensionByDefault = true;
+            await ViewModel.PersistSettingsAsync();
+        }
         await ViewModel.IncludeExtensionForSearchAsync(warning);
         return true;
     }

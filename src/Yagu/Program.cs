@@ -85,6 +85,13 @@ internal static class Program
             return;
         }
 
+        // We are the primary (and, per the global mutex, the ONLY) Yagu instance. Before this instance
+        // spawns any of its own workers, terminate any orphaned semantic/OCR worker processes left running
+        // from a previous run that crashed or was force-killed without tearing its children down (they would
+        // otherwise keep holding VRAM / RAM / CPU). A worker whose parent is a live Yagu.exe (e.g. a
+        // concurrent --cli run) is spared.
+        Services.OrphanedWorkerCleanup.KillOrphanedWorkers();
+
         // Pass any --dir / --query arguments so App.OnLaunched can pick them up.
         App.StartupDirectory = App.ParseDirArg(args);
         App.StartupQuery = App.ParseStringArg(args, "--query");
